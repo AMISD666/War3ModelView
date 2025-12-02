@@ -1,0 +1,92 @@
+html,
+body,
+#root {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    user-select: none;
+    background-color: #1e1e1e;
+    color: #e0e0e0;
+}
+
+/* Custom Scrollbar for WebKit (Chrome/Electron) */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #2d2d2d;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #555;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #777;
+}
+
+/* Node Manager Tree Styling */
+.node-manager-tree {
+    color: #e0e0e0;
+}
+
+.node-manager-tree .ant-tree-treenode {
+    padding: 2px 0;
+    -webkit-user-drag: element;
+    user-select: none;
+}
+
+.node-manager-tree .ant-tree-node-content-wrapper {
+    display: inline-flex;
+    align-items: center;
+    width: 100%;
+    min-width: 0;
+    padding: 2px 4px;
+    border-radius: 2px;
+    transition: background-color 0.2s;
+}
+
+.node-manager-tree .ant-tree-node-content-wrapper:hover {
+    background-color: #2a2d2e !important;
+}
+
+.node-manager-tree .ant-tree-node-selected .ant-tree-node-content-wrapper,
+.node-manager-tree .ant-tree-node-content-wrapper.ant-tree-node-selected {
+    background-color: #094771 !important;
+    border: 1px solid #007acc;
+}
+
+.node-manager-tree .ant-tree-iconEle {
+    display: inline-flex;
+    align-items: center;
+    margin-right: 4px;
+}
+
+.node-manager-tree .ant-tree-title {
+    display: inline-flex;
+    align-items: center;
+    width: 100%;
+    min-width: 0;
+}
+
+.node-manager-tree .ant-tree-switcher {
+    display: inline-flex;
+    align-items: center;
+    color: #888;
+}
+
+.node-manager-tree .ant-tree-indent-unit {
+    width: 16px;
+}
+
+/* Ensure global drag isn't disabled for draggable elements */
+[draggable="true"] {
+    -webkit-user-drag: element;
+    cursor: grab;
+}

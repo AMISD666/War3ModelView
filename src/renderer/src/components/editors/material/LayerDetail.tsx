@@ -1,0 +1,185 @@
+import React, { useState } from 'react'
+import { Checkbox, InputNumber, Button, Select, Space } from 'antd'
+import KeyframeEditor from '../KeyframeEditor'
+
+interface LayerDetailProps {
+    layer: any
+    model: any
+    onUpdate: (updatedLayer: any) => void
+    _onBack: () => void
+}
+
+const LayerDetail: React.FC<LayerDetailProps> = ({ layer, model, onUpdate }) => {
+    const [isKeyframeEditorOpen, setIsKeyframeEditorOpen] = useState(false)
+    const [editingField, setEditingField] = useState<string | null>(null)
+    const [editingVectorSize, setEditingVectorSize] = useState(1)
+
+    const handleChange = (field: string, value: any) => {
+        onUpdate({ ...layer, [field]: value })
+    }
+
+    const handleAnimToggle = (field: string, checked: boolean, vectorSize: number = 1) => {
+        if (checked) {
+            // Convert to AnimVector
+            const currentVal = layer[field]
+            const initialVal = typeof currentVal === 'number' ? currentVal : (vectorSize === 1 ? 1 : 0)
+
+            // Create default AnimVector structure
+            const animVector = {
+                Keys: [
+                    { Frame: 0, Vector: vectorSize === 1 ? [initialVal] : new Array(vectorSize).fill(0) }
+                ],
+                LineType: 0,
+                GlobalSeqId: null
+            }
+            handleChange(field, animVector)
+        } else {
+            // Convert to static value (take first key or default)
+            const currentVal = layer[field]
+            let staticVal = 1
+            if (currentVal && currentVal.Keys && currentVal.Keys.length > 0) {
+                staticVal = currentVal.Keys[0].Vector[0]
+            }
+            handleChange(field, staticVal)
+        }
+    }
+
+    const openKeyframeEditor = (field: string, vectorSize: number) => {
+        setEditingField(field)
+        setEditingVectorSize(vectorSize)
+        setIsKeyframeEditorOpen(true)
+    }
+
+    const handleKeyframeSave = (animVector: any) => {
+        if (editingField) {
+            handleChange(editingField, animVector)
+        }
+        setIsKeyframeEditorOpen(false)
+    }
+
+    const filterModeOptions = [
+        { value: 0, label: 'None' },
+        { value: 1, label: 'Transparent' },
+        { value: 2, label: 'Blend' },
+        { value: 3, label: 'Additive' },
+        { value: 4, label: 'Add Alpha' },
+        { value: 5, label: 'Modulate' },
+        { value: 6, label: 'Modulate 2X' },
+    ]
+
+    const textureOptions = model.Textures.map((t: any, i: number) => ({
+        value: i,
+        label: `[${i}] ${t.Image ? t.Image.split(/[\\/]/).pop() : '无路径'}`
+    }))
+
+    const isAlphaAnimated = layer.Alpha && typeof layer.Alpha !== 'number'
+    // const isTextureIDAnimated = layer.TextureID && typeof layer.TextureID !== 'number' // TextureID animation is complex (Int), let's focus on Alpha first
+
+    return (
+        <div style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: '10px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+                {/* Top Left: Transparency */}
+                <div style={{ border: '1px solid #444', padding: 10, borderRadius: 4 }}>
+                    <h4 style={{ margin: '0 0 10px 0', color: '#aaa' }}>透明度 (Alpha)</h4>
+                    <div style={{ marginBottom: 10 }}>
+                        <Checkbox
+                            checked={isAlphaAnimated}
+                            onChange={(e) => handleAnimToggle('Alpha', e.target.checked, 1)}
+                        >
+                            动态化 (Animated)
+                        </Checkbox>
+                    </div>
+                    <Space>
+                        <Button
+                            size="small"
+                            disabled={!isAlphaAnimated}
+                            onClick={() => openKeyframeEditor('Alpha', 1)}
+                        >
+                            编辑动画
+                        </Button>
+                        {!isAlphaAnimated && (
+                            <InputNumber
+                                size="small"
+                                value={typeof layer.Alpha === 'number' ? layer.Alpha : 1}
+                                onChange={(v) => handleChange('Alpha', v)}
+                                step={0.1}
+                                min={0}
+                                max={1}
+                            />
+                        )}
+                    </Space>
+                </div>
+
+                {/* Top Right: Texture ID */}
+                <div style={{ border: '1px solid #444', padding: 10, borderRadius: 4 }}>
+                    <h4 style={{ margin: '0 0 10px 0', color: '#aaa' }}>贴图 ID (Texture ID)</h4>
+                    <div style={{ marginBottom: 10 }}>
+                        <Checkbox disabled>动态化 (Animated)</Checkbox>
+                    </div>
+                    <Space direction="vertical" style={{ width: '100%' }}>
+                        <Button size="small" disabled>贴图 ID</Button>
+                        <Select
+                            size="small"
+                            style={{ width: '100%' }}
+                            value={typeof layer.TextureID === 'number' ? layer.TextureID : 0}
+                            onChange={(v) => handleChange('TextureID', v)}
+                            options={textureOptions}
+                        />
+                    </Space>
+                </div>
+
+                {/* Bottom Left: Flags */}
+                <div style={{ border: '1px solid #444', padding: 10, borderRadius: 4 }}>
+                    <h4 style={{ margin: '0 0 10px 0', color: '#aaa' }}>标记 (Flags)</h4>
+                    <Space direction="vertical">
+                        <Checkbox checked={layer.Unshaded} onChange={(e) => handleChange('Unshaded', e.target.checked)}>无阴影 (Unshaded)</Checkbox>
+                        <Checkbox checked={layer.Unfogged} onChange={(e) => handleChange('Unfogged', e.target.checked)}>无迷雾 (Unfogged)</Checkbox>
+                        <Checkbox checked={layer.TwoSided} onChange={(e) => handleChange('TwoSided', e.target.checked)}>双面的 (Two Sided)</Checkbox>
+                        <Checkbox checked={layer.SphereEnvMap} onChange={(e) => handleChange('SphereEnvMap', e.target.checked)}>球面环境贴图 (Sphere Env Map)</Checkbox>
+                        <Checkbox checked={layer.NoDepthTest} onChange={(e) => handleChange('NoDepthTest', e.target.checked)}>无深度测试 (No Depth Test)</Checkbox>
+                        <Checkbox checked={layer.NoDepthSet} onChange={(e) => handleChange('NoDepthSet', e.target.checked)}>无深度设置 (No Depth Set)</Checkbox>
+                    </Space>
+                </div>
+
+                {/* Bottom Right: Animated Texture & Filter Mode */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <div style={{ border: '1px solid #444', padding: 10, borderRadius: 4 }}>
+                        <h4 style={{ margin: '0 0 10px 0', color: '#aaa' }}>动画纹理 ID (Animated Texture ID)</h4>
+                        <Select
+                            size="small"
+                            style={{ width: '100%' }}
+                            disabled
+                            value={'(None)'}
+                        />
+                    </div>
+
+                    <div style={{ border: '1px solid #444', padding: 10, borderRadius: 4, flex: 1 }}>
+                        <h4 style={{ margin: '0 0 10px 0', color: '#aaa' }}>过滤模式 (Filter Mode)</h4>
+                        <Select
+                            size="small"
+                            style={{ width: '100%' }}
+                            value={layer.FilterMode}
+                            onChange={(v) => handleChange('FilterMode', v)}
+                            options={filterModeOptions}
+                        />
+                    </div>
+                </div>
+            </div>
+
+            {/* Keyframe Editor Modal */}
+            {editingField && (
+                <KeyframeEditor
+                    visible={isKeyframeEditorOpen}
+                    onCancel={() => setIsKeyframeEditorOpen(false)}
+                    onOk={handleKeyframeSave}
+                    initialData={layer[editingField]}
+                    title={`Edit ${editingField}`}
+                    vectorSize={editingVectorSize}
+                    globalSequences={model.GlobalSequences || []}
+                />
+            )}
+        </div>
+    )
+}
+
+export default LayerDetail
