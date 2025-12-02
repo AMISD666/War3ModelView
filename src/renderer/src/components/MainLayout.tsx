@@ -36,7 +36,9 @@ const MainLayout: React.FC = () => {
     }
 
     const [activeEditor, setActiveEditor] = useState<string | null>(null)
-    const [modelData, setModelData] = useState<any>(null)
+    // Use modelData directly from store to ensure updates from NodeManager are reflected
+    const modelData = useModelStore(state => state.modelData)
+
 
     // Persistent settings
     const [teamColor, setTeamColor] = useState<number>(() => loadSetting('teamColor', 0))
@@ -163,7 +165,6 @@ const MainLayout: React.FC = () => {
                 setIsLoading(true)
                 setZustandLoading(true)
                 // Clear modelData to ensure fresh load from file
-                setModelData(null)
                 setZustandModelData(null, selected)
 
                 setIsLoading(false)
@@ -178,7 +179,7 @@ const MainLayout: React.FC = () => {
 
     const handleModelLoaded = useCallback((data: any) => {
         console.log('Model loaded:', data)
-        setModelData(data)
+        // setModelData(data) // No longer needed as we use store
         setZustandModelData(data, data.path || modelPath) // Ensure store is updated
         setIsLoading(false)
         setZustandLoading(false)
@@ -205,12 +206,7 @@ const MainLayout: React.FC = () => {
         // For now, the Viewer component will see the new modelPath and re-init.
     }, [setZustandModelData, setZustandLoading, modelPath, setMainMode, setPlaying])
 
-    const handleModelUpdate = () => {
-        if (modelData) {
-            // Increment a counter to force Viewer to reload with updated modelData
-            setModelData({ ...modelData, _updateCounter: (modelData._updateCounter || 0) + 1 })
-        }
-    }
+
 
     const handleOpen = handleImport // Alias for MenuBar
 
@@ -256,10 +252,10 @@ const MainLayout: React.FC = () => {
             const { writeFile } = await import('@tauri-apps/plugin-fs')
 
             if (modelPath.toLowerCase().endsWith('.mdl')) {
-                const content = generateMDL(modelData)
+                const content = generateMDL(modelData as any)
                 await writeFile(modelPath, new TextEncoder().encode(content))
             } else {
-                const buffer = generateMDX(modelData)
+                const buffer = generateMDX(modelData as any)
                 await writeFile(modelPath, new Uint8Array(buffer))
             }
 
@@ -285,10 +281,10 @@ const MainLayout: React.FC = () => {
 
             if (selected) {
                 if (selected.toLowerCase().endsWith('.mdl')) {
-                    const content = generateMDL(modelData)
+                    const content = generateMDL(modelData as any)
                     await writeFile(selected, new TextEncoder().encode(content))
                 } else {
-                    const buffer = generateMDX(modelData)
+                    const buffer = generateMDX(modelData as any)
                     await writeFile(selected, new Uint8Array(buffer))
                 }
                 // Update store with new path if needed, but for now just alert
@@ -310,10 +306,13 @@ const MainLayout: React.FC = () => {
 
     useEffect(() => {
         localStorage.setItem('showDebugConsole', JSON.stringify(showDebugConsole))
-        // Invoke Rust command to toggle console
-        import('@tauri-apps/api/core').then(({ invoke }) => {
-            invoke('toggle_console', { show: showDebugConsole }).catch(e => console.error('Failed to toggle console:', e))
-        })
+        // Invoke Rust command to toggle console with a slight delay to ensure window is ready
+        const timer = setTimeout(() => {
+            import('@tauri-apps/api/core').then(({ invoke }) => {
+                invoke('toggle_console', { show: showDebugConsole }).catch(e => console.error('Failed to toggle console:', e))
+            })
+        }, 200)
+        return () => clearTimeout(timer)
     }, [showDebugConsole])
 
     return (
@@ -482,9 +481,6 @@ const MainLayout: React.FC = () => {
                         />
                         <EditorPanel
                             activeTab={activeEditor}
-                            model={modelData}
-                            modelPath={modelPath || undefined}
-                            onUpdate={handleModelUpdate}
                             onClose={() => setActiveEditor(null)}
                         />
                     </div>

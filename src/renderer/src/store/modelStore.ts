@@ -45,6 +45,13 @@ interface ModelState {
     setPlaying: (playing: boolean) => void;
     setPlaybackSpeed: (speed: number) => void;
     setLooping: (looping: boolean) => void;
+    setTextures: (textures: any[]) => void;
+    setGeosets: (geosets: any[]) => void;
+    setMaterials: (materials: any[]) => void;
+
+    // Geometry Actions
+    updateGeoset: (index: number, updates: any) => void;
+    updateNodes: (updates: { objectId: number, data: Partial<ModelNode> }[]) => void;
 }
 
 /**
@@ -366,10 +373,61 @@ export const useModelStore = create<ModelState>((set, get) => ({
     },
 
     // Animation Actions Implementation
-    setSequences: (sequences) => set({ sequences }),
+    setSequences: (sequences) => set((state) => {
+        const updatedModelData = state.modelData ? { ...state.modelData, Sequences: sequences } : state.modelData;
+        return { sequences, modelData: updatedModelData };
+    }),
     setSequence: (index) => set({ currentSequence: index, currentFrame: 0 }), // Reset frame on sequence change
     setFrame: (frame) => set({ currentFrame: frame }),
     setPlaying: (playing) => set({ isPlaying: playing }),
     setPlaybackSpeed: (speed) => set({ playbackSpeed: speed }),
     setLooping: (looping) => set({ isLooping: looping }),
+    setTextures: (textures) => set((state) => {
+        const updatedModelData = state.modelData ? { ...state.modelData, Textures: textures } : state.modelData;
+        return { modelData: updatedModelData };
+    }),
+    setGeosets: (geosets) => set((state) => {
+        const updatedModelData = state.modelData ? { ...state.modelData, Geosets: geosets } : state.modelData;
+        return { modelData: updatedModelData };
+    }),
+    setMaterials: (materials) => set((state) => {
+        const updatedModelData = state.modelData ? { ...state.modelData, Materials: materials } : state.modelData;
+        return { modelData: updatedModelData };
+    }),
+
+    updateGeoset: (index, updates) => {
+        set((state) => {
+            if (!state.modelData || !state.modelData.Geosets) return {};
+
+            const newGeosets = [...state.modelData.Geosets];
+            if (index >= 0 && index < newGeosets.length) {
+                newGeosets[index] = { ...newGeosets[index], ...updates };
+
+                // Update modelData
+                const updatedModelData = { ...state.modelData, Geosets: newGeosets };
+                return { modelData: updatedModelData };
+            }
+            return {};
+        });
+    },
+
+    updateNodes: (updates) => {
+        set((state) => {
+            let hasChanges = false;
+            const updatedNodes = state.nodes.map(node => {
+                const update = updates.find(u => u.objectId === node.ObjectId);
+                if (update) {
+                    hasChanges = true;
+                    return { ...node, ...update.data };
+                }
+                return node;
+            });
+
+            if (!hasChanges) return {};
+
+            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes);
+            console.log('[ModelStore] Batch updated', updates.length, 'nodes');
+            return { nodes: updatedNodes, modelData: updatedModelData };
+        });
+    }
 }));

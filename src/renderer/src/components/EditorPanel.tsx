@@ -6,15 +6,12 @@ import GeosetEditor from './editors/GeosetEditor'
 
 interface EditorPanelProps {
     activeTab: string
-    model: any
-    modelPath?: string
-    onUpdate: () => void
     onClose: () => void
 }
 
 import { ConfigProvider, theme } from 'antd'
 
-const EditorPanel: React.FC<EditorPanelProps> = ({ activeTab, model, modelPath, onUpdate, onClose }) => {
+const EditorPanel: React.FC<EditorPanelProps> = ({ activeTab, onClose }) => {
     const getTitle = () => {
         switch (activeTab) {
             case 'texture': return '纹理编辑器'
@@ -55,10 +52,10 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ activeTab, model, modelPath, 
                     }}>X</button>
                 </div>
                 <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
-                    {activeTab === 'texture' && <TextureEditor model={model} modelPath={modelPath} onUpdate={onUpdate} />}
-                    {activeTab === 'sequence' && <SequenceEditor model={model} onUpdate={onUpdate} />}
-                    {activeTab === 'material' && <MaterialEditor model={model} onUpdate={onUpdate} />}
-                    {activeTab === 'geoset' && <GeosetEditor model={model} onUpdate={onUpdate} />}
+                    {activeTab === 'texture' && <TextureEditor />}
+                    {activeTab === 'sequence' && <SequenceEditor />}
+                    {activeTab === 'material' && <MaterialEditor />}
+                    {activeTab === 'geoset' && <GeosetEditor />}
                 </div>
             </div>
         </ConfigProvider>

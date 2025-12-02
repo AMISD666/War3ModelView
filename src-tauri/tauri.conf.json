@@ -1,0 +1,31 @@
+{
+    "productName": "War3ModelEditor",
+    "version": "1.0.0",
+    "identifier": "com.war3model.editor",
+    "build": {
+        "beforeDevCommand": "npm run dev",
+        "beforeBuildCommand": "npm run build",
+        "devUrl": "http://localhost:5173",
+        "frontendDist": "../out/renderer"
+    },
+    "app": {
+        "windows": [
+            {
+                "title": "War3 Model Editor",
+                "width": 1200,
+                "height": 800
+            }
+        ],
+        "security": {
+            "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: asset: https:; connect-src 'self' ipc: http://ipc.localhost;"
+        }
+    },
+    "bundle": {
+        "active": true,
+        "targets": "all",
+        "icon": [
+            "icons/icon.png",
+            "icons/icon.ico"
+        ]
+    }
+}

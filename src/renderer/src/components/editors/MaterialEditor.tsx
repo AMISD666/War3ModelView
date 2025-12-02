@@ -4,14 +4,18 @@ import { ReloadOutlined } from '@ant-design/icons'
 import MaterialList from './material/MaterialList'
 import MaterialDetail from './material/MaterialDetail'
 import LayerDetail from './material/LayerDetail'
+import { useModelStore } from '../../store/modelStore'
 
 interface MaterialEditorProps {
-    model: any
-    onUpdate: () => void
+    model?: any
+    onUpdate?: () => void
 }
 
-const MaterialEditor: React.FC<MaterialEditorProps> = ({ model, onUpdate }) => {
-    const [materials, setMaterials] = useState<any[]>([])
+const MaterialEditor: React.FC<MaterialEditorProps> = () => {
+    const modelData = useModelStore(state => state.modelData)
+    const setMaterials = useModelStore(state => state.setMaterials)
+
+    const [materials, setLocalMaterials] = useState<any[]>([])
     const [selectedMaterialIndex, setSelectedMaterialIndex] = useState<number>(-1)
     const [selectedLayerIndex, setSelectedLayerIndex] = useState<number>(-1)
 
@@ -20,45 +24,32 @@ const MaterialEditor: React.FC<MaterialEditorProps> = ({ model, onUpdate }) => {
     const [isLayerModalOpen, setIsLayerModalOpen] = useState(false)
 
     useEffect(() => {
-        if (model && model.Materials) {
-            setMaterials(JSON.parse(JSON.stringify(model.Materials)))
+        if (modelData && modelData.Materials) {
+            setLocalMaterials(JSON.parse(JSON.stringify(modelData.Materials)))
         } else {
-            setMaterials([])
+            setLocalMaterials([])
         }
-    }, [model])
-
-    // const handleUpdate = () => {
-    //     if (model) {
-    //         model.Materials = JSON.parse(JSON.stringify(materials))
-    //         onUpdate()
-    //     }
-    // }
+    }, [modelData])
 
     const updateMaterial = (updatedMaterial: any) => {
         const newMaterials = [...materials]
         newMaterials[selectedMaterialIndex] = updatedMaterial
-        setMaterials(newMaterials)
+        setLocalMaterials(newMaterials)
 
         // Auto-save
-        if (model) {
-            model.Materials = JSON.parse(JSON.stringify(newMaterials))
-            onUpdate()
-        }
+        setMaterials(JSON.parse(JSON.stringify(newMaterials)))
     }
 
     const updateLayer = (updatedLayer: any) => {
         const newMaterials = [...materials]
         newMaterials[selectedMaterialIndex].Layers[selectedLayerIndex] = updatedLayer
-        setMaterials(newMaterials)
+        setLocalMaterials(newMaterials)
 
         // Auto-save
-        if (model) {
-            model.Materials = JSON.parse(JSON.stringify(newMaterials))
-            onUpdate()
-        }
+        setMaterials(JSON.parse(JSON.stringify(newMaterials)))
     }
 
-    if (!model) return <div style={{ padding: 20, color: '#aaa' }}>未加载模型</div>
+    if (!modelData) return <div style={{ padding: 20, color: '#aaa' }}>未加载模型</div>
 
     return (
         <div style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: '10px' }}>
@@ -68,8 +59,8 @@ const MaterialEditor: React.FC<MaterialEditorProps> = ({ model, onUpdate }) => {
                     <Button
                         icon={<ReloadOutlined />}
                         onClick={() => {
-                            if (model && model.Materials) {
-                                setMaterials(JSON.parse(JSON.stringify(model.Materials)))
+                            if (modelData && modelData.Materials) {
+                                setLocalMaterials(JSON.parse(JSON.stringify(modelData.Materials)))
                             }
                         }}
                     />
@@ -126,7 +117,6 @@ const MaterialEditor: React.FC<MaterialEditorProps> = ({ model, onUpdate }) => {
                 {selectedMaterialIndex !== -1 && selectedLayerIndex !== -1 && materials[selectedMaterialIndex]?.Layers?.[selectedLayerIndex] && (
                     <LayerDetail
                         layer={materials[selectedMaterialIndex].Layers[selectedLayerIndex]}
-                        model={model}
                         onUpdate={updateLayer}
                         _onBack={() => setIsLayerModalOpen(false)}
                     />

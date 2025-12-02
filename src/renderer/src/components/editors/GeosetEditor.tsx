@@ -1,40 +1,41 @@
 import React, { useState, useEffect } from 'react'
 import { Table, Button, Space, message, Select, Tooltip, InputNumber } from 'antd'
 import { SaveOutlined, ReloadOutlined } from '@ant-design/icons'
+import { useModelStore } from '../../store/modelStore'
 
 interface GeosetEditorProps {
-    model: any
-    onUpdate: () => void
+    model?: any
+    onUpdate?: () => void
 }
 
-const GeosetEditor: React.FC<GeosetEditorProps> = ({ model, onUpdate }) => {
-    const [geosets, setGeosets] = useState<any[]>([])
+const GeosetEditor: React.FC<GeosetEditorProps> = () => {
+    const modelData = useModelStore(state => state.modelData)
+    const setGeosets = useModelStore(state => state.setGeosets)
+
+    const [geosets, setLocalGeosets] = useState<any[]>([])
     const [hasChanges, setHasChanges] = useState(false)
 
     useEffect(() => {
-        if (model && model.Geosets) {
-            setGeosets(JSON.parse(JSON.stringify(model.Geosets)))
+        if (modelData && modelData.Geosets) {
+            setLocalGeosets(JSON.parse(JSON.stringify(modelData.Geosets)))
             setHasChanges(false)
         } else {
-            setGeosets([])
+            setLocalGeosets([])
             setHasChanges(false)
         }
-    }, [model])
+    }, [modelData])
 
     const handleChange = (index: number, field: string, value: any) => {
         const newGeosets = [...geosets]
         newGeosets[index][field] = value
-        setGeosets(newGeosets)
+        setLocalGeosets(newGeosets)
         setHasChanges(true)
     }
 
     const handleApply = () => {
-        if (model) {
-            model.Geosets = JSON.parse(JSON.stringify(geosets))
-            setHasChanges(false)
-            onUpdate()
-            message.success('多边形设置已更新')
-        }
+        setGeosets(JSON.parse(JSON.stringify(geosets)))
+        setHasChanges(false)
+        message.success('多边形设置已更新')
     }
 
     const columns = [
@@ -54,10 +55,10 @@ const GeosetEditor: React.FC<GeosetEditorProps> = ({ model, onUpdate }) => {
                     value={val}
                     onChange={(v) => handleChange(index, 'MaterialID', v)}
                     style={{ width: '100%' }}
-                    options={model.Materials.map((_m: any, i: number) => ({
+                    options={(modelData as any)?.Materials?.map((_m: any, i: number) => ({
                         value: i,
                         label: `材质 ${i}`
-                    }))}
+                    })) || []}
                 />
             )
         },
@@ -85,7 +86,7 @@ const GeosetEditor: React.FC<GeosetEditorProps> = ({ model, onUpdate }) => {
         }
     ]
 
-    if (!model) return <div style={{ padding: 20, color: '#aaa' }}>未加载模型</div>
+    if (!modelData) return <div style={{ padding: 20, color: '#aaa' }}>未加载模型</div>
 
     return (
         <div style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: '10px' }}>
@@ -104,8 +105,8 @@ const GeosetEditor: React.FC<GeosetEditorProps> = ({ model, onUpdate }) => {
                     <Button
                         icon={<ReloadOutlined />}
                         onClick={() => {
-                            if (model && model.Geosets) {
-                                setGeosets(JSON.parse(JSON.stringify(model.Geosets)))
+                            if (modelData && modelData.Geosets) {
+                                setLocalGeosets(JSON.parse(JSON.stringify(modelData.Geosets)))
                                 setHasChanges(false)
                             }
                         }}

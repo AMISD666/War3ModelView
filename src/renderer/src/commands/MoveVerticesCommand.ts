@@ -10,7 +10,8 @@ export interface VertexChange {
 export class MoveVerticesCommand implements Command {
     constructor(
         private renderer: any,
-        private changes: VertexChange[]
+        private changes: VertexChange[],
+        private onSync?: (changes: VertexChange[]) => void
     ) { }
 
     execute() {
@@ -43,6 +44,14 @@ export class MoveVerticesCommand implements Command {
             if (this.renderer.updateGeosetVertices) {
                 this.renderer.updateGeosetVertices(geoIndex, geoset.Vertices)
             }
+        }
+
+        if (this.onSync) {
+            // We need to pass the effective changes (swapped if undoing)
+            this.onSync(this.changes.map(c => ({
+                ...c,
+                newPos: useNew ? c.newPos : c.oldPos
+            })))
         }
     }
 }

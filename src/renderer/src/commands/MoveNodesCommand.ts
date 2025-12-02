@@ -9,7 +9,8 @@ export interface NodeChange {
 export class MoveNodesCommand implements Command {
     constructor(
         private renderer: any,
-        private changes: NodeChange[]
+        private changes: NodeChange[],
+        private onSync?: (changes: NodeChange[]) => void
     ) { }
 
     execute() {
@@ -32,6 +33,13 @@ export class MoveNodesCommand implements Command {
             nodeWrapper.node.PivotPoint[0] = pivot[0]
             nodeWrapper.node.PivotPoint[1] = pivot[1]
             nodeWrapper.node.PivotPoint[2] = pivot[2]
+        }
+
+        if (this.onSync) {
+            this.onSync(this.changes.map(c => ({
+                ...c,
+                newPivot: useNew ? c.newPivot : c.oldPivot // If undoing, we sync the 'old' pivot as the new state
+            })))
         }
     }
 }

@@ -101,6 +101,7 @@ export interface ModelData {
     EventObject?: ModelNode[];
     CollisionShape?: ModelNode[];
     Camera?: ModelNode[];
+    _updateCounter?: number;
 }
 
 // 模型统计信息

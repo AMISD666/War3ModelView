@@ -231,6 +231,13 @@ export const NodeManagerWindow: React.FC = () => {
                 icon: <FireOutlined />,
                 onClick: () => setPe2DialogVisible(true)
             });
+        } else if (node.type === NodeType.PARTICLE_EMITTER || node.type === NodeType.RIBBON_EMITTER) {
+            items.push({
+                key: 'edit_particle_disabled',
+                label: '编辑粒子系统 (暂不支持)',
+                icon: <FireOutlined />,
+                disabled: true
+            });
         }
 
         items.push(

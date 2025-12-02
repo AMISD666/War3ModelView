@@ -1,15 +1,16 @@
 import React, { useState } from 'react'
 import { Checkbox, InputNumber, Button, Select, Space } from 'antd'
 import KeyframeEditor from '../KeyframeEditor'
+import { useModelStore } from '../../../store/modelStore'
 
 interface LayerDetailProps {
     layer: any
-    model: any
     onUpdate: (updatedLayer: any) => void
     _onBack: () => void
 }
 
-const LayerDetail: React.FC<LayerDetailProps> = ({ layer, model, onUpdate }) => {
+const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
+    const modelData = useModelStore(state => state.modelData)
     const [isKeyframeEditorOpen, setIsKeyframeEditorOpen] = useState(false)
     const [editingField, setEditingField] = useState<string | null>(null)
     const [editingVectorSize, setEditingVectorSize] = useState(1)
@@ -67,10 +68,10 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, model, onUpdate }) => 
         { value: 6, label: 'Modulate 2X' },
     ]
 
-    const textureOptions = model.Textures.map((t: any, i: number) => ({
+    const textureOptions = (modelData as any)?.Textures?.map((t: any, i: number) => ({
         value: i,
         label: `[${i}] ${t.Image ? t.Image.split(/[\\/]/).pop() : '无路径'}`
-    }))
+    })) || []
 
     const isAlphaAnimated = layer.Alpha && typeof layer.Alpha !== 'number'
     // const isTextureIDAnimated = layer.TextureID && typeof layer.TextureID !== 'number' // TextureID animation is complex (Int), let's focus on Alpha first
@@ -175,7 +176,7 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, model, onUpdate }) => 
                     initialData={layer[editingField]}
                     title={`Edit ${editingField}`}
                     vectorSize={editingVectorSize}
-                    globalSequences={model.GlobalSequences || []}
+                    globalSequences={(modelData as any)?.GlobalSequences || []}
                 />
             )}
         </div>

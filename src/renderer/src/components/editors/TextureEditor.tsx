@@ -2,45 +2,50 @@ import React, { useState, useEffect } from 'react'
 import { Table, Button, Input, Space, Modal, message, Tooltip } from 'antd'
 import { PlusOutlined, DeleteOutlined, SaveOutlined, ReloadOutlined } from '@ant-design/icons'
 import TextureDetail from './texture/TextureDetail'
+import { useModelStore } from '../../store/modelStore'
 
 interface TextureEditorProps {
-    model: any
+    model?: any
     modelPath?: string
-    onUpdate: () => void
+    onUpdate?: () => void
 }
 
-const TextureEditor: React.FC<TextureEditorProps> = ({ model, modelPath, onUpdate }) => {
-    const [textures, setTextures] = useState<any[]>([])
+const TextureEditor: React.FC<TextureEditorProps> = () => {
+    const modelData = useModelStore(state => state.modelData)
+    const modelPath = useModelStore(state => state.modelPath)
+    const setTextures = useModelStore(state => state.setTextures)
+
+    const [textures, setLocalTextures] = useState<any[]>([])
     const [hasChanges, setHasChanges] = useState(false)
     const [selectedTextureIndex, setSelectedTextureIndex] = useState<number>(-1)
     const [isModalOpen, setIsModalOpen] = useState(false)
 
     useEffect(() => {
-        if (model && model.Textures) {
-            setTextures(JSON.parse(JSON.stringify(model.Textures)))
+        if (modelData && modelData.Textures) {
+            setLocalTextures(JSON.parse(JSON.stringify(modelData.Textures)))
             setHasChanges(false)
         } else {
-            setTextures([])
+            setLocalTextures([])
             setHasChanges(false)
         }
-    }, [model])
+    }, [modelData])
 
     const handlePathChange = (index: number, newPath: string) => {
         const newTextures = [...textures]
         newTextures[index].Image = newPath
-        setTextures(newTextures)
+        setLocalTextures(newTextures)
         setHasChanges(true)
     }
 
     const handleUpdateTexture = (updatedTexture: any) => {
         const newTextures = [...textures]
         newTextures[selectedTextureIndex] = updatedTexture
-        setTextures(newTextures)
+        setLocalTextures(newTextures)
         setHasChanges(true)
     }
 
     const handleAddTexture = () => {
-        setTextures([...textures, { Image: 'Textures\\white.blp', ReplaceableId: 0, Flags: 0 }])
+        setLocalTextures([...textures, { Image: 'Textures\\white.blp', ReplaceableId: 0, Flags: 0 }])
         setHasChanges(true)
     }
 
@@ -50,19 +55,16 @@ const TextureEditor: React.FC<TextureEditorProps> = ({ model, modelPath, onUpdat
             content: '确定要删除这个纹理吗？',
             onOk: () => {
                 const newTextures = textures.filter((_, i) => i !== index)
-                setTextures(newTextures)
+                setLocalTextures(newTextures)
                 setHasChanges(true)
             }
         })
     }
 
     const handleApply = () => {
-        if (model) {
-            model.Textures = JSON.parse(JSON.stringify(textures))
-            setHasChanges(false)
-            onUpdate()
-            message.success('纹理已更新')
-        }
+        setTextures(JSON.parse(JSON.stringify(textures)))
+        setHasChanges(false)
+        message.success('纹理已更新')
     }
 
     const columns = [
@@ -104,7 +106,7 @@ const TextureEditor: React.FC<TextureEditorProps> = ({ model, modelPath, onUpdat
         }
     ]
 
-    if (!model) return <div style={{ padding: 20, color: '#aaa' }}>未加载模型</div>
+    if (!modelData) return <div style={{ padding: 20, color: '#aaa' }}>未加载模型</div>
 
     return (
         <div style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: '10px' }}>
@@ -126,8 +128,8 @@ const TextureEditor: React.FC<TextureEditorProps> = ({ model, modelPath, onUpdat
                     <Button
                         icon={<ReloadOutlined />}
                         onClick={() => {
-                            if (model && model.Textures) {
-                                setTextures(JSON.parse(JSON.stringify(model.Textures)))
+                            if (modelData && modelData.Textures) {
+                                setLocalTextures(JSON.parse(JSON.stringify(modelData.Textures)))
                                 setHasChanges(false)
                             }
                         }}
@@ -154,7 +156,7 @@ const TextureEditor: React.FC<TextureEditorProps> = ({ model, modelPath, onUpdat
             />
 
             <Modal
-                title={`贴图 [${model.Name || 'Model'}]`}
+                title={`贴图 [${(modelData as any).Name || 'Model'}]`}
                 open={isModalOpen}
                 onCancel={() => setIsModalOpen(false)}
                 footer={null}
@@ -165,7 +167,7 @@ const TextureEditor: React.FC<TextureEditorProps> = ({ model, modelPath, onUpdat
                 {selectedTextureIndex !== -1 && textures[selectedTextureIndex] && (
                     <TextureDetail
                         texture={textures[selectedTextureIndex]}
-                        modelPath={modelPath}
+                        modelPath={modelPath || ''}
                         onUpdate={handleUpdateTexture}
                         onClose={() => setIsModalOpen(false)}
                     />

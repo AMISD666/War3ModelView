@@ -1,25 +1,29 @@
 import React, { useState, useEffect } from 'react'
 import { Table, Button, Input, Space, Modal, message, InputNumber, Tooltip, Checkbox } from 'antd'
 import { PlusOutlined, DeleteOutlined, SaveOutlined, ReloadOutlined } from '@ant-design/icons'
+import { useModelStore } from '../../store/modelStore'
 
 interface SequenceEditorProps {
-    model: any
-    onUpdate: () => void
+    model?: any
+    onUpdate?: () => void
 }
 
-const SequenceEditor: React.FC<SequenceEditorProps> = ({ model, onUpdate }) => {
+const SequenceEditor: React.FC<SequenceEditorProps> = () => {
+    const storeSequences = useModelStore(state => state.sequences)
+    const setStoreSequences = useModelStore(state => state.setSequences)
+
     const [sequences, setSequences] = useState<any[]>([])
     const [hasChanges, setHasChanges] = useState(false)
 
     useEffect(() => {
-        if (model && model.Sequences) {
-            setSequences(JSON.parse(JSON.stringify(model.Sequences)))
+        if (storeSequences) {
+            setSequences(JSON.parse(JSON.stringify(storeSequences)))
             setHasChanges(false)
         } else {
             setSequences([])
             setHasChanges(false)
         }
-    }, [model])
+    }, [storeSequences])
 
     const handleChange = (index: number, field: string, value: any) => {
         const newSequences = [...sequences]
@@ -53,12 +57,9 @@ const SequenceEditor: React.FC<SequenceEditorProps> = ({ model, onUpdate }) => {
     }
 
     const handleApply = () => {
-        if (model) {
-            model.Sequences = JSON.parse(JSON.stringify(sequences))
-            setHasChanges(false)
-            onUpdate()
-            message.success('序列已更新')
-        }
+        setStoreSequences(JSON.parse(JSON.stringify(sequences)))
+        setHasChanges(false)
+        message.success('序列已更新')
     }
 
     const columns = [
@@ -137,8 +138,6 @@ const SequenceEditor: React.FC<SequenceEditorProps> = ({ model, onUpdate }) => {
         }
     ]
 
-    if (!model) return <div style={{ padding: 20, color: '#aaa' }}>未加载模型</div>
-
     return (
         <div style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: '10px' }}>
             <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -159,8 +158,8 @@ const SequenceEditor: React.FC<SequenceEditorProps> = ({ model, onUpdate }) => {
                     <Button
                         icon={<ReloadOutlined />}
                         onClick={() => {
-                            if (model && model.Sequences) {
-                                setSequences(JSON.parse(JSON.stringify(model.Sequences)))
+                            if (storeSequences) {
+                                setSequences(JSON.parse(JSON.stringify(storeSequences)))
                                 setHasChanges(false)
                             }
                         }}

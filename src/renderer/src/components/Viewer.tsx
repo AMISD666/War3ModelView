@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+﻿import React, { useEffect, useRef, useState } from 'react'
 import { ModelRenderer, parseMDX, parseMDL, decodeBLP, getBLPImageData } from 'war3-model'
 import { mat4, vec3, vec4, quat } from 'gl-matrix'
 import { GridRenderer } from './GridRenderer'
@@ -8,6 +8,7 @@ import { readFile } from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'
 import { useUIStore } from '../store/uiStore'
 import { useSelectionStore } from '../store/selectionStore'
+import { useModelStore } from '../store/modelStore'
 import { ModelInfoPanel } from './info/ModelInfoPanel'
 import { ViewerToolbar } from './ViewerToolbar'
 import { ConfigProvider, theme } from 'antd'
@@ -910,7 +911,7 @@ const Viewer: React.FC<ViewerProps> = ({
                   const blp = decodeBLP(mpqBuffer)
                   const mipLevel0 = getBLPImageData(blp, 0)
                   const idata = new ImageData(
-                    // 透明度    test
+                    // 閫忔槑搴?   test
                     new Uint8ClampedArray(mipLevel0.data),
                     mipLevel0.width,
                     mipLevel0.height
@@ -931,7 +932,7 @@ const Viewer: React.FC<ViewerProps> = ({
               let textureRelPath = normalize(texturePath)
               const modelDir = normalize(path.substring(0, path.lastIndexOf('\\')))
 
-              // 被截取掉了
+              // 琚埅鍙栨帀浜?
               // if (textureRelPath.toLowerCase().startsWith('war3mapimported\\')) {
               //   textureRelPath = textureRelPath.substring('war3mapimported\\'.length)
               // }
@@ -954,7 +955,7 @@ const Viewer: React.FC<ViewerProps> = ({
 
               console.info(`[Viewer] All textures: ${candidates}`)
 
-              // 这里的逻辑是先找MPQ，然后再找模型文件的当前目录，其实应该是先找当前，然后MPQ
+              // 杩欓噷鐨勯€昏緫鏄厛鎵綧PQ锛岀劧鍚庡啀鎵炬ā鍨嬫枃浠剁殑褰撳墠鐩綍锛屽叾瀹炲簲璇ユ槸鍏堟壘褰撳墠锛岀劧鍚嶮PQ
               for (const candidate of candidates) {
                 try {
                   const texBuffer = await readFile(candidate)
@@ -1440,6 +1441,13 @@ const Viewer: React.FC<ViewerProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
+  // Handle Animation Index Changes
+  useEffect(() => {
+    if (renderer && typeof (renderer as any).setSequence === 'function') {
+      (renderer as any).setSequence(animationIndex)
+    }
+  }, [renderer, animationIndex])
+
   // Reset animation when entering Geometry Mode to ensure Bind Pose
   useEffect(() => {
     if (appMainMode === 'geometry' && renderer) {
@@ -1879,7 +1887,20 @@ const Viewer: React.FC<ViewerProps> = ({
             })
 
             if (changes.length > 0) {
-              commandManager.execute(new MoveVerticesCommand(rendererRef.current, changes))
+              const cmd = new MoveVerticesCommand(
+                rendererRef.current,
+                changes,
+                (syncedChanges) => {
+                  const affectedGeosets = new Set(syncedChanges.map(c => c.geosetIndex))
+                  affectedGeosets.forEach(index => {
+                    const vertices = rendererRef.current?.model.Geosets[index].Vertices
+                    if (vertices) {
+                      useModelStore.getState().updateGeoset(index, { Vertices: Array.from(vertices) })
+                    }
+                  })
+                }
+              )
+              commandManager.execute(cmd)
               console.log('[Viewer] Vertex Move Command executed', changes.length)
             }
             initialVertexPositions.current.clear()
@@ -1904,7 +1925,18 @@ const Viewer: React.FC<ViewerProps> = ({
             })
 
             if (changes.length > 0) {
-              commandManager.execute(new MoveNodesCommand(rendererRef.current, changes))
+              const cmd = new MoveNodesCommand(
+                rendererRef.current,
+                changes,
+                (syncedChanges) => {
+                  const updates = syncedChanges.map(c => ({
+                    objectId: c.nodeId,
+                    data: { PivotPoint: c.newPivot }
+                  }))
+                  useModelStore.getState().updateNodes(updates)
+                }
+              )
+              commandManager.execute(cmd)
               console.log('[Viewer] Node Move Command executed', changes.length)
             }
             initialNodePositions.current.clear()
@@ -2079,10 +2111,9 @@ const Viewer: React.FC<ViewerProps> = ({
 
       <ViewerToolbar />
       <BoneBindingPanel />
-      {appMainMode === 'geometry' && <VertexEditor renderer={renderer} />}
+      {appMainMode === 'geometry' && <VertexEditor renderer={renderer} onBeginUpdate={() => { ignoreNextModelDataUpdate.current = true }} />}
     </div>
   )
 }
 
 export default Viewer
-

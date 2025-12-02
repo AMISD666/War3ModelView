@@ -1,0 +1,28 @@
+{
+    "$schema": "../gen/schemas/desktop-schema.json",
+    "identifier": "default",
+    "description": "Capability for the main window",
+    "windows": [
+        "main"
+    ],
+    "permissions": [
+        "fs:default",
+        "fs:allow-read-text-file",
+        "fs:allow-read-file",
+        "fs:allow-write-file",
+        "fs:allow-write-text-file",
+        "dialog:default",
+        "shell:allow-open",
+        "core:webview:allow-internal-toggle-devtools",
+        {
+            "identifier": "fs:scope",
+            "allow": [
+                "$HOME/**",
+                "C:/**",
+                "D:/**",
+                "E:/**",
+                "F:/**"
+            ]
+        }
+    ]
+}

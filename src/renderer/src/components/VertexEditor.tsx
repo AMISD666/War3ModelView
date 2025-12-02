@@ -1,19 +1,25 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useRef } from 'react'
 import { ModelRenderer } from 'war3-model'
 import { useSelectionStore } from '../store/selectionStore'
 import { InputNumber } from 'antd'
+import { commandManager } from '../utils/CommandManager'
+import { MoveVerticesCommand, VertexChange } from '../commands/MoveVerticesCommand'
+import { useModelStore } from '../store/modelStore'
 
 interface VertexEditorProps {
     renderer: ModelRenderer | null
+    onBeginUpdate?: () => void
 }
 
-export const VertexEditor: React.FC<VertexEditorProps> = ({ renderer }) => {
+export const VertexEditor: React.FC<VertexEditorProps> = ({ renderer, onBeginUpdate }) => {
     const { selectedVertexIds, geometrySubMode, mainMode } = useSelectionStore()
     const [position, setPosition] = useState<[number, number, number] | null>(null)
+    const startPosition = useRef<[number, number, number] | null>(null)
 
     useEffect(() => {
         if (!renderer || selectedVertexIds.length !== 1 || geometrySubMode !== 'vertex' || mainMode !== 'geometry') {
             setPosition(null)
+            startPosition.current = null
             return
         }
 
@@ -21,32 +27,74 @@ export const VertexEditor: React.FC<VertexEditorProps> = ({ renderer }) => {
         const geoset = renderer.model.Geosets[sel.geosetIndex]
         if (geoset) {
             const vIndex = sel.index * 3
-            setPosition([
+            const pos: [number, number, number] = [
                 geoset.Vertices[vIndex],
                 geoset.Vertices[vIndex + 1],
                 geoset.Vertices[vIndex + 2]
-            ])
+            ]
+            setPosition(pos)
+            startPosition.current = [...pos]
         }
     }, [renderer, selectedVertexIds, geometrySubMode, mainMode])
 
     const handleChange = (index: number, value: number | null) => {
-        if (value === null || !renderer || selectedVertexIds.length !== 1) return
+        if (value === null || !renderer || selectedVertexIds.length !== 1 || !position) return
 
+        const newPos = [...position] as [number, number, number]
+        newPos[index] = value
+        setPosition(newPos)
+
+        // Preview in renderer
         const sel = selectedVertexIds[0]
         const geoset = renderer.model.Geosets[sel.geosetIndex]
         if (geoset) {
             const vIndex = sel.index * 3
-            const newPos = [...(position || [0, 0, 0])] as [number, number, number]
-            newPos[index] = value
-            setPosition(newPos)
-
-            // Update Model
             geoset.Vertices[vIndex + index] = value
-
             if ((renderer as any).updateGeosetVertices) {
                 (renderer as any).updateGeosetVertices(sel.geosetIndex, geoset.Vertices)
             }
         }
+    }
+
+    const handleCommit = () => {
+        if (!renderer || selectedVertexIds.length !== 1 || !position || !startPosition.current) return
+
+        // Check if changed
+        if (
+            position[0] === startPosition.current[0] &&
+            position[1] === startPosition.current[1] &&
+            position[2] === startPosition.current[2]
+        ) {
+            return
+        }
+
+        if (onBeginUpdate) onBeginUpdate()
+
+        const sel = selectedVertexIds[0]
+        const change: VertexChange = {
+            geosetIndex: sel.geosetIndex,
+            vertexIndex: sel.index,
+            oldPos: startPosition.current,
+            newPos: position
+        }
+
+        const cmd = new MoveVerticesCommand(
+            renderer,
+            [change],
+            (syncedChanges) => {
+                const affectedGeosets = new Set(syncedChanges.map(c => c.geosetIndex))
+                affectedGeosets.forEach(index => {
+                    const vertices = renderer.model.Geosets[index].Vertices
+                    if (vertices) {
+                        useModelStore.getState().updateGeoset(index, { Vertices: Array.from(vertices) })
+                    }
+                })
+            }
+        )
+        commandManager.execute(cmd)
+
+        // Update start position for next edit
+        startPosition.current = [...position]
     }
 
     if (!position) return null
@@ -72,6 +120,8 @@ export const VertexEditor: React.FC<VertexEditorProps> = ({ renderer }) => {
                     size="small"
                     value={position[0]}
                     onChange={(v) => handleChange(0, v)}
+                    onBlur={handleCommit}
+                    onPressEnter={handleCommit}
                     style={{ width: '80px', backgroundColor: '#1f1f1f', color: 'white', border: '1px solid #434343' }}
                 />
             </div>
@@ -81,6 +131,8 @@ export const VertexEditor: React.FC<VertexEditorProps> = ({ renderer }) => {
                     size="small"
                     value={position[1]}
                     onChange={(v) => handleChange(1, v)}
+                    onBlur={handleCommit}
+                    onPressEnter={handleCommit}
                     style={{ width: '80px', backgroundColor: '#1f1f1f', color: 'white', border: '1px solid #434343' }}
                 />
             </div>
@@ -90,6 +142,8 @@ export const VertexEditor: React.FC<VertexEditorProps> = ({ renderer }) => {
                     size="small"
                     value={position[2]}
                     onChange={(v) => handleChange(2, v)}
+                    onBlur={handleCommit}
+                    onPressEnter={handleCommit}
                     style={{ width: '80px', backgroundColor: '#1f1f1f', color: 'white', border: '1px solid #434343' }}
                 />
             </div>
