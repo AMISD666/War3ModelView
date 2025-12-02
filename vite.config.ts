@@ -9,8 +9,7 @@ export default defineConfig({
     // Same configuration as electron.vite.config.ts renderer section
     resolve: {
         alias: {
-            '@renderer': resolve(__dirname, 'src/renderer/src'),
-            'war3-model': resolve(__dirname, '../war3-model-4.0.0')
+            '@renderer': resolve(__dirname, 'src/renderer/src')
         }
     },
 
