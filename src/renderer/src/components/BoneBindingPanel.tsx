@@ -31,7 +31,9 @@ const BoneBindingPanel: React.FC = () => {
             if (!matrixGroup) return
 
             // Handle both 'Matrix' (MDL) and 'matrices' (Type definition)
-            const matrix = matrixGroup.Matrix || matrixGroup.matrices
+            // Groups is number[][] so matrixGroup is number[]
+            const matrix = matrixGroup
+            console.log('[BoneBindingPanel] Processing Vertex:', sel, 'GroupIndex:', matrixGroupIndex, 'Matrix:', matrix)
 
             if (matrix && Array.isArray(matrix)) {
                 matrix.forEach((nodeIndex: number) => {
@@ -58,7 +60,7 @@ const BoneBindingPanel: React.FC = () => {
         <div style={{
             position: 'absolute',
             right: 20,
-            top: 60,
+            top: 120,
             width: 200,
             maxHeight: 400,
             backgroundColor: 'rgba(0, 0, 0, 0.7)',

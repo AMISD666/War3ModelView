@@ -1,0 +1,15 @@
+[plugin:vite:import-analysis] Failed to parse source for import analysis because the content contains invalid JS syntax. If you are using JSX, make sure to name the file with the .jsx or .tsx extension.
+../../renderer/ribbons.ts:761:0
+8014|      this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, emitter.creationTimes.length * 2);
+8015|    }
+8016|  }
+   |  ^
+8017|  const vertexShaderHardwareSkinningSource = "attribute vec3 aVertexPosition;\nattribute vec3 aNormal;\nattribute vec2 aTextureCoord;\nattribute vec4 aGroup;\n\nuniform mat4 uMVMatrix;\nuniform mat4 uPMatrix;\nuniform mat4 uNodesMatrices[${MAX_NODES}];\n\nvarying vec3 vNormal;\nvarying vec2 vTextureCoord;\n\nvoid main(void) {\n    vec4 position = vec4(aVertexPosition, 1.0);\n    int count = 1;\n    vec4 sum = uNodesMatrices[int(aGroup[0])] * position;\n\n    if (aGroup[1] < ${MAX_NODES}.) {\n        sum += uNodesMatrices[int(aGroup[1])] * position;\n        count += 1;\n    }\n    if (aGroup[2] < ${MAX_NODES}.) {\n        sum += uNodesMatrices[int(aGroup[2])] * position;\n        count += 1;\n    }\n    if (aGroup[3] < ${MAX_NODES}.) {\n        sum += uNodesMatrices[int(aGroup[3])] * position;\n        count += 1;\n    }\n    sum.xyz /= float(count);\n    sum.w = 1.;\n    position = sum;\n\n    gl_Position = uPMatrix * uMVMatrix * position;\n    vTextureCoord = aTextureCoord;\n    vNormal = aNormal;\n}";
+8018|  const vertexShaderSoftwareSkinning = "attribute vec3 aVertexPosition;\nattribute vec3 aNormal;\nattribute vec2 aTextureCoord;\n\nuniform mat4 uMVMatrix;\nuniform mat4 uPMatrix;\n\nvarying vec3 vNormal;\nvarying vec2 vTextureCoord;\n\nvoid main(void) {\n    vec4 position = vec4(aVertexPosition, 1.0);\n    gl_Position = uPMatrix * uMVMatrix * position;\n    vTextureCoord = aTextureCoord;\n    vNormal = aNormal;\n}";
+    at TransformPluginContext._formatError (file:///D:/Desktop/war3modelview/War3ModelView/node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:49258:41)
+    at TransformPluginContext.error (file:///D:/Desktop/war3modelview/War3ModelView/node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:49253:16)
+    at TransformPluginContext.transform (file:///D:/Desktop/war3modelview/War3ModelView/node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:64259:14)
+    at async PluginContainer.transform (file:///D:/Desktop/war3modelview/War3ModelView/node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:49099:18)
+    at async loadAndTransform (file:///D:/Desktop/war3modelview/War3ModelView/node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:51978:27
+Click outside, press Esc key, or fix the code to dismiss.
+You can also disable this overlay by setting server.hmr.overlay to false in vite.config.ts.

@@ -23,6 +23,9 @@ interface MenuBarProps {
     onToggleEditor: (editor: string) => void
     mainMode: 'view' | 'geometry' | 'uv' | 'animation'
     onSetMainMode: (mode: 'view' | 'geometry' | 'uv' | 'animation') => void
+    showDebugConsole: boolean
+    onToggleDebugConsole: () => void
+    onShowAbout: () => void
 }
 
 const MenuBar: React.FC<MenuBarProps> = ({
@@ -47,7 +50,10 @@ const MenuBar: React.FC<MenuBarProps> = ({
     onSetViewPreset,
     onToggleEditor,
     mainMode,
-    onSetMainMode
+    onSetMainMode,
+    showDebugConsole,
+    onToggleDebugConsole,
+    onShowAbout
 }) => {
     const [activeMenu, setActiveMenu] = useState<string | null>(null)
     const menuRef = useRef<HTMLDivElement>(null)
@@ -420,6 +426,33 @@ const MenuBar: React.FC<MenuBarProps> = ({
                                     <option key={i} value={i}>玩家 {i + 1} ({['红', '蓝', '青', '紫', '黄', '橙', '绿', '粉', '灰', '浅蓝', '暗绿', '棕', '栗'][i] || '未知'})</option>
                                 ))}
                             </select>
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            {/* Help Menu */}
+            <div style={menuStyle} onClick={() => toggleMenu('help')}>
+                帮助
+                {activeMenu === 'help' && (
+                    <div style={dropdownStyle}>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={() => { onToggleDebugConsole(); }}
+                        >
+                            <span>显示调试控制台</span>
+                            <span>{showDebugConsole ? '✓' : ''}</span>
+                        </div>
+                        <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={() => { onShowAbout(); closeMenu() }}
+                        >
+                            关于
                         </div>
                     </div>
                 )}

@@ -95,18 +95,54 @@ const MainLayout: React.FC = () => {
     // Auto-load MPQs
     useEffect(() => {
         const loadSavedMpqs = async () => {
+            const { invoke } = await import('@tauri-apps/api/core')
             const savedPaths = localStorage.getItem('mpq_paths')
+
             if (savedPaths) {
                 try {
                     const paths = JSON.parse(savedPaths)
-                    const { invoke } = await import('@tauri-apps/api/core')
                     let count = 0
                     for (const path of paths) {
                         await invoke('load_mpq', { path })
                         count++
                     }
                 } catch (e) {
-                    console.error('[MainLayout] Failed to auto-load MPQs:', e)
+                    console.error('[MainLayout] Failed to auto-load saved MPQs:', e)
+                }
+            } else {
+                // Try auto-detection from Registry
+                try {
+                    console.log('[MainLayout] Attempting to auto-detect Warcraft III path...')
+                    const installPath = await invoke<string>('detect_warcraft_path')
+                    if (installPath) {
+                        console.log('[MainLayout] Detected Warcraft III path:', installPath)
+                        const mpqs = ['war3.mpq', 'War3Patch.mpq', 'War3x.mpq', 'War3xLocal.mpq']
+                        // Ensure path ends with backslash
+                        const basePath = installPath.endsWith('\\') ? installPath : `${installPath}\\`
+
+                        const pathsToLoad = mpqs.map(mpq => `${basePath}${mpq}`)
+                        const validPaths: string[] = []
+
+                        let count = 0
+                        for (const path of pathsToLoad) {
+                            try {
+                                await invoke('load_mpq', { path })
+                                validPaths.push(path)
+                                count++
+                                console.log(`[MainLayout] Loaded ${path}`)
+                            } catch (e) {
+                                console.warn(`[MainLayout] Failed to load ${path}:`, e)
+                            }
+                        }
+
+                        if (count > 0) {
+                            // Save found paths to localStorage so user can see/manage them later if we add a manager
+                            localStorage.setItem('mpq_paths', JSON.stringify(validPaths))
+                            // alert(`已自动检测并加载了 ${count} 个魔兽争霸 MPQ 文件！`)
+                        }
+                    }
+                } catch (e) {
+                    console.log('[MainLayout] Auto-detection failed (registry key not found or error):', e)
                 }
             }
         }
@@ -268,6 +304,18 @@ const MainLayout: React.FC = () => {
         setActiveEditor(activeEditor === editor ? null : editor)
     }
 
+    // Debug Console State
+    const [showDebugConsole, setShowDebugConsole] = useState<boolean>(() => loadSetting('showDebugConsole', false))
+    const [showAbout, setShowAbout] = useState<boolean>(false)
+
+    useEffect(() => {
+        localStorage.setItem('showDebugConsole', JSON.stringify(showDebugConsole))
+        // Invoke Rust command to toggle console
+        import('@tauri-apps/api/core').then(({ invoke }) => {
+            invoke('toggle_console', { show: showDebugConsole }).catch(e => console.error('Failed to toggle console:', e))
+        })
+    }, [showDebugConsole])
+
     return (
         <div style={{
             display: 'flex',
@@ -312,7 +360,52 @@ const MainLayout: React.FC = () => {
                 }}
                 mainMode={mainMode}
                 onSetMainMode={setMainMode}
+                showDebugConsole={showDebugConsole}
+                onToggleDebugConsole={() => setShowDebugConsole(!showDebugConsole)}
+                onShowAbout={() => setShowAbout(true)}
             />
+
+            {/* About Dialog */}
+            {showAbout && (
+                <div style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 2000
+                }} onClick={() => setShowAbout(false)}>
+                    <div style={{
+                        backgroundColor: '#333',
+                        padding: '20px',
+                        borderRadius: '8px',
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+                        minWidth: '300px',
+                        textAlign: 'center',
+                        border: '1px solid #555'
+                    }} onClick={e => e.stopPropagation()}>
+                        <h3 style={{ marginTop: 0, marginBottom: '15px' }}>关于</h3>
+                        <p style={{ fontSize: '18px', margin: '20px 0' }}>测试1.0</p>
+                        <button
+                            onClick={() => setShowAbout(false)}
+                            style={{
+                                padding: '6px 16px',
+                                backgroundColor: '#007acc',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '4px',
+                                cursor: 'pointer'
+                            }}
+                        >
+                            确定
+                        </button>
+                    </div>
+                </div>
+            )}
 
             <div style={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative' }}>
                 {/* Left Panel - Animation & Browser */}

@@ -13,6 +13,7 @@ import { ViewerToolbar } from './ViewerToolbar'
 import { ConfigProvider, theme } from 'antd'
 import { commandManager } from '../utils/CommandManager'
 import { MoveVerticesCommand, VertexChange } from '../commands/MoveVerticesCommand'
+import { MoveNodesCommand, NodeChange } from '../commands/MoveNodesCommand'
 import { VertexEditor } from './VertexEditor'
 import BoneBindingPanel from './BoneBindingPanel'
 interface ViewerProps {
@@ -143,6 +144,7 @@ const Viewer: React.FC<ViewerProps> = ({
   })
 
   const initialVertexPositions = useRef<Map<string, [number, number, number]>>(new Map())
+  const initialNodePositions = useRef<Map<number, [number, number, number]>>(new Map())
 
   // Gizmo state
   const gizmoState = useRef<{
@@ -302,6 +304,7 @@ const Viewer: React.FC<ViewerProps> = ({
   }
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const { mainMode } = useSelectionStore.getState()
     // Check for Gizmo interaction first
     if (gizmoState.current.activeAxis && e.button === 0) {
       gizmoState.current.isDragging = true
@@ -336,6 +339,18 @@ const Viewer: React.FC<ViewerProps> = ({
             captureVertex(sel.geosetIndex, geoset.Faces[fIndex + 2])
           }
         })
+      } else if (mainMode === 'animation' && animationSubMode === 'binding') {
+        // Capture initial node positions
+        initialNodePositions.current.clear()
+        const { selectedNodeIds } = useSelectionStore.getState()
+        if (renderer && renderer.rendererData && renderer.rendererData.nodes) {
+          selectedNodeIds.forEach(nodeId => {
+            const nodeWrapper = renderer.rendererData.nodes.find(n => n.node.ObjectId === nodeId)
+            if (nodeWrapper && nodeWrapper.node.PivotPoint) {
+              initialNodePositions.current.set(nodeId, [nodeWrapper.node.PivotPoint[0], nodeWrapper.node.PivotPoint[1], nodeWrapper.node.PivotPoint[2]])
+            }
+          })
+        }
       }
       return // Consume event
     }
@@ -348,7 +363,7 @@ const Viewer: React.FC<ViewerProps> = ({
     mouseState.current.startY = e.clientY
 
     // Check for box selection start
-    const { mainMode } = useSelectionStore.getState()
+    // const { mainMode } = useSelectionStore.getState() // Moved to top
     // const isCtrl = e.ctrlKey || e.metaKey
 
     // Box Selection: Alt + Left Click
@@ -379,7 +394,7 @@ const Viewer: React.FC<ViewerProps> = ({
   const handleBoxSelection = (startX: number, startY: number, endX: number, endY: number, isShift: boolean, isCtrl: boolean) => {
     if (!rendererRef.current || !canvasRef.current) return
 
-    const { mainMode, geometrySubMode, addVertexSelection, addFaceSelection, removeVertexSelection, removeFaceSelection, selectVertices, selectFaces, selectNodes } = useSelectionStore.getState()
+    const { mainMode, animationSubMode, geometrySubMode, addVertexSelection, addFaceSelection, removeVertexSelection, removeFaceSelection, selectVertices, selectFaces, selectNodes } = useSelectionStore.getState()
 
     if (mainMode !== 'geometry' && mainMode !== 'animation') return
 
@@ -399,7 +414,7 @@ const Viewer: React.FC<ViewerProps> = ({
     vec3.add(cameraPos, cameraPos, target)
 
     const pMatrix = mat4.create()
-    mat4.perspective(pMatrix, Math.PI / 4, canvasRef.current.width / canvasRef.current.height, 1, 20000)
+    mat4.perspective(pMatrix, Math.PI / 4, canvasRef.current.width / canvasRef.current.height, 1, 100000)
 
     const mvMatrix = mat4.create()
     const cameraUp = vec3.fromValues(0, 0, 1)
@@ -436,7 +451,7 @@ const Viewer: React.FC<ViewerProps> = ({
       return vec3.fromValues(x, y, ndc[2])
     }
 
-    if (geometrySubMode === 'vertex') {
+    if (geometrySubMode === 'vertex' || (mainMode === 'animation' && animationSubMode === 'binding')) {
       const newSelection: { geosetIndex: number, index: number }[] = []
       if (!rendererRef.current) return
       for (let i = 0; i < rendererRef.current.model.Geosets.length; i++) {
@@ -505,7 +520,7 @@ const Viewer: React.FC<ViewerProps> = ({
       } else {
         selectFaces(newSelection)
       }
-    } else if (mainMode === 'animation') {
+    } else if (mainMode === 'animation' && animationSubMode !== 'binding') {
       // Box Select Nodes
       const newSelection: number[] = []
       if (!rendererRef.current || !rendererRef.current.rendererData || !rendererRef.current.rendererData.nodes) return
@@ -539,9 +554,11 @@ const Viewer: React.FC<ViewerProps> = ({
   const handleSelectionClick = (clientX: number, clientY: number, isShift: boolean, isCtrl: boolean) => {
     if (!rendererRef.current || !canvasRef.current) return
 
-    const { mainMode, geometrySubMode, selectVertex, selectFace, addVertexSelection, addFaceSelection, removeVertexSelection, removeFaceSelection, clearAllSelections, selectNode } = useSelectionStore.getState()
+    const { mainMode, animationSubMode, geometrySubMode, selectVertex, selectFace, addVertexSelection, addFaceSelection, removeVertexSelection, removeFaceSelection, clearAllSelections, selectNode } = useSelectionStore.getState()
 
     // Handle Animation Mode Bone Selection
+    // In Binding Mode, we want to allow selecting BOTH nodes and vertices.
+    // Priority: Node > Vertex (if clicked on both)
     if (mainMode === 'animation') {
       // Simple distance check for nodes
       // Project all nodes to screen and find closest
@@ -558,7 +575,7 @@ const Viewer: React.FC<ViewerProps> = ({
       vec3.add(cameraPos, cameraPos, target)
 
       const pMatrix = mat4.create()
-      mat4.perspective(pMatrix, Math.PI / 4, canvasRef.current.width / canvasRef.current.height, 1, 20000)
+      mat4.perspective(pMatrix, Math.PI / 4, canvasRef.current.width / canvasRef.current.height, 1, 100000)
 
       const mvMatrix = mat4.create()
       const cameraUp = vec3.fromValues(0, 0, 1)
@@ -610,13 +627,19 @@ const Viewer: React.FC<ViewerProps> = ({
 
       if (closestNodeId !== -1) {
         selectNode(closestNodeId, isCtrl) // Support multi-select with Ctrl
-      } else if (!isCtrl) {
-        selectNode(-1) // Clear selection
+        return // Stop here if we hit a node
+      } else if (!isCtrl && animationSubMode !== 'binding') {
+        // Only clear selection if NOT in binding mode (because in binding mode we might want to select a vertex next)
+        selectNode(-1)
       }
-      return
+
+      // If we are in Binding Mode and didn't hit a node, continue to vertex selection
+      if (animationSubMode !== 'binding') {
+        return
+      }
     }
 
-    if (mainMode !== 'geometry') return
+    if (mainMode !== 'geometry' && !(mainMode === 'animation' && animationSubMode === 'binding')) return
 
     const rect = canvasRef.current.getBoundingClientRect()
     const x = clientX - rect.left
@@ -632,7 +655,7 @@ const Viewer: React.FC<ViewerProps> = ({
     vec3.add(cameraPos, cameraPos, target)
 
     const pMatrix = mat4.create()
-    mat4.perspective(pMatrix, Math.PI / 4, canvasRef.current.width / canvasRef.current.height, 1, 20000)
+    mat4.perspective(pMatrix, Math.PI / 4, canvasRef.current.width / canvasRef.current.height, 1, 100000)
 
     const mvMatrix = mat4.create()
     const cameraUp = vec3.fromValues(0, 0, 1)
@@ -660,10 +683,13 @@ const Viewer: React.FC<ViewerProps> = ({
     const rayDir = vec3.fromValues(rayWorld[0], rayWorld[1], rayWorld[2])
     vec3.normalize(rayDir, rayDir)
 
-    const result = rendererRef.current.raycast(cameraPos, rayDir, geometrySubMode)
+    // In Binding Mode, treat as vertex selection
+    const effectiveSubMode = (mainMode === 'animation' && animationSubMode === 'binding') ? 'vertex' : geometrySubMode
+
+    const result = rendererRef.current.raycast(cameraPos, rayDir, effectiveSubMode)
 
     if (result) {
-      if (geometrySubMode === 'vertex') {
+      if (effectiveSubMode === 'vertex') {
         const sel = result as { geosetIndex: number, index: number }
         if (isShift) {
           removeVertexSelection([sel])
@@ -722,6 +748,20 @@ const Viewer: React.FC<ViewerProps> = ({
           break
         case '6': // Bottom
           targetCamera.current.phi = Math.PI - 0.01
+          break
+        case 'z':
+          if (e.ctrlKey || e.metaKey) {
+            if (e.shiftKey) {
+              commandManager.redo()
+            } else {
+              commandManager.undo()
+            }
+          }
+          break
+        case 'y':
+          if (e.ctrlKey || e.metaKey) {
+            commandManager.redo()
+          }
           break
       }
     }
@@ -804,7 +844,7 @@ const Viewer: React.FC<ViewerProps> = ({
       // Create WebGL context with alpha channel enabled
       const contextAttributes: WebGLContextAttributes = {
         alpha: true,
-        premultipliedAlpha: true,  // Changed from false to true
+        premultipliedAlpha: true,
         preserveDrawingBuffer: false
       }
 
@@ -817,7 +857,7 @@ const Viewer: React.FC<ViewerProps> = ({
         return
       }
 
-      gl.clearColor(0.2, 0.2, 0.2, 0)  // Changed from 1.0 to 0 to support transparency
+      gl.clearColor(0.2, 0.2, 0.2, 0)
       gl.enable(gl.DEPTH_TEST)
       gl.depthFunc(gl.LEQUAL)
       gl.enable(gl.BLEND)
@@ -870,6 +910,7 @@ const Viewer: React.FC<ViewerProps> = ({
                   const blp = decodeBLP(mpqBuffer)
                   const mipLevel0 = getBLPImageData(blp, 0)
                   const idata = new ImageData(
+                    // 透明度    test
                     new Uint8ClampedArray(mipLevel0.data),
                     mipLevel0.width,
                     mipLevel0.height
@@ -890,9 +931,10 @@ const Viewer: React.FC<ViewerProps> = ({
               let textureRelPath = normalize(texturePath)
               const modelDir = normalize(path.substring(0, path.lastIndexOf('\\')))
 
-              if (textureRelPath.toLowerCase().startsWith('war3mapimported\\')) {
-                textureRelPath = textureRelPath.substring('war3mapimported\\'.length)
-              }
+              // 被截取掉了
+              // if (textureRelPath.toLowerCase().startsWith('war3mapimported\\')) {
+              //   textureRelPath = textureRelPath.substring('war3mapimported\\'.length)
+              // }
 
               const candidates: string[] = []
               candidates.push(`${modelDir}\\${textureRelPath}`)
@@ -910,6 +952,9 @@ const Viewer: React.FC<ViewerProps> = ({
                 candidates.push(`${currentDir}\\${textureRelPath}`)
               }
 
+              console.info(`[Viewer] All textures: ${candidates}`)
+
+              // 这里的逻辑是先找MPQ，然后再找模型文件的当前目录，其实应该是先找当前，然后MPQ
               for (const candidate of candidates) {
                 try {
                   const texBuffer = await readFile(candidate)
@@ -1092,7 +1137,7 @@ const Viewer: React.FC<ViewerProps> = ({
     if (renderer && canvasRef.current) {
       const contextAttributes: WebGLContextAttributes = {
         alpha: true,
-        premultipliedAlpha: true  // Changed from false to true
+        premultipliedAlpha: true
       }
       const gl = canvasRef.current.getContext('webgl2', contextAttributes) || canvasRef.current.getContext('webgl', contextAttributes)
       if (!gl) return undefined
@@ -1148,7 +1193,7 @@ const Viewer: React.FC<ViewerProps> = ({
         vec3.add(cameraPos, cameraPos, target) // Add target offset
 
         mat4.lookAt(mvMatrix, cameraPos, target, cameraUp)
-        mat4.perspective(pMatrix, Math.PI / 4, canvas.width / canvas.height, 1, 5000)
+        mat4.perspective(pMatrix, Math.PI / 4, canvas.width / canvas.height, 1, 100000)
 
         const { geometrySubMode, transformMode, selectedVertexIds, selectedFaceIds } = useSelectionStore.getState()
 
@@ -1189,11 +1234,38 @@ const Viewer: React.FC<ViewerProps> = ({
           mdlRenderer.render(mvMatrix, pMatrix, { wireframe: showWireframeRef.current || (appMainMode === 'geometry' && geometrySubMode === 'face') })
 
           // Render nodes (debug) - not in geometry mode, but OK in binding mode
-          if (showNodesRef.current && mdlRenderer.rendererData.nodes && appMainMode !== 'geometry') {
-            debugRenderer.current.renderNodes(gl as WebGLRenderingContext, mvMatrix, pMatrix, mdlRenderer.rendererData.nodes as any)
+          // Force show nodes in Binding Mode (User requested "Bone Nodes" not "Skeleton")
+          if ((showNodesRef.current || (appMainMode === 'animation' && animationSubMode === 'binding')) && mdlRenderer.rendererData.nodes && appMainMode !== 'geometry') {
+            const { selectedNodeIds } = useSelectionStore.getState()
+            let parentOfSelected: number | null = null
+            let childrenOfSelected: number[] = []
+
+            if (selectedNodeIds.length === 1) {
+              const selectedId = selectedNodeIds[0]
+              const selectedNode = mdlRenderer.rendererData.nodes.find(n => n.node.ObjectId === selectedId)
+              if (selectedNode) {
+                if (typeof selectedNode.node.Parent === 'number') {
+                  parentOfSelected = selectedNode.node.Parent
+                }
+                childrenOfSelected = mdlRenderer.rendererData.nodes
+                  .filter(n => n.node.Parent === selectedId)
+                  .map(n => n.node.ObjectId)
+              }
+            }
+
+            debugRenderer.current.renderNodes(
+              gl as WebGLRenderingContext,
+              mvMatrix,
+              pMatrix,
+              mdlRenderer.rendererData.nodes as any,
+              selectedNodeIds,
+              parentOfSelected,
+              childrenOfSelected
+            )
           }
 
           // Render skeleton - show in animation mode (including binding submode), but not in geometry mode
+          // Do NOT force skeleton in Binding Mode (User reported "Ghosting" and explicitly asked for Nodes instead)
           if (showSkeletonRef.current && mdlRenderer.rendererData.nodes && appMainMode === 'animation') {
             gl.disable(gl.DEPTH_TEST)
             mdlRenderer.renderSkeleton(mvMatrix, pMatrix, null)
@@ -1388,8 +1460,8 @@ const Viewer: React.FC<ViewerProps> = ({
       const { transformMode, mainMode } = useSelectionStore.getState()
       const axis = gizmoState.current.activeAxis
 
-      // Only allow vertex/face transformation in Geometry Mode
-      if (mainMode !== 'geometry') {
+      // Only allow vertex/face transformation in Geometry Mode OR Bone Binding Mode
+      if (mainMode !== 'geometry' && !(mainMode === 'animation' && animationSubMode === 'binding')) {
         return
       }
 
@@ -1411,7 +1483,7 @@ const Viewer: React.FC<ViewerProps> = ({
       vec3.scaleAndAdd(worldMoveDelta, worldMoveDelta, right, deltaX * moveScale)
       vec3.scaleAndAdd(worldMoveDelta, worldMoveDelta, camUp, -deltaY * moveScale) // Inverted Y
 
-      if (transformMode === 'translate') {
+      if (transformMode === 'translate' && mainMode === 'geometry') {
         const moveVec = vec3.create()
 
         if (axis === 'x') moveVec[0] = -worldMoveDelta[0] // Invert X
@@ -1462,6 +1534,29 @@ const Viewer: React.FC<ViewerProps> = ({
             (rendererRef.current as any).updateGeosetVertices(geosetIndex, geoset.Vertices)
           }
         })
+
+      } else if (transformMode === 'translate' && mainMode === 'animation' && animationSubMode === 'binding') {
+        // Handle Bone Translation (Pivot Point)
+        const { selectedNodeIds } = useSelectionStore.getState()
+        const moveVec = vec3.create()
+
+        if (axis === 'x') moveVec[0] = -worldMoveDelta[0] // Invert X
+        else if (axis === 'y') moveVec[1] = -worldMoveDelta[1] // Invert Y
+        else if (axis === 'z') moveVec[2] = worldMoveDelta[2]
+        else if (axis === 'xy') { moveVec[0] = -worldMoveDelta[0]; moveVec[1] = -worldMoveDelta[1]; }
+        else if (axis === 'xz') { moveVec[0] = -worldMoveDelta[0]; moveVec[2] = worldMoveDelta[2]; }
+        else if (axis === 'yz') { moveVec[1] = -worldMoveDelta[1]; moveVec[2] = worldMoveDelta[2]; }
+
+        if (selectedNodeIds.length > 0 && rendererRef.current && rendererRef.current.rendererData.nodes) {
+          selectedNodeIds.forEach(nodeId => {
+            const nodeWrapper = rendererRef.current!.rendererData.nodes.find(n => n.node.ObjectId === nodeId)
+            if (nodeWrapper && nodeWrapper.node.PivotPoint) {
+              nodeWrapper.node.PivotPoint[0] += moveVec[0]
+              nodeWrapper.node.PivotPoint[1] += moveVec[1]
+              nodeWrapper.node.PivotPoint[2] += moveVec[2]
+            }
+          })
+        }
       } else if (transformMode === 'rotate' || transformMode === 'scale') {
         const { selectedVertexIds, selectedFaceIds, geometrySubMode } = useSelectionStore.getState()
 
@@ -1751,31 +1846,70 @@ const Viewer: React.FC<ViewerProps> = ({
 
     if (gizmoState.current.isDragging) {
       gizmoState.current.isDragging = false
+      gizmoState.current.activeAxis = null
 
-      // Commit Undo Command
-      if (initialVertexPositions.current.size > 0 && rendererRef.current) {
-        const changes: VertexChange[] = []
-        initialVertexPositions.current.forEach((oldPos, key) => {
-          const [geosetIndexStr, vertexIndexStr] = key.split('-')
-          const geosetIndex = parseInt(geosetIndexStr)
-          const vertexIndex = parseInt(vertexIndexStr)
+      // Create Command for Undo/Redo
+      if (rendererRef.current) {
+        const { mainMode, animationSubMode } = useSelectionStore.getState()
 
-          if (!rendererRef.current) return
-          const geoset = rendererRef.current.model.Geosets[geosetIndex]
-          if (geoset) {
-            const vIndex = vertexIndex * 3
-            const newPos: [number, number, number] = [geoset.Vertices[vIndex], geoset.Vertices[vIndex + 1], geoset.Vertices[vIndex + 2]]
+        if (mainMode === 'geometry') {
+          if (initialVertexPositions.current.size > 0) {
+            const changes: VertexChange[] = []
 
-            if (oldPos[0] !== newPos[0] || oldPos[1] !== newPos[1] || oldPos[2] !== newPos[2]) {
-              changes.push({ geosetIndex, vertexIndex, oldPos, newPos })
+            initialVertexPositions.current.forEach((oldPos, key) => {
+              const [geosetIndexStr, vertexIndexStr] = key.split('-')
+              const geosetIndex = parseInt(geosetIndexStr)
+              const vertexIndex = parseInt(vertexIndexStr)
+
+              const geoset = rendererRef.current!.model.Geosets[geosetIndex]
+              if (geoset) {
+                const vIndex = vertexIndex * 3
+                const newPos: [number, number, number] = [geoset.Vertices[vIndex], geoset.Vertices[vIndex + 1], geoset.Vertices[vIndex + 2]]
+
+                // Only add if changed
+                if (oldPos[0] !== newPos[0] || oldPos[1] !== newPos[1] || oldPos[2] !== newPos[2]) {
+                  changes.push({
+                    geosetIndex,
+                    vertexIndex,
+                    oldPos,
+                    newPos
+                  })
+                }
+              }
+            })
+
+            if (changes.length > 0) {
+              commandManager.execute(new MoveVerticesCommand(rendererRef.current, changes))
+              console.log('[Viewer] Vertex Move Command executed', changes.length)
             }
+            initialVertexPositions.current.clear()
           }
-        })
+        } else if (mainMode === 'animation' && animationSubMode === 'binding') {
+          if (initialNodePositions.current.size > 0) {
+            const changes: NodeChange[] = []
 
-        if (changes.length > 0) {
-          commandManager.execute(new MoveVerticesCommand(rendererRef.current, changes))
+            initialNodePositions.current.forEach((oldPos, nodeId) => {
+              const nodeWrapper = rendererRef.current!.rendererData.nodes.find(n => n.node.ObjectId === nodeId)
+              if (nodeWrapper && nodeWrapper.node.PivotPoint) {
+                const newPos: [number, number, number] = [nodeWrapper.node.PivotPoint[0], nodeWrapper.node.PivotPoint[1], nodeWrapper.node.PivotPoint[2]]
+
+                if (oldPos[0] !== newPos[0] || oldPos[1] !== newPos[1] || oldPos[2] !== newPos[2]) {
+                  changes.push({
+                    nodeId,
+                    oldPivot: oldPos,
+                    newPivot: newPos
+                  })
+                }
+              }
+            })
+
+            if (changes.length > 0) {
+              commandManager.execute(new MoveNodesCommand(rendererRef.current, changes))
+              console.log('[Viewer] Node Move Command executed', changes.length)
+            }
+            initialNodePositions.current.clear()
+          }
         }
-        initialVertexPositions.current.clear()
       }
       return
     }
