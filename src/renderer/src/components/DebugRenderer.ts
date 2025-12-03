@@ -152,6 +152,16 @@ export class DebugRenderer {
         this.draw(gl, mvMatrix, pMatrix, positions, color, gl.TRIANGLES, 1.0)
     }
 
+    renderFaces(
+        gl: WebGLRenderingContext | WebGL2RenderingContext,
+        mvMatrix: mat4,
+        pMatrix: mat4,
+        positions: number[] | Float32Array,
+        color: number[]
+    ) {
+        this.renderTriangles(gl, mvMatrix, pMatrix, positions, color)
+    }
+
     renderLines(
         gl: WebGLRenderingContext | WebGL2RenderingContext,
         mvMatrix: mat4,

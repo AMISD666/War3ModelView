@@ -163,6 +163,54 @@ function updateModelDataWithNodes(
     return updated;
 }
 
+function getDefaultNodeProperties(type: NodeType): Partial<ModelNode> {
+    switch (type) {
+        case NodeType.PARTICLE_EMITTER_2:
+            return {
+                FilterMode: 0, // Blend
+                TextureID: 0,
+                EmissionRate: 10,
+                LifeSpan: 1,
+
+                Gravity: 0,
+                Latitude: 0,
+                Variation: 0,
+                Speed: 10,
+                Width: 10,
+                Length: 10,
+                Rows: 1,
+                Columns: 1,
+
+                TailLength: 1,
+                Time: 0.5,
+                SegmentColor: [[1, 1, 1], [1, 1, 1], [1, 1, 1]],
+                SegmentAlpha: [255, 255, 255],
+                SegmentScaling: [10, 10, 10],
+                Head: true,
+                Tail: false,
+                Unshaded: false,
+                SortPrimsFarZ: false,
+                LineEmitter: false,
+                Unfogged: false,
+                ModelSpace: false,
+                XYQuad: false,
+                Squirt: false
+            };
+        case NodeType.LIGHT:
+            return {
+                LightType: 0, // Omnidirectional
+                AttenuationStart: 80,
+                AttenuationEnd: 200,
+                Color: [1, 1, 1],
+                Intensity: 1,
+                AmbientIntensity: 0,
+                AmbientColor: [1, 1, 1]
+            };
+        default:
+            return {};
+    }
+}
+
 export const useModelStore = create<ModelState>((set, get) => ({
     modelData: null,
     modelPath: null,
@@ -214,25 +262,26 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
     addNode: (nodePartial) => {
         set((state) => {
-            // 1. 生成新的 ObjectId
-            // 1. 生成新的 ObjectId
+            // 1. Generate new ObjectId
             const maxObjectId = state.nodes.reduce((max, n) => {
                 const id = typeof n.ObjectId === 'number' && !isNaN(n.ObjectId) ? n.ObjectId : -1;
                 return Math.max(max, id);
             }, -1);
             const newObjectId = maxObjectId + 1;
 
-            // 2. 创建完整节点对象
+            // 2. Create complete node object with defaults
+            const defaults = getDefaultNodeProperties(nodePartial.type);
             const newNode: ModelNode = {
+                ...defaults,
                 ...nodePartial,
                 ObjectId: newObjectId,
-                // 如果没有指定 Parent，默认为 -1 (根节点)
+                // If Parent is not specified, default to -1 (Root)
                 Parent: nodePartial.Parent ?? -1,
-                // 设置默认属性
-                Translation: {},
-                Rotation: {},
-                Scaling: {},
-                Visibility: {},
+                // Ensure base transform properties exist
+                Translation: nodePartial.Translation || {},
+                Rotation: nodePartial.Rotation || {},
+                Scaling: nodePartial.Scaling || {},
+                Visibility: nodePartial.Visibility || {},
             } as ModelNode;
 
             const updatedNodes = [...state.nodes, newNode];

@@ -44,9 +44,18 @@ const MaterialEditor: React.FC<MaterialEditorProps> = () => {
         const newMaterials = [...materials]
         newMaterials[selectedMaterialIndex].Layers[selectedLayerIndex] = updatedLayer
         setLocalMaterials(newMaterials)
+    }
 
-        // Auto-save
-        setMaterials(JSON.parse(JSON.stringify(newMaterials)))
+    const handleLayerOk = () => {
+        setMaterials(JSON.parse(JSON.stringify(materials)))
+        setIsLayerModalOpen(false)
+    }
+
+    const handleLayerCancel = () => {
+        if (modelData && modelData.Materials) {
+            setLocalMaterials(JSON.parse(JSON.stringify(modelData.Materials)))
+        }
+        setIsLayerModalOpen(false)
     }
 
     if (!modelData) return <div style={{ padding: 20, color: '#aaa' }}>未加载模型</div>
@@ -106,8 +115,8 @@ const MaterialEditor: React.FC<MaterialEditorProps> = () => {
             <Modal
                 title={`材质 [${selectedMaterialIndex}] - 图层 [${selectedLayerIndex}] 设置`}
                 open={isLayerModalOpen}
-                onCancel={() => setIsLayerModalOpen(false)}
-                footer={null}
+                onOk={handleLayerOk}
+                onCancel={handleLayerCancel}
                 width={700}
                 centered
                 maskClosable={false}

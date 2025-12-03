@@ -66,7 +66,7 @@ export interface AttachmentNode extends BaseNode {
 // Light 节点
 export interface LightNode extends BaseNode {
     type: NodeType.LIGHT;
-    LightType?: 'Omnidirectional' | 'Directional' | 'Ambient';
+    LightType?: 'Omnidirectional' | 'Directional' | 'Ambient' | number;
     Color?: [number, number, number];
     AmbientColor?: [number, number, number];
     Intensity?: number;
@@ -103,7 +103,7 @@ export interface ParticleEmitter2Node extends BaseNode {
 
     // 渲染属性
     TextureID?: number;
-    FilterMode?: 'Blend' | 'Additive' | 'Modulate' | 'Modulate2x' | 'AlphaKey' | 'None';
+    FilterMode?: 'Blend' | 'Additive' | 'Modulate' | 'Modulate2x' | 'AlphaKey' | 'None' | number;
     Rows?: number;
     Columns?: number;
     PriorityPlane?: number;

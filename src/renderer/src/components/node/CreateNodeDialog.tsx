@@ -71,13 +71,13 @@ export const CreateNodeDialog: React.FC = () => {
                         <Option value={NodeType.BONE}>Bone (骨骼)</Option>
                         <Option value={NodeType.HELPER}>Helper (辅助点)</Option>
                         <Option value={NodeType.ATTACHMENT}>Attachment (挂载点)</Option>
-                        <Option value={NodeType.LIGHT}>Light (灯光)</Option>
-                        <Option value={NodeType.PARTICLE_EMITTER}>ParticleEmitter (粒子发射器)</Option>
+                        <Option value={NodeType.LIGHT} disabled>Light (灯光) - 暂不可用</Option>
+                        <Option value={NodeType.PARTICLE_EMITTER} disabled>ParticleEmitter (粒子发射器) - 暂不可用</Option>
                         <Option value={NodeType.PARTICLE_EMITTER_2}>ParticleEmitter2 (粒子发射器2)</Option>
-                        <Option value={NodeType.RIBBON_EMITTER}>RibbonEmitter (条带发射器)</Option>
-                        <Option value={NodeType.EVENT_OBJECT}>EventObject (事件对象)</Option>
-                        <Option value={NodeType.COLLISION_SHAPE}>CollisionShape (碰撞体)</Option>
-                        <Option value={NodeType.CAMERA}>Camera (摄像机)</Option>
+                        <Option value={NodeType.RIBBON_EMITTER} disabled>RibbonEmitter (条带发射器) - 暂不可用</Option>
+                        <Option value={NodeType.EVENT_OBJECT} disabled>EventObject (事件对象) - 暂不可用</Option>
+                        <Option value={NodeType.COLLISION_SHAPE} disabled>CollisionShape (碰撞体) - 暂不可用</Option>
+                        <Option value={NodeType.CAMERA} disabled>Camera (摄像机) - 暂不可用</Option>
                     </Select>
                 </Form.Item>
 

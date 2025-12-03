@@ -106,6 +106,7 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
                                 step={0.1}
                                 min={0}
                                 max={1}
+                                precision={2}
                             />
                         )}
                     </Space>

@@ -1,5 +1,7 @@
 ﻿import React, { useEffect, useRef, useState } from 'react'
-import { ModelRenderer, parseMDX, parseMDL, decodeBLP, getBLPImageData } from 'war3-model'
+import { viewer as m3viewer, parsers as m3parsers } from 'mdx-m3-viewer'
+import { decodeBLP, getBLPImageData } from 'war3-model'  // Keep BLP utilities for now
+import { SimpleOrbitCameraM3 } from '../utils/SimpleOrbitCameraM3'
 import { mat4, vec3, vec4, quat } from 'gl-matrix'
 import { GridRenderer } from './GridRenderer'
 import { DebugRenderer } from './DebugRenderer'
@@ -57,6 +59,9 @@ const Viewer: React.FC<ViewerProps> = ({
   const debugRenderer = useRef(new DebugRenderer())
   const gizmoRenderer = useRef(new GizmoRenderer())
   const rendererRef = useRef<ModelRenderer | null>(null)
+  const sceneRef = useRef(new Scene())
+  const batchRendererRef = useRef<BatchRenderer | null>(null)
+  const cameraRef = useRef<SimpleOrbitCamera | null>(null)
 
   const appMainMode = useSelectionStore((state) => state.mainMode)
   const animationSubMode = useSelectionStore((state) => state.animationSubMode)
@@ -89,6 +94,12 @@ const Viewer: React.FC<ViewerProps> = ({
     isPlayingRef.current = isPlaying
     backgroundColorRef.current = backgroundColor
   }, [showGrid, showNodes, showSkeleton, showWireframe, isPlaying, backgroundColor])
+
+  useEffect(() => {
+    if (canvasRef.current && !cameraRef.current) {
+      cameraRef.current = new SimpleOrbitCamera(canvasRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     rendererRef.current = renderer
@@ -308,6 +319,7 @@ const Viewer: React.FC<ViewerProps> = ({
     const { mainMode } = useSelectionStore.getState()
     // Check for Gizmo interaction first
     if (gizmoState.current.activeAxis && e.button === 0) {
+      if (cameraRef.current) cameraRef.current.enabled = false
       gizmoState.current.isDragging = true
       mouseState.current.lastMouseX = e.clientX
       mouseState.current.lastMouseY = e.clientY
@@ -369,6 +381,7 @@ const Viewer: React.FC<ViewerProps> = ({
 
     // Box Selection: Alt + Left Click
     if (e.button === 0 && e.altKey && (mainMode === 'geometry' || mainMode === 'animation')) {
+      if (cameraRef.current) cameraRef.current.enabled = false
       const rect = canvasRef.current?.getBoundingClientRect()
       if (rect) {
         mouseState.current.isBoxSelecting = true
@@ -1166,6 +1179,7 @@ const Viewer: React.FC<ViewerProps> = ({
         const cameraPos = vec3.create()
         const cameraUp = vec3.fromValues(0, 0, 1)
         const cameraQuat = quat.create()
+        quat.identity(cameraQuat)
         const pMatrix = mat4.create()
         const mvMatrix = mat4.create()
 
@@ -1175,6 +1189,7 @@ const Viewer: React.FC<ViewerProps> = ({
           const b = parseInt(hex.slice(5, 7), 16) / 255
           return [r, g, b]
         }
+
         const [r, g, b] = hexToRgb(backgroundColorRef.current)
         gl.clearColor(r, g, b, 1.0)
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
@@ -1184,29 +1199,51 @@ const Viewer: React.FC<ViewerProps> = ({
         gl.enable(gl.BLEND)
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 
-        const { distance, theta, phi, target } = targetCamera.current
+        // Use SimpleOrbitCamera for matrices
+        if (cameraRef.current) {
+          cameraRef.current.getMatrix(mvMatrix, pMatrix)
 
-        const x = distance * Math.sin(phi) * Math.cos(theta)
-        const y = distance * Math.sin(phi) * Math.sin(theta)
-        const z = distance * Math.cos(phi)
+          // Copy camera position
+          vec3.copy(cameraPos, cameraRef.current.position)
 
-        vec3.set(cameraPos, x, y, z)
-        vec3.add(cameraPos, cameraPos, target) // Add target offset
+          // Calculate camera quaternion using the war3-model approach
+          // Reference: war3-model-4.0.0/docs/preview/preview.ts lines 222-234
+          const cameraPosProjected = vec3.create()
+          const cameraPosTemp = vec3.create()
+          const fromCameraBaseVec = vec3.fromValues(1, 0, 0)
+          const verticalQuat = quat.create()
 
-        mat4.lookAt(mvMatrix, cameraPos, target, cameraUp)
-        mat4.perspective(pMatrix, Math.PI / 4, canvas.width / canvas.height, 1, 100000)
+          vec3.set(cameraPosProjected, cameraRef.current.position[0], cameraRef.current.position[1], 0)
+          vec3.subtract(cameraPosTemp, cameraRef.current.position, cameraRef.current.target)
+          vec3.normalize(cameraPosProjected, cameraPosProjected)
+          vec3.normalize(cameraPosTemp, cameraPosTemp)
+
+          quat.rotationTo(cameraQuat, fromCameraBaseVec, cameraPosProjected)
+          quat.rotationTo(verticalQuat, cameraPosProjected, cameraPosTemp)
+          quat.mul(cameraQuat, verticalQuat, cameraQuat)
+        } else {
+          // Fallback logic
+          const dist = targetCamera.current.distance
+          const theta = targetCamera.current.theta
+          const phi = targetCamera.current.phi
+          const target = targetCamera.current.target
+
+          const x = dist * Math.sin(phi) * Math.cos(theta)
+          const y = dist * Math.sin(phi) * Math.sin(theta)
+          const z = dist * Math.cos(phi)
+          vec3.set(cameraPos, x, y, z)
+          vec3.add(cameraPos, cameraPos, target)
+          mat4.lookAt(mvMatrix, cameraPos, target, cameraUp)
+          mat4.perspective(pMatrix, Math.PI / 4, canvas.width / canvas.height, 1, 100000)
+        }
 
         const { geometrySubMode, transformMode, selectedVertexIds, selectedFaceIds } = useSelectionStore.getState()
-
-        // Determine if we should be in Bind Pose (static, no animation)
         const isBindPoseMode = appMainMode === 'geometry' || (appMainMode === 'animation' && animationSubMode === 'binding')
 
-        // Update animation only when playing and NOT in Bind Pose mode
         if (isPlayingRef.current && !isBindPoseMode) {
           mdlRenderer.update(delta)
         }
 
-        // Update progress bar
         if (mdlRenderer.rendererData && mdlRenderer.rendererData.animationInfo) {
           const info = mdlRenderer.rendererData.animationInfo
           const current = mdlRenderer.rendererData.frame
@@ -1216,12 +1253,9 @@ const Viewer: React.FC<ViewerProps> = ({
         if (mdlRenderer.rendererData) {
           mdlRenderer.setCamera(cameraPos, cameraQuat)
 
-          // Force Bind Pose in Geometry Mode or Bone Binding Mode
           if (isBindPoseMode) {
-            // Force all node matrices to identity every frame to ensure strict Bind Pose
-            // This prevents any residual animation or update logic from offsetting the mesh
             if (mdlRenderer.rendererData.nodes) {
-              mdlRenderer.rendererData.nodes.forEach(node => {
+              mdlRenderer.rendererData.nodes.forEach((node: any) => {
                 if (node && node.matrix) {
                   mat4.identity(node.matrix)
                 }
@@ -1234,8 +1268,6 @@ const Viewer: React.FC<ViewerProps> = ({
 
           mdlRenderer.render(mvMatrix, pMatrix, { wireframe: showWireframeRef.current || (appMainMode === 'geometry' && geometrySubMode === 'face') })
 
-          // Render nodes (debug) - not in geometry mode, but OK in binding mode
-          // Force show nodes in Binding Mode (User requested "Bone Nodes" not "Skeleton")
           if ((showNodesRef.current || (appMainMode === 'animation' && animationSubMode === 'binding')) && mdlRenderer.rendererData.nodes && appMainMode !== 'geometry') {
             const { selectedNodeIds } = useSelectionStore.getState()
             let parentOfSelected: number | null = null
@@ -1243,14 +1275,14 @@ const Viewer: React.FC<ViewerProps> = ({
 
             if (selectedNodeIds.length === 1) {
               const selectedId = selectedNodeIds[0]
-              const selectedNode = mdlRenderer.rendererData.nodes.find(n => n.node.ObjectId === selectedId)
+              const selectedNode = mdlRenderer.rendererData.nodes.find((n: any) => n.node.ObjectId === selectedId)
               if (selectedNode) {
                 if (typeof selectedNode.node.Parent === 'number') {
                   parentOfSelected = selectedNode.node.Parent
                 }
                 childrenOfSelected = mdlRenderer.rendererData.nodes
-                  .filter(n => n.node.Parent === selectedId)
-                  .map(n => n.node.ObjectId)
+                  .filter((n: any) => n.node.Parent === selectedId)
+                  .map((n: any) => n.node.ObjectId)
               }
             }
 
@@ -1265,8 +1297,6 @@ const Viewer: React.FC<ViewerProps> = ({
             )
           }
 
-          // Render skeleton - show in animation mode (including binding submode), but not in geometry mode
-          // Do NOT force skeleton in Binding Mode (User reported "Ghosting" and explicitly asked for Nodes instead)
           if (showSkeletonRef.current && mdlRenderer.rendererData.nodes && appMainMode === 'animation') {
             gl.disable(gl.DEPTH_TEST)
             mdlRenderer.renderSkeleton(mvMatrix, pMatrix, null)
@@ -1274,18 +1304,14 @@ const Viewer: React.FC<ViewerProps> = ({
           }
         }
 
-
-        // Render vertices in Geometry Mode (vertex submode) OR Bone Binding Mode
         if ((appMainMode === 'geometry' && geometrySubMode === 'vertex') ||
           (appMainMode === 'animation' && animationSubMode === 'binding')) {
-          // Render all vertices as small blue dots
           for (const geoset of mdlRenderer.model.Geosets) {
             if (geoset.Vertices) {
               debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, geoset.Vertices, [0, 0, 1, 0.5], 5.0)
             }
           }
 
-          // Render selected vertices as red dots
           if (selectedVertexIds.length > 0) {
             const selectedPositions: number[] = []
             for (const sel of selectedVertexIds) {
@@ -1303,7 +1329,6 @@ const Viewer: React.FC<ViewerProps> = ({
           }
         }
 
-        // Render face selection (only in geometry mode, face submode)
         if (appMainMode === 'geometry' && geometrySubMode === 'face') {
           if (selectedFaceIds.length > 0) {
             const selectedPositions: number[] = []
@@ -1322,10 +1347,8 @@ const Viewer: React.FC<ViewerProps> = ({
                 )
               }
             }
-            // Render filled triangles (semi-transparent red)
             debugRenderer.current.renderTriangles(gl as WebGLRenderingContext, mvMatrix, pMatrix, selectedPositions, [1, 0, 0, 0.5])
 
-            // Prepare wireframe lines
             const linePositions: number[] = []
             for (let i = 0; i < selectedPositions.length; i += 9) {
               linePositions.push(selectedPositions[i], selectedPositions[i + 1], selectedPositions[i + 2])
@@ -1335,19 +1358,15 @@ const Viewer: React.FC<ViewerProps> = ({
               linePositions.push(selectedPositions[i + 6], selectedPositions[i + 7], selectedPositions[i + 8])
               linePositions.push(selectedPositions[i], selectedPositions[i + 1], selectedPositions[i + 2])
             }
-
-            // Render wireframe (solid red)
             debugRenderer.current.renderLines(gl as WebGLRenderingContext, mvMatrix, pMatrix, linePositions, [1, 0, 0, 1])
           }
         }
 
-        // Render Gizmo
         if (transformMode) {
           const center = vec3.create()
           let count = 0
           let showGizmo = false
 
-          // Case 1: Geometry Mode - Vertex/Face
           if (appMainMode === 'geometry') {
             if (geometrySubMode === 'vertex' && selectedVertexIds.length > 0) {
               for (const sel of selectedVertexIds) {
@@ -1376,7 +1395,6 @@ const Viewer: React.FC<ViewerProps> = ({
               showGizmo = true
             }
           }
-          // Case 2: Animation Mode (Binding) - Bones
           else if (appMainMode === 'animation' && animationSubMode === 'binding') {
             const { selectedNodeIds } = useSelectionStore.getState()
             if (selectedNodeIds && selectedNodeIds.length > 0) {
@@ -1423,11 +1441,9 @@ const Viewer: React.FC<ViewerProps> = ({
         }
       }
     }
-    // If renderer or canvas is not ready, return undefined
     return undefined
   }, [renderer, appMainMode, animationSubMode, animationIndex])
 
-  // Handle W/E/R Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) return
@@ -1441,14 +1457,12 @@ const Viewer: React.FC<ViewerProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
-  // Handle Animation Index Changes
   useEffect(() => {
     if (renderer && typeof (renderer as any).setSequence === 'function') {
       (renderer as any).setSequence(animationIndex)
     }
   }, [renderer, animationIndex])
 
-  // Reset animation when entering Geometry Mode to ensure Bind Pose
   useEffect(() => {
     if (appMainMode === 'geometry' && renderer) {
       if (renderer.rendererData) {
@@ -1468,12 +1482,10 @@ const Viewer: React.FC<ViewerProps> = ({
       const { transformMode, mainMode } = useSelectionStore.getState()
       const axis = gizmoState.current.activeAxis
 
-      // Only allow vertex/face transformation in Geometry Mode OR Bone Binding Mode
       if (mainMode !== 'geometry' && !(mainMode === 'animation' && animationSubMode === 'binding')) {
         return
       }
 
-      // Calculate Camera Vectors for World Movement
       const { theta, phi, distance } = targetCamera.current
       const forward = vec3.fromValues(Math.sin(phi) * Math.cos(theta), Math.sin(phi) * Math.sin(theta), Math.cos(phi))
       const up = vec3.fromValues(0, 0, 1)
@@ -1486,20 +1498,19 @@ const Viewer: React.FC<ViewerProps> = ({
 
       const moveScale = distance * 0.001
 
-      // Calculate world movement delta based on camera orientation
       const worldMoveDelta = vec3.create()
       vec3.scaleAndAdd(worldMoveDelta, worldMoveDelta, right, deltaX * moveScale)
-      vec3.scaleAndAdd(worldMoveDelta, worldMoveDelta, camUp, -deltaY * moveScale) // Inverted Y
+      vec3.scaleAndAdd(worldMoveDelta, worldMoveDelta, camUp, -deltaY * moveScale)
 
       if (transformMode === 'translate' && mainMode === 'geometry') {
         const moveVec = vec3.create()
 
-        if (axis === 'x') moveVec[0] = -worldMoveDelta[0] // Invert X
-        else if (axis === 'y') moveVec[1] = -worldMoveDelta[1] // Invert Y
+        if (axis === 'x') moveVec[0] = -worldMoveDelta[0]
+        else if (axis === 'y') moveVec[1] = -worldMoveDelta[1]
         else if (axis === 'z') moveVec[2] = worldMoveDelta[2]
-        else if (axis === 'xy') { moveVec[0] = -worldMoveDelta[0]; moveVec[1] = -worldMoveDelta[1]; } // Invert X & Y
-        else if (axis === 'xz') { moveVec[0] = -worldMoveDelta[0]; moveVec[2] = worldMoveDelta[2]; } // Invert X
-        else if (axis === 'yz') { moveVec[1] = -worldMoveDelta[1]; moveVec[2] = worldMoveDelta[2]; } // Invert Y
+        else if (axis === 'xy') { moveVec[0] = -worldMoveDelta[0]; moveVec[1] = -worldMoveDelta[1]; }
+        else if (axis === 'xz') { moveVec[0] = -worldMoveDelta[0]; moveVec[2] = worldMoveDelta[2]; }
+        else if (axis === 'yz') { moveVec[1] = -worldMoveDelta[1]; moveVec[2] = worldMoveDelta[2]; }
 
         const { selectedVertexIds, selectedFaceIds, geometrySubMode } = useSelectionStore.getState()
         const affectedGeosets = new Set<number>()
@@ -1544,12 +1555,11 @@ const Viewer: React.FC<ViewerProps> = ({
         })
 
       } else if (transformMode === 'translate' && mainMode === 'animation' && animationSubMode === 'binding') {
-        // Handle Bone Translation (Pivot Point)
         const { selectedNodeIds } = useSelectionStore.getState()
         const moveVec = vec3.create()
 
-        if (axis === 'x') moveVec[0] = -worldMoveDelta[0] // Invert X
-        else if (axis === 'y') moveVec[1] = -worldMoveDelta[1] // Invert Y
+        if (axis === 'x') moveVec[0] = -worldMoveDelta[0]
+        else if (axis === 'y') moveVec[1] = -worldMoveDelta[1]
         else if (axis === 'z') moveVec[2] = worldMoveDelta[2]
         else if (axis === 'xy') { moveVec[0] = -worldMoveDelta[0]; moveVec[1] = -worldMoveDelta[1]; }
         else if (axis === 'xz') { moveVec[0] = -worldMoveDelta[0]; moveVec[2] = worldMoveDelta[2]; }
@@ -1557,7 +1567,7 @@ const Viewer: React.FC<ViewerProps> = ({
 
         if (selectedNodeIds.length > 0 && rendererRef.current && rendererRef.current.rendererData.nodes) {
           selectedNodeIds.forEach(nodeId => {
-            const nodeWrapper = rendererRef.current!.rendererData.nodes.find(n => n.node.ObjectId === nodeId)
+            const nodeWrapper = rendererRef.current!.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
             if (nodeWrapper && nodeWrapper.node.PivotPoint) {
               nodeWrapper.node.PivotPoint[0] += moveVec[0]
               nodeWrapper.node.PivotPoint[1] += moveVec[1]
@@ -1568,7 +1578,6 @@ const Viewer: React.FC<ViewerProps> = ({
       } else if (transformMode === 'rotate' || transformMode === 'scale') {
         const { selectedVertexIds, selectedFaceIds, geometrySubMode } = useSelectionStore.getState()
 
-        // Calculate Center
         const center = vec3.create()
         let count = 0
         const accumulateCenter = (geosetIndex: number, vertexIndex: number) => {
@@ -1634,7 +1643,7 @@ const Viewer: React.FC<ViewerProps> = ({
               angle = deltaY * 0.01
               vec3.set(rotAxis, 1, 0, 0)
             } else if (axis === 'y') {
-              angle = -deltaX * 0.01 // Inverted Y rotation as requested
+              angle = -deltaX * 0.01
               vec3.set(rotAxis, 0, 1, 0)
             } else if (axis === 'z') {
               angle = deltaX * 0.01
@@ -1665,7 +1674,7 @@ const Viewer: React.FC<ViewerProps> = ({
             else if (axis === 'xy') { scaleVec[0] = scaleFactor; scaleVec[1] = scaleFactor }
             else if (axis === 'xz') { scaleVec[0] = scaleFactor; scaleVec[2] = scaleFactor }
             else if (axis === 'yz') { scaleVec[1] = scaleFactor; scaleVec[2] = scaleFactor }
-            else if (axis === 'center') { vec3.set(scaleVec, scaleFactor, scaleFactor, scaleFactor) } // Uniform
+            else if (axis === 'center') { vec3.set(scaleVec, scaleFactor, scaleFactor, scaleFactor) }
 
             if (scaleVec[0] !== 1 || scaleVec[1] !== 1 || scaleVec[2] !== 1) {
               applyToSelection((v, i) => {
@@ -1689,10 +1698,9 @@ const Viewer: React.FC<ViewerProps> = ({
           })
         }
       }
-      return // Consume event
+      return
     }
 
-    // 2. Camera / Box Selection Dragging
     if (mouseState.current.isDragging) {
       const deltaX = e.clientX - mouseState.current.lastMouseX
       const deltaY = e.clientY - mouseState.current.lastMouseY
@@ -1720,7 +1728,7 @@ const Viewer: React.FC<ViewerProps> = ({
         const panX = vec3.create()
         const panY = vec3.create()
         vec3.scale(panX, right, deltaX * panSpeed)
-        vec3.scale(panY, camUp, deltaY * panSpeed) // Inverted Y for Pan
+        vec3.scale(panY, camUp, deltaY * panSpeed)
 
         vec3.add(targetCamera.current.target, targetCamera.current.target, panX)
         vec3.add(targetCamera.current.target, targetCamera.current.target, panY)
@@ -1731,7 +1739,6 @@ const Viewer: React.FC<ViewerProps> = ({
       } else if (mouseState.current.dragButton === 2 || mouseState.current.dragButton === 1) {
         doPan()
       } else if (mouseState.current.dragButton === 0 && mouseState.current.isBoxSelecting) {
-        // Box Selection Update
         const startX = mouseState.current.startX
         const startY = mouseState.current.startY
         const currentX = e.clientX
@@ -1748,11 +1755,9 @@ const Viewer: React.FC<ViewerProps> = ({
       return
     }
 
-    // 3. Gizmo Hover Check (Only if not dragging anything)
     if (!gizmoState.current.isDragging && !mouseState.current.isDragging && rendererRef.current) {
       const { transformMode, selectedVertexIds, selectedFaceIds, geometrySubMode, mainMode, animationSubMode, selectedNodeIds } = useSelectionStore.getState()
 
-      // Check if we should show Gizmo
       let showGizmo = false
       const center = vec3.create()
       let count = 0
@@ -1799,9 +1804,6 @@ const Viewer: React.FC<ViewerProps> = ({
       }
 
       if (showGizmo && count > 0 && transformMode) {
-        vec3.scale(center, center, 1.0 / count)
-
-        // Raycast
         if (canvasRef.current) {
           const rect = canvasRef.current.getBoundingClientRect()
           const x = e.clientX - rect.left
@@ -1816,7 +1818,7 @@ const Viewer: React.FC<ViewerProps> = ({
           vec3.add(cameraPos, cameraPos, target)
 
           const pMatrix = mat4.create()
-          mat4.perspective(pMatrix, Math.PI / 4, rect.width / rect.height, 1, 5000) // Match render perspective
+          mat4.perspective(pMatrix, Math.PI / 4, rect.width / rect.height, 1, 5000)
 
           const mvMatrix = mat4.create()
           const cameraUp = vec3.fromValues(0, 0, 1)
@@ -1841,7 +1843,6 @@ const Viewer: React.FC<ViewerProps> = ({
   }
 
   const handleMouseUp = (e: any) => {
-    // const wasDragging = mouseState.current.isDragging
     const wasBoxSelecting = mouseState.current.isBoxSelecting
     const startX = mouseState.current.startX
     const startY = mouseState.current.startY
@@ -1851,12 +1852,12 @@ const Viewer: React.FC<ViewerProps> = ({
     mouseState.current.isBoxSelecting = false
     mouseState.current.dragButton = -1
     setSelectionBox(null)
+    if (cameraRef.current) cameraRef.current.enabled = true
 
     if (gizmoState.current.isDragging) {
       gizmoState.current.isDragging = false
       gizmoState.current.activeAxis = null
 
-      // Create Command for Undo/Redo
       if (rendererRef.current) {
         const { mainMode, animationSubMode } = useSelectionStore.getState()
 
@@ -1874,7 +1875,6 @@ const Viewer: React.FC<ViewerProps> = ({
                 const vIndex = vertexIndex * 3
                 const newPos: [number, number, number] = [geoset.Vertices[vIndex], geoset.Vertices[vIndex + 1], geoset.Vertices[vIndex + 2]]
 
-                // Only add if changed
                 if (oldPos[0] !== newPos[0] || oldPos[1] !== newPos[1] || oldPos[2] !== newPos[2]) {
                   changes.push({
                     geosetIndex,
@@ -1910,7 +1910,7 @@ const Viewer: React.FC<ViewerProps> = ({
             const changes: NodeChange[] = []
 
             initialNodePositions.current.forEach((oldPos, nodeId) => {
-              const nodeWrapper = rendererRef.current!.rendererData.nodes.find(n => n.node.ObjectId === nodeId)
+              const nodeWrapper = rendererRef.current!.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
               if (nodeWrapper && nodeWrapper.node.PivotPoint) {
                 const newPos: [number, number, number] = [nodeWrapper.node.PivotPoint[0], nodeWrapper.node.PivotPoint[1], nodeWrapper.node.PivotPoint[2]]
 
