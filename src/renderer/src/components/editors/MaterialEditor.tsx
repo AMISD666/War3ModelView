@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
-import { Button, Tooltip, Modal } from 'antd'
+import { Button, Tooltip } from 'antd'
+import { DraggableModal } from '../DraggableModal'
 import { ReloadOutlined } from '@ant-design/icons'
 import MaterialList from './material/MaterialList'
 import MaterialDetail from './material/MaterialDetail'
@@ -87,7 +88,7 @@ const MaterialEditor: React.FC<MaterialEditorProps> = () => {
             </div>
 
             {/* Level 2: Material Detail Modal */}
-            <Modal
+            <DraggableModal
                 title={`材质 [${selectedMaterialIndex}] 设置`}
                 open={isMaterialModalOpen}
                 onCancel={() => setIsMaterialModalOpen(false)}
@@ -109,10 +110,10 @@ const MaterialEditor: React.FC<MaterialEditorProps> = () => {
                         _onBack={() => setIsMaterialModalOpen(false)}
                     />
                 )}
-            </Modal>
+            </DraggableModal>
 
             {/* Level 3: Layer Detail Modal */}
-            <Modal
+            <DraggableModal
                 title={`材质 [${selectedMaterialIndex}] - 图层 [${selectedLayerIndex}] 设置`}
                 open={isLayerModalOpen}
                 onOk={handleLayerOk}
@@ -130,7 +131,7 @@ const MaterialEditor: React.FC<MaterialEditorProps> = () => {
                         _onBack={() => setIsLayerModalOpen(false)}
                     />
                 )}
-            </Modal>
+            </DraggableModal>
         </div>
     )
 }

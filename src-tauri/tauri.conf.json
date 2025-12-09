@@ -1,5 +1,5 @@
 {
-    "productName": "War3ModelEditor",
+    "productName": "咕咕War3模型编辑器",
     "version": "1.0.0",
     "identifier": "com.war3model.editor",
     "build": {
@@ -11,9 +11,10 @@
     "app": {
         "windows": [
             {
-                "title": "War3 Model Editor",
+                "title": "咕咕War3模型编辑器 测试版1.0",
                 "width": 1200,
-                "height": 800
+                "height": 800,
+                "dragDropEnabled": false
             }
         ],
         "security": {
@@ -22,7 +23,9 @@
     },
     "bundle": {
         "active": true,
-        "targets": "all",
+        "targets": [
+            "nsis"
+        ],
         "icon": [
             "icons/icon.png",
             "icons/icon.ico"

@@ -3,6 +3,7 @@ import TextureEditor from './editors/TextureEditor'
 import SequenceEditor from './editors/SequenceEditor'
 import MaterialEditor from './editors/MaterialEditor'
 import GeosetEditor from './editors/GeosetEditor'
+import GeosetAnimationEditor from './editors/GeosetAnimationEditor'
 
 interface EditorPanelProps {
     activeTab: string
@@ -18,6 +19,7 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ activeTab, onClose }) => {
             case 'sequence': return '序列编辑器'
             case 'material': return '材质编辑器'
             case 'geoset': return '多边形编辑器'
+            case 'geosetAnim': return '多边形动画管理器'
             default: return '编辑器'
         }
     }
@@ -56,6 +58,7 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ activeTab, onClose }) => {
                     {activeTab === 'sequence' && <SequenceEditor />}
                     {activeTab === 'material' && <MaterialEditor />}
                     {activeTab === 'geoset' && <GeosetEditor />}
+                    {activeTab === 'geosetAnim' && <GeosetAnimationEditor />}
                 </div>
             </div>
         </ConfigProvider>

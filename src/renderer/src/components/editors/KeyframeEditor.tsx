@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
-import { Input, Select, Modal, Row, Col } from 'antd'
+import { Input, Select, Row, Col } from 'antd'
+import { DraggableModal } from '../DraggableModal'
 
 const { TextArea } = Input
 
@@ -132,27 +133,42 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
     ]
 
     return (
-        <Modal
-            title={title}
+        <DraggableModal
+            title={<span style={{ color: '#e8e8e8' }}>{title}</span>}
             open={visible}
             onCancel={onCancel}
             onOk={handleOk}
             width={600}
             destroyOnClose
             maskClosable={false}
+            okText="确定"
+            cancelText="取消"
+            styles={{
+                content: { backgroundColor: '#333333', border: '1px solid #4a4a4a' },
+                header: { backgroundColor: '#333333', borderBottom: '1px solid #4a4a4a' },
+                body: { backgroundColor: '#2d2d2d' },
+                footer: { borderTop: '1px solid #4a4a4a' }
+            }}
+            wrapClassName="dark-theme-modal"
         >
             <div style={{ display: 'flex', flexDirection: 'column', height: 400 }}>
                 <TextArea
                     value={text}
                     onChange={(e) => setText(e.target.value)}
-                    style={{ flex: 1, fontFamily: 'monospace', whiteSpace: 'pre' }}
-                    placeholder="Format: Frame: Value"
+                    style={{
+                        flex: 1,
+                        fontFamily: 'monospace',
+                        whiteSpace: 'pre',
+                        backgroundColor: '#252525',
+                        color: '#e8e8e8',
+                        borderColor: '#4a4a4a'
+                    }}
                 />
 
-                <div style={{ marginTop: 16, borderTop: '1px solid #eee', paddingTop: 16 }}>
+                <div style={{ marginTop: 16, borderTop: '1px solid #4a4a4a', paddingTop: 16 }}>
                     <Row gutter={16}>
                         <Col span={12}>
-                            <div style={{ marginBottom: 8 }}>全局序列 ID (Global Sequence ID)</div>
+                            <div style={{ marginBottom: 8, color: '#b0b0b0' }}>全局序列 ID (Global Sequence ID)</div>
                             <Select
                                 style={{ width: '100%' }}
                                 value={globalSeqId === null ? -1 : globalSeqId}
@@ -161,7 +177,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
                             />
                         </Col>
                         <Col span={12}>
-                            <div style={{ marginBottom: 8 }}>插值类型 (Interpolation Type)</div>
+                            <div style={{ marginBottom: 8, color: '#b0b0b0' }}>插值类型 (Interpolation Type)</div>
                             <Select
                                 style={{ width: '100%' }}
                                 value={lineType}
@@ -177,7 +193,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
                     </Row>
                 </div>
             </div>
-        </Modal>
+        </DraggableModal>
     )
 }
 

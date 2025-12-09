@@ -1,11 +1,12 @@
 ﻿import React, { useEffect, useRef, useState } from 'react'
 import { viewer as m3viewer, parsers as m3parsers } from 'mdx-m3-viewer'
-import { decodeBLP, getBLPImageData } from 'war3-model'  // Keep BLP utilities for now
-import { SimpleOrbitCameraM3 } from '../utils/SimpleOrbitCameraM3'
+import { decodeBLP, getBLPImageData, Scene, BatchRenderer, parseMDX, parseMDL, ModelRenderer } from 'war3-model'
+import { SimpleOrbitCamera } from '../utils/SimpleOrbitCamera'
 import { mat4, vec3, vec4, quat } from 'gl-matrix'
 import { GridRenderer } from './GridRenderer'
 import { DebugRenderer } from './DebugRenderer'
 import { GizmoRenderer, GizmoAxis } from './GizmoRenderer'
+import { AxisIndicator } from './AxisIndicator'
 import { readFile } from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'
 import { useUIStore } from '../store/uiStore'
@@ -29,6 +30,7 @@ interface ViewerProps {
   showWireframe: boolean
   isPlaying: boolean
   onTogglePlay: () => void
+  onToggleWireframe: () => void
   onModelLoaded: (model: any) => void
   backgroundColor: string
   showFPS: boolean
@@ -46,6 +48,7 @@ const Viewer: React.FC<ViewerProps> = ({
   showWireframe,
   isPlaying,
   onTogglePlay,
+  onToggleWireframe,
   onModelLoaded,
   backgroundColor,
   showFPS,
@@ -58,6 +61,7 @@ const Viewer: React.FC<ViewerProps> = ({
   const gridRenderer = useRef(new GridRenderer())
   const debugRenderer = useRef(new DebugRenderer())
   const gizmoRenderer = useRef(new GizmoRenderer())
+  const axisIndicator = useRef(new AxisIndicator())
   const rendererRef = useRef<ModelRenderer | null>(null)
   const sceneRef = useRef(new Scene())
   const batchRendererRef = useRef<BatchRenderer | null>(null)
@@ -251,16 +255,15 @@ const Viewer: React.FC<ViewerProps> = ({
 
   // Handle Animation and Mode Changes
   useEffect(() => {
-    if (renderer) {
+    // Guard: Only set sequence if renderer is fully initialized
+    if (renderer && renderer.rendererData) {
       if (appMainMode === 'geometry') {
         // Force Bind Pose
         if ((renderer as any).setSequence) {
           (renderer as any).setSequence(-1)
         }
         // Reset frame to 0 to ensure static pose
-        if (renderer.rendererData) {
-          renderer.rendererData.frame = 0
-        }
+        renderer.rendererData.frame = 0
       } else {
         // Restore Animation
         if ((renderer as any).setSequence) {
@@ -279,20 +282,13 @@ const Viewer: React.FC<ViewerProps> = ({
   }, [])
 
   useEffect(() => {
-    if (modelData && modelPath) {
-      if (ignoreNextModelDataUpdate.current) {
-        ignoreNextModelDataUpdate.current = false
-        return
-      }
-      // If we have modelData, it means the model was updated (e.g., texture edit)
-      // Reload the renderer with the updated modelData
-      console.log('[Viewer] Reloading renderer with updated modelData')
-      reloadRendererWithData(modelData, modelPath)
-    } else if (modelPath) {
-      // Otherwise load from file
+    // Only reload on modelPath change, NOT on modelData change.
+    // Auto-reloading on modelData change causes texture corruption and animation freeze.
+    if (modelPath) {
       loadModel(modelPath)
     }
-  }, [modelPath, modelData])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modelPath])
 
   const updateProgress = (currentFrame: number, totalDuration: number) => {
     const now = performance.now()
@@ -735,7 +731,10 @@ const Viewer: React.FC<ViewerProps> = ({
       }
 
       switch (e.key.toLowerCase()) {
-        case 'f': // Focus / Reset
+        case 'f': // Toggle wireframe/textured render mode
+          onToggleWireframe()
+          break
+        case '0': // Camera Reset / Focus
           vec3.set(targetCamera.current.target, 0, 0, 0)
           targetCamera.current.distance = 500
           targetCamera.current.theta = Math.PI / 4
@@ -782,7 +781,7 @@ const Viewer: React.FC<ViewerProps> = ({
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [])
+  }, [onToggleWireframe])
 
   useEffect(() => {
     if (!canvasRef.current) return
@@ -820,12 +819,16 @@ const Viewer: React.FC<ViewerProps> = ({
     }
   }, [])
 
-  const loadModel = async (path: string) => {
+  const loadModel = async (path: string, inMemoryData?: any) => {
     // Cleanup old renderer and animation frames
     if (animationFrameId.current !== null) {
       cancelAnimationFrame(animationFrameId.current)
       animationFrameId.current = null
     }
+
+    // Reset lastFrameTime to prevent large delta on first frame after model reload
+    // This fixes animation jumping past interval bounds when reloading models
+    lastFrameTime.current = performance.now()
 
     // Destroy old renderer to prevent memory leaks and clear the scene
     if (renderer) {
@@ -883,14 +886,38 @@ const Viewer: React.FC<ViewerProps> = ({
       gridRenderer.current.init(gl)
       debugRenderer.current.init(gl)
 
-      const buffer = await readFile(path)
       let model: any
 
-      if (path.toLowerCase().endsWith('.mdl')) {
-        const text = new TextDecoder().decode(buffer)
-        model = parseMDL(text)
+      if (inMemoryData) {
+        console.log('[Viewer] Loading model from in-memory data')
+        model = inMemoryData
       } else {
-        model = parseMDX(buffer.buffer)
+        const buffer = await readFile(path)
+        if (path.toLowerCase().endsWith('.mdl')) {
+          const text = new TextDecoder().decode(buffer)
+          model = parseMDL(text)
+        } else {
+          model = parseMDX(buffer.buffer)
+        }
+      }
+
+      // Debug logging to diagnose saved model issues
+      console.log('[Viewer] Parsed model:', {
+        Sequences: model.Sequences?.length || 0,
+        ParticleEmitters2: model.ParticleEmitters2?.length || 0,
+        Nodes: model.Nodes?.length || 0,
+        Bones: model.Bones?.length || 0,
+        GlobalSequences: model.GlobalSequences?.length || 0,
+      })
+      if (model.Sequences && model.Sequences.length > 0) {
+        // Log ALL sequences with their intervals to trace corruption
+        model.Sequences.forEach((seq: any, index: number) => {
+          const intervalType = seq.Interval instanceof Uint32Array ? 'Uint32Array' : Array.isArray(seq.Interval) ? 'Array' : typeof seq.Interval;
+          console.log(`[Viewer] Sequence ${index} "${seq.Name}" Interval (${intervalType}): [${seq.Interval[0]}, ${seq.Interval[1]}]`);
+        });
+      }
+      if (model.ParticleEmitters2 && model.ParticleEmitters2.length > 0) {
+        console.log('[Viewer] First ParticleEmitter2:', model.ParticleEmitters2[0])
       }
 
       ignoreNextModelDataUpdate.current = true
@@ -1146,6 +1173,121 @@ const Viewer: React.FC<ViewerProps> = ({
     }
   }
 
+  // Watch for renderer reload trigger from store (e.g., when particles are updated)
+  const rendererReloadTrigger = useModelStore((state) => state.rendererReloadTrigger)
+  const lastReloadTrigger = useRef(-1) // Start at -1 to detect first change from 0 to 1
+  useEffect(() => {
+    // Skip only initial mount (when lastReloadTrigger is -1 and trigger is 0)
+    const isInitialMount = lastReloadTrigger.current === -1 && rendererReloadTrigger === 0
+    const hasChanged = rendererReloadTrigger !== lastReloadTrigger.current
+
+    if (!isInitialMount && hasChanged && lastReloadTrigger.current !== -1) {
+      console.log('[Viewer] Model data sync triggered, trigger:', rendererReloadTrigger)
+
+      // Sync model data to renderer without recreating the entire renderer
+      // This is the LIGHTWEIGHT SYNC approach - only updates internal data arrays
+      if (renderer && modelData) {
+        // === NODES ===
+        // Sync Nodes array for correct node transforms - MUST do this BEFORE ParticleEmitters2
+        if (modelData.Nodes) {
+          renderer.model.Nodes = modelData.Nodes
+          // Reinitialize rendererData.nodes so new nodes are accessible
+          if (renderer.modelInstance && typeof renderer.modelInstance.syncNodes === 'function') {
+            renderer.modelInstance.syncNodes()
+          }
+        }
+
+        // === PARTICLES ===
+        // Sync ParticleEmitters2 array - new emitters will be detected by syncEmitters()
+        if (modelData.ParticleEmitters2) {
+          renderer.model.ParticleEmitters2 = modelData.ParticleEmitters2
+          console.log('[Viewer] Synced ParticleEmitters2:', modelData.ParticleEmitters2.length, 'emitters')
+        }
+
+        // === RIBBON EMITTERS ===
+        if (modelData.RibbonEmitters) {
+          renderer.model.RibbonEmitters = modelData.RibbonEmitters
+        }
+
+        // === LIGHTS ===
+        if (modelData.Lights) {
+          renderer.model.Lights = modelData.Lights
+        }
+
+        // === BONES ===
+        if (modelData.Bones) {
+          renderer.model.Bones = modelData.Bones
+        }
+
+        // === HELPERS ===
+        if (modelData.Helpers) {
+          renderer.model.Helpers = modelData.Helpers
+        }
+
+        // === ATTACHMENTS ===
+        if (modelData.Attachments) {
+          renderer.model.Attachments = modelData.Attachments
+        }
+
+        // === EVENT OBJECTS ===
+        if (modelData.EventObjects) {
+          renderer.model.EventObjects = modelData.EventObjects
+        }
+
+        // === COLLISION SHAPES ===
+        if (modelData.CollisionShapes) {
+          renderer.model.CollisionShapes = modelData.CollisionShapes
+        }
+
+        // === CAMERAS ===
+        if (modelData.Cameras) {
+          renderer.model.Cameras = modelData.Cameras
+        }
+
+        // === MATERIALS & TEXTURES ===
+        if (modelData.Materials) {
+          renderer.model.Materials = modelData.Materials
+        }
+        if (modelData.Textures) {
+          renderer.model.Textures = modelData.Textures
+        }
+        if (modelData.TextureAnims) {
+          renderer.model.TextureAnims = modelData.TextureAnims
+        }
+
+        // === GEOSETS ===
+        // Note: Geoset vertices and faces are typically edited via GPUBuffer
+        // For most cases we don't need to sync Geosets unless major geometry changed
+        if (modelData.Geosets) {
+          renderer.model.Geosets = modelData.Geosets
+        }
+
+        // === GEOSET ANIMATIONS ===
+        if (modelData.GeosetAnims) {
+          renderer.model.GeosetAnims = modelData.GeosetAnims
+        }
+
+        // === SEQUENCES ===
+        if (modelData.Sequences) {
+          renderer.model.Sequences = modelData.Sequences
+        }
+
+        // === GLOBAL SEQUENCES ===
+        if (modelData.GlobalSequences) {
+          renderer.model.GlobalSequences = modelData.GlobalSequences
+        }
+
+        // === PIVOT POINTS ===
+        if (modelData.PivotPoints) {
+          renderer.model.PivotPoints = modelData.PivotPoints
+        }
+
+        console.log('[Viewer] Lightweight sync complete')
+      }
+    }
+    lastReloadTrigger.current = rendererReloadTrigger
+  }, [rendererReloadTrigger, modelData, renderer])
+
   // Handle Animation and Mode Changes
   useEffect(() => {
     if (renderer && canvasRef.current) {
@@ -1234,13 +1376,26 @@ const Viewer: React.FC<ViewerProps> = ({
           vec3.set(cameraPos, x, y, z)
           vec3.add(cameraPos, cameraPos, target)
           mat4.lookAt(mvMatrix, cameraPos, target, cameraUp)
+
           mat4.perspective(pMatrix, Math.PI / 4, canvas.width / canvas.height, 1, 100000)
         }
 
         const { geometrySubMode, transformMode, selectedVertexIds, selectedFaceIds } = useSelectionStore.getState()
         const isBindPoseMode = appMainMode === 'geometry' || (appMainMode === 'animation' && animationSubMode === 'binding')
 
+        // Debug logs commented out to reduce console noise
+        // if (time - lastFpsTime.current > 1000) {
+        //   console.log('[Viewer] Render loop state:', { isPlaying: isPlayingRef.current, isBindPoseMode, appMainMode, animationSubMode })
+        // }
+
         if (isPlayingRef.current && !isBindPoseMode) {
+          // Debug logs commented out to reduce console noise
+          // if (time - lastFpsTime.current > 1000) {
+          //   const intervalStr = mdlRenderer.rendererData?.animationInfo?.Interval
+          //     ? `[${mdlRenderer.rendererData.animationInfo.Interval[0]}, ${mdlRenderer.rendererData.animationInfo.Interval[1]}]`
+          //     : 'N/A';
+          //   console.log('[Viewer] Calling mdlRenderer.update(), delta:', delta, 'frame:', mdlRenderer.rendererData?.frame, 'Interval:', intervalStr)
+          // }
           mdlRenderer.update(delta)
         }
 
@@ -1422,6 +1577,9 @@ const Viewer: React.FC<ViewerProps> = ({
           gridRenderer.current.render(gl as WebGLRenderingContext, mvMatrix, pMatrix)
         }
 
+        // Always render the axis indicator in bottom-left corner
+        axisIndicator.current.render(gl as WebGLRenderingContext, mvMatrix, canvas.width, canvas.height)
+
         frameCount.current++
         if (time - lastFpsTime.current >= 1000) {
           setFps(Math.round(frameCount.current * 1000 / (time - lastFpsTime.current)))
@@ -1458,8 +1616,11 @@ const Viewer: React.FC<ViewerProps> = ({
   }, [])
 
   useEffect(() => {
-    if (renderer && typeof (renderer as any).setSequence === 'function') {
-      (renderer as any).setSequence(animationIndex)
+    // Guard: Only set sequence if renderer is fully initialized with valid rendererData AND animationInfo
+    // rendererData can exist but animationInfo might not be set yet during initialization
+    if (renderer && renderer.rendererData && renderer.rendererData.animationInfo && typeof (renderer as any).setSequence === 'function') {
+      console.log('[Viewer] Setting sequence to:', animationIndex, 'rendererData exists:', !!renderer.rendererData, 'animationInfo:', renderer.rendererData?.animationInfo?.Name)
+        ; (renderer as any).setSequence(animationIndex)
     }
   }, [renderer, animationIndex])
 

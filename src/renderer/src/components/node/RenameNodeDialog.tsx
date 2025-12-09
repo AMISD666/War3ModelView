@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
-import { Modal, Form, Input } from 'antd';
+import { Form, Input } from 'antd';
+import { DraggableModal } from '../DraggableModal';
 
 interface RenameNodeDialogProps {
     visible: boolean;
@@ -32,7 +33,7 @@ export const RenameNodeDialog: React.FC<RenameNodeDialogProps> = ({
     };
 
     return (
-        <Modal
+        <DraggableModal
             title="重命名节点"
             open={visible}
             onOk={handleOk}
@@ -48,6 +49,6 @@ export const RenameNodeDialog: React.FC<RenameNodeDialogProps> = ({
                     <Input placeholder="输入新名称" autoFocus onPressEnter={handleOk} />
                 </Form.Item>
             </Form>
-        </Modal>
+        </DraggableModal>
     );
 };

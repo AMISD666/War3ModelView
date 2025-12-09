@@ -13,6 +13,9 @@ interface ModelState {
     isLoading: boolean;
     clipboardNode: ModelNode | null;
 
+    // Renderer reload trigger - increment to force Viewer to reload
+    rendererReloadTrigger: number;
+
     setModelData: (data: ModelData | null, path: string | null) => void;
     setLoading: (loading: boolean) => void;
     updateNode: (objectId: number, updates: Partial<ModelNode>) => void;
@@ -24,6 +27,8 @@ interface ModelState {
     pasteNode: (parentId: number) => void;
     moveNode: (nodeId: number, newParentId: number) => void;
     moveNodeTo: (nodeId: number, targetId: number, position: 'before' | 'after' | 'inside') => void;
+    moveNodeWithChildren: (nodeId: number, targetId: number, position: 'before' | 'after' | 'inside') => void;
+    reparentNodes: (nodeIds: number[], newParentId: number) => void;
     renameNode: (nodeId: number, newName: string) => void;
 
     getNodeById: (objectId: number) => ModelNode | undefined;
@@ -48,10 +53,16 @@ interface ModelState {
     setTextures: (textures: any[]) => void;
     setGeosets: (geosets: any[]) => void;
     setMaterials: (materials: any[]) => void;
+    setTextureAnims: (anims: any[]) => void;
 
     // Geometry Actions
     updateGeoset: (index: number, updates: any) => void;
+    updateGeosetAnim: (index: number, updates: any) => void;
+    setGeosetAnims: (anims: any[]) => void;
     updateNodes: (updates: { objectId: number, data: Partial<ModelNode> }[]) => void;
+
+    // Renderer reload
+    triggerRendererReload: () => void;
 }
 
 /**
@@ -149,16 +160,35 @@ function updateModelDataWithNodes(
     const updated = { ...modelData };
 
     // 按类型分组节点
-    updated.Bone = nodes.filter(n => n.type === NodeType.BONE);
-    updated.Helper = nodes.filter(n => n.type === NodeType.HELPER);
-    updated.Attachment = nodes.filter(n => n.type === NodeType.ATTACHMENT);
-    updated.Light = nodes.filter(n => n.type === NodeType.LIGHT);
-    updated.ParticleEmitter = nodes.filter(n => n.type === NodeType.PARTICLE_EMITTER);
-    updated.ParticleEmitter2 = nodes.filter(n => n.type === NodeType.PARTICLE_EMITTER_2);
-    updated.RibbonEmitter = nodes.filter(n => n.type === NodeType.RIBBON_EMITTER);
-    updated.EventObject = nodes.filter(n => n.type === NodeType.EVENT_OBJECT);
-    updated.CollisionShape = nodes.filter(n => n.type === NodeType.COLLISION_SHAPE);
-    updated.Camera = nodes.filter(n => n.type === NodeType.CAMERA);
+    updated.Bones = nodes.filter(n => n.type === NodeType.BONE);
+    updated.Helpers = nodes.filter(n => n.type === NodeType.HELPER);
+    updated.Attachments = nodes.filter(n => n.type === NodeType.ATTACHMENT);
+    updated.Lights = nodes.filter(n => n.type === NodeType.LIGHT);
+    updated.ParticleEmitters = nodes.filter(n => n.type === NodeType.PARTICLE_EMITTER);
+    updated.ParticleEmitters2 = nodes.filter(n => n.type === NodeType.PARTICLE_EMITTER_2);
+    updated.RibbonEmitters = nodes.filter(n => n.type === NodeType.RIBBON_EMITTER);
+    updated.EventObjects = nodes.filter(n => n.type === NodeType.EVENT_OBJECT);
+    updated.CollisionShapes = nodes.filter(n => n.type === NodeType.COLLISION_SHAPE);
+    updated.Cameras = nodes.filter(n => n.type === NodeType.CAMERA);
+
+    // IMPORTANT: Reconstruct the master Nodes array for ModelRenderer
+    // ModelRenderer/ModelInstance constructs the scene graph hierarchy from model.Nodes
+    // If we don't update this, transforms (parenting) will be broken or stale!
+    // We should sort by ObjectId to hopefully match the original index structure, 
+    // although ObjectId isn't strictly index-bound, typical parsers produce sorted lists.
+    updated.Nodes = [...nodes].sort((a, b) => a.ObjectId - b.ObjectId);
+
+    // IMPORTANT: Reconstruct the PivotPoints array from node.PivotPoint properties
+    // PivotPoints array is indexed by node position (same order as Nodes array)
+    // The renderer uses model.Nodes[i].PivotPoint OR model.PivotPoints[i] 
+    // We update both to ensure consistency
+    (updated as any).PivotPoints = updated.Nodes.map(node =>
+        node.PivotPoint || [0, 0, 0]
+    );
+
+    if (updated.ParticleEmitters2 && updated.ParticleEmitters2.length > 0) {
+        // Log removed
+    }
 
     return updated;
 }
@@ -167,8 +197,8 @@ function getDefaultNodeProperties(type: NodeType): Partial<ModelNode> {
     switch (type) {
         case NodeType.PARTICLE_EMITTER_2:
             return {
-                FilterMode: 0, // Blend
-                TextureID: 0,
+                FilterMode: 0, // 0=Blend, 1=Additive, 2=Modulate, 3=Modulate2x, 4=AlphaKey
+                TextureID: -1,
                 EmissionRate: 10,
                 LifeSpan: 1,
 
@@ -181,20 +211,42 @@ function getDefaultNodeProperties(type: NodeType): Partial<ModelNode> {
                 Rows: 1,
                 Columns: 1,
 
-                TailLength: 1,
+                TailLength: 0,
                 Time: 0.5,
-                SegmentColor: [[1, 1, 1], [1, 1, 1], [1, 1, 1]],
-                SegmentAlpha: [255, 255, 255],
-                SegmentScaling: [10, 10, 10],
+                // Use typed arrays matching parse.ts output
+                SegmentColor: [
+                    new Float32Array([1, 1, 1]),
+                    new Float32Array([1, 1, 1]),
+                    new Float32Array([1, 1, 1])
+                ],
+                Alpha: new Uint8Array([255, 255, 255]),
+                ParticleScaling: new Float32Array([10, 10, 10]),
+                LifeSpanUVAnim: new Uint32Array([0, 0, 1]),
+                DecayUVAnim: new Uint32Array([0, 0, 1]),
+                TailUVAnim: new Uint32Array([0, 0, 1]),
+                TailDecayUVAnim: new Uint32Array([0, 0, 1]),
                 Head: true,
                 Tail: false,
-                Unshaded: false,
-                SortPrimsFarZ: false,
+                FrameFlags: 1, // 1=Head, 2=Tail, 3=Both - REQUIRED by renderer
+                Unshaded: true,
+                SortPrimsFarZ: true,
                 LineEmitter: false,
                 Unfogged: false,
                 ModelSpace: false,
                 XYQuad: false,
-                Squirt: false
+                Squirt: false,
+                PriorityPlane: 0,
+                ReplaceableId: 0,
+                Visibility: 1,
+                // Default rotation: rotate X-axis (War3 emission direction) to Z-axis (upward)
+                // This makes new particles emit along Z-axis by default
+                // Rotation: -90 degrees around Y-axis rotates X to Z
+                // Quaternion (x,y,z,w): (0, sin(-45°), 0, cos(-45°)) = (0, -0.7071, 0, 0.7071)
+                Rotation: {
+                    Keys: [{ Frame: 0, Vector: [0, -0.7071067811865476, 0, 0.7071067811865476] }],
+                    LineType: 0,
+                    GlobalSeqId: null
+                }
             };
         case NodeType.LIGHT:
             return {
@@ -217,6 +269,9 @@ export const useModelStore = create<ModelState>((set, get) => ({
     nodes: [],
     isLoading: false,
     clipboardNode: null,
+
+    // Renderer reload trigger
+    rendererReloadTrigger: 0,
 
     // Animation State Initial Values
     sequences: [],
@@ -255,8 +310,15 @@ export const useModelStore = create<ModelState>((set, get) => ({
             // 同时更新 modelData
             const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes);
 
-            console.log('[ModelStore] Updated node', objectId);
-            return { nodes: updatedNodes, modelData: updatedModelData };
+            // Always trigger lightweight renderer sync for any node update
+            // The sync is now lightweight (just updates internal arrays) so it's safe to do on every change
+            console.log('[ModelStore] Updated node', objectId, 'triggering lightweight sync');
+            return {
+                nodes: updatedNodes,
+                modelData: updatedModelData,
+                // Always trigger lightweight sync on any node modification
+                rendererReloadTrigger: state.rendererReloadTrigger + 1
+            };
         });
     },
 
@@ -277,27 +339,58 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 ObjectId: newObjectId,
                 // If Parent is not specified, default to -1 (Root)
                 Parent: nodePartial.Parent ?? -1,
-                // Ensure base transform properties exist
-                Translation: nodePartial.Translation || {},
-                Rotation: nodePartial.Rotation || {},
-                Scaling: nodePartial.Scaling || {},
-                Visibility: nodePartial.Visibility || {},
+                // PivotPoint is REQUIRED by war3-model renderer - it accesses PivotPoint[0]
+                PivotPoint: nodePartial.PivotPoint || [0, 0, 0],
+                // Use defaults for transform properties if not specified in nodePartial
+                // This ensures default Rotation from getDefaultNodeProperties is preserved
+                Translation: nodePartial.Translation ?? defaults.Translation,
+                Rotation: nodePartial.Rotation ?? defaults.Rotation,
+                Scaling: nodePartial.Scaling ?? defaults.Scaling,
+                Visibility: nodePartial.Visibility ?? defaults.Visibility,
             } as ModelNode;
 
             const updatedNodes = [...state.nodes, newNode];
             const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes);
 
             console.log('[ModelStore] Added node', newNode.Name, 'with ObjectId', newNode.ObjectId);
-            return { nodes: updatedNodes, modelData: updatedModelData };
+
+            // Trigger renderer data sync for particle emitters to enable real-time rendering
+            const isParticleNode = nodePartial.type === NodeType.PARTICLE_EMITTER_2 ||
+                nodePartial.type === NodeType.PARTICLE_EMITTER ||
+                nodePartial.type === NodeType.RIBBON_EMITTER;
+
+            return {
+                nodes: updatedNodes,
+                modelData: updatedModelData,
+                // Increment rendererReloadTrigger when adding particle nodes
+                rendererReloadTrigger: isParticleNode ? state.rendererReloadTrigger + 1 : state.rendererReloadTrigger
+            };
         });
     },
 
     deleteNode: (objectId) => {
         set((state) => {
-            const updatedNodes = state.nodes.filter(node => node.ObjectId !== objectId);
+            // Find the node to be deleted to get its parent
+            const nodeToDelete = state.nodes.find(n => n.ObjectId === objectId);
+            const parentOfDeletedNode = nodeToDelete?.Parent ?? -1;
+
+            // Update child nodes to inherit the deleted node's parent (grandparent)
+            // This maintains the hierarchy structure: 1 → 2 → 3, delete 2 → 1 → 3
+            const nodesWithUpdatedParents = state.nodes.map(node => {
+                if (node.Parent === objectId) {
+                    // Child of deleted node - inherit grandparent
+                    return { ...node, Parent: parentOfDeletedNode };
+                }
+                return node;
+            });
+
+            // Filter out the deleted node
+            const updatedNodes = nodesWithUpdatedParents.filter(node => node.ObjectId !== objectId);
             const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes);
 
-            console.log('[ModelStore] Deleted node', objectId);
+            const orphanedCount = state.nodes.filter(n => n.Parent === objectId).length;
+            console.log('[ModelStore] Deleted node', objectId,
+                '- re-parented', orphanedCount, 'children to parent', parentOfDeletedNode);
             return { nodes: updatedNodes, modelData: updatedModelData };
         });
     },
@@ -314,12 +407,14 @@ export const useModelStore = create<ModelState>((set, get) => ({
             const maxObjectId = state.nodes.reduce((max, n) => Math.max(max, n.ObjectId), -1);
             const newObjectId = maxObjectId + 1;
 
-            // Clone node
+            // Clone node with proper defaults to avoid NaN issues
             const newNode: ModelNode = {
                 ...state.clipboardNode,
                 ObjectId: newObjectId,
                 Parent: parentId,
-                Name: `${state.clipboardNode.Name}_Copy`
+                Name: `${state.clipboardNode.Name}_Copy`,
+                // Ensure PivotPoint exists (required by war3-model renderer)
+                PivotPoint: state.clipboardNode.PivotPoint || [0, 0, 0],
             };
 
             const updatedNodes = [...state.nodes, newNode];
@@ -397,6 +492,78 @@ export const useModelStore = create<ModelState>((set, get) => ({
         });
     },
 
+    moveNodeWithChildren: (nodeId: number, targetId: number, position: 'before' | 'after' | 'inside') => {
+        set((state) => {
+            // Helper function to get all descendants of a node
+            const getAllDescendants = (parentId: number, allNodes: ModelNode[]): number[] => {
+                const children = allNodes.filter(n => n.Parent === parentId);
+                let descendants: number[] = [];
+                for (const child of children) {
+                    descendants.push(child.ObjectId);
+                    descendants = descendants.concat(getAllDescendants(child.ObjectId, allNodes));
+                }
+                return descendants;
+            };
+
+            // 1. Validation - Prevent circular reference
+            let current = state.nodes.find(n => n.ObjectId === targetId);
+            while (current) {
+                if (current.ObjectId === nodeId) {
+                    console.warn('[ModelStore] Cannot move node into its own child');
+                    return {};
+                }
+                if (current.Parent === -1 || current.Parent === undefined) break;
+                current = state.nodes.find(n => n.ObjectId === current?.Parent);
+            }
+
+            // 2. Get all descendants of the node being moved
+            const descendantIds = getAllDescendants(nodeId, state.nodes);
+            const allMovingIds = [nodeId, ...descendantIds];
+
+            // Prevent moving into own descendants
+            if (allMovingIds.includes(targetId)) {
+                console.warn('[ModelStore] Cannot move node into its own descendant');
+                return {};
+            }
+
+            // 3. Determine new Parent for the root node
+            let newParentId = -1;
+            let targetIndex = -1;
+            const targetNode = state.nodes.find(n => n.ObjectId === targetId);
+
+            if (position === 'inside') {
+                newParentId = targetId;
+                targetIndex = state.nodes.length;
+            } else {
+                if (targetNode) {
+                    newParentId = targetNode.Parent ?? -1;
+                    targetIndex = state.nodes.findIndex(n => n.ObjectId === targetId);
+                    if (position === 'after') targetIndex++;
+                }
+            }
+
+            // 4. Build new nodes array
+            // Remove all moving nodes from their current positions
+            const remainingNodes = state.nodes.filter(n => !allMovingIds.includes(n.ObjectId));
+
+            // Get the moving nodes with updated parent for root node only
+            const movingNodes = state.nodes
+                .filter(n => allMovingIds.includes(n.ObjectId))
+                .map(n => n.ObjectId === nodeId ? { ...n, Parent: newParentId } : n);
+
+            // Insert moving nodes at target position
+            const newNodes = [...remainingNodes];
+            const insertPosition = Math.min(targetIndex, newNodes.length);
+            newNodes.splice(insertPosition, 0, ...movingNodes);
+
+            // 5. Update Model Data
+            const updatedModelData = updateModelDataWithNodes(state.modelData, newNodes);
+
+            console.log(`[ModelStore] Moved node ${nodeId} with ${descendantIds.length} children ${position} ${targetId}`);
+            return { nodes: newNodes, modelData: updatedModelData };
+        });
+    },
+
     renameNode: (nodeId, newName) => {
         set((state) => {
             const updatedNodes = state.nodes.map(node =>
@@ -406,6 +573,90 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
             console.log('[ModelStore] Renamed node', nodeId, 'to', newName);
             return { nodes: updatedNodes, modelData: updatedModelData };
+        });
+    },
+
+    reparentNodes: (nodeIds: number[], newParentId: number) => {
+        set((state) => {
+            // Helper: Get world position by walking up the parent chain
+            const getWorldPosition = (node: ModelNode, allNodes: ModelNode[]): [number, number, number] => {
+                const pos: [number, number, number] = [
+                    node.PivotPoint?.[0] || 0,
+                    node.PivotPoint?.[1] || 0,
+                    node.PivotPoint?.[2] || 0
+                ];
+                let current = allNodes.find(n => n.ObjectId === node.Parent);
+                while (current) {
+                    pos[0] += current.PivotPoint?.[0] || 0;
+                    pos[1] += current.PivotPoint?.[1] || 0;
+                    pos[2] += current.PivotPoint?.[2] || 0;
+                    if (current.Parent === -1 || current.Parent === undefined) break;
+                    current = allNodes.find(n => n.ObjectId === current?.Parent);
+                }
+                return pos;
+            };
+
+            // Helper: Get all descendants of a node (for circular reference check)
+            const getDescendants = (parentId: number, allNodes: ModelNode[]): number[] => {
+                const children = allNodes.filter(n => n.Parent === parentId);
+                let descendants: number[] = [];
+                for (const child of children) {
+                    descendants.push(child.ObjectId);
+                    descendants = descendants.concat(getDescendants(child.ObjectId, allNodes));
+                }
+                return descendants;
+            };
+
+            // Validate: Check for circular references
+            for (const nodeId of nodeIds) {
+                if (nodeId === newParentId) {
+                    console.warn('[ModelStore] Cannot reparent node to itself');
+                    return {};
+                }
+                const descendants = getDescendants(nodeId, state.nodes);
+                if (descendants.includes(newParentId)) {
+                    console.warn('[ModelStore] Cannot reparent node to its own descendant');
+                    return {};
+                }
+            }
+
+            // Calculate new parent's world position
+            let parentWorldPos: [number, number, number] = [0, 0, 0];
+            if (newParentId !== -1) {
+                const parentNode = state.nodes.find(n => n.ObjectId === newParentId);
+                if (parentNode) {
+                    parentWorldPos = getWorldPosition(parentNode, state.nodes);
+                }
+            }
+
+            // Update each node
+            const updatedNodes = state.nodes.map(node => {
+                if (!nodeIds.includes(node.ObjectId)) {
+                    return node;
+                }
+
+                // Get current world position
+                const worldPos = getWorldPosition(node, state.nodes);
+
+                // Calculate new local position (relative to new parent)
+                const newPivotPoint: [number, number, number] = [
+                    worldPos[0] - parentWorldPos[0],
+                    worldPos[1] - parentWorldPos[1],
+                    worldPos[2] - parentWorldPos[2]
+                ];
+
+                console.log(`[ModelStore] Reparenting node ${node.ObjectId} "${node.Name}": world=[${worldPos}], newLocal=[${newPivotPoint[0].toFixed(2)}, ${newPivotPoint[1].toFixed(2)}, ${newPivotPoint[2].toFixed(2)}]`);
+
+                return {
+                    ...node,
+                    Parent: newParentId,
+                    PivotPoint: newPivotPoint
+                };
+            });
+
+            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes);
+            console.log(`[ModelStore] Reparented ${nodeIds.length} nodes to parent ${newParentId}`);
+            return { nodes: updatedNodes, modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
         });
     },
 
@@ -422,9 +673,10 @@ export const useModelStore = create<ModelState>((set, get) => ({
     },
 
     // Animation Actions Implementation
+    // Animation Actions Implementation
     setSequences: (sequences) => set((state) => {
         const updatedModelData = state.modelData ? { ...state.modelData, Sequences: sequences } : state.modelData;
-        return { sequences, modelData: updatedModelData };
+        return { sequences, modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
     }),
     setSequence: (index) => set({ currentSequence: index, currentFrame: 0 }), // Reset frame on sequence change
     setFrame: (frame) => set({ currentFrame: frame }),
@@ -433,15 +685,19 @@ export const useModelStore = create<ModelState>((set, get) => ({
     setLooping: (looping) => set({ isLooping: looping }),
     setTextures: (textures) => set((state) => {
         const updatedModelData = state.modelData ? { ...state.modelData, Textures: textures } : state.modelData;
-        return { modelData: updatedModelData };
+        return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
     }),
     setGeosets: (geosets) => set((state) => {
         const updatedModelData = state.modelData ? { ...state.modelData, Geosets: geosets } : state.modelData;
-        return { modelData: updatedModelData };
+        return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
     }),
     setMaterials: (materials) => set((state) => {
         const updatedModelData = state.modelData ? { ...state.modelData, Materials: materials } : state.modelData;
-        return { modelData: updatedModelData };
+        return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
+    }),
+    setTextureAnims: (anims) => set((state) => {
+        const updatedModelData = state.modelData ? { ...state.modelData, TextureAnims: anims } : state.modelData;
+        return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
     }),
 
     updateGeoset: (index, updates) => {
@@ -457,6 +713,30 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 return { modelData: updatedModelData };
             }
             return {};
+        });
+    },
+
+    updateGeosetAnim: (index: number, updates: any) => {
+        set((state) => {
+            if (!state.modelData || !state.modelData.GeosetAnims) return {};
+
+            const newGeosetAnims = [...state.modelData.GeosetAnims];
+            if (index >= 0 && index < newGeosetAnims.length) {
+                newGeosetAnims[index] = { ...newGeosetAnims[index], ...updates };
+
+                // Update modelData
+                const updatedModelData = { ...state.modelData, GeosetAnims: newGeosetAnims };
+                return { modelData: updatedModelData };
+            }
+            return {};
+        });
+    },
+
+    setGeosetAnims: (anims: any[]) => {
+        set((state) => {
+            if (!state.modelData) return {};
+            const updatedModelData = { ...state.modelData, GeosetAnims: anims };
+            return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
         });
     },
 
@@ -478,5 +758,12 @@ export const useModelStore = create<ModelState>((set, get) => ({
             console.log('[ModelStore] Batch updated', updates.length, 'nodes');
             return { nodes: updatedNodes, modelData: updatedModelData };
         });
+    },
+
+    triggerRendererReload: () => {
+        set((state) => ({
+            rendererReloadTrigger: state.rendererReloadTrigger + 1
+        }));
+        console.log('[ModelStore] Triggered renderer reload');
     }
 }));

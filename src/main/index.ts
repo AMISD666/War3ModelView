@@ -9,8 +9,8 @@ const isDev = process.env.NODE_ENV !== 'production'
 function createWindow(): void {
     // Create the browser window.
     const mainWindow = new BrowserWindow({
-        width: 1080,
-        height: 670,
+        width: 1440,
+        height: 900,
         show: false,
         autoHideMenuBar: true,
         ...(process.platform === 'linux' ? { icon } : {}),

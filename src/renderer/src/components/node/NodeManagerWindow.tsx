@@ -14,7 +14,6 @@ import {
     BuildOutlined,
     BulbOutlined,
     FireOutlined,
-    VideoCameraOutlined,
     SoundOutlined,
     BlockOutlined,
     PaperClipOutlined
@@ -31,7 +30,6 @@ const getNodeIcon = (type: NodeType) => {
         case NodeType.PARTICLE_EMITTER:
         case NodeType.PARTICLE_EMITTER_2:
         case NodeType.RIBBON_EMITTER: return <FireOutlined />;
-        case NodeType.CAMERA: return <VideoCameraOutlined />;
         case NodeType.EVENT_OBJECT: return <SoundOutlined />;
         case NodeType.COLLISION_SHAPE: return <BlockOutlined />;
         case NodeType.ATTACHMENT: return <PaperClipOutlined />;
@@ -51,23 +49,100 @@ import { buildTreeData, filterTreeNodes, getExpandedKeys } from '../../utils/tre
 import { canDeleteNode } from '../../utils/nodeUtils';
 import { RenameNodeDialog } from './RenameNodeDialog';
 import ParticleEmitter2Dialog from './ParticleEmitter2Dialog';
+import CollisionShapeDialog from './CollisionShapeDialog';
+import LightDialog from './LightDialog';
+
+import EventObjectDialog from './EventObjectDialog';
+import RibbonEmitterDialog from './RibbonEmitterDialog';
 
 const { Search } = Input;
 
 export const NodeManagerWindow: React.FC = () => {
-    const { nodes, modelData, deleteNode, moveNodeTo, setClipboardNode, pasteNode, renameNode, clipboardNode } = useModelStore();
-    const { selectedNodeIds, selectNode, clearNodeSelection } = useSelectionStore();
+    const { nodes, modelData, deleteNode, moveNodeTo, moveNodeWithChildren, reparentNodes, setClipboardNode, pasteNode, renameNode, clipboardNode, addNode } = useModelStore();
+    const { selectedNodeIds, selectNode, selectNodes, clearNodeSelection } = useSelectionStore();
     const { setNodeDialogVisible, setCreateNodeDialogVisible } = useUIStore();
 
     const [searchText, setSearchText] = useState('');
     const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
     const [autoExpandParent, setAutoExpandParent] = useState(true);
 
+    // Track Ctrl key state for drag operations
+    const ctrlKeyPressedRef = React.useRef(false);
+
+    // Listen for keyboard events to track Ctrl key
+    React.useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Control' || e.key === 'Meta') {
+                ctrlKeyPressedRef.current = true;
+            }
+        };
+        const handleKeyUp = (e: KeyboardEvent) => {
+            if (e.key === 'Control' || e.key === 'Meta') {
+                ctrlKeyPressedRef.current = false;
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        window.addEventListener('keyup', handleKeyUp);
+        return () => {
+            window.removeEventListener('keydown', handleKeyDown);
+            window.removeEventListener('keyup', handleKeyUp);
+        };
+    }, []);
+
     // Rename Dialog State
     const [renameVisible, setRenameVisible] = useState(false);
     const [renamingNodeId, setRenamingNodeId] = useState<number | null>(null);
     const [renamingNodeName, setRenamingNodeName] = useState('');
     const [pe2DialogVisible, setPe2DialogVisible] = useState(false);
+    const [collisionDialogVisible, setCollisionDialogVisible] = useState(false);
+    const [lightDialogVisible, setLightDialogVisible] = useState(false);
+    const [eventDialogVisible, setEventDialogVisible] = useState(false);
+    const [ribbonDialogVisible, setRibbonDialogVisible] = useState(false);
+
+    // Manual Drag-Drop State
+    const [draggedNodeId, setDraggedNodeId] = useState<number | null>(null);
+    const [dropTargetNodeId, setDropTargetNodeId] = useState<number | null>(null);
+    const [cutNodeId, setCutNodeId] = useState<number | null>(null); // For Cut/Paste functionality
+
+    // Use ref to track draggedNodeId in event handlers (state won't update in event listener closure)
+    const draggedNodeIdRef = React.useRef<number | null>(null);
+
+    // Ref for tree wrapper
+    const treeWrapperRef = React.useRef<HTMLDivElement>(null);
+
+    // Keep ref in sync with state
+    React.useEffect(() => {
+        draggedNodeIdRef.current = draggedNodeId;
+    }, [draggedNodeId]);
+
+    // Force enable drop at DOCUMENT level (highest priority)
+    React.useEffect(() => {
+        const handleDragOver = (e: DragEvent) => {
+            // Only handle if we're dragging a node
+            if (draggedNodeIdRef.current === null) return;
+
+            e.preventDefault();
+            if (e.dataTransfer) {
+                e.dataTransfer.dropEffect = 'move';
+            }
+        };
+
+        const handleDrop = (e: DragEvent) => {
+            if (draggedNodeIdRef.current === null) return;
+
+            e.preventDefault();
+            console.log('[DocDrag] Drop detected');
+        };
+
+        // Add to document with capture phase
+        document.addEventListener('dragover', handleDragOver, true);
+        document.addEventListener('drop', handleDrop, true);
+
+        return () => {
+            document.removeEventListener('dragover', handleDragOver, true);
+            document.removeEventListener('drop', handleDrop, true);
+        };
+    }, []);
 
     // 构建树形数据
     const treeData = useMemo(() => buildTreeData(nodes), [nodes]);
@@ -116,12 +191,17 @@ export const NodeManagerWindow: React.FC = () => {
         }
     }, [searchText, treeData, nodes.length]);
 
-    const handleSelect: TreeProps['onSelect'] = (selectedKeys) => {
-        if (selectedKeys.length > 0) {
-            const nodeId = parseInt(selectedKeys[0] as string);
-            selectNode(nodeId);
+    const handleSelect: TreeProps['onSelect'] = (_selectedKeys, info) => {
+        // Strictly control selection logic
+        const nodeId = parseInt(info.node.key as string);
+        const isMulti = info.nativeEvent.ctrlKey || info.nativeEvent.metaKey;
+
+        if (isMulti) {
+            // Ctrl+Click: Toggle
+            selectNode(nodeId, true);
         } else {
-            clearNodeSelection();
+            // Click: Replace selection (Single Select)
+            selectNode(nodeId, false);
         }
     };
 
@@ -171,6 +251,27 @@ export const NodeManagerWindow: React.FC = () => {
         });
     };
 
+    // Verify environment drag support
+    // Drag diagnostics removed as per user request
+    // useEffect(() => {
+    //     const handleDragOver = (e: DragEvent) => {
+    //         e.preventDefault();
+    //         if (e.dataTransfer) {
+    //             e.dataTransfer.dropEffect = 'move';
+    //         }
+    //     };
+    //     const handleDrop = (e: DragEvent) => {
+    //         console.log('Global drop:', e.target);
+    //     };
+
+    //     window.addEventListener('dragover', handleDragOver, true);
+    //     window.addEventListener('drop', handleDrop, true);
+    //     return () => {
+    //         window.removeEventListener('dragover', handleDragOver, true);
+    //         window.removeEventListener('drop', handleDrop, true);
+    //     };
+    // }, []);
+
     const onDrop: TreeProps['onDrop'] = (info) => {
         console.log('[NodeManager] onDrop triggered', info);
         const dragId = parseInt(info.dragNode.key as string);
@@ -178,30 +279,68 @@ export const NodeManagerWindow: React.FC = () => {
         const dropPos = info.node.pos.split('-');
         const dropPosition = info.dropPosition - Number(dropPos[dropPos.length - 1]);
 
-        console.log('[NodeManager] Dragging ' + dragId + ' to ' + dropId + ', position: ' + dropPosition + ', dropToGap: ' + info.dropToGap);
-        console.log('[NodeManager] Raw dropPosition:', info.dropPosition, 'Node pos:', info.node.pos);
+        // Use ref to check if Ctrl key is pressed (more reliable than event.ctrlKey)
+        const withChildren = ctrlKeyPressedRef.current;
+
+        console.log('[NodeManager] Dragging ' + dragId + ' to ' + dropId + ', position: ' + dropPosition + ', dropToGap: ' + info.dropToGap + ', withChildren: ' + withChildren);
+
+        // Determine nodes to move: all selected nodes OR just the dragged node
+        let nodesToMove: number[] = [dragId];
+        if (selectedNodeIds.length > 0 && selectedNodeIds.includes(dragId)) {
+            // Dragging one of the selected nodes -> move all selected
+            nodesToMove = [...selectedNodeIds];
+        }
 
         if (!info.dropToGap) {
-            // Drop on the node -> make it a child
-            console.log('[NodeManager] Dropping inside (reparenting)');
-            moveNodeTo(dragId, dropId, 'inside');
-        } else if (dropPosition < 1) {
-            // Drop before the node (usually 0, sometimes -1)
-            console.log('[NodeManager] Dropping before');
-            moveNodeTo(dragId, dropId, 'before');
+            // Drop on the node -> reparenting
+            console.log('[NodeManager] Dropping inside (reparenting)', nodesToMove);
+            reparentNodes(nodesToMove, dropId);
+            message.success(nodesToMove.length > 1 ? `已移动 ${nodesToMove.length} 个节点` : '节点已移动');
         } else {
-            // Drop after the node (usually 1)
-            console.log('[NodeManager] Dropping after');
-            moveNodeTo(dragId, dropId, 'after');
+            // Drop before/after -> reordering (only supports single node for now due to complexity of ordering)
+            // Or we could support multi-move if we iterate. For now, fallback to single node move for reordering.
+            const moveFunc = withChildren ? moveNodeWithChildren : moveNodeTo;
+
+            if (nodesToMove.length > 1) {
+                message.warning('多选模式下仅支持拖拽到节点内部(修改父节点)');
+                return;
+            }
+
+            if (dropPosition < 1) {
+                // Drop before
+                console.log('[NodeManager] Dropping before');
+                moveFunc(dragId, dropId, 'before');
+            } else {
+                // Drop after
+                console.log('[NodeManager] Dropping after');
+                moveFunc(dragId, dropId, 'after');
+            }
+            message.success(withChildren ? '节点及子节点已移动' : '节点已移动');
         }
-        message.success('节点已移动');
     };
 
     const allowDrop: TreeProps['allowDrop'] = (info) => {
+        const dropId = parseInt(info.dropNode.key as string);
+        const dragId = parseInt(info.dragNode.key as string);
+
         // Prevent dropping on itself
-        if (info.dropNode.key === info.dragNode.key) {
+        if (dropId === dragId) {
             return false;
         }
+
+        // If reparenting (drop inside), check all selected nodes
+        if (!(info as any).dropToGap) {
+            // Check if drop target is descendant of any selected node
+            let nodesToCheck: number[] = [dragId];
+            if (selectedNodeIds.length > 0 && selectedNodeIds.includes(dragId)) {
+                nodesToCheck = [...selectedNodeIds];
+            }
+
+            // We can't easily check descendants here without helper, but store will block it.
+            // Just simple check: cannot drop onto any selected node
+            if (nodesToCheck.includes(dropId)) return false;
+        }
+
         return true;
     };
 
@@ -215,11 +354,7 @@ export const NodeManagerWindow: React.FC = () => {
                 label: '编辑节点',
                 icon: <EditOutlined />,
                 onClick: () => {
-                    if (node.type === NodeType.PARTICLE_EMITTER_2) {
-                        setPe2DialogVisible(true);
-                    } else {
-                        setNodeDialogVisible(true, nodeId);
-                    }
+                    setNodeDialogVisible(true, nodeId);
                 }
             }
         ];
@@ -231,12 +366,40 @@ export const NodeManagerWindow: React.FC = () => {
                 icon: <FireOutlined />,
                 onClick: () => setPe2DialogVisible(true)
             });
-        } else if (node.type === NodeType.PARTICLE_EMITTER || node.type === NodeType.RIBBON_EMITTER) {
+        } else if (node.type === NodeType.RIBBON_EMITTER) {
+            items.push({
+                key: 'edit_ribbon',
+                label: '编辑丝带',
+                icon: <FireOutlined />,
+                onClick: () => setRibbonDialogVisible(true)
+            });
+        } else if (node.type === NodeType.PARTICLE_EMITTER) {
             items.push({
                 key: 'edit_particle_disabled',
                 label: '编辑粒子系统 (暂不支持)',
                 icon: <FireOutlined />,
                 disabled: true
+            });
+        } else if (node.type === NodeType.COLLISION_SHAPE) {
+            items.push({
+                key: 'edit_collision',
+                label: '编辑碰撞形状',
+                icon: <BlockOutlined />,
+                onClick: () => setCollisionDialogVisible(true)
+            });
+        } else if (node.type === NodeType.LIGHT) {
+            items.push({
+                key: 'edit_light',
+                label: '编辑灯光',
+                icon: <BulbOutlined />,
+                onClick: () => setLightDialogVisible(true)
+            });
+        } else if (node.type === NodeType.EVENT_OBJECT) {
+            items.push({
+                key: 'edit_event',
+                label: '编辑事件对象',
+                icon: <SoundOutlined />,
+                onClick: () => setEventDialogVisible(true)
             });
         }
 
@@ -277,7 +440,17 @@ export const NodeManagerWindow: React.FC = () => {
                 label: '复制节点',
                 onClick: () => {
                     setClipboardNode(node);
+                    setCutNodeId(null); // Clear cut state
                     message.success('节点已复制');
+                }
+            },
+            {
+                key: 'cut',
+                label: '剪切节点',
+                onClick: () => {
+                    setCutNodeId(nodeId);
+                    setClipboardNode(null); // Clear copy state
+                    message.success('节点已剪切，请选择目标节点后右键粘贴');
                 }
             },
             {
@@ -302,11 +475,105 @@ export const NodeManagerWindow: React.FC = () => {
                     }, 50);
                 }
             },
+            {
+                key: 'moveHere',
+                label: '移动到此处(作为子节点)',
+                disabled: cutNodeId === null || cutNodeId === nodeId,
+                onClick: () => {
+                    if (cutNodeId !== null) {
+                        reparentNodes([cutNodeId], nodeId);
+                        message.success('节点已移动');
+                        setCutNodeId(null);
+                    }
+                }
+            },
             { type: 'divider' },
             {
                 key: 'create',
-                label: '在此创建子节点',
-                onClick: () => setCreateNodeDialogVisible(true)
+                label: '添加节点',
+                icon: <PlusOutlined />,
+                children: [
+                    {
+                        key: 'create_dialog',
+                        label: '打开创建对话框...',
+                        onClick: () => setCreateNodeDialogVisible(true)
+                    },
+                    { type: 'divider' },
+                    {
+                        key: 'create_bone',
+                        label: '骨骼 (Bone)',
+                        icon: <DeploymentUnitOutlined />,
+                        onClick: () => {
+                            addNode({ type: NodeType.BONE, Name: 'New Bone', Parent: nodeId });
+                            message.success('已创建骨骼节点');
+                        }
+                    },
+                    {
+                        key: 'create_helper',
+                        label: '辅助体 (Helper)',
+                        icon: <BuildOutlined />,
+                        onClick: () => {
+                            addNode({ type: NodeType.HELPER, Name: 'New Helper', Parent: nodeId });
+                            message.success('已创建辅助体节点');
+                        }
+                    },
+                    {
+                        key: 'create_attachment',
+                        label: '附件点 (Attachment)',
+                        icon: <PaperClipOutlined />,
+                        onClick: () => {
+                            addNode({ type: NodeType.ATTACHMENT, Name: 'New Attachment', Parent: nodeId });
+                            message.success('已创建附件点节点');
+                        }
+                    },
+                    { type: 'divider' },
+                    {
+                        key: 'create_particle2',
+                        label: '粒子发射器2 (ParticleEmitter2)',
+                        icon: <FireOutlined />,
+                        onClick: () => {
+                            addNode({ type: NodeType.PARTICLE_EMITTER_2, Name: 'New Particle', Parent: nodeId });
+                            message.success('已创建粒子发射器2节点');
+                        }
+                    },
+                    {
+                        key: 'create_ribbon',
+                        label: '丝带发射器 (RibbonEmitter)',
+                        icon: <FireOutlined style={{ color: '#1890ff' }} />,
+                        onClick: () => {
+                            addNode({ type: NodeType.RIBBON_EMITTER, Name: 'New Ribbon', Parent: nodeId });
+                            message.success('已创建丝带发射器节点');
+                        }
+                    },
+                    { type: 'divider' },
+                    {
+                        key: 'create_light',
+                        label: '灯光 (Light)',
+                        icon: <BulbOutlined />,
+                        onClick: () => {
+                            addNode({ type: NodeType.LIGHT, Name: 'New Light', Parent: nodeId });
+                            message.success('已创建灯光节点');
+                        }
+                    },
+                    {
+                        key: 'create_event',
+                        label: '事件对象 (EventObject)',
+                        icon: <SoundOutlined />,
+                        onClick: () => {
+                            addNode({ type: NodeType.EVENT_OBJECT, Name: 'New Event', Parent: nodeId });
+                            message.success('已创建事件对象节点');
+                        }
+                    },
+                    {
+                        key: 'create_collision',
+                        label: '碰撞形状 (CollisionShape)',
+                        icon: <BlockOutlined />,
+                        onClick: () => {
+                            addNode({ type: NodeType.COLLISION_SHAPE, Name: 'New Collision', Parent: nodeId });
+                            message.success('已创建碰撞形状节点');
+                        }
+                    }
+                ]
             },
             {
                 key: 'rename',
@@ -366,7 +633,33 @@ export const NodeManagerWindow: React.FC = () => {
     }, [contextMenuNodeId, nodes]); // Re-calculate when node or selection changes
 
     const handleNodeDoubleClick = (node: any) => {
-        setNodeDialogVisible(true, node.ObjectId);
+        // Open specialized editor based on node type
+        switch (node.type) {
+            case NodeType.PARTICLE_EMITTER_2:
+                selectNode(node.ObjectId);
+                setPe2DialogVisible(true);
+                break;
+            case NodeType.LIGHT:
+                selectNode(node.ObjectId);
+                setLightDialogVisible(true);
+                break;
+            case NodeType.COLLISION_SHAPE:
+                selectNode(node.ObjectId);
+                setCollisionDialogVisible(true);
+                break;
+            case NodeType.EVENT_OBJECT:
+                selectNode(node.ObjectId);
+                setEventDialogVisible(true);
+                break;
+            case NodeType.RIBBON_EMITTER:
+                selectNode(node.ObjectId);
+                setRibbonDialogVisible(true);
+                break;
+            default:
+                // For other node types (Bone, Helper, Attachment, etc.), open generic node dialog
+                setNodeDialogVisible(true, node.ObjectId);
+                break;
+        }
     };
 
     return (
@@ -374,6 +667,16 @@ export const NodeManagerWindow: React.FC = () => {
             style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: '8px', overflow: 'hidden' }}
             onContextMenu={(e) => e.preventDefault()}
         >
+            <style dangerouslySetInnerHTML={{
+                __html: `
+                .node-manager-tree-wrapper, .node-manager-tree-wrapper * {
+                    -webkit-app-region: no-drag !important;
+                    user-select: none;
+                }
+                .ant-tree-treenode {
+                    -webkit-user-drag: element;
+                }
+            `}} />
             <Search
                 placeholder="搜索节点..."
                 value={searchText}
@@ -383,6 +686,7 @@ export const NodeManagerWindow: React.FC = () => {
                 size="small"
                 style={{ marginBottom: 8 }}
             />
+            {/* Diagnostic Element Removed */}
             <Space size="small" style={{ marginBottom: 8 }}>
                 <Tooltip title="创建节点">
                     <Button type="primary" size="small" icon={<PlusOutlined />} onClick={handleCreate} />
@@ -395,24 +699,21 @@ export const NodeManagerWindow: React.FC = () => {
                 </Tooltip>
             </Space>
             <div
+                ref={treeWrapperRef}
+                className="node-manager-tree-wrapper"
                 style={{
                     flex: 1,
                     overflow: 'auto',
                     border: '1px solid #303030',
                     borderRadius: '2px',
                     backgroundColor: '#1e1e1e',
-                    padding: '4px',
-                    // @ts-ignore
-                    WebkitAppRegion: 'no-drag' // Force allow mouse events
-                }}
-                onDragOver={(e) => {
-                    e.preventDefault();
-                    e.dataTransfer.dropEffect = 'move';
+                    padding: '4px'
                 }}
             >
                 {treeData.length > 0 ? (
                     <Tree
                         className="node-manager-tree"
+                        multiple
                         treeData={filteredTreeData}
                         selectedKeys={selectedNodeIds.map(String)}
                         expandedKeys={expandedKeys}
@@ -423,26 +724,107 @@ export const NodeManagerWindow: React.FC = () => {
                         onDoubleClick={(_e, node) => handleNodeDoubleClick(node.data)}
                         showIcon
                         showLine
-                        draggable
                         blockNode
-                        onDragStart={(info) => {
-                            // Ensure dataTransfer is set for Electron/Chromium
-                            if (info.event.dataTransfer) {
-                                info.event.dataTransfer.effectAllowed = 'move';
-                                info.event.dataTransfer.setData('text/plain', String(info.node.key));
-                            }
+                        titleRender={(nodeData: any) => {
+                            const nodeId = nodeData.data?.ObjectId ?? parseInt(nodeData.key);
+                            const isDropTarget = dropTargetNodeId === nodeId;
+                            const isDragging = draggedNodeId === nodeId;
+                            const isCut = cutNodeId === nodeId;
+
+                            return (
+                                <div
+                                    draggable
+                                    onDragStart={(e) => {
+                                        console.log('[ManualDrag] Start:', nodeId);
+                                        setDraggedNodeId(nodeId);
+                                        e.dataTransfer.effectAllowed = 'move';
+                                        e.dataTransfer.setData('text/plain', String(nodeId));
+                                        // Create a custom drag image (optional)
+                                        const dragImage = e.currentTarget.cloneNode(true) as HTMLElement;
+                                        dragImage.style.opacity = '0.7';
+                                        dragImage.style.position = 'absolute';
+                                        dragImage.style.top = '-1000px';
+                                        document.body.appendChild(dragImage);
+                                        e.dataTransfer.setDragImage(dragImage, 0, 0);
+                                        setTimeout(() => document.body.removeChild(dragImage), 0);
+                                    }}
+                                    onDragEnd={() => {
+                                        console.log('[ManualDrag] End');
+                                        setDraggedNodeId(null);
+                                        setDropTargetNodeId(null);
+                                    }}
+                                    onDragOver={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        e.dataTransfer.dropEffect = 'move';
+                                        if (draggedNodeId !== null && draggedNodeId !== nodeId) {
+                                            setDropTargetNodeId(nodeId);
+                                        }
+                                    }}
+                                    onDragEnter={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        if (draggedNodeId !== null && draggedNodeId !== nodeId) {
+                                            console.log('[ManualDrag] Enter target:', nodeId);
+                                            setDropTargetNodeId(nodeId);
+                                        }
+                                    }}
+                                    onDragLeave={(e) => {
+                                        e.preventDefault();
+                                        // Only clear if leaving this specific element
+                                        if (dropTargetNodeId === nodeId) {
+                                            // Check if we're leaving to a child - don't clear in that case
+                                            const rect = e.currentTarget.getBoundingClientRect();
+                                            const x = e.clientX;
+                                            const y = e.clientY;
+                                            if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
+                                                setDropTargetNodeId(null);
+                                            }
+                                        }
+                                    }}
+                                    onDrop={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        console.log('[ManualDrag] Drop:', draggedNodeId, '->', nodeId);
+
+                                        if (draggedNodeId !== null && draggedNodeId !== nodeId) {
+                                            // Check for circular reference (can't drop parent onto child)
+                                            // Simple check: don't allow if target is in selected nodes
+                                            let nodesToMove = [draggedNodeId];
+                                            if (selectedNodeIds.includes(draggedNodeId)) {
+                                                nodesToMove = [...selectedNodeIds];
+                                            }
+
+                                            // Perform reparent
+                                            reparentNodes(nodesToMove, nodeId);
+                                            message.success(nodesToMove.length > 1 ? `已移动 ${nodesToMove.length} 个节点` : '节点已移动');
+                                        }
+
+                                        setDraggedNodeId(null);
+                                        setDropTargetNodeId(null);
+                                    }}
+                                    style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        width: '100%',
+                                        minWidth: 0,
+                                        padding: '2px 4px',
+                                        cursor: 'grab',
+                                        borderRadius: '2px',
+                                        backgroundColor: isDropTarget ? 'rgba(24, 144, 255, 0.3)' : 'transparent',
+                                        border: isDropTarget ? '1px dashed #1890ff' : '1px solid transparent',
+                                        opacity: isDragging ? 0.5 : (isCut ? 0.5 : 1),
+                                        transition: 'background-color 0.15s, border 0.15s'
+                                    }}
+                                >
+                                    <span style={{ marginRight: 8, color: '#aaa' }}>{getNodeIcon(nodeData.type)}</span>
+                                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+                                        {nodeData.title}
+                                    </span>
+                                    <span style={{ color: '#666', fontSize: '10px', marginLeft: '8px' }}>{nodeData.data.ObjectId ?? ''}</span>
+                                </div>
+                            );
                         }}
-                        onDrop={onDrop}
-                        allowDrop={allowDrop}
-                        titleRender={(nodeData: any) => (
-                            <div style={{ display: 'flex', alignItems: 'center', width: '100%', minWidth: 0, padding: '0 4px' }}>
-                                <span style={{ marginRight: 8, color: '#aaa' }}>{getNodeIcon(nodeData.type)}</span>
-                                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, pointerEvents: 'none' }}>
-                                    {nodeData.title}
-                                </span>
-                                <span style={{ color: '#666', fontSize: '10px', marginLeft: '8px' }}>{nodeData.data.ObjectId}</span>
-                            </div>
-                        )}
                     />
                 ) : (
                     <div style={{ textAlign: 'center', padding: '20px', color: '#888' }}>暂无节点数据</div>
@@ -450,30 +832,32 @@ export const NodeManagerWindow: React.FC = () => {
             </div>
 
             {/* Global Context Menu */}
-            {contextMenuVisible && (
-                <div
-                    style={{
-                        position: 'fixed',
-                        left: contextMenuPosition.x,
-                        top: contextMenuPosition.y,
-                        zIndex: 1000,
-                        backgroundColor: '#1f1f1f',
-                        border: '1px solid #303030',
-                        borderRadius: '2px',
-                        boxShadow: '0 2px 8px rgba(0, 0, 0, 0.5)'
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                >
-                    <Menu
-                        items={contextMenuItems}
-                        mode="vertical"
-                        theme="dark"
-                        selectable={false}
-                        onClick={() => setContextMenuVisible(false)}
-                        style={{ border: 'none', width: 160 }}
-                    />
-                </div>
-            )}
+            {
+                contextMenuVisible && (
+                    <div
+                        style={{
+                            position: 'fixed',
+                            left: contextMenuPosition.x,
+                            top: contextMenuPosition.y,
+                            zIndex: 1000,
+                            backgroundColor: '#1f1f1f',
+                            border: '1px solid #303030',
+                            borderRadius: '2px',
+                            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.5)'
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <Menu
+                            items={contextMenuItems}
+                            mode="vertical"
+                            theme="dark"
+                            selectable={false}
+                            onClick={() => setContextMenuVisible(false)}
+                            style={{ border: 'none', width: 160 }}
+                        />
+                    </div>
+                )
+            }
 
             <RenameNodeDialog
                 visible={renameVisible}
@@ -494,6 +878,26 @@ export const NodeManagerWindow: React.FC = () => {
                 nodeId={selectedNodeIds.length > 0 ? selectedNodeIds[0] : null}
                 onClose={() => setPe2DialogVisible(false)}
             />
-        </div>
+            <CollisionShapeDialog
+                visible={collisionDialogVisible}
+                nodeId={selectedNodeIds.length > 0 ? selectedNodeIds[0] : null}
+                onClose={() => setCollisionDialogVisible(false)}
+            />
+            <LightDialog
+                visible={lightDialogVisible}
+                nodeId={selectedNodeIds.length > 0 ? selectedNodeIds[0] : null}
+                onClose={() => setLightDialogVisible(false)}
+            />
+            <EventObjectDialog
+                visible={eventDialogVisible}
+                nodeId={selectedNodeIds.length > 0 ? selectedNodeIds[0] : null}
+                onClose={() => setEventDialogVisible(false)}
+            />
+            <RibbonEmitterDialog
+                visible={ribbonDialogVisible}
+                nodeId={selectedNodeIds.length > 0 ? selectedNodeIds[0] : null}
+                onClose={() => setRibbonDialogVisible(false)}
+            />
+        </div >
     );
 };

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { Table, Button, Input, Space, Modal, message, Tooltip } from 'antd'
+import { DraggableModal } from '../DraggableModal'
 import { PlusOutlined, DeleteOutlined, SaveOutlined, ReloadOutlined } from '@ant-design/icons'
 import TextureDetail from './texture/TextureDetail'
 import { useModelStore } from '../../store/modelStore'
@@ -155,7 +156,7 @@ const TextureEditor: React.FC<TextureEditorProps> = () => {
                 })}
             />
 
-            <Modal
+            <DraggableModal
                 title={`贴图 [${(modelData as any).Name || 'Model'}]`}
                 open={isModalOpen}
                 onCancel={() => setIsModalOpen(false)}
@@ -172,7 +173,7 @@ const TextureEditor: React.FC<TextureEditorProps> = () => {
                         onClose={() => setIsModalOpen(false)}
                     />
                 )}
-            </Modal>
+            </DraggableModal>
 
             <style>{`
                 .ant-table { background: transparent; }

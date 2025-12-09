@@ -13,7 +13,6 @@ function getTouchesLength(touch1: Touch, touch2: Touch): number {
 }
 
 const vecHeap = vec3.create()
-const vecHeap2 = vec3.create()
 const quatHeap = quat.create()
 
 export interface MdxM3ViewerScene {

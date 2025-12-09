@@ -14,16 +14,17 @@ export function buildTreeData(nodes: ModelNode[]): TreeNode[] {
 
     // 第一遍：创建所有树节点
     nodes.forEach(node => {
+        const objectId = node.ObjectId ?? 0;  // 确保 ObjectId 有值
         const treeNode: TreeNode = {
-            key: String(node.ObjectId),
-            value: node.ObjectId,
-            title: node.Name || `未命名节点 ${node.ObjectId}`,
+            key: String(objectId),
+            value: objectId,  // 确保 value 始终有效
+            title: node.Name || `未命名节点 ${objectId}`,
             type: node.type,
             icon: getNodeIcon(node.type),
             children: [],
             data: node
         };
-        nodeMap.set(node.ObjectId, treeNode);
+        nodeMap.set(objectId, treeNode);
     });
 
     // 第二遍：建立父子关系

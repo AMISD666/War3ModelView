@@ -90,3 +90,170 @@ body,
     -webkit-user-drag: element;
     cursor: grab;
 }
+
+/* Dark Theme Overrides for Ant Design Modal Components */
+.dark-theme-modal .ant-modal-content,
+.dark-theme-modal .ant-modal-header,
+.dark-theme-modal .ant-modal-body,
+.dark-theme-modal .ant-modal-footer {
+    background-color: #333333 !important;
+    color: #e8e8e8 !important;
+}
+
+.dark-theme-modal .ant-modal-title {
+    color: #e8e8e8 !important;
+}
+
+/* InputNumber Dark Theme */
+.dark-theme-modal .ant-input-number,
+.ant-input-number {
+    background-color: #252525 !important;
+    border-color: #4a4a4a !important;
+    color: #e8e8e8 !important;
+}
+
+.dark-theme-modal .ant-input-number-input,
+.ant-input-number-input {
+    color: #e8e8e8 !important;
+    background-color: #252525 !important;
+}
+
+.dark-theme-modal .ant-input-number-handler-wrap {
+    background-color: #333333 !important;
+    border-color: #4a4a4a !important;
+}
+
+.dark-theme-modal .ant-input-number-handler {
+    color: #b0b0b0 !important;
+}
+
+.dark-theme-modal .ant-input-number-handler:hover {
+    background-color: #454545 !important;
+}
+
+/* Input Dark Theme */
+.dark-theme-modal .ant-input,
+.ant-input {
+    background-color: #252525 !important;
+    border-color: #4a4a4a !important;
+    color: #e8e8e8 !important;
+}
+
+.dark-theme-modal .ant-input::placeholder {
+    color: #808080 !important;
+}
+
+/* Select Dark Theme */
+.dark-theme-modal .ant-select-selector,
+.ant-select-selector {
+    background-color: #252525 !important;
+    border-color: #4a4a4a !important;
+    color: #e8e8e8 !important;
+}
+
+.dark-theme-modal .ant-select-selection-item {
+    color: #e8e8e8 !important;
+}
+
+.dark-theme-modal .ant-select-arrow {
+    color: #b0b0b0 !important;
+}
+
+/* Select Dropdown Dark Theme */
+.dark-theme-select-dropdown,
+.ant-select-dropdown {
+    background-color: #333333 !important;
+    border: 1px solid #4a4a4a !important;
+}
+
+.ant-select-item {
+    color: #e8e8e8 !important;
+}
+
+.ant-select-item-option-selected {
+    background-color: #5a9cff !important;
+}
+
+.ant-select-item-option-active {
+    background-color: #454545 !important;
+}
+
+/* Checkbox Dark Theme */
+.dark-theme-modal .ant-checkbox-wrapper {
+    color: #e8e8e8 !important;
+}
+
+/* Button in Modal */
+.dark-theme-modal .ant-btn-default {
+    background-color: #333333 !important;
+    border-color: #4a4a4a !important;
+    color: #e8e8e8 !important;
+}
+
+.dark-theme-modal .ant-btn-default:hover {
+    border-color: #5a9cff !important;
+    color: #5a9cff !important;
+}
+
+/* Card Header in Modal */
+.dark-theme-modal .ant-card {
+    background-color: #333333 !important;
+    border-color: #4a4a4a !important;
+}
+
+.dark-theme-modal .ant-card-head {
+    border-color: #4a4a4a !important;
+    color: #e8e8e8 !important;
+}
+
+.dark-theme-modal .ant-card-head-title {
+    color: #e8e8e8 !important;
+}
+
+/* List Item Dark Theme */
+.dark-theme-modal .ant-list-item {
+    border-color: #3a3a3a !important;
+}
+
+/* TextArea Dark Theme */
+.dark-theme-modal textarea.ant-input {
+    background-color: #252525 !important;
+    color: #e8e8e8 !important;
+    border-color: #4a4a4a !important;
+}
+
+/* Force WHITE labels in Modal Form Items */
+.dark-theme-modal .ant-form-item-label>label {
+    color: #ffffff !important;
+}
+
+/* Card Titles in Dark Modal */
+.dark-theme-modal .ant-card-head-title {
+    color: #ffffff !important;
+}
+
+/* Ensure Text components used as labels are white */
+.dark-theme-modal .ant-typography {
+    color: #e8e8e8 !important;
+}
+
+/* Form/List headers */
+.dark-theme-modal .ant-list-header,
+.dark-theme-modal .ant-card-head {
+    background-color: #333333 !important;
+    border-color: #444444 !important;
+}
+
+/* Dark theme for cards inside modals */
+.dark-theme-modal .ant-card {
+    background-color: #2d2d2d !important;
+    border-color: #444444 !important;
+}
+
+.dark-theme-modal .ant-card-head {
+    color: #ffffff !important;
+}
+
+.dark-theme-modal .ant-card-body {
+    background-color: #2d2d2d !important;
+}

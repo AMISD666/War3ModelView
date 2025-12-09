@@ -5,6 +5,7 @@ interface MenuBarProps {
     onSave: () => void
     onSaveAs: () => void
     onLoadMPQ: () => void
+    mpqLoaded: boolean
     teamColor: number
     onSelectTeamColor: (color: number) => void
     showGrid: boolean
@@ -33,6 +34,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
     onSave,
     onSaveAs,
     onLoadMPQ,
+    mpqLoaded,
     teamColor,
     onSelectTeamColor,
     showGrid,
@@ -167,15 +169,35 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             onMouseLeave={unhoverStyle}
                             onClick={() => { onToggleEditor('nodeManager'); closeMenu() }}
                         >
-                            节点管理器 (Node Manager)
+                            <span>节点管理器</span>
+                            <span style={{ color: '#888', fontSize: '11px' }}>N</span>
                         </div>
                         <div
                             style={itemStyle}
                             onMouseEnter={hoverStyle}
                             onMouseLeave={unhoverStyle}
-                            onClick={() => { onToggleEditor('modelInfo'); closeMenu() }}
+                            onClick={() => { onToggleEditor('camera'); closeMenu() }}
                         >
-                            模型信息 (Model Info)
+                            <span>镜头管理器</span>
+                            <span style={{ color: '#888', fontSize: '11px' }}>C</span>
+                        </div>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={() => { onToggleEditor('geoset'); closeMenu() }}
+                        >
+                            <span>多边形管理器</span>
+                            <span style={{ color: '#888', fontSize: '11px' }}>G</span>
+                        </div>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={() => { onToggleEditor('geosetAnim'); closeMenu() }}
+                        >
+                            <span>多边形动画管理器</span>
+                            <span style={{ color: '#888', fontSize: '11px' }}>E</span>
                         </div>
                         <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
                         <div
@@ -184,15 +206,17 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             onMouseLeave={unhoverStyle}
                             onClick={() => { onToggleEditor('texture'); closeMenu() }}
                         >
-                            纹理编辑器 (Texture)
+                            <span>贴图管理器</span>
+                            <span style={{ color: '#888', fontSize: '11px' }}>T</span>
                         </div>
                         <div
                             style={itemStyle}
                             onMouseEnter={hoverStyle}
                             onMouseLeave={unhoverStyle}
-                            onClick={() => { onToggleEditor('sequence'); closeMenu() }}
+                            onClick={() => { onToggleEditor('textureAnim'); closeMenu() }}
                         >
-                            序列编辑器 (Sequence)
+                            <span>贴图动画管理器</span>
+                            <span style={{ color: '#888', fontSize: '11px' }}>X</span>
                         </div>
                         <div
                             style={itemStyle}
@@ -200,15 +224,51 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             onMouseLeave={unhoverStyle}
                             onClick={() => { onToggleEditor('material'); closeMenu() }}
                         >
-                            材质编辑器 (Material)
+                            <span>材质管理器</span>
+                            <span style={{ color: '#888', fontSize: '11px' }}>M</span>
+                        </div>
+                        {/* Model Sequence Manager (Ignored / No Shortcut) */}
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={() => { onToggleEditor('sequence'); closeMenu() }}
+                        >
+                            <span>模型动作管理器</span>
+                            <span style={{ color: '#888', fontSize: '11px' }}>S</span>
+                            {/* User asked to ignore "Model Action Manager", but the image shows (S). 
+                                "Ignore" might mean "Don't change it" or "Don't implement it". 
+                                But later they said "Add shortcuts according to image". 
+                                I will add S shortcut for UI consistency but verify if logic exists. 
+                                Actually, user said "Directly ignore model action manager". 
+                                I will NOT trigger `toggleSequence` from MainLayout shortcut list, 
+                                but I will display it in the menu if it matches the image.
+                                Wait, the image shows "Model Action Manager (S)".
+                                If I ignore it, maybe I shouldn't show it?
+                                "And sort all managers... directly ignore that model action manager... then add shortcuts to THEM".
+                                "THEM" implies the ones I sorted.
+                                I'll keep it in the menu related to the image but maybe not enable the hotkey 
+                                if the user wants no changes to it. 
+                                But the image has (S), so I should probably render (S) for completeness. 
+                            */}
                         </div>
                         <div
                             style={itemStyle}
                             onMouseEnter={hoverStyle}
                             onMouseLeave={unhoverStyle}
-                            onClick={() => { onToggleEditor('geoset'); closeMenu() }}
+                            onClick={() => { onToggleEditor('globalSequence'); closeMenu() }}
                         >
-                            多边形管理器 (Geoset)
+                            <span>模型全局动作管理器</span>
+                            <span style={{ color: '#888', fontSize: '11px' }}>L</span>
+                        </div>
+                        <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={() => { onToggleEditor('modelInfo'); closeMenu() }}
+                        >
+                            模型信息
                         </div>
                     </div>
                 )}
@@ -225,7 +285,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             onMouseLeave={unhoverStyle}
                             onClick={() => { onSetMainMode('view'); closeMenu() }}
                         >
-                            <span>查看模式 (View)</span>
+                            <span>查看模式</span>
                             <span>{mainMode === 'view' ? '✓' : ''}</span>
                         </div>
                         <div
@@ -234,7 +294,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             onMouseLeave={unhoverStyle}
                             onClick={() => { onSetMainMode('geometry'); closeMenu() }}
                         >
-                            <span>顶点模式 (Vertex)</span>
+                            <span>顶点模式</span>
                             <span>{mainMode === 'geometry' ? '✓' : ''}</span>
                         </div>
                         <div
@@ -243,7 +303,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             onMouseLeave={unhoverStyle}
                             onClick={() => { onSetMainMode('uv'); closeMenu() }}
                         >
-                            <span>UV 模式 (UV)</span>
+                            <span>UV 模式</span>
                             <span>{mainMode === 'uv' ? '✓' : ''}</span>
                         </div>
                         <div
@@ -252,7 +312,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             onMouseLeave={unhoverStyle}
                             onClick={() => { onSetMainMode('animation'); closeMenu() }}
                         >
-                            <span>动画模式 (Animation)</span>
+                            <span>动画模式</span>
                             <span>{mainMode === 'animation' ? '✓' : ''}</span>
                         </div>
                     </div>
@@ -326,7 +386,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             onClick={() => { onSetViewPreset('focus'); closeMenu() }}
                         >
                             <span>聚焦中心</span>
-                            <span style={{ color: '#888', fontSize: '11px' }}>F</span>
+                            <span style={{ color: '#888', fontSize: '11px' }}>0</span>
                         </div>
                     </div>
                 )}
@@ -343,7 +403,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             onMouseLeave={unhoverStyle}
                             onClick={() => { onLoadMPQ(); closeMenu() }}
                         >
-                            加载游戏 MPQ
+                            加载游戏 MPQ {mpqLoaded ? '（成功加载）' : '（未加载）'}
                         </div>
                         <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
                         <div

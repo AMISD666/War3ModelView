@@ -91,16 +91,17 @@ export interface ModelData {
     TextureAnims?: TextureAnimation[];
     Geosets?: Geoset[];
     GeosetAnims?: GeosetAnimation[];
-    Bone?: ModelNode[];
-    Helper?: ModelNode[];
-    Attachment?: ModelNode[];
-    Light?: ModelNode[];
-    ParticleEmitter?: ModelNode[];
-    ParticleEmitter2?: ModelNode[];
-    RibbonEmitter?: ModelNode[];
-    EventObject?: ModelNode[];
-    CollisionShape?: ModelNode[];
-    Camera?: ModelNode[];
+    Nodes?: ModelNode[];
+    Bones?: ModelNode[];
+    Helpers?: ModelNode[];
+    Attachments?: ModelNode[];
+    Lights?: ModelNode[];
+    ParticleEmitters?: ModelNode[];
+    ParticleEmitters2?: ModelNode[];
+    RibbonEmitters?: ModelNode[];
+    EventObjects?: ModelNode[];
+    CollisionShapes?: ModelNode[];
+    Cameras?: ModelNode[];
     _updateCounter?: number;
 }
 

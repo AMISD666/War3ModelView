@@ -111,14 +111,14 @@ export interface ParticleEmitter2Node extends BaseNode {
 
     // 分段属性 (3段)
     SegmentColor?: [number, number, number][]; // [[R,G,B], [R,G,B], [R,G,B]]
-    SegmentAlpha?: [number, number, number]; // [0-255, 0-255, 0-255]
-    SegmentScaling?: [number, number, number];
+    Alpha?: [number, number, number]; // [0-255, 0-255, 0-255]
+    ParticleScaling?: [number, number, number];
 
-    // 头尾属性
-    HeadLifeSpan?: number;
-    HeadDecay?: number;
-    TailLifeSpan?: number;
-    TailDecay?: number;
+    // 头尾属性 - Interval UV arrays [start, end, repeat]
+    LifeSpanUVAnim?: [number, number, number];
+    DecayUVAnim?: [number, number, number];
+    TailUVAnim?: [number, number, number];
+    TailDecayUVAnim?: [number, number, number];
     TailLength?: number;
 
     // 标志位
@@ -154,6 +154,10 @@ export interface RibbonEmitterNode extends BaseNode {
     TextureSlot?: number;
     EmissionRate?: number;
     MaterialID?: number;
+    LifeSpan?: number;
+    Rows?: number;
+    Columns?: number;
+    Gravity?: number;
 }
 
 // Event Object 节点
@@ -179,7 +183,11 @@ export interface CameraNode extends BaseNode {
     FarClip?: number;
     NearClip?: number;
     TargetPosition?: [number, number, number];
+    TargetTranslation?: any; // Animation data for Target Position
 }
+
+// Texture Animation 节点
+
 
 // 联合类型
 export type ModelNode =

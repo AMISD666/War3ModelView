@@ -16,8 +16,6 @@ export class SimpleOrbitCamera {
     public farClipPlane: number
 
     private mouse: { buttons: boolean[]; x: number; y: number; x2: number; y2: number }
-    private touchMode: number
-    private touches: Touch[]
 
     // Callback for manual changes (to trigger React re-renders if needed)
     public onChange?: () => void
@@ -40,8 +38,6 @@ export class SimpleOrbitCamera {
         this.farClipPlane = 100000
 
         this.mouse = { buttons: [false, false, false], x: 0, y: 0, x2: 0, y2: 0 }
-        this.touchMode = -1 // TOUCH_MODE_INVALID
-        this.touches = []
 
         this.initEvents()
         this.update()
