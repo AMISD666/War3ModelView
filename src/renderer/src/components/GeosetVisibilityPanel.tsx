@@ -1,0 +1,218 @@
+import React, { useState, useRef, useEffect } from 'react';
+import { Checkbox } from 'antd';
+import { EyeOutlined, EyeInvisibleOutlined, CloseOutlined, MinusOutlined } from '@ant-design/icons';
+import { useModelStore } from '../store/modelStore';
+
+interface GeosetVisibilityPanelProps {
+    visible: boolean;
+    onClose: () => void;
+}
+
+export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ visible, onClose }) => {
+    const {
+        modelData,
+        hiddenGeosetIds,
+        forceShowAllGeosets,
+        hoveredGeosetId,
+        toggleGeosetVisibility,
+        setForceShowAllGeosets,
+        setHoveredGeosetId
+    } = useModelStore();
+
+    const [position, setPosition] = useState({ x: 20, y: 80 });
+    const [isDragging, setIsDragging] = useState(false);
+    const [isMinimized, setIsMinimized] = useState(false);
+    const dragStart = useRef({ x: 0, y: 0, posX: 0, posY: 0 });
+    const panelRef = useRef<HTMLDivElement>(null);
+
+    const geosets = modelData?.Geosets || [];
+
+    // Handle dragging - fixed direction
+    const handleMouseDown = (e: React.MouseEvent) => {
+        if ((e.target as HTMLElement).closest('.panel-control-btn')) return;
+        setIsDragging(true);
+        dragStart.current = {
+            x: e.clientX,
+            y: e.clientY,
+            posX: position.x,
+            posY: position.y
+        };
+    };
+
+    useEffect(() => {
+        const handleMouseMove = (e: MouseEvent) => {
+            if (!isDragging) return;
+            const deltaX = e.clientX - dragStart.current.x;
+            const deltaY = e.clientY - dragStart.current.y;
+            setPosition({
+                x: dragStart.current.posX - deltaX,  // Subtract for right-anchored
+                y: dragStart.current.posY + deltaY
+            });
+        };
+
+        const handleMouseUp = () => {
+            setIsDragging(false);
+        };
+
+        if (isDragging) {
+            document.addEventListener('mousemove', handleMouseMove);
+            document.addEventListener('mouseup', handleMouseUp);
+        }
+
+        return () => {
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', handleMouseUp);
+        };
+    }, [isDragging]);
+
+    if (!visible) return null;
+
+    // New logic: checked = visible when Show All is OFF
+    // hiddenGeosetIds stores IDs that are NOT checked
+    const isGeosetChecked = (id: number) => {
+        return !hiddenGeosetIds.includes(id);
+    };
+
+    // Create 3-column grid data
+    const columns = 3;
+    const itemsPerColumn = Math.ceil(geosets.length / columns);
+
+    return (
+        <div
+            ref={panelRef}
+            style={{
+                position: 'fixed',
+                right: position.x,
+                top: position.y,
+                width: isMinimized ? 120 : 180,
+                maxHeight: isMinimized ? 'auto' : '400px',
+                backgroundColor: 'rgba(30, 30, 30, 0.9)',
+                border: '1px solid rgba(80, 80, 80, 0.6)',
+                borderRadius: 4,
+                boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+                zIndex: 1000,
+                userSelect: 'none',
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden'
+            }}
+        >
+            {/* Title Bar */}
+            <div
+                onMouseDown={handleMouseDown}
+                style={{
+                    backgroundColor: 'rgba(40, 40, 40, 0.95)',
+                    padding: '5px 8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    cursor: isDragging ? 'grabbing' : 'grab',
+                    borderBottom: '1px solid rgba(60, 60, 60, 0.8)'
+                }}
+            >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Checkbox
+                        checked={forceShowAllGeosets}
+                        onChange={(e) => setForceShowAllGeosets(e.target.checked)}
+                    />
+                    <span style={{ color: '#ddd', fontSize: 11, fontWeight: 500 }}>
+                        {forceShowAllGeosets ? <EyeOutlined /> : <EyeInvisibleOutlined />} 全部
+                    </span>
+                </div>
+                <div style={{ display: 'flex', gap: 4 }}>
+                    <button
+                        className="panel-control-btn"
+                        onClick={() => setIsMinimized(!isMinimized)}
+                        style={{
+                            background: 'none',
+                            border: 'none',
+                            color: '#aaa',
+                            cursor: 'pointer',
+                            padding: 2
+                        }}
+                    >
+                        <MinusOutlined style={{ fontSize: 11 }} />
+                    </button>
+                    <button
+                        className="panel-control-btn"
+                        onClick={onClose}
+                        style={{
+                            background: 'none',
+                            border: 'none',
+                            color: '#aaa',
+                            cursor: 'pointer',
+                            padding: 2
+                        }}
+                    >
+                        <CloseOutlined style={{ fontSize: 11 }} />
+                    </button>
+                </div>
+            </div>
+
+            {/* Content - 3 column grid */}
+            {!isMinimized && (
+                <div
+                    style={{
+                        flex: 1,
+                        overflowY: 'auto',
+                        padding: '6px 8px',
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(3, 1fr)',
+                        gap: '2px 4px'
+                    }}
+                >
+                    {geosets.length === 0 ? (
+                        <div style={{ gridColumn: 'span 3', padding: 8, color: '#888', fontSize: 11, textAlign: 'center' }}>
+                            无多边形
+                        </div>
+                    ) : (
+                        geosets.map((_geoset: any, index: number) => (
+                            <div
+                                key={index}
+                                onMouseEnter={() => setHoveredGeosetId(index)}
+                                onMouseLeave={() => setHoveredGeosetId(null)}
+                                style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    padding: '2px 4px',
+                                    cursor: 'pointer',
+                                    backgroundColor: hoveredGeosetId === index ? 'rgba(70, 130, 220, 0.4)' : 'transparent',
+                                    borderRadius: 2,
+                                    transition: 'background-color 0.1s'
+                                }}
+                                onClick={() => toggleGeosetVisibility(index)}
+                            >
+                                <Checkbox
+                                    checked={isGeosetChecked(index)}
+                                    onChange={() => toggleGeosetVisibility(index)}
+                                    style={{ marginRight: 4 }}
+                                />
+                                <span style={{
+                                    color: isGeosetChecked(index) ? '#ddd' : '#666',
+                                    fontSize: 11
+                                }}>
+                                    {index}
+                                </span>
+                            </div>
+                        ))
+                    )}
+                </div>
+            )}
+
+            {/* Footer with count */}
+            {!isMinimized && geosets.length > 0 && (
+                <div style={{
+                    padding: '3px 8px',
+                    borderTop: '1px solid rgba(60, 60, 60, 0.8)',
+                    fontSize: 10,
+                    color: '#888',
+                    textAlign: 'right'
+                }}>
+                    共 {geosets.length} 个
+                </div>
+            )}
+        </div>
+    );
+};
+
+export default GeosetVisibilityPanel;

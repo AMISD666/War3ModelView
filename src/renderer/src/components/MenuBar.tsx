@@ -20,6 +20,8 @@ interface MenuBarProps {
     onChangeBackgroundColor: (color: string) => void
     showFPS: boolean
     onToggleFPS: () => void
+    showGeosetVisibility: boolean
+    onToggleGeosetVisibility: () => void
     onSetViewPreset: (preset: string) => void
     onToggleEditor: (editor: string) => void
     mainMode: 'view' | 'geometry' | 'uv' | 'animation'
@@ -49,6 +51,8 @@ const MenuBar: React.FC<MenuBarProps> = ({
     onChangeBackgroundColor,
     showFPS,
     onToggleFPS,
+    showGeosetVisibility,
+    onToggleGeosetVisibility,
     onSetViewPreset,
     onToggleEditor,
     mainMode,
@@ -441,6 +445,15 @@ const MenuBar: React.FC<MenuBarProps> = ({
                         >
                             <span>显示 FPS</span>
                             <span>{showFPS ? '✓' : ''}</span>
+                        </div>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={() => { onToggleGeosetVisibility(); }}
+                        >
+                            <span>多边形显示工具</span>
+                            <span>{showGeosetVisibility ? '✓' : ''}</span>
                         </div>
                         <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
                         <div style={{ padding: '5px 15px', color: '#aaa', fontSize: '12px' }}>渲染模式</div>

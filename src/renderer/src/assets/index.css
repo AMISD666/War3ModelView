@@ -257,3 +257,61 @@ body,
 .dark-theme-modal .ant-card-body {
     background-color: #2d2d2d !important;
 }
+
+/* Non-blocking modal wrapper - allows clicks through to menu and other UI */
+.non-blocking-modal-wrap {
+    pointer-events: none !important;
+}
+
+.non-blocking-modal-wrap .ant-modal {
+    pointer-events: auto !important;
+}
+
+.non-blocking-modal-wrap .ant-modal-content {
+    pointer-events: auto !important;
+}
+
+/* Modal title must be white */
+.dark-theme-modal .ant-modal-title,
+.non-blocking-modal-wrap .ant-modal-title {
+    color: #ffffff !important;
+}
+
+/* Ensure modal header has dark background */
+.dark-theme-modal .ant-modal-header,
+.non-blocking-modal-wrap.dark-theme-modal .ant-modal-header {
+    background-color: #333333 !important;
+    border-bottom: 1px solid #444444 !important;
+}
+
+/* Ensure modal content has dark background */
+.dark-theme-modal .ant-modal-content,
+.non-blocking-modal-wrap.dark-theme-modal .ant-modal-content {
+    background-color: #333333 !important;
+}
+
+/* Ensure modal body has dark background */
+.dark-theme-modal .ant-modal-body,
+.non-blocking-modal-wrap.dark-theme-modal .ant-modal-body {
+    background-color: #2d2d2d !important;
+    color: #e8e8e8 !important;
+}
+
+/* Ensure modal footer has dark background */
+.dark-theme-modal .ant-modal-footer,
+.non-blocking-modal-wrap.dark-theme-modal .ant-modal-footer {
+    background-color: #333333 !important;
+    border-top: 1px solid #444444 !important;
+}
+
+/* Modal close button - red color */
+.dark-theme-modal .ant-modal-close,
+.non-blocking-modal-wrap .ant-modal-close {
+    color: #ff4d4f !important;
+}
+
+.dark-theme-modal .ant-modal-close:hover,
+.non-blocking-modal-wrap .ant-modal-close:hover {
+    color: #ff7875 !important;
+    background-color: rgba(255, 77, 79, 0.1) !important;
+}

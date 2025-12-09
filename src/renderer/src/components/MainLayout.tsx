@@ -12,6 +12,7 @@ import CameraManagerModal from './modals/CameraManagerModal'
 import MaterialEditorModal from './modals/MaterialEditorModal'
 import GeosetEditorModal from './modals/GeosetEditorModal'
 import GlobalSequenceModal from './modals/GlobalSequenceModal'
+import { GeosetVisibilityPanel } from './GeosetVisibilityPanel'
 import { open } from '@tauri-apps/plugin-dialog'
 import { generateMDL, generateMDX } from 'war3-model'
 import { useModelStore } from '../store/modelStore'
@@ -243,6 +244,7 @@ const MainLayout: React.FC = () => {
     const [showMaterialModal, setShowMaterialModal] = useState<boolean>(false)
     const [showGeosetModal, setShowGeosetModal] = useState<boolean>(false)
     const [showGlobalSeqModal, setShowGlobalSeqModal] = useState<boolean>(false)
+    const [showGeosetVisibility, setShowGeosetVisibility] = useState<boolean>(() => loadSetting('showGeosetVisibility', true))
 
     // Use modelData directly from store to ensure updates from NodeManager are reflected
     const modelData = useModelStore(state => state.modelData)
@@ -762,6 +764,12 @@ const MainLayout: React.FC = () => {
                 onChangeBackgroundColor={setBackgroundColor}
                 showFPS={showFPS}
                 onToggleFPS={() => setShowFPS(!showFPS)}
+                showGeosetVisibility={showGeosetVisibility}
+                onToggleGeosetVisibility={() => {
+                    const newValue = !showGeosetVisibility;
+                    setShowGeosetVisibility(newValue);
+                    localStorage.setItem('showGeosetVisibility', JSON.stringify(newValue));
+                }}
                 onSetViewPreset={(preset) => setViewPreset({ type: preset, time: Date.now() })}
                 onToggleEditor={(editor) => {
                     console.log('[MainLayout] onToggleEditor called with:', editor)
@@ -786,6 +794,8 @@ const MainLayout: React.FC = () => {
                         setShowGeosetModal(true)
                     } else if (editor === 'globalSequence') {
                         setShowGlobalSeqModal(true)
+                    } else if (editor === 'geosetVisibility') {
+                        setShowGeosetVisibility(prev => !prev)
                     } else {
                         console.log('[MainLayout] Toggling editor:', editor)
                         toggleEditor(editor)
@@ -903,6 +913,11 @@ const MainLayout: React.FC = () => {
                         onModelLoaded={handleModelLoaded}
                         showFPS={showFPS}
                         viewPreset={viewPreset}
+                    />
+
+                    <GeosetVisibilityPanel
+                        visible={showGeosetVisibility}
+                        onClose={() => setShowGeosetVisibility(false)}
                     />
 
                     {isLoading && (

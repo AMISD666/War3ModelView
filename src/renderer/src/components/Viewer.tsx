@@ -1421,7 +1421,68 @@ const Viewer: React.FC<ViewerProps> = ({
             }
           }
 
+          // === Geoset Visibility Control ===
+          // Get visibility state from store
+          const { hiddenGeosetIds, forceShowAllGeosets, hoveredGeosetId } = useModelStore.getState()
+
+          // Store original geoset alphas to restore later
+          const originalGeosetAlphas: Map<number, number> = new Map()
+
+          // Apply visibility: hide geosets that are in hiddenGeosetIds (when forceShowAllGeosets is OFF)
+          // When forceShowAllGeosets is ON, all geosets are visible regardless of hiddenGeosetIds
+          if (!forceShowAllGeosets && mdlRenderer.rendererData.geosetAlpha) {
+            const numGeosets = mdlRenderer.model.Geosets?.length || 0
+            for (let i = 0; i < numGeosets; i++) {
+              originalGeosetAlphas.set(i, mdlRenderer.rendererData.geosetAlpha[i] ?? 1)
+              // If geoset is in hiddenGeosetIds, it's unchecked = hidden
+              if (hiddenGeosetIds.includes(i)) {
+                mdlRenderer.rendererData.geosetAlpha[i] = 0
+              }
+            }
+          }
+
           mdlRenderer.render(mvMatrix, pMatrix, { wireframe: showWireframeRef.current || (appMainMode === 'geometry' && geometrySubMode === 'face') })
+
+          // Restore original geoset alphas
+          if (originalGeosetAlphas.size > 0 && mdlRenderer.rendererData.geosetAlpha) {
+            originalGeosetAlphas.forEach((alpha, index) => {
+              mdlRenderer.rendererData.geosetAlpha[index] = alpha
+            })
+          }
+
+          // === Hover Highlight ===
+          // If a geoset is hovered, render a highlight overlay
+          if (hoveredGeosetId !== null && mdlRenderer.model.Geosets && mdlRenderer.model.Geosets[hoveredGeosetId]) {
+            const hoveredGeoset = mdlRenderer.model.Geosets[hoveredGeosetId]
+            if (hoveredGeoset.Vertices && hoveredGeoset.Faces) {
+              const highlightPositions: number[] = []
+              const faces = hoveredGeoset.Faces
+              const vertices = hoveredGeoset.Vertices
+              for (let i = 0; i < faces.length; i += 3) {
+                const i1 = faces[i] * 3
+                const i2 = faces[i + 1] * 3
+                const i3 = faces[i + 2] * 3
+                highlightPositions.push(
+                  vertices[i1], vertices[i1 + 1], vertices[i1 + 2],
+                  vertices[i2], vertices[i2 + 1], vertices[i2 + 2],
+                  vertices[i3], vertices[i3 + 1], vertices[i3 + 2]
+                )
+              }
+              // Save current GL state to avoid affecting grid/other rendering
+              const prevBlend = gl.isEnabled(gl.BLEND)
+              const prevDepthMask = gl.getParameter(gl.DEPTH_WRITEMASK)
+
+              // Render with red highlight color and high opacity
+              gl.enable(gl.BLEND)
+              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+              gl.depthMask(false)
+              debugRenderer.current.renderTriangles(gl as WebGLRenderingContext, mvMatrix, pMatrix, highlightPositions, [0.9, 0.1, 0.1, 0.8])
+
+              // Restore GL state
+              gl.depthMask(prevDepthMask)
+              if (!prevBlend) gl.disable(gl.BLEND)
+            }
+          }
 
           if ((showNodesRef.current || (appMainMode === 'animation' && animationSubMode === 'binding')) && mdlRenderer.rendererData.nodes && appMainMode !== 'geometry') {
             const { selectedNodeIds } = useSelectionStore.getState()

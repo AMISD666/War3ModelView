@@ -16,6 +16,11 @@ interface ModelState {
     // Renderer reload trigger - increment to force Viewer to reload
     rendererReloadTrigger: number;
 
+    // Geoset Visibility State
+    hiddenGeosetIds: number[];
+    forceShowAllGeosets: boolean;
+    hoveredGeosetId: number | null;
+
     setModelData: (data: ModelData | null, path: string | null) => void;
     setLoading: (loading: boolean) => void;
     updateNode: (objectId: number, updates: Partial<ModelNode>) => void;
@@ -63,6 +68,12 @@ interface ModelState {
 
     // Renderer reload
     triggerRendererReload: () => void;
+
+    // Geoset Visibility Actions
+    toggleGeosetVisibility: (geosetId: number) => void;
+    setForceShowAllGeosets: (show: boolean) => void;
+    setHoveredGeosetId: (id: number | null) => void;
+    resetGeosetVisibility: () => void;
 }
 
 /**
@@ -272,6 +283,11 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
     // Renderer reload trigger
     rendererReloadTrigger: 0,
+
+    // Geoset Visibility State Initial Values
+    hiddenGeosetIds: [],
+    forceShowAllGeosets: true,
+    hoveredGeosetId: null,
 
     // Animation State Initial Values
     sequences: [],
@@ -765,5 +781,29 @@ export const useModelStore = create<ModelState>((set, get) => ({
             rendererReloadTrigger: state.rendererReloadTrigger + 1
         }));
         console.log('[ModelStore] Triggered renderer reload');
+    },
+
+    // Geoset Visibility Actions
+    toggleGeosetVisibility: (geosetId: number) => {
+        set((state) => {
+            const isCurrentlyHidden = state.hiddenGeosetIds.includes(geosetId);
+            if (isCurrentlyHidden) {
+                return { hiddenGeosetIds: state.hiddenGeosetIds.filter(id => id !== geosetId) };
+            } else {
+                return { hiddenGeosetIds: [...state.hiddenGeosetIds, geosetId] };
+            }
+        });
+    },
+
+    setForceShowAllGeosets: (show: boolean) => {
+        set({ forceShowAllGeosets: show });
+    },
+
+    setHoveredGeosetId: (id: number | null) => {
+        set({ hoveredGeosetId: id });
+    },
+
+    resetGeosetVisibility: () => {
+        set({ hiddenGeosetIds: [], forceShowAllGeosets: true, hoveredGeosetId: null });
     }
 }));

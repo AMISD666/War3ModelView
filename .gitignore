@@ -20,6 +20,8 @@ rad.json
 *.flf
 #Test results file
 TestResults.xml
+ai_handover.md
+log.txt
 node_modules/
 dist/
 out/
