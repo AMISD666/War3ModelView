@@ -1,41 +1,41 @@
 import React, { useRef, useState, useCallback, useEffect } from 'react';
 import { Button } from 'antd';
 import { CloseOutlined } from '@ant-design/icons';
-import type { ModalProps } from 'antd/es/modal';
 
-interface DraggableModalProps extends Omit<ModalProps, 'visible'> {
+interface FloatingPanelProps {
+    open: boolean;
+    onClose: () => void;
+    onOk?: () => void;
+    title: React.ReactNode;
     children: React.ReactNode;
-    resizable?: boolean;
-    minWidth?: number;
-    minHeight?: number;
+    width?: number | string;
+    height?: number | string;
+    okText?: string;
+    cancelText?: string;
+    footer?: React.ReactNode | null;
+    initialPosition?: { x: number; y: number };
 }
 
 /**
- * DraggableModal - Now uses a custom floating panel that doesn't block other panels
+ * FloatingPanel - A truly independent draggable panel that doesn't block other panels
  * This replaces Ant Design Modal which has inherent blocking behavior
  */
-export const DraggableModal: React.FC<DraggableModalProps> = ({
-    resizable = true,
-    minWidth = 300,
-    minHeight = 200,
+export const FloatingPanel: React.FC<FloatingPanelProps> = ({
     open,
-    onCancel,
+    onClose,
     onOk,
     title,
     children,
     width = 600,
-    footer,
+    height = 'auto',
     okText = '确定',
     cancelText = '取消',
-    wrapClassName,
-    ...restProps
+    footer,
+    initialPosition
 }) => {
     const panelRef = useRef<HTMLDivElement>(null);
-    const [position, setPosition] = useState({ x: 100, y: 50 });
-    const [size, setSize] = useState({
-        width: typeof width === 'number' ? width : 600,
-        height: 'auto' as number | 'auto'
-    });
+    const [position, setPosition] = useState({ x: initialPosition?.x ?? 100, y: initialPosition?.y ?? 50 });
+    const [size, setSize] = useState({ width: typeof width === 'number' ? width : 600, height: height });
     const [isDragging, setIsDragging] = useState(false);
     const [isResizing, setIsResizing] = useState(false);
     const dragStartPos = useRef({ x: 0, y: 0, panelX: 0, panelY: 0 });
@@ -44,24 +44,23 @@ export const DraggableModal: React.FC<DraggableModalProps> = ({
 
     // Increment global z-index counter to bring panel to front on click
     const bringToFront = useCallback(() => {
-        setZIndex((DraggableModal as any).zCounter = ((DraggableModal as any).zCounter || 1000) + 1);
+        setZIndex((FloatingPanel as any).zCounter = ((FloatingPanel as any).zCounter || 1000) + 1);
     }, []);
 
     useEffect(() => {
         if (open) {
             bringToFront();
-            // Center panel on open
-            const panelWidth = typeof width === 'number' ? width : 600;
-            const x = Math.max(50, (window.innerWidth - panelWidth) / 2);
-            const y = Math.max(50, window.innerHeight * 0.1);
-            setPosition({ x, y });
-            setSize({ width: panelWidth, height: 'auto' });
+            // Center panel on open if no initial position
+            if (!initialPosition) {
+                const x = Math.max(50, (window.innerWidth - (typeof width === 'number' ? width : 600)) / 2);
+                const y = Math.max(50, window.innerHeight * 0.1);
+                setPosition({ x, y });
+            }
         }
-    }, [open, width, bringToFront]);
+    }, [open, initialPosition, width, bringToFront]);
 
     const handleDragStart = useCallback((e: React.MouseEvent) => {
-        // Only drag from header, not from buttons
-        if ((e.target as HTMLElement).closest('button')) return;
+        if ((e.target as HTMLElement).closest('.floating-panel-content')) return;
         e.preventDefault();
         setIsDragging(true);
         bringToFront();
@@ -69,7 +68,6 @@ export const DraggableModal: React.FC<DraggableModalProps> = ({
     }, [position, bringToFront]);
 
     const handleResizeStart = useCallback((e: React.MouseEvent) => {
-        if (!resizable) return;
         e.preventDefault();
         e.stopPropagation();
         setIsResizing(true);
@@ -81,7 +79,7 @@ export const DraggableModal: React.FC<DraggableModalProps> = ({
             width: rect?.width || 600,
             height: rect?.height || 400
         };
-    }, [bringToFront, resizable]);
+    }, [bringToFront]);
 
     useEffect(() => {
         if (!isDragging && !isResizing) return;
@@ -98,8 +96,8 @@ export const DraggableModal: React.FC<DraggableModalProps> = ({
                 const deltaX = e.clientX - resizeStartPos.current.x;
                 const deltaY = e.clientY - resizeStartPos.current.y;
                 setSize({
-                    width: Math.max(minWidth, resizeStartPos.current.width + deltaX),
-                    height: Math.max(minHeight, resizeStartPos.current.height + deltaY)
+                    width: Math.max(300, resizeStartPos.current.width + deltaX),
+                    height: Math.max(200, resizeStartPos.current.height + deltaY)
                 });
             }
         };
@@ -115,35 +113,21 @@ export const DraggableModal: React.FC<DraggableModalProps> = ({
             document.removeEventListener('mousemove', handleMouseMove);
             document.removeEventListener('mouseup', handleMouseUp);
         };
-    }, [isDragging, isResizing, minWidth, minHeight]);
-
-    const handleClose = useCallback((e: React.MouseEvent) => {
-        onCancel?.(e as any);
-    }, [onCancel]);
-
-    const handleOk = useCallback((e: React.MouseEvent) => {
-        onOk?.(e as any);
-    }, [onOk]);
+    }, [isDragging, isResizing]);
 
     if (!open) return null;
 
-    // Determine footer content
-    let footerContent: React.ReactNode = null;
-    if (footer === undefined) {
-        footerContent = (
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-                <Button onClick={handleClose}>{cancelText}</Button>
-                {onOk && <Button type="primary" onClick={handleOk}>{okText}</Button>}
-            </div>
-        );
-    } else if (footer !== null) {
-        footerContent = footer;
-    }
+    const defaultFooter = footer === undefined ? (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <Button onClick={onClose}>{cancelText}</Button>
+            {onOk && <Button type="primary" onClick={onOk}>{okText}</Button>}
+        </div>
+    ) : footer;
 
     return (
         <div
             ref={panelRef}
-            className={`floating-panel dark-theme-modal ${wrapClassName || ''}`}
+            className="floating-panel"
             style={{
                 position: 'fixed',
                 left: position.x,
@@ -157,8 +141,7 @@ export const DraggableModal: React.FC<DraggableModalProps> = ({
                 borderRadius: 8,
                 boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
                 border: '1px solid #444',
-                overflow: 'hidden',
-                maxHeight: '90vh'
+                overflow: 'hidden'
             }}
             onMouseDown={bringToFront}
         >
@@ -174,15 +157,14 @@ export const DraggableModal: React.FC<DraggableModalProps> = ({
                     backgroundColor: '#2a2a2a',
                     cursor: 'move',
                     userSelect: 'none',
-                    borderBottom: '1px solid #444',
-                    flexShrink: 0
+                    borderBottom: '1px solid #444'
                 }}
             >
                 <span style={{ color: '#fff', fontWeight: 500 }}>{title}</span>
                 <Button
                     type="text"
                     size="small"
-                    onClick={handleClose}
+                    onClick={onClose}
                     style={{ color: '#ff4d4f' }}
                     icon={<CloseOutlined />}
                 />
@@ -194,47 +176,44 @@ export const DraggableModal: React.FC<DraggableModalProps> = ({
                 style={{
                     flex: 1,
                     overflow: 'auto',
-                    padding: restProps.styles?.body?.padding ?? 16,
+                    padding: 16,
                     backgroundColor: '#2d2d2d',
-                    color: '#e8e8e8',
-                    ...(restProps.styles?.body || {})
+                    color: '#e8e8e8'
                 }}
             >
                 {children}
             </div>
 
             {/* Footer */}
-            {footerContent && (
+            {defaultFooter && (
                 <div
                     className="floating-panel-footer"
                     style={{
                         padding: '10px 16px',
                         backgroundColor: '#333',
-                        borderTop: '1px solid #444',
-                        flexShrink: 0
+                        borderTop: '1px solid #444'
                     }}
                 >
-                    {footerContent}
+                    {defaultFooter}
                 </div>
             )}
 
             {/* Resize Handle */}
-            {resizable && (
-                <div
-                    onMouseDown={handleResizeStart}
-                    style={{
-                        position: 'absolute',
-                        right: 0,
-                        bottom: 0,
-                        width: 16,
-                        height: 16,
-                        cursor: 'se-resize',
-                        background: 'linear-gradient(135deg, transparent 50%, rgba(255,255,255,0.3) 50%)',
-                        borderBottomRightRadius: 8,
-                        zIndex: 10
-                    }}
-                />
-            )}
+            <div
+                onMouseDown={handleResizeStart}
+                style={{
+                    position: 'absolute',
+                    right: 0,
+                    bottom: 0,
+                    width: 16,
+                    height: 16,
+                    cursor: 'se-resize',
+                    background: 'linear-gradient(135deg, transparent 50%, rgba(255,255,255,0.3) 50%)',
+                    borderBottomRightRadius: 8
+                }}
+            />
         </div>
     );
 };
+
+export default FloatingPanel;

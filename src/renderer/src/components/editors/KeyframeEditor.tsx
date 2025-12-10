@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { Input, Select, Row, Col } from 'antd'
 import { DraggableModal } from '../DraggableModal'
+import { useModelStore } from '../../store/modelStore'
 
 const { TextArea } = Input
 
@@ -12,6 +13,7 @@ interface KeyframeEditorProps {
     title?: string
     vectorSize?: number
     globalSequences?: number[]
+    sequences?: any[]
 }
 
 const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
@@ -21,99 +23,214 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
     initialData,
     title = 'Keyframe Editor',
     vectorSize = 1,
-    globalSequences = []
+    globalSequences = [],
+    sequences = []
 }) => {
     const [text, setText] = useState('')
     const [lineType, setLineType] = useState(0)
     const [globalSeqId, setGlobalSeqId] = useState<number | null>(null)
 
-    useEffect(() => {
-        if (visible && initialData) {
-            // Format initial data to text
-            // Format: "Frame: Value" or "Frame: V1 V2 V3"
-            let formattedText = ''
-            if (initialData.Keys) {
-                formattedText = initialData.Keys.map((k: any) => {
-                    let vector: number[] = []
-                    if (Array.isArray(k.Vector)) {
-                        vector = k.Vector
-                    } else if (typeof k.Vector === 'object' && k.Vector !== null) {
-                        // Handle object format {0: x, 1: y, ...}
-                        for (let i = 0; i < vectorSize; i++) {
-                            vector.push(Number(k.Vector[i] || 0))
-                        }
-                    } else if (typeof k.Vector === 'number') {
-                        vector = [k.Vector]
-                    }
+    // Batch Generation State
+    const [batchValue, setBatchValue] = useState<number>(1)
+    const [batchMode, setBatchMode] = useState<'replace' | 'keep'>('replace')
 
-                    const valStr = vector.map((v: number) => {
-                        // Format number to remove trailing zeros if integer, or keep precision
-                        return Number(v.toFixed(4)).toString()
-                    }).join(' ')
-
-                    let line = `${k.Frame}: ${valStr}`
-
-                    // TODO: Handle Tangents if LineType is Hermite/Bezier?
-                    // The reference image is simple "0: 1", implying no tangents shown or simple linear/none.
-                    // If we need to support tangents in text, we might need a more complex format.
-                    // For now, let's stick to value.
-
-                    return line
-                }).join('\n')
-            }
-            setText(formattedText)
-            setLineType(initialData.LineType || 0)
-            setGlobalSeqId(initialData.GlobalSeqId)
-        } else if (visible) {
-            setText('')
-            setLineType(0)
-            setGlobalSeqId(null)
+    // Helper to format a single vector/scalar value
+    const formatValue = (val: number | number[] | Float32Array): string => {
+        let nums: number[] = []
+        if (typeof val === 'number') {
+            nums = [val]
+        } else if (Array.isArray(val)) {
+            nums = val
+        } else {
+            nums = Array.from(val)
         }
-    }, [visible, initialData])
 
-    const handleOk = () => {
-        // Parse text
-        const lines = text.split('\n')
+        // Format numbers
+        const parts = nums.map(n => Number((n || 0).toFixed(4)).toString())
+
+        // Scalar: just the number
+        if (vectorSize === 1) return parts[0]
+
+        // Vector: { a, b, c }
+        return `{ ${parts.join(', ')} }`
+    }
+
+    // Helper to parse a value string like "{ 1, 0, 0 }" or "0.5"
+    const parseValue = (str: string): number[] => {
+        const clean = str.replace(/[{}]/g, '').trim()
+        const parts = clean.split(/[,\s]+/).filter(Boolean)
+        const nums = parts.map(p => parseFloat(p)).filter(n => !isNaN(n))
+
+        // Pad or truncate
+        while (nums.length < vectorSize) nums.push(0)
+        return nums.slice(0, vectorSize)
+    }
+
+    // Generate formatted text from keys
+    const generateText = (keys: any[], type: number) => {
+        return keys.map(k => {
+            let lines = [`${k.Frame}: ${formatValue(k.Vector)}`]
+
+            if (type > 1) { // Hermite or Bezier
+                const defaultTan = new Array(vectorSize).fill(0)
+                lines.push(`  InTan: ${formatValue(k.InTan || defaultTan)}`)
+                lines.push(`  OutTan: ${formatValue(k.OutTan || defaultTan)}`)
+            }
+            return lines.join('\n')
+        }).join('\n')
+    }
+
+    // Parse current text into keys
+    const parseText = (currentText: string): any[] => {
+        const lines = currentText.split('\n')
         const keys: any[] = []
+        let currentKey: any = null
 
         for (const line of lines) {
             const trimmed = line.trim()
             if (!trimmed) continue
 
-            // Expected format: "Frame: Value"
-            const parts = trimmed.split(':')
-            if (parts.length !== 2) continue
-
-            const frame = parseInt(parts[0].trim())
-            if (isNaN(frame)) continue
-
-            const valParts = parts[1].trim().split(/\s+/)
-            const vector: number[] = []
-            for (const vStr of valParts) {
-                const v = parseFloat(vStr)
-                if (!isNaN(v)) vector.push(v)
+            if (trimmed.startsWith('InTan:')) {
+                if (currentKey) currentKey.InTan = parseValue(trimmed.substring(6))
+            } else if (trimmed.startsWith('OutTan:')) {
+                if (currentKey) currentKey.OutTan = parseValue(trimmed.substring(7))
+            } else {
+                // Assume Frame: Value
+                const parts = trimmed.split(':')
+                if (parts.length >= 2) {
+                    const frame = parseInt(parts[0])
+                    if (!isNaN(frame)) {
+                        const valStr = parts.slice(1).join(':') // Rejoin rest in case of nested colons? Unlikely given format
+                        currentKey = {
+                            Frame: frame,
+                            Vector: parseValue(valStr),
+                            InTan: new Array(vectorSize).fill(0),
+                            OutTan: new Array(vectorSize).fill(0)
+                        }
+                        keys.push(currentKey)
+                    }
+                }
             }
+        }
+        return keys.sort((a, b) => a.Frame - b.Frame)
+    }
 
-            // Pad or truncate vector to vectorSize
-            while (vector.length < vectorSize) vector.push(0)
-            while (vector.length > vectorSize) vector.pop()
+    // Handle Interpolation Type Change
+    const handleLineTypeChange = (newType: number) => {
+        // Parse current text to preserve values
+        const currentKeys = parseText(text)
+        // Reformat with new type
+        const newText = generateText(currentKeys, newType)
 
-            const key: any = {
-                Frame: frame,
-                Vector: vector
+        setLineType(newType)
+        setText(newText)
+    }
+
+    // Handle Batch Generation
+    const handleBatchGenerate = () => {
+        // Direct store access fallback if props are missing
+        let targetSequences = sequences;
+        if (!targetSequences || targetSequences.length === 0) {
+            const storeData = useModelStore.getState().modelData as any;
+            if (storeData && storeData.Sequences) {
+                targetSequences = storeData.Sequences;
             }
-
-            // Add default tangents if needed (though we don't edit them in text yet)
-            if (lineType > 1) {
-                key.InTan = new Array(vectorSize).fill(0)
-                key.OutTan = new Array(vectorSize).fill(0)
-            }
-
-            keys.push(key)
         }
 
-        // Sort keys by frame
-        keys.sort((a, b) => a.Frame - b.Frame)
+        console.log('[KeyframeEditor] Batch Generate clicked')
+        console.log('Target Sequences:', targetSequences)
+        console.log('VectorSize:', vectorSize)
+
+        if (!targetSequences || targetSequences.length === 0) {
+            console.warn('[KeyframeEditor] No sequences found')
+            return
+        }
+
+        const currentKeys = parseText(text)
+        const keyMap = new Map<number, any>()
+
+        // Index existing keys
+        currentKeys.forEach(k => keyMap.set(k.Frame, k))
+
+        // Process sequences
+        let count = 0
+        targetSequences.forEach((seq: any) => {
+            if (!seq.Interval || seq.Interval.length < 2) return
+
+            const frames = [seq.Interval[0], seq.Interval[1]]
+            frames.forEach(frame => {
+                if (keyMap.has(frame)) {
+                    // Update existing
+                    if (batchMode === 'replace') {
+                        const k = keyMap.get(frame)
+                        k.Vector = [batchValue] // Only for scalar
+                        count++
+                    }
+                } else {
+                    // Create new
+                    keyMap.set(frame, {
+                        Frame: frame,
+                        Vector: [batchValue],
+                        InTan: new Array(vectorSize).fill(0),
+                        OutTan: new Array(vectorSize).fill(0)
+                    })
+                    count++
+                }
+            })
+        })
+
+        console.log(`[KeyframeEditor] Generated/Updated ${count} keys`)
+
+        // Reconstruct sorted list
+        const newKeys = Array.from(keyMap.values()).sort((a, b) => a.Frame - b.Frame)
+        const newText = generateText(newKeys, lineType)
+        setText(newText)
+    }
+
+    useEffect(() => {
+        if (visible) {
+            if (initialData && initialData.Keys && initialData.Keys.length > 0) {
+                // Existing data
+                setLineType(initialData.LineType || 0)
+                setGlobalSeqId(initialData.GlobalSeqId)
+                setText(generateText(initialData.Keys, initialData.LineType || 0))
+            } else {
+                // Default data
+                setLineType(0)
+                setGlobalSeqId(null)
+
+                // Smart defaults
+                let defVector: number[] = new Array(vectorSize).fill(0)
+
+                if (vectorSize === 4) {
+                    // Rotation quaternion identity
+                    defVector = [0, 0, 0, 1]
+                } else if (vectorSize === 3) {
+                    // Scale defaults to 1s
+                    if (title.includes('Scale') || title.includes('Scaling') || title.includes('缩放')) {
+                        defVector = [1, 1, 1]
+                    }
+                } else if (vectorSize === 1) {
+                    // Alpha/Visibility defaults to 1
+                    if (title.includes('Alpha') || title.includes('Visibility') || title.includes('透明') || title.includes('Opac')) {
+                        defVector = [1]
+                    }
+                }
+
+                const defaultKey = {
+                    Frame: 0,
+                    Vector: defVector,
+                    InTan: new Array(vectorSize).fill(0),
+                    OutTan: new Array(vectorSize).fill(0)
+                }
+
+                setText(generateText([defaultKey], 0))
+            }
+        }
+    }, [visible, initialData])
+
+    const handleOk = () => {
+        const keys = parseText(text)
 
         const result = {
             Keys: keys,
@@ -181,7 +298,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
                             <Select
                                 style={{ width: '100%' }}
                                 value={lineType}
-                                onChange={setLineType}
+                                onChange={handleLineTypeChange}
                                 options={[
                                     { value: 0, label: 'None' },
                                     { value: 1, label: 'Linear' },
@@ -191,6 +308,47 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
                             />
                         </Col>
                     </Row>
+
+                    {/* Simplified Batch Generation Section - Only for Scalars */}
+                    {vectorSize === 1 && (
+                        <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid #4a4a4a' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                    <span style={{ color: '#ccc' }}>数值:</span>
+                                    <Input
+                                        type="number"
+                                        value={batchValue}
+                                        onChange={(e) => setBatchValue(parseFloat(e.target.value))}
+                                        style={{ width: 80, backgroundColor: '#333', color: '#fff', borderColor: '#444' }}
+                                        size="small"
+                                    />
+                                </div>
+                                <Select
+                                    value={batchMode}
+                                    onChange={(v) => setBatchMode(v as any)}
+                                    size="small"
+                                    style={{ width: 100 }}
+                                    options={[
+                                        { label: '替换', value: 'replace' },
+                                        { label: '保持', value: 'keep' }
+                                    ]}
+                                />
+                                <button
+                                    onClick={handleBatchGenerate}
+                                    style={{
+                                        cursor: 'pointer',
+                                        background: '#1890ff',
+                                        border: 'none',
+                                        color: '#fff',
+                                        padding: '4px 12px',
+                                        borderRadius: 2
+                                    }}
+                                >
+                                    生成
+                                </button>
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
         </DraggableModal>

@@ -259,10 +259,18 @@ body,
 }
 
 /* Non-blocking modal wrapper - allows clicks through to menu and other UI */
-.non-blocking-modal-wrap {
+/* Target all wrapper layers */
+.non-blocking-modal-wrap,
+.non-blocking-modal-wrap.ant-modal-wrap {
     pointer-events: none !important;
 }
 
+/* The modal root container must also be non-blocking */
+.ant-modal-root:has(.non-blocking-modal-wrap) {
+    pointer-events: none !important;
+}
+
+/* Only the actual modal content should receive pointer events */
 .non-blocking-modal-wrap .ant-modal {
     pointer-events: auto !important;
 }
@@ -314,4 +322,13 @@ body,
 .non-blocking-modal-wrap .ant-modal-close:hover {
     color: #ff7875 !important;
     background-color: rgba(255, 77, 79, 0.1) !important;
+}
+
+/* Ensure modal footer and close buttons are always clickable */
+.non-blocking-modal-wrap .ant-modal-footer,
+.non-blocking-modal-wrap .ant-modal-close,
+.non-blocking-modal-wrap .ant-modal-header,
+.non-blocking-modal-wrap button,
+.non-blocking-modal-wrap .ant-btn {
+    pointer-events: auto !important;
 }

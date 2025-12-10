@@ -4,8 +4,32 @@ import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { DraggableModal } from '../DraggableModal'
 import KeyframeEditor from '../editors/KeyframeEditor'
 import { useModelStore } from '../../store/modelStore'
+import { useSelectionStore } from '../../store/selectionStore'
 
 const { Text } = Typography
+
+/**
+ * Convert Shading bitmask to individual boolean properties for UI display
+ * LayerShading: Unshaded=1, SphereEnvMap=2, TwoSided=16, Unfogged=32, NoDepthTest=64, NoDepthSet=128
+ */
+function normalizeMaterialsForUI(materials: any[]): any[] {
+    return materials.map(material => ({
+        ...material,
+        Layers: (material.Layers || []).map((layer: any) => {
+            const shading = layer.Shading || 0;
+            return {
+                ...layer,
+                // Set boolean properties from Shading bitmask (if not already set)
+                Unshaded: layer.Unshaded !== undefined ? layer.Unshaded : (shading & 1) !== 0,
+                SphereEnvMap: layer.SphereEnvMap !== undefined ? layer.SphereEnvMap : (shading & 2) !== 0,
+                TwoSided: layer.TwoSided !== undefined ? layer.TwoSided : (shading & 16) !== 0,
+                Unfogged: layer.Unfogged !== undefined ? layer.Unfogged : (shading & 32) !== 0,
+                NoDepthTest: layer.NoDepthTest !== undefined ? layer.NoDepthTest : (shading & 64) !== 0,
+                NoDepthSet: layer.NoDepthSet !== undefined ? layer.NoDepthSet : (shading & 128) !== 0,
+            };
+        })
+    }));
+}
 
 interface MaterialEditorModalProps {
     visible: boolean
@@ -23,18 +47,48 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const [editingField, setEditingField] = useState<string | null>(null)
     const [editingVectorSize, setEditingVectorSize] = useState(1)
 
+    const isInitialized = React.useRef(false)
+
     // Initialize local state
     useEffect(() => {
-        if (visible && modelData && modelData.Materials) {
-            setLocalMaterials(JSON.parse(JSON.stringify(modelData.Materials)))
-            setSelectedMaterialIndex(modelData.Materials.length > 0 ? 0 : -1)
-            setSelectedLayerIndex(-1)
-        } else if (visible) {
+        if (visible) {
+            if (!isInitialized.current && modelData && modelData.Materials) {
+                console.log('[MaterialEditorModal] Initializing local materials from store. Count:', modelData.Materials.length)
+                // Convert Shading bitmask to boolean properties for UI display
+                const normalized = normalizeMaterialsForUI(JSON.parse(JSON.stringify(modelData.Materials)));
+                setLocalMaterials(normalized)
+                setSelectedMaterialIndex(modelData.Materials.length > 0 ? 0 : -1)
+                setSelectedLayerIndex(-1)
+                isInitialized.current = true
+            }
+        } else {
             setLocalMaterials([])
             setSelectedMaterialIndex(-1)
             setSelectedLayerIndex(-1)
+            isInitialized.current = false
         }
     }, [visible, modelData])
+
+    // Subscribe to Ctrl+Click geoset picking - auto-select material
+    useEffect(() => {
+        if (!visible || !modelData) return
+        let lastPickedIndex: number | null = null
+        const unsubscribe = useSelectionStore.subscribe((state) => {
+            const pickedGeosetIndex = state.pickedGeosetIndex
+            if (pickedGeosetIndex !== lastPickedIndex) {
+                lastPickedIndex = pickedGeosetIndex
+                if (pickedGeosetIndex !== null && modelData.Geosets && modelData.Geosets[pickedGeosetIndex]) {
+                    const materialId = modelData.Geosets[pickedGeosetIndex].MaterialID
+                    if (materialId !== undefined && materialId >= 0 && materialId < localMaterials.length) {
+                        setSelectedMaterialIndex(materialId)
+                        setSelectedLayerIndex(-1)
+                        console.log('[MaterialEditor] Auto-selected material', materialId, 'for geoset', pickedGeosetIndex)
+                    }
+                }
+            }
+        })
+        return unsubscribe
+    }, [visible, modelData, localMaterials.length])
 
     const handleOk = () => {
         setMaterials(localMaterials)
@@ -58,10 +112,22 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 
     // Material Actions
     const handleAddMaterial = () => {
-        const newMaterial = { PriorityPlane: 0, RenderMode: 0, Layers: [] }
+        // Include a default layer with TextureID 0 so the geoset renders correctly
+        const defaultLayer = {
+            FilterMode: 0,
+            TextureID: 0,
+            Alpha: 1,
+            Unshaded: true, // Prevent lighting issues hiding the model
+            Unfogged: false,
+            TwoSided: true, // Prevent backface culling hiding the model
+            SphereEnvMap: false,
+            NoDepthTest: false,
+            NoDepthSet: false
+        }
+        const newMaterial = { PriorityPlane: 0, RenderMode: 0, Layers: [defaultLayer] }
         setLocalMaterials([...localMaterials, newMaterial])
         setSelectedMaterialIndex(localMaterials.length)
-        setSelectedLayerIndex(-1)
+        setSelectedLayerIndex(0) // Auto-select the default layer
     }
 
     const handleDeleteMaterial = (index: number) => {
@@ -80,11 +146,11 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         if (selectedMaterialIndex < 0) return
         const newLayer = {
             FilterMode: 0,
-            TextureID: -1,
+            TextureID: 0,  // Default to first texture (index 0) instead of -1 (invalid)
             Alpha: 1,
-            Unshaded: false,
+            Unshaded: true,
             Unfogged: false,
-            TwoSided: false,
+            TwoSided: true,
             SphereEnvMap: false,
             NoDepthTest: false,
             NoDepthSet: false

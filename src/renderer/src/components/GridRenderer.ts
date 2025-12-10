@@ -71,6 +71,10 @@ export class GridRenderer {
         gl.uniformMatrix4fv(uMVP, false, mvp)
         gl.uniform4f(uColor, 0.5, 0.5, 0.5, 0.5) // Grey color
 
+        // Force Alpha Blending state
+        gl.enable(gl.BLEND)
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+
         gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer)
         gl.enableVertexAttribArray(aPosition)
         gl.vertexAttribPointer(aPosition, 3, gl.FLOAT, false, 0, 0)

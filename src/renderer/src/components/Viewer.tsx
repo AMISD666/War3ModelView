@@ -20,6 +20,7 @@ import { MoveVerticesCommand, VertexChange } from '../commands/MoveVerticesComma
 import { MoveNodesCommand, NodeChange } from '../commands/MoveNodesCommand'
 import { VertexEditor } from './VertexEditor'
 import BoneBindingPanel from './BoneBindingPanel'
+import { pickClosestGeoset } from '../utils/rayTriangle'
 interface ViewerProps {
   modelPath: string | null
   animationIndex: number
@@ -156,7 +157,8 @@ const Viewer: React.FC<ViewerProps> = ({
     lastMouseY: 0,
     startX: 0,
     startY: 0,
-    isBoxSelecting: false
+    isBoxSelecting: false,
+    isCtrlPressed: false // Store Ctrl state on mouseDown for reliable detection during drag
   })
 
   const initialVertexPositions = useRef<Map<string, [number, number, number]>>(new Map())
@@ -370,6 +372,7 @@ const Viewer: React.FC<ViewerProps> = ({
     mouseState.current.lastMouseY = e.clientY
     mouseState.current.startX = e.clientX
     mouseState.current.startY = e.clientY
+    mouseState.current.isCtrlPressed = e.ctrlKey || e.metaKey // Store Ctrl state on mouseDown
 
     // Check for box selection start
     // const { mainMode } = useSelectionStore.getState() // Moved to top
@@ -564,7 +567,85 @@ const Viewer: React.FC<ViewerProps> = ({
   const handleSelectionClick = (clientX: number, clientY: number, isShift: boolean, isCtrl: boolean) => {
     if (!rendererRef.current || !canvasRef.current) return
 
-    const { mainMode, animationSubMode, geometrySubMode, selectVertex, selectFace, addVertexSelection, addFaceSelection, removeVertexSelection, removeFaceSelection, clearAllSelections, selectNode } = useSelectionStore.getState()
+    const { mainMode, animationSubMode, geometrySubMode, selectVertex, selectFace, addVertexSelection, addFaceSelection, removeVertexSelection, removeFaceSelection, clearAllSelections, selectNode, setPickedGeosetIndex } = useSelectionStore.getState()
+
+    // === Ctrl+Click Geoset Picking (works in any mode) ===
+    if (isCtrl) {
+      const rect = canvasRef.current.getBoundingClientRect()
+      const x = clientX - rect.left
+      const y = clientY - rect.top
+
+      // Calculate camera and ray
+      // Calculate camera and ray
+      // Use the actual camera matrices to ensure perfect sync with rendering
+      const pMatrix = mat4.create()
+      const mvMatrix = mat4.create()
+      const cameraPos = vec3.create()
+
+      if (cameraRef.current) {
+        cameraRef.current.getMatrix(mvMatrix, pMatrix)
+        vec3.copy(cameraPos, cameraRef.current.position)
+      } else {
+        // Fallback if cameraRef is missing (should not happen usually)
+        const { distance, theta, phi, target } = targetCamera.current
+        const cameraX = distance * Math.sin(phi) * Math.cos(theta)
+        const cameraY = distance * Math.sin(phi) * Math.sin(theta)
+        const cameraZ = distance * Math.cos(phi)
+        vec3.set(cameraPos, cameraX, cameraY, cameraZ)
+        vec3.add(cameraPos, cameraPos, target)
+
+        mat4.perspective(pMatrix, Math.PI / 4, canvasRef.current.width / canvasRef.current.height, 1, 100000)
+        const cameraUp = vec3.fromValues(0, 0, 1)
+        mat4.lookAt(mvMatrix, cameraPos, target, cameraUp)
+      }
+
+      // Unproject to get ray
+      const ndcX = (x / canvasRef.current.width) * 2 - 1
+      const ndcY = 1 - (y / canvasRef.current.height) * 2
+
+      const invProj = mat4.create()
+      mat4.invert(invProj, pMatrix)
+
+      const invView = mat4.create()
+      mat4.invert(invView, mvMatrix) // View matrix
+
+      // Ray in Clip Space (4D)
+      const rayClip4 = vec4.fromValues(ndcX, ndcY, -1.0, 1.0)
+
+      // Ray in Eye Space
+      const rayEye4 = vec4.create()
+      vec4.transformMat4(rayEye4, rayClip4, invProj)
+      rayEye4[2] = -1.0
+      rayEye4[3] = 0.0
+
+      // Ray in World Space
+      const rayWorld4 = vec4.create()
+      vec4.transformMat4(rayWorld4, rayEye4, invView)
+
+      const rayDir = vec3.fromValues(rayWorld4[0], rayWorld4[1], rayWorld4[2])
+      vec3.normalize(rayDir, rayDir)
+
+      // Use accurate ray-triangle intersection to find closest geoset
+      const geosets = rendererRef.current.model.Geosets || []
+      const result = pickClosestGeoset(cameraPos, rayDir, geosets)
+      if (result !== null) {
+        console.log('[Viewer] Ctrl+Click picked geoset:', result.geosetIndex, 'at distance:', result.distance)
+        setPickedGeosetIndex(result.geosetIndex)
+
+        // Visual feedback: temporarily highlight the picked geoset
+        const { setHoveredGeosetId } = useModelStore.getState()
+        setHoveredGeosetId(result.geosetIndex)
+        // Flash effect - clear after 500ms
+        setTimeout(() => {
+          setHoveredGeosetId(null)
+        }, 500)
+
+        return // Stop further processing
+      } else {
+        // Clear picked geoset if clicked on empty space
+        setPickedGeosetIndex(null)
+      }
+    }
 
     // Handle Animation Mode Bone Selection
     // In Binding Mode, we want to allow selecting BOTH nodes and vertices.
@@ -925,7 +1006,7 @@ const Viewer: React.FC<ViewerProps> = ({
 
       const newRenderer = new ModelRenderer(model)
       newRenderer.initGL(gl)
-      setRenderer(newRenderer)
+      // NOTE: setRenderer(newRenderer) is called AFTER texture loading to avoid race condition
       newRenderer.update(0)
       resetCamera()
 
@@ -998,7 +1079,9 @@ const Viewer: React.FC<ViewerProps> = ({
               // 杩欓噷鐨勯€昏緫鏄厛鎵綧PQ锛岀劧鍚庡啀鎵炬ā鍨嬫枃浠剁殑褰撳墠鐩綍锛屽叾瀹炲簲璇ユ槸鍏堟壘褰撳墠锛岀劧鍚嶮PQ
               for (const candidate of candidates) {
                 try {
+                  console.log(`[Viewer] Trying texture path: ${candidate}`)
                   const texBuffer = await readFile(candidate)
+                  console.log(`[Viewer] Successfully loaded texture: ${candidate}, size: ${texBuffer.byteLength}`)
                   const blp = decodeBLP(texBuffer.buffer)
                   const mipLevel0 = getBLPImageData(blp, 0)
                   const idata = new ImageData(
@@ -1011,7 +1094,8 @@ const Viewer: React.FC<ViewerProps> = ({
                   }
                   loaded = true
                   break
-                } catch (e) {
+                } catch (e: any) {
+                  console.log(`[Viewer] Failed to load texture from ${candidate}: ${e.message || e}`)
                   // Continue to next candidate
                 }
               }
@@ -1027,12 +1111,23 @@ const Viewer: React.FC<ViewerProps> = ({
       }
 
       loadTeamColorTextures(teamColor)
+
+      // Set renderer AFTER textures are loaded to avoid race condition
+      console.log('[Viewer] loadModel: All textures loaded, setting renderer')
+      setRenderer(newRenderer)
     } catch (error) {
       console.error('[Viewer] Error loading model:', error)
     }
   }
 
   const reloadRendererWithData = async (model: any, path: string) => {
+    // CRITICAL: Capture old renderer's Geoset geometry BEFORE destroying
+    // The TypedArrays (Vertices, Faces, Normals) are lost in store's spread operations
+    let oldGeosets: any[] | null = null
+    if (renderer && renderer.model && renderer.model.Geosets) {
+      oldGeosets = renderer.model.Geosets
+    }
+
     // Cleanup old renderer
     if (animationFrameId.current !== null) {
       cancelAnimationFrame(animationFrameId.current)
@@ -1040,7 +1135,6 @@ const Viewer: React.FC<ViewerProps> = ({
     }
 
     if (renderer) {
-      console.log('[Viewer] Destroying old renderer for data reload')
       try {
         // Safety check for destroy method
         if (typeof renderer.destroy === 'function') {
@@ -1068,10 +1162,44 @@ const Viewer: React.FC<ViewerProps> = ({
         return
       }
 
-      console.log('[Viewer] Creating new renderer with updated data')
+      // Copy Geoset geometry data from captured old Geosets
+      // The modelData from store loses TypedArrays (Vertices, Faces, Normals) during spread operations
+      if (oldGeosets && model.Geosets) {
+        for (let i = 0; i < model.Geosets.length && i < oldGeosets.length; i++) {
+          const oldGeoset = oldGeosets[i]
+          const newGeoset = model.Geosets[i]
+
+          // Always copy geometry data from old geoset, overwriting anything in new geoset
+          if (oldGeoset.Vertices) {
+            newGeoset.Vertices = oldGeoset.Vertices
+          }
+          if (oldGeoset.Faces) {
+            newGeoset.Faces = oldGeoset.Faces
+          }
+          if (oldGeoset.Normals) {
+            newGeoset.Normals = oldGeoset.Normals
+          }
+          if (oldGeoset.TVertices) {
+            newGeoset.TVertices = oldGeoset.TVertices
+          }
+          if (oldGeoset.Groups) {
+            newGeoset.Groups = oldGeoset.Groups
+          }
+          if (oldGeoset.SkinWeights) {
+            newGeoset.SkinWeights = oldGeoset.SkinWeights
+          }
+          if (oldGeoset.Tangents) {
+            newGeoset.Tangents = oldGeoset.Tangents
+          }
+          if (oldGeoset.VertexGroup) {
+            newGeoset.VertexGroup = oldGeoset.VertexGroup
+          }
+        }
+      }
+
       const newRenderer = new ModelRenderer(model)
       newRenderer.initGL(gl)
-      setRenderer(newRenderer)
+      // NOTE: setRenderer(newRenderer) is called AFTER texture loading to avoid race condition
       newRenderer.update(0)
       resetCamera()
 
@@ -1113,47 +1241,55 @@ const Viewer: React.FC<ViewerProps> = ({
 
             // Strategy 2: Try local file system if MPQ didn't work
             if (!loaded) {
-              const normalize = (p: string) => p.replace(/\//g, '\\')
-              let textureRelPath = normalize(texturePath)
-              const modelDir = normalize(path.substring(0, path.lastIndexOf('\\')))
+              if (!path || path.length === 0) {
+                console.warn(`[Viewer] reloadRendererWithData: modelPath is empty, cannot resolve local texture path for ${texturePath}`)
+              } else {
+                const normalize = (p: string) => p.replace(/\//g, '\\')
+                let textureRelPath = normalize(texturePath)
+                const modelDir = normalize(path.substring(0, path.lastIndexOf('\\')))
+                console.log(`[Viewer] reloadRendererWithData: modelDir=${modelDir}, textureRelPath=${textureRelPath}`)
 
-              if (textureRelPath.toLowerCase().startsWith('war3mapimported\\')) {
-                textureRelPath = textureRelPath.substring('war3mapimported\\'.length)
-              }
+                if (textureRelPath.toLowerCase().startsWith('war3mapimported\\')) {
+                  textureRelPath = textureRelPath.substring('war3mapimported\\'.length)
+                }
 
-              const candidates: string[] = []
-              candidates.push(`${modelDir}\\${textureRelPath}`)
+                const candidates: string[] = []
+                candidates.push(`${modelDir}\\${textureRelPath}`)
 
-              const filename = textureRelPath.split('\\').pop() || ''
-              if (filename !== textureRelPath) {
-                candidates.push(`${modelDir}\\${filename}`)
-              }
+                const filename = textureRelPath.split('\\').pop() || ''
+                if (filename !== textureRelPath) {
+                  candidates.push(`${modelDir}\\${filename}`)
+                }
 
-              let currentDir = modelDir
-              for (let depth = 0; depth < 3; depth++) {
-                const lastSlash = currentDir.lastIndexOf('\\')
-                if (lastSlash === -1) break
-                currentDir = currentDir.substring(0, lastSlash)
-                candidates.push(`${currentDir}\\${textureRelPath}`)
-              }
+                let currentDir = modelDir
+                for (let depth = 0; depth < 3; depth++) {
+                  const lastSlash = currentDir.lastIndexOf('\\')
+                  if (lastSlash === -1) break
+                  currentDir = currentDir.substring(0, lastSlash)
+                  candidates.push(`${currentDir}\\${textureRelPath}`)
+                }
 
-              for (const candidate of candidates) {
-                try {
-                  const texBuffer = await readFile(candidate)
-                  const blp = decodeBLP(texBuffer.buffer)
-                  const mipLevel0 = getBLPImageData(blp, 0)
-                  const idata = new ImageData(
-                    new Uint8ClampedArray(mipLevel0.data),
-                    mipLevel0.width,
-                    mipLevel0.height
-                  )
-                  if (newRenderer.setTextureImageData) {
-                    newRenderer.setTextureImageData(texturePath, [idata])
+                for (const candidate of candidates) {
+                  try {
+                    console.log(`[Viewer] reloadRendererWithData: Trying texture path: ${candidate}`)
+                    const texBuffer = await readFile(candidate)
+                    console.log(`[Viewer] reloadRendererWithData: Successfully loaded texture: ${candidate}`)
+                    const blp = decodeBLP(texBuffer.buffer)
+                    const mipLevel0 = getBLPImageData(blp, 0)
+                    const idata = new ImageData(
+                      new Uint8ClampedArray(mipLevel0.data),
+                      mipLevel0.width,
+                      mipLevel0.height
+                    )
+                    if (newRenderer.setTextureImageData) {
+                      console.log(`[Viewer] reloadRendererWithData: Storing texture with key: "${texturePath}"`)
+                      newRenderer.setTextureImageData(texturePath, [idata])
+                    }
+                    loaded = true
+                    break
+                  } catch (e: any) {
+                    console.log(`[Viewer] reloadRendererWithData: Failed to load ${candidate}: ${e.message || e}`)
                   }
-                  loaded = true
-                  break
-                } catch (e) {
-                  // Continue to next candidate
                 }
               }
             }
@@ -1168,6 +1304,11 @@ const Viewer: React.FC<ViewerProps> = ({
       }
 
       loadTeamColorTextures(teamColor)
+
+      // Set renderer AFTER textures are loaded to avoid race condition where
+      // render loop starts before textures are available in GPU
+      console.log('[Viewer] reloadRendererWithData: All textures loaded, setting renderer')
+      setRenderer(newRenderer)
     } catch (error) {
       console.error('[Viewer] Error reloading renderer with data:', error)
     }
@@ -1187,6 +1328,31 @@ const Viewer: React.FC<ViewerProps> = ({
       // Sync model data to renderer without recreating the entire renderer
       // This is the LIGHTWEIGHT SYNC approach - only updates internal data arrays
       if (renderer && modelData) {
+        // Check for structural changes that require full reload
+        const geoChanged = (modelData.Geosets?.length || 0) !== (renderer.model.Geosets?.length || 0)
+        const textureChanged = (modelData.Textures?.length || 0) !== (renderer.model.Textures?.length || 0)
+        const materialChanged = (modelData.Materials?.length || 0) !== (renderer.model.Materials?.length || 0)
+        const particleChanged = (modelData.ParticleEmitters2?.length || 0) !== (renderer.model.ParticleEmitters2?.length || 0)
+
+        // Check if any geoset's MaterialID has changed (requires texture reload)
+        let geosetMaterialChanged = false
+        if (!geoChanged && modelData.Geosets && renderer.model.Geosets) {
+          for (let i = 0; i < modelData.Geosets.length; i++) {
+            if (modelData.Geosets[i]?.MaterialID !== renderer.model.Geosets[i]?.MaterialID) {
+              geosetMaterialChanged = true
+              console.log(`[Viewer] Geoset ${i} MaterialID changed from ${renderer.model.Geosets[i]?.MaterialID} to ${modelData.Geosets[i]?.MaterialID}`)
+              break
+            }
+          }
+        }
+
+        // Geosets, Textures, Materials, Particles, or MaterialID changes need full reload
+        if (geoChanged || textureChanged || materialChanged || particleChanged || geosetMaterialChanged) {
+          console.log('[Viewer] Structural change detected (Geo/Tex/Mat/Particle). Triggering full reload.')
+          reloadRendererWithData(modelData, modelPath || '')
+          lastReloadTrigger.current = rendererReloadTrigger
+          return
+        }
         // === NODES ===
         // Sync Nodes array for correct node transforms - MUST do this BEFORE ParticleEmitters2
         if (modelData.Nodes) {
@@ -1246,7 +1412,15 @@ const Viewer: React.FC<ViewerProps> = ({
 
         // === MATERIALS & TEXTURES ===
         if (modelData.Materials) {
+          console.log('[Viewer] Syncing materials. Count:', modelData.Materials.length)
+          if (modelData.Materials.length > 0) {
+            console.log('[Viewer] Last Material:', JSON.stringify(modelData.Materials[modelData.Materials.length - 1]));
+          }
           renderer.model.Materials = modelData.Materials
+          // Lightweight sync: rebuild materialLayerTextureID cache
+          if (renderer.modelInstance && typeof renderer.modelInstance.syncMaterials === 'function') {
+            renderer.modelInstance.syncMaterials()
+          }
         }
         if (modelData.Textures) {
           renderer.model.Textures = modelData.Textures
@@ -1308,6 +1482,7 @@ const Viewer: React.FC<ViewerProps> = ({
       gizmoRenderer.current.init(gl)
 
       const render = (time: DOMHighResTimeStamp) => {
+
         if (!gl || !canvasRef.current || !renderer) {
           animationFrameId.current = requestAnimationFrame(render)
           return
@@ -1381,7 +1556,7 @@ const Viewer: React.FC<ViewerProps> = ({
         }
 
         const { geometrySubMode, transformMode, selectedVertexIds, selectedFaceIds } = useSelectionStore.getState()
-        const isBindPoseMode = appMainMode === 'geometry' || (appMainMode === 'animation' && animationSubMode === 'binding')
+        const isBindPoseMode = appMainMode === 'geometry' || (appMainMode === 'animation' && (animationSubMode === 'binding' || animationIndex === -1))
 
         // Debug logs commented out to reduce console noise
         // if (time - lastFpsTime.current > 1000) {
@@ -1453,35 +1628,25 @@ const Viewer: React.FC<ViewerProps> = ({
           // === Hover Highlight ===
           // If a geoset is hovered, render a highlight overlay
           if (hoveredGeosetId !== null && mdlRenderer.model.Geosets && mdlRenderer.model.Geosets[hoveredGeosetId]) {
-            const hoveredGeoset = mdlRenderer.model.Geosets[hoveredGeosetId]
-            if (hoveredGeoset.Vertices && hoveredGeoset.Faces) {
-              const highlightPositions: number[] = []
-              const faces = hoveredGeoset.Faces
-              const vertices = hoveredGeoset.Vertices
-              for (let i = 0; i < faces.length; i += 3) {
-                const i1 = faces[i] * 3
-                const i2 = faces[i + 1] * 3
-                const i3 = faces[i + 2] * 3
-                highlightPositions.push(
-                  vertices[i1], vertices[i1 + 1], vertices[i1 + 2],
-                  vertices[i2], vertices[i2 + 1], vertices[i2 + 2],
-                  vertices[i3], vertices[i3 + 1], vertices[i3 + 2]
-                )
-              }
-              // Save current GL state to avoid affecting grid/other rendering
-              const prevBlend = gl.isEnabled(gl.BLEND)
-              const prevDepthMask = gl.getParameter(gl.DEPTH_WRITEMASK)
+            // Save current GL state
+            const prevBlend = gl.isEnabled(gl.BLEND)
+            const prevDepthMask = gl.getParameter(gl.DEPTH_WRITEMASK)
+            const prevDepthTest = gl.isEnabled(gl.DEPTH_TEST)
 
-              // Render with red highlight color and high opacity
-              gl.enable(gl.BLEND)
-              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-              gl.depthMask(false)
-              debugRenderer.current.renderTriangles(gl as WebGLRenderingContext, mvMatrix, pMatrix, highlightPositions, [0.9, 0.1, 0.1, 0.8])
+            // Render with red highlight color and high opacity
+            gl.enable(gl.BLEND)
+            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+            gl.depthMask(false)
+            gl.disable(gl.DEPTH_TEST)
 
-              // Restore GL state
-              gl.depthMask(prevDepthMask)
-              if (!prevBlend) gl.disable(gl.BLEND)
+            if (typeof (mdlRenderer as any).renderGeosetHighlight === 'function') {
+              (mdlRenderer as any).renderGeosetHighlight(hoveredGeosetId, [1, 0, 0], 0.6, mvMatrix, pMatrix)
             }
+
+            // Restore GL state
+            if (prevDepthTest) gl.enable(gl.DEPTH_TEST)
+            gl.depthMask(prevDepthMask)
+            if (!prevBlend) gl.disable(gl.BLEND)
           }
 
           if ((showNodesRef.current || (appMainMode === 'animation' && animationSubMode === 'binding')) && mdlRenderer.rendererData.nodes && appMainMode !== 'geometry') {
@@ -1957,7 +2122,10 @@ const Viewer: React.FC<ViewerProps> = ({
       }
 
       if (mouseState.current.dragButton === 0 && !mouseState.current.isBoxSelecting) {
-        doRotate()
+        // Block camera rotation if Ctrl was held on mouseDown (for geoset picking mode)
+        if (!mouseState.current.isCtrlPressed) {
+          doRotate()
+        }
       } else if (mouseState.current.dragButton === 2 || mouseState.current.dragButton === 1) {
         doPan()
       } else if (mouseState.current.dragButton === 0 && mouseState.current.isBoxSelecting) {

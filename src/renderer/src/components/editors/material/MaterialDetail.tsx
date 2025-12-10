@@ -29,7 +29,7 @@ const MaterialDetail: React.FC<MaterialDetailProps> = ({ material, onUpdate, onS
     const handleAddLayer = () => {
         const newLayer = {
             FilterMode: 0,
-            TextureID: -1,
+            TextureID: 0,  // Default to first texture (index 0) instead of -1 (invalid)
             Alpha: 1,
             // Default flags
             Unshaded: false,

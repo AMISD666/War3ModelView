@@ -50,6 +50,9 @@ export class SimpleOrbitCamera {
 
         this.canvas.addEventListener('mousedown', (e) => {
             if (!this.enabled) return
+            // Block camera interaction if Ctrl is held (for picking)
+            if (e.ctrlKey || e.metaKey) return
+
             e.preventDefault()
             this.mouse.buttons[e.button] = true
         })

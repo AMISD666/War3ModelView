@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { List, Button, InputNumber, Select, Card, Typography, message } from 'antd'
 import { DraggableModal } from '../DraggableModal';
 import { useModelStore } from '../../store/modelStore'
+import { useSelectionStore } from '../../store/selectionStore'
 import { ReloadOutlined } from '@ant-design/icons'
 
 const { Text } = Typography
@@ -26,6 +27,23 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose 
             setHasChanges(false)
         }
     }, [visible, modelData])
+
+    // Subscribe to Ctrl+Click geoset picking - auto-select geoset
+    useEffect(() => {
+        if (!visible) return
+        let lastPickedIndex: number | null = null
+        const unsubscribe = useSelectionStore.subscribe((state) => {
+            const pickedGeosetIndex = state.pickedGeosetIndex
+            if (pickedGeosetIndex !== lastPickedIndex) {
+                lastPickedIndex = pickedGeosetIndex
+                if (pickedGeosetIndex !== null && pickedGeosetIndex >= 0 && pickedGeosetIndex < localGeosets.length) {
+                    setSelectedIndex(pickedGeosetIndex)
+                    console.log('[GeosetEditor] Auto-selected geoset', pickedGeosetIndex)
+                }
+            }
+        })
+        return unsubscribe
+    }, [visible, localGeosets.length])
 
     const handleOk = () => {
         if (setGeosets) {

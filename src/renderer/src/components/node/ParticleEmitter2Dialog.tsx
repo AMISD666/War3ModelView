@@ -629,6 +629,8 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
                     initialData={currentEditingProp ? animDataMap[currentEditingProp] : null}
                     title={`编辑: ${currentEditingTitle}`}
                     vectorSize={1}
+                    globalSequences={modelData?.GlobalSequences?.map(g => g.Duration) || []}
+                    sequences={modelData?.Sequences || []}
                 />
             )}
         </DraggableModal>

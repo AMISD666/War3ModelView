@@ -12,6 +12,29 @@ interface MaterialEditorProps {
     onUpdate?: () => void
 }
 
+/**
+ * Convert Shading bitmask to individual boolean properties for UI display
+ * LayerShading: Unshaded=1, SphereEnvMap=2, TwoSided=16, Unfogged=32, NoDepthTest=64, NoDepthSet=128
+ */
+function normalizeMaterialsForUI(materials: any[]): any[] {
+    return materials.map(material => ({
+        ...material,
+        Layers: (material.Layers || []).map((layer: any) => {
+            const shading = layer.Shading || 0;
+            return {
+                ...layer,
+                // Set boolean properties from Shading bitmask (if not already set)
+                Unshaded: layer.Unshaded !== undefined ? layer.Unshaded : (shading & 1) !== 0,
+                SphereEnvMap: layer.SphereEnvMap !== undefined ? layer.SphereEnvMap : (shading & 2) !== 0,
+                TwoSided: layer.TwoSided !== undefined ? layer.TwoSided : (shading & 16) !== 0,
+                Unfogged: layer.Unfogged !== undefined ? layer.Unfogged : (shading & 32) !== 0,
+                NoDepthTest: layer.NoDepthTest !== undefined ? layer.NoDepthTest : (shading & 64) !== 0,
+                NoDepthSet: layer.NoDepthSet !== undefined ? layer.NoDepthSet : (shading & 128) !== 0,
+            };
+        })
+    }));
+}
+
 const MaterialEditor: React.FC<MaterialEditorProps> = () => {
     const modelData = useModelStore(state => state.modelData)
     const setMaterials = useModelStore(state => state.setMaterials)
@@ -26,7 +49,9 @@ const MaterialEditor: React.FC<MaterialEditorProps> = () => {
 
     useEffect(() => {
         if (modelData && modelData.Materials) {
-            setLocalMaterials(JSON.parse(JSON.stringify(modelData.Materials)))
+            // Convert Shading bitmask to boolean properties for UI display
+            const normalized = normalizeMaterialsForUI(JSON.parse(JSON.stringify(modelData.Materials)));
+            setLocalMaterials(normalized);
         } else {
             setLocalMaterials([])
         }

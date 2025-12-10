@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { List, Checkbox, Button, InputNumber, Select, ColorPicker, Card, Typography, message } from 'antd'
 import { DraggableModal } from '../DraggableModal';
 import { useModelStore } from '../../store/modelStore'
+import { useSelectionStore } from '../../store/selectionStore'
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
 import KeyframeEditor from '../editors/KeyframeEditor'
 
@@ -52,6 +53,27 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
             setSelectedIndex(modelData.GeosetAnims && modelData.GeosetAnims.length > 0 ? 0 : -1)
         }
     }, [visible, modelData])
+
+    // Subscribe to Ctrl+Click geoset picking - auto-select matching geoset animation
+    useEffect(() => {
+        if (!visible) return
+        let lastPickedIndex: number | null = null
+        const unsubscribe = useSelectionStore.subscribe((state) => {
+            const pickedGeosetIndex = state.pickedGeosetIndex
+            if (pickedGeosetIndex !== lastPickedIndex) {
+                lastPickedIndex = pickedGeosetIndex
+                if (pickedGeosetIndex !== null && localAnims.length > 0) {
+                    // Find geoset animation that matches this geoset
+                    const matchingIndex = localAnims.findIndex((anim: any) => anim.GeosetId === pickedGeosetIndex)
+                    if (matchingIndex !== -1) {
+                        setSelectedIndex(matchingIndex)
+                        console.log('[GeosetAnimationEditor] Auto-selected animation', matchingIndex, 'for geoset', pickedGeosetIndex)
+                    }
+                }
+            }
+        })
+        return unsubscribe
+    }, [visible, localAnims])
 
     const handleOk = () => {
         if (setGeosetAnims) {

@@ -1,7 +1,9 @@
 import React, { useState } from 'react'
 import { Checkbox, InputNumber, Button, Select, Space } from 'antd'
+import { EditOutlined } from '@ant-design/icons'
 import KeyframeEditor from '../KeyframeEditor'
 import { useModelStore } from '../../../store/modelStore'
+import TextureAnimationManagerModal from '../../modals/TextureAnimationManagerModal'
 
 interface LayerDetailProps {
     layer: any
@@ -12,6 +14,7 @@ interface LayerDetailProps {
 const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
     const modelData = useModelStore(state => state.modelData)
     const [isKeyframeEditorOpen, setIsKeyframeEditorOpen] = useState(false)
+    const [isAnimManagerOpen, setIsAnimManagerOpen] = useState(false)
     const [editingField, setEditingField] = useState<string | null>(null)
     const [editingVectorSize, setEditingVectorSize] = useState(1)
 
@@ -71,6 +74,11 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
     const textureOptions = (modelData as any)?.Textures?.map((t: any, i: number) => ({
         value: i,
         label: `[${i}] ${t.Image ? t.Image.split(/[\\/]/).pop() : '无路径'}`
+    })) || []
+
+    const textureAnimOptions = (modelData as any)?.TextureAnims?.map((_t: any, i: number) => ({
+        value: i,
+        label: `TextureAnim ${i}`
     })) || []
 
     const isAlphaAnimated = layer.Alpha && typeof layer.Alpha !== 'number'
@@ -147,12 +155,22 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                     <div style={{ border: '1px solid #444', padding: 10, borderRadius: 4 }}>
                         <h4 style={{ margin: '0 0 10px 0', color: '#aaa' }}>动画纹理 ID (Animated Texture ID)</h4>
-                        <Select
-                            size="small"
-                            style={{ width: '100%' }}
-                            disabled
-                            value={'(None)'}
-                        />
+                        <Space style={{ width: '100%' }}>
+                            <Select
+                                size="small"
+                                style={{ width: '100%' }}
+                                allowClear
+                                placeholder="(None)"
+                                value={layer.TVertexAnimId}
+                                onChange={(v) => handleChange('TVertexAnimId', v)}
+                                options={textureAnimOptions}
+                            />
+                            <Button
+                                size="small"
+                                icon={<EditOutlined />}
+                                onClick={() => setIsAnimManagerOpen(true)}
+                            />
+                        </Space>
                     </div>
 
                     <div style={{ border: '1px solid #444', padding: 10, borderRadius: 4, flex: 1 }}>
@@ -180,6 +198,12 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
                     globalSequences={(modelData as any)?.GlobalSequences || []}
                 />
             )}
+
+            {/* Texture Animation Manager Modal */}
+            <TextureAnimationManagerModal
+                visible={isAnimManagerOpen}
+                onClose={() => setIsAnimManagerOpen(false)}
+            />
         </div>
     )
 }

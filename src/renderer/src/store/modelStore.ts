@@ -59,6 +59,9 @@ interface ModelState {
     setGeosets: (geosets: any[]) => void;
     setMaterials: (materials: any[]) => void;
     setTextureAnims: (anims: any[]) => void;
+    addTextureAnim: () => void;
+    removeTextureAnim: (index: number) => void;
+    updateTextureAnim: (index: number, updates: any) => void;
 
     // Geometry Actions
     updateGeoset: (index: number, updates: any) => void;
@@ -708,6 +711,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
         return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
     }),
     setMaterials: (materials) => set((state) => {
+        console.log('[ModelStore] setMaterials called. Count:', materials ? materials.length : 0);
         const updatedModelData = state.modelData ? { ...state.modelData, Materials: materials } : state.modelData;
         return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
     }),
@@ -715,6 +719,49 @@ export const useModelStore = create<ModelState>((set, get) => ({
         const updatedModelData = state.modelData ? { ...state.modelData, TextureAnims: anims } : state.modelData;
         return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
     }),
+
+    addTextureAnim: () => {
+        set((state) => {
+            if (!state.modelData) return {};
+            const currentAnims = state.modelData.TextureAnims || [];
+            const newAnim = {
+                Translation: { InterpolationType: 0, GlobalSeqId: null, Keys: [] },
+                Rotation: { InterpolationType: 0, GlobalSeqId: null, Keys: [] },
+                Scaling: { InterpolationType: 0, GlobalSeqId: null, Keys: [] }
+            };
+            const updatedAnims = [...currentAnims, newAnim];
+            const updatedModelData = { ...state.modelData, TextureAnims: updatedAnims };
+            console.log('[ModelStore] Added TextureAnim, new count:', updatedAnims.length);
+            return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
+        });
+    },
+
+    removeTextureAnim: (index) => {
+        set((state) => {
+            if (!state.modelData || !state.modelData.TextureAnims) return {};
+            const updatedAnims = [...state.modelData.TextureAnims];
+            if (index >= 0 && index < updatedAnims.length) {
+                updatedAnims.splice(index, 1);
+                const updatedModelData = { ...state.modelData, TextureAnims: updatedAnims };
+                console.log('[ModelStore] Removed TextureAnim at index', index);
+                return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
+            }
+            return {};
+        });
+    },
+
+    updateTextureAnim: (index, updates) => {
+        set((state) => {
+            if (!state.modelData || !state.modelData.TextureAnims) return {};
+            const updatedAnims = [...state.modelData.TextureAnims];
+            if (index >= 0 && index < updatedAnims.length) {
+                updatedAnims[index] = { ...updatedAnims[index], ...updates };
+                const updatedModelData = { ...state.modelData, TextureAnims: updatedAnims };
+                return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
+            }
+            return {};
+        });
+    },
 
     updateGeoset: (index, updates) => {
         set((state) => {

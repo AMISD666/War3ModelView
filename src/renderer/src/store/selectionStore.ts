@@ -66,6 +66,10 @@ interface SelectionState {
     isPickingParent: boolean;
     setIsPickingParent: (isPicking: boolean) => void;
 
+    // Geoset Picking (Ctrl+Click in 3D view)
+    pickedGeosetIndex: number | null;
+    setPickedGeosetIndex: (index: number | null) => void;
+
     // 清除所有选择
     clearAllSelections: () => void;
 }
@@ -247,13 +251,18 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
     isPickingParent: false,
     setIsPickingParent: (isPicking) => set({ isPickingParent: isPicking }),
 
+    // Geoset Picking (Ctrl+Click in 3D view)
+    pickedGeosetIndex: null,
+    setPickedGeosetIndex: (index) => set({ pickedGeosetIndex: index }),
+
     // 清除所有选择
     clearAllSelections: () => {
         set({
             selectedNodeIds: [],
             selectedVertexIds: [],
             selectedFaceIds: [],
-            isPickingParent: false
+            isPickingParent: false,
+            pickedGeosetIndex: null
         });
     }
 }));
