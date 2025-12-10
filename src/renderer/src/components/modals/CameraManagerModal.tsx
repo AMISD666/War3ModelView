@@ -101,17 +101,25 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
 
     const renderDetail = (item: any, index: number) => {
         const cam = item as CameraNode;
-        // Use static values from first key if available for display
-        const getPos = (block: any) => {
-            if (block && block.Keys && block.Keys.length > 0) {
-                const v = block.Keys[0].Vector;
-                return v || [0, 0, 0];
+        // Get position from camera - check multiple possible formats
+        // Note: Position may be Float32Array which fails Array.isArray()
+        const isArrayLike = (v: any) => Array.isArray(v) || v instanceof Float32Array || ArrayBuffer.isView(v);
+        const toArray = (v: any) => v instanceof Float32Array ? Array.from(v) : v;
+
+        const getPos = (prop: any, directProp?: any) => {
+            if (directProp && isArrayLike(directProp)) return toArray(directProp);
+            if (isArrayLike(prop)) return toArray(prop);
+            if (prop && prop.Keys && prop.Keys.length > 0) {
+                const v = prop.Keys[0].Vector;
+                return v ? toArray(v) : [0, 0, 0];
             }
             return [0, 0, 0];
         };
 
-        const pos = getPos(cam.Translation);
-        const target = getPos(cam.TargetTranslation);
+        // Use Position/TargetPosition first (raw parser format), 
+        // then Translation/TargetTranslation (animation format)
+        const pos = getPos(cam.Translation, (cam as any).Position);
+        const target = getPos(cam.TargetTranslation, (cam as any).TargetPosition);
 
         const VectorInputs = ({ value, onChange, label }: { value: number[], onChange: (val: number[]) => void, label: string }) => (
             <div style={{ display: 'flex', flexDirection: 'column' }}>

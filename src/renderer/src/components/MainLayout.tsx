@@ -264,6 +264,7 @@ const MainLayout: React.FC = () => {
     const [showNodes, setShowNodes] = useState<boolean>(false)
     const [showSkeleton, setShowSkeleton] = useState<boolean>(false)
     const [showCollisionShapes, setShowCollisionShapes] = useState<boolean>(() => loadSetting('showCollisionShapes', true))
+    const [showCameras, setShowCameras] = useState<boolean>(() => loadSetting('showCameras', false))
     const [renderMode, setRenderMode] = useState<'textured' | 'wireframe'>(() => loadSetting('renderMode', 'textured'))
     const [backgroundColor, setBackgroundColor] = useState<string>(() => loadSetting('backgroundColor', '#000000'))
     const [showFPS, setShowFPS] = useState<boolean>(() => loadSetting('showFPS', false))
@@ -339,15 +340,21 @@ const MainLayout: React.FC = () => {
         if (viewerRef.current && cameraNode) {
             console.log('handleViewCamera', cameraNode)
 
-            const getPos = (block: any) => {
-                if (block && block.Keys && block.Keys.length > 0) {
-                    return block.Keys[0].Vector || [0, 0, 0]
+            const isArrayLike = (v: any) => Array.isArray(v) || v instanceof Float32Array || ArrayBuffer.isView(v);
+            const toArray = (v: any) => v instanceof Float32Array ? Array.from(v) : v;
+
+            const getPos = (prop: any, directProp?: any) => {
+                if (directProp && isArrayLike(directProp)) return toArray(directProp)
+                if (isArrayLike(prop)) return toArray(prop)
+                if (prop && prop.Keys && prop.Keys.length > 0) {
+                    const v = prop.Keys[0].Vector
+                    return v ? toArray(v) : [0, 0, 0]
                 }
                 return [0, 0, 0]
             }
 
-            const pos = getPos(cameraNode.Translation)
-            const target = getPos(cameraNode.TargetTranslation)
+            const pos = getPos(cameraNode.Translation, cameraNode.Position)
+            const target = getPos(cameraNode.TargetTranslation, cameraNode.TargetPosition)
 
             console.log('Camera Pos:', pos, 'Target:', target)
 
@@ -356,22 +363,11 @@ const MainLayout: React.FC = () => {
             const dz = pos[2] - target[2]
 
             let distance = Math.sqrt(dx * dx + dy * dy + dz * dz)
-            if (distance < 0.1) distance = 100; // Default safety distance if pos == target
-
-            // Spherical conversion
-            // War3 Coordinate System: Z is up.
-            // Viewer Orbit Camera: Standard spherical coordinates usually define phi from Y axis (or Z if Z-up).
-            // Let's check Viewer.tsx orbit controls implementation implicitly via trial.
-            // Assuming Z is up for War3.
+            if (distance < 0.1) distance = 100;
 
             let phi = Math.acos(dz / distance)
-
-            // Safety check for NaN
-            if (isNaN(phi)) phi = 0.1;
-
-            // Clamp phi to avoid gimble lock
-            if (phi < 0.01) phi = 0.01
-            if (phi > Math.PI - 0.01) phi = Math.PI - 0.01
+            if (isNaN(phi)) phi = Math.PI / 4;
+            phi = Math.max(0.01, Math.min(Math.PI - 0.01, phi))
 
             let theta = Math.atan2(dy, dx)
             if (isNaN(theta)) theta = 0;
@@ -785,6 +781,12 @@ const MainLayout: React.FC = () => {
                     setShowCollisionShapes(newVal)
                     saveSetting('showCollisionShapes', newVal)
                 }}
+                showCameras={showCameras}
+                onToggleCameras={() => {
+                    const newVal = !showCameras
+                    setShowCameras(newVal)
+                    saveSetting('showCameras', newVal)
+                }}
                 onSetViewPreset={(preset) => setViewPreset({ type: preset, time: Date.now() })}
                 onToggleEditor={(editor) => {
                     console.log('[MainLayout] onToggleEditor called with:', editor)
@@ -920,6 +922,7 @@ const MainLayout: React.FC = () => {
                         showNodes={showNodes}
                         showSkeleton={showSkeleton}
                         showCollisionShapes={showCollisionShapes}
+                        showCameras={showCameras}
                         showWireframe={renderMode === 'wireframe'}
                         onToggleWireframe={() => setRenderMode(prev => prev === 'textured' ? 'wireframe' : 'textured')}
                         backgroundColor={backgroundColor}

@@ -24,6 +24,8 @@ interface MenuBarProps {
     onToggleGeosetVisibility: () => void
     showCollisionShapes: boolean // Add this
     onToggleCollisionShapes: () => void // Add this
+    showCameras: boolean
+    onToggleCameras: () => void
     onSetViewPreset: (preset: string) => void
     onToggleEditor: (editor: string) => void
     mainMode: 'view' | 'geometry' | 'uv' | 'animation'
@@ -57,6 +59,8 @@ const MenuBar: React.FC<MenuBarProps> = ({
     onToggleGeosetVisibility,
     showCollisionShapes, // Add this
     onToggleCollisionShapes, // Add this
+    showCameras,
+    onToggleCameras,
     onSetViewPreset,
     onToggleEditor,
     mainMode,
@@ -467,6 +471,15 @@ const MenuBar: React.FC<MenuBarProps> = ({
                         >
                             <span>显示碰撞形状</span>
                             <span>{showCollisionShapes ? '✓' : ''}</span>
+                        </div>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={() => { onToggleCameras(); }}
+                        >
+                            <span>相机显示</span>
+                            <span>{showCameras ? '✓' : ''}</span>
                         </div>
                         <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
                         <div style={{ padding: '5px 15px', color: '#aaa', fontSize: '12px' }}>渲染模式</div>

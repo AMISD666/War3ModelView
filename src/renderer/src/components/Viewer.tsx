@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useRef, useState } from 'react'
+﻿import React, { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react'
 import { viewer as m3viewer, parsers as m3parsers } from 'mdx-m3-viewer'
 import { decodeBLP, getBLPImageData, Scene, BatchRenderer, parseMDX, parseMDL, ModelRenderer } from 'war3-model'
 import { SimpleOrbitCamera } from '../utils/SimpleOrbitCamera'
@@ -21,15 +21,22 @@ import { MoveNodesCommand, NodeChange } from '../commands/MoveNodesCommand'
 import { VertexEditor } from './VertexEditor'
 import BoneBindingPanel from './BoneBindingPanel'
 import { pickClosestGeoset } from '../utils/rayTriangle'
+
+// Ref interface for external access to camera methods
+export interface ViewerRef {
+  getCamera: () => { distance: number; theta: number; phi: number; target: [number, number, number] }
+  setCamera: (params: { distance: number; theta: number; phi: number; target: [number, number, number] }) => void
+}
+
 interface ViewerProps {
   modelPath: string | null
   animationIndex: number
   teamColor: number
   showGrid: boolean
   showNodes: boolean
-  showNodes: boolean
   showSkeleton: boolean
   showCollisionShapes: boolean
+  showCameras: boolean
   showWireframe: boolean
   isPlaying: boolean
   onTogglePlay: () => void
@@ -41,7 +48,7 @@ interface ViewerProps {
   modelData?: any
 }
 
-const Viewer: React.FC<ViewerProps> = ({
+const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   modelPath,
   animationIndex,
   teamColor,
@@ -49,6 +56,7 @@ const Viewer: React.FC<ViewerProps> = ({
   showNodes,
   showSkeleton,
   showCollisionShapes,
+  showCameras,
   showWireframe,
   isPlaying,
   onTogglePlay,
@@ -58,7 +66,7 @@ const Viewer: React.FC<ViewerProps> = ({
   showFPS,
   viewPreset,
   modelData
-}) => {
+}, ref) => {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [renderer, setRenderer] = useState<ModelRenderer | null>(null)
   const [fps, setFps] = useState<number>(0)
@@ -85,6 +93,7 @@ const Viewer: React.FC<ViewerProps> = ({
   const showNodesRef = useRef(showNodes)
   const showSkeletonRef = useRef(showSkeleton)
   const showCollisionShapesRef = useRef(showCollisionShapes)
+  const showCamerasRef = useRef(showCameras)
   const showWireframeRef = useRef(showWireframe)
   const isPlayingRef = useRef(isPlaying)
   const backgroundColorRef = useRef(backgroundColor)
@@ -100,10 +109,11 @@ const Viewer: React.FC<ViewerProps> = ({
     showNodesRef.current = showNodes
     showSkeletonRef.current = showSkeleton
     showCollisionShapesRef.current = showCollisionShapes
+    showCamerasRef.current = showCameras
     showWireframeRef.current = showWireframe
     isPlayingRef.current = isPlaying
     backgroundColorRef.current = backgroundColor
-  }, [showGrid, showNodes, showSkeleton, showCollisionShapes, showWireframe, isPlaying, backgroundColor])
+  }, [showGrid, showNodes, showSkeleton, showCollisionShapes, showCameras, showWireframe, isPlaying, backgroundColor])
 
   useEffect(() => {
     if (canvasRef.current && !cameraRef.current) {
@@ -147,12 +157,79 @@ const Viewer: React.FC<ViewerProps> = ({
     target: vec3.fromValues(0, 0, 0),
   })
 
+  // Helper to sync targetCamera state to SimpleOrbitCamera
+  const syncCameraToOrbit = () => {
+    if (cameraRef.current) {
+      cameraRef.current.distance = targetCamera.current.distance
+      cameraRef.current.horizontalAngle = targetCamera.current.theta + Math.PI / 2
+      cameraRef.current.verticalAngle = targetCamera.current.phi
+      vec3.copy(cameraRef.current.target, targetCamera.current.target)
+      cameraRef.current.update()
+    }
+  }
+
   const resetCamera = () => {
     vec3.set(targetCamera.current.target, 0, 0, 0)
     targetCamera.current.distance = 500
     targetCamera.current.theta = Math.PI / 4
     targetCamera.current.phi = Math.PI / 4
+    syncCameraToOrbit()
   }
+
+  // Expose camera methods to parent via ref
+  useImperativeHandle(ref, () => ({
+    getCamera: () => {
+      // Read from SimpleOrbitCamera (actual camera used by render loop)
+      if (cameraRef.current) {
+        return {
+          distance: cameraRef.current.distance,
+          theta: cameraRef.current.horizontalAngle - Math.PI / 2, // Convert back from horizontalAngle
+          phi: cameraRef.current.verticalAngle,
+          target: [
+            cameraRef.current.target[0],
+            cameraRef.current.target[1],
+            cameraRef.current.target[2]
+          ] as [number, number, number]
+        }
+      }
+      // Fallback to targetCamera
+      return {
+        distance: targetCamera.current.distance,
+        theta: targetCamera.current.theta,
+        phi: targetCamera.current.phi,
+        target: [
+          targetCamera.current.target[0],
+          targetCamera.current.target[1],
+          targetCamera.current.target[2]
+        ] as [number, number, number]
+      }
+    },
+    setCamera: (params: { distance: number; theta: number; phi: number; target: [number, number, number] }) => {
+      console.log('[Viewer setCamera] Setting camera:', params)
+      const clampedPhi = Math.max(0.01, Math.min(Math.PI - 0.01, params.phi))
+
+      // Update targetCamera (backup/fallback)
+      targetCamera.current.distance = params.distance
+      targetCamera.current.theta = params.theta
+      targetCamera.current.phi = clampedPhi
+      vec3.set(targetCamera.current.target, params.target[0], params.target[1], params.target[2])
+
+      // CRITICAL: Also update SimpleOrbitCamera which is actually used by the render loop
+      if (cameraRef.current) {
+        cameraRef.current.distance = params.distance
+        cameraRef.current.horizontalAngle = params.theta + Math.PI / 2 // Theta to horizontalAngle offset
+        cameraRef.current.verticalAngle = clampedPhi
+        vec3.set(cameraRef.current.target, params.target[0], params.target[1], params.target[2])
+        cameraRef.current.update()
+        console.log('[Viewer setCamera] Updated SimpleOrbitCamera:', {
+          distance: cameraRef.current.distance,
+          horizontalAngle: cameraRef.current.horizontalAngle,
+          verticalAngle: cameraRef.current.verticalAngle,
+          target: cameraRef.current.target
+        })
+      }
+    }
+  }), [])
 
   // Mouse interaction state
   const mouseState = useRef({
@@ -825,28 +902,81 @@ const Viewer: React.FC<ViewerProps> = ({
           targetCamera.current.distance = 500
           targetCamera.current.theta = Math.PI / 4
           targetCamera.current.phi = Math.PI / 4
+          syncCameraToOrbit()
           break
         case '1': // Front
           targetCamera.current.theta = -Math.PI / 2
           targetCamera.current.phi = Math.PI / 2
+          syncCameraToOrbit()
           break
         case '2': // Back
           targetCamera.current.theta = Math.PI / 2
           targetCamera.current.phi = Math.PI / 2
+          syncCameraToOrbit()
           break
         case '3': // Left
           targetCamera.current.theta = 0
           targetCamera.current.phi = Math.PI / 2
+          syncCameraToOrbit()
           break
         case '4': // Right
           targetCamera.current.theta = Math.PI
           targetCamera.current.phi = Math.PI / 2
+          syncCameraToOrbit()
           break
         case '5': // Top
           targetCamera.current.phi = 0.01
+          syncCameraToOrbit()
           break
         case '6': // Bottom
           targetCamera.current.phi = Math.PI - 0.01
+          syncCameraToOrbit()
+          break
+        case '`': // View selected camera (~ key)
+          {
+            const selector = document.getElementById('camera-selector') as HTMLSelectElement;
+            if (selector && selector.value !== '-1') {
+              const { nodes: storeNodes } = useModelStore.getState();
+              const cameraList = storeNodes.filter((n: any) => n.type === 'Camera');
+              const idx = parseInt(selector.value);
+              if (idx >= 0 && idx < cameraList.length) {
+                const cam = cameraList[idx];
+                const isArrayLike = (v: any) => Array.isArray(v) || v instanceof Float32Array || ArrayBuffer.isView(v);
+                const toArray = (v: any) => v instanceof Float32Array ? Array.from(v) : v;
+                const getPos = (prop: any, directProp?: any) => {
+                  if (directProp && isArrayLike(directProp)) return toArray(directProp);
+                  if (isArrayLike(prop)) return toArray(prop);
+                  if (prop && prop.Keys && prop.Keys.length > 0) {
+                    const v = prop.Keys[0].Vector;
+                    return v ? toArray(v) : [0, 0, 0];
+                  }
+                  return [0, 0, 0];
+                };
+
+                const pos = getPos(cam.Translation, cam.Position);
+                const target = getPos(cam.TargetTranslation, cam.TargetPosition);
+
+                const dx = pos[0] - target[0];
+                const dy = pos[1] - target[1];
+                const dz = pos[2] - target[2];
+                let distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                if (distance < 0.1) distance = 100;
+
+                let phi = Math.acos(dz / distance);
+                if (isNaN(phi)) phi = Math.PI / 4;
+                phi = Math.max(0.01, Math.min(Math.PI - 0.01, phi));
+
+                let theta = Math.atan2(dy, dx);
+                if (isNaN(theta)) theta = 0;
+
+                targetCamera.current.distance = distance;
+                targetCamera.current.theta = theta;
+                targetCamera.current.phi = phi;
+                vec3.set(targetCamera.current.target, target[0], target[1], target[2]);
+                syncCameraToOrbit()
+              }
+            }
+          }
           break
         case 'z':
           if (e.ctrlKey || e.metaKey) {
@@ -1659,6 +1789,56 @@ const Viewer: React.FC<ViewerProps> = ({
                 }
               }
             });
+          }
+        }
+
+        // === Camera Frustum Rendering ===
+        if (showCamerasRef.current && (mdlRenderer as any).gl) {
+          const gl = (mdlRenderer as any).gl;
+          const { nodes: storeNodes } = useModelStore.getState();
+          const cameraNodes = storeNodes.filter((n: any) => n.type === 'Camera');
+
+          // Get selected camera index from dropdown
+          const selector = document.getElementById('camera-selector') as HTMLSelectElement;
+          const selectedIdx = selector ? parseInt(selector.value) : -1;
+
+          // Debug log every 300 frames
+          if (frameCount.current % 300 === 0) {
+            console.log('[Camera Render] showCameras:', showCamerasRef.current, 'cameraNodes:', cameraNodes.length, 'selectedIdx:', selectedIdx);
+          }
+
+          if (cameraNodes.length > 0 && selectedIdx >= 0 && selectedIdx < cameraNodes.length) {
+            // Only render the selected camera's frustum
+            const cam = cameraNodes[selectedIdx];
+            const isArrayLike = (v: any) => Array.isArray(v) || v instanceof Float32Array || ArrayBuffer.isView(v);
+            const toArray = (v: any) => v instanceof Float32Array ? Array.from(v) : v;
+            const getPos = (prop: any, directProp?: any) => {
+              if (directProp && isArrayLike(directProp)) return toArray(directProp);
+              if (isArrayLike(prop)) return toArray(prop);
+              if (prop && prop.Keys && prop.Keys.length > 0) {
+                const v = prop.Keys[0].Vector;
+                return v ? toArray(v) : [0, 0, 0];
+              }
+              return [0, 0, 0];
+            };
+
+            const pos = getPos(cam.Translation, cam.Position);
+            const target = getPos(cam.TargetTranslation, cam.TargetPosition);
+            const fov = cam.FieldOfView || 0.7853;
+            const nearClip = cam.NearClip || 16;
+            const farClip = cam.FarClip || 1000;
+
+            debugRenderer.current.renderWireframeFrustum(
+              gl,
+              mvMatrix,
+              pMatrix,
+              pos,
+              target,
+              fov,
+              nearClip,
+              farClip,
+              [0, 0.8, 1, 1]
+            );
           }
         }
 
@@ -2530,6 +2710,80 @@ const Viewer: React.FC<ViewerProps> = ({
         </div>
       )}
 
+      {/* Camera Selector Dropdown */}
+      {(() => {
+        const { nodes: storeNodes } = useModelStore.getState();
+        const cameraList = storeNodes.filter((n: any) => n.type === 'Camera');
+        if (cameraList.length === 0) return null;
+
+        return (
+          <div style={{
+            position: 'absolute',
+            top: '10px',
+            left: '10px',
+            zIndex: 10
+          }}>
+            <select
+              id="camera-selector"
+              style={{
+                background: 'rgba(0, 0, 0, 0.7)',
+                color: '#fff',
+                border: '1px solid #555',
+                padding: '4px 8px',
+                borderRadius: '4px',
+                fontSize: '12px',
+                cursor: 'pointer'
+              }}
+              onChange={(e) => {
+                const idx = parseInt(e.target.value);
+                if (idx >= 0 && idx < cameraList.length) {
+                  const cam = cameraList[idx];
+                  const isArrayLike = (v: any) => Array.isArray(v) || v instanceof Float32Array || ArrayBuffer.isView(v);
+                  const toArray = (v: any) => v instanceof Float32Array ? Array.from(v) : v;
+                  const getPos = (prop: any, directProp?: any) => {
+                    if (directProp && isArrayLike(directProp)) return toArray(directProp);
+                    if (isArrayLike(prop)) return toArray(prop);
+                    if (prop && prop.Keys && prop.Keys.length > 0) {
+                      const v = prop.Keys[0].Vector;
+                      return v ? toArray(v) : [0, 0, 0];
+                    }
+                    return [0, 0, 0];
+                  };
+
+                  const pos = getPos(cam.Translation, cam.Position);
+                  const target = getPos(cam.TargetTranslation, cam.TargetPosition);
+
+                  const dx = pos[0] - target[0];
+                  const dy = pos[1] - target[1];
+                  const dz = pos[2] - target[2];
+                  let distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                  if (distance < 0.1) distance = 100;
+
+                  let phi = Math.acos(dz / distance);
+                  if (isNaN(phi)) phi = Math.PI / 4;
+                  phi = Math.max(0.01, Math.min(Math.PI - 0.01, phi));
+
+                  let theta = Math.atan2(dy, dx);
+                  if (isNaN(theta)) theta = 0;
+
+                  targetCamera.current.distance = distance;
+                  targetCamera.current.theta = theta;
+                  targetCamera.current.phi = phi;
+                  vec3.set(targetCamera.current.target, target[0], target[1], target[2]);
+                  syncCameraToOrbit()
+                }
+              }}
+              defaultValue="-1"
+            >
+              <option value="-1" disabled>选择相机...</option>
+              {cameraList.map((cam: any, i: number) => (
+                <option key={i} value={i}>{cam.Name || `Camera ${i + 1}`}</option>
+              ))}
+            </select>
+          </div>
+        );
+      })()}
+
       {selectionBox && (
         <div
           style={{
@@ -2592,6 +2846,6 @@ const Viewer: React.FC<ViewerProps> = ({
       {appMainMode === 'geometry' && <VertexEditor renderer={renderer} onBeginUpdate={() => { ignoreNextModelDataUpdate.current = true }} />}
     </div>
   )
-}
+})
 
 export default Viewer

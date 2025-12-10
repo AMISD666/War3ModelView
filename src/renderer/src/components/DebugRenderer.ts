@@ -239,6 +239,75 @@ export class DebugRenderer {
         this.renderLines(gl, mvMatrix, pMatrix, lines, color);
     }
 
+    /**
+     * Render a wireframe camera frustum (truncated pyramid)
+     */
+    renderWireframeFrustum(
+        gl: WebGLRenderingContext | WebGL2RenderingContext,
+        mvMatrix: mat4,
+        pMatrix: mat4,
+        position: number[],
+        target: number[],
+        fov: number,
+        nearClip: number,
+        farClip: number,
+        color: number[],
+        aspectRatio: number = 4 / 3
+    ) {
+        const maxVisualFar = Math.min(farClip, 500);
+        const dx = target[0] - position[0];
+        const dy = target[1] - position[1];
+        const dz = target[2] - position[2];
+        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+        if (dist < 0.001) return;
+
+        const fwd = [dx / dist, dy / dist, dz / dist];
+        let upVec = [0, 0, 1];
+        const dotUp = fwd[0] * upVec[0] + fwd[1] * upVec[1] + fwd[2] * upVec[2];
+        if (Math.abs(dotUp) > 0.99) upVec = [0, 1, 0];
+
+        const right = [
+            fwd[1] * upVec[2] - fwd[2] * upVec[1],
+            fwd[2] * upVec[0] - fwd[0] * upVec[2],
+            fwd[0] * upVec[1] - fwd[1] * upVec[0]
+        ];
+        const rightLen = Math.sqrt(right[0] * right[0] + right[1] * right[1] + right[2] * right[2]);
+        right[0] /= rightLen; right[1] /= rightLen; right[2] /= rightLen;
+
+        const up = [
+            right[1] * fwd[2] - right[2] * fwd[1],
+            right[2] * fwd[0] - right[0] * fwd[2],
+            right[0] * fwd[1] - right[1] * fwd[0]
+        ];
+
+        const nearH = nearClip * Math.tan(fov / 2);
+        const nearW = nearH * aspectRatio;
+        const farH = maxVisualFar * Math.tan(fov / 2);
+        const farW = farH * aspectRatio;
+
+        const nc = [position[0] + fwd[0] * nearClip, position[1] + fwd[1] * nearClip, position[2] + fwd[2] * nearClip];
+        const ntl = [nc[0] + up[0] * nearH - right[0] * nearW, nc[1] + up[1] * nearH - right[1] * nearW, nc[2] + up[2] * nearH - right[2] * nearW];
+        const ntr = [nc[0] + up[0] * nearH + right[0] * nearW, nc[1] + up[1] * nearH + right[1] * nearW, nc[2] + up[2] * nearH + right[2] * nearW];
+        const nbl = [nc[0] - up[0] * nearH - right[0] * nearW, nc[1] - up[1] * nearH - right[1] * nearW, nc[2] - up[2] * nearH - right[2] * nearW];
+        const nbr = [nc[0] - up[0] * nearH + right[0] * nearW, nc[1] - up[1] * nearH + right[1] * nearW, nc[2] - up[2] * nearH + right[2] * nearW];
+
+        const fc = [position[0] + fwd[0] * maxVisualFar, position[1] + fwd[1] * maxVisualFar, position[2] + fwd[2] * maxVisualFar];
+        const ftl = [fc[0] + up[0] * farH - right[0] * farW, fc[1] + up[1] * farH - right[1] * farW, fc[2] + up[2] * farH - right[2] * farW];
+        const ftr = [fc[0] + up[0] * farH + right[0] * farW, fc[1] + up[1] * farH + right[1] * farW, fc[2] + up[2] * farH + right[2] * farW];
+        const fbl = [fc[0] - up[0] * farH - right[0] * farW, fc[1] - up[1] * farH - right[1] * farW, fc[2] - up[2] * farH - right[2] * farW];
+        const fbr = [fc[0] - up[0] * farH + right[0] * farW, fc[1] - up[1] * farH + right[1] * farW, fc[2] - up[2] * farH + right[2] * farW];
+
+        const lines: number[] = [
+            ...ntl, ...ntr, ...ntr, ...nbr, ...nbr, ...nbl, ...nbl, ...ntl,
+            ...ftl, ...ftr, ...ftr, ...fbr, ...fbr, ...fbl, ...fbl, ...ftl,
+            ...ntl, ...ftl, ...ntr, ...ftr, ...nbl, ...fbl, ...nbr, ...fbr,
+            ...position, ...nc
+        ];
+
+        this.renderLines(gl, mvMatrix, pMatrix, lines, color);
+    }
+
     private draw(
         gl: WebGLRenderingContext | WebGL2RenderingContext,
         mvMatrix: mat4,
