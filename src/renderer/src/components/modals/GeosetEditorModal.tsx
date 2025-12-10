@@ -23,7 +23,13 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose 
     useEffect(() => {
         if (visible && modelData && modelData.Geosets) {
             setLocalGeosets(JSON.parse(JSON.stringify(modelData.Geosets)))
-            setSelectedIndex(modelData.Geosets.length > 0 ? 0 : -1)
+            // Use persistent selection from store if available, otherwise default to first
+            const { selectedGeosetIndex } = useModelStore.getState()
+            if (selectedGeosetIndex !== null && selectedGeosetIndex >= 0 && selectedGeosetIndex < modelData.Geosets.length) {
+                setSelectedIndex(selectedGeosetIndex)
+            } else {
+                setSelectedIndex(modelData.Geosets.length > 0 ? 0 : -1)
+            }
             setHasChanges(false)
         }
     }, [visible, modelData])

@@ -6,11 +6,25 @@ import React, { useMemo } from 'react';
 import { useModelStore } from '../../store/modelStore';
 import { NodeType } from '../../types/node';
 
-const lineStyle: React.CSSProperties = {
+const rowStyle: React.CSSProperties = {
+    display: 'flex',
+    justifyContent: 'space-between',
     lineHeight: '1.6',
     fontSize: '12px',
     color: '#ccc',
-    whiteSpace: 'nowrap'
+    whiteSpace: 'nowrap',
+    gap: '20px'  // Increased gap between label and value
+};
+
+const labelStyle: React.CSSProperties = {
+    textAlign: 'left',
+    flexShrink: 0
+};
+
+const valueStyle: React.CSSProperties = {
+    textAlign: 'right',
+    color: '#fff',
+    minWidth: '30px'
 };
 
 export const ModelInfoPanel: React.FC = () => {
@@ -54,31 +68,36 @@ export const ModelInfoPanel: React.FC = () => {
 
     const modelChunk = modelData.Model || {} as any;
 
+    const InfoRow = ({ label, value }: { label: string; value: string | number }) => (
+        <div style={rowStyle}>
+            <span style={labelStyle}>{label}</span>
+            <span style={valueStyle}>{value}</span>
+        </div>
+    );
+
     return (
         <div style={{ padding: '8px 12px', overflowY: 'auto', height: '100%' }}>
-            <div style={lineStyle}>名称: {modelChunk.Name || '未知'}</div>
-            <div style={lineStyle}>版本: {modelData.Version?.FormatVersion || '未知'}</div>
-            <div style={lineStyle}>混合时间: {modelChunk.BlendTime || 0}</div>
+            <InfoRow label="混合时间" value={modelChunk.BlendTime || 0} />
             {modelChunk.BoundsRadius !== undefined && (
-                <div style={lineStyle}>包围半径: {modelChunk.BoundsRadius.toFixed(2)}</div>
+                <InfoRow label="包围半径" value={modelChunk.BoundsRadius.toFixed(2)} />
             )}
-            <div style={lineStyle}>Geosets: {stats.geosets}</div>
-            <div style={lineStyle}>顶点: {stats.vertices}</div>
-            <div style={lineStyle}>面: {stats.faces}</div>
-            <div style={lineStyle}>纹理: {stats.textures}</div>
-            <div style={lineStyle}>材质: {stats.materials}</div>
-            <div style={lineStyle}>动画序列: {stats.sequences}</div>
-            <div style={lineStyle}>全局序列: {stats.globalSequences}</div>
-            <div style={lineStyle}>骨骼: {stats.bones}</div>
-            <div style={lineStyle}>辅助点: {stats.helpers}</div>
-            <div style={lineStyle}>附加点: {stats.attachments}</div>
-            <div style={lineStyle}>光源: {stats.lights}</div>
-            <div style={lineStyle}>相机: {stats.cameras}</div>
-            <div style={lineStyle}>粒子发射器: {stats.particleEmitters}</div>
-            <div style={lineStyle}>粒子发射器2: {stats.particleEmitters2}</div>
-            <div style={lineStyle}>带状发射器: {stats.ribbonEmitters}</div>
-            <div style={lineStyle}>事件对象: {stats.eventObjects}</div>
-            <div style={lineStyle}>碰撞体: {stats.collisionShapes}</div>
+            <InfoRow label="Geosets" value={stats.geosets} />
+            <InfoRow label="顶点" value={stats.vertices} />
+            <InfoRow label="面" value={stats.faces} />
+            <InfoRow label="纹理" value={stats.textures} />
+            <InfoRow label="材质" value={stats.materials} />
+            <InfoRow label="动画序列" value={stats.sequences} />
+            <InfoRow label="全局序列" value={stats.globalSequences} />
+            <InfoRow label="骨骼" value={stats.bones} />
+            <InfoRow label="辅助点" value={stats.helpers} />
+            <InfoRow label="附加点" value={stats.attachments} />
+            <InfoRow label="光源" value={stats.lights} />
+            <InfoRow label="相机" value={stats.cameras} />
+            <InfoRow label="粒子发射器" value={stats.particleEmitters} />
+            <InfoRow label="粒子发射器2" value={stats.particleEmitters2} />
+            <InfoRow label="带状发射器" value={stats.ribbonEmitters} />
+            <InfoRow label="事件对象" value={stats.eventObjects} />
+            <InfoRow label="碰撞体" value={stats.collisionShapes} />
         </div>
     );
 };

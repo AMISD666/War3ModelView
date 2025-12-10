@@ -43,7 +43,7 @@ interface UIState {
 
 export const useUIStore = create<UIState>((set) => ({
     // 初始窗口状态 - 默认隐藏，通过菜单打开
-    showNodeManager: false,
+    showNodeManager: true,
     showModelInfo: false,
     showVertexEditor: false,
     showFaceEditor: false,

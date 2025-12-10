@@ -157,6 +157,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     target: vec3.fromValues(0, 0, 0),
   })
 
+  // Track if currently viewing a model camera (for ~ toggle)
+  const inCameraView = useRef(false)
+  // Store previous camera state to restore after exiting camera view
+  const previousCameraState = useRef<{ distance: number, theta: number, phi: number, target: Float32Array } | null>(null)
+
   // Helper to sync targetCamera state to SimpleOrbitCamera
   const syncCameraToOrbit = () => {
     if (cameraRef.current) {
@@ -715,12 +720,14 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         setPickedGeosetIndex(result.geosetIndex)
 
         // Visual feedback: temporarily highlight the picked geoset
-        const { setHoveredGeosetId } = useModelStore.getState()
+        const { setHoveredGeosetId, setSelectedGeosetIndex } = useModelStore.getState()
         setHoveredGeosetId(result.geosetIndex)
-        // Flash effect - clear after 500ms
+        // Persist selection to store for sync with managers
+        setSelectedGeosetIndex(result.geosetIndex)
+        // Flash effect - clear after 300ms
         setTimeout(() => {
           setHoveredGeosetId(null)
-        }, 500)
+        }, 300)
 
         return // Stop further processing
       } else {
@@ -932,48 +939,73 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           targetCamera.current.phi = Math.PI - 0.01
           syncCameraToOrbit()
           break
-        case '`': // View selected camera (~ key)
+        case '`': // View selected camera (~ key) - Toggle mode
           {
-            const selector = document.getElementById('camera-selector') as HTMLSelectElement;
-            if (selector && selector.value !== '-1') {
-              const { nodes: storeNodes } = useModelStore.getState();
-              const cameraList = storeNodes.filter((n: any) => n.type === 'Camera');
-              const idx = parseInt(selector.value);
-              if (idx >= 0 && idx < cameraList.length) {
-                const cam = cameraList[idx];
-                const isArrayLike = (v: any) => Array.isArray(v) || v instanceof Float32Array || ArrayBuffer.isView(v);
-                const toArray = (v: any) => v instanceof Float32Array ? Array.from(v) : v;
-                const getPos = (prop: any, directProp?: any) => {
-                  if (directProp && isArrayLike(directProp)) return toArray(directProp);
-                  if (isArrayLike(prop)) return toArray(prop);
-                  if (prop && prop.Keys && prop.Keys.length > 0) {
-                    const v = prop.Keys[0].Vector;
-                    return v ? toArray(v) : [0, 0, 0];
-                  }
-                  return [0, 0, 0];
-                };
+            if (inCameraView.current) {
+              // Exit camera view: restore previous state if available, or reset to model center
+              if (previousCameraState.current) {
+                targetCamera.current.distance = previousCameraState.current.distance
+                targetCamera.current.theta = previousCameraState.current.theta
+                targetCamera.current.phi = previousCameraState.current.phi
+                vec3.set(targetCamera.current.target, previousCameraState.current.target[0], previousCameraState.current.target[1], previousCameraState.current.target[2])
+                previousCameraState.current = null
+              } else {
+                vec3.set(targetCamera.current.target, 0, 0, 0)
+              }
+              syncCameraToOrbit()
+              inCameraView.current = false
+            } else {
+              // Enter camera view
+              // First, save current state
+              previousCameraState.current = {
+                distance: targetCamera.current.distance,
+                theta: targetCamera.current.theta,
+                phi: targetCamera.current.phi,
+                target: vec3.clone(targetCamera.current.target) as Float32Array
+              }
 
-                const pos = getPos(cam.Translation, cam.Position);
-                const target = getPos(cam.TargetTranslation, cam.TargetPosition);
+              const selector = document.getElementById('camera-selector') as HTMLSelectElement;
+              if (selector && selector.value !== '-1') {
+                const { nodes: storeNodes } = useModelStore.getState();
+                const cameraList = storeNodes.filter((n: any) => n.type === 'Camera');
+                const idx = parseInt(selector.value);
+                if (idx >= 0 && idx < cameraList.length) {
+                  const cam = cameraList[idx];
+                  const isArrayLike = (v: any) => Array.isArray(v) || v instanceof Float32Array || ArrayBuffer.isView(v);
+                  const toArray = (v: any) => v instanceof Float32Array ? Array.from(v) : v;
+                  const getPos = (prop: any, directProp?: any) => {
+                    if (directProp && isArrayLike(directProp)) return toArray(directProp);
+                    if (isArrayLike(prop)) return toArray(prop);
+                    if (prop && prop.Keys && prop.Keys.length > 0) {
+                      const v = prop.Keys[0].Vector;
+                      return v ? toArray(v) : [0, 0, 0];
+                    }
+                    return [0, 0, 0];
+                  };
 
-                const dx = pos[0] - target[0];
-                const dy = pos[1] - target[1];
-                const dz = pos[2] - target[2];
-                let distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-                if (distance < 0.1) distance = 100;
+                  const pos = getPos(cam.Translation, cam.Position);
+                  const target = getPos(cam.TargetTranslation, cam.TargetPosition);
 
-                let phi = Math.acos(dz / distance);
-                if (isNaN(phi)) phi = Math.PI / 4;
-                phi = Math.max(0.01, Math.min(Math.PI - 0.01, phi));
+                  const dx = pos[0] - target[0];
+                  const dy = pos[1] - target[1];
+                  const dz = pos[2] - target[2];
+                  let distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                  if (distance < 0.1) distance = 100;
 
-                let theta = Math.atan2(dy, dx);
-                if (isNaN(theta)) theta = 0;
+                  let phi = Math.acos(dz / distance);
+                  if (isNaN(phi)) phi = Math.PI / 4;
+                  phi = Math.max(0.01, Math.min(Math.PI - 0.01, phi));
 
-                targetCamera.current.distance = distance;
-                targetCamera.current.theta = theta;
-                targetCamera.current.phi = phi;
-                vec3.set(targetCamera.current.target, target[0], target[1], target[2]);
-                syncCameraToOrbit()
+                  let theta = Math.atan2(dy, dx);
+                  if (isNaN(theta)) theta = 0;
+
+                  targetCamera.current.distance = distance;
+                  targetCamera.current.theta = theta;
+                  targetCamera.current.phi = phi;
+                  vec3.set(targetCamera.current.target, target[0], target[1], target[2]);
+                  syncCameraToOrbit()
+                  inCameraView.current = true
+                }
               }
             }
           }
@@ -1468,6 +1500,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         const textureChanged = (modelData.Textures?.length || 0) !== (renderer.model.Textures?.length || 0)
         const materialChanged = (modelData.Materials?.length || 0) !== (renderer.model.Materials?.length || 0)
         const particleChanged = (modelData.ParticleEmitters2?.length || 0) !== (renderer.model.ParticleEmitters2?.length || 0)
+        // Lights change requires strictly full reload as we don't have updateLight methods
+        const lightChanged = modelData.Lights !== renderer.model.Lights
 
         // Check if any geoset's MaterialID has changed (requires texture reload)
         let geosetMaterialChanged = false
@@ -1481,8 +1515,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           }
         }
 
-        // Geosets, Textures, Materials, Particles, or MaterialID changes need full reload
-        if (geoChanged || textureChanged || materialChanged || particleChanged || geosetMaterialChanged) {
+        // Geosets, Textures, Materials, Particles, MaterialID, or LIGHTS changes need full reload
+        if (geoChanged || textureChanged || materialChanged || particleChanged || geosetMaterialChanged || lightChanged) {
           console.log('[Viewer] Structural change detected (Geo/Tex/Mat/Particle). Triggering full reload.')
           reloadRendererWithData(modelData, modelPath || '')
           lastReloadTrigger.current = rendererReloadTrigger
@@ -1908,7 +1942,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             gl.disable(gl.DEPTH_TEST)
 
             if (typeof (mdlRenderer as any).renderGeosetHighlight === 'function') {
-              (mdlRenderer as any).renderGeosetHighlight(hoveredGeosetId, [1, 0, 0], 0.6, mvMatrix, pMatrix)
+              (mdlRenderer as any).renderGeosetHighlight(hoveredGeosetId, [1, 0, 0], 0.8, mvMatrix, pMatrix)
             }
 
             // Restore GL state
@@ -2807,7 +2841,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               position: 'absolute',
               top: 12,
               left: 12,
-              width: 320,
+              width: 'auto',
+              maxWidth: 200,
               maxHeight: 'calc(100% - 100px)',
               backgroundColor: 'rgba(30, 30, 30, 0.85)',
               border: '1px solid #007acc',

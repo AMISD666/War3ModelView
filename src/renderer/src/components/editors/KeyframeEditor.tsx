@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Input, Select, Row, Col } from 'antd'
+import { Input, Select, Row, Col, InputNumber, Button } from 'antd'
 import { DraggableModal } from '../DraggableModal'
 import { useModelStore } from '../../store/modelStore'
 
@@ -33,6 +33,11 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
     // Batch Generation State
     const [batchValue, setBatchValue] = useState<number>(1)
     const [batchMode, setBatchMode] = useState<'replace' | 'keep'>('replace')
+
+    // Grid Generation State
+    const [gridRows, setGridRows] = useState<number>(4)
+    const [gridCols, setGridCols] = useState<number>(4)
+    const [gridInterval, setGridInterval] = useState<number>(66)
 
     // Helper to format a single vector/scalar value
     const formatValue = (val: number | number[] | Float32Array): string => {
@@ -187,13 +192,69 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
         setText(newText)
     }
 
+    // Handle Grid Generation
+    const handleGridGenerate = () => {
+        let time = 0
+        const stepX = 1 / gridCols
+        const stepY = 1 / gridRows
+        const newKeys: any[] = []
+
+        // User requested: Clear text then generate
+        // Iteration order logic:
+        // Based on example: 0, 66, 133... 
+        // 0: {0,0,0}, 66: {0.25, 0, 0}
+        // This means Inner loop is Columns (X), Outer loop is Rows (Y).
+        // Coordinates grow X first, then Y.
+
+        for (let r = 0; r < gridRows; r++) {
+            for (let c = 0; c < gridCols; c++) {
+                // Vector 3: [U, V, Z]
+                // InterpolationType forced to 0 (None) conceptually, but here we just generate keys.
+                // The parent logic sets InterpolationType or we set it here if we were controlling object.
+                // But this editor just sets text. User can change InterpType in dropdown.
+
+                newKeys.push({
+                    Frame: time,
+                    Vector: [c * stepX, r * stepY, 0],
+                    InTan: [0, 0, 0],
+                    OutTan: [0, 0, 0]
+                })
+
+                time += gridInterval
+            }
+        }
+
+        // Add final closing frame same as user example (1067: {1, 1, 0})
+        newKeys.push({
+            Frame: time,
+            Vector: [1, 1, 0],
+            InTan: [0, 0, 0],
+            OutTan: [0, 0, 0]
+        })
+
+        const newText = generateText(newKeys, lineType) // Use current lineType (likely None/0)
+        setText(newText)
+    }
+
+    // Helper to normalize keys (handle Frame/Time and Vector/Value aliases)
+    const normalizeKeys = (keys: any[]): any[] => {
+        if (!Array.isArray(keys)) return [];
+        return keys.map(k => ({
+            Frame: k.Frame ?? k.Time ?? 0,
+            Vector: k.Vector ?? k.Value ?? new Array(vectorSize).fill(0),
+            InTan: k.InTan ?? k.InTan ?? new Array(vectorSize).fill(0),
+            OutTan: k.OutTan ?? k.OutTan ?? new Array(vectorSize).fill(0)
+        }));
+    };
+
     useEffect(() => {
         if (visible) {
             if (initialData && initialData.Keys && initialData.Keys.length > 0) {
-                // Existing data
+                // Normalize and load existing data
+                const normalizedKeys = normalizeKeys(initialData.Keys);
                 setLineType(initialData.LineType || 0)
                 setGlobalSeqId(initialData.GlobalSeqId)
-                setText(generateText(initialData.Keys, initialData.LineType || 0))
+                setText(generateText(normalizedKeys, initialData.LineType || 0))
             } else {
                 // Default data
                 setLineType(0)
@@ -347,6 +408,39 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
                                     生成
                                 </button>
                             </div>
+                        </div>
+                    )}
+
+                    {/* Grid Generation Section - Only for Vector3 (Translation/Scaling mainly) */}
+                    {vectorSize === 3 && (
+                        <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid #4a4a4a', display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ color: "#ccc" }}>行:</span>
+                            <InputNumber
+                                min={1}
+                                value={gridRows}
+                                onChange={(v) => setGridRows(v || 1)}
+                                style={{ width: 60 }}
+                                size="small"
+                            />
+                            <span style={{ color: "#ccc" }}>列:</span>
+                            <InputNumber
+                                min={1}
+                                value={gridCols}
+                                onChange={(v) => setGridCols(v || 1)}
+                                style={{ width: 60 }}
+                                size="small"
+                            />
+                            <span style={{ color: "#ccc" }}>间隔:</span>
+                            <InputNumber
+                                min={1}
+                                value={gridInterval}
+                                onChange={(v) => setGridInterval(v || 1)}
+                                style={{ width: 60 }}
+                                size="small"
+                            />
+                            <Button type="primary" size="small" onClick={handleGridGenerate}>
+                                生成
+                            </Button>
                         </div>
                     )}
                 </div>

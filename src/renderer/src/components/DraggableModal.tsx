@@ -31,7 +31,7 @@ export const DraggableModal: React.FC<DraggableModalProps> = ({
     ...restProps
 }) => {
     const panelRef = useRef<HTMLDivElement>(null);
-    const [position, setPosition] = useState({ x: 100, y: 50 });
+    const [position, setPosition] = useState<{ x: number, y: number } | null>(null);
     const [size, setSize] = useState({
         width: typeof width === 'number' ? width : 600,
         height: 'auto' as number | 'auto'
@@ -60,8 +60,8 @@ export const DraggableModal: React.FC<DraggableModalProps> = ({
     }, [open, width, bringToFront]);
 
     const handleDragStart = useCallback((e: React.MouseEvent) => {
-        // Only drag from header, not from buttons
         if ((e.target as HTMLElement).closest('button')) return;
+        if (!position) return;
         e.preventDefault();
         setIsDragging(true);
         bringToFront();
@@ -146,8 +146,9 @@ export const DraggableModal: React.FC<DraggableModalProps> = ({
             className={`floating-panel dark-theme-modal ${wrapClassName || ''}`}
             style={{
                 position: 'fixed',
-                left: position.x,
-                top: position.y,
+                left: position ? position.x : 0,
+                top: position ? position.y : 0,
+                visibility: position ? 'visible' : 'hidden', // Hide until positioned
                 width: size.width,
                 height: typeof size.height === 'number' ? size.height : undefined,
                 zIndex,

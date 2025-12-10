@@ -335,9 +335,9 @@ const LightDialog: React.FC<LightDialogProps> = ({ visible, nodeId, onClose }) =
                                 <span style={{ marginRight: 12, color: '#888' }}>类型:</span>
                                 <Form.Item name="LightType" noStyle>
                                     <Select style={{ flex: 1 }} size="small">
-                                        <Option value="Omnidirectional">Omnidirectional</Option>
-                                        <Option value="Directional">Directional</Option>
-                                        <Option value="Ambient">Ambient</Option>
+                                        <Option value="Omnidirectional">全方向光 (Omnidirectional)</Option>
+                                        <Option value="Directional">方向光 (Directional)</Option>
+                                        <Option value="Ambient">环境光 (Ambient)</Option>
                                     </Select>
                                 </Form.Item>
                             </div>

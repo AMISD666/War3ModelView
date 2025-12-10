@@ -4,6 +4,8 @@ interface MenuBarProps {
     onOpen: () => void
     onSave: () => void
     onSaveAs: () => void
+    onExportMDL: () => void
+    onExportMDX: () => void
     onLoadMPQ: () => void
     mpqLoaded: boolean
     teamColor: number
@@ -39,6 +41,8 @@ const MenuBar: React.FC<MenuBarProps> = ({
     onOpen,
     onSave,
     onSaveAs,
+    onExportMDL,
+    onExportMDX,
     onLoadMPQ,
     mpqLoaded,
     teamColor,
@@ -158,13 +162,22 @@ const MenuBar: React.FC<MenuBarProps> = ({
                         >
                             保存模型
                         </div>
+                        <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
                         <div
                             style={itemStyle}
                             onMouseEnter={hoverStyle}
                             onMouseLeave={unhoverStyle}
-                            onClick={() => { onSaveAs(); closeMenu() }}
+                            onClick={() => { onExportMDL(); closeMenu() }}
                         >
-                            另存为...
+                            导出为 MDL
+                        </div>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={() => { onExportMDX(); closeMenu() }}
+                        >
+                            导出为 MDX
                         </div>
                     </div>
                 )}

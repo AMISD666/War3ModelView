@@ -176,6 +176,110 @@ function prepareModelDataForSave(modelData: any): any {
             });
         }
     });
+
+    // Fix Light node properties - ensure Color/AmbColor are Float32Array or valid AnimVector, and Visibility is valid
+    if (data.Lights && Array.isArray(data.Lights)) {
+        console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Lights.length} lights`);
+        data.Lights.forEach((light: any) => {
+            // FIRST: Map our naming convention to war3-model naming convention
+            // This must happen BEFORE we process/default the war3-model properties!
+
+            // Map AmbientColor (our naming) to AmbColor (war3-model naming)
+            if (light.AmbientColor !== undefined) {
+                if (Array.isArray(light.AmbientColor)) {
+                    light.AmbColor = new Float32Array(light.AmbientColor);
+                } else if (light.AmbientColor instanceof Float32Array) {
+                    light.AmbColor = light.AmbientColor;
+                }
+                // Don't delete AmbientColor - keep for UI compatibility
+            }
+
+            // Map AmbientIntensity to AmbIntensity
+            if (light.AmbientIntensity !== undefined) {
+                light.AmbIntensity = light.AmbientIntensity;
+            }
+
+            // SECOND: Process Color - should be Float32Array or AnimVector with Keys array
+            if (light.Color) {
+                if (Array.isArray(light.Color)) {
+                    light.Color = new Float32Array(light.Color);
+                } else if (typeof light.Color === 'object' && !(light.Color instanceof Float32Array)) {
+                    // It might be an AnimVector - validate it has Keys
+                    if (!light.Color.Keys || !Array.isArray(light.Color.Keys)) {
+                        // Invalid AnimVector, convert to static color
+                        light.Color = new Float32Array([1, 1, 1]);
+                    }
+                }
+            } else {
+                light.Color = new Float32Array([1, 1, 1]);
+            }
+
+            // THIRD: Process AmbColor (after mapping from AmbientColor)
+            if (light.AmbColor) {
+                if (Array.isArray(light.AmbColor)) {
+                    light.AmbColor = new Float32Array(light.AmbColor);
+                } else if (typeof light.AmbColor === 'object' && !(light.AmbColor instanceof Float32Array)) {
+                    if (!light.AmbColor.Keys || !Array.isArray(light.AmbColor.Keys)) {
+                        light.AmbColor = new Float32Array([1, 1, 1]);
+                    }
+                }
+            } else {
+                light.AmbColor = new Float32Array([1, 1, 1]);
+            }
+
+            // Ensure AmbIntensity exists (after mapping from AmbientIntensity)
+            if (light.AmbIntensity === undefined) {
+                light.AmbIntensity = 0;
+            }
+
+            // Ensure static numeric properties exist as numbers (not AnimVector if they're simple values)
+            if (light.Intensity !== undefined && typeof light.Intensity === 'object' && light.Intensity !== null) {
+                if (!light.Intensity.Keys || !Array.isArray(light.Intensity.Keys)) {
+                    light.Intensity = 1; // Default to 1 if malformed
+                }
+            }
+
+            if (light.AmbIntensity !== undefined && typeof light.AmbIntensity === 'object' && light.AmbIntensity !== null) {
+                if (!light.AmbIntensity.Keys || !Array.isArray(light.AmbIntensity.Keys)) {
+                    light.AmbIntensity = 0; // Default ambient intensity
+                }
+            }
+
+            if (light.AttenuationStart !== undefined && typeof light.AttenuationStart === 'object' && light.AttenuationStart !== null) {
+                if (!light.AttenuationStart.Keys || !Array.isArray(light.AttenuationStart.Keys)) {
+                    light.AttenuationStart = 80;
+                }
+            }
+
+            if (light.AttenuationEnd !== undefined && typeof light.AttenuationEnd === 'object' && light.AttenuationEnd !== null) {
+                if (!light.AttenuationEnd.Keys || !Array.isArray(light.AttenuationEnd.Keys)) {
+                    light.AttenuationEnd = 200;
+                }
+            }
+
+            // Visibility - must be undefined or a valid AnimVector, NOT a number
+            // In war3-model, if Visibility is present, it must be an AnimVector
+            if (light.Visibility !== undefined) {
+                if (typeof light.Visibility === 'number') {
+                    // Static visibility - just remove it (defaults to visible)
+                    delete light.Visibility;
+                } else if (typeof light.Visibility === 'object' && light.Visibility !== null) {
+                    if (!light.Visibility.Keys || !Array.isArray(light.Visibility.Keys)) {
+                        // Malformed AnimVector - remove it
+                        delete light.Visibility;
+                    }
+                }
+            }
+
+            // LightType should be a number (0=Omni, 1=Directional, 2=Ambient)
+            if (light.LightType !== undefined && typeof light.LightType === 'string') {
+                const typeMap: Record<string, number> = { 'Omnidirectional': 0, 'Directional': 1, 'Ambient': 2 };
+                light.LightType = typeMap[light.LightType] ?? 0;
+            }
+
+            console.log(`[MainLayout] Light "${light.Name}": Type=${light.LightType}, Intensity=${light.Intensity}, AmbIntensity=${light.AmbIntensity}, AmbColor=[${light.AmbColor[0]?.toFixed(2)},${light.AmbColor[1]?.toFixed(2)},${light.AmbColor[2]?.toFixed(2)}]`);
+        });
+    }
     // Fix ParticleEmitter2 Flags - convert boolean properties to bitmask
     // ParticleEmitter2Flags: Unshaded=32768, SortPrimsFarZ=65536, LineEmitter=131072,
     //                        Unfogged=262144, ModelSpace=524288, XYQuad=1048576
@@ -722,6 +826,105 @@ const MainLayout: React.FC = () => {
         }
     }
 
+    // Helper function to get model name from path or default
+    const getModelBaseName = (): string => {
+        if (modelPath) {
+            const filename = modelPath.split(/[/\\]/).pop() || 'model'
+            // Remove extension
+            return filename.replace(/\.(mdx|mdl)$/i, '')
+        }
+        return 'model'
+    }
+
+    const handleExportMDL = async () => {
+        if (!modelData) return
+        try {
+            const { save } = await import('@tauri-apps/plugin-dialog')
+            const { writeFile } = await import('@tauri-apps/plugin-fs')
+
+            const defaultName = getModelBaseName() + '.mdl'
+
+            const selected = await save({
+                defaultPath: defaultName,
+                filters: [{
+                    name: 'MDL Models',
+                    extensions: ['mdl']
+                }]
+            })
+
+            if (selected) {
+                // Ensure .mdl extension
+                let filePath = selected
+                if (!filePath.toLowerCase().endsWith('.mdl')) {
+                    filePath += '.mdl'
+                }
+
+                const preparedData = prepareModelDataForSave(modelData)
+                fixParticleEmitterFlags(preparedData)
+
+                const content = generateMDL(preparedData)
+                await writeFile(filePath, new TextEncoder().encode(content))
+                alert('已导出为 MDL: ' + filePath)
+            }
+        } catch (err) {
+            console.error('Failed to export MDL:', err)
+            alert('导出 MDL 失败: ' + err)
+        }
+    }
+
+    const handleExportMDX = async () => {
+        if (!modelData) return
+        try {
+            const { save } = await import('@tauri-apps/plugin-dialog')
+            const { writeFile } = await import('@tauri-apps/plugin-fs')
+
+            const defaultName = getModelBaseName() + '.mdx'
+
+            const selected = await save({
+                defaultPath: defaultName,
+                filters: [{
+                    name: 'MDX Models',
+                    extensions: ['mdx']
+                }]
+            })
+
+            if (selected) {
+                // Ensure .mdx extension
+                let filePath = selected
+                if (!filePath.toLowerCase().endsWith('.mdx')) {
+                    filePath += '.mdx'
+                }
+
+                const preparedData = prepareModelDataForSave(modelData)
+                fixParticleEmitterFlags(preparedData)
+
+                const buffer = generateMDX(preparedData)
+                await writeFile(filePath, new Uint8Array(buffer))
+                alert('已导出为 MDX: ' + filePath)
+            }
+        } catch (err) {
+            console.error('Failed to export MDX:', err)
+            alert('导出 MDX 失败: ' + err)
+        }
+    }
+
+    // Helper to fix ParticleEmitter2 flags (extracted from save functions)
+    const fixParticleEmitterFlags = (preparedData: any) => {
+        if (preparedData.ParticleEmitters2) {
+            preparedData.ParticleEmitters2.forEach((emitter: any) => {
+                if (typeof emitter.Head === 'boolean' || typeof emitter.Tail === 'boolean') {
+                    let flags = 0
+                    if (emitter.Head) flags |= 1
+                    if (emitter.Tail) flags |= 2
+                    if (flags === 0) flags = 1
+                    emitter.FrameFlags = flags
+                } else if (emitter.FrameFlags === undefined) {
+                    emitter.FrameFlags = 1
+                }
+            })
+        }
+    }
+
     const toggleEditor = (editor: string) => {
         setActiveEditor(activeEditor === editor ? null : editor)
     }
@@ -753,6 +956,8 @@ const MainLayout: React.FC = () => {
                 onOpen={handleOpen}
                 onSave={handleSave}
                 onSaveAs={handleSaveAs}
+                onExportMDL={handleExportMDL}
+                onExportMDX={handleExportMDX}
                 onLoadMPQ={handleLoadMPQ}
                 mpqLoaded={mpqLoaded}
                 teamColor={teamColor}

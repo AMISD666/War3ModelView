@@ -20,6 +20,7 @@ interface ModelState {
     hiddenGeosetIds: number[];
     forceShowAllGeosets: boolean;
     hoveredGeosetId: number | null;
+    selectedGeosetIndex: number | null;  // Persistent selection for sync with managers
 
     setModelData: (data: ModelData | null, path: string | null) => void;
     setLoading: (loading: boolean) => void;
@@ -76,6 +77,7 @@ interface ModelState {
     toggleGeosetVisibility: (geosetId: number) => void;
     setForceShowAllGeosets: (show: boolean) => void;
     setHoveredGeosetId: (id: number | null) => void;
+    setSelectedGeosetIndex: (index: number | null) => void;
     resetGeosetVisibility: () => void;
 }
 
@@ -102,7 +104,35 @@ function extractNodesFromModel(data: ModelData | null): ModelNode[] {
     extract(['Bone', 'Bones'], NodeType.BONE);
     extract(['Helper', 'Helpers'], NodeType.HELPER);
     extract(['Attachment', 'Attachments'], NodeType.ATTACHMENT);
-    extract(['Light', 'Lights'], NodeType.LIGHT);
+
+    // Special handling for Light nodes to map war3-model naming to our UI naming
+    const lightKeys = ['Light', 'Lights'];
+    lightKeys.forEach(key => {
+        if (d[key] && Array.isArray(d[key])) {
+            d[key].forEach((item: any) => {
+                const node: any = { ...item, type: NodeType.LIGHT };
+
+                // Map war3-model naming to our UI naming
+                // AmbColor -> AmbientColor
+                if (item.AmbColor !== undefined) {
+                    node.AmbientColor = item.AmbColor instanceof Float32Array
+                        ? Array.from(item.AmbColor)
+                        : item.AmbColor;
+                }
+                // AmbIntensity -> AmbientIntensity
+                if (item.AmbIntensity !== undefined) {
+                    node.AmbientIntensity = item.AmbIntensity;
+                }
+                // Color - convert Float32Array to array for UI
+                if (item.Color instanceof Float32Array) {
+                    node.Color = Array.from(item.Color);
+                }
+
+                nodes.push(node as ModelNode);
+            });
+        }
+    });
+
     extract(['ParticleEmitter', 'ParticleEmitters'], NodeType.PARTICLE_EMITTER);
 
     // Special handling for ParticleEmitter2 to map properties
@@ -291,6 +321,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
     hiddenGeosetIds: [],
     forceShowAllGeosets: true,
     hoveredGeosetId: null,
+    selectedGeosetIndex: null,
 
     // Animation State Initial Values
     sequences: [],
@@ -850,7 +881,11 @@ export const useModelStore = create<ModelState>((set, get) => ({
         set({ hoveredGeosetId: id });
     },
 
+    setSelectedGeosetIndex: (index: number | null) => {
+        set({ selectedGeosetIndex: index });
+    },
+
     resetGeosetVisibility: () => {
-        set({ hiddenGeosetIds: [], forceShowAllGeosets: true, hoveredGeosetId: null });
+        set({ hiddenGeosetIds: [], forceShowAllGeosets: true, hoveredGeosetId: null, selectedGeosetIndex: null });
     }
 }));
