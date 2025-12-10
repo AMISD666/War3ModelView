@@ -27,7 +27,9 @@ interface ViewerProps {
   teamColor: number
   showGrid: boolean
   showNodes: boolean
+  showNodes: boolean
   showSkeleton: boolean
+  showCollisionShapes: boolean
   showWireframe: boolean
   isPlaying: boolean
   onTogglePlay: () => void
@@ -46,6 +48,7 @@ const Viewer: React.FC<ViewerProps> = ({
   showGrid,
   showNodes,
   showSkeleton,
+  showCollisionShapes,
   showWireframe,
   isPlaying,
   onTogglePlay,
@@ -81,6 +84,7 @@ const Viewer: React.FC<ViewerProps> = ({
   const showGridRef = useRef(showGrid)
   const showNodesRef = useRef(showNodes)
   const showSkeletonRef = useRef(showSkeleton)
+  const showCollisionShapesRef = useRef(showCollisionShapes)
   const showWireframeRef = useRef(showWireframe)
   const isPlayingRef = useRef(isPlaying)
   const backgroundColorRef = useRef(backgroundColor)
@@ -95,10 +99,11 @@ const Viewer: React.FC<ViewerProps> = ({
     showGridRef.current = showGrid
     showNodesRef.current = showNodes
     showSkeletonRef.current = showSkeleton
+    showCollisionShapesRef.current = showCollisionShapes
     showWireframeRef.current = showWireframe
     isPlayingRef.current = isPlaying
     backgroundColorRef.current = backgroundColor
-  }, [showGrid, showNodes, showSkeleton, showWireframe, isPlaying, backgroundColor])
+  }, [showGrid, showNodes, showSkeleton, showCollisionShapes, showWireframe, isPlaying, backgroundColor])
 
   useEffect(() => {
     if (canvasRef.current && !cameraRef.current) {
@@ -1572,6 +1577,89 @@ const Viewer: React.FC<ViewerProps> = ({
           //   console.log('[Viewer] Calling mdlRenderer.update(), delta:', delta, 'frame:', mdlRenderer.rendererData?.frame, 'Interval:', intervalStr)
           // }
           mdlRenderer.update(delta)
+        }
+
+        // === Collision Shape Rendering ===
+        if (showCollisionShapesRef.current && mdlRenderer.rendererData && mdlRenderer.rendererData.nodes) {
+          // Filter nodes that look like collision shapes (have Shape property)
+          const collisionNodes = mdlRenderer.rendererData.nodes.filter((n: any) => n.node.hasOwnProperty('Shape') || n.node.type === 'CollisionShape');
+
+          if (collisionNodes.length > 0) {
+            const viewMatrix = mvMatrix;
+            const projectionMatrix = pMatrix;
+            const nodeMVMatrix = mat4.create();
+
+            collisionNodes.forEach((nodeWrapper: any) => {
+              const node = nodeWrapper.node;
+              // worldMatrix may be undefined, try 'matrix' property or use identity
+              let worldMatrix = nodeWrapper.worldMatrix || nodeWrapper.matrix;
+              if (!worldMatrix) {
+                // Use identity matrix if no world matrix available
+                worldMatrix = mat4.create();
+              }
+
+              if (!viewMatrix) return;
+              mat4.multiply(nodeMVMatrix, viewMatrix, worldMatrix);
+
+              let isSphere = false;
+              if (node.Shape === 2 || node.ShapeType === 'Sphere') {
+                isSphere = true;
+              } else if (node.Shape === 0 || node.ShapeType === 'Box') {
+                isSphere = false;
+              } else if (node.BoundsRadius && node.BoundsRadius > 0) {
+                isSphere = true;
+              }
+
+              if (isSphere) {
+                let center;
+                if (node.Vertices) {
+                  if (node.Vertices instanceof Float32Array || (node.Vertices.length === 3 && typeof node.Vertices[0] === 'number')) {
+                    center = node.Vertices;
+                  } else if (node.Vertices.length > 0) {
+                    center = node.Vertices[0];
+                  }
+                }
+                if (!center) center = node.Vertex1 || [0, 0, 0];
+                const radius = node.BoundsRadius || 0;
+
+                if (center && (mdlRenderer as any).gl) {
+                  debugRenderer.current.renderWireframeSphere(
+                    (mdlRenderer as any).gl,
+                    nodeMVMatrix,
+                    projectionMatrix,
+                    radius,
+                    center,
+                    16,
+                    [1, 0.5, 0, 1]
+                  );
+                }
+              } else {
+                let v1, v2;
+                if (node.Vertices) {
+                  if (node.Vertices instanceof Float32Array || (typeof node.Vertices[0] === 'number' && node.Vertices.length >= 6)) {
+                    v1 = node.Vertices.subarray ? node.Vertices.subarray(0, 3) : node.Vertices.slice(0, 3);
+                    v2 = node.Vertices.subarray ? node.Vertices.subarray(3, 6) : node.Vertices.slice(3, 6);
+                  } else if (node.Vertices.length >= 2) {
+                    v1 = node.Vertices[0];
+                    v2 = node.Vertices[1];
+                  }
+                }
+                if (!v1) v1 = node.Vertex1;
+                if (!v2) v2 = node.Vertex2;
+
+                if (v1 && v2 && (mdlRenderer as any).gl) {
+                  debugRenderer.current.renderWireframeBox(
+                    (mdlRenderer as any).gl,
+                    nodeMVMatrix,
+                    projectionMatrix,
+                    v1,
+                    v2,
+                    [1, 0.5, 0, 1]
+                  );
+                }
+              }
+            });
+          }
         }
 
         if (mdlRenderer.rendererData && mdlRenderer.rendererData.animationInfo) {

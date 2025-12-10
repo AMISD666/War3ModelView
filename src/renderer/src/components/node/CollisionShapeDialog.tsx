@@ -43,18 +43,51 @@ const CollisionShapeDialog: React.FC<CollisionShapeDialogProps> = ({ visible, no
 
     useEffect(() => {
         if (visible && currentNode) {
-            const vertex1 = currentNode.Vertex1 || [0, 0, 0];
-            const vertex2 = currentNode.Vertex2 || [0, 0, 0];
+            // Handle Vertices which can be Float32Array(3) for sphere or Float32Array(6) for box
+            // or fallback to Vertex1/Vertex2
+            let vertex1: [number, number, number] = [0, 0, 0];
+            let vertex2: [number, number, number] = [0, 0, 0];
+
+            if (currentNode.Vertices) {
+                const v = currentNode.Vertices;
+                if (v instanceof Float32Array || (typeof v[0] === 'number' && v.length >= 3)) {
+                    // Flat array: [x, y, z] or [x1, y1, z1, x2, y2, z2]
+                    const flat = v as unknown as number[];
+                    vertex1 = [flat[0], flat[1], flat[2]];
+                    if (flat.length >= 6) {
+                        vertex2 = [flat[3], flat[4], flat[5]];
+                    }
+                } else if (Array.isArray(v[0])) {
+                    // Array of arrays: [[x,y,z], [x,y,z]]
+                    const arr = v as [number, number, number][];
+                    vertex1 = arr[0] || [0, 0, 0];
+                    vertex2 = arr[1] || [0, 0, 0];
+                }
+            } else {
+                // Fallback to Vertex1/Vertex2
+                vertex1 = currentNode.Vertex1 || [0, 0, 0];
+                vertex2 = currentNode.Vertex2 || [0, 0, 0];
+            }
+
+            // Round to 2 decimal places for display
+            const round2 = (n: number) => Math.round(n * 100) / 100;
+
+            // Prioritize Shape number (0=Box, 2=Sphere), fallback to ShapeType string
+            let initialShapeType = currentNode.ShapeType ?? 'Box';
+            if (currentNode.Shape !== undefined) {
+                if (currentNode.Shape === 2) initialShapeType = 'Sphere';
+                else if (currentNode.Shape === 0) initialShapeType = 'Box';
+            }
 
             form.setFieldsValue({
-                ShapeType: currentNode.ShapeType ?? 'Box',
-                BoundsRadius: currentNode.BoundsRadius ?? 60,
-                V1X: vertex1[0] ?? 0,
-                V1Y: vertex1[1] ?? 0,
-                V1Z: vertex1[2] ?? 0,
-                V2X: vertex2[0] ?? 0,
-                V2Y: vertex2[1] ?? 0,
-                V2Z: vertex2[2] ?? 0,
+                ShapeType: initialShapeType,
+                BoundsRadius: round2(currentNode.BoundsRadius ?? 60),
+                V1X: round2(vertex1[0] ?? 0),
+                V1Y: round2(vertex1[1] ?? 0),
+                V1Z: round2(vertex1[2] ?? 0),
+                V2X: round2(vertex2[0] ?? 0),
+                V2Y: round2(vertex2[1] ?? 0),
+                V2Z: round2(vertex2[2] ?? 0),
             });
         } else if (visible) {
             form.setFieldsValue({
@@ -73,12 +106,18 @@ const CollisionShapeDialog: React.FC<CollisionShapeDialogProps> = ({ visible, no
             const values = await form.validateFields();
             if (!currentNode || nodeId === null) return;
 
+            const v1: [number, number, number] = [values.V1X, values.V1Y, values.V1Z];
+            const v2: [number, number, number] = [values.V2X, values.V2Y, values.V2Z];
+            const isBox = values.ShapeType === 'Box';
+
             const updatedNode: CollisionShapeNode = {
                 ...currentNode,
                 ShapeType: values.ShapeType,
-                Vertex1: [values.V1X, values.V1Y, values.V1Z],
-                Vertex2: values.ShapeType === 'Box' ? [values.V2X, values.V2Y, values.V2Z] : undefined,
-                BoundsRadius: values.ShapeType === 'Sphere' ? values.BoundsRadius : undefined,
+                Shape: isBox ? 0 : 2,
+                Vertex1: v1,
+                Vertex2: isBox ? v2 : undefined,
+                Vertices: isBox ? [v1, v2] : [v1],
+                BoundsRadius: !isBox ? values.BoundsRadius : undefined,
             };
 
             updateNode(nodeId, updatedNode);

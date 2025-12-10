@@ -234,6 +234,14 @@ const MainLayout: React.FC = () => {
         return defaultValue
     }
 
+    const saveSetting = (key: string, value: any) => {
+        try {
+            localStorage.setItem(key, JSON.stringify(value))
+        } catch (e) {
+            console.warn(`Failed to save setting ${key}:`, e)
+        }
+    }
+
     const [activeEditor, setActiveEditor] = useState<string | null>(null)
     const [showGeosetAnimModal, setShowGeosetAnimModal] = useState<boolean>(false)
     const [showTextureModal, setShowTextureModal] = useState<boolean>(false)
@@ -255,6 +263,7 @@ const MainLayout: React.FC = () => {
     const [showGrid, setShowGrid] = useState<boolean>(() => loadSetting('showGrid', true))
     const [showNodes, setShowNodes] = useState<boolean>(false)
     const [showSkeleton, setShowSkeleton] = useState<boolean>(false)
+    const [showCollisionShapes, setShowCollisionShapes] = useState<boolean>(() => loadSetting('showCollisionShapes', true))
     const [renderMode, setRenderMode] = useState<'textured' | 'wireframe'>(() => loadSetting('renderMode', 'textured'))
     const [backgroundColor, setBackgroundColor] = useState<string>(() => loadSetting('backgroundColor', '#000000'))
     const [showFPS, setShowFPS] = useState<boolean>(() => loadSetting('showFPS', false))
@@ -770,6 +779,12 @@ const MainLayout: React.FC = () => {
                     setShowGeosetVisibility(newValue);
                     localStorage.setItem('showGeosetVisibility', JSON.stringify(newValue));
                 }}
+                showCollisionShapes={showCollisionShapes}
+                onToggleCollisionShapes={() => {
+                    const newVal = !showCollisionShapes
+                    setShowCollisionShapes(newVal)
+                    saveSetting('showCollisionShapes', newVal)
+                }}
                 onSetViewPreset={(preset) => setViewPreset({ type: preset, time: Date.now() })}
                 onToggleEditor={(editor) => {
                     console.log('[MainLayout] onToggleEditor called with:', editor)
@@ -904,6 +919,7 @@ const MainLayout: React.FC = () => {
                         showGrid={showGrid}
                         showNodes={showNodes}
                         showSkeleton={showSkeleton}
+                        showCollisionShapes={showCollisionShapes}
                         showWireframe={renderMode === 'wireframe'}
                         onToggleWireframe={() => setRenderMode(prev => prev === 'textured' ? 'wireframe' : 'textured')}
                         backgroundColor={backgroundColor}

@@ -172,6 +172,73 @@ export class DebugRenderer {
         this.draw(gl, mvMatrix, pMatrix, positions, color, gl.LINES, 1.0)
     }
 
+    renderWireframeBox(
+        gl: WebGLRenderingContext | WebGL2RenderingContext,
+        mvMatrix: mat4,
+        pMatrix: mat4,
+        min: Float32Array | number[],
+        max: Float32Array | number[],
+        color: number[]
+    ) {
+        const x1 = min[0], y1 = min[1], z1 = min[2];
+        const x2 = max[0], y2 = max[1], z2 = max[2];
+
+        const lines = [
+            // Bottom
+            x1, y1, z1, x2, y1, z1,
+            x2, y1, z1, x2, y2, z1,
+            x2, y2, z1, x1, y2, z1,
+            x1, y2, z1, x1, y1, z1,
+            // Top
+            x1, y1, z2, x2, y1, z2,
+            x2, y1, z2, x2, y2, z2,
+            x2, y2, z2, x1, y2, z2,
+            x1, y2, z2, x1, y1, z2,
+            // Sides
+            x1, y1, z1, x1, y1, z2,
+            x2, y1, z1, x2, y1, z2,
+            x2, y2, z1, x2, y2, z2,
+            x1, y2, z1, x1, y2, z2
+        ];
+        this.renderLines(gl, mvMatrix, pMatrix, lines, color);
+    }
+
+    renderWireframeSphere(
+        gl: WebGLRenderingContext | WebGL2RenderingContext,
+        mvMatrix: mat4,
+        pMatrix: mat4,
+        radius: number,
+        center: Float32Array | number[], // Added center
+        segments: number = 16,
+        color: number[]
+    ) {
+        const lines: number[] = [];
+        const cx = center[0], cy = center[1], cz = center[2];
+
+        // XY Circle
+        for (let i = 0; i < segments; i++) {
+            const theta1 = (i / segments) * Math.PI * 2;
+            const theta2 = ((i + 1) / segments) * Math.PI * 2;
+            lines.push(cx + Math.cos(theta1) * radius, cy + Math.sin(theta1) * radius, cz);
+            lines.push(cx + Math.cos(theta2) * radius, cy + Math.sin(theta2) * radius, cz);
+        }
+        // XZ Circle
+        for (let i = 0; i < segments; i++) {
+            const theta1 = (i / segments) * Math.PI * 2;
+            const theta2 = ((i + 1) / segments) * Math.PI * 2;
+            lines.push(cx + Math.cos(theta1) * radius, cy, cz + Math.sin(theta1) * radius);
+            lines.push(cx + Math.cos(theta2) * radius, cy, cz + Math.sin(theta2) * radius);
+        }
+        // YZ Circle
+        for (let i = 0; i < segments; i++) {
+            const theta1 = (i / segments) * Math.PI * 2;
+            const theta2 = ((i + 1) / segments) * Math.PI * 2;
+            lines.push(cx, cy + Math.cos(theta1) * radius, cz + Math.sin(theta1) * radius);
+            lines.push(cx, cy + Math.cos(theta2) * radius, cz + Math.sin(theta2) * radius);
+        }
+        this.renderLines(gl, mvMatrix, pMatrix, lines, color);
+    }
+
     private draw(
         gl: WebGLRenderingContext | WebGL2RenderingContext,
         mvMatrix: mat4,

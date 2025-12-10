@@ -171,9 +171,11 @@ export interface EventObjectNode extends BaseNode {
 export interface CollisionShapeNode extends BaseNode {
     type: NodeType.COLLISION_SHAPE;
     ShapeType?: 'Box' | 'Sphere';
+    Shape?: number; // 0=Box, 2=Sphere
     BoundsRadius?: number;
     Vertex1?: [number, number, number];
     Vertex2?: [number, number, number];
+    Vertices?: [number, number, number][];
 }
 
 // Camera 节点
