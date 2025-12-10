@@ -40,7 +40,6 @@ interface MenuBarProps {
 const MenuBar: React.FC<MenuBarProps> = ({
     onOpen,
     onSave,
-    onSaveAs,
     onExportMDL,
     onExportMDX,
     onLoadMPQ,

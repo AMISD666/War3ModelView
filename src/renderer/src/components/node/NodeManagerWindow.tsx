@@ -58,8 +58,8 @@ import RibbonEmitterDialog from './RibbonEmitterDialog';
 const { Search } = Input;
 
 export const NodeManagerWindow: React.FC = () => {
-    const { nodes, modelData, deleteNode, moveNodeTo, moveNodeWithChildren, reparentNodes, setClipboardNode, pasteNode, renameNode, clipboardNode, addNode } = useModelStore();
-    const { selectedNodeIds, selectNode, selectNodes, clearNodeSelection } = useSelectionStore();
+    const { nodes, modelData, deleteNode, reparentNodes, setClipboardNode, pasteNode, renameNode, clipboardNode, addNode } = useModelStore();
+    const { selectedNodeIds, selectNode, clearNodeSelection } = useSelectionStore();
     const { setNodeDialogVisible, setCreateNodeDialogVisible } = useUIStore();
 
     const [searchText, setSearchText] = useState('');
@@ -272,77 +272,8 @@ export const NodeManagerWindow: React.FC = () => {
     //     };
     // }, []);
 
-    const onDrop: TreeProps['onDrop'] = (info) => {
-        console.log('[NodeManager] onDrop triggered', info);
-        const dragId = parseInt(info.dragNode.key as string);
-        const dropId = parseInt(info.node.key as string);
-        const dropPos = info.node.pos.split('-');
-        const dropPosition = info.dropPosition - Number(dropPos[dropPos.length - 1]);
-
-        // Use ref to check if Ctrl key is pressed (more reliable than event.ctrlKey)
-        const withChildren = ctrlKeyPressedRef.current;
-
-        console.log('[NodeManager] Dragging ' + dragId + ' to ' + dropId + ', position: ' + dropPosition + ', dropToGap: ' + info.dropToGap + ', withChildren: ' + withChildren);
-
-        // Determine nodes to move: all selected nodes OR just the dragged node
-        let nodesToMove: number[] = [dragId];
-        if (selectedNodeIds.length > 0 && selectedNodeIds.includes(dragId)) {
-            // Dragging one of the selected nodes -> move all selected
-            nodesToMove = [...selectedNodeIds];
-        }
-
-        if (!info.dropToGap) {
-            // Drop on the node -> reparenting
-            console.log('[NodeManager] Dropping inside (reparenting)', nodesToMove);
-            reparentNodes(nodesToMove, dropId);
-            message.success(nodesToMove.length > 1 ? `已移动 ${nodesToMove.length} 个节点` : '节点已移动');
-        } else {
-            // Drop before/after -> reordering (only supports single node for now due to complexity of ordering)
-            // Or we could support multi-move if we iterate. For now, fallback to single node move for reordering.
-            const moveFunc = withChildren ? moveNodeWithChildren : moveNodeTo;
-
-            if (nodesToMove.length > 1) {
-                message.warning('多选模式下仅支持拖拽到节点内部(修改父节点)');
-                return;
-            }
-
-            if (dropPosition < 1) {
-                // Drop before
-                console.log('[NodeManager] Dropping before');
-                moveFunc(dragId, dropId, 'before');
-            } else {
-                // Drop after
-                console.log('[NodeManager] Dropping after');
-                moveFunc(dragId, dropId, 'after');
-            }
-            message.success(withChildren ? '节点及子节点已移动' : '节点已移动');
-        }
-    };
-
-    const allowDrop: TreeProps['allowDrop'] = (info) => {
-        const dropId = parseInt(info.dropNode.key as string);
-        const dragId = parseInt(info.dragNode.key as string);
-
-        // Prevent dropping on itself
-        if (dropId === dragId) {
-            return false;
-        }
-
-        // If reparenting (drop inside), check all selected nodes
-        if (!(info as any).dropToGap) {
-            // Check if drop target is descendant of any selected node
-            let nodesToCheck: number[] = [dragId];
-            if (selectedNodeIds.length > 0 && selectedNodeIds.includes(dragId)) {
-                nodesToCheck = [...selectedNodeIds];
-            }
-
-            // We can't easily check descendants here without helper, but store will block it.
-            // Just simple check: cannot drop onto any selected node
-            if (nodesToCheck.includes(dropId)) return false;
-        }
-
-        return true;
-    };
+    // Note: Native Tree drag-drop is disabled due to environment issues.
+    // Manual drag-drop is implemented in titleRender instead.
 
     const getContextMenuItems = (nodeId: number): MenuProps['items'] => {
         const node = nodes.find(n => n.ObjectId === nodeId);

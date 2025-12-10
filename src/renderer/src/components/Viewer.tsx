@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react'
-import { viewer as m3viewer, parsers as m3parsers } from 'mdx-m3-viewer'
-import { decodeBLP, getBLPImageData, Scene, BatchRenderer, parseMDX, parseMDL, ModelRenderer } from 'war3-model'
+// @ts-ignore
+import { decodeBLP, getBLPImageData, parseMDX, parseMDL, ModelRenderer } from 'war3-model'
 import { SimpleOrbitCamera } from '../utils/SimpleOrbitCamera'
 import { mat4, vec3, vec4, quat } from 'gl-matrix'
 import { GridRenderer } from './GridRenderer'
@@ -75,8 +75,6 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const gizmoRenderer = useRef(new GizmoRenderer())
   const axisIndicator = useRef(new AxisIndicator())
   const rendererRef = useRef<ModelRenderer | null>(null)
-  const sceneRef = useRef(new Scene())
-  const batchRendererRef = useRef<BatchRenderer | null>(null)
   const cameraRef = useRef<SimpleOrbitCamera | null>(null)
 
   const appMainMode = useSelectionStore((state) => state.mainMode)
@@ -443,7 +441,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         const { selectedNodeIds } = useSelectionStore.getState()
         if (renderer && renderer.rendererData && renderer.rendererData.nodes) {
           selectedNodeIds.forEach(nodeId => {
-            const nodeWrapper = renderer.rendererData.nodes.find(n => n.node.ObjectId === nodeId)
+            const nodeWrapper = renderer.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
             if (nodeWrapper && nodeWrapper.node.PivotPoint) {
               initialNodePositions.current.set(nodeId, [nodeWrapper.node.PivotPoint[0], nodeWrapper.node.PivotPoint[1], nodeWrapper.node.PivotPoint[2]])
             }
@@ -625,7 +623,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       const newSelection: number[] = []
       if (!rendererRef.current || !rendererRef.current.rendererData || !rendererRef.current.rendererData.nodes) return
 
-      rendererRef.current.rendererData.nodes.forEach(nodeWrapper => {
+      rendererRef.current.rendererData.nodes.forEach((nodeWrapper: any) => {
         const pivot = nodeWrapper.node.PivotPoint
         const worldPos = vec3.create()
         vec3.transformMat4(worldPos, pivot, nodeWrapper.matrix)
@@ -785,7 +783,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       let minDist = 20 // Selection threshold pixels
 
       if (rendererRef.current.rendererData && rendererRef.current.rendererData.nodes) {
-        rendererRef.current.rendererData.nodes.forEach(nodeWrapper => {
+        rendererRef.current.rendererData.nodes.forEach((nodeWrapper: any) => {
           // Check Pivot Point
           const pivot = nodeWrapper.node.PivotPoint
           // Apply current transformation
@@ -982,34 +980,37 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                     }
                     return [0, 0, 0];
                   };
+                  if (cam) {
+                    // Cast to any to access properties that might be missing in strict type defs
+                    const camAny = cam as any;
+                    const pos = getPos(camAny.Translation, camAny.Position);
+                    const target = getPos(camAny.TargetTranslation, camAny.TargetPosition);
 
-                  const pos = getPos(cam.Translation, cam.Position);
-                  const target = getPos(cam.TargetTranslation, cam.TargetPosition);
+                    const dx = pos[0] - target[0];
+                    const dy = pos[1] - target[1];
+                    const dz = pos[2] - target[2];
+                    let distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                    if (distance < 0.1) distance = 100;
 
-                  const dx = pos[0] - target[0];
-                  const dy = pos[1] - target[1];
-                  const dz = pos[2] - target[2];
-                  let distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-                  if (distance < 0.1) distance = 100;
+                    let phi = Math.acos(dz / distance);
+                    if (isNaN(phi)) phi = Math.PI / 4;
+                    phi = Math.max(0.01, Math.min(Math.PI - 0.01, phi));
 
-                  let phi = Math.acos(dz / distance);
-                  if (isNaN(phi)) phi = Math.PI / 4;
-                  phi = Math.max(0.01, Math.min(Math.PI - 0.01, phi));
+                    let theta = Math.atan2(dy, dx);
+                    if (isNaN(theta)) theta = 0;
 
-                  let theta = Math.atan2(dy, dx);
-                  if (isNaN(theta)) theta = 0;
-
-                  targetCamera.current.distance = distance;
-                  targetCamera.current.theta = theta;
-                  targetCamera.current.phi = phi;
-                  vec3.set(targetCamera.current.target, target[0], target[1], target[2]);
-                  syncCameraToOrbit()
-                  inCameraView.current = true
+                    targetCamera.current.distance = distance;
+                    targetCamera.current.theta = theta;
+                    targetCamera.current.phi = phi;
+                    vec3.set(targetCamera.current.target, target[0], target[1], target[2]);
+                    syncCameraToOrbit()
+                    inCameraView.current = true
+                  }
                 }
               }
             }
+            break
           }
-          break
         case 'z':
           if (e.ctrlKey || e.metaKey) {
             if (e.shiftKey) {
@@ -1527,8 +1528,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         if (modelData.Nodes) {
           renderer.model.Nodes = modelData.Nodes
           // Reinitialize rendererData.nodes so new nodes are accessible
-          if (renderer.modelInstance && typeof renderer.modelInstance.syncNodes === 'function') {
-            renderer.modelInstance.syncNodes()
+          if ((renderer as any).modelInstance && typeof (renderer as any).modelInstance.syncNodes === 'function') {
+            (renderer as any).modelInstance.syncNodes()
           }
         }
 
@@ -1587,8 +1588,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           }
           renderer.model.Materials = modelData.Materials
           // Lightweight sync: rebuild materialLayerTextureID cache
-          if (renderer.modelInstance && typeof renderer.modelInstance.syncMaterials === 'function') {
-            renderer.modelInstance.syncMaterials()
+          if ((renderer as any).modelInstance && typeof (renderer as any).modelInstance.syncMaterials === 'function') {
+            (renderer as any).modelInstance.syncMaterials()
           }
         }
         if (modelData.Textures) {
@@ -1856,11 +1857,13 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               return [0, 0, 0];
             };
 
-            const pos = getPos(cam.Translation, cam.Position);
-            const target = getPos(cam.TargetTranslation, cam.TargetPosition);
-            const fov = cam.FieldOfView || 0.7853;
-            const nearClip = cam.NearClip || 16;
-            const farClip = cam.FarClip || 1000;
+            // Cast to any to access properties that might be missing in strict type defs
+            const camAny = cam as any;
+            const pos = getPos(camAny.Translation, camAny.Position);
+            const target = getPos(camAny.TargetTranslation, camAny.TargetPosition);
+            const fov = camAny.FieldOfView || 0.7853;
+            const nearClip = camAny.NearClip || 16;
+            const farClip = camAny.FarClip || 1000;
 
             debugRenderer.current.renderWireframeFrustum(
               gl,
@@ -2784,8 +2787,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                     return [0, 0, 0];
                   };
 
-                  const pos = getPos(cam.Translation, cam.Position);
-                  const target = getPos(cam.TargetTranslation, cam.TargetPosition);
+                  const camAny = cam as any;
+                  const pos = getPos(camAny.Translation, camAny.Position);
+                  const target = getPos(camAny.TargetTranslation, camAny.TargetPosition);
 
                   const dx = pos[0] - target[0];
                   const dy = pos[1] - target[1];

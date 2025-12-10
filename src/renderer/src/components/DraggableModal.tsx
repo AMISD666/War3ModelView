@@ -137,7 +137,7 @@ export const DraggableModal: React.FC<DraggableModalProps> = ({
             </div>
         );
     } else if (footer !== null) {
-        footerContent = footer;
+        footerContent = footer as React.ReactNode;
     }
 
     return (

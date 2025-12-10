@@ -73,9 +73,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
         return !hiddenGeosetIds.includes(id);
     };
 
-    // Create 3-column grid data
-    const columns = 3;
-    const itemsPerColumn = Math.ceil(geosets.length / columns);
+    // Grid uses 3 columns directly in CSS
 
     return (
         <div

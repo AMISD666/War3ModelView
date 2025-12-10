@@ -1,4 +1,4 @@
-import { mat4, vec3 } from 'gl-matrix'
+import { mat4 } from 'gl-matrix'
 
 /**
  * AxisIndicator - Renders a small 3D coordinate axis indicator in the corner of the viewport
@@ -103,7 +103,7 @@ export class AxisIndicator {
      * @param canvasWidth Canvas width
      * @param canvasHeight Canvas height
      */
-    render(gl: WebGLRenderingContext, viewMatrix: mat4, canvasWidth: number, canvasHeight: number): void {
+    render(gl: WebGLRenderingContext, viewMatrix: mat4, _canvasWidth: number, _canvasHeight: number): void {
         if (!this.init(gl) || !this.shaderProgram) return
 
         // Save current viewport and state

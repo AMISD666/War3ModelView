@@ -259,18 +259,19 @@ function getDefaultNodeProperties(type: NodeType): Partial<ModelNode> {
                 Time: 0.5,
                 // Use typed arrays matching parse.ts output
                 SegmentColor: [
-                    new Float32Array([1, 1, 1]),
-                    new Float32Array([1, 1, 1]),
-                    new Float32Array([1, 1, 1])
+                    [1, 1, 1],
+                    [1, 1, 1],
+                    [1, 1, 1]
                 ],
-                Alpha: new Uint8Array([255, 255, 255]),
-                ParticleScaling: new Float32Array([10, 10, 10]),
-                LifeSpanUVAnim: new Uint32Array([0, 0, 1]),
-                DecayUVAnim: new Uint32Array([0, 0, 1]),
-                TailUVAnim: new Uint32Array([0, 0, 1]),
-                TailDecayUVAnim: new Uint32Array([0, 0, 1]),
+                Alpha: [255, 255, 255],
+                ParticleScaling: [10, 10, 10],
+                LifeSpanUVAnim: [0, 0, 1],
+                DecayUVAnim: [0, 0, 1],
+                TailUVAnim: [0, 0, 1],
+                TailDecayUVAnim: [0, 0, 1],
                 Head: true,
                 Tail: false,
+                // @ts-ignore
                 FrameFlags: 1, // 1=Head, 2=Tail, 3=Both - REQUIRED by renderer
                 Unshaded: true,
                 SortPrimsFarZ: true,
@@ -358,13 +359,13 @@ export const useModelStore = create<ModelState>((set, get) => ({
             );
 
             // 同时更新 modelData
-            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes);
+            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[]);
 
             // Always trigger lightweight renderer sync for any node update
             // The sync is now lightweight (just updates internal arrays) so it's safe to do on every change
             console.log('[ModelStore] Updated node', objectId, 'triggering lightweight sync');
             return {
-                nodes: updatedNodes,
+                nodes: updatedNodes as ModelNode[],
                 modelData: updatedModelData,
                 // Always trigger lightweight sync on any node modification
                 rendererReloadTrigger: state.rendererReloadTrigger + 1
@@ -400,7 +401,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             } as ModelNode;
 
             const updatedNodes = [...state.nodes, newNode];
-            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes);
+            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[]);
 
             console.log('[ModelStore] Added node', newNode.Name, 'with ObjectId', newNode.ObjectId);
 
@@ -436,7 +437,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
             // Filter out the deleted node
             const updatedNodes = nodesWithUpdatedParents.filter(node => node.ObjectId !== objectId);
-            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes);
+            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[]);
 
             const orphanedCount = state.nodes.filter(n => n.Parent === objectId).length;
             console.log('[ModelStore] Deleted node', objectId,
@@ -468,7 +469,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             };
 
             const updatedNodes = [...state.nodes, newNode];
-            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes);
+            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[]);
 
             console.log('[ModelStore] Pasted node', newNode.Name, 'to parent', parentId);
             return { nodes: updatedNodes, modelData: updatedModelData };
@@ -535,7 +536,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             }
 
             // 4. Update Model Data
-            const updatedModelData = updateModelDataWithNodes(state.modelData, newNodes);
+            const updatedModelData = updateModelDataWithNodes(state.modelData, newNodes as any[]);
 
             console.log(`[ModelStore] Moved node ${nodeId} ${position} ${targetId} (New Parent: ${newParentId})`);
             return { nodes: newNodes, modelData: updatedModelData };
@@ -607,7 +608,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             newNodes.splice(insertPosition, 0, ...movingNodes);
 
             // 5. Update Model Data
-            const updatedModelData = updateModelDataWithNodes(state.modelData, newNodes);
+            const updatedModelData = updateModelDataWithNodes(state.modelData, newNodes as any[]);
 
             console.log(`[ModelStore] Moved node ${nodeId} with ${descendantIds.length} children ${position} ${targetId}`);
             return { nodes: newNodes, modelData: updatedModelData };
@@ -619,7 +620,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             const updatedNodes = state.nodes.map(node =>
                 node.ObjectId === nodeId ? { ...node, Name: newName } : node
             );
-            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes);
+            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[]);
 
             console.log('[ModelStore] Renamed node', nodeId, 'to', newName);
             return { nodes: updatedNodes, modelData: updatedModelData };
@@ -704,7 +705,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 };
             });
 
-            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes);
+            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[]);
             console.log(`[ModelStore] Reparented ${nodeIds.length} nodes to parent ${newParentId}`);
             return { nodes: updatedNodes, modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
         });
@@ -848,9 +849,9 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
             if (!hasChanges) return {};
 
-            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes);
+            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[]);
             console.log('[ModelStore] Batch updated', updates.length, 'nodes');
-            return { nodes: updatedNodes, modelData: updatedModelData };
+            return { nodes: updatedNodes as ModelNode[], modelData: updatedModelData };
         });
     },
 
