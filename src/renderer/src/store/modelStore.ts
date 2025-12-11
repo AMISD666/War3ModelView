@@ -282,16 +282,9 @@ function getDefaultNodeProperties(type: NodeType): Partial<ModelNode> {
                 Squirt: false,
                 PriorityPlane: 0,
                 ReplaceableId: 0,
-                Visibility: 1,
-                // Default rotation: rotate X-axis (War3 emission direction) to Z-axis (upward)
-                // This makes new particles emit along Z-axis by default
-                // Rotation: -90 degrees around Y-axis rotates X to Z
-                // Quaternion (x,y,z,w): (0, sin(-45°), 0, cos(-45°)) = (0, -0.7071, 0, 0.7071)
-                Rotation: {
-                    Keys: [{ Frame: 0, Vector: [0, -0.7071067811865476, 0, 0.7071067811865476] }],
-                    LineType: 0,
-                    GlobalSeqId: null
-                }
+                Visibility: 1
+                // No default Rotation - particles.ts already emits along Z-axis (line 1011)
+                // Adding rotation here can cause issues when animation state affects interpolation
             };
         case NodeType.LIGHT:
             return {
@@ -442,7 +435,13 @@ export const useModelStore = create<ModelState>((set, get) => ({
             const orphanedCount = state.nodes.filter(n => n.Parent === objectId).length;
             console.log('[ModelStore] Deleted node', objectId,
                 '- re-parented', orphanedCount, 'children to parent', parentOfDeletedNode);
-            return { nodes: updatedNodes, modelData: updatedModelData };
+
+            // Trigger renderer reload to sync deleted particles/emitters in 3D view
+            return {
+                nodes: updatedNodes,
+                modelData: updatedModelData,
+                rendererReloadTrigger: state.rendererReloadTrigger + 1
+            };
         });
     },
 

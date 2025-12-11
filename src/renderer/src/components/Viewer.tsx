@@ -1387,11 +1387,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         }
 
         // === PARTICLES ===
-        // Sync ParticleEmitters2 array - new emitters will be detected by syncEmitters()
-        if (modelData.ParticleEmitters2) {
-          renderer.model.ParticleEmitters2 = modelData.ParticleEmitters2
-          console.log('[Viewer] Synced ParticleEmitters2:', modelData.ParticleEmitters2.length, 'emitters')
-        }
+        // Sync ParticleEmitters2 array - always sync to handle deletions
+        // Default to empty array if undefined to properly handle particle node deletion
+        renderer.model.ParticleEmitters2 = modelData.ParticleEmitters2 || []
+        console.log('[Viewer] Synced ParticleEmitters2:', renderer.model.ParticleEmitters2.length, 'emitters')
 
         // === RIBBON EMITTERS ===
         if (modelData.RibbonEmitters) {
@@ -1513,6 +1512,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       gridRenderer.current.init(gl)
       debugRenderer.current.init(gl)
       gizmoRenderer.current.init(gl)
+
+      // Reset time tracking to prevent huge delta on first frame after reload
+      lastFrameTime.current = performance.now()
 
       const render = (time: DOMHighResTimeStamp) => {
 
@@ -2080,9 +2082,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   }, [])
 
   useEffect(() => {
-    // Guard: Only set sequence if renderer is fully initialized with valid rendererData AND animationInfo
-    // rendererData can exist but animationInfo might not be set yet during initialization
-    if (renderer && renderer.rendererData && renderer.rendererData.animationInfo && typeof (renderer as any).setSequence === 'function') {
+    // Guard: Only set sequence if renderer is fully initialized with valid rendererData
+    // NOTE: Don't require animationInfo to be set - it gets set BY setSequence!
+    // Requiring it creates chicken-and-egg problem where animation never starts.
+    if (renderer && renderer.rendererData && typeof (renderer as any).setSequence === 'function') {
       console.log('[Viewer] Setting sequence to:', animationIndex, 'rendererData exists:', !!renderer.rendererData, 'animationInfo:', renderer.rendererData?.animationInfo?.Name)
         ; (renderer as any).setSequence(animationIndex)
     }

@@ -263,7 +263,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
                             onViewCamera(cameras[selectedIndex]);
                         }
                     }}
-                    style={{ color: '#52c41a' }}
+                    style={{ color: selectedIndex < 0 ? '#666' : '#52c41a', opacity: selectedIndex < 0 ? 0.5 : 1 }}
                 />
             </Tooltip>
         </Space>
@@ -275,12 +275,11 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
                 title="相机管理器 (Camera Manager)"
                 open={visible}
                 onCancel={onClose}
-                width={700}
+                width={850}
                 footer={null}
                 wrapClassName="dark-theme-modal"
             >
-                <div
-                    style={{ height: 550, background: '#222', border: '1px solid #444' }}
+                <div style={{ height: 650, background: '#222', border: '1px solid #444' }}
                 >
                     <MasterDetailLayout
                         items={cameras}
@@ -300,7 +299,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
                     <Button type="primary" onClick={onClose} style={{ marginRight: 8 }}>确定</Button>
                     <Button onClick={onClose}>取消</Button>
                 </div>
-            </DraggableModal>
+            </DraggableModal >
 
             {editorVisible && (
                 <KeyframeEditor
@@ -312,7 +311,8 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
                     vectorSize={3}
                     globalSequences={globalSequences}
                 />
-            )}
+            )
+            }
         </>
     );
 };

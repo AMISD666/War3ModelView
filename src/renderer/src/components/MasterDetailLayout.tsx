@@ -106,13 +106,15 @@ export function MasterDetailLayout<T>({
                                 style={{ color: '#1677ff' }}
                             />
                         )}
-                        {onDelete && selectedIndex >= 0 && (
+                        {onDelete && (
                             <Button
                                 type="text"
                                 size="small"
                                 danger
                                 icon={<DeleteOutlined />}
                                 onClick={() => onDelete(selectedIndex)}
+                                disabled={selectedIndex < 0}
+                                style={{ opacity: selectedIndex < 0 ? 0.5 : 1 }}
                             />
                         )}
                     </div>

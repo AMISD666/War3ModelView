@@ -671,16 +671,27 @@ const MainLayout: React.FC = () => {
         setZustandLoading(false)
 
         // Reset State on New Model Load FIRST (before auto-play)
-        setMainMode('view')
-        useSelectionStore.getState().clearAllSelections()
+        // Reset State on New Model Load FIRST (before auto-play)
+        // Guard: If model path is same, don't reset state (it's a reload/update)
+        const isSameModel = data.path === modelPath
+        if (!isSameModel) {
+            setMainMode('view')
+            useSelectionStore.getState().clearAllSelections()
+        }
 
         // Auto-play first animation if available
         if (data && data.Sequences && data.Sequences.length > 0) {
             // Use a small timeout to ensure the renderer is ready
             setTimeout(() => {
-                console.log('[MainLayout] Auto-playing first animation')
-                useModelStore.getState().setSequence(0)
-                useModelStore.getState().setPlaying(true)
+                // Only reset sequence if it's a new model or we aren't playing anything valid
+                // This prevents resetting to 0 when deleting particles on same model
+                if (!isSameModel || useModelStore.getState().currentSequence === -1) {
+                    console.log('[MainLayout] Auto-playing first animation (New Model or Reset)')
+                    useModelStore.getState().setSequence(0)
+                    useModelStore.getState().setPlaying(true)
+                } else {
+                    console.log('[MainLayout] Preserving existing animation sequence:', useModelStore.getState().currentSequence)
+                }
             }, 300)
         } else {
             // No sequences available, reset to no animation
