@@ -8,6 +8,7 @@ import TextureEditorModal from './modals/TextureEditorModal'
 import TextureAnimationManagerModal from './modals/TextureAnimationManagerModal'
 import SequenceEditorModal from './modals/SequenceEditorModal'
 import CameraManagerModal from './modals/CameraManagerModal'
+import UVModeLayout from './UVModeLayout'
 
 import MaterialEditorModal from './modals/MaterialEditorModal'
 import GeosetEditorModal from './modals/GeosetEditorModal'
@@ -1118,40 +1119,49 @@ const MainLayout: React.FC = () => {
 
             <div style={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative' }}>
                 {/* Left Panel - Animation & Browser */}
-                <div style={{ width: '280px', display: 'flex', flexDirection: 'column', borderRight: '1px solid #333' }}>
-                    <AnimationPanel
-                        onImport={handleImport}
-                    />
-                </div>
+                {mainMode !== 'uv' && (
+                    <div style={{ width: '280px', display: 'flex', flexDirection: 'column', borderRight: '1px solid #333' }}>
+                        <AnimationPanel
+                            onImport={handleImport}
+                        />
+                    </div>
+                )}
 
-                {/* Center - 3D Viewer */}
+                {/* Center - 3D Viewer or UV Mode Layout */}
                 <div style={{ flex: 1, position: 'relative', backgroundColor }}>
-                    <Viewer
-                        ref={viewerRef}
-                        modelPath={modelPath} // Use path from store
-                        modelData={modelData}
-                        teamColor={teamColor}
-                        showGrid={showGrid}
-                        showNodes={showNodes}
-                        showSkeleton={showSkeleton}
-                        showCollisionShapes={showCollisionShapes}
-                        showCameras={showCameras}
-                        showLights={showLights}
-                        showWireframe={renderMode === 'wireframe'}
-                        onToggleWireframe={() => setRenderMode(prev => prev === 'textured' ? 'wireframe' : 'textured')}
-                        backgroundColor={backgroundColor}
-                        animationIndex={currentSequence} // Use sequence from store
-                        isPlaying={isPlaying} // Use playing state from store
-                        onTogglePlay={() => setPlaying(!isPlaying)}
-                        onModelLoaded={handleModelLoaded}
-                        showFPS={showFPS}
-                        viewPreset={viewPreset}
-                    />
+                    <UVModeLayout
+                        modelPath={modelPath}
+                        isActive={mainMode === 'uv'}
+                    >
+                        <Viewer
+                            ref={viewerRef}
+                            modelPath={modelPath}
+                            modelData={modelData}
+                            teamColor={teamColor}
+                            showGrid={showGrid}
+                            showNodes={mainMode !== 'uv' && showNodes}
+                            showSkeleton={mainMode !== 'uv' && showSkeleton}
+                            showCollisionShapes={mainMode !== 'uv' && showCollisionShapes}
+                            showCameras={mainMode !== 'uv' && showCameras}
+                            showLights={mainMode !== 'uv' && showLights}
+                            showWireframe={mainMode !== 'uv' && renderMode === 'wireframe'}
+                            onToggleWireframe={() => setRenderMode(prev => prev === 'textured' ? 'wireframe' : 'textured')}
+                            backgroundColor={backgroundColor}
+                            animationIndex={mainMode === 'uv' ? -1 : currentSequence}
+                            isPlaying={mainMode !== 'uv' && isPlaying}
+                            onTogglePlay={() => setPlaying(!isPlaying)}
+                            onModelLoaded={handleModelLoaded}
+                            showFPS={mainMode !== 'uv' && showFPS}
+                            viewPreset={viewPreset}
+                        />
+                    </UVModeLayout>
 
-                    <GeosetVisibilityPanel
-                        visible={showGeosetVisibility}
-                        onClose={() => setShowGeosetVisibility(false)}
-                    />
+                    {mainMode !== 'uv' && (
+                        <GeosetVisibilityPanel
+                            visible={showGeosetVisibility}
+                            onClose={() => setShowGeosetVisibility(false)}
+                        />
+                    )}
 
                     {isLoading && (
                         <div style={{

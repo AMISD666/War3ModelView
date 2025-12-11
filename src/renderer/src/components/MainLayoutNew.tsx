@@ -5,6 +5,7 @@
 import React, { useState } from 'react';
 import { Layout, ConfigProvider, theme } from 'antd';
 import { useUIStore } from '../store/uiStore';
+import { useSelectionStore } from '../store/selectionStore';
 import MainLayoutOld from './MainLayout';
 import { NodeManagerWindow } from './node/NodeManagerWindow';
 import NodeDialog from './node/NodeDialog';
@@ -19,6 +20,8 @@ export const MainLayoutNew: React.FC = () => {
         editingNodeId,
         setNodeDialogVisible
     } = useUIStore();
+
+    const mainMode = useSelectionStore(state => state.mainMode);
 
     const [nodeManagerWidth, setNodeManagerWidth] = useState(300);
     const [isResizing, setIsResizing] = useState(false);
@@ -57,7 +60,7 @@ export const MainLayoutNew: React.FC = () => {
     return (
         <>
             <div style={{ height: '100vh', display: 'flex', overflow: 'hidden' }}>
-                {showNodeManager && (
+                {showNodeManager && mainMode !== 'uv' && (
                     <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
                         <div
                             style={{
