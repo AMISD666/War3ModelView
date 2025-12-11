@@ -35,4 +35,27 @@ impl MpqManager {
         }
         None
     }
+
+    /// Read multiple files in a single batch operation
+    /// Returns a Vec of Option<Vec<u8>> in the same order as input paths
+    pub fn read_files_batch(&self, filenames: &[String]) -> Vec<Option<Vec<u8>>> {
+        let mut archives = self.archives.lock().unwrap();
+        let mut results = Vec::with_capacity(filenames.len());
+        
+        for filename in filenames {
+            let mut found = None;
+            // Search in reverse order (newest loaded first)
+            for archive in archives.iter_mut().rev() {
+                if let Ok(data) = archive.read_file(filename) {
+                    // Safety check: Limit to 50MB
+                    if data.len() <= 50 * 1024 * 1024 {
+                        found = Some(data);
+                        break;
+                    }
+                }
+            }
+            results.push(found);
+        }
+        results
+    }
 }

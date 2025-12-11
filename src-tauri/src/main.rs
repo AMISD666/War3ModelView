@@ -60,6 +60,16 @@ fn read_mpq_file(path: String, state: State<MpqManager>) -> Result<Vec<u8>, Stri
     }
 }
 
+#[tauri::command]
+fn read_mpq_files_batch(paths: Vec<String>, state: State<MpqManager>) -> Vec<Option<Vec<u8>>> {
+    state.read_files_batch(&paths)
+}
+
+#[tauri::command]
+fn read_local_files_batch(paths: Vec<String>) -> Vec<Option<Vec<u8>>> {
+    paths.iter().map(|path| std::fs::read(path).ok()).collect()
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(MpqManager::new())
@@ -69,6 +79,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             load_mpq,
             read_mpq_file,
+            read_mpq_files_batch,
+            read_local_files_batch,
             detect_warcraft_path,
             toggle_console,
             debug_log

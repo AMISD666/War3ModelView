@@ -1147,6 +1147,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     }
 
     try {
+      console.time('[Viewer] FullModelLoad')
       if (!canvas) {
         console.error('[Viewer] Canvas reference is null')
         return
@@ -1182,6 +1183,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
       let model: any
 
+      console.time('[Viewer] MDX Parse')
+      const parseStart = performance.now()
       if (inMemoryData) {
         console.log('[Viewer] Loading model from in-memory data')
         model = inMemoryData
@@ -1194,6 +1197,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           model = parseMDX(buffer.buffer)
         }
       }
+      console.timeEnd('[Viewer] MDX Parse')
+      console.log(`[Viewer] Model Parsing took ${(performance.now() - parseStart).toFixed(1)}ms`)
 
       // Debug logging to diagnose saved model issues
       console.log('[Viewer] Parsed model:', {
@@ -1221,123 +1226,30 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       // This prevents production-only rendering issues caused by invalid/missing properties
       validateAllParticleEmitters(model)
 
+      const rendererStart = performance.now()
       const newRenderer = new ModelRenderer(model)
       newRenderer.initGL(gl)
       // NOTE: setRenderer(newRenderer) is called AFTER texture loading to avoid race condition
       newRenderer.update(0)
       resetCamera()
+      console.log(`[Viewer] Renderer Init took ${(performance.now() - rendererStart).toFixed(1)}ms`)
 
-      // Load textures with MPQ priority
-      if (model.Textures) {
-        for (let i = 0; i < model.Textures.length; i++) {
-          const texture = model.Textures[i]
-          const texturePath = texture.Image
-          if (!texturePath) continue
-
-          try {
-            let loaded = false
-
-            // Strategy 1: Try MPQ first for standard War3 paths
-            const isMPQPath = /^(Textures|UI|ReplaceableTextures|Units|Buildings|Doodads|Environment)[\\/]/i.test(texturePath)
-
-            if (isMPQPath) {
-              try {
-                const mpqData = await invoke<number[]>('read_mpq_file', { path: texturePath })
-
-                if (mpqData && mpqData.length > 0) {
-                  const mpqBuffer = new Uint8Array(mpqData).buffer
-                  const blp = decodeBLP(mpqBuffer)
-                  const mipLevel0 = getBLPImageData(blp, 0)
-                  const idata = new ImageData(
-                    // 閫忔槑搴?   test
-                    new Uint8ClampedArray(mipLevel0.data),
-                    mipLevel0.width,
-                    mipLevel0.height
-                  )
-                  if (newRenderer.setTextureImageData) {
-                    newRenderer.setTextureImageData(texturePath, [idata])
-                  }
-                  loaded = true
-                }
-              } catch (mpqError) {
-                // MPQ loading failed, will try file system
-              }
-            }
-
-            // Strategy 2: Try local file system if MPQ didn't work
-            if (!loaded) {
-              const normalize = (p: string) => p.replace(/\//g, '\\')
-              let textureRelPath = normalize(texturePath)
-              const modelDir = normalize(path.substring(0, path.lastIndexOf('\\')))
-
-              // 琚埅鍙栨帀浜?
-              // if (textureRelPath.toLowerCase().startsWith('war3mapimported\\')) {
-              //   textureRelPath = textureRelPath.substring('war3mapimported\\'.length)
-              // }
-
-              const candidates: string[] = []
-              candidates.push(`${modelDir}\\${textureRelPath}`)
-
-              const filename = textureRelPath.split('\\').pop() || ''
-              if (filename !== textureRelPath) {
-                candidates.push(`${modelDir}\\${filename}`)
-              }
-
-              let currentDir = modelDir
-              for (let depth = 0; depth < 3; depth++) {
-                const lastSlash = currentDir.lastIndexOf('\\')
-                if (lastSlash === -1) break
-                currentDir = currentDir.substring(0, lastSlash)
-                candidates.push(`${currentDir}\\${textureRelPath}`)
-              }
-
-              console.info(`[Viewer] All textures: ${candidates}`)
-
-              // 杩欓噷鐨勯€昏緫鏄厛鎵綧PQ锛岀劧鍚庡啀鎵炬ā鍨嬫枃浠剁殑褰撳墠鐩綍锛屽叾瀹炲簲璇ユ槸鍏堟壘褰撳墠锛岀劧鍚嶮PQ
-              for (const candidate of candidates) {
-                try {
-                  console.log(`[Viewer] Trying texture path: ${candidate}`)
-                  const texBuffer = await readFile(candidate)
-                  console.log(`[Viewer] Successfully loaded texture: ${candidate}, size: ${texBuffer.byteLength}`)
-                  const blp = decodeBLP(texBuffer.buffer)
-                  const mipLevel0 = getBLPImageData(blp, 0)
-                  const idata = new ImageData(
-                    new Uint8ClampedArray(mipLevel0.data),
-                    mipLevel0.width,
-                    mipLevel0.height
-                  )
-                  if (newRenderer.setTextureImageData) {
-                    newRenderer.setTextureImageData(texturePath, [idata])
-                  }
-                  loaded = true
-                  break
-                } catch (e: any) {
-                  console.log(`[Viewer] Failed to load texture from ${candidate}: ${e.message || e}`)
-                  // Continue to next candidate
-                }
-              }
-            }
-
-            if (!loaded) {
-              console.warn(`[Viewer] Failed to load texture: ${texturePath}`)
-            }
-          } catch (e) {
-            console.error(`[Viewer] Error processing texture:`, e)
-          }
-        }
-      }
+      // Load textures using concurrent loader
+      await loadAllTextures(model, newRenderer, path)
 
       loadTeamColorTextures(teamColor)
 
       // Set renderer AFTER textures are loaded to avoid race condition
       console.log('[Viewer] loadModel: All textures loaded, setting renderer')
       setRenderer(newRenderer)
+      console.timeEnd('[Viewer] FullModelLoad')
     } catch (error) {
       console.error('[Viewer] Error loading model:', error)
     }
   }
 
   const reloadRendererWithData = async (model: any, path: string) => {
+    console.time('[Viewer] ReloadModel')
     // CRITICAL: Capture old renderer's Geoset geometry BEFORE destroying
     // The TypedArrays (Vertices, Faces, Normals) are lost in store's spread operations
     let oldGeosets: any[] | null = null
@@ -1418,111 +1330,16 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       // Same validation as in loadModel - prevents production-only rendering issues
       validateAllParticleEmitters(model)
 
+      const rendererStart = performance.now()
       const newRenderer = new ModelRenderer(model)
       newRenderer.initGL(gl)
       // NOTE: setRenderer(newRenderer) is called AFTER texture loading to avoid race condition
       newRenderer.update(0)
       resetCamera()
+      console.log(`[Viewer] reloadRendererWithData: Renderer Init took ${(performance.now() - rendererStart).toFixed(1)}ms`)
 
-      // Load textures with MPQ priority (same logic as loadModel)
-      if (model.Textures) {
-        for (let i = 0; i < model.Textures.length; i++) {
-          const texture = model.Textures[i]
-          const texturePath = texture.Image
-          if (!texturePath) continue
-
-          try {
-            let loaded = false
-
-            // Strategy 1: Try MPQ first for standard War3 paths
-            const isMPQPath = /^(Textures|UI|ReplaceableTextures|Units|Buildings|Doodads|Environment)[\\/]/i.test(texturePath)
-
-            if (isMPQPath) {
-              try {
-                const mpqData = await invoke<number[]>('read_mpq_file', { path: texturePath })
-
-                if (mpqData && mpqData.length > 0) {
-                  const mpqBuffer = new Uint8Array(mpqData).buffer
-                  const blp = decodeBLP(mpqBuffer)
-                  const mipLevel0 = getBLPImageData(blp, 0)
-                  const idata = new ImageData(
-                    new Uint8ClampedArray(mipLevel0.data),
-                    mipLevel0.width,
-                    mipLevel0.height
-                  )
-                  if (newRenderer.setTextureImageData) {
-                    newRenderer.setTextureImageData(texturePath, [idata])
-                  }
-                  loaded = true
-                }
-              } catch (mpqError) {
-                // MPQ loading failed, will try file system
-              }
-            }
-
-            // Strategy 2: Try local file system if MPQ didn't work
-            if (!loaded) {
-              if (!path || path.length === 0) {
-                console.warn(`[Viewer] reloadRendererWithData: modelPath is empty, cannot resolve local texture path for ${texturePath}`)
-              } else {
-                const normalize = (p: string) => p.replace(/\//g, '\\')
-                let textureRelPath = normalize(texturePath)
-                const modelDir = normalize(path.substring(0, path.lastIndexOf('\\')))
-                console.log(`[Viewer] reloadRendererWithData: modelDir=${modelDir}, textureRelPath=${textureRelPath}`)
-
-                if (textureRelPath.toLowerCase().startsWith('war3mapimported\\')) {
-                  textureRelPath = textureRelPath.substring('war3mapimported\\'.length)
-                }
-
-                const candidates: string[] = []
-                candidates.push(`${modelDir}\\${textureRelPath}`)
-
-                const filename = textureRelPath.split('\\').pop() || ''
-                if (filename !== textureRelPath) {
-                  candidates.push(`${modelDir}\\${filename}`)
-                }
-
-                let currentDir = modelDir
-                for (let depth = 0; depth < 3; depth++) {
-                  const lastSlash = currentDir.lastIndexOf('\\')
-                  if (lastSlash === -1) break
-                  currentDir = currentDir.substring(0, lastSlash)
-                  candidates.push(`${currentDir}\\${textureRelPath}`)
-                }
-
-                for (const candidate of candidates) {
-                  try {
-                    console.log(`[Viewer] reloadRendererWithData: Trying texture path: ${candidate}`)
-                    const texBuffer = await readFile(candidate)
-                    console.log(`[Viewer] reloadRendererWithData: Successfully loaded texture: ${candidate}`)
-                    const blp = decodeBLP(texBuffer.buffer)
-                    const mipLevel0 = getBLPImageData(blp, 0)
-                    const idata = new ImageData(
-                      new Uint8ClampedArray(mipLevel0.data),
-                      mipLevel0.width,
-                      mipLevel0.height
-                    )
-                    if (newRenderer.setTextureImageData) {
-                      console.log(`[Viewer] reloadRendererWithData: Storing texture with key: "${texturePath}"`)
-                      newRenderer.setTextureImageData(texturePath, [idata])
-                    }
-                    loaded = true
-                    break
-                  } catch (e: any) {
-                    console.log(`[Viewer] reloadRendererWithData: Failed to load ${candidate}: ${e.message || e}`)
-                  }
-                }
-              }
-            }
-
-            if (!loaded) {
-              console.warn(`[Viewer] Failed to load texture: ${texturePath}`)
-            }
-          } catch (e) {
-            console.error(`[Viewer] Error processing texture:`, e)
-          }
-        }
-      }
+      // Load textures using concurrent loader
+      await loadAllTextures(model, newRenderer, path)
 
       loadTeamColorTextures(teamColor)
 
@@ -1530,6 +1347,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       // render loop starts before textures are available in GPU
       console.log('[Viewer] reloadRendererWithData: All textures loaded, setting renderer')
       setRenderer(newRenderer)
+      console.timeEnd('[Viewer] ReloadModel')
     } catch (error) {
       console.error('[Viewer] Error reloading renderer with data:', error)
     }
