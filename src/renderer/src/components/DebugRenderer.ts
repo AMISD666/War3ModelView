@@ -335,10 +335,58 @@ export class DebugRenderer {
 
         // Disable depth test to see through model
         gl.disable(gl.DEPTH_TEST)
+        gl.enable(gl.BLEND)
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 
         gl.drawArrays(mode, 0, positions.length / 3)
 
-        // Restore depth test
+        // Restore state
+        gl.disable(gl.BLEND)
         gl.enable(gl.DEPTH_TEST)
+    }
+    /**
+     * Render a visual representation of a light
+     */
+    renderLight(
+        gl: WebGLRenderingContext | WebGL2RenderingContext,
+        mvMatrix: mat4,
+        pMatrix: mat4,
+        type: number, // 0=Omni, 1=Directional, 2=Ambient
+        attenuationStart: number,
+        attenuationEnd: number,
+        color: number[]
+    ) {
+        // Render a small central sphere for the light source itself
+        this.renderWireframeSphere(gl, mvMatrix, pMatrix, 5.0, [0, 0, 0], 8, color);
+
+        // Render Attenuation Ranges for ALL light types if valid
+        if (attenuationEnd > 0) {
+            this.renderWireframeSphere(gl, mvMatrix, pMatrix, attenuationEnd, [0, 0, 0], 16, [color[0], color[1], color[2], 0.3]);
+        }
+        if (attenuationStart > 0 && attenuationStart < attenuationEnd) {
+            this.renderWireframeSphere(gl, mvMatrix, pMatrix, attenuationStart, [0, 0, 0], 12, [color[0], color[1], color[2], 0.1]);
+        }
+
+        if (type === 1) { // Directional
+            // Render a pointer/cone indicating direction
+            const len = 50.0;
+            const lines = [
+                0, 0, 0, 0, 0, -len, // Shaft
+                // Arrowhead
+                0, 0, -len, -5, -5, -len + 10,
+                0, 0, -len, 5, -5, -len + 10,
+                0, 0, -len, 5, 5, -len + 10,
+                0, 0, -len, -5, 5, -len + 10
+            ];
+            this.renderLines(gl, mvMatrix, pMatrix, lines, color);
+        } else if (type === 2) { // Ambient
+            // Ambient lights in War3 are often just global, but if they have positions/ranges, visualize them.
+            // The user specifically complained about "box size unrelated to params".
+            // Since we now render the Attenuation Spheres above, let's keep the central marker simple.
+            // But maybe render the box slightly larger or scale it?
+            // Actually, if we render the spheres, that addresses the "Range" visualization.
+            // Let's keep the small box as an identifier for "Ambient" type.
+            this.renderWireframeBox(gl, mvMatrix, pMatrix, [-10, -10, -10], [10, 10, 10], color);
+        }
     }
 }

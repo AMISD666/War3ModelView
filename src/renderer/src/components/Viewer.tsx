@@ -37,6 +37,7 @@ interface ViewerProps {
   showSkeleton: boolean
   showCollisionShapes: boolean
   showCameras: boolean
+  showLights: boolean
   showWireframe: boolean
   isPlaying: boolean
   onTogglePlay: () => void
@@ -57,6 +58,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   showSkeleton,
   showCollisionShapes,
   showCameras,
+  showLights,
   showWireframe,
   isPlaying,
   onTogglePlay,
@@ -92,6 +94,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const showSkeletonRef = useRef(showSkeleton)
   const showCollisionShapesRef = useRef(showCollisionShapes)
   const showCamerasRef = useRef(showCameras)
+  const showLightsRef = useRef(showLights)
   const showWireframeRef = useRef(showWireframe)
   const isPlayingRef = useRef(isPlaying)
   const backgroundColorRef = useRef(backgroundColor)
@@ -108,10 +111,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     showSkeletonRef.current = showSkeleton
     showCollisionShapesRef.current = showCollisionShapes
     showCamerasRef.current = showCameras
+    showLightsRef.current = showLights
     showWireframeRef.current = showWireframe
     isPlayingRef.current = isPlaying
     backgroundColorRef.current = backgroundColor
-  }, [showGrid, showNodes, showSkeleton, showCollisionShapes, showCameras, showWireframe, isPlaying, backgroundColor])
+  }, [showGrid, showNodes, showSkeleton, showCollisionShapes, showCameras, showLights, showWireframe, isPlaying, backgroundColor])
 
   useEffect(() => {
     if (canvasRef.current && !cameraRef.current) {
@@ -359,6 +363,39 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       }
     }
   }, [renderer, appMainMode, animationIndex])
+
+  // Sync Store Changes to Renderer (Hot Patching)
+  useEffect(() => {
+    if (rendererRef.current && rendererRef.current.model) {
+      const { nodes } = useModelStore.getState()
+      // Patch the model data in the renderer with the latest from store
+      // This is crucial for "Lightweight Reload" and seeing changes like PivotPoint (Position) updates instantly.
+
+      // 1. Update full Nodes list (contains structure and hierarchy info)
+      rendererRef.current.model.Nodes = nodes;
+
+      // 2. Update specific lists used by renderer (Lights, etc.)
+      // Note: war3-model might cache these, so we update them explicitly.
+      rendererRef.current.model.Lights = nodes.filter((n: any) => n.type === 'Light');
+      // Update other types if necessary (cameras, emitters, etc.)
+
+      // 3. Force caching/update if possible. 
+      // war3-model creates 'rendererData.nodes' which wraps the raw nodes.
+      // We might need to update the references in rendererData if they are stale.
+      if (rendererRef.current.rendererData && rendererRef.current.rendererData.nodes) {
+        // The rendererData.nodes array holds wrappers { node: rawNode, ... }
+        // We need to update the 'node' reference in these wrappers or update the properties.
+        rendererRef.current.rendererData.nodes.forEach((wrapper: any) => {
+          const freshNode = nodes.find((n: any) => n.ObjectId === wrapper.node.ObjectId);
+          if (freshNode) {
+            wrapper.node = freshNode;
+            // If PivotPoint changed, the matrix calculation needs to happen again.
+            // The renderer loop handles matrix calc, so just updating the data should be enough for the NEXT frame.
+          }
+        });
+      }
+    }
+  }, [renderer, useModelStore.getState().nodes]) // Depend on nodes changing
 
   useEffect(() => {
     return () => {
@@ -1630,8 +1667,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         const textureChanged = (modelData.Textures?.length || 0) !== (renderer.model.Textures?.length || 0)
         const materialChanged = (modelData.Materials?.length || 0) !== (renderer.model.Materials?.length || 0)
         const particleChanged = (modelData.ParticleEmitters2?.length || 0) !== (renderer.model.ParticleEmitters2?.length || 0)
-        // Lights change requires strictly full reload as we don't have updateLight methods
-        const lightChanged = modelData.Lights !== renderer.model.Lights
+        // Lights change requires strick checking.
+        // If only properties changed, we can lightweight sync.
+        // If count changed, we might need full reload (depending on shader implementation, but safe to reload)
+        const lightCountChanged = (modelData.Lights?.length || 0) !== (renderer.model.Lights?.length || 0)
 
         // Check if any geoset's MaterialID has changed (requires texture reload)
         let geosetMaterialChanged = false
@@ -1645,8 +1684,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           }
         }
 
-        // Geosets, Textures, Materials, Particles, MaterialID, or LIGHTS changes need full reload
-        if (geoChanged || textureChanged || materialChanged || particleChanged || geosetMaterialChanged || lightChanged) {
+        // Geosets, Textures, Materials, Particles, MaterialID, or LIGHT COUNT changes need full reload
+        if (geoChanged || textureChanged || materialChanged || particleChanged || geosetMaterialChanged || lightCountChanged) {
           console.log('[Viewer] Structural change detected (Geo/Tex/Mat/Particle). Triggering full reload.')
           reloadRendererWithData(modelData, modelPath || '')
           lastReloadTrigger.current = rendererReloadTrigger
@@ -2123,6 +2162,77 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             mdlRenderer.renderSkeleton(mvMatrix, pMatrix, null)
             gl.enable(gl.DEPTH_TEST)
           }
+
+          // === Light Object Rendering ===
+          if ((showLightsRef.current || (appMainMode === 'animation')) && mdlRenderer.rendererData.nodes) {
+            const { nodes } = useModelStore.getState()
+            const lightNodes = nodes.filter((n: any) => n.type === 'Light')
+
+            if (lightNodes.length > 0) {
+              const viewMatrix = mvMatrix
+              const projectionMatrix = pMatrix
+              const nodeMVMatrix = mat4.create()
+
+              lightNodes.forEach((light: any) => {
+                const nodeWrapper = mdlRenderer.rendererData.nodes.find((n: any) => n.node.ObjectId === light.ObjectId)
+                if (!nodeWrapper) return
+
+                let worldMatrix = nodeWrapper.worldMatrix || nodeWrapper.matrix
+                if (!worldMatrix) worldMatrix = mat4.create()
+
+                mat4.multiply(nodeMVMatrix, viewMatrix, worldMatrix)
+
+                // Extract Light Properties
+                let type = light.LightType || 0
+                // Handle string types just in case
+                if (typeof type === 'string') {
+                  if (type === 'Directional') type = 1
+                  else if (type === 'Ambient') type = 2
+                  else type = 0
+                }
+                // Get current attenuation values if animated, otherwise use static
+                // For simplicity in Debug view, we can use the static or first keyframe values if not easily accessible via renderer
+                // Or check if rendererData has light values updating?
+                // War3-model might not expose live light values easily unless we dig into KeyframeController.
+                // Let's use static/default values for now for structure visualization.
+
+                let attStart = 0
+                let attEnd = 0
+                let color = [1, 1, 0, 1] // Yellow default
+
+                // Helper to get scalar value (static or first key)
+                const getVal = (prop: any) => {
+                  if (typeof prop === 'number') return prop
+                  if (prop && prop.Keys && prop.Keys.length > 0) return prop.Keys[0].Vector[0]
+                  return 0
+                }
+                // Helper to get vector value
+                const getVec = (prop: any) => {
+                  if (prop instanceof Float32Array || Array.isArray(prop)) return [prop[0], prop[1], prop[2]]
+                  if (prop && prop.Keys && prop.Keys.length > 0) return [prop.Keys[0].Vector[0], prop.Keys[0].Vector[1], prop.Keys[0].Vector[2]]
+                  return [1, 1, 1]
+                }
+
+                attStart = getVal(light.AttenuationStart)
+                attEnd = getVal(light.AttenuationEnd)
+                const c = getVec(light.Color)
+                // If Color is [r,g,b], map to 0-1 range if > 1? usually 0-1 in MDL?
+                // MDL colors are usually 0-1 range.
+                color = [c[0], c[1], c[2], 1.0]
+
+                debugRenderer.current.renderLight(
+                  gl as WebGLRenderingContext,
+                  nodeMVMatrix,
+                  projectionMatrix,
+                  type,
+                  attStart,
+                  attEnd,
+                  color
+                )
+              })
+            }
+          }
+
         }
 
         if ((appMainMode === 'geometry' && geometrySubMode === 'vertex') ||
@@ -2910,40 +3020,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 const idx = parseInt(e.target.value);
                 if (idx >= 0 && idx < cameraList.length) {
                   const cam = cameraList[idx];
-                  const isArrayLike = (v: any) => Array.isArray(v) || v instanceof Float32Array || ArrayBuffer.isView(v);
-                  const toArray = (v: any) => v instanceof Float32Array ? Array.from(v) : v;
-                  const getPos = (prop: any, directProp?: any) => {
-                    if (directProp && isArrayLike(directProp)) return toArray(directProp);
-                    if (isArrayLike(prop)) return toArray(prop);
-                    if (prop && prop.Keys && prop.Keys.length > 0) {
-                      const v = prop.Keys[0].Vector;
-                      return v ? toArray(v) : [0, 0, 0];
-                    }
-                    return [0, 0, 0];
-                  };
-
-                  const camAny = cam as any;
-                  const pos = getPos(camAny.Translation, camAny.Position);
-                  const target = getPos(camAny.TargetTranslation, camAny.TargetPosition);
-
-                  const dx = pos[0] - target[0];
-                  const dy = pos[1] - target[1];
-                  const dz = pos[2] - target[2];
-                  let distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-                  if (distance < 0.1) distance = 100;
-
-                  let phi = Math.acos(dz / distance);
-                  if (isNaN(phi)) phi = Math.PI / 4;
-                  phi = Math.max(0.01, Math.min(Math.PI - 0.01, phi));
-
-                  let theta = Math.atan2(dy, dx);
-                  if (isNaN(theta)) theta = 0;
-
-                  targetCamera.current.distance = distance;
-                  targetCamera.current.theta = theta;
-                  targetCamera.current.phi = phi;
-                  vec3.set(targetCamera.current.target, target[0], target[1], target[2]);
-                  syncCameraToOrbit()
+                  // Select the camera node instead of switching view
+                  // usage of selectNode(id, multiSelect)
+                  useSelectionStore.getState().selectNode(cam.ObjectId);
                 }
               }}
               defaultValue="-1"

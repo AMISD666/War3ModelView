@@ -369,6 +369,7 @@ const MainLayout: React.FC = () => {
     const [showSkeleton, setShowSkeleton] = useState<boolean>(false)
     const [showCollisionShapes, setShowCollisionShapes] = useState<boolean>(() => loadSetting('showCollisionShapes', true))
     const [showCameras, setShowCameras] = useState<boolean>(() => loadSetting('showCameras', false))
+    const [showLights, setShowLights] = useState<boolean>(() => loadSetting('showLights', true))
     const [renderMode, setRenderMode] = useState<'textured' | 'wireframe'>(() => loadSetting('renderMode', 'textured'))
     const [backgroundColor, setBackgroundColor] = useState<string>(() => loadSetting('backgroundColor', '#000000'))
     const [showFPS, setShowFPS] = useState<boolean>(() => loadSetting('showFPS', false))
@@ -521,6 +522,7 @@ const MainLayout: React.FC = () => {
     useEffect(() => localStorage.setItem('showGrid', JSON.stringify(showGrid)), [showGrid])
     useEffect(() => localStorage.setItem('showNodes', JSON.stringify(showNodes)), [showNodes])
     useEffect(() => localStorage.setItem('showSkeleton', JSON.stringify(showSkeleton)), [showSkeleton])
+    useEffect(() => localStorage.setItem('showLights', JSON.stringify(showLights)), [showLights])
     useEffect(() => localStorage.setItem('renderMode', JSON.stringify(renderMode)), [renderMode])
     useEffect(() => localStorage.setItem('backgroundColor', JSON.stringify(backgroundColor)), [backgroundColor])
     useEffect(() => localStorage.setItem('showFPS', JSON.stringify(showFPS)), [showFPS])
@@ -992,6 +994,12 @@ const MainLayout: React.FC = () => {
                     setShowCameras(newVal)
                     saveSetting('showCameras', newVal)
                 }}
+                showLights={showLights}
+                onToggleLights={() => {
+                    const newVal = !showLights
+                    setShowLights(newVal)
+                    saveSetting('showLights', newVal)
+                }}
                 onSetViewPreset={(preset) => setViewPreset({ type: preset, time: Date.now() })}
                 onToggleEditor={(editor) => {
                     console.log('[MainLayout] onToggleEditor called with:', editor)
@@ -1128,6 +1136,7 @@ const MainLayout: React.FC = () => {
                         showSkeleton={showSkeleton}
                         showCollisionShapes={showCollisionShapes}
                         showCameras={showCameras}
+                        showLights={showLights}
                         showWireframe={renderMode === 'wireframe'}
                         onToggleWireframe={() => setRenderMode(prev => prev === 'textured' ? 'wireframe' : 'textured')}
                         backgroundColor={backgroundColor}

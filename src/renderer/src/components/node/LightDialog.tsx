@@ -133,7 +133,7 @@ const LightDialog: React.FC<LightDialogProps> = ({ visible, nodeId, onClose }) =
                 AttenuationEnd: currentNode.AttenuationEnd ?? 500,
                 Intensity: currentNode.Intensity ?? 1,
                 AmbientIntensity: currentNode.AmbientIntensity ?? 0,
-                Visibility: 1,
+                Visibility: currentNode.Visibility ?? 1,
                 Color: toAntdColor(currentNode.Color),
                 AmbientColor: toAntdColor(currentNode.AmbientColor),
             });
@@ -158,9 +158,15 @@ const LightDialog: React.FC<LightDialogProps> = ({ visible, nodeId, onClose }) =
             const values = await form.validateFields();
             if (!currentNode || nodeId === null) return;
 
+            // Convert LightType string to number for consistency
+            let lightTypeVal = 0;
+            if (values.LightType === 'Directional') lightTypeVal = 1;
+            else if (values.LightType === 'Ambient') lightTypeVal = 2;
+            else lightTypeVal = 0; // Omnidirectional
+
             const updatedNode: LightNode = {
                 ...currentNode,
-                LightType: values.LightType,
+                LightType: lightTypeVal,
                 AttenuationStart: values.AttenuationStart,
                 AttenuationEnd: values.AttenuationEnd,
                 Intensity: values.Intensity,

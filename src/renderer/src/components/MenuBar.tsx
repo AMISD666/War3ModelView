@@ -28,6 +28,8 @@ interface MenuBarProps {
     onToggleCollisionShapes: () => void // Add this
     showCameras: boolean
     onToggleCameras: () => void
+    showLights: boolean
+    onToggleLights: () => void
     onSetViewPreset: (preset: string) => void
     onToggleEditor: (editor: string) => void
     mainMode: 'view' | 'geometry' | 'uv' | 'animation'
@@ -64,6 +66,8 @@ const MenuBar: React.FC<MenuBarProps> = ({
     onToggleCollisionShapes, // Add this
     showCameras,
     onToggleCameras,
+    showLights,
+    onToggleLights,
     onSetViewPreset,
     onToggleEditor,
     mainMode,
@@ -73,12 +77,14 @@ const MenuBar: React.FC<MenuBarProps> = ({
     onShowAbout
 }) => {
     const [activeMenu, setActiveMenu] = useState<string | null>(null)
+    const [settingsSubMenu, setSettingsSubMenu] = useState<string | null>(null)
     const menuRef = useRef<HTMLDivElement>(null)
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
             if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
                 setActiveMenu(null)
+                setSettingsSubMenu(null)
             }
         }
         document.addEventListener('mousedown', handleClickOutside)
@@ -89,6 +95,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
 
     const toggleMenu = (menu: string) => {
         setActiveMenu(activeMenu === menu ? null : menu)
+        setSettingsSubMenu(null)
     }
 
     const closeMenu = () => setActiveMenu(null)
@@ -430,68 +437,95 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             加载游戏 MPQ {mpqLoaded ? '（成功加载）' : '（未加载）'}
                         </div>
                         <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
+                        <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
+
                         <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
+                            style={{ ...itemStyle, position: 'relative' }}
+                            onMouseEnter={(e) => { hoverStyle(e); setSettingsSubMenu('displayEffects'); }}
                             onMouseLeave={unhoverStyle}
-                            onClick={() => { onToggleGrid(); }}
                         >
-                            <span>显示网格</span>
-                            <span>{showGrid ? '✓' : ''}</span>
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onToggleNodes(); }}
-                        >
-                            <span>显示节点</span>
-                            <span>{showNodes ? '✓' : ''}</span>
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onToggleSkeleton(); }}
-                        >
-                            <span>显示骨架</span>
-                            <span>{showSkeleton ? '✓' : ''}</span>
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onToggleFPS(); }}
-                        >
-                            <span>显示 FPS</span>
-                            <span>{showFPS ? '✓' : ''}</span>
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onToggleGeosetVisibility(); }}
-                        >
-                            <span>多边形显示工具</span>
-                            <span>{showGeosetVisibility ? '✓' : ''}</span>
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onToggleCollisionShapes(); }}
-                        >
-                            <span>显示碰撞形状</span>
-                            <span>{showCollisionShapes ? '✓' : ''}</span>
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onToggleCameras(); }}
-                        >
-                            <span>相机显示</span>
-                            <span>{showCameras ? '✓' : ''}</span>
+                            <span>显示效果 ▸</span>
+                            {settingsSubMenu === 'displayEffects' && (
+                                <div style={{
+                                    ...dropdownStyle,
+                                    top: 0,
+                                    left: '100%',
+                                    marginTop: '-5px'
+                                }}>
+                                    <div
+                                        style={itemStyle}
+                                        onMouseEnter={hoverStyle}
+                                        onMouseLeave={unhoverStyle}
+                                        onClick={() => { onToggleGrid(); }}
+                                    >
+                                        <span>显示网格</span>
+                                        <span>{showGrid ? '✓' : ''}</span>
+                                    </div>
+                                    <div
+                                        style={itemStyle}
+                                        onMouseEnter={hoverStyle}
+                                        onMouseLeave={unhoverStyle}
+                                        onClick={() => { onToggleNodes(); }}
+                                    >
+                                        <span>显示节点</span>
+                                        <span>{showNodes ? '✓' : ''}</span>
+                                    </div>
+                                    <div
+                                        style={itemStyle}
+                                        onMouseEnter={hoverStyle}
+                                        onMouseLeave={unhoverStyle}
+                                        onClick={() => { onToggleSkeleton(); }}
+                                    >
+                                        <span>显示骨架</span>
+                                        <span>{showSkeleton ? '✓' : ''}</span>
+                                    </div>
+                                    <div
+                                        style={itemStyle}
+                                        onMouseEnter={hoverStyle}
+                                        onMouseLeave={unhoverStyle}
+                                        onClick={() => { onToggleFPS(); }}
+                                    >
+                                        <span>显示 FPS</span>
+                                        <span>{showFPS ? '✓' : ''}</span>
+                                    </div>
+                                    <div
+                                        style={itemStyle}
+                                        onMouseEnter={hoverStyle}
+                                        onMouseLeave={unhoverStyle}
+                                        onClick={() => { onToggleGeosetVisibility(); }}
+                                    >
+                                        <span>多边形显示工具</span>
+                                        <span>{showGeosetVisibility ? '✓' : ''}</span>
+                                    </div>
+                                    <div
+                                        style={itemStyle}
+                                        onMouseEnter={hoverStyle}
+                                        onMouseLeave={unhoverStyle}
+                                        onClick={() => { onToggleCollisionShapes(); }}
+                                    >
+                                        <span>显示碰撞形状</span>
+                                        <span>{showCollisionShapes ? '✓' : ''}</span>
+                                    </div>
+                                    <div
+                                        style={itemStyle}
+                                        onMouseEnter={hoverStyle}
+                                        onMouseLeave={unhoverStyle}
+                                        onClick={() => { onToggleCameras(); }}
+                                    >
+                                        <span>显示相机</span>
+                                        <span>{showCameras ? '✓' : ''}</span>
+                                    </div>
+                                    <div
+                                        style={itemStyle}
+                                        onMouseEnter={hoverStyle}
+                                        onMouseLeave={unhoverStyle}
+                                        onClick={() => { onToggleLights(); }}
+                                    >
+                                        <span>显示灯光</span>
+                                        <span>{showLights ? '✓' : ''}</span>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                         <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
                         <div style={{ padding: '5px 15px', color: '#aaa', fontSize: '12px' }}>渲染模式</div>
