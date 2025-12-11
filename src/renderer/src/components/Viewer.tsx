@@ -1172,6 +1172,73 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       ignoreNextModelDataUpdate.current = true
       onModelLoaded(model)
 
+      // CRITICAL FIX: Validate and fix ParticleEmitters2 before creating renderer
+      // This prevents production-only rendering issues caused by invalid/missing properties
+      if (model.ParticleEmitters2 && model.ParticleEmitters2.length > 0) {
+        const textureCount = model.Textures?.length || 0
+        console.log('[Viewer] Validating', model.ParticleEmitters2.length, 'ParticleEmitters2, textureCount:', textureCount)
+
+        model.ParticleEmitters2.forEach((emitter: any, idx: number) => {
+          // Fix 1: TextureID - change -1 or invalid to 0 (first texture)
+          if (emitter.TextureID === undefined || emitter.TextureID === null ||
+            emitter.TextureID < 0 || emitter.TextureID >= textureCount) {
+            console.log(`[Viewer] Particle ${idx} "${emitter.Name}": TextureID ${emitter.TextureID} -> 0`)
+            emitter.TextureID = textureCount > 0 ? 0 : 0
+          }
+
+          // Fix 2: Reconstruct Flags bitmask from boolean properties
+          // war3-model expects numeric Flags, not individual booleans
+          // ParticleEmitter2Flags: Unshaded=32768, SortPrimsFarZ=65536, LineEmitter=131072,
+          //                        Unfogged=262144, ModelSpace=524288, XYQuad=1048576
+          let flags = typeof emitter.Flags === 'number' ? emitter.Flags : 0
+          if (emitter.Unshaded === true) flags |= 32768
+          if (emitter.SortPrimsFarZ === true) flags |= 65536
+          if (emitter.LineEmitter === true) flags |= 131072
+          if (emitter.Unfogged === true) flags |= 262144
+          if (emitter.ModelSpace === true) flags |= 524288
+          if (emitter.XYQuad === true) flags |= 1048576
+
+          // Fix 5: Force Head flag if neither Head nor Tail is set
+          // In production, parsing might fail to set these, causing invisible/needle particles
+          if ((flags & 3) === 0) {
+            console.log(`[Viewer] Particle ${idx} "${emitter.Name}": Missing Head/Tail flags. Forcing Head.`)
+            flags |= 1
+          }
+
+          emitter.Flags = flags
+
+          // Fix 3: Reconstruct FrameFlags from Head/Tail booleans
+          let frameFlags = typeof emitter.FrameFlags === 'number' ? emitter.FrameFlags : 0
+          if (emitter.Head === true) frameFlags |= 1
+          if (emitter.Tail === true) frameFlags |= 2
+          // Default to Head if neither is set
+          if (frameFlags === 0) frameFlags = 1
+          emitter.FrameFlags = frameFlags
+
+          // Fix 4: Convert arrays to typed arrays expected by war3-model renderer
+          if (emitter.ParticleScaling && !(emitter.ParticleScaling instanceof Float32Array)) {
+            emitter.ParticleScaling = new Float32Array(emitter.ParticleScaling)
+          }
+          if (emitter.Alpha && !(emitter.Alpha instanceof Uint8Array)) {
+            emitter.Alpha = new Uint8Array(emitter.Alpha)
+          }
+          if (emitter.SegmentColor && Array.isArray(emitter.SegmentColor)) {
+            emitter.SegmentColor = emitter.SegmentColor.map((c: any) =>
+              c instanceof Float32Array ? c : new Float32Array(c)
+            )
+          }
+          // Convert UV anim arrays to Float32Array if present
+          const uvAnimProps = ['LifeSpanUVAnim', 'DecayUVAnim', 'TailUVAnim', 'TailDecayUVAnim']
+          uvAnimProps.forEach(prop => {
+            if (emitter[prop] && !(emitter[prop] instanceof Float32Array)) {
+              emitter[prop] = new Float32Array(emitter[prop])
+            }
+          })
+
+          console.log(`[Viewer] Particle ${idx} validated: Flags=${emitter.Flags}, FrameFlags=${emitter.FrameFlags}, TextureID=${emitter.TextureID}`)
+        })
+      }
+
       const newRenderer = new ModelRenderer(model)
       newRenderer.initGL(gl)
       // NOTE: setRenderer(newRenderer) is called AFTER texture loading to avoid race condition
@@ -1363,6 +1430,68 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             newGeoset.VertexGroup = oldGeoset.VertexGroup
           }
         }
+      }
+
+      // CRITICAL FIX: Validate and fix ParticleEmitters2 before creating renderer
+      // Same validation as in loadModel - prevents production-only rendering issues
+      if (model.ParticleEmitters2 && model.ParticleEmitters2.length > 0) {
+        const textureCount = model.Textures?.length || 0
+        console.log('[Viewer] reloadRendererWithData: Validating', model.ParticleEmitters2.length, 'ParticleEmitters2')
+
+        model.ParticleEmitters2.forEach((emitter: any, idx: number) => {
+          // Fix 1: TextureID - change -1 or invalid to 0 (first texture)
+          if (emitter.TextureID === undefined || emitter.TextureID === null ||
+            emitter.TextureID < 0 || emitter.TextureID >= textureCount) {
+            console.log(`[Viewer] Particle ${idx}: TextureID ${emitter.TextureID} -> 0`)
+            emitter.TextureID = textureCount > 0 ? 0 : 0
+          }
+
+          // Fix 2: Reconstruct Flags bitmask from boolean properties
+          let flags = typeof emitter.Flags === 'number' ? emitter.Flags : 0
+          if (emitter.Unshaded === true) flags |= 32768
+          if (emitter.SortPrimsFarZ === true) flags |= 65536
+          if (emitter.LineEmitter === true) flags |= 131072
+          if (emitter.Unfogged === true) flags |= 262144
+          if (emitter.ModelSpace === true) flags |= 524288
+          if (emitter.XYQuad === true) flags |= 1048576
+
+
+          // Fix 5: Force Head flag if neither Head nor Tail is set
+          if ((flags & 3) === 0) {
+            console.log(`[Viewer] Particle ${idx} (Reload): Missing Head/Tail flags. Forcing Head.`)
+            flags |= 1
+          }
+
+
+
+          emitter.Flags = flags
+
+          // Fix 3: Reconstruct FrameFlags from Head/Tail booleans
+          let frameFlags = typeof emitter.FrameFlags === 'number' ? emitter.FrameFlags : 0
+          if (emitter.Head === true) frameFlags |= 1
+          if (emitter.Tail === true) frameFlags |= 2
+          if (frameFlags === 0) frameFlags = 1
+          emitter.FrameFlags = frameFlags
+
+          // Fix 4: Convert arrays to typed arrays
+          if (emitter.ParticleScaling && !(emitter.ParticleScaling instanceof Float32Array)) {
+            emitter.ParticleScaling = new Float32Array(emitter.ParticleScaling)
+          }
+          if (emitter.Alpha && !(emitter.Alpha instanceof Uint8Array)) {
+            emitter.Alpha = new Uint8Array(emitter.Alpha)
+          }
+          if (emitter.SegmentColor && Array.isArray(emitter.SegmentColor)) {
+            emitter.SegmentColor = emitter.SegmentColor.map((c: any) =>
+              c instanceof Float32Array ? c : new Float32Array(c)
+            )
+          }
+          const uvAnimProps = ['LifeSpanUVAnim', 'DecayUVAnim', 'TailUVAnim', 'TailDecayUVAnim']
+          uvAnimProps.forEach(prop => {
+            if (emitter[prop] && !(emitter[prop] instanceof Float32Array)) {
+              emitter[prop] = new Float32Array(emitter[prop])
+            }
+          })
+        })
       }
 
       const newRenderer = new ModelRenderer(model)
@@ -1693,21 +1822,12 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           // Copy camera position
           vec3.copy(cameraPos, cameraRef.current.position)
 
-          // Calculate camera quaternion using the war3-model approach
-          // Reference: war3-model-4.0.0/docs/preview/preview.ts lines 222-234
-          const cameraPosProjected = vec3.create()
-          const cameraPosTemp = vec3.create()
-          const fromCameraBaseVec = vec3.fromValues(1, 0, 0)
-          const verticalQuat = quat.create()
-
-          vec3.set(cameraPosProjected, cameraRef.current.position[0], cameraRef.current.position[1], 0)
-          vec3.subtract(cameraPosTemp, cameraRef.current.position, cameraRef.current.target)
-          vec3.normalize(cameraPosProjected, cameraPosProjected)
-          vec3.normalize(cameraPosTemp, cameraPosTemp)
-
-          quat.rotationTo(cameraQuat, fromCameraBaseVec, cameraPosProjected)
-          quat.rotationTo(verticalQuat, cameraPosProjected, cameraPosTemp)
-          quat.mul(cameraQuat, verticalQuat, cameraQuat)
+          // Calculate camera quaternion by inverting the modelview matrix
+          // This matches how it's done in war3-model renderInstances for particle billboarding
+          // Reference: modelRenderer.ts lines 1047-1050
+          const cameraWorldMatrix = mat4.create()
+          mat4.invert(cameraWorldMatrix, mvMatrix)
+          mat4.getRotation(cameraQuat, cameraWorldMatrix)
         } else {
           // Fallback logic
           const dist = targetCamera.current.distance
@@ -1732,6 +1852,17 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         // if (time - lastFpsTime.current > 1000) {
         //   console.log('[Viewer] Render loop state:', { isPlaying: isPlayingRef.current, isBindPoseMode, appMainMode, animationSubMode })
         // }
+
+
+
+        // CRITICAL FIX: Set camera for particle billboarding BEFORE update()
+        // Particles calculate their billboard vertices during update(), but war3-model's 
+        // renderInstances() normally calculates cameraQuat AFTER update() (at render time).
+        // This means particles would use stale/uninitialized cameraQuat values.
+        // By calling setCamera() here, we ensure particles have the correct quaternion.
+        if (typeof mdlRenderer.setCamera === 'function') {
+          mdlRenderer.setCamera(cameraPos, cameraQuat)
+        }
 
         if (isPlayingRef.current && !isBindPoseMode) {
           // Debug logs commented out to reduce console noise
@@ -1937,18 +2068,22 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             const prevBlend = gl.isEnabled(gl.BLEND)
             const prevDepthMask = gl.getParameter(gl.DEPTH_WRITEMASK)
             const prevDepthTest = gl.isEnabled(gl.DEPTH_TEST)
+            const prevCullFace = gl.isEnabled(gl.CULL_FACE)
 
             // Render with red highlight color and high opacity
             gl.enable(gl.BLEND)
             gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
             gl.depthMask(false)
             gl.disable(gl.DEPTH_TEST)
+            // Disable culling for double-sided highlight
+            gl.disable(gl.CULL_FACE)
 
             if (typeof (mdlRenderer as any).renderGeosetHighlight === 'function') {
               (mdlRenderer as any).renderGeosetHighlight(hoveredGeosetId, [1, 0, 0], 0.8, mvMatrix, pMatrix)
             }
 
             // Restore GL state
+            if (prevCullFace) gl.enable(gl.CULL_FACE)
             if (prevDepthTest) gl.enable(gl.DEPTH_TEST)
             gl.depthMask(prevDepthMask)
             if (!prevBlend) gl.disable(gl.BLEND)

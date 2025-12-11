@@ -13,7 +13,7 @@ export default defineConfig({
     resolve: {
       alias: {
         '@renderer': resolve('src/renderer/src'),
-        'war3-model': resolve('../war3-model-4.0.0')
+        'war3-model': resolve('../war3-model-4.0.0/index.ts')
       }
     },
     plugins: [react()]

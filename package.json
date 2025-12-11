@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "./out/main/index.js",
   "author": "SX2530075955",
-  "description": "咕咕War3模型编辑器",
+  "description": "gugu-war3-model-editor",
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint . --ext .js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts --fix",
