@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react'
+import React, { useState, useMemo, useCallback, useEffect } from 'react'
 import { ModelData } from '../../types/model'
 import { Checkbox } from 'antd'
 
@@ -17,17 +17,21 @@ const TextureGeosetSelector: React.FC<TextureGeosetSelectorProps> = ({
     visibleGeosetIds,
     onToggleGeosetVisibility
 }) => {
+    // Splitter state: ratio of texture list vs geoset list
+    const [textureRatio, setTextureRatio] = useState(0.45)
+    const [isDragging, setIsDragging] = useState(false)
+    const containerRef = React.useRef<HTMLDivElement>(null)
+
     // Group geosets by texture
     const textureMap = useMemo(() => {
         if (!modelData || !modelData.Geosets || !modelData.Materials) return new Map<number, number[]>()
 
-        const map = new Map<number, number[]>() // TextureID -> GeosetID[]
+        const map = new Map<number, number[]>()
 
         modelData.Geosets.forEach((geoset, geosetIndex) => {
             if (geoset.MaterialID === -1 || !modelData.Materials || geoset.MaterialID >= modelData.Materials.length) return
 
             const material = modelData.Materials[geoset.MaterialID]
-            // Check all layers for textures
             material?.Layers?.forEach(layer => {
                 if (typeof layer.TextureID === 'number' && layer.TextureID >= 0 && modelData.Textures && layer.TextureID < modelData.Textures.length) {
                     const texId = layer.TextureID
@@ -44,7 +48,6 @@ const TextureGeosetSelector: React.FC<TextureGeosetSelectorProps> = ({
         return map
     }, [modelData])
 
-    // Get list of textures that are actually used by geosets
     const usedTextures = useMemo(() => {
         if (!modelData || !modelData.Textures) return []
         return modelData.Textures.map((tex, index) => ({ tex, index }))
@@ -56,14 +59,42 @@ const TextureGeosetSelector: React.FC<TextureGeosetSelectorProps> = ({
         return textureMap.get(selectedTextureId) || []
     }, [selectedTextureId, textureMap])
 
+    // Splitter drag handlers
+    const handleMouseDown = useCallback((e: React.MouseEvent) => {
+        e.preventDefault()
+        setIsDragging(true)
+    }, [])
+
+    const handleMouseMove = useCallback((e: MouseEvent) => {
+        if (!isDragging || !containerRef.current) return
+        const rect = containerRef.current.getBoundingClientRect()
+        const newRatio = (e.clientY - rect.top) / rect.height
+        setTextureRatio(Math.max(0.2, Math.min(0.8, newRatio)))
+    }, [isDragging])
+
+    const handleMouseUp = useCallback(() => {
+        setIsDragging(false)
+    }, [])
+
+    useEffect(() => {
+        if (isDragging) {
+            document.addEventListener('mousemove', handleMouseMove)
+            document.addEventListener('mouseup', handleMouseUp)
+        }
+        return () => {
+            document.removeEventListener('mousemove', handleMouseMove)
+            document.removeEventListener('mouseup', handleMouseUp)
+        }
+    }, [isDragging, handleMouseMove, handleMouseUp])
+
     if (!modelData) return <div style={{ color: '#fff', padding: 10 }}>No model loaded</div>
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', color: '#fff' }}>
-            {/* Texture List (Level 1) */}
-            <div style={{ flex: 1, borderBottom: '1px solid #444', overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
-                <div style={{ padding: '8px 12px', background: '#333', borderBottom: '1px solid #444', fontWeight: 'bold' }}>
-                    贴图列表 (Textures)
+        <div ref={containerRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', color: '#fff' }}>
+            {/* Texture List */}
+            <div style={{ height: `calc(${textureRatio * 100}% - 3px)`, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                <div style={{ padding: '6px 10px', background: '#333', borderBottom: '1px solid #444', fontWeight: 'bold', fontSize: '12px' }}>
+                    贴图列表
                 </div>
                 <div style={{ flex: 1, overflowY: 'auto' }}>
                     {usedTextures.map(({ tex, index }) => (
@@ -71,61 +102,79 @@ const TextureGeosetSelector: React.FC<TextureGeosetSelectorProps> = ({
                             key={index}
                             onClick={() => onSelectTexture(index)}
                             style={{
-                                padding: '8px 12px',
+                                padding: '6px 10px',
                                 cursor: 'pointer',
                                 backgroundColor: selectedTextureId === index ? '#1a3a5a' : 'transparent',
                                 color: selectedTextureId === index ? '#fff' : '#ccc',
                                 borderBottom: '1px solid #333',
-                                borderLeft: selectedTextureId === index ? '4px solid #1890ff' : '4px solid transparent'
+                                borderLeft: selectedTextureId === index ? '3px solid #1890ff' : '3px solid transparent',
+                                fontSize: '11px'
                             }}
                         >
-                            <div style={{ fontSize: '12px', wordBreak: 'break-all' }}>
-                                {tex.Image || `Texture ${index}`}
-                            </div>
+                            {tex.Image || `Texture ${index}`}
                         </div>
                     ))}
                     {usedTextures.length === 0 && (
-                        <div style={{ padding: 12, color: '#666', fontStyle: 'italic' }}>
+                        <div style={{ padding: 10, color: '#666', fontStyle: 'italic', fontSize: '11px' }}>
                             没有使用纹理的几何体
                         </div>
                     )}
                 </div>
             </div>
 
-            {/* Geoset List (Level 2) */}
-            <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
-                <div style={{ padding: '8px 12px', background: '#333', borderBottom: '1px solid #444', borderTop: '1px solid #444', fontWeight: 'bold' }}>
-                    几何体 (Geosets)
+            {/* Splitter */}
+            <div
+                onMouseDown={handleMouseDown}
+                style={{
+                    height: '6px',
+                    backgroundColor: isDragging ? '#1890ff' : '#333',
+                    cursor: 'row-resize',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0
+                }}
+            >
+                <div style={{ width: '30px', height: '2px', backgroundColor: '#666', borderRadius: '1px' }} />
+            </div>
+
+            {/* Geoset List - 2 columns */}
+            <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                <div style={{ padding: '6px 10px', background: '#333', borderBottom: '1px solid #444', fontWeight: 'bold', fontSize: '12px' }}>
+                    几何体
                 </div>
-                <div style={{ flex: 1, overflowY: 'auto' }}>
+                <div style={{ flex: 1, overflowY: 'auto', padding: '4px' }}>
                     {selectedTextureId === null ? (
-                        <div style={{ padding: 12, color: '#666' }}>请先选择贴图</div>
+                        <div style={{ padding: 10, color: '#666', fontSize: '11px' }}>请先选择贴图</div>
                     ) : (
-                        currentGeosets.map(geosetId => (
-                            <div
-                                key={geosetId}
-                                onClick={() => onToggleGeosetVisibility(geosetId, !visibleGeosetIds.includes(geosetId))}
-                                style={{
-                                    padding: '8px 12px',
-                                    cursor: 'pointer',
-                                    backgroundColor: visibleGeosetIds.includes(geosetId) ? '#1a3a5a' : 'transparent',
-                                    color: visibleGeosetIds.includes(geosetId) ? '#fff' : '#ccc',
-                                    borderBottom: '1px solid #333',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    borderLeft: visibleGeosetIds.includes(geosetId) ? '4px solid #1890ff' : '4px solid transparent'
-                                }}
-                            >
-                                <Checkbox
-                                    checked={visibleGeosetIds.includes(geosetId)}
-                                    style={{ marginRight: 8, pointerEvents: 'none' }} // Click handled by parent div
-                                />
-                                <span>Geoset {geosetId}</span>
-                            </div>
-                        ))
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
+                            {currentGeosets.map(geosetId => (
+                                <div
+                                    key={geosetId}
+                                    onClick={() => onToggleGeosetVisibility(geosetId, !visibleGeosetIds.includes(geosetId))}
+                                    style={{
+                                        padding: '4px 6px',
+                                        cursor: 'pointer',
+                                        backgroundColor: visibleGeosetIds.includes(geosetId) ? '#1a3a5a' : '#2a2a2a',
+                                        color: visibleGeosetIds.includes(geosetId) ? '#fff' : '#888',
+                                        borderRadius: '3px',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        fontSize: '11px',
+                                        border: visibleGeosetIds.includes(geosetId) ? '1px solid #1890ff' : '1px solid #444'
+                                    }}
+                                >
+                                    <Checkbox
+                                        checked={visibleGeosetIds.includes(geosetId)}
+                                        style={{ marginRight: 4, pointerEvents: 'none' }}
+                                    />
+                                    <span>G{geosetId}</span>
+                                </div>
+                            ))}
+                        </div>
                     )}
                     {selectedTextureId !== null && currentGeosets.length === 0 && (
-                        <div style={{ padding: 12, color: '#666' }}>该贴图没有关联的几何体</div>
+                        <div style={{ padding: 10, color: '#666', fontSize: '11px' }}>该贴图没有关联的几何体</div>
                     )}
                 </div>
             </div>

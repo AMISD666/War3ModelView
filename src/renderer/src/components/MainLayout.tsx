@@ -603,7 +603,7 @@ const MainLayout: React.FC = () => {
             // Node Manager(N) -> toggleNodeManager()
             // Camera Manager(C) -> setShowCameraModal(true/toggle)
             // Geoset Manager(G) -> setShowGeosetModal(true/toggle)
-            // Geoset Anim Manager(E) -> setShowGeosetAnimModal
+            // Geoset Anim Manager(U) -> setShowGeosetAnimModal
             // Texture Manager(T) -> setShowTextureModal
             // Texture Anim Manager(X) -> setShowTextureAnimModal
             // Material Manager(M) -> setShowMaterialModal
@@ -614,7 +614,7 @@ const MainLayout: React.FC = () => {
                 case 'n': toggleNodeManager(); break;
                 case 'c': setShowCameraModal(prev => !prev); break;
                 case 'g': setShowGeosetModal(prev => !prev); break;
-                case 'e': setShowGeosetAnimModal(prev => !prev); break;
+                case 'u': setShowGeosetAnimModal(prev => !prev); break;
                 case 't': setShowTextureModal(prev => !prev); break;
                 case 'x': setShowTextureAnimModal(prev => !prev); break;
                 case 'm': setShowMaterialModal(prev => !prev); break;

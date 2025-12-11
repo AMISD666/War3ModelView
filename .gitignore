@@ -21,6 +21,8 @@ rad.json
 #Test results file
 TestResults.xml
 ai_handover.md
+project_comparison.md
+问题log.log
 log.txt
 node_modules/
 dist/

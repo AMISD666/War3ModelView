@@ -7,6 +7,9 @@ import { decodeBLP, getBLPImageData } from 'war3-model'
 import { Button, Tooltip } from 'antd'
 import {
     BorderOutlined,
+    LineOutlined,
+    AppstoreOutlined,
+    GroupOutlined,
     DragOutlined,
     SelectOutlined,
     RotateLeftOutlined,
@@ -14,7 +17,10 @@ import {
     SwapOutlined,
     VerticalAlignMiddleOutlined,
     UndoOutlined,
-    RedoOutlined
+    RedoOutlined,
+    EyeOutlined,
+    EyeInvisibleOutlined,
+    CompressOutlined
 } from '@ant-design/icons'
 
 interface UVEditorProps {
@@ -30,8 +36,10 @@ interface UVSelection {
     indices: number[]
 }
 
-type UVSubMode = 'vertex' | 'edge' | 'face'
+type UVSubMode = 'vertex' | 'edge' | 'face' | 'group'
 type UVTransformMode = 'select' | 'translate' | 'rotate' | 'scale'
+
+const MAX_HISTORY = 10
 
 const UVEditor: React.FC<UVEditorProps> = ({
     modelPath,
@@ -60,7 +68,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
     const [isDragging, setIsDragging] = useState(false)
     const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null)
 
-    // History for Undo/Redo
+    // History for Undo/Redo (max 10 steps)
     const [history, setHistory] = useState<{ geosetIndex: number; tVertices: Float32Array }[][]>([])
     const [historyIndex, setHistoryIndex] = useState(-1)
 
@@ -111,6 +119,18 @@ const UVEditor: React.FC<UVEditorProps> = ({
         return { u: sumU / count, v: sumV / count }
     }, [modelData, selectedUVs])
 
+    // Fit to view - calculate zoom and pan to fit texture
+    const fitToView = useCallback(() => {
+        const canvas = canvasRef.current
+        if (!canvas) return
+
+        // Reset to fit the 0-1 UV space in the canvas
+        const canvasSize = Math.min(canvas.width, canvas.height)
+        setZoom(1)
+        setPanX(0)
+        setPanY(0)
+    }, [])
+
     // -------------------------------------------------------------------------
     // LOGIC: Undo/Redo & Store Sync
     // -------------------------------------------------------------------------
@@ -132,8 +152,12 @@ const UVEditor: React.FC<UVEditorProps> = ({
         if (snapshot.length > 0) {
             const newHistory = history.slice(0, historyIndex + 1)
             newHistory.push(snapshot)
+            // Limit to MAX_HISTORY steps
+            if (newHistory.length > MAX_HISTORY) {
+                newHistory.shift()
+            }
             setHistory(newHistory)
-            setHistoryIndex(newHistory.length - 1)
+            setHistoryIndex(Math.min(newHistory.length - 1, MAX_HISTORY - 1))
         }
     }, [modelData, selectedUVs, history, historyIndex])
 
@@ -205,6 +229,77 @@ const UVEditor: React.FC<UVEditorProps> = ({
 
         syncToStore()
     }, [modelData, selectedUVs, zoom, syncToStore])
+
+    const applyScale = useCallback((dx: number, dy: number) => {
+        if (!modelData?.Geosets) return
+        const center = getSelectionCenter()
+        if (!center) return
+
+        const canvas = canvasRef.current
+        if (!canvas) return
+
+        const size = Math.min(canvas.width, canvas.height) * 0.8 * zoom
+        // Scale factor based on mouse movement
+        const scaleFactor = 1 + (dx + dy) / size
+
+        selectedUVs.forEach(sel => {
+            const geoset = modelData.Geosets![sel.geosetIndex]
+            if (!geoset?.TVertices?.[0]) return
+
+            const uvs = geoset.TVertices[0]
+            sel.indices.forEach(i => {
+                const currentU = uvs[i * 2] as number
+                const currentV = uvs[i * 2 + 1] as number
+                // Scale around center
+                let newU = center.u + (currentU - center.u) * scaleFactor
+                let newV = center.v + (currentV - center.v) * scaleFactor
+
+                // Apply axis constraint
+                if (activeAxis === 'x') {
+                    newV = currentV
+                } else if (activeAxis === 'y') {
+                    newU = currentU
+                }
+
+                uvs[i * 2] = newU
+                uvs[i * 2 + 1] = newV
+            })
+        })
+
+        syncToStore()
+    }, [modelData, selectedUVs, zoom, syncToStore, getSelectionCenter, activeAxis])
+
+    const applyRotation = useCallback((dx: number, dy: number) => {
+        if (!modelData?.Geosets) return
+        const center = getSelectionCenter()
+        if (!center) return
+
+        const canvas = canvasRef.current
+        if (!canvas) return
+
+        // Rotation angle based on mouse movement
+        const angle = (dx - dy) * 0.01 // Radians
+
+        selectedUVs.forEach(sel => {
+            const geoset = modelData.Geosets![sel.geosetIndex]
+            if (!geoset?.TVertices?.[0]) return
+
+            const uvs = geoset.TVertices[0]
+            sel.indices.forEach(i => {
+                const currentU = uvs[i * 2] as number
+                const currentV = uvs[i * 2 + 1] as number
+                // Rotate around center
+                const relU = currentU - center.u
+                const relV = currentV - center.v
+                const cos = Math.cos(angle)
+                const sin = Math.sin(angle)
+                uvs[i * 2] = center.u + relU * cos - relV * sin
+                uvs[i * 2 + 1] = center.v + relU * sin + relV * cos
+            })
+        })
+
+        syncToStore()
+    }, [modelData, selectedUVs, syncToStore, getSelectionCenter])
 
     const mirrorHorizontal = useCallback(() => {
         if (!modelData?.Geosets) return
@@ -305,7 +400,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
                 ctx.lineWidth = 1
                 ctx.beginPath()
                 for (let i = 0; i < faces.length; i += 3) {
-                    const i0 = faces[i], i1 = faces[i + 1], i2 = faces[i + 2]
+                    const i0 = faces[i] as number, i1 = faces[i + 1] as number, i2 = faces[i + 2] as number
                     const uv0 = uvToCanvas(uvs[i0 * 2] as number, uvs[i0 * 2 + 1] as number)
                     const uv1 = uvToCanvas(uvs[i1 * 2] as number, uvs[i1 * 2 + 1] as number)
                     const uv2 = uvToCanvas(uvs[i2 * 2] as number, uvs[i2 * 2 + 1] as number)
@@ -326,51 +421,96 @@ const UVEditor: React.FC<UVEditorProps> = ({
             })
         }
 
-        // Gizmo (only for transform modes, not select)
+        // Gizmo drawing based on transform mode
         const selectionCenter = getSelectionCenter()
-        if (selectionCenter && (transformMode === 'translate' || transformMode === 'rotate' || transformMode === 'scale') && selectedUVs.length > 0) {
+        if (selectionCenter && selectedUVs.length > 0 && transformMode !== 'select') {
             const cp = uvToCanvas(selectionCenter.u, selectionCenter.v)
             const axisLength = 60
 
-            ctx.lineWidth = 2
+            if (transformMode === 'translate') {
+                // Move Gizmo: Arrows
+                ctx.lineWidth = 2
 
-            // X Axis (Red) - pointing RIGHT
-            ctx.strokeStyle = (hoveredAxis === 'x' || activeAxis === 'x') ? '#ff6666' : '#ff0000'
-            ctx.beginPath()
-            ctx.moveTo(cp.x, cp.y)
-            ctx.lineTo(cp.x + axisLength, cp.y)
-            ctx.stroke()
-            // Arrow
-            ctx.beginPath()
-            ctx.moveTo(cp.x + axisLength, cp.y)
-            ctx.lineTo(cp.x + axisLength - 8, cp.y - 4)
-            ctx.lineTo(cp.x + axisLength - 8, cp.y + 4)
-            ctx.closePath()
-            ctx.fillStyle = (hoveredAxis === 'x' || activeAxis === 'x') ? '#ff6666' : '#ff0000'
-            ctx.fill()
+                // X Axis (Red)
+                ctx.strokeStyle = (hoveredAxis === 'x' || activeAxis === 'x') ? '#ff6666' : '#ff0000'
+                ctx.beginPath()
+                ctx.moveTo(cp.x, cp.y)
+                ctx.lineTo(cp.x + axisLength, cp.y)
+                ctx.stroke()
+                ctx.beginPath()
+                ctx.moveTo(cp.x + axisLength, cp.y)
+                ctx.lineTo(cp.x + axisLength - 8, cp.y - 4)
+                ctx.lineTo(cp.x + axisLength - 8, cp.y + 4)
+                ctx.closePath()
+                ctx.fillStyle = (hoveredAxis === 'x' || activeAxis === 'x') ? '#ff6666' : '#ff0000'
+                ctx.fill()
 
-            // Y Axis (Green) - pointing UP (negative canvas Y)
-            ctx.strokeStyle = (hoveredAxis === 'y' || activeAxis === 'y') ? '#66ff66' : '#00ff00'
-            ctx.beginPath()
-            ctx.moveTo(cp.x, cp.y)
-            ctx.lineTo(cp.x, cp.y - axisLength)  // Note: UP is negative Y in canvas
-            ctx.stroke()
-            // Arrow
-            ctx.beginPath()
-            ctx.moveTo(cp.x, cp.y - axisLength)
-            ctx.lineTo(cp.x - 4, cp.y - axisLength + 8)
-            ctx.lineTo(cp.x + 4, cp.y - axisLength + 8)
-            ctx.closePath()
-            ctx.fillStyle = (hoveredAxis === 'y' || activeAxis === 'y') ? '#66ff66' : '#00ff00'
-            ctx.fill()
+                // Y Axis (Green) - UP
+                ctx.strokeStyle = (hoveredAxis === 'y' || activeAxis === 'y') ? '#66ff66' : '#00ff00'
+                ctx.beginPath()
+                ctx.moveTo(cp.x, cp.y)
+                ctx.lineTo(cp.x, cp.y - axisLength)
+                ctx.stroke()
+                ctx.beginPath()
+                ctx.moveTo(cp.x, cp.y - axisLength)
+                ctx.lineTo(cp.x - 4, cp.y - axisLength + 8)
+                ctx.lineTo(cp.x + 4, cp.y - axisLength + 8)
+                ctx.closePath()
+                ctx.fillStyle = (hoveredAxis === 'y' || activeAxis === 'y') ? '#66ff66' : '#00ff00'
+                ctx.fill()
 
-            // XY Plane handle (dual axis) - small square at corner
-            const xySize = 15
-            ctx.fillStyle = (hoveredAxis === 'xy' || activeAxis === 'xy') ? 'rgba(255,255,0,0.6)' : 'rgba(255,255,0,0.3)'
-            ctx.fillRect(cp.x + 8, cp.y - 8 - xySize, xySize, xySize)
-            ctx.strokeStyle = '#ffff00'
-            ctx.lineWidth = 1
-            ctx.strokeRect(cp.x + 8, cp.y - 8 - xySize, xySize, xySize)
+                // XY Plane handle
+                const xySize = 15
+                ctx.fillStyle = (hoveredAxis === 'xy' || activeAxis === 'xy') ? 'rgba(255,255,0,0.6)' : 'rgba(255,255,0,0.3)'
+                ctx.fillRect(cp.x + 8, cp.y - 8 - xySize, xySize, xySize)
+                ctx.strokeStyle = '#ffff00'
+                ctx.lineWidth = 1
+                ctx.strokeRect(cp.x + 8, cp.y - 8 - xySize, xySize, xySize)
+
+            } else if (transformMode === 'rotate') {
+                // Rotate Gizmo: Circle
+                const radius = 40
+                ctx.strokeStyle = (hoveredAxis === 'xy' || activeAxis === 'xy') ? '#66aaff' : '#4488ff'
+                ctx.lineWidth = 3
+                ctx.beginPath()
+                ctx.arc(cp.x, cp.y, radius, 0, Math.PI * 2)
+                ctx.stroke()
+
+                // Arc indicator
+                ctx.beginPath()
+                ctx.arc(cp.x, cp.y, radius - 5, -Math.PI / 4, Math.PI / 4)
+                ctx.stroke()
+
+            } else if (transformMode === 'scale') {
+                // Scale Gizmo: Lines with square ends
+                ctx.lineWidth = 2
+
+                // X Axis (Red)
+                ctx.strokeStyle = (hoveredAxis === 'x' || activeAxis === 'x') ? '#ff6666' : '#ff0000'
+                ctx.beginPath()
+                ctx.moveTo(cp.x, cp.y)
+                ctx.lineTo(cp.x + axisLength, cp.y)
+                ctx.stroke()
+                ctx.fillStyle = (hoveredAxis === 'x' || activeAxis === 'x') ? '#ff6666' : '#ff0000'
+                ctx.fillRect(cp.x + axisLength - 5, cp.y - 5, 10, 10)
+
+                // Y Axis (Green) - UP
+                ctx.strokeStyle = (hoveredAxis === 'y' || activeAxis === 'y') ? '#66ff66' : '#00ff00'
+                ctx.beginPath()
+                ctx.moveTo(cp.x, cp.y)
+                ctx.lineTo(cp.x, cp.y - axisLength)
+                ctx.stroke()
+                ctx.fillStyle = (hoveredAxis === 'y' || activeAxis === 'y') ? '#66ff66' : '#00ff00'
+                ctx.fillRect(cp.x - 5, cp.y - axisLength - 5, 10, 10)
+
+                // XY Plane handle (uniform scale)
+                const xySize = 15
+                ctx.fillStyle = (hoveredAxis === 'xy' || activeAxis === 'xy') ? 'rgba(255,255,0,0.6)' : 'rgba(255,255,0,0.3)'
+                ctx.fillRect(cp.x + 8, cp.y - 8 - xySize, xySize, xySize)
+                ctx.strokeStyle = '#ffff00'
+                ctx.lineWidth = 1
+                ctx.strokeRect(cp.x + 8, cp.y - 8 - xySize, xySize, xySize)
+            }
         }
 
         // Selection rectangle
@@ -392,11 +532,28 @@ const UVEditor: React.FC<UVEditorProps> = ({
     // EVENT HANDLERS
     // -------------------------------------------------------------------------
 
+    // Zoom at mouse position
     const handleWheel = useCallback((e: React.WheelEvent) => {
         e.preventDefault()
+        const canvas = canvasRef.current
+        if (!canvas) return
+
+        const rect = canvas.getBoundingClientRect()
+        const mouseX = e.clientX - rect.left
+        const mouseY = e.clientY - rect.top
+
         const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1
-        setZoom(prev => Math.max(0.1, Math.min(10, prev * zoomFactor)))
-    }, [])
+        const newZoom = Math.max(0.1, Math.min(10, zoom * zoomFactor))
+
+        // Adjust pan to zoom at mouse position
+        const zoomRatio = newZoom / zoom
+        const canvasCenterX = canvas.width / 2
+        const canvasCenterY = canvas.height / 2
+
+        setPanX(prev => (prev + canvasCenterX - mouseX) * zoomRatio - canvasCenterX + mouseX)
+        setPanY(prev => (prev + canvasCenterY - mouseY) * zoomRatio - canvasCenterY + mouseY)
+        setZoom(newZoom)
+    }, [zoom])
 
     const handleMouseDown = useCallback((e: React.MouseEvent) => {
         const canvas = canvasRef.current
@@ -407,7 +564,6 @@ const UVEditor: React.FC<UVEditorProps> = ({
         const y = e.clientY - rect.top
 
         if (e.button === 2) {
-            // Right click - pan
             setIsPanning(true)
             setDragStart({ x: e.clientX, y: e.clientY })
         } else if (e.button === 0) {
@@ -419,37 +575,49 @@ const UVEditor: React.FC<UVEditorProps> = ({
                 return
             }
 
-            // Check Gizmo Hit (only when in transform mode and has selection)
-            if ((transformMode === 'translate' || transformMode === 'rotate' || transformMode === 'scale') && selectedUVs.length > 0) {
+            // Check Gizmo Hit
+            if (transformMode !== 'select' && selectedUVs.length > 0) {
                 const center = getSelectionCenter()
                 if (center) {
                     const cp = uvToCanvas(center.u, center.v)
                     const axisLength = 60
                     const xySize = 15
 
-                    // XY plane handle
-                    if (x >= cp.x + 8 && x <= cp.x + 8 + xySize && y >= cp.y - 8 - xySize && y <= cp.y - 8) {
-                        setActiveAxis('xy')
-                        addToHistory()
-                        setIsDragging(true)
-                        setDragStart({ x: e.clientX, y: e.clientY })
-                        return
-                    }
-                    // X-axis hit
-                    if (y >= cp.y - 8 && y <= cp.y + 8 && x >= cp.x && x <= cp.x + axisLength) {
-                        setActiveAxis('x')
-                        addToHistory()
-                        setIsDragging(true)
-                        setDragStart({ x: e.clientX, y: e.clientY })
-                        return
-                    }
-                    // Y-axis hit (UP is negative Y)
-                    if (x >= cp.x - 8 && x <= cp.x + 8 && y >= cp.y - axisLength && y <= cp.y) {
-                        setActiveAxis('y')
-                        addToHistory()
-                        setIsDragging(true)
-                        setDragStart({ x: e.clientX, y: e.clientY })
-                        return
+                    if (transformMode === 'rotate') {
+                        // Rotate: hit anywhere on the circle
+                        const dist = Math.sqrt((x - cp.x) ** 2 + (y - cp.y) ** 2)
+                        if (dist >= 30 && dist <= 50) {
+                            setActiveAxis('xy')
+                            addToHistory()
+                            setIsDragging(true)
+                            setDragStart({ x: e.clientX, y: e.clientY })
+                            return
+                        }
+                    } else {
+                        // XY plane handle
+                        if (x >= cp.x + 8 && x <= cp.x + 8 + xySize && y >= cp.y - 8 - xySize && y <= cp.y - 8) {
+                            setActiveAxis('xy')
+                            addToHistory()
+                            setIsDragging(true)
+                            setDragStart({ x: e.clientX, y: e.clientY })
+                            return
+                        }
+                        // X-axis hit
+                        if (y >= cp.y - 8 && y <= cp.y + 8 && x >= cp.x && x <= cp.x + axisLength) {
+                            setActiveAxis('x')
+                            addToHistory()
+                            setIsDragging(true)
+                            setDragStart({ x: e.clientX, y: e.clientY })
+                            return
+                        }
+                        // Y-axis hit
+                        if (x >= cp.x - 8 && x <= cp.x + 8 && y >= cp.y - axisLength && y <= cp.y) {
+                            setActiveAxis('y')
+                            addToHistory()
+                            setIsDragging(true)
+                            setDragStart({ x: e.clientX, y: e.clientY })
+                            return
+                        }
                     }
                 }
             }
@@ -460,7 +628,6 @@ const UVEditor: React.FC<UVEditorProps> = ({
                 setSelectionStart({ x, y })
                 setSelectionEnd({ x, y })
             }
-            // Transform modes without hitting gizmo: do nothing (transform only via gizmo)
         }
     }, [transformMode, selectedUVs, uvToCanvas, getSelectionCenter, addToHistory])
 
@@ -473,7 +640,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
         const y = e.clientY - rect.top
 
         // Gizmo Hover Update
-        if ((transformMode === 'translate' || transformMode === 'rotate' || transformMode === 'scale') && !isDragging && selectedUVs.length > 0) {
+        if (transformMode !== 'select' && !isDragging && selectedUVs.length > 0) {
             const center = getSelectionCenter()
             if (center) {
                 const cp = uvToCanvas(center.u, center.v)
@@ -481,12 +648,14 @@ const UVEditor: React.FC<UVEditorProps> = ({
                 const xySize = 15
                 let hover: 'x' | 'y' | 'xy' | null = null
 
-                // XY plane
-                if (x >= cp.x + 8 && x <= cp.x + 8 + xySize && y >= cp.y - 8 - xySize && y <= cp.y - 8) hover = 'xy'
-                // X axis
-                else if (y >= cp.y - 8 && y <= cp.y + 8 && x >= cp.x && x <= cp.x + axisLength) hover = 'x'
-                // Y axis
-                else if (x >= cp.x - 8 && x <= cp.x + 8 && y >= cp.y - axisLength && y <= cp.y) hover = 'y'
+                if (transformMode === 'rotate') {
+                    const dist = Math.sqrt((x - cp.x) ** 2 + (y - cp.y) ** 2)
+                    if (dist >= 30 && dist <= 50) hover = 'xy'
+                } else {
+                    if (x >= cp.x + 8 && x <= cp.x + 8 + xySize && y >= cp.y - 8 - xySize && y <= cp.y - 8) hover = 'xy'
+                    else if (y >= cp.y - 8 && y <= cp.y + 8 && x >= cp.x && x <= cp.x + axisLength) hover = 'x'
+                    else if (x >= cp.x - 8 && x <= cp.x + 8 && y >= cp.y - axisLength && y <= cp.y) hover = 'y'
+                }
 
                 if (hover !== hoveredAxis) setHoveredAxis(hover)
             }
@@ -508,22 +677,21 @@ const UVEditor: React.FC<UVEditorProps> = ({
 
             if (transformMode === 'translate') {
                 let constraintX = clientDx
-                let constraintY = clientDy  // Note: In UV space, we need to INVERT Y for proper direction
+                let constraintY = clientDy
 
-                if (activeAxis === 'x') {
-                    constraintY = 0
-                } else if (activeAxis === 'y') {
-                    constraintX = 0
-                }
-                // 'xy' = no constraints
+                if (activeAxis === 'x') constraintY = 0
+                else if (activeAxis === 'y') constraintX = 0
 
                 applyTranslation(constraintX, constraintY)
+            } else if (transformMode === 'scale') {
+                applyScale(clientDx, clientDy)
+            } else if (transformMode === 'rotate') {
+                applyRotation(clientDx, clientDy)
             }
-            // TODO: Implement rotate and scale transforms
 
             setDragStart({ x: e.clientX, y: e.clientY })
         }
-    }, [isPanning, isSelecting, isDragging, dragStart, transformMode, selectedUVs, uvToCanvas, getSelectionCenter, hoveredAxis, activeAxis, applyTranslation])
+    }, [isPanning, isSelecting, isDragging, dragStart, transformMode, selectedUVs, uvToCanvas, getSelectionCenter, hoveredAxis, activeAxis, applyTranslation, applyScale, applyRotation])
 
     const handleMouseUp = useCallback((e: React.MouseEvent) => {
         if (isSelecting && selectionStart && selectionEnd) {
@@ -544,7 +712,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
                     const selectedIndices: number[] = []
 
                     for (let i = 0; i < vertexCount; i++) {
-                        const pos = uvToCanvas(uvs[i * 2], uvs[i * 2 + 1])
+                        const pos = uvToCanvas(uvs[i * 2] as number, uvs[i * 2 + 1] as number)
                         if (pos.x >= minX && pos.x <= maxX && pos.y >= minY && pos.y <= maxY) {
                             selectedIndices.push(i)
                         }
@@ -599,25 +767,32 @@ const UVEditor: React.FC<UVEditorProps> = ({
     // EFFECTS
     // -------------------------------------------------------------------------
 
-    // Keyboard shortcuts: W/E/R for Move/Rotate/Scale, Ctrl+Z/Y for Undo/Redo
+    // Keyboard shortcuts
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.ctrlKey && e.key === 'z') {
+            // Check if focus is on input element
+            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+
+            if (e.ctrlKey && (e.key === 'z' || e.key === 'Z')) {
                 e.preventDefault()
+                e.stopPropagation()
                 undo()
-            } else if (e.ctrlKey && e.key === 'y') {
+            } else if (e.ctrlKey && (e.key === 'y' || e.key === 'Y')) {
                 e.preventDefault()
+                e.stopPropagation()
                 redo()
-            } else if (e.key === 'w' || e.key === 'W') {
-                setTransformMode('translate')
-            } else if (e.key === 'e' || e.key === 'E') {
-                setTransformMode('rotate')
-            } else if (e.key === 'r' || e.key === 'R') {
-                setTransformMode('scale')
+            } else if (!e.ctrlKey && !e.altKey && !e.shiftKey) {
+                if (e.key === 'w' || e.key === 'W') {
+                    setTransformMode('translate')
+                } else if (e.key === 'e' || e.key === 'E') {
+                    setTransformMode('rotate')
+                } else if (e.key === 'r' || e.key === 'R') {
+                    setTransformMode('scale')
+                }
             }
         }
-        window.addEventListener('keydown', handleKeyDown)
-        return () => window.removeEventListener('keydown', handleKeyDown)
+        window.addEventListener('keydown', handleKeyDown, true) // Use capture phase
+        return () => window.removeEventListener('keydown', handleKeyDown, true)
     }, [undo, redo])
 
     // Load texture
@@ -712,7 +887,6 @@ const UVEditor: React.FC<UVEditorProps> = ({
         return () => resizeObserver.disconnect()
     }, [renderCanvas])
 
-    // Re-render
     useEffect(() => {
         renderCanvas()
     }, [renderCanvas])
@@ -727,18 +901,30 @@ const UVEditor: React.FC<UVEditorProps> = ({
         left: '50%',
         transform: 'translateX(-50%)',
         display: 'flex',
-        gap: '5px',
-        padding: '8px 12px',
-        backgroundColor: 'rgba(0, 0, 0, 0.8)',
-        borderRadius: '8px',
+        gap: '4px',
+        padding: '6px 10px',
+        backgroundColor: 'rgba(0, 0, 0, 0.85)',
+        borderRadius: '6px',
         zIndex: 100
     }
 
-    const buttonStyle = (active: boolean): React.CSSProperties => ({
-        backgroundColor: active ? '#1890ff' : '#333',
-        borderColor: active ? '#1890ff' : '#555',
+    const btnStyle: React.CSSProperties = {
+        backgroundColor: '#444',
+        borderColor: '#555',
+        color: '#ddd'
+    }
+
+    const btnActiveStyle: React.CSSProperties = {
+        backgroundColor: '#1890ff',
+        borderColor: '#1890ff',
         color: '#fff'
-    })
+    }
+
+    const btnDisabledStyle: React.CSSProperties = {
+        backgroundColor: '#333',
+        borderColor: '#444',
+        color: '#666'
+    }
 
     return (
         <div
@@ -754,54 +940,66 @@ const UVEditor: React.FC<UVEditorProps> = ({
         >
             {/* Toolbar */}
             <div style={toolbarStyle}>
-                {/* Sub-mode */}
+                {/* Sub-mode: Vertex/Edge/Face/Group */}
                 <Tooltip title="选择顶点">
-                    <Button icon={<BorderOutlined />} style={buttonStyle(uvSubMode === 'vertex')} onClick={() => setUvSubMode('vertex')} />
+                    <Button size="small" icon={<BorderOutlined />} style={uvSubMode === 'vertex' ? btnActiveStyle : btnStyle} onClick={() => setUvSubMode('vertex')} />
+                </Tooltip>
+                <Tooltip title="选择边">
+                    <Button size="small" icon={<LineOutlined />} style={uvSubMode === 'edge' ? btnActiveStyle : btnStyle} onClick={() => setUvSubMode('edge')} />
+                </Tooltip>
+                <Tooltip title="选择面">
+                    <Button size="small" icon={<AppstoreOutlined />} style={uvSubMode === 'face' ? btnActiveStyle : btnStyle} onClick={() => setUvSubMode('face')} />
+                </Tooltip>
+                <Tooltip title="选择组">
+                    <Button size="small" icon={<GroupOutlined />} style={uvSubMode === 'group' ? btnActiveStyle : btnStyle} onClick={() => setUvSubMode('group')} />
                 </Tooltip>
 
-                <div style={{ width: '1px', backgroundColor: '#555', margin: '0 5px' }} />
+                <div style={{ width: '1px', backgroundColor: '#555', margin: '0 4px' }} />
 
                 {/* Transform modes */}
-                <Tooltip title="选择框选">
-                    <Button icon={<SelectOutlined />} style={buttonStyle(transformMode === 'select')} onClick={() => setTransformMode('select')} />
+                <Tooltip title="框选">
+                    <Button size="small" icon={<SelectOutlined />} style={transformMode === 'select' ? btnActiveStyle : btnStyle} onClick={() => setTransformMode('select')} />
                 </Tooltip>
                 <Tooltip title="移动 (W)">
-                    <Button icon={<DragOutlined />} style={buttonStyle(transformMode === 'translate')} onClick={() => setTransformMode('translate')} />
+                    <Button size="small" icon={<DragOutlined />} style={transformMode === 'translate' ? btnActiveStyle : btnStyle} onClick={() => setTransformMode('translate')} />
                 </Tooltip>
                 <Tooltip title="旋转 (E)">
-                    <Button icon={<RotateLeftOutlined />} style={buttonStyle(transformMode === 'rotate')} onClick={() => setTransformMode('rotate')} />
+                    <Button size="small" icon={<RotateLeftOutlined />} style={transformMode === 'rotate' ? btnActiveStyle : btnStyle} onClick={() => setTransformMode('rotate')} />
                 </Tooltip>
                 <Tooltip title="缩放 (R)">
-                    <Button icon={<ColumnWidthOutlined />} style={buttonStyle(transformMode === 'scale')} onClick={() => setTransformMode('scale')} />
+                    <Button size="small" icon={<ColumnWidthOutlined />} style={transformMode === 'scale' ? btnActiveStyle : btnStyle} onClick={() => setTransformMode('scale')} />
                 </Tooltip>
 
-                <div style={{ width: '1px', backgroundColor: '#555', margin: '0 5px' }} />
+                <div style={{ width: '1px', backgroundColor: '#555', margin: '0 4px' }} />
 
                 {/* Mirror */}
                 <Tooltip title="水平镜像">
-                    <Button icon={<SwapOutlined />} onClick={mirrorHorizontal} disabled={selectedUVs.length === 0} />
+                    <Button size="small" icon={<SwapOutlined />} style={selectedUVs.length === 0 ? btnDisabledStyle : btnStyle} onClick={mirrorHorizontal} disabled={selectedUVs.length === 0} />
                 </Tooltip>
                 <Tooltip title="垂直镜像">
-                    <Button icon={<VerticalAlignMiddleOutlined style={{ transform: 'rotate(90deg)' }} />} onClick={mirrorVertical} disabled={selectedUVs.length === 0} />
+                    <Button size="small" icon={<VerticalAlignMiddleOutlined style={{ transform: 'rotate(90deg)' }} />} style={selectedUVs.length === 0 ? btnDisabledStyle : btnStyle} onClick={mirrorVertical} disabled={selectedUVs.length === 0} />
                 </Tooltip>
 
-                <div style={{ width: '1px', backgroundColor: '#555', margin: '0 5px' }} />
+                <div style={{ width: '1px', backgroundColor: '#555', margin: '0 4px' }} />
 
-                {/* Undo/Redo with icons */}
+                {/* Undo/Redo - always visible */}
                 <Tooltip title="撤销 (Ctrl+Z)">
-                    <Button icon={<UndoOutlined />} onClick={undo} disabled={historyIndex < 0} />
+                    <Button size="small" icon={<UndoOutlined />} style={historyIndex < 0 ? btnDisabledStyle : btnStyle} onClick={undo} disabled={historyIndex < 0} />
                 </Tooltip>
                 <Tooltip title="重做 (Ctrl+Y)">
-                    <Button icon={<RedoOutlined />} onClick={redo} disabled={historyIndex >= history.length - 1} />
+                    <Button size="small" icon={<RedoOutlined />} style={historyIndex >= history.length - 1 ? btnDisabledStyle : btnStyle} onClick={redo} disabled={historyIndex >= history.length - 1} />
                 </Tooltip>
 
-                <div style={{ width: '1px', backgroundColor: '#555', margin: '0 5px' }} />
+                <div style={{ width: '1px', backgroundColor: '#555', margin: '0 4px' }} />
 
-                {/* Toggle 3D view */}
-                <Tooltip title={showModelView ? '隐藏模型视图' : '显示模型视图'}>
-                    <Button style={buttonStyle(showModelView)} onClick={onToggleModelView}>
-                        {showModelView ? '隐藏3D' : '显示3D'}
-                    </Button>
+                {/* Fit to view */}
+                <Tooltip title="适应视图">
+                    <Button size="small" icon={<CompressOutlined />} style={btnStyle} onClick={fitToView} />
+                </Tooltip>
+
+                {/* Toggle 3D view - icon only */}
+                <Tooltip title={showModelView ? '隐藏3D视图' : '显示3D视图'}>
+                    <Button size="small" icon={showModelView ? <EyeInvisibleOutlined /> : <EyeOutlined />} style={btnStyle} onClick={onToggleModelView} />
                 </Tooltip>
             </div>
 
@@ -824,12 +1022,12 @@ const UVEditor: React.FC<UVEditorProps> = ({
                 color: '#888',
                 fontSize: '12px',
                 backgroundColor: 'rgba(0,0,0,0.6)',
-                padding: '5px 10px',
+                padding: '4px 8px',
                 borderRadius: '4px'
             }}>
                 缩放: {(zoom * 100).toFixed(0)}% |
                 选中: {selectedUVs.reduce((sum, s) => sum + s.indices.length, 0)} 顶点 |
-                可见多边形: {visibleGeosetIds.length}
+                可见: {visibleGeosetIds.length}
             </div>
         </div>
     )
