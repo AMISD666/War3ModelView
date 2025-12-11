@@ -1453,10 +1453,20 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         }
 
         // === GEOSETS ===
-        // Note: Geoset vertices and faces are typically edited via GPUBuffer
-        // For most cases we don't need to sync Geosets unless major geometry changed
+        // Sync geoset data and update UV texture coordinate buffers for real-time rendering
         if (modelData.Geosets) {
           renderer.model.Geosets = modelData.Geosets
+          // Update UV buffers for each geoset to reflect changes made in UV Editor
+          modelData.Geosets.forEach((geoset: any, i: number) => {
+            if (geoset?.TVertices?.[0]) {
+              const uvData = geoset.TVertices[0]
+              // Convert to Float32Array if needed
+              const float32Data = uvData instanceof Float32Array
+                ? uvData
+                : new Float32Array(uvData)
+              renderer.updateGeosetTexCoords(i, float32Data)
+            }
+          })
         }
 
         // === GEOSET ANIMATIONS ===

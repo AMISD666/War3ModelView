@@ -194,7 +194,9 @@ const UVEditor: React.FC<UVEditorProps> = ({
         })
 
         setHistoryIndex(prev => prev - 1)
-    }, [history, historyIndex, modelData, updateGeoset])
+        // Update 3D view immediately
+        triggerRendererReload()
+    }, [history, historyIndex, modelData, updateGeoset, triggerRendererReload])
 
     const redo = useCallback(() => {
         if (historyIndex >= history.length - 1 || !modelData?.Geosets) return
@@ -207,7 +209,9 @@ const UVEditor: React.FC<UVEditorProps> = ({
         })
 
         setHistoryIndex(prev => prev + 1)
-    }, [history, historyIndex, modelData, updateGeoset])
+        // Update 3D view immediately
+        triggerRendererReload()
+    }, [history, historyIndex, modelData, updateGeoset, triggerRendererReload])
 
     // -------------------------------------------------------------------------
     // LOGIC: Transformation
@@ -409,10 +413,10 @@ const UVEditor: React.FC<UVEditorProps> = ({
                 ctx.lineWidth = 1
                 ctx.beginPath()
                 for (let i = 0; i < faces.length; i += 3) {
-                    const i0 = faces[i] as number, i1 = faces[i + 1] as number, i2 = faces[i + 2] as number
-                    const uv0 = uvToCanvas(uvs[i0 * 2] as number, uvs[i0 * 2 + 1] as number)
-                    const uv1 = uvToCanvas(uvs[i1 * 2] as number, uvs[i1 * 2 + 1] as number)
-                    const uv2 = uvToCanvas(uvs[i2 * 2] as number, uvs[i2 * 2 + 1] as number)
+                    const i0 = Number(faces[i]), i1 = Number(faces[i + 1]), i2 = Number(faces[i + 2])
+                    const uv0 = uvToCanvas(Number(uvs[i0 * 2]), Number(uvs[i0 * 2 + 1]))
+                    const uv1 = uvToCanvas(Number(uvs[i1 * 2]), Number(uvs[i1 * 2 + 1]))
+                    const uv2 = uvToCanvas(Number(uvs[i2 * 2]), Number(uvs[i2 * 2 + 1]))
                     ctx.moveTo(uv0.x, uv0.y); ctx.lineTo(uv1.x, uv1.y); ctx.lineTo(uv2.x, uv2.y); ctx.lineTo(uv0.x, uv0.y)
                 }
                 ctx.stroke()
@@ -701,24 +705,82 @@ const UVEditor: React.FC<UVEditorProps> = ({
 
             const newSelections: UVSelection[] = []
 
+            // Helper: check if a point is inside selection box
+            const isInBox = (u: number, v: number) => {
+                const pos = uvToCanvas(u, v)
+                return pos.x >= minX && pos.x <= maxX && pos.y >= minY && pos.y <= maxY
+            }
+
             if (modelData?.Geosets) {
                 visibleGeosetIds.forEach((geosetIndex: number) => {
                     const geoset = modelData!.Geosets![geosetIndex]
                     if (!geoset?.TVertices?.[0]) return
 
                     const uvs = geoset.TVertices[0]
+                    const faces = geoset.Faces
                     const vertexCount = uvs.length / 2
-                    const selectedIndices: number[] = []
+                    const selectedSet = new Set<number>()
 
-                    for (let i = 0; i < vertexCount; i++) {
-                        const pos = uvToCanvas(uvs[i * 2] as number, uvs[i * 2 + 1] as number)
-                        if (pos.x >= minX && pos.x <= maxX && pos.y >= minY && pos.y <= maxY) {
-                            selectedIndices.push(i)
+                    if (uvSubMode === 'vertex') {
+                        // VERTEX MODE: Select individual vertices in box
+                        for (let i = 0; i < vertexCount; i++) {
+                            if (isInBox(uvs[i * 2] as number, uvs[i * 2 + 1] as number)) {
+                                selectedSet.add(i)
+                            }
+                        }
+                    } else if (uvSubMode === 'edge' && faces) {
+                        // EDGE MODE: Select both vertices of each edge that has at least one vertex in box
+                        for (let i = 0; i < faces.length; i += 3) {
+                            const i0 = Number(faces[i])
+                            const i1 = Number(faces[i + 1])
+                            const i2 = Number(faces[i + 2])
+
+                            const v0In = isInBox(Number(uvs[i0 * 2]), Number(uvs[i0 * 2 + 1]))
+                            const v1In = isInBox(Number(uvs[i1 * 2]), Number(uvs[i1 * 2 + 1]))
+                            const v2In = isInBox(Number(uvs[i2 * 2]), Number(uvs[i2 * 2 + 1]))
+
+                            // Edge 0-1
+                            if (v0In || v1In) { selectedSet.add(i0); selectedSet.add(i1) }
+                            // Edge 1-2
+                            if (v1In || v2In) { selectedSet.add(i1); selectedSet.add(i2) }
+                            // Edge 2-0
+                            if (v2In || v0In) { selectedSet.add(i2); selectedSet.add(i0) }
+                        }
+                    } else if (uvSubMode === 'face' && faces) {
+                        // FACE MODE: Select all 3 vertices of each triangle with any vertex in box
+                        for (let i = 0; i < faces.length; i += 3) {
+                            const i0 = Number(faces[i])
+                            const i1 = Number(faces[i + 1])
+                            const i2 = Number(faces[i + 2])
+
+                            const anyInBox = isInBox(Number(uvs[i0 * 2]), Number(uvs[i0 * 2 + 1])) ||
+                                isInBox(Number(uvs[i1 * 2]), Number(uvs[i1 * 2 + 1])) ||
+                                isInBox(Number(uvs[i2 * 2]), Number(uvs[i2 * 2 + 1]))
+
+                            if (anyInBox) {
+                                selectedSet.add(i0)
+                                selectedSet.add(i1)
+                                selectedSet.add(i2)
+                            }
+                        }
+                    } else if (uvSubMode === 'group') {
+                        // GROUP MODE: Select ALL vertices of geoset if any vertex is in box
+                        let anyInBox = false
+                        for (let i = 0; i < vertexCount; i++) {
+                            if (isInBox(uvs[i * 2] as number, uvs[i * 2 + 1] as number)) {
+                                anyInBox = true
+                                break
+                            }
+                        }
+                        if (anyInBox) {
+                            for (let i = 0; i < vertexCount; i++) {
+                                selectedSet.add(i)
+                            }
                         }
                     }
 
-                    if (selectedIndices.length > 0) {
-                        newSelections.push({ geosetIndex, indices: selectedIndices })
+                    if (selectedSet.size > 0) {
+                        newSelections.push({ geosetIndex, indices: Array.from(selectedSet) })
                     }
                 })
             }
@@ -765,7 +827,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
         setSelectionStart(null)
         setSelectionEnd(null)
         setDragStart(null)
-    }, [isSelecting, selectionStart, selectionEnd, modelData, visibleGeosetIds, uvToCanvas, isDragging, selectedUVs, syncToStore])
+    }, [isSelecting, selectionStart, selectionEnd, modelData, visibleGeosetIds, uvToCanvas, isDragging, selectedUVs, syncToStore, uvSubMode])
 
     // -------------------------------------------------------------------------
     // EFFECTS
