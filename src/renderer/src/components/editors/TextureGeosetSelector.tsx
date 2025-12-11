@@ -108,7 +108,7 @@ const TextureGeosetSelector: React.FC<TextureGeosetSelectorProps> = ({
                                 color: selectedTextureId === index ? '#fff' : '#ccc',
                                 borderBottom: '1px solid #333',
                                 borderLeft: selectedTextureId === index ? '3px solid #1890ff' : '3px solid transparent',
-                                fontSize: '11px'
+                                fontSize: '13px'
                             }}
                         >
                             {tex.Image || `Texture ${index}`}
@@ -140,8 +140,54 @@ const TextureGeosetSelector: React.FC<TextureGeosetSelectorProps> = ({
 
             {/* Geoset List - 2 columns */}
             <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                <div style={{ padding: '6px 10px', background: '#333', borderBottom: '1px solid #444', fontWeight: 'bold', fontSize: '12px' }}>
-                    几何体
+                <div style={{ padding: '6px 10px', background: '#333', borderBottom: '1px solid #444', fontWeight: 'bold', fontSize: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span>几何体</span>
+                    {selectedTextureId !== null && currentGeosets.length > 0 && (
+                        <div style={{ display: 'flex', gap: '4px' }}>
+                            <button
+                                onClick={() => {
+                                    // Select all geosets for this texture
+                                    currentGeosets.forEach(geosetId => {
+                                        if (!visibleGeosetIds.includes(geosetId)) {
+                                            onToggleGeosetVisibility(geosetId, true)
+                                        }
+                                    })
+                                }}
+                                style={{
+                                    background: '#555',
+                                    border: 'none',
+                                    color: '#ccc',
+                                    padding: '2px 6px',
+                                    borderRadius: '3px',
+                                    fontSize: '10px',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                全选
+                            </button>
+                            <button
+                                onClick={() => {
+                                    // Deselect all geosets for this texture
+                                    currentGeosets.forEach(geosetId => {
+                                        if (visibleGeosetIds.includes(geosetId)) {
+                                            onToggleGeosetVisibility(geosetId, false)
+                                        }
+                                    })
+                                }}
+                                style={{
+                                    background: '#444',
+                                    border: 'none',
+                                    color: '#999',
+                                    padding: '2px 6px',
+                                    borderRadius: '3px',
+                                    fontSize: '10px',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                清空
+                            </button>
+                        </div>
+                    )}
                 </div>
                 <div style={{ flex: 1, overflowY: 'auto', padding: '4px' }}>
                     {selectedTextureId === null ? (
@@ -168,7 +214,7 @@ const TextureGeosetSelector: React.FC<TextureGeosetSelectorProps> = ({
                                         checked={visibleGeosetIds.includes(geosetId)}
                                         style={{ marginRight: 4, pointerEvents: 'none' }}
                                     />
-                                    <span>G{geosetId}</span>
+                                    <span>{geosetId}</span>
                                 </div>
                             ))}
                         </div>

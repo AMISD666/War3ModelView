@@ -76,6 +76,9 @@ const UVEditor: React.FC<UVEditorProps> = ({
     const [hoveredAxis, setHoveredAxis] = useState<'x' | 'y' | 'xy' | null>(null)
     const [activeAxis, setActiveAxis] = useState<'x' | 'y' | 'xy' | null>(null)
 
+    // Render tick - increment to force canvas redraw
+    const [renderTick, setRenderTick] = useState(0)
+
     // Model store
     const modelData = useModelStore(state => state.modelData)
     const updateGeoset = useModelStore(state => state.updateGeoset)
@@ -161,6 +164,9 @@ const UVEditor: React.FC<UVEditorProps> = ({
         }
     }, [modelData, selectedUVs, history, historyIndex])
 
+    // Get triggerRendererReload from store
+    const triggerRendererReload = useModelStore(state => state.triggerRendererReload)
+
     const syncToStore = useCallback(() => {
         if (!modelData?.Geosets) return
 
@@ -172,7 +178,10 @@ const UVEditor: React.FC<UVEditorProps> = ({
                 })
             }
         })
-    }, [modelData, selectedUVs, updateGeoset])
+
+        // Trigger Viewer to refresh and re-render with updated UV data
+        triggerRendererReload()
+    }, [modelData, selectedUVs, updateGeoset, triggerRendererReload])
 
     const undo = useCallback(() => {
         if (historyIndex < 0 || !modelData?.Geosets) return
@@ -227,8 +236,8 @@ const UVEditor: React.FC<UVEditorProps> = ({
             })
         })
 
-        syncToStore()
-    }, [modelData, selectedUVs, zoom, syncToStore])
+        setRenderTick(t => t + 1)
+    }, [modelData, selectedUVs, zoom])
 
     const applyScale = useCallback((dx: number, dy: number) => {
         if (!modelData?.Geosets) return
@@ -266,8 +275,8 @@ const UVEditor: React.FC<UVEditorProps> = ({
             })
         })
 
-        syncToStore()
-    }, [modelData, selectedUVs, zoom, syncToStore, getSelectionCenter, activeAxis])
+        setRenderTick(t => t + 1)
+    }, [modelData, selectedUVs, zoom, getSelectionCenter, activeAxis])
 
     const applyRotation = useCallback((dx: number, dy: number) => {
         if (!modelData?.Geosets) return
@@ -277,8 +286,8 @@ const UVEditor: React.FC<UVEditorProps> = ({
         const canvas = canvasRef.current
         if (!canvas) return
 
-        // Rotation angle based on mouse movement
-        const angle = (dx - dy) * 0.01 // Radians
+        // Rotation angle based on mouse movement (negative for correct direction)
+        const angle = -(dx - dy) * 0.01 // Radians
 
         selectedUVs.forEach(sel => {
             const geoset = modelData.Geosets![sel.geosetIndex]
@@ -298,8 +307,8 @@ const UVEditor: React.FC<UVEditorProps> = ({
             })
         })
 
-        syncToStore()
-    }, [modelData, selectedUVs, syncToStore, getSelectionCenter])
+        setRenderTick(t => t + 1)
+    }, [modelData, selectedUVs, getSelectionCenter])
 
     const mirrorHorizontal = useCallback(() => {
         if (!modelData?.Geosets) return
@@ -567,15 +576,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
             setIsPanning(true)
             setDragStart({ x: e.clientX, y: e.clientY })
         } else if (e.button === 0) {
-            // Alt + Left Click = Box Selection (always)
-            if (e.altKey) {
-                setIsSelecting(true)
-                setSelectionStart({ x, y })
-                setSelectionEnd({ x, y })
-                return
-            }
-
-            // Check Gizmo Hit
+            // Check Gizmo Hit first (only when in transform mode with selection)
             if (transformMode !== 'select' && selectedUVs.length > 0) {
                 const center = getSelectionCenter()
                 if (center) {
@@ -622,12 +623,10 @@ const UVEditor: React.FC<UVEditorProps> = ({
                 }
             }
 
-            // Select mode: box selection
-            if (transformMode === 'select') {
-                setIsSelecting(true)
-                setSelectionStart({ x, y })
-                setSelectionEnd({ x, y })
-            }
+            // If not hitting gizmo, start box selection (LMB directly)
+            setIsSelecting(true)
+            setSelectionStart({ x, y })
+            setSelectionEnd({ x, y })
         }
     }, [transformMode, selectedUVs, uvToCanvas, getSelectionCenter, addToHistory])
 
@@ -754,6 +753,11 @@ const UVEditor: React.FC<UVEditorProps> = ({
             }
         }
 
+        // Sync to store after drag operations (deferred for performance)
+        if (isDragging && selectedUVs.length > 0) {
+            syncToStore()
+        }
+
         setIsPanning(false)
         setIsSelecting(false)
         setIsDragging(false)
@@ -761,7 +765,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
         setSelectionStart(null)
         setSelectionEnd(null)
         setDragStart(null)
-    }, [isSelecting, selectionStart, selectionEnd, modelData, visibleGeosetIds, uvToCanvas])
+    }, [isSelecting, selectionStart, selectionEnd, modelData, visibleGeosetIds, uvToCanvas, isDragging, selectedUVs, syncToStore])
 
     // -------------------------------------------------------------------------
     // EFFECTS
@@ -889,7 +893,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
 
     useEffect(() => {
         renderCanvas()
-    }, [renderCanvas])
+    }, [renderCanvas, renderTick])
 
     // -------------------------------------------------------------------------
     // DOM
