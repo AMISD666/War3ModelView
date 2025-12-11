@@ -2,6 +2,14 @@
 // @ts-ignore
 import { decodeBLP, getBLPImageData, parseMDX, parseMDL, ModelRenderer } from 'war3-model'
 import { SimpleOrbitCamera } from '../utils/SimpleOrbitCamera'
+import { useViewerCamera } from './viewer/hooks/useViewerCamera'
+import { useSelection } from './viewer/hooks/useSelection'
+import { useGizmoTransform } from './viewer/hooks/useGizmoTransform'
+import { loadAllTextures, loadTeamColorTextures as loadTeamColors } from './viewer/textureLoader'
+import { validateAllParticleEmitters } from './viewer/particleValidator'
+import { checkForStructuralChanges, lightweightSync, syncNodeData } from './viewer/modelSync'
+import { renderGrid, renderCollisionShapes, renderSkeleton, renderNodes, renderLights, renderCameraFrustum, applyGeosetVisibility, restoreGeosetAlphas } from './viewer/renderHelpers'
+import { GizmoAxis as GizmoAxisType, CameraState, hexToRgb, isArrayLike, toArray, getPos, getVal, getVec } from './viewer/types'
 import { mat4, vec3, vec4, quat } from 'gl-matrix'
 import { GridRenderer } from './GridRenderer'
 import { DebugRenderer } from './DebugRenderer'
@@ -1211,70 +1219,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
       // CRITICAL FIX: Validate and fix ParticleEmitters2 before creating renderer
       // This prevents production-only rendering issues caused by invalid/missing properties
-      if (model.ParticleEmitters2 && model.ParticleEmitters2.length > 0) {
-        const textureCount = model.Textures?.length || 0
-        console.log('[Viewer] Validating', model.ParticleEmitters2.length, 'ParticleEmitters2, textureCount:', textureCount)
-
-        model.ParticleEmitters2.forEach((emitter: any, idx: number) => {
-          // Fix 1: TextureID - change -1 or invalid to 0 (first texture)
-          if (emitter.TextureID === undefined || emitter.TextureID === null ||
-            emitter.TextureID < 0 || emitter.TextureID >= textureCount) {
-            console.log(`[Viewer] Particle ${idx} "${emitter.Name}": TextureID ${emitter.TextureID} -> 0`)
-            emitter.TextureID = textureCount > 0 ? 0 : 0
-          }
-
-          // Fix 2: Reconstruct Flags bitmask from boolean properties
-          // war3-model expects numeric Flags, not individual booleans
-          // ParticleEmitter2Flags: Unshaded=32768, SortPrimsFarZ=65536, LineEmitter=131072,
-          //                        Unfogged=262144, ModelSpace=524288, XYQuad=1048576
-          let flags = typeof emitter.Flags === 'number' ? emitter.Flags : 0
-          if (emitter.Unshaded === true) flags |= 32768
-          if (emitter.SortPrimsFarZ === true) flags |= 65536
-          if (emitter.LineEmitter === true) flags |= 131072
-          if (emitter.Unfogged === true) flags |= 262144
-          if (emitter.ModelSpace === true) flags |= 524288
-          if (emitter.XYQuad === true) flags |= 1048576
-
-          // Fix 5: Force Head flag if neither Head nor Tail is set
-          // In production, parsing might fail to set these, causing invisible/needle particles
-          if ((flags & 3) === 0) {
-            console.log(`[Viewer] Particle ${idx} "${emitter.Name}": Missing Head/Tail flags. Forcing Head.`)
-            flags |= 1
-          }
-
-          emitter.Flags = flags
-
-          // Fix 3: Reconstruct FrameFlags from Head/Tail booleans
-          let frameFlags = typeof emitter.FrameFlags === 'number' ? emitter.FrameFlags : 0
-          if (emitter.Head === true) frameFlags |= 1
-          if (emitter.Tail === true) frameFlags |= 2
-          // Default to Head if neither is set
-          if (frameFlags === 0) frameFlags = 1
-          emitter.FrameFlags = frameFlags
-
-          // Fix 4: Convert arrays to typed arrays expected by war3-model renderer
-          if (emitter.ParticleScaling && !(emitter.ParticleScaling instanceof Float32Array)) {
-            emitter.ParticleScaling = new Float32Array(emitter.ParticleScaling)
-          }
-          if (emitter.Alpha && !(emitter.Alpha instanceof Uint8Array)) {
-            emitter.Alpha = new Uint8Array(emitter.Alpha)
-          }
-          if (emitter.SegmentColor && Array.isArray(emitter.SegmentColor)) {
-            emitter.SegmentColor = emitter.SegmentColor.map((c: any) =>
-              c instanceof Float32Array ? c : new Float32Array(c)
-            )
-          }
-          // Convert UV anim arrays to Float32Array if present
-          const uvAnimProps = ['LifeSpanUVAnim', 'DecayUVAnim', 'TailUVAnim', 'TailDecayUVAnim']
-          uvAnimProps.forEach(prop => {
-            if (emitter[prop] && !(emitter[prop] instanceof Float32Array)) {
-              emitter[prop] = new Float32Array(emitter[prop])
-            }
-          })
-
-          console.log(`[Viewer] Particle ${idx} validated: Flags=${emitter.Flags}, FrameFlags=${emitter.FrameFlags}, TextureID=${emitter.TextureID}`)
-        })
-      }
+      validateAllParticleEmitters(model)
 
       const newRenderer = new ModelRenderer(model)
       newRenderer.initGL(gl)
@@ -1471,65 +1416,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
       // CRITICAL FIX: Validate and fix ParticleEmitters2 before creating renderer
       // Same validation as in loadModel - prevents production-only rendering issues
-      if (model.ParticleEmitters2 && model.ParticleEmitters2.length > 0) {
-        const textureCount = model.Textures?.length || 0
-        console.log('[Viewer] reloadRendererWithData: Validating', model.ParticleEmitters2.length, 'ParticleEmitters2')
-
-        model.ParticleEmitters2.forEach((emitter: any, idx: number) => {
-          // Fix 1: TextureID - change -1 or invalid to 0 (first texture)
-          if (emitter.TextureID === undefined || emitter.TextureID === null ||
-            emitter.TextureID < 0 || emitter.TextureID >= textureCount) {
-            console.log(`[Viewer] Particle ${idx}: TextureID ${emitter.TextureID} -> 0`)
-            emitter.TextureID = textureCount > 0 ? 0 : 0
-          }
-
-          // Fix 2: Reconstruct Flags bitmask from boolean properties
-          let flags = typeof emitter.Flags === 'number' ? emitter.Flags : 0
-          if (emitter.Unshaded === true) flags |= 32768
-          if (emitter.SortPrimsFarZ === true) flags |= 65536
-          if (emitter.LineEmitter === true) flags |= 131072
-          if (emitter.Unfogged === true) flags |= 262144
-          if (emitter.ModelSpace === true) flags |= 524288
-          if (emitter.XYQuad === true) flags |= 1048576
-
-
-          // Fix 5: Force Head flag if neither Head nor Tail is set
-          if ((flags & 3) === 0) {
-            console.log(`[Viewer] Particle ${idx} (Reload): Missing Head/Tail flags. Forcing Head.`)
-            flags |= 1
-          }
-
-
-
-          emitter.Flags = flags
-
-          // Fix 3: Reconstruct FrameFlags from Head/Tail booleans
-          let frameFlags = typeof emitter.FrameFlags === 'number' ? emitter.FrameFlags : 0
-          if (emitter.Head === true) frameFlags |= 1
-          if (emitter.Tail === true) frameFlags |= 2
-          if (frameFlags === 0) frameFlags = 1
-          emitter.FrameFlags = frameFlags
-
-          // Fix 4: Convert arrays to typed arrays
-          if (emitter.ParticleScaling && !(emitter.ParticleScaling instanceof Float32Array)) {
-            emitter.ParticleScaling = new Float32Array(emitter.ParticleScaling)
-          }
-          if (emitter.Alpha && !(emitter.Alpha instanceof Uint8Array)) {
-            emitter.Alpha = new Uint8Array(emitter.Alpha)
-          }
-          if (emitter.SegmentColor && Array.isArray(emitter.SegmentColor)) {
-            emitter.SegmentColor = emitter.SegmentColor.map((c: any) =>
-              c instanceof Float32Array ? c : new Float32Array(c)
-            )
-          }
-          const uvAnimProps = ['LifeSpanUVAnim', 'DecayUVAnim', 'TailUVAnim', 'TailDecayUVAnim']
-          uvAnimProps.forEach(prop => {
-            if (emitter[prop] && !(emitter[prop] instanceof Float32Array)) {
-              emitter[prop] = new Float32Array(emitter[prop])
-            }
-          })
-        })
-      }
+      validateAllParticleEmitters(model)
 
       const newRenderer = new ModelRenderer(model)
       newRenderer.initGL(gl)
@@ -1663,30 +1550,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       // This is the LIGHTWEIGHT SYNC approach - only updates internal data arrays
       if (renderer && modelData) {
         // Check for structural changes that require full reload
-        const geoChanged = (modelData.Geosets?.length || 0) !== (renderer.model.Geosets?.length || 0)
-        const textureChanged = (modelData.Textures?.length || 0) !== (renderer.model.Textures?.length || 0)
-        const materialChanged = (modelData.Materials?.length || 0) !== (renderer.model.Materials?.length || 0)
-        const particleChanged = (modelData.ParticleEmitters2?.length || 0) !== (renderer.model.ParticleEmitters2?.length || 0)
-        // Lights change requires strick checking.
-        // If only properties changed, we can lightweight sync.
-        // If count changed, we might need full reload (depending on shader implementation, but safe to reload)
-        const lightCountChanged = (modelData.Lights?.length || 0) !== (renderer.model.Lights?.length || 0)
+        const { needsReload, reason } = checkForStructuralChanges(modelData, renderer.model)
 
-        // Check if any geoset's MaterialID has changed (requires texture reload)
-        let geosetMaterialChanged = false
-        if (!geoChanged && modelData.Geosets && renderer.model.Geosets) {
-          for (let i = 0; i < modelData.Geosets.length; i++) {
-            if (modelData.Geosets[i]?.MaterialID !== renderer.model.Geosets[i]?.MaterialID) {
-              geosetMaterialChanged = true
-              console.log(`[Viewer] Geoset ${i} MaterialID changed from ${renderer.model.Geosets[i]?.MaterialID} to ${modelData.Geosets[i]?.MaterialID}`)
-              break
-            }
-          }
-        }
-
-        // Geosets, Textures, Materials, Particles, MaterialID, or LIGHT COUNT changes need full reload
-        if (geoChanged || textureChanged || materialChanged || particleChanged || geosetMaterialChanged || lightCountChanged) {
-          console.log('[Viewer] Structural change detected (Geo/Tex/Mat/Particle). Triggering full reload.')
+        if (needsReload) {
+          console.log('[Viewer] Structural change detected:', reason, '. Triggering full reload.')
           reloadRendererWithData(modelData, modelPath || '')
           lastReloadTrigger.current = rendererReloadTrigger
           return
@@ -1837,13 +1704,6 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         quat.identity(cameraQuat)
         const pMatrix = mat4.create()
         const mvMatrix = mat4.create()
-
-        const hexToRgb = (hex: string) => {
-          const r = parseInt(hex.slice(1, 3), 16) / 255
-          const g = parseInt(hex.slice(3, 5), 16) / 255
-          const b = parseInt(hex.slice(5, 7), 16) / 255
-          return [r, g, b]
-        }
 
         const [r, g, b] = hexToRgb(backgroundColorRef.current)
         gl.clearColor(r, g, b, 1.0)

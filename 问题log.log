@@ -1,0 +1,63 @@
+D:\Desktop\war3modelview\War3ModelView>npm run tauri dev
+
+> gugu-war3-model-editor@1.0.0 tauri
+> tauri dev
+
+     Running BeforeDevCommand (`npm run dev`)
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+        Info Watching D:\Desktop\war3modelview\War3ModelView\src-tauri for changes...
+
+> gugu-war3-model-editor@1.0.0 dev
+> npm run dev:vite
+
+
+> gugu-war3-model-editor@1.0.0 dev:vite
+> vite
+
+   Compiling proc-macro2 v1.0.103
+   Compiling quote v1.0.42
+   Compiling zerocopy v0.8.30
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling icu_properties_data v2.1.1
+   Compiling icu_normalizer_data v2.1.1
+   Compiling phf_shared v0.11.3
+   Compiling thiserror v2.0.17
+   Compiling getrandom v0.1.16
+   Compiling ryu v1.0.20
+   Compiling utf8_iter v1.0.4
+   Compiling log v0.4.28
+   Compiling windows_x86_64_msvc v0.52.6
+   Compiling winnow v0.7.14
+   Compiling parking_lot_core v0.9.12
+   Compiling ident_case v1.0.1
+   Compiling syn v1.0.109
+   Compiling typeid v1.0.3
+   Compiling toml_writer v1.0.4
+   Compiling scopeguard v1.2.0
+   Compiling erased-serde v0.4.9
+   Compiling lock_api v0.4.14
+   Compiling aho-corasick v1.1.4
+   Compiling phf_shared v0.8.0
+   Compiling regex-syntax v0.8.8
+   Compiling thiserror v1.0.69
+   Compiling unic-common v0.9.0
+   Compiling proc-macro-hack v0.5.20+deprecated
+   Compiling bytes v1.11.0
+   Compiling unic-char-range v0.9.0
+   Compiling unic-ucd-version v0.9.0
+   Compiling phf_shared v0.10.0
+   Compiling unic-char-property v0.9.0
+   Compiling dunce v1.0.5
+   Compiling version_check v0.9.5
+   Compiling getrandom v0.3.4
+   Compiling serde_json v1.0.145
+The CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.
+   Compiling new_debug_unreachable v1.0.6
+error when starting dev server:         ] 58/477: serde...
+Error: Port 5173 is already in use
+    at Server.onError (file:///D:/Desktop/war3modelview/War3ModelView/node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:45596:18)
+    at Server.emit (node:events:508:28)
+    at emitErrorNT (node:net:1976:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:89:21)
+       Error The "beforeDevCommand" terminated with a non-zero status code.

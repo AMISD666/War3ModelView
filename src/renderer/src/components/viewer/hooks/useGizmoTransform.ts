@@ -1,0 +1,307 @@
+/**
+ * useGizmoTransform - Gizmo transformation logic for the Viewer component
+ * Handles translation, rotation, and scaling of vertices and nodes via gizmo dragging
+ */
+
+import { useCallback } from 'react'
+import { vec3, mat4 } from 'gl-matrix'
+import { useSelectionStore } from '../../../store/selectionStore'
+import type { GizmoAxis, CameraState } from '../types'
+
+export interface UseGizmoTransformParams {
+    rendererRef: React.MutableRefObject<any>
+    targetCamera: React.MutableRefObject<CameraState>
+    gizmoState: React.MutableRefObject<{
+        activeAxis: GizmoAxis
+        isDragging: boolean
+        dragStartPos: vec3 | null
+    }>
+    animationSubMode: string
+}
+
+/**
+ * Calculate world movement delta from screen delta
+ */
+function calculateWorldMoveDelta(
+    deltaX: number,
+    deltaY: number,
+    cameraState: CameraState
+): vec3 {
+    const { theta, phi, distance } = cameraState
+    const forward = vec3.fromValues(
+        Math.sin(phi) * Math.cos(theta),
+        Math.sin(phi) * Math.sin(theta),
+        Math.cos(phi)
+    )
+    const up = vec3.fromValues(0, 0, 1)
+    const right = vec3.create()
+    vec3.cross(right, forward, up)
+    vec3.normalize(right, right)
+    const camUp = vec3.create()
+    vec3.cross(camUp, right, forward)
+    vec3.normalize(camUp, camUp)
+
+    const moveScale = distance * 0.001
+    const worldMoveDelta = vec3.create()
+    vec3.scaleAndAdd(worldMoveDelta, worldMoveDelta, right, deltaX * moveScale)
+    vec3.scaleAndAdd(worldMoveDelta, worldMoveDelta, camUp, -deltaY * moveScale)
+
+    return worldMoveDelta
+}
+
+/**
+ * Get move vector based on axis
+ */
+function getMoveVectorForAxis(worldMoveDelta: vec3, axis: GizmoAxis): vec3 {
+    const moveVec = vec3.create()
+    if (axis === 'x') moveVec[0] = -worldMoveDelta[0]
+    else if (axis === 'y') moveVec[1] = -worldMoveDelta[1]
+    else if (axis === 'z') moveVec[2] = worldMoveDelta[2]
+    else if (axis === 'xy') { moveVec[0] = -worldMoveDelta[0]; moveVec[1] = -worldMoveDelta[1] }
+    else if (axis === 'xz') { moveVec[0] = -worldMoveDelta[0]; moveVec[2] = worldMoveDelta[2] }
+    else if (axis === 'yz') { moveVec[1] = -worldMoveDelta[1]; moveVec[2] = worldMoveDelta[2] }
+    return moveVec
+}
+
+export function useGizmoTransform({
+    rendererRef,
+    targetCamera,
+    gizmoState,
+    animationSubMode
+}: UseGizmoTransformParams) {
+
+    /**
+     * Handle gizmo drag for transformations
+     */
+    const handleGizmoDrag = useCallback((deltaX: number, deltaY: number) => {
+        const { transformMode, mainMode } = useSelectionStore.getState()
+        const axis = gizmoState.current.activeAxis
+
+        if (!axis) return
+        if (mainMode !== 'geometry' && !(mainMode === 'animation' && animationSubMode === 'binding')) {
+            return
+        }
+
+        const worldMoveDelta = calculateWorldMoveDelta(deltaX, deltaY, targetCamera.current)
+
+        // === TRANSLATE MODE ===
+        if (transformMode === 'translate' && mainMode === 'geometry') {
+            handleTranslateVertices(deltaX, deltaY, axis, worldMoveDelta)
+        } else if (transformMode === 'translate' && mainMode === 'animation' && animationSubMode === 'binding') {
+            handleTranslateNodes(axis, worldMoveDelta)
+        } else if (transformMode === 'rotate' || transformMode === 'scale') {
+            handleRotateOrScaleVertices(deltaX, deltaY, transformMode, axis)
+        }
+    }, [animationSubMode, targetCamera, gizmoState, rendererRef])
+
+    /**
+     * Translate vertices in geometry mode
+     */
+    const handleTranslateVertices = useCallback((
+        _deltaX: number,
+        _deltaY: number,
+        axis: GizmoAxis,
+        worldMoveDelta: vec3
+    ) => {
+        if (!rendererRef.current) return
+
+        const moveVec = getMoveVectorForAxis(worldMoveDelta, axis)
+        const { selectedVertexIds, selectedFaceIds, geometrySubMode } = useSelectionStore.getState()
+        const affectedGeosets = new Set<number>()
+
+        const updateVertex = (geosetIndex: number, vertexIndex: number, updateFn: (v: Float32Array, idx: number) => void) => {
+            const geoset = rendererRef.current.model.Geosets[geosetIndex]
+            if (!geoset) return
+            updateFn(geoset.Vertices, vertexIndex * 3)
+            affectedGeosets.add(geosetIndex)
+        }
+
+        const applyToSelection = (updateFn: (v: Float32Array, idx: number) => void) => {
+            if (geometrySubMode === 'vertex') {
+                selectedVertexIds.forEach(sel => updateVertex(sel.geosetIndex, sel.index, updateFn))
+            } else if (geometrySubMode === 'face') {
+                selectedFaceIds.forEach(sel => {
+                    const geoset = rendererRef.current.model.Geosets[sel.geosetIndex]
+                    if (geoset) {
+                        const fIndex = sel.index * 3
+                        updateVertex(sel.geosetIndex, geoset.Faces[fIndex], updateFn)
+                        updateVertex(sel.geosetIndex, geoset.Faces[fIndex + 1], updateFn)
+                        updateVertex(sel.geosetIndex, geoset.Faces[fIndex + 2], updateFn)
+                    }
+                })
+            }
+        }
+
+        applyToSelection((v, i) => {
+            v[i] += moveVec[0]
+            v[i + 1] += moveVec[1]
+            v[i + 2] += moveVec[2]
+        })
+
+        // Update GPU buffers
+        affectedGeosets.forEach(geosetIndex => {
+            const geoset = rendererRef.current.model.Geosets[geosetIndex]
+            if ((rendererRef.current as any).updateGeosetVertices) {
+                (rendererRef.current as any).updateGeosetVertices(geosetIndex, geoset.Vertices)
+            }
+        })
+    }, [rendererRef])
+
+    /**
+     * Translate nodes in animation binding mode
+     */
+    const handleTranslateNodes = useCallback((axis: GizmoAxis, worldMoveDelta: vec3) => {
+        if (!rendererRef.current?.rendererData?.nodes) return
+
+        const moveVec = getMoveVectorForAxis(worldMoveDelta, axis)
+        const { selectedNodeIds } = useSelectionStore.getState()
+
+        selectedNodeIds.forEach(nodeId => {
+            const nodeWrapper = rendererRef.current.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
+            if (nodeWrapper?.node.PivotPoint) {
+                nodeWrapper.node.PivotPoint[0] += moveVec[0]
+                nodeWrapper.node.PivotPoint[1] += moveVec[1]
+                nodeWrapper.node.PivotPoint[2] += moveVec[2]
+            }
+        })
+    }, [rendererRef])
+
+    /**
+     * Rotate or scale vertices
+     */
+    const handleRotateOrScaleVertices = useCallback((
+        deltaX: number,
+        deltaY: number,
+        transformMode: 'rotate' | 'scale',
+        axis: GizmoAxis
+    ) => {
+        if (!rendererRef.current) return
+
+        const { selectedVertexIds, selectedFaceIds, geometrySubMode } = useSelectionStore.getState()
+
+        // Calculate center of selection
+        const center = vec3.create()
+        let count = 0
+
+        const accumulateCenter = (geosetIndex: number, vertexIndex: number) => {
+            const geoset = rendererRef.current.model.Geosets[geosetIndex]
+            if (!geoset) return
+            const vIndex = vertexIndex * 3
+            center[0] += geoset.Vertices[vIndex]
+            center[1] += geoset.Vertices[vIndex + 1]
+            center[2] += geoset.Vertices[vIndex + 2]
+            count++
+        }
+
+        if (geometrySubMode === 'vertex') {
+            selectedVertexIds.forEach(sel => accumulateCenter(sel.geosetIndex, sel.index))
+        } else if (geometrySubMode === 'face') {
+            selectedFaceIds.forEach(sel => {
+                const geoset = rendererRef.current.model.Geosets[sel.geosetIndex]
+                if (geoset) {
+                    const fIndex = sel.index * 3
+                    accumulateCenter(sel.geosetIndex, geoset.Faces[fIndex])
+                    accumulateCenter(sel.geosetIndex, geoset.Faces[fIndex + 1])
+                    accumulateCenter(sel.geosetIndex, geoset.Faces[fIndex + 2])
+                }
+            })
+        }
+
+        if (count === 0) return
+        vec3.scale(center, center, 1.0 / count)
+
+        const affectedGeosets = new Set<number>()
+
+        const updateVertex = (geosetIndex: number, vertexIndex: number, updateFn: (v: Float32Array, idx: number) => void) => {
+            const geoset = rendererRef.current.model.Geosets[geosetIndex]
+            if (!geoset) return
+            updateFn(geoset.Vertices, vertexIndex * 3)
+            affectedGeosets.add(geosetIndex)
+        }
+
+        const applyToSelection = (updateFn: (v: Float32Array, idx: number) => void) => {
+            if (geometrySubMode === 'vertex') {
+                selectedVertexIds.forEach(sel => updateVertex(sel.geosetIndex, sel.index, updateFn))
+            } else if (geometrySubMode === 'face') {
+                selectedFaceIds.forEach(sel => {
+                    const geoset = rendererRef.current.model.Geosets[sel.geosetIndex]
+                    if (geoset) {
+                        const fIndex = sel.index * 3
+                        updateVertex(sel.geosetIndex, geoset.Faces[fIndex], updateFn)
+                        updateVertex(sel.geosetIndex, geoset.Faces[fIndex + 1], updateFn)
+                        updateVertex(sel.geosetIndex, geoset.Faces[fIndex + 2], updateFn)
+                    }
+                })
+            }
+        }
+
+        if (transformMode === 'rotate') {
+            let angle = 0
+            const rotAxis = vec3.create()
+
+            if (axis === 'x') {
+                angle = deltaY * 0.01
+                vec3.set(rotAxis, 1, 0, 0)
+            } else if (axis === 'y') {
+                angle = -deltaX * 0.01
+                vec3.set(rotAxis, 0, 1, 0)
+            } else if (axis === 'z') {
+                angle = deltaX * 0.01
+                vec3.set(rotAxis, 0, 0, 1)
+            }
+
+            if (angle !== 0) {
+                const rotMat = mat4.create()
+                mat4.fromRotation(rotMat, angle, rotAxis)
+
+                applyToSelection((v, i) => {
+                    const p = vec3.fromValues(v[i], v[i + 1], v[i + 2])
+                    vec3.sub(p, p, center)
+                    vec3.transformMat4(p, p, rotMat)
+                    vec3.add(p, p, center)
+                    v[i] = p[0]
+                    v[i + 1] = p[1]
+                    v[i + 2] = p[2]
+                })
+            }
+        } else if (transformMode === 'scale') {
+            const scaleVec = vec3.fromValues(1, 1, 1)
+            const scaleFactor = 1 + (deltaX - deltaY) * 0.005
+
+            if (axis === 'x') scaleVec[0] = scaleFactor
+            else if (axis === 'y') scaleVec[1] = scaleFactor
+            else if (axis === 'z') scaleVec[2] = scaleFactor
+            else if (axis === 'xy') { scaleVec[0] = scaleFactor; scaleVec[1] = scaleFactor }
+            else if (axis === 'xz') { scaleVec[0] = scaleFactor; scaleVec[2] = scaleFactor }
+            else if (axis === 'yz') { scaleVec[1] = scaleFactor; scaleVec[2] = scaleFactor }
+            else if (axis === 'center') { vec3.set(scaleVec, scaleFactor, scaleFactor, scaleFactor) }
+
+            if (scaleVec[0] !== 1 || scaleVec[1] !== 1 || scaleVec[2] !== 1) {
+                applyToSelection((v, i) => {
+                    const p = vec3.fromValues(v[i], v[i + 1], v[i + 2])
+                    vec3.sub(p, p, center)
+                    vec3.mul(p, p, scaleVec)
+                    vec3.add(p, p, center)
+                    v[i] = p[0]
+                    v[i + 1] = p[1]
+                    v[i + 2] = p[2]
+                })
+            }
+        }
+
+        // Update GPU buffers
+        affectedGeosets.forEach(geosetIndex => {
+            const geoset = rendererRef.current.model.Geosets[geosetIndex]
+            if ((rendererRef.current as any).updateGeosetVertices) {
+                (rendererRef.current as any).updateGeosetVertices(geosetIndex, geoset.Vertices)
+            }
+        })
+    }, [rendererRef])
+
+    return {
+        handleGizmoDrag,
+        handleTranslateVertices,
+        handleTranslateNodes,
+        handleRotateOrScaleVertices
+    }
+}
