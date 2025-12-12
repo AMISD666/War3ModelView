@@ -1,0 +1,37 @@
+
+> gugu-war3-model-editor@1.0.0 typecheck:web
+> tsc --noEmit -p tsconfig.web.json --composite false
+
+src/renderer/src/components/editors/UVEditor.tsx(24,5): error TS6133: 'BgColorsOutlined' is declared but its value is never read.
+src/renderer/src/components/editors/UVEditor.tsx(135,15): error TS6133: 'canvasSize' is declared but its value is never read.
+src/renderer/src/components/Viewer.tsx(5,1): error TS6133: 'useViewerCamera' is declared but its value is never read.
+src/renderer/src/components/Viewer.tsx(6,1): error TS6133: 'useSelection' is declared but its value is never read.
+src/renderer/src/components/Viewer.tsx(7,1): error TS6133: 'useGizmoTransform' is declared but its value is never read.
+src/renderer/src/components/Viewer.tsx(8,52): error TS6133: 'loadTeamColors' is declared but its value is never read.
+src/renderer/src/components/Viewer.tsx(10,37): error TS6133: 'lightweightSync' is declared but its value is never read.
+src/renderer/src/components/Viewer.tsx(10,54): error TS6133: 'syncNodeData' is declared but its value is never read.
+src/renderer/src/components/Viewer.tsx(12,1): error TS6192: All imports in import declaration are unused.
+src/renderer/src/components/Viewer.tsx(13,23): error TS6133: 'GizmoAxisType' is declared but its value is never read.
+src/renderer/src/components/Viewer.tsx(13,38): error TS6133: 'CameraState' is declared but its value is never read.
+src/renderer/src/components/Viewer.tsx(13,61): error TS6133: 'isArrayLike' is declared but its value is never read.
+src/renderer/src/components/Viewer.tsx(13,74): error TS6133: 'toArray' is declared but its value is never read.
+src/renderer/src/components/Viewer.tsx(13,83): error TS6133: 'getPos' is declared but its value is never read.
+src/renderer/src/components/Viewer.tsx(13,91): error TS6133: 'getVal' is declared but its value is never read.
+src/renderer/src/components/Viewer.tsx(13,99): error TS6133: 'getVec' is declared but its value is never read.
+src/renderer/src/components/Viewer.tsx(1469,24): error TS2339: Property 'updateGeosetTexCoords' does not exist on type 'ModelRenderer'.
+src/renderer/src/components/viewer/hooks/useMouseHandlers.ts(6,23): error TS6133: 'useRef' is declared but its value is never read.
+src/renderer/src/components/viewer/hooks/useMouseHandlers.ts(7,1): error TS6133: 'vec3' is declared but its value is never read.
+src/renderer/src/components/viewer/renderHelpers.ts(6,22): error TS6133: 'vec4' is declared but its value is never read.
+src/renderer/src/components/viewer/renderHelpers.ts(7,30): error TS2307: Cannot find module '../../GridRenderer' or its corresponding type declarations.
+src/renderer/src/components/viewer/renderHelpers.ts(8,31): error TS2307: Cannot find module '../../DebugRenderer' or its corresponding type declarations.
+src/renderer/src/components/viewer/renderHelpers.ts(9,1): error TS6133: 'GizmoRenderer' is declared but its value is never read.
+src/renderer/src/components/viewer/renderHelpers.ts(9,31): error TS2307: Cannot find module '../../GizmoRenderer' or its corresponding type declarations.
+src/renderer/src/components/viewer/renderHelpers.ts(10,31): error TS2307: Cannot find module '../../../store/modelStore' or its corresponding type declarations.
+src/renderer/src/components/viewer/renderHelpers.ts(11,35): error TS2307: Cannot find module '../../../store/selectionStore' or its corresponding type declarations.
+src/renderer/src/components/viewer/renderHelpers.ts(12,10): error TS6133: 'isArrayLike' is declared but its value is never read.
+src/renderer/src/components/viewer/renderHelpers.ts(12,23): error TS6133: 'toArray' is declared but its value is never read.
+src/renderer/src/components/viewer/renderHelpers.ts(12,56): error TS6133: 'hexToRgb' is declared but its value is never read.
+src/renderer/src/components/viewer/renderHelpers.ts(12,72): error TS2307: Cannot find module '../types' or its corresponding type declarations.
+src/renderer/src/components/viewer/renderHelpers.ts(233,5): error TS6133: 'gl' is declared but its value is never read.
+src/renderer/src/components/viewer/textureLoader.ts(254,52): error TS6133: 'i' is declared but its value is never read.
+src/renderer/src/utils/debugLogger.ts(39,5): error TS6133: 'model' is declared but its value is never read.
