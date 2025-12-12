@@ -1,63 +1,161 @@
-D:\Desktop\war3modelview\War3ModelView>npm run tauri dev
+[console.error] Warning: findDOMNode is deprecated and will be removed in the next major release. Instead, add a ref directly to the element you want to reference. Learn more about using refs safely here: https://reactjs.org/link/strict-mode-find-node%s
+    at SingleObserver (http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:2390:24)
+    at ResizeObserver3 (http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:2467:24)
+    at http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:24693:34
+    at Tooltip2 (http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:30138:32)
+    at http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:30790:16
+    at div
+    at div
+    at UVEditor (http://localhost:5173/src/components/editors/UVEditor.tsx:44:3)
+    at div
+    at div
+    at UVModeLayout (http://localhost:5173/src/components/UVModeLayout.tsx:23:3)
+    at div
+    at div
+    at div
+    at MainLayout (http://localhost:5173/src/components/MainLayout.tsx:278:7)
+    at main
+    at http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:67035:16
+    at Content
+    at div
+    at MainLayoutNew (http://localhost:5173/src/components/MainLayoutNew.tsx:34:7)
+    at App (http://localhost:5173/src/App.tsx:23:3)
 
-> gugu-war3-model-editor@1.0.0 tauri
-> tauri dev
-
-     Running BeforeDevCommand (`npm run dev`)
-     Running DevCommand (`cargo  run --no-default-features --color always --`)
-        Info Watching D:\Desktop\war3modelview\War3ModelView\src-tauri for changes...
-
-> gugu-war3-model-editor@1.0.0 dev
-> npm run dev:vite
 
 
-> gugu-war3-model-editor@1.0.0 dev:vite
-> vite
 
-   Compiling proc-macro2 v1.0.103
-   Compiling quote v1.0.42
-   Compiling zerocopy v0.8.30
-   Compiling serde_core v1.0.228
-   Compiling serde v1.0.228
-   Compiling icu_properties_data v2.1.1
-   Compiling icu_normalizer_data v2.1.1
-   Compiling phf_shared v0.11.3
-   Compiling thiserror v2.0.17
-   Compiling getrandom v0.1.16
-   Compiling ryu v1.0.20
-   Compiling utf8_iter v1.0.4
-   Compiling log v0.4.28
-   Compiling windows_x86_64_msvc v0.52.6
-   Compiling winnow v0.7.14
-   Compiling parking_lot_core v0.9.12
-   Compiling ident_case v1.0.1
-   Compiling syn v1.0.109
-   Compiling typeid v1.0.3
-   Compiling toml_writer v1.0.4
-   Compiling scopeguard v1.2.0
-   Compiling erased-serde v0.4.9
-   Compiling lock_api v0.4.14
-   Compiling aho-corasick v1.1.4
-   Compiling phf_shared v0.8.0
-   Compiling regex-syntax v0.8.8
-   Compiling thiserror v1.0.69
-   Compiling unic-common v0.9.0
-   Compiling proc-macro-hack v0.5.20+deprecated
-   Compiling bytes v1.11.0
-   Compiling unic-char-range v0.9.0
-   Compiling unic-ucd-version v0.9.0
-   Compiling phf_shared v0.10.0
-   Compiling unic-char-property v0.9.0
-   Compiling dunce v1.0.5
-   Compiling version_check v0.9.5
-   Compiling getrandom v0.3.4
-   Compiling serde_json v1.0.145
-The CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.
-   Compiling new_debug_unreachable v1.0.6
-error when starting dev server:         ] 58/477: serde...
-Error: Port 5173 is already in use
-    at Server.onError (file:///D:/Desktop/war3modelview/War3ModelView/node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:45596:18)
-    at Server.emit (node:events:508:28)
-    at emitErrorNT (node:net:1976:8)
-    at process.processTicksAndRejections (node:internal/process/task_queues:89:21)
-       Error The "beforeDevCommand" terminated with a non-zero status code.
+react-dom.development.js:29895 Download the React DevTools for a better development experience: https://reactjs.org/link/react-devtools
+main.tsx:8 war3-model loaded: ƒ parse(arrayBuffer) {
+  const state = new State(arrayBuffer);
+  if (state.keyword() !== "MDLX") {
+    throw new Error("Not a mdx model");
+  }
+  const model = {
+    // default
+    Version: 800,
+    Inf…
+:5173/favicon.ico:1   Failed to load resource: the server responded with a status of 404 (Not Found)
+modelStore.ts:330 [ModelStore] Loaded model with 0 nodes
+Viewer.tsx:1255 [Viewer] MDX Parse: 14.932861328125 ms
+Viewer.tsx:1256 [Viewer] Model Parsing took 15.1ms
+debugLogger.ts:16 ========================================
+Viewer.tsx:1260 [Viewer] Parsed model: Object
+Viewer.tsx:1271 [Viewer] Sequence 0 "zSX2530075955" Interval (Uint32Array): [0, 33]
+Viewer.tsx:1271 [Viewer] Sequence 1 "attack" Interval (Uint32Array): [333, 1899]
+Viewer.tsx:1271 [Viewer] Sequence 2 "walk" Interval (Uint32Array): [4100, 4767]
+Viewer.tsx:1271 [Viewer] Sequence 3 "stand" Interval (Uint32Array): [6467, 7800]
+Viewer.tsx:1271 [Viewer] Sequence 4 "spell2" Interval (Uint32Array): [12400, 17167]
+Viewer.tsx:1271 [Viewer] Sequence 5 "stand2" Interval (Uint32Array): [18867, 20067]
+MainLayout.tsx:667 Model loaded: Object
+modelStore.ts:191 [ModelStore] Extracted nodes: 83 from keys: Array(21)
+modelStore.ts:330 [ModelStore] Loaded model with 83 nodes
+modelInstance.ts:203 [ModelInstance] initMaterialLayers called. Materials count: 1
+modelRenderer.ts:2698 [initShaders] Attribute locations: Object
+modelRenderer.ts:555  [ModelRenderer] Float textures not supported, falling back to HALF_FLOAT
+initBoneTexture @ modelRenderer.ts:555
+Viewer.tsx:1291 [Viewer] Renderer Init took 28.8ms
+debugLogger.ts:16 📦 模型加载: SX-wangqishou00.mdx
+textureLoader.ts:239 [Viewer] Texture Load+Decode (Parallel): 278.96484375 ms
+textureLoader.ts:251 [Viewer] Texture Upload (Sequential): 7.0400390625 ms
+debugLogger.ts:16    贴图列表 (2):
+MainLayout.tsx:689 [MainLayout] Auto-playing first animation (New Model or Reset)
+debugLogger.ts:16    路径: D:\Desktop\A王棋兽\SX-wangqishou00.mdx
+debugLogger.ts:12      ✓ wangqishou_base.blp
+debugLogger.ts:16    解析耗时: 15.1ms
+debugLogger.ts:12      ✓ diyuma04.blp
+debugLogger.ts:16 ----------------------------------------
+debugLogger.ts:16 ----------------------------------------
+debugLogger.ts:16    贴图加载完成: 2/2 (322.0ms)
+debugLogger.ts:16 ========================================
+textureLoader.ts:263 [Viewer] Texture Load (Batch): 325.18212890625 ms
+Viewer.tsx:1299 [Viewer] loadModel: All textures loaded, setting renderer
+Viewer.tsx:1301 [Viewer] FullModelLoad: 379.237060546875 ms
+Viewer.tsx:2161 [Viewer] Setting sequence to: 0 rendererData exists: true animationInfo: zSX2530075955
+debugLog.ts:57  Warning: findDOMNode is deprecated and will be removed in the next major release. Instead, add a ref directly to the element you want to reference. Learn more about using refs safely here: https://reactjs.org/link/strict-mode-find-node
+    at SingleObserver (http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:2390:24)
+    at ResizeObserver3 (http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:2467:24)
+    at http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:24693:34
+    at Tooltip2 (http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:30138:32)
+    at http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:30790:16
+    at div
+    at div
+    at UVEditor (http://localhost:5173/src/components/editors/UVEditor.tsx:44:3)
+    at div
+    at div
+    at UVModeLayout (http://localhost:5173/src/components/UVModeLayout.tsx:23:3)
+    at div
+    at div
+    at div
+    at MainLayout (http://localhost:5173/src/components/MainLayout.tsx:278:7)
+    at main
+    at http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:67035:16
+    at Content
+    at div
+    at MainLayoutNew (http://localhost:5173/src/components/MainLayoutNew.tsx:34:7)
+    at App (http://localhost:5173/src/App.tsx:23:3)
+console.error @ debugLog.ts:57
+debugLog.ts:57  Warning: findDOMNode is deprecated in StrictMode. findDOMNode was passed an instance of DomWrapper4 which is inside StrictMode. Instead, add a ref directly to the element you want to reference. Learn more about using refs safely here: https://reactjs.org/link/strict-mode-find-node
+    at div
+    at http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:59538:5
+    at http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:24040:24
+    at DomWrapper4 (http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:2376:5)
+    at SingleObserver (http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:2390:24)
+    at ResizeObserver3 (http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:2467:24)
+    at http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:24693:34
+    at Tooltip2 (http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:30138:32)
+    at http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:30790:16
+    at http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:31183:16
+    at ColorPicker2 (http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:60281:5)
+    at http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:24040:24
+    at DomWrapper4 (http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:2376:5)
+    at SingleObserver (http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:2390:24)
+    at ResizeObserver3 (http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:2467:24)
+    at http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:24693:34
+    at Tooltip2 (http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:30138:32)
+    at http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:30790:16
+    at div
+    at div
+    at UVEditor (http://localhost:5173/src/components/editors/UVEditor.tsx:44:3)
+    at div
+    at div
+    at UVModeLayout (http://localhost:5173/src/components/UVModeLayout.tsx:23:3)
+    at div
+    at div
+    at div
+    at MainLayout (http://localhost:5173/src/components/MainLayout.tsx:278:7)
+    at main
+    at http://localhost:5173/@fs/D:/Desktop/war3modelview/War3ModelView/node_modules/.vite/deps/antd.js?v=bbdc6aae:67035:16
+    at Content
+    at div
+    at MainLayoutNew (http://localhost:5173/src/components/MainLayoutNew.tsx:34:7)
+    at App (http://localhost:5173/src/App.tsx:23:3)
+console.error @ debugLog.ts:57
+Viewer.tsx:2161 [Viewer] Setting sequence to: -1 rendererData exists: true animationInfo: undefined
+Viewer.tsx:2161 [Viewer] Setting sequence to: 0 rendererData exists: true animationInfo: undefined
+modelStore.ts:399 [ModelStore] Added node New Particle with ObjectId 82
+debugLog.ts:57  Warning: [antd: message] Static function can not consume context like dynamic theme. Please use 'App' component instead.
+console.error @ debugLog.ts:57
+Viewer.tsx:1426 [Viewer] Model data sync triggered, trigger: 1
+Viewer.tsx:1435 [Viewer] Structural change detected: Particle count changed . Triggering full reload.
+Viewer.tsx:1355 [Viewer] Copying geometry from old geosets (same count)
+particleValidator.ts:78 [particleValidator] Validating 1 ParticleEmitters2, textureCount: 2
+particleValidator.ts:14 [particleValidator] Particle 0 "New Particle": TextureID -1 -> 0
+particleValidator.ts:33 [particleValidator] Particle 0 "New Particle": Missing Head/Tail flags. Forcing Head.
+particleValidator.ts:68 [particleValidator] Particle 0 validated: Flags=98305, FrameFlags=1, TextureID=0
+modelInstance.ts:203 [ModelInstance] initMaterialLayers called. Materials count: 1
+modelRenderer.ts:2698 [initShaders] Attribute locations: Object
+modelRenderer.ts:555  [ModelRenderer] Float textures not supported, falling back to HALF_FLOAT
+initBoneTexture @ modelRenderer.ts:555
+Viewer.tsx:1400 [Viewer] reloadRendererWithData: Renderer Init took 23.8ms
+textureLoader.ts:239 [Viewer] Texture Load+Decode (Parallel): 230.422119140625 ms
+textureLoader.ts:251 [Viewer] Texture Upload (Sequential): 0.02197265625 ms
+debugLogger.ts:16    贴图列表 (2):
+debugLogger.ts:12      ✓ wangqishou_base.blp
+debugLogger.ts:12      ✓ diyuma04.blp
+debugLogger.ts:16 ----------------------------------------
+debugLogger.ts:16    贴图加载完成: 2/2 (243.2ms)
+debugLogger.ts:16 ========================================
+textureLoader.ts:263 [Viewer] Texture Load (Batch): 255.93603515625 ms
+Viewer.tsx:1409 [Viewer] reloadRendererWithData: All textures loaded, setting renderer
+Viewer.tsx:1411 [Viewer] ReloadModel: 280.48095703125 ms
+Viewer.tsx:2161 [Viewer] Setting sequence to: 0 rendererData exists: true animationInfo: zSX2530075955

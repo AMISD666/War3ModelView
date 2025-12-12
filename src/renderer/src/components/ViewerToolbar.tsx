@@ -3,6 +3,7 @@ import { Button, Tooltip, Space } from 'antd';
 import {
     GatewayOutlined, // Vertex/Point
     AppstoreOutlined, // Face
+    GroupOutlined, // Group/Connected
     DragOutlined, // Move
     RedoOutlined, // Rotate
     ExpandOutlined, // Scale
@@ -59,6 +60,13 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({ onRecalculateNorma
                                 type={geometrySubMode === 'face' ? 'primary' : 'default'}
                                 icon={<AppstoreOutlined />}
                                 onClick={() => setGeometrySubMode('face')}
+                            />
+                        </Tooltip>
+                        <Tooltip title="组模式 (选择相连元素)">
+                            <Button
+                                type={geometrySubMode === 'group' ? 'primary' : 'default'}
+                                icon={<GroupOutlined />}
+                                onClick={() => setGeometrySubMode('group')}
                             />
                         </Tooltip>
                         <Tooltip title="重算法线">

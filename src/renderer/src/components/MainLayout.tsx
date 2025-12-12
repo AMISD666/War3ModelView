@@ -1158,7 +1158,7 @@ const MainLayout: React.FC = () => {
                             showWireframe={mainMode !== 'uv' && renderMode === 'wireframe'}
                             onToggleWireframe={() => setRenderMode(prev => prev === 'textured' ? 'wireframe' : 'textured')}
                             backgroundColor={backgroundColor}
-                            animationIndex={mainMode === 'uv' ? -1 : currentSequence}
+                            animationIndex={currentSequence}
                             isPlaying={mainMode !== 'uv' && isPlaying}
                             onTogglePlay={() => setPlaying(!isPlaying)}
                             onModelLoaded={handleModelLoaded}

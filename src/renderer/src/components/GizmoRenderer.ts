@@ -38,7 +38,7 @@ export class GizmoRenderer {
     private colorBuffer: WebGLBuffer | null = null
 
     // Gizmo Geometry Data - Fixed size (no adaptive scaling)
-    private axisLength = 20.0
+    private axisLength = 10.0
 
 
     init(gl: WebGLRenderingContext | WebGL2RenderingContext) {

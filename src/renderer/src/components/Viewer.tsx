@@ -447,8 +447,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const { mainMode } = useSelectionStore.getState()
-    // Check for Gizmo interaction first (Disabled if Alt is pressed)
-    if (gizmoState.current.activeAxis && e.button === 0 && !e.altKey) {
+    // Check for Gizmo interaction first
+    // In geometry mode: Alt = camera rotation (allow Gizmo)
+    // In animation mode: Alt = box selection (block Gizmo)
+    const shouldBlockGizmoForAlt = e.altKey && mainMode === 'animation'
+    if (gizmoState.current.activeAxis && e.button === 0 && !shouldBlockGizmoForAlt) {
       if (cameraRef.current) cameraRef.current.enabled = false
       gizmoState.current.isDragging = true
       mouseState.current.lastMouseX = e.clientX
@@ -510,8 +513,16 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     // const { mainMode } = useSelectionStore.getState() // Moved to top
     // const isCtrl = e.ctrlKey || e.metaKey
 
-    // Box Selection: Alt + Left Click
-    if (e.button === 0 && e.altKey && (mainMode === 'geometry' || mainMode === 'animation')) {
+    // Box Selection behavior:
+    // - In Geometry mode: Direct Left Click = Box Selection, Alt+Left = Camera Rotation
+    // - In Animation mode: Alt + Left Click = Box Selection (legacy)
+    const isGeometryMode = mainMode === 'geometry'
+    const shouldStartBoxSelection = e.button === 0 && (
+      (isGeometryMode && !e.altKey) || // Geometry: direct left click
+      (!isGeometryMode && e.altKey && mainMode === 'animation') // Animation: alt+left
+    )
+
+    if (shouldStartBoxSelection) {
       if (cameraRef.current) cameraRef.current.enabled = false
       const rect = canvasRef.current?.getBoundingClientRect()
       if (rect) {
@@ -1338,8 +1349,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
       // Copy Geoset geometry data from captured old Geosets
       // The modelData from store loses TypedArrays (Vertices, Faces, Normals) during spread operations
-      if (oldGeosets && model.Geosets) {
-        for (let i = 0; i < model.Geosets.length && i < oldGeosets.length; i++) {
+      // BUT: Only do this when geoset count is the same! If count changed (merge/delete),
+      // the new geosets already have the correct geometry from the merge operation.
+      if (oldGeosets && model.Geosets && oldGeosets.length === model.Geosets.length) {
+        console.log('[Viewer] Copying geometry from old geosets (same count)');
+        for (let i = 0; i < model.Geosets.length; i++) {
           const oldGeoset = oldGeosets[i]
           const newGeoset = model.Geosets[i]
 
@@ -1369,6 +1383,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             newGeoset.VertexGroup = oldGeoset.VertexGroup
           }
         }
+      } else if (oldGeosets && model.Geosets) {
+        console.log('[Viewer] Geoset count changed (old:', oldGeosets.length, 'new:', model.Geosets.length, '), using merged geometry directly');
       }
 
       // CRITICAL FIX: Validate and fix ParticleEmitters2 before creating renderer
@@ -1434,6 +1450,13 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         // === PARTICLES ===
         // Sync ParticleEmitters2 array - always sync to handle deletions
         // Default to empty array if undefined to properly handle particle node deletion
+        // CRITICAL: Validate particles BEFORE syncing to prevent crashes from invalid new particles
+        if (modelData.ParticleEmitters2 && modelData.ParticleEmitters2.length > 0) {
+          validateAllParticleEmitters({
+            ParticleEmitters2: modelData.ParticleEmitters2,
+            Textures: modelData.Textures
+          })
+        }
         renderer.model.ParticleEmitters2 = modelData.ParticleEmitters2 || []
         console.log('[Viewer] Synced ParticleEmitters2:', renderer.model.ParticleEmitters2.length, 'emitters')
 
@@ -1974,7 +1997,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           (appMainMode === 'animation' && animationSubMode === 'binding')) {
           for (const geoset of mdlRenderer.model.Geosets) {
             if (geoset.Vertices) {
-              debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, geoset.Vertices, [0, 0, 1, 0.5], 5.0)
+              debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, geoset.Vertices, [0, 0, 1, 0.5], 4.0)
             }
           }
 
@@ -1991,7 +2014,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 )
               }
             }
-            debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, selectedPositions, [1, 0, 0, 1], 5.0)
+            debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, selectedPositions, [1, 0, 0, 1], 4.0)
           }
         }
 
@@ -2484,8 +2507,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       }
 
       if (showGizmo && count > 0 && transformMode) {
-        // Disable Gizmo if Alt is pressed (for Box Selection)
-        if (e.altKey) {
+        // Disable Gizmo if Alt is pressed for Box Selection
+        // In geometry mode: Alt = camera rotation (keep Gizmo active)
+        // In animation mode: Alt = box selection (disable Gizmo)
+        if (e.altKey && mainMode === 'animation') {
           gizmoState.current.activeAxis = null
           return
         }

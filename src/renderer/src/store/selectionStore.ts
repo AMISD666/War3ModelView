@@ -10,10 +10,10 @@ export interface SelectionId {
 }
 
 export type AppMode = 'view' | 'geometry' | 'uv' | 'animation';
-export type GeometrySubMode = 'vertex' | 'face';
+export type GeometrySubMode = 'vertex' | 'face' | 'group';
 export type TransformMode = 'translate' | 'rotate' | 'scale' | null;
 
-export type SelectionMode = 'object' | 'vertex' | 'face'; // Deprecated in favor of AppMode + SubMode, keeping for compatibility for now
+export type SelectionMode = 'object' | 'vertex' | 'face' | 'group'; // Deprecated in favor of AppMode + SubMode, keeping for compatibility for now
 export type GizmoMode = 'translate' | 'rotate' | 'scale'; // Deprecated in favor of TransformMode
 
 interface SelectionState {
