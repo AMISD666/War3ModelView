@@ -37,8 +37,8 @@ export class GizmoRenderer {
     private buffer: WebGLBuffer | null = null
     private colorBuffer: WebGLBuffer | null = null
 
-    // Gizmo Geometry Data
-    private axisLength = 50.0
+    // Gizmo Geometry Data - Fixed size (no adaptive scaling)
+    private axisLength = 20.0
 
 
     init(gl: WebGLRenderingContext | WebGL2RenderingContext) {
@@ -86,7 +86,8 @@ export class GizmoRenderer {
         pMatrix: mat4,
         center: vec3,
         mode: GizmoMode,
-        highlightAxis: GizmoAxis
+        highlightAxis: GizmoAxis,
+        scale: number = 1.0
     ) {
         if (!this.program || !this.buffer || !this.colorBuffer) return
 
@@ -111,18 +112,20 @@ export class GizmoRenderer {
         const green = highlightAxis === 'y' ? [1, 1, 0] : [0, 1, 0]
         const blue = highlightAxis === 'z' ? [1, 1, 0] : [0, 0, 1]
 
+        const axisLen = this.axisLength * scale
+
         if (mode === 'translate') {
-            const xEnd = vec3.create(); vec3.add(xEnd, center, [this.axisLength, 0, 0])
-            const yEnd = vec3.create(); vec3.add(yEnd, center, [0, this.axisLength, 0])
-            const zEnd = vec3.create(); vec3.add(zEnd, center, [0, 0, this.axisLength])
+            const xEnd = vec3.create(); vec3.add(xEnd, center, [axisLen, 0, 0])
+            const yEnd = vec3.create(); vec3.add(yEnd, center, [0, axisLen, 0])
+            const zEnd = vec3.create(); vec3.add(zEnd, center, [0, 0, axisLen])
 
             addLine(center, xEnd, red)
             addLine(center, yEnd, green)
             addLine(center, zEnd, blue)
         } else if (mode === 'scale') {
-            const xEnd = vec3.create(); vec3.add(xEnd, center, [this.axisLength, 0, 0])
-            const yEnd = vec3.create(); vec3.add(yEnd, center, [0, this.axisLength, 0])
-            const zEnd = vec3.create(); vec3.add(zEnd, center, [0, 0, this.axisLength])
+            const xEnd = vec3.create(); vec3.add(xEnd, center, [axisLen, 0, 0])
+            const yEnd = vec3.create(); vec3.add(yEnd, center, [0, axisLen, 0])
+            const zEnd = vec3.create(); vec3.add(zEnd, center, [0, 0, axisLen])
 
             addLine(center, xEnd, red)
             addLine(center, yEnd, green)
@@ -131,14 +134,14 @@ export class GizmoRenderer {
             // Add scale tips (small triangles/lines connecting axes?)
             // For now, just lines is fine, maybe add a small cross at the end?
             // Let's add a small perpendicular line at the end to denote scale
-            const s = 5.0
+            const s = 5.0 * scale
             addLine(xEnd, [xEnd[0], xEnd[1] + s, xEnd[2]], red)
             addLine(yEnd, [yEnd[0] + s, yEnd[1], yEnd[2]], green)
             addLine(zEnd, [zEnd[0], zEnd[1], zEnd[2] + s], blue)
         } else if (mode === 'rotate') {
             // Draw circles
             const segments = 32
-            const r = this.axisLength
+            const r = axisLen
 
             // X-Axis Circle (YZ plane)
             for (let i = 0; i < segments; i++) {
@@ -169,8 +172,8 @@ export class GizmoRenderer {
         }
 
         // Planar Handles (Squares)
-        const planeSize = this.axisLength * 0.3
-        const planeOffset = this.axisLength * 0.1 // Slight offset from origin
+        const planeSize = axisLen * 0.3
+        const planeOffset = axisLen * 0.1 // Slight offset from origin
 
         // XY Plane (Blue)
         if (mode === 'translate' || mode === 'scale') {
@@ -250,21 +253,25 @@ export class GizmoRenderer {
         cameraPos: vec3,
         rayDir: vec3,
         center: vec3,
-        mode: GizmoMode
+        mode: GizmoMode,
+        scale: number = 1.0
     ): GizmoAxis {
         // Simplified ray-cylinder intersection (treating lines as cylinders/capsules)
         // For now, we use a distance check to the line segments
 
-        const threshold = 2.0 // World unit threshold (might need adjustment based on camera distance)
+        const threshold = 5.0 // World unit threshold - increased for easier selection
 
-        // We need to scale threshold by distance to camera to maintain constant screen size feel
+        // Scale threshold by distance to camera to maintain constant screen size feel
         const distToGizmo = vec3.distance(cameraPos, center)
-        const hitThreshold = threshold * (distToGizmo / 500.0) * 5.0
+        // Use a more generous multiplier for hit detection
+        const hitThreshold = threshold * (distToGizmo / 500.0) * 8.0
+
+        const axisLen = this.axisLength * scale
 
         if (mode === 'translate' || mode === 'scale') {
-            const xEnd = vec3.create(); vec3.add(xEnd, center, [this.axisLength, 0, 0])
-            const yEnd = vec3.create(); vec3.add(yEnd, center, [0, this.axisLength, 0])
-            const zEnd = vec3.create(); vec3.add(zEnd, center, [0, 0, this.axisLength])
+            const xEnd = vec3.create(); vec3.add(xEnd, center, [axisLen, 0, 0])
+            const yEnd = vec3.create(); vec3.add(yEnd, center, [0, axisLen, 0])
+            const zEnd = vec3.create(); vec3.add(zEnd, center, [0, 0, axisLen])
 
             const distX = this.distToSegment(cameraPos, rayDir, center, xEnd)
             const distY = this.distToSegment(cameraPos, rayDir, center, yEnd)
@@ -279,8 +286,8 @@ export class GizmoRenderer {
             if (distZ < minDist) { minDist = distZ; hitAxis = 'z' }
 
             // Planar Checks
-            const planeSize = this.axisLength * 0.3
-            const planeOffset = this.axisLength * 0.1
+            const planeSize = axisLen * 0.3
+            const planeOffset = axisLen * 0.1
 
             // XY Plane
             const distXY = this.distToQuad(cameraPos, rayDir,
@@ -314,7 +321,7 @@ export class GizmoRenderer {
         } else if (mode === 'rotate') {
             // Ray-Plane intersection for circles? Or just distance to ring?
             // Distance to ring is better.
-            const r = this.axisLength
+            const r = axisLen
 
             // X-Axis Ring (YZ Plane)
             const distX = this.distToRing(cameraPos, rayDir, center, [1, 0, 0], r)

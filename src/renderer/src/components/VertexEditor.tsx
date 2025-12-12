@@ -97,7 +97,9 @@ export const VertexEditor: React.FC<VertexEditorProps> = ({ renderer, onBeginUpd
         startPosition.current = [...position]
     }
 
-    if (!position) return null
+
+    // Only show in geometry mode
+    if (mainMode !== 'geometry') return null
 
     return (
         <div style={{
@@ -110,43 +112,52 @@ export const VertexEditor: React.FC<VertexEditorProps> = ({ renderer, onBeginUpd
             color: 'white',
             display: 'flex',
             flexDirection: 'column',
-            gap: '5px',
-            zIndex: 100
+            gap: '8px',
+            zIndex: 100,
+            minWidth: '140px'
         }}>
-            <div style={{ fontSize: '12px', marginBottom: '5px' }}>顶点坐标</div>
-            <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
-                <span style={{ color: '#ff4d4f', width: '15px' }}>X:</span>
-                <InputNumber
-                    size="small"
-                    value={position[0]}
-                    onChange={(v) => handleChange(0, v)}
-                    onBlur={handleCommit}
-                    onPressEnter={handleCommit}
-                    style={{ width: '80px', backgroundColor: '#1f1f1f', color: 'white', border: '1px solid #434343' }}
-                />
-            </div>
-            <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
-                <span style={{ color: '#52c41a', width: '15px' }}>Y:</span>
-                <InputNumber
-                    size="small"
-                    value={position[1]}
-                    onChange={(v) => handleChange(1, v)}
-                    onBlur={handleCommit}
-                    onPressEnter={handleCommit}
-                    style={{ width: '80px', backgroundColor: '#1f1f1f', color: 'white', border: '1px solid #434343' }}
-                />
-            </div>
-            <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
-                <span style={{ color: '#1890ff', width: '15px' }}>Z:</span>
-                <InputNumber
-                    size="small"
-                    value={position[2]}
-                    onChange={(v) => handleChange(2, v)}
-                    onBlur={handleCommit}
-                    onPressEnter={handleCommit}
-                    style={{ width: '80px', backgroundColor: '#1f1f1f', color: 'white', border: '1px solid #434343' }}
-                />
-            </div>
+            {/* Coordinates Section - Only when single vertex selected */}
+            {position && (
+                <>
+                    <div style={{ fontSize: '12px', marginBottom: '2px' }}>顶点坐标</div>
+                    <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
+                        <span style={{ color: '#ff4d4f', width: '15px' }}>X:</span>
+                        <InputNumber
+                            size="small"
+                            value={position[0]}
+                            onChange={(v) => handleChange(0, v)}
+                            onBlur={handleCommit}
+                            onPressEnter={handleCommit}
+                            style={{ width: '80px', backgroundColor: '#1f1f1f', color: 'white', border: '1px solid #434343' }}
+                        />
+                    </div>
+                    <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
+                        <span style={{ color: '#52c41a', width: '15px' }}>Y:</span>
+                        <InputNumber
+                            size="small"
+                            value={position[1]}
+                            onChange={(v) => handleChange(1, v)}
+                            onBlur={handleCommit}
+                            onPressEnter={handleCommit}
+                            style={{ width: '80px', backgroundColor: '#1f1f1f', color: 'white', border: '1px solid #434343' }}
+                        />
+                    </div>
+                    <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
+                        <span style={{ color: '#1890ff', width: '15px' }}>Z:</span>
+                        <InputNumber
+                            size="small"
+                            value={position[2]}
+                            onChange={(v) => handleChange(2, v)}
+                            onBlur={handleCommit}
+                            onPressEnter={handleCommit}
+                            style={{ width: '80px', backgroundColor: '#1f1f1f', color: 'white', border: '1px solid #434343' }}
+                        />
+                    </div>
+                    <div style={{ borderTop: '1px solid #434343', margin: '4px 0' }} />
+                </>
+            )}
+
+            {/* Normal Recalculation Section - Always visible in geometry mode */}
         </div>
     )
 }

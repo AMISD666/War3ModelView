@@ -30,6 +30,7 @@ import { MoveNodesCommand, NodeChange } from '../commands/MoveNodesCommand'
 import { VertexEditor } from './VertexEditor'
 import BoneBindingPanel from './BoneBindingPanel'
 import { pickClosestGeoset } from '../utils/rayTriangle'
+import { recalculateAllNormals } from '../utils/geometryUtils'
 
 // Ref interface for external access to camera methods
 export interface ViewerRef {
@@ -446,8 +447,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const { mainMode } = useSelectionStore.getState()
-    // Check for Gizmo interaction first
-    if (gizmoState.current.activeAxis && e.button === 0) {
+    // Check for Gizmo interaction first (Disabled if Alt is pressed)
+    if (gizmoState.current.activeAxis && e.button === 0 && !e.altKey) {
       if (cameraRef.current) cameraRef.current.enabled = false
       gizmoState.current.isDragging = true
       mouseState.current.lastMouseX = e.clientX
@@ -543,26 +544,37 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     if (mainMode !== 'geometry' && mainMode !== 'animation') return
 
     // Normalize box coordinates relative to canvas
+    // IMPORTANT: getBoundingClientRect returns CSS pixels, but canvas.width/height are actual pixels
+    // We need to convert CSS coords to canvas pixel coords
     const rect = canvasRef.current.getBoundingClientRect()
-    const boxLeft = Math.min(startX, endX) - rect.left
-    const boxRight = Math.max(startX, endX) - rect.left
-    const boxTop = Math.min(startY, endY) - rect.top
-    const boxBottom = Math.max(startY, endY) - rect.top
+    const scaleX = canvasRef.current.width / rect.width
+    const scaleY = canvasRef.current.height / rect.height
 
-    const { distance, theta, phi, target } = targetCamera.current
-    const cameraPos = vec3.create()
-    const cameraX = distance * Math.sin(phi) * Math.cos(theta)
-    const cameraY = distance * Math.sin(phi) * Math.sin(theta)
-    const cameraZ = distance * Math.cos(phi)
-    vec3.set(cameraPos, cameraX, cameraY, cameraZ)
-    vec3.add(cameraPos, cameraPos, target)
+    const boxLeft = (Math.min(startX, endX) - rect.left) * scaleX
+    const boxRight = (Math.max(startX, endX) - rect.left) * scaleX
+    const boxTop = (Math.min(startY, endY) - rect.top) * scaleY
+    const boxBottom = (Math.max(startY, endY) - rect.top) * scaleY
 
+    // Use the same camera matrices as the render loop for accurate projection
     const pMatrix = mat4.create()
-    mat4.perspective(pMatrix, Math.PI / 4, canvasRef.current.width / canvasRef.current.height, 1, 100000)
-
     const mvMatrix = mat4.create()
-    const cameraUp = vec3.fromValues(0, 0, 1)
-    mat4.lookAt(mvMatrix, cameraPos, target, cameraUp)
+
+    if (cameraRef.current) {
+      cameraRef.current.getMatrix(mvMatrix, pMatrix)
+    } else {
+      // Fallback to targetCamera if cameraRef is not available
+      const { distance, theta, phi, target } = targetCamera.current
+      const cameraPos = vec3.create()
+      const cameraX = distance * Math.sin(phi) * Math.cos(theta)
+      const cameraY = distance * Math.sin(phi) * Math.sin(theta)
+      const cameraZ = distance * Math.cos(phi)
+      vec3.set(cameraPos, cameraX, cameraY, cameraZ)
+      vec3.add(cameraPos, cameraPos, target)
+
+      mat4.perspective(pMatrix, Math.PI / 4, canvasRef.current.width / canvasRef.current.height, 1, 100000)
+      const cameraUp = vec3.fromValues(0, 0, 1)
+      mat4.lookAt(mvMatrix, cameraPos, target, cameraUp)
+    }
 
     const viewProj = mat4.create()
     mat4.multiply(viewProj, pMatrix, mvMatrix)
@@ -703,8 +715,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     // === Ctrl+Click Geoset Picking (works in any mode) ===
     if (isCtrl) {
       const rect = canvasRef.current.getBoundingClientRect()
-      const x = clientX - rect.left
-      const y = clientY - rect.top
+      // Convert CSS coords to canvas pixel coords
+      const scaleX = canvasRef.current.width / rect.width
+      const scaleY = canvasRef.current.height / rect.height
+      const x = (clientX - rect.left) * scaleX
+      const y = (clientY - rect.top) * scaleY
 
       // Calculate camera and ray
       // Calculate camera and ray
@@ -730,7 +745,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         mat4.lookAt(mvMatrix, cameraPos, target, cameraUp)
       }
 
-      // Unproject to get ray
+      // Unproject to get ray (using canvas pixel coordinates)
       const ndcX = (x / canvasRef.current.width) * 2 - 1
       const ndcY = 1 - (y / canvasRef.current.height) * 2
 
@@ -787,23 +802,31 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       // Simple distance check for nodes
       // Project all nodes to screen and find closest
       const rect = canvasRef.current.getBoundingClientRect()
-      const x = clientX - rect.left
-      const y = clientY - rect.top
+      // Convert CSS coords to canvas pixel coords
+      const scaleX = canvasRef.current.width / rect.width
+      const scaleY = canvasRef.current.height / rect.height
+      const x = (clientX - rect.left) * scaleX
+      const y = (clientY - rect.top) * scaleY
 
-      const { distance, theta, phi, target } = targetCamera.current
-      const cameraPos = vec3.create()
-      const cameraX = distance * Math.sin(phi) * Math.cos(theta)
-      const cameraY = distance * Math.sin(phi) * Math.sin(theta)
-      const cameraZ = distance * Math.cos(phi)
-      vec3.set(cameraPos, cameraX, cameraY, cameraZ)
-      vec3.add(cameraPos, cameraPos, target)
-
+      // Use the same camera matrices as render loop for accurate projection
       const pMatrix = mat4.create()
-      mat4.perspective(pMatrix, Math.PI / 4, canvasRef.current.width / canvasRef.current.height, 1, 100000)
-
       const mvMatrix = mat4.create()
-      const cameraUp = vec3.fromValues(0, 0, 1)
-      mat4.lookAt(mvMatrix, cameraPos, target, cameraUp)
+
+      if (cameraRef.current) {
+        cameraRef.current.getMatrix(mvMatrix, pMatrix)
+      } else {
+        const { distance, theta, phi, target } = targetCamera.current
+        const cameraPos = vec3.create()
+        const cameraX = distance * Math.sin(phi) * Math.cos(theta)
+        const cameraY = distance * Math.sin(phi) * Math.sin(theta)
+        const cameraZ = distance * Math.cos(phi)
+        vec3.set(cameraPos, cameraX, cameraY, cameraZ)
+        vec3.add(cameraPos, cameraPos, target)
+
+        mat4.perspective(pMatrix, Math.PI / 4, canvasRef.current.width / canvasRef.current.height, 1, 100000)
+        const cameraUp = vec3.fromValues(0, 0, 1)
+        mat4.lookAt(mvMatrix, cameraPos, target, cameraUp)
+      }
 
       const viewProj = mat4.create()
       mat4.multiply(viewProj, pMatrix, mvMatrix)
@@ -866,24 +889,32 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     if (mainMode !== 'geometry' && !(mainMode === 'animation' && animationSubMode === 'binding')) return
 
     const rect = canvasRef.current.getBoundingClientRect()
-    const x = clientX - rect.left
-    const y = clientY - rect.top
+    // Convert CSS coords to canvas pixel coords
+    const scaleX = canvasRef.current.width / rect.width
+    const scaleY = canvasRef.current.height / rect.height
+    const x = (clientX - rect.left) * scaleX
+    const y = (clientY - rect.top) * scaleY
 
-    // Calculate ray from camera
-    const { distance, theta, phi, target } = targetCamera.current
-    const cameraPos = vec3.create()
-    const cameraX = distance * Math.sin(phi) * Math.cos(theta)
-    const cameraY = distance * Math.sin(phi) * Math.sin(theta)
-    const cameraZ = distance * Math.cos(phi)
-    vec3.set(cameraPos, cameraX, cameraY, cameraZ)
-    vec3.add(cameraPos, cameraPos, target)
-
+    // Calculate ray from camera using same matrices as render loop
     const pMatrix = mat4.create()
-    mat4.perspective(pMatrix, Math.PI / 4, canvasRef.current.width / canvasRef.current.height, 1, 100000)
-
     const mvMatrix = mat4.create()
-    const cameraUp = vec3.fromValues(0, 0, 1)
-    mat4.lookAt(mvMatrix, cameraPos, target, cameraUp)
+    const cameraPos = vec3.create()
+
+    if (cameraRef.current) {
+      cameraRef.current.getMatrix(mvMatrix, pMatrix)
+      vec3.copy(cameraPos, cameraRef.current.position)
+    } else {
+      const { distance, theta, phi, target } = targetCamera.current
+      const cameraX = distance * Math.sin(phi) * Math.cos(theta)
+      const cameraY = distance * Math.sin(phi) * Math.sin(theta)
+      const cameraZ = distance * Math.cos(phi)
+      vec3.set(cameraPos, cameraX, cameraY, cameraZ)
+      vec3.add(cameraPos, cameraPos, target)
+
+      mat4.perspective(pMatrix, Math.PI / 4, canvasRef.current.width / canvasRef.current.height, 1, 100000)
+      const cameraUp = vec3.fromValues(0, 0, 1)
+      mat4.lookAt(mvMatrix, cameraPos, target, cameraUp)
+    }
 
     // Unproject to get ray
     // Normalized Device Coordinates
@@ -910,6 +941,18 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     // In Binding Mode, treat as vertex selection
     const effectiveSubMode = (mainMode === 'animation' && animationSubMode === 'binding') ? 'vertex' : geometrySubMode
 
+    // DISABLED: Single-click vertex/face selection in geometry mode
+    // Only box selection is allowed for vertices/faces
+    // But we still allow clicking to clear selection
+    if (mainMode === 'geometry') {
+      // In geometry mode, single-click only clears selection (if not shift/ctrl)
+      if (!isShift && !isCtrl) {
+        clearAllSelections()
+      }
+      return
+    }
+
+    // Animation binding mode still supports single-click
     const result = rendererRef.current.raycast(cameraPos, rayDir, effectiveSubMode)
 
     if (result) {
@@ -2037,7 +2080,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
           if (showGizmo && count > 0) {
             vec3.scale(center, center, 1.0 / count)
-            gizmoRenderer.current.render(gl as WebGLRenderingContext, mvMatrix, pMatrix, center, transformMode as any, gizmoState.current.activeAxis)
+
+            // Fixed Gizmo Scale (no adaptive scaling)
+            const gizmoScale = 1.0
+
+            gizmoRenderer.current.render(gl as WebGLRenderingContext, mvMatrix, pMatrix, center, transformMode as any, gizmoState.current.activeAxis, gizmoScale)
           }
         }
 
@@ -2270,7 +2317,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             const rotAxis = vec3.create()
 
             if (axis === 'x') {
-              angle = deltaY * 0.01
+              angle = -deltaY * 0.01 // Negated to fix rotation direction
               vec3.set(rotAxis, 1, 0, 0)
             } else if (axis === 'y') {
               angle = -deltaX * 0.01
@@ -2437,28 +2484,49 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       }
 
       if (showGizmo && count > 0 && transformMode) {
+        // Disable Gizmo if Alt is pressed (for Box Selection)
+        if (e.altKey) {
+          gizmoState.current.activeAxis = null
+          return
+        }
+
+        vec3.scale(center, center, 1.0 / count)
+        // Fixed Gizmo Scale (no adaptive scaling)
+        const gizmoScale = 1.0
+
         if (canvasRef.current) {
           const rect = canvasRef.current.getBoundingClientRect()
-          const x = e.clientX - rect.left
-          const y = e.clientY - rect.top
+          // Convert CSS coords to canvas pixel coords
+          const scaleX = canvasRef.current.width / rect.width
+          const scaleY = canvasRef.current.height / rect.height
+          const x = (e.clientX - rect.left) * scaleX
+          const y = (e.clientY - rect.top) * scaleY
 
-          const { distance, theta, phi, target } = targetCamera.current
-          const cameraPos = vec3.create()
-          const cx = distance * Math.sin(phi) * Math.cos(theta)
-          const cy = distance * Math.sin(phi) * Math.sin(theta)
-          const cz = distance * Math.cos(phi)
-          vec3.set(cameraPos, cx, cy, cz)
-          vec3.add(cameraPos, cameraPos, target)
-
+          // Use the same camera matrices as render loop for accurate raycasting
           const pMatrix = mat4.create()
-          mat4.perspective(pMatrix, Math.PI / 4, rect.width / rect.height, 1, 5000)
-
           const mvMatrix = mat4.create()
-          const cameraUp = vec3.fromValues(0, 0, 1)
-          mat4.lookAt(mvMatrix, cameraPos, target, cameraUp)
+          const cameraPos = vec3.create()
 
-          const ndcX = (x / rect.width) * 2 - 1
-          const ndcY = -((y / rect.height) * 2 - 1)
+          if (cameraRef.current) {
+            cameraRef.current.getMatrix(mvMatrix, pMatrix)
+            vec3.copy(cameraPos, cameraRef.current.position)
+          } else {
+            // Fallback
+            const { distance, theta, phi, target } = targetCamera.current
+            const cx = distance * Math.sin(phi) * Math.cos(theta)
+            const cy = distance * Math.sin(phi) * Math.sin(theta)
+            const cz = distance * Math.cos(phi)
+            vec3.set(cameraPos, cx, cy, cz)
+            vec3.add(cameraPos, cameraPos, target)
+
+            mat4.perspective(pMatrix, Math.PI / 4, canvasRef.current.width / canvasRef.current.height, 1, 5000)
+            const cameraUp = vec3.fromValues(0, 0, 1)
+            mat4.lookAt(mvMatrix, cameraPos, target, cameraUp)
+          }
+
+          // NDC using canvas pixel coordinates
+          const ndcX = (x / canvasRef.current.width) * 2 - 1
+          const ndcY = -((y / canvasRef.current.height) * 2 - 1)
           const rayClip = vec4.fromValues(ndcX, ndcY, -1.0, 1.0)
           const invProj = mat4.create(); mat4.invert(invProj, pMatrix)
           const rayEye = vec4.create(); vec4.transformMat4(rayEye, rayClip, invProj)
@@ -2468,11 +2536,17 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           const rayDir = vec3.fromValues(rayWorld[0], rayWorld[1], rayWorld[2])
           vec3.normalize(rayDir, rayDir)
 
-          const hit = gizmoRenderer.current.raycast(cameraPos, rayDir, center, transformMode as any)
+          const hit = gizmoRenderer.current.raycast(cameraPos, rayDir, center, transformMode as any, gizmoScale)
           gizmoState.current.activeAxis = hit
         }
       }
     }
+  }
+
+  const handleRecalculateNormals = () => {
+    if (!rendererRef.current) return
+    console.log('[Viewer] Recalculating normals (Smooth)...')
+    recalculateAllNormals(rendererRef.current, true)
   }
 
   const handleMouseUp = (e: any) => {
@@ -2737,8 +2811,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             top: selectionBox.y,
             width: selectionBox.width,
             height: selectionBox.height,
-            border: '1px solid rgba(0, 255, 0, 0.8)',
-            backgroundColor: 'rgba(0, 255, 0, 0.2)',
+            border: '2px dashed rgba(0, 200, 255, 0.9)',
+            backgroundColor: 'transparent',
             pointerEvents: 'none',
             zIndex: 1000
           }}
@@ -2787,7 +2861,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         </ConfigProvider>
       )}
 
-      <ViewerToolbar />
+      <ViewerToolbar onRecalculateNormals={handleRecalculateNormals} />
       <BoneBindingPanel />
       {appMainMode === 'geometry' && <VertexEditor renderer={renderer} onBeginUpdate={() => { ignoreNextModelDataUpdate.current = true }} />}
     </div>

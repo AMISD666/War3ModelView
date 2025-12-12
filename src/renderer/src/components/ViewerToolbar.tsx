@@ -7,11 +7,16 @@ import {
     RedoOutlined, // Rotate
     ExpandOutlined, // Scale
     SkinOutlined, // Binding
-    VideoCameraOutlined // Keyframe
+    VideoCameraOutlined, // Keyframe
+    ThunderboltOutlined // Recalculate Normals
 } from '@ant-design/icons';
 import { useSelectionStore } from '../store/selectionStore';
 
-export const ViewerToolbar: React.FC = () => {
+interface ViewerToolbarProps {
+    onRecalculateNormals?: () => void
+}
+
+export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({ onRecalculateNormals }) => {
     const {
         mainMode,
         geometrySubMode,
@@ -54,6 +59,12 @@ export const ViewerToolbar: React.FC = () => {
                                 type={geometrySubMode === 'face' ? 'primary' : 'default'}
                                 icon={<AppstoreOutlined />}
                                 onClick={() => setGeometrySubMode('face')}
+                            />
+                        </Tooltip>
+                        <Tooltip title="重算法线">
+                            <Button
+                                icon={<ThunderboltOutlined />}
+                                onClick={onRecalculateNormals}
                             />
                         </Tooltip>
                     </Space>
