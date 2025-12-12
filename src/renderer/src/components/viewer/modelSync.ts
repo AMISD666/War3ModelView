@@ -10,6 +10,24 @@ export function checkForStructuralChanges(
     modelData: any,
     rendererModel: any
 ): { needsReload: boolean; reason?: string } {
+    console.log('[modelSync] checkForStructuralChanges called')
+    console.log('[modelSync] modelData counts:', {
+        Geosets: modelData.Geosets?.length || 0,
+        Textures: modelData.Textures?.length || 0,
+        Materials: modelData.Materials?.length || 0,
+        ParticleEmitters2: modelData.ParticleEmitters2?.length || 0,
+        Lights: modelData.Lights?.length || 0,
+        Nodes: modelData.Nodes?.length || 0
+    })
+    console.log('[modelSync] rendererModel counts:', {
+        Geosets: rendererModel.Geosets?.length || 0,
+        Textures: rendererModel.Textures?.length || 0,
+        Materials: rendererModel.Materials?.length || 0,
+        ParticleEmitters2: rendererModel.ParticleEmitters2?.length || 0,
+        Lights: rendererModel.Lights?.length || 0,
+        Nodes: rendererModel.Nodes?.length || 0
+    })
+
     const geoChanged = (modelData.Geosets?.length || 0) !== (rendererModel.Geosets?.length || 0)
     const textureChanged = (modelData.Textures?.length || 0) !== (rendererModel.Textures?.length || 0)
     const materialChanged = (modelData.Materials?.length || 0) !== (rendererModel.Materials?.length || 0)
@@ -27,6 +45,8 @@ export function checkForStructuralChanges(
         }
     }
 
+    console.log('[modelSync] Change flags:', { geoChanged, textureChanged, materialChanged, particleChanged, geosetMaterialChanged, lightCountChanged })
+
     if (geoChanged) return { needsReload: true, reason: 'Geoset count changed' }
     if (textureChanged) return { needsReload: true, reason: 'Texture count changed' }
     if (materialChanged) return { needsReload: true, reason: 'Material count changed' }
@@ -34,6 +54,7 @@ export function checkForStructuralChanges(
     if (geosetMaterialChanged) return { needsReload: true, reason: 'Geoset MaterialID changed' }
     if (lightCountChanged) return { needsReload: true, reason: 'Light count changed' }
 
+    console.log('[modelSync] No structural changes, using lightweight sync')
     return { needsReload: false }
 }
 

@@ -1086,13 +1086,16 @@ const UVEditor: React.FC<UVEditorProps> = ({
 
                 {/* Background color picker */}
                 <Tooltip title="画布背景颜色">
-                    <ColorPicker
-                        value={canvasBackgroundColor}
-                        onChange={(color) => setCanvasBackgroundColor(color.toHexString())}
-                        size="small"
-                        showText={false}
-                    />
+                    <div>
+                        <ColorPicker
+                            value={canvasBackgroundColor}
+                            onChange={(color) => setCanvasBackgroundColor(color.toHexString())}
+                            size="small"
+                            showText={false}
+                        />
+                    </div>
                 </Tooltip>
+
             </div>
 
             {/* Canvas */}

@@ -160,8 +160,16 @@ body,
 }
 
 /* Select Dropdown Dark Theme */
+/* CRITICAL: High z-index ensures dropdowns appear ABOVE floating panels (z-index ~1000+) */
 .dark-theme-select-dropdown,
-.ant-select-dropdown {
+.ant-select-dropdown,
+.ant-cascader-dropdown,
+.ant-tree-select-dropdown,
+.ant-picker-dropdown,
+.ant-tooltip,
+.ant-popover,
+.ant-dropdown {
+    z-index: 10000 !important;
     background-color: #333333 !important;
     border: 1px solid #4a4a4a !important;
 }

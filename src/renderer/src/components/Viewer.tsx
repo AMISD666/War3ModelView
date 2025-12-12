@@ -356,21 +356,52 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
   // Handle Animation and Mode Changes
   useEffect(() => {
+    console.log('[Viewer] Mode/Animation useEffect triggered:', {
+      hasRenderer: !!renderer,
+      hasRendererData: !!renderer?.rendererData,
+      appMainMode,
+      animationIndex,
+      animationInfoName: renderer?.rendererData?.animationInfo?.Name
+    })
+
     // Guard: Only set sequence if renderer is fully initialized
     if (renderer && renderer.rendererData) {
       if (appMainMode === 'geometry') {
-        // Force Bind Pose
-        if ((renderer as any).setSequence) {
-          (renderer as any).setSequence(-1)
+        // Bind Pose: Set frame to the START of the current sequence's interval
+        // This avoids corrupting animationInfo by NOT calling setSequence(-1)
+        console.log('[Viewer] Geometry mode: Locking frame to sequence start')
+        if (renderer.rendererData.animationInfo?.Interval) {
+          renderer.rendererData.frame = renderer.rendererData.animationInfo.Interval[0]
+          console.log('[Viewer] Frame locked to:', renderer.rendererData.animationInfo.Interval[0])
+        } else if (renderer.model?.Sequences?.[animationIndex]?.Interval) {
+          // Fallback if animationInfo not yet set
+          renderer.rendererData.frame = renderer.model.Sequences[animationIndex].Interval[0]
+          console.log('[Viewer] Frame locked (fallback) to:', renderer.model.Sequences[animationIndex].Interval[0])
+        } else {
+          renderer.rendererData.frame = 0
+          console.log('[Viewer] Frame locked to: 0 (default)')
         }
-        // Reset frame to 0 to ensure static pose
-        renderer.rendererData.frame = 0
       } else {
         // Restore Animation
-        if ((renderer as any).setSequence) {
-          (renderer as any).setSequence(animationIndex)
+        // Check if animationInfo needs to be set/updated
+        const currentSeqIndex = renderer.rendererData.animationInfo
+          ? renderer.model?.Sequences?.findIndex((s: any) => s === renderer.rendererData.animationInfo) ?? -2
+          : -2
+        console.log('[Viewer] View mode: Checking animation state', {
+          currentSeqIndex,
+          animationIndex,
+          needsSetSequence: currentSeqIndex !== animationIndex
+        })
+
+        if (currentSeqIndex !== animationIndex && (renderer as any).setSequence) {
+          console.log('[Viewer] Calling setSequence:', animationIndex)
+            ; (renderer as any).setSequence(animationIndex)
+        } else {
+          console.log('[Viewer] Skipping setSequence - already at correct sequence')
         }
       }
+    } else {
+      console.log('[Viewer] Mode/Animation useEffect: Renderer not ready, skipping')
     }
   }, [renderer, appMainMode, animationIndex])
 
@@ -1305,6 +1336,16 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   }
 
   const reloadRendererWithData = async (model: any, path: string) => {
+    console.log('[Viewer] ========== FULL RELOAD START ==========')
+    console.log('[Viewer] reloadRendererWithData called with path:', path)
+    console.log('[Viewer] Model data summary:', {
+      Geosets: model.Geosets?.length || 0,
+      Textures: model.Textures?.length || 0,
+      Materials: model.Materials?.length || 0,
+      ParticleEmitters2: model.ParticleEmitters2?.length || 0,
+      Nodes: model.Nodes?.length || 0,
+      Sequences: model.Sequences?.length || 0
+    })
     console.time('[Viewer] ReloadModel')
     // CRITICAL: Capture old renderer's Geoset geometry BEFORE destroying
     // The TypedArrays (Vertices, Faces, Normals) are lost in store's spread operations
@@ -1351,6 +1392,12 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       // The modelData from store loses TypedArrays (Vertices, Faces, Normals) during spread operations
       // BUT: Only do this when geoset count is the same! If count changed (merge/delete),
       // the new geosets already have the correct geometry from the merge operation.
+      // CRITICAL UPDATE: Commented out geometry copying. 
+      // While this was intended to preserve TypedArrays, it causes severe issues when geometry is modified
+      // (e.g. UV Editor splitting vertices -> vertex count changes).
+      // Overwriting with oldGeosets reverts these changes or causes data mismatch (Index out of bounds).
+      // The performance cost of re-parsing Arrays to TypedArrays is negligible compared to correctness.
+      /*
       if (oldGeosets && model.Geosets && oldGeosets.length === model.Geosets.length) {
         console.log('[Viewer] Copying geometry from old geosets (same count)');
         for (let i = 0; i < model.Geosets.length; i++) {
@@ -1386,31 +1433,61 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       } else if (oldGeosets && model.Geosets) {
         console.log('[Viewer] Geoset count changed (old:', oldGeosets.length, 'new:', model.Geosets.length, '), using merged geometry directly');
       }
+      */
 
       // CRITICAL FIX: Validate and fix ParticleEmitters2 before creating renderer
       // Same validation as in loadModel - prevents production-only rendering issues
+      console.log('[Viewer] Step 1: Validating particles...')
       validateAllParticleEmitters(model)
+      console.log('[Viewer] Step 1: Particle validation complete')
 
+      console.log('[Viewer] Step 2: Creating ModelRenderer...')
       const rendererStart = performance.now()
       const newRenderer = new ModelRenderer(model)
+      console.log('[Viewer] Step 2: ModelRenderer created')
+
+      console.log('[Viewer] Step 3: Initializing WebGL...')
       newRenderer.initGL(gl)
+      console.log('[Viewer] Step 3: WebGL initialized')
+
       // NOTE: setRenderer(newRenderer) is called AFTER texture loading to avoid race condition
+      console.log('[Viewer] Step 4: First update(0)...')
       newRenderer.update(0)
+      console.log('[Viewer] Step 4: First update complete')
+
+      console.log('[Viewer] Step 5: Resetting camera...')
       resetCamera()
       console.log(`[Viewer] reloadRendererWithData: Renderer Init took ${(performance.now() - rendererStart).toFixed(1)}ms`)
 
       // Load textures using concurrent loader
+      console.log('[Viewer] Step 6: Loading textures...')
       await loadAllTextures(model, newRenderer, path)
+      console.log('[Viewer] Step 6: Textures loaded')
 
+      console.log('[Viewer] Step 7: Loading team color textures...')
       loadTeamColorTextures(teamColor)
+      console.log('[Viewer] Step 7: Team colors loaded')
 
       // Set renderer AFTER textures are loaded to avoid race condition where
       // render loop starts before textures are available in GPU
-      console.log('[Viewer] reloadRendererWithData: All textures loaded, setting renderer')
+      console.log('[Viewer] Step 8: Setting renderer state...')
+
+      // CRITICAL: Force set the correct animation sequence on the NEW renderer
+      // before setting it as state. This ensures animation is restored correctly
+      // after a full reload (e.g. after creating a particle).
+      const currentAnimIndex = useModelStore.getState().currentSequence
+      console.log('[Viewer] Step 8a: Setting animation sequence on new renderer to:', currentAnimIndex)
+      if (typeof (newRenderer as any).setSequence === 'function' && currentAnimIndex >= 0) {
+        (newRenderer as any).setSequence(currentAnimIndex)
+      }
+
       setRenderer(newRenderer)
+      console.log('[Viewer] ========== FULL RELOAD COMPLETE ==========')
       console.timeEnd('[Viewer] ReloadModel')
     } catch (error) {
+      console.error('[Viewer] ========== FULL RELOAD CRASHED ==========')
       console.error('[Viewer] Error reloading renderer with data:', error)
+      console.error('[Viewer] Stack:', (error as Error).stack)
     }
   }
 
@@ -1585,544 +1662,574 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       lastFrameTime.current = performance.now()
 
       const render = (time: DOMHighResTimeStamp) => {
+        try {
 
-        if (!gl || !canvasRef.current || !renderer) {
-          animationFrameId.current = requestAnimationFrame(render)
-          return
-        }
+          if (!gl || !canvasRef.current || !renderer) {
+            animationFrameId.current = requestAnimationFrame(render)
+            return
+          }
 
-        const canvas = canvasRef.current
-        const mdlRenderer = renderer
-        const delta = time - lastFrameTime.current
-        lastFrameTime.current = time
+          const canvas = canvasRef.current
+          // CRITICAL: Use rendererRef.current instead of closure-captured 'renderer'
+          // to always get the LATEST renderer, even if component re-renders with new renderer
+          const mdlRenderer = rendererRef.current
+          if (!mdlRenderer) {
+            animationFrameId.current = requestAnimationFrame(render)
+            return
+          }
+          const delta = time - lastFrameTime.current
+          lastFrameTime.current = time
 
-        const cameraPos = vec3.create()
-        const cameraUp = vec3.fromValues(0, 0, 1)
-        const cameraQuat = quat.create()
-        quat.identity(cameraQuat)
-        const pMatrix = mat4.create()
-        const mvMatrix = mat4.create()
+          const cameraPos = vec3.create()
+          const cameraUp = vec3.fromValues(0, 0, 1)
+          const cameraQuat = quat.create()
+          quat.identity(cameraQuat)
+          const pMatrix = mat4.create()
+          const mvMatrix = mat4.create()
 
-        const [r, g, b] = hexToRgb(backgroundColorRef.current)
-        gl.clearColor(r, g, b, 1.0)
-        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+          const [r, g, b] = hexToRgb(backgroundColorRef.current)
+          gl.clearColor(r, g, b, 1.0)
+          gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 
-        gl.enable(gl.DEPTH_TEST)
-        gl.depthFunc(gl.LEQUAL)
-        gl.enable(gl.BLEND)
-        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+          gl.enable(gl.DEPTH_TEST)
+          gl.depthFunc(gl.LEQUAL)
+          gl.enable(gl.BLEND)
+          gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 
-        // Use SimpleOrbitCamera for matrices
-        if (cameraRef.current) {
-          cameraRef.current.getMatrix(mvMatrix, pMatrix)
+          // Use SimpleOrbitCamera for matrices
+          if (cameraRef.current) {
+            cameraRef.current.getMatrix(mvMatrix, pMatrix)
 
-          // Copy camera position
-          vec3.copy(cameraPos, cameraRef.current.position)
+            // Copy camera position
+            vec3.copy(cameraPos, cameraRef.current.position)
 
-          // Calculate camera quaternion by inverting the modelview matrix
-          // This matches how it's done in war3-model renderInstances for particle billboarding
-          // Reference: modelRenderer.ts lines 1047-1050
-          const cameraWorldMatrix = mat4.create()
-          mat4.invert(cameraWorldMatrix, mvMatrix)
-          mat4.getRotation(cameraQuat, cameraWorldMatrix)
-        } else {
-          // Fallback logic
-          const dist = targetCamera.current.distance
-          const theta = targetCamera.current.theta
-          const phi = targetCamera.current.phi
-          const target = targetCamera.current.target
+            // Calculate camera quaternion by inverting the modelview matrix
+            // This matches how it's done in war3-model renderInstances for particle billboarding
+            // Reference: modelRenderer.ts lines 1047-1050
+            const cameraWorldMatrix = mat4.create()
+            mat4.invert(cameraWorldMatrix, mvMatrix)
+            mat4.getRotation(cameraQuat, cameraWorldMatrix)
+          } else {
+            // Fallback logic
+            const dist = targetCamera.current.distance
+            const theta = targetCamera.current.theta
+            const phi = targetCamera.current.phi
+            const target = targetCamera.current.target
 
-          const x = dist * Math.sin(phi) * Math.cos(theta)
-          const y = dist * Math.sin(phi) * Math.sin(theta)
-          const z = dist * Math.cos(phi)
-          vec3.set(cameraPos, x, y, z)
-          vec3.add(cameraPos, cameraPos, target)
-          mat4.lookAt(mvMatrix, cameraPos, target, cameraUp)
+            const x = dist * Math.sin(phi) * Math.cos(theta)
+            const y = dist * Math.sin(phi) * Math.sin(theta)
+            const z = dist * Math.cos(phi)
+            vec3.set(cameraPos, x, y, z)
+            vec3.add(cameraPos, cameraPos, target)
+            mat4.lookAt(mvMatrix, cameraPos, target, cameraUp)
 
-          mat4.perspective(pMatrix, Math.PI / 4, canvas.width / canvas.height, 1, 100000)
-        }
+            mat4.perspective(pMatrix, Math.PI / 4, canvas.width / canvas.height, 1, 100000)
+          }
 
-        const { geometrySubMode, transformMode, selectedVertexIds, selectedFaceIds } = useSelectionStore.getState()
-        const isBindPoseMode = appMainMode === 'geometry' || (appMainMode === 'animation' && (animationSubMode === 'binding' || animationIndex === -1))
+          const { geometrySubMode, transformMode, selectedVertexIds, selectedFaceIds } = useSelectionStore.getState()
+          const isBindPoseMode = appMainMode === 'geometry' || (appMainMode === 'animation' && (animationSubMode === 'binding' || animationIndex === -1))
 
-        // Debug logs commented out to reduce console noise
-        // if (time - lastFpsTime.current > 1000) {
-        //   console.log('[Viewer] Render loop state:', { isPlaying: isPlayingRef.current, isBindPoseMode, appMainMode, animationSubMode })
-        // }
-
-
-
-        // CRITICAL FIX: Set camera for particle billboarding BEFORE update()
-        // Particles calculate their billboard vertices during update(), but war3-model's 
-        // renderInstances() normally calculates cameraQuat AFTER update() (at render time).
-        // This means particles would use stale/uninitialized cameraQuat values.
-        // By calling setCamera() here, we ensure particles have the correct quaternion.
-        if (typeof mdlRenderer.setCamera === 'function') {
-          mdlRenderer.setCamera(cameraPos, cameraQuat)
-        }
-
-        if (isPlayingRef.current && !isBindPoseMode) {
           // Debug logs commented out to reduce console noise
           // if (time - lastFpsTime.current > 1000) {
-          //   const intervalStr = mdlRenderer.rendererData?.animationInfo?.Interval
-          //     ? `[${mdlRenderer.rendererData.animationInfo.Interval[0]}, ${mdlRenderer.rendererData.animationInfo.Interval[1]}]`
-          //     : 'N/A';
-          //   console.log('[Viewer] Calling mdlRenderer.update(), delta:', delta, 'frame:', mdlRenderer.rendererData?.frame, 'Interval:', intervalStr)
+          //   console.log('[Viewer] Render loop state:', { isPlaying: isPlayingRef.current, isBindPoseMode, appMainMode, animationSubMode })
           // }
-          mdlRenderer.update(delta)
-        }
 
-        // === Collision Shape Rendering ===
-        if (showCollisionShapesRef.current && mdlRenderer.rendererData && mdlRenderer.rendererData.nodes) {
-          // Filter nodes that look like collision shapes (have Shape property)
-          const collisionNodes = mdlRenderer.rendererData.nodes.filter((n: any) => n.node.hasOwnProperty('Shape') || n.node.type === 'CollisionShape');
 
-          if (collisionNodes.length > 0) {
-            const viewMatrix = mvMatrix;
-            const projectionMatrix = pMatrix;
-            const nodeMVMatrix = mat4.create();
 
-            collisionNodes.forEach((nodeWrapper: any) => {
-              const node = nodeWrapper.node;
-              // worldMatrix may be undefined, try 'matrix' property or use identity
-              let worldMatrix = nodeWrapper.worldMatrix || nodeWrapper.matrix;
-              if (!worldMatrix) {
-                // Use identity matrix if no world matrix available
-                worldMatrix = mat4.create();
-              }
-
-              if (!viewMatrix) return;
-              mat4.multiply(nodeMVMatrix, viewMatrix, worldMatrix);
-
-              let isSphere = false;
-              if (node.Shape === 2 || node.ShapeType === 'Sphere') {
-                isSphere = true;
-              } else if (node.Shape === 0 || node.ShapeType === 'Box') {
-                isSphere = false;
-              } else if (node.BoundsRadius && node.BoundsRadius > 0) {
-                isSphere = true;
-              }
-
-              if (isSphere) {
-                let center;
-                if (node.Vertices) {
-                  if (node.Vertices instanceof Float32Array || (node.Vertices.length === 3 && typeof node.Vertices[0] === 'number')) {
-                    center = node.Vertices;
-                  } else if (node.Vertices.length > 0) {
-                    center = node.Vertices[0];
-                  }
-                }
-                if (!center) center = node.Vertex1 || [0, 0, 0];
-                const radius = node.BoundsRadius || 0;
-
-                if (center && (mdlRenderer as any).gl) {
-                  debugRenderer.current.renderWireframeSphere(
-                    (mdlRenderer as any).gl,
-                    nodeMVMatrix,
-                    projectionMatrix,
-                    radius,
-                    center,
-                    16,
-                    [1, 0.5, 0, 1]
-                  );
-                }
-              } else {
-                let v1, v2;
-                if (node.Vertices) {
-                  if (node.Vertices instanceof Float32Array || (typeof node.Vertices[0] === 'number' && node.Vertices.length >= 6)) {
-                    v1 = node.Vertices.subarray ? node.Vertices.subarray(0, 3) : node.Vertices.slice(0, 3);
-                    v2 = node.Vertices.subarray ? node.Vertices.subarray(3, 6) : node.Vertices.slice(3, 6);
-                  } else if (node.Vertices.length >= 2) {
-                    v1 = node.Vertices[0];
-                    v2 = node.Vertices[1];
-                  }
-                }
-                if (!v1) v1 = node.Vertex1;
-                if (!v2) v2 = node.Vertex2;
-
-                if (v1 && v2 && (mdlRenderer as any).gl) {
-                  debugRenderer.current.renderWireframeBox(
-                    (mdlRenderer as any).gl,
-                    nodeMVMatrix,
-                    projectionMatrix,
-                    v1,
-                    v2,
-                    [1, 0.5, 0, 1]
-                  );
-                }
-              }
-            });
-          }
-        }
-
-        // === Camera Frustum Rendering ===
-        if (showCamerasRef.current && (mdlRenderer as any).gl) {
-          const gl = (mdlRenderer as any).gl;
-          const { nodes: storeNodes } = useModelStore.getState();
-          const cameraNodes = storeNodes.filter((n: any) => n.type === 'Camera');
-
-          // Get selected camera index from dropdown
-          const selector = document.getElementById('camera-selector') as HTMLSelectElement;
-          const selectedIdx = selector ? parseInt(selector.value) : -1;
-
-          // Debug log every 300 frames
-          if (frameCount.current % 300 === 0) {
-            console.log('[Camera Render] showCameras:', showCamerasRef.current, 'cameraNodes:', cameraNodes.length, 'selectedIdx:', selectedIdx);
+          // CRITICAL FIX: Set camera for particle billboarding BEFORE update()
+          // Particles calculate their billboard vertices during update(), but war3-model's 
+          // renderInstances() normally calculates cameraQuat AFTER update() (at render time).
+          // This means particles would use stale/uninitialized cameraQuat values.
+          // By calling setCamera() here, we ensure particles have the correct quaternion.
+          if (typeof mdlRenderer.setCamera === 'function') {
+            mdlRenderer.setCamera(cameraPos, cameraQuat)
           }
 
-          if (cameraNodes.length > 0 && selectedIdx >= 0 && selectedIdx < cameraNodes.length) {
-            // Only render the selected camera's frustum
-            const cam = cameraNodes[selectedIdx];
-            const isArrayLike = (v: any) => Array.isArray(v) || v instanceof Float32Array || ArrayBuffer.isView(v);
-            const toArray = (v: any) => v instanceof Float32Array ? Array.from(v) : v;
-            const getPos = (prop: any, directProp?: any) => {
-              if (directProp && isArrayLike(directProp)) return toArray(directProp);
-              if (isArrayLike(prop)) return toArray(prop);
-              if (prop && prop.Keys && prop.Keys.length > 0) {
-                const v = prop.Keys[0].Vector;
-                return v ? toArray(v) : [0, 0, 0];
-              }
-              return [0, 0, 0];
-            };
-
-            // Cast to any to access properties that might be missing in strict type defs
-            const camAny = cam as any;
-            const pos = getPos(camAny.Translation, camAny.Position);
-            const target = getPos(camAny.TargetTranslation, camAny.TargetPosition);
-            const fov = camAny.FieldOfView || 0.7853;
-            const nearClip = camAny.NearClip || 16;
-            const farClip = camAny.FarClip || 1000;
-
-            debugRenderer.current.renderWireframeFrustum(
-              gl,
-              mvMatrix,
-              pMatrix,
-              pos,
-              target,
-              fov,
-              nearClip,
-              farClip,
-              [0, 0.8, 1, 1]
-            );
-          }
-        }
-
-        if (mdlRenderer.rendererData && mdlRenderer.rendererData.animationInfo) {
-          const info = mdlRenderer.rendererData.animationInfo
-          const current = mdlRenderer.rendererData.frame
-          updateProgress(current, info.Interval[1])
-        }
-
-        if (mdlRenderer.rendererData) {
-          mdlRenderer.setCamera(cameraPos, cameraQuat)
-
-          if (isBindPoseMode) {
-            if (mdlRenderer.rendererData.nodes) {
-              mdlRenderer.rendererData.nodes.forEach((node: any) => {
-                if (node && node.matrix) {
-                  mat4.identity(node.matrix)
-                }
+          if (isPlayingRef.current && !isBindPoseMode) {
+            // Only log once per second to reduce noise
+            if (time - lastFpsTime.current > 1000) {
+              const intervalStr = mdlRenderer.rendererData?.animationInfo?.Interval
+                ? `[${mdlRenderer.rendererData.animationInfo.Interval[0]}, ${mdlRenderer.rendererData.animationInfo.Interval[1]}]`
+                : 'N/A';
+              console.log('[Viewer] Animation update:', {
+                delta: delta.toFixed(1),
+                frame: mdlRenderer.rendererData?.frame,
+                interval: intervalStr,
+                animationInfo: mdlRenderer.rendererData?.animationInfo?.Name
               })
             }
-            if (mdlRenderer.rendererData.rootNode) {
-              mat4.identity(mdlRenderer.rendererData.rootNode.matrix)
-            }
-          }
-
-          // === Geoset Visibility Control ===
-          // Get visibility state from store
-          const { hiddenGeosetIds, forceShowAllGeosets, hoveredGeosetId } = useModelStore.getState()
-
-          // Store original geoset alphas to restore later
-          const originalGeosetAlphas: Map<number, number> = new Map()
-
-          // Apply visibility: hide geosets that are in hiddenGeosetIds (when forceShowAllGeosets is OFF)
-          // When forceShowAllGeosets is ON, all geosets are visible regardless of hiddenGeosetIds
-          if (!forceShowAllGeosets && mdlRenderer.rendererData.geosetAlpha) {
-            const numGeosets = mdlRenderer.model.Geosets?.length || 0
-            for (let i = 0; i < numGeosets; i++) {
-              originalGeosetAlphas.set(i, mdlRenderer.rendererData.geosetAlpha[i] ?? 1)
-              // If geoset is in hiddenGeosetIds, it's unchecked = hidden
-              if (hiddenGeosetIds.includes(i)) {
-                mdlRenderer.rendererData.geosetAlpha[i] = 0
-              }
-            }
-          }
-
-          mdlRenderer.render(mvMatrix, pMatrix, { wireframe: showWireframeRef.current || (appMainMode === 'geometry' && geometrySubMode === 'face') })
-
-          // Restore original geoset alphas
-          if (originalGeosetAlphas.size > 0 && mdlRenderer.rendererData.geosetAlpha) {
-            originalGeosetAlphas.forEach((alpha, index) => {
-              mdlRenderer.rendererData.geosetAlpha[index] = alpha
-            })
-          }
-
-          // === Hover Highlight ===
-          // If a geoset is hovered, render a highlight overlay
-          if (hoveredGeosetId !== null && mdlRenderer.model.Geosets && mdlRenderer.model.Geosets[hoveredGeosetId]) {
-            // Save current GL state
-            const prevBlend = gl.isEnabled(gl.BLEND)
-            const prevDepthMask = gl.getParameter(gl.DEPTH_WRITEMASK)
-            const prevDepthTest = gl.isEnabled(gl.DEPTH_TEST)
-            const prevCullFace = gl.isEnabled(gl.CULL_FACE)
-
-            // Render with red highlight color and high opacity
-            gl.enable(gl.BLEND)
-            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-            gl.depthMask(false)
-            gl.disable(gl.DEPTH_TEST)
-            // Disable culling for double-sided highlight
-            gl.disable(gl.CULL_FACE)
-
-            if (typeof (mdlRenderer as any).renderGeosetHighlight === 'function') {
-              (mdlRenderer as any).renderGeosetHighlight(hoveredGeosetId, [1, 0, 0], 0.8, mvMatrix, pMatrix)
-            }
-
-            // Restore GL state
-            if (prevCullFace) gl.enable(gl.CULL_FACE)
-            if (prevDepthTest) gl.enable(gl.DEPTH_TEST)
-            gl.depthMask(prevDepthMask)
-            if (!prevBlend) gl.disable(gl.BLEND)
-          }
-
-          if ((showNodesRef.current || (appMainMode === 'animation' && animationSubMode === 'binding')) && mdlRenderer.rendererData.nodes && appMainMode !== 'geometry') {
-            const { selectedNodeIds } = useSelectionStore.getState()
-            let parentOfSelected: number | null = null
-            let childrenOfSelected: number[] = []
-
-            if (selectedNodeIds.length === 1) {
-              const selectedId = selectedNodeIds[0]
-              const selectedNode = mdlRenderer.rendererData.nodes.find((n: any) => n.node.ObjectId === selectedId)
-              if (selectedNode) {
-                if (typeof selectedNode.node.Parent === 'number') {
-                  parentOfSelected = selectedNode.node.Parent
-                }
-                childrenOfSelected = mdlRenderer.rendererData.nodes
-                  .filter((n: any) => n.node.Parent === selectedId)
-                  .map((n: any) => n.node.ObjectId)
-              }
-            }
-
-            debugRenderer.current.renderNodes(
-              gl as WebGLRenderingContext,
-              mvMatrix,
-              pMatrix,
-              mdlRenderer.rendererData.nodes as any,
-              selectedNodeIds,
-              parentOfSelected,
-              childrenOfSelected
-            )
-          }
-
-          if (showSkeletonRef.current && mdlRenderer.rendererData.nodes && appMainMode === 'animation') {
-            gl.disable(gl.DEPTH_TEST)
-            mdlRenderer.renderSkeleton(mvMatrix, pMatrix, null)
-            gl.enable(gl.DEPTH_TEST)
-          }
-
-          // === Light Object Rendering ===
-          if ((showLightsRef.current || (appMainMode === 'animation')) && mdlRenderer.rendererData.nodes) {
-            const { nodes } = useModelStore.getState()
-            const lightNodes = nodes.filter((n: any) => n.type === 'Light')
-
-            if (lightNodes.length > 0) {
-              const viewMatrix = mvMatrix
-              const projectionMatrix = pMatrix
-              const nodeMVMatrix = mat4.create()
-
-              lightNodes.forEach((light: any) => {
-                const nodeWrapper = mdlRenderer.rendererData.nodes.find((n: any) => n.node.ObjectId === light.ObjectId)
-                if (!nodeWrapper) return
-
-                let worldMatrix = nodeWrapper.worldMatrix || nodeWrapper.matrix
-                if (!worldMatrix) worldMatrix = mat4.create()
-
-                mat4.multiply(nodeMVMatrix, viewMatrix, worldMatrix)
-
-                // Extract Light Properties
-                let type = light.LightType || 0
-                // Handle string types just in case
-                if (typeof type === 'string') {
-                  if (type === 'Directional') type = 1
-                  else if (type === 'Ambient') type = 2
-                  else type = 0
-                }
-                // Get current attenuation values if animated, otherwise use static
-                // For simplicity in Debug view, we can use the static or first keyframe values if not easily accessible via renderer
-                // Or check if rendererData has light values updating?
-                // War3-model might not expose live light values easily unless we dig into KeyframeController.
-                // Let's use static/default values for now for structure visualization.
-
-                let attStart = 0
-                let attEnd = 0
-                let color = [1, 1, 0, 1] // Yellow default
-
-                // Helper to get scalar value (static or first key)
-                const getVal = (prop: any) => {
-                  if (typeof prop === 'number') return prop
-                  if (prop && prop.Keys && prop.Keys.length > 0) return prop.Keys[0].Vector[0]
-                  return 0
-                }
-                // Helper to get vector value
-                const getVec = (prop: any) => {
-                  if (prop instanceof Float32Array || Array.isArray(prop)) return [prop[0], prop[1], prop[2]]
-                  if (prop && prop.Keys && prop.Keys.length > 0) return [prop.Keys[0].Vector[0], prop.Keys[0].Vector[1], prop.Keys[0].Vector[2]]
-                  return [1, 1, 1]
-                }
-
-                attStart = getVal(light.AttenuationStart)
-                attEnd = getVal(light.AttenuationEnd)
-                const c = getVec(light.Color)
-                // If Color is [r,g,b], map to 0-1 range if > 1? usually 0-1 in MDL?
-                // MDL colors are usually 0-1 range.
-                color = [c[0], c[1], c[2], 1.0]
-
-                debugRenderer.current.renderLight(
-                  gl as WebGLRenderingContext,
-                  nodeMVMatrix,
-                  projectionMatrix,
-                  type,
-                  attStart,
-                  attEnd,
-                  color
-                )
+            mdlRenderer.update(delta)
+          } else {
+            // Log why animation is NOT updating (once per second)
+            if (time - lastFpsTime.current > 1000) {
+              console.log('[Viewer] Animation NOT updating:', {
+                isPlaying: isPlayingRef.current,
+                isBindPoseMode,
+                frame: mdlRenderer.rendererData?.frame
               })
             }
           }
 
-        }
+          // === Collision Shape Rendering ===
+          if (showCollisionShapesRef.current && mdlRenderer.rendererData && mdlRenderer.rendererData.nodes) {
+            // Filter nodes that look like collision shapes (have Shape property)
+            const collisionNodes = mdlRenderer.rendererData.nodes.filter((n: any) => n.node.hasOwnProperty('Shape') || n.node.type === 'CollisionShape');
 
-        if ((appMainMode === 'geometry' && geometrySubMode === 'vertex') ||
-          (appMainMode === 'animation' && animationSubMode === 'binding')) {
-          for (const geoset of mdlRenderer.model.Geosets) {
-            if (geoset.Vertices) {
-              debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, geoset.Vertices, [0, 0, 1, 0.5], 4.0)
+            if (collisionNodes.length > 0) {
+              const viewMatrix = mvMatrix;
+              const projectionMatrix = pMatrix;
+              const nodeMVMatrix = mat4.create();
+
+              collisionNodes.forEach((nodeWrapper: any) => {
+                const node = nodeWrapper.node;
+                // worldMatrix may be undefined, try 'matrix' property or use identity
+                let worldMatrix = nodeWrapper.worldMatrix || nodeWrapper.matrix;
+                if (!worldMatrix) {
+                  // Use identity matrix if no world matrix available
+                  worldMatrix = mat4.create();
+                }
+
+                if (!viewMatrix) return;
+                mat4.multiply(nodeMVMatrix, viewMatrix, worldMatrix);
+
+                let isSphere = false;
+                if (node.Shape === 2 || node.ShapeType === 'Sphere') {
+                  isSphere = true;
+                } else if (node.Shape === 0 || node.ShapeType === 'Box') {
+                  isSphere = false;
+                } else if (node.BoundsRadius && node.BoundsRadius > 0) {
+                  isSphere = true;
+                }
+
+                if (isSphere) {
+                  let center;
+                  if (node.Vertices) {
+                    if (node.Vertices instanceof Float32Array || (node.Vertices.length === 3 && typeof node.Vertices[0] === 'number')) {
+                      center = node.Vertices;
+                    } else if (node.Vertices.length > 0) {
+                      center = node.Vertices[0];
+                    }
+                  }
+                  if (!center) center = node.Vertex1 || [0, 0, 0];
+                  const radius = node.BoundsRadius || 0;
+
+                  if (center && (mdlRenderer as any).gl) {
+                    debugRenderer.current.renderWireframeSphere(
+                      (mdlRenderer as any).gl,
+                      nodeMVMatrix,
+                      projectionMatrix,
+                      radius,
+                      center,
+                      16,
+                      [1, 0.5, 0, 1]
+                    );
+                  }
+                } else {
+                  let v1, v2;
+                  if (node.Vertices) {
+                    if (node.Vertices instanceof Float32Array || (typeof node.Vertices[0] === 'number' && node.Vertices.length >= 6)) {
+                      v1 = node.Vertices.subarray ? node.Vertices.subarray(0, 3) : node.Vertices.slice(0, 3);
+                      v2 = node.Vertices.subarray ? node.Vertices.subarray(3, 6) : node.Vertices.slice(3, 6);
+                    } else if (node.Vertices.length >= 2) {
+                      v1 = node.Vertices[0];
+                      v2 = node.Vertices[1];
+                    }
+                  }
+                  if (!v1) v1 = node.Vertex1;
+                  if (!v2) v2 = node.Vertex2;
+
+                  if (v1 && v2 && (mdlRenderer as any).gl) {
+                    debugRenderer.current.renderWireframeBox(
+                      (mdlRenderer as any).gl,
+                      nodeMVMatrix,
+                      projectionMatrix,
+                      v1,
+                      v2,
+                      [1, 0.5, 0, 1]
+                    );
+                  }
+                }
+              });
             }
           }
 
-          if (selectedVertexIds.length > 0) {
-            const selectedPositions: number[] = []
-            for (const sel of selectedVertexIds) {
-              const geoset = mdlRenderer.model.Geosets[sel.geosetIndex]
-              if (geoset) {
-                const vIndex = sel.index * 3
-                selectedPositions.push(
-                  geoset.Vertices[vIndex],
-                  geoset.Vertices[vIndex + 1],
-                  geoset.Vertices[vIndex + 2]
-                )
+          // === Camera Frustum Rendering ===
+          if (showCamerasRef.current && (mdlRenderer as any).gl) {
+            const gl = (mdlRenderer as any).gl;
+            const { nodes: storeNodes } = useModelStore.getState();
+            const cameraNodes = storeNodes.filter((n: any) => n.type === 'Camera');
+
+            // Get selected camera index from dropdown
+            const selector = document.getElementById('camera-selector') as HTMLSelectElement;
+            const selectedIdx = selector ? parseInt(selector.value) : -1;
+
+            // Debug log every 300 frames
+            if (frameCount.current % 300 === 0) {
+              console.log('[Camera Render] showCameras:', showCamerasRef.current, 'cameraNodes:', cameraNodes.length, 'selectedIdx:', selectedIdx);
+            }
+
+            if (cameraNodes.length > 0 && selectedIdx >= 0 && selectedIdx < cameraNodes.length) {
+              // Only render the selected camera's frustum
+              const cam = cameraNodes[selectedIdx];
+              const isArrayLike = (v: any) => Array.isArray(v) || v instanceof Float32Array || ArrayBuffer.isView(v);
+              const toArray = (v: any) => v instanceof Float32Array ? Array.from(v) : v;
+              const getPos = (prop: any, directProp?: any) => {
+                if (directProp && isArrayLike(directProp)) return toArray(directProp);
+                if (isArrayLike(prop)) return toArray(prop);
+                if (prop && prop.Keys && prop.Keys.length > 0) {
+                  const v = prop.Keys[0].Vector;
+                  return v ? toArray(v) : [0, 0, 0];
+                }
+                return [0, 0, 0];
+              };
+
+              // Cast to any to access properties that might be missing in strict type defs
+              const camAny = cam as any;
+              const pos = getPos(camAny.Translation, camAny.Position);
+              const target = getPos(camAny.TargetTranslation, camAny.TargetPosition);
+              const fov = camAny.FieldOfView || 0.7853;
+              const nearClip = camAny.NearClip || 16;
+              const farClip = camAny.FarClip || 1000;
+
+              debugRenderer.current.renderWireframeFrustum(
+                gl,
+                mvMatrix,
+                pMatrix,
+                pos,
+                target,
+                fov,
+                nearClip,
+                farClip,
+                [0, 0.8, 1, 1]
+              );
+            }
+          }
+
+          if (mdlRenderer.rendererData && mdlRenderer.rendererData.animationInfo) {
+            const info = mdlRenderer.rendererData.animationInfo
+            const current = mdlRenderer.rendererData.frame
+            updateProgress(current, info.Interval[1])
+          }
+
+          if (mdlRenderer.rendererData) {
+            mdlRenderer.setCamera(cameraPos, cameraQuat)
+
+            if (isBindPoseMode) {
+              if (mdlRenderer.rendererData.nodes) {
+                mdlRenderer.rendererData.nodes.forEach((node: any) => {
+                  if (node && node.matrix) {
+                    mat4.identity(node.matrix)
+                  }
+                })
+              }
+              if (mdlRenderer.rendererData.rootNode) {
+                mat4.identity(mdlRenderer.rendererData.rootNode.matrix)
               }
             }
-            debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, selectedPositions, [1, 0, 0, 1], 4.0)
-          }
-        }
 
-        if (appMainMode === 'geometry' && geometrySubMode === 'face') {
-          if (selectedFaceIds.length > 0) {
-            const selectedPositions: number[] = []
-            for (const sel of selectedFaceIds) {
-              const geoset = mdlRenderer.model.Geosets[sel.geosetIndex]
-              if (geoset) {
-                const fIndex = sel.index * 3
-                const i1 = geoset.Faces[fIndex] * 3
-                const i2 = geoset.Faces[fIndex + 1] * 3
-                const i3 = geoset.Faces[fIndex + 2] * 3
+            // === Geoset Visibility Control ===
+            // Get visibility state from store
+            const { hiddenGeosetIds, forceShowAllGeosets, hoveredGeosetId } = useModelStore.getState()
 
-                selectedPositions.push(
-                  geoset.Vertices[i1], geoset.Vertices[i1 + 1], geoset.Vertices[i1 + 2],
-                  geoset.Vertices[i2], geoset.Vertices[i2 + 1], geoset.Vertices[i2 + 2],
-                  geoset.Vertices[i3], geoset.Vertices[i3 + 1], geoset.Vertices[i3 + 2]
-                )
+            // Store original geoset alphas to restore later
+            const originalGeosetAlphas: Map<number, number> = new Map()
+
+            // Apply visibility: hide geosets that are in hiddenGeosetIds (when forceShowAllGeosets is OFF)
+            // When forceShowAllGeosets is ON, all geosets are visible regardless of hiddenGeosetIds
+            if (!forceShowAllGeosets && mdlRenderer.rendererData.geosetAlpha) {
+              const numGeosets = mdlRenderer.model.Geosets?.length || 0
+              for (let i = 0; i < numGeosets; i++) {
+                originalGeosetAlphas.set(i, mdlRenderer.rendererData.geosetAlpha[i] ?? 1)
+                // If geoset is in hiddenGeosetIds, it's unchecked = hidden
+                if (hiddenGeosetIds.includes(i)) {
+                  mdlRenderer.rendererData.geosetAlpha[i] = 0
+                }
               }
             }
-            debugRenderer.current.renderTriangles(gl as WebGLRenderingContext, mvMatrix, pMatrix, selectedPositions, [1, 0, 0, 0.5])
 
-            const linePositions: number[] = []
-            for (let i = 0; i < selectedPositions.length; i += 9) {
-              linePositions.push(selectedPositions[i], selectedPositions[i + 1], selectedPositions[i + 2])
-              linePositions.push(selectedPositions[i + 3], selectedPositions[i + 4], selectedPositions[i + 5])
-              linePositions.push(selectedPositions[i + 3], selectedPositions[i + 4], selectedPositions[i + 5])
-              linePositions.push(selectedPositions[i + 6], selectedPositions[i + 7], selectedPositions[i + 8])
-              linePositions.push(selectedPositions[i + 6], selectedPositions[i + 7], selectedPositions[i + 8])
-              linePositions.push(selectedPositions[i], selectedPositions[i + 1], selectedPositions[i + 2])
+            mdlRenderer.render(mvMatrix, pMatrix, { wireframe: showWireframeRef.current || (appMainMode === 'geometry' && geometrySubMode === 'face') })
+
+            // Restore original geoset alphas
+            if (originalGeosetAlphas.size > 0 && mdlRenderer.rendererData.geosetAlpha) {
+              originalGeosetAlphas.forEach((alpha, index) => {
+                mdlRenderer.rendererData.geosetAlpha[index] = alpha
+              })
             }
-            debugRenderer.current.renderLines(gl as WebGLRenderingContext, mvMatrix, pMatrix, linePositions, [1, 0, 0, 1])
+
+            // === Hover Highlight ===
+            // If a geoset is hovered, render a highlight overlay
+            if (hoveredGeosetId !== null && mdlRenderer.model.Geosets && mdlRenderer.model.Geosets[hoveredGeosetId]) {
+              // Save current GL state
+              const prevBlend = gl.isEnabled(gl.BLEND)
+              const prevDepthMask = gl.getParameter(gl.DEPTH_WRITEMASK)
+              const prevDepthTest = gl.isEnabled(gl.DEPTH_TEST)
+              const prevCullFace = gl.isEnabled(gl.CULL_FACE)
+
+              // Render with red highlight color and high opacity
+              gl.enable(gl.BLEND)
+              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+              gl.depthMask(false)
+              gl.disable(gl.DEPTH_TEST)
+              // Disable culling for double-sided highlight
+              gl.disable(gl.CULL_FACE)
+
+              if (typeof (mdlRenderer as any).renderGeosetHighlight === 'function') {
+                (mdlRenderer as any).renderGeosetHighlight(hoveredGeosetId, [1, 0, 0], 0.8, mvMatrix, pMatrix)
+              }
+
+              // Restore GL state
+              if (prevCullFace) gl.enable(gl.CULL_FACE)
+              if (prevDepthTest) gl.enable(gl.DEPTH_TEST)
+              gl.depthMask(prevDepthMask)
+              if (!prevBlend) gl.disable(gl.BLEND)
+            }
+
+            if ((showNodesRef.current || (appMainMode === 'animation' && animationSubMode === 'binding')) && mdlRenderer.rendererData.nodes && appMainMode !== 'geometry') {
+              const { selectedNodeIds } = useSelectionStore.getState()
+              let parentOfSelected: number | null = null
+              let childrenOfSelected: number[] = []
+
+              if (selectedNodeIds.length === 1) {
+                const selectedId = selectedNodeIds[0]
+                const selectedNode = mdlRenderer.rendererData.nodes.find((n: any) => n.node.ObjectId === selectedId)
+                if (selectedNode) {
+                  if (typeof selectedNode.node.Parent === 'number') {
+                    parentOfSelected = selectedNode.node.Parent
+                  }
+                  childrenOfSelected = mdlRenderer.rendererData.nodes
+                    .filter((n: any) => n.node.Parent === selectedId)
+                    .map((n: any) => n.node.ObjectId)
+                }
+              }
+
+              debugRenderer.current.renderNodes(
+                gl as WebGLRenderingContext,
+                mvMatrix,
+                pMatrix,
+                mdlRenderer.rendererData.nodes as any,
+                selectedNodeIds,
+                parentOfSelected,
+                childrenOfSelected
+              )
+            }
+
+            if (showSkeletonRef.current && mdlRenderer.rendererData.nodes && appMainMode === 'animation') {
+              gl.disable(gl.DEPTH_TEST)
+              mdlRenderer.renderSkeleton(mvMatrix, pMatrix, null)
+              gl.enable(gl.DEPTH_TEST)
+            }
+
+            // === Light Object Rendering ===
+            if ((showLightsRef.current || (appMainMode === 'animation')) && mdlRenderer.rendererData.nodes) {
+              const { nodes } = useModelStore.getState()
+              const lightNodes = nodes.filter((n: any) => n.type === 'Light')
+
+              if (lightNodes.length > 0) {
+                const viewMatrix = mvMatrix
+                const projectionMatrix = pMatrix
+                const nodeMVMatrix = mat4.create()
+
+                lightNodes.forEach((light: any) => {
+                  const nodeWrapper = mdlRenderer.rendererData.nodes.find((n: any) => n.node.ObjectId === light.ObjectId)
+                  if (!nodeWrapper) return
+
+                  let worldMatrix = nodeWrapper.worldMatrix || nodeWrapper.matrix
+                  if (!worldMatrix) worldMatrix = mat4.create()
+
+                  mat4.multiply(nodeMVMatrix, viewMatrix, worldMatrix)
+
+                  // Extract Light Properties
+                  let type = light.LightType || 0
+                  // Handle string types just in case
+                  if (typeof type === 'string') {
+                    if (type === 'Directional') type = 1
+                    else if (type === 'Ambient') type = 2
+                    else type = 0
+                  }
+                  // Get current attenuation values if animated, otherwise use static
+                  // For simplicity in Debug view, we can use the static or first keyframe values if not easily accessible via renderer
+                  // Or check if rendererData has light values updating?
+                  // War3-model might not expose live light values easily unless we dig into KeyframeController.
+                  // Let's use static/default values for now for structure visualization.
+
+                  let attStart = 0
+                  let attEnd = 0
+                  let color = [1, 1, 0, 1] // Yellow default
+
+                  // Helper to get scalar value (static or first key)
+                  const getVal = (prop: any) => {
+                    if (typeof prop === 'number') return prop
+                    if (prop && prop.Keys && prop.Keys.length > 0) return prop.Keys[0].Vector[0]
+                    return 0
+                  }
+                  // Helper to get vector value
+                  const getVec = (prop: any) => {
+                    if (prop instanceof Float32Array || Array.isArray(prop)) return [prop[0], prop[1], prop[2]]
+                    if (prop && prop.Keys && prop.Keys.length > 0) return [prop.Keys[0].Vector[0], prop.Keys[0].Vector[1], prop.Keys[0].Vector[2]]
+                    return [1, 1, 1]
+                  }
+
+                  attStart = getVal(light.AttenuationStart)
+                  attEnd = getVal(light.AttenuationEnd)
+                  const c = getVec(light.Color)
+                  // If Color is [r,g,b], map to 0-1 range if > 1? usually 0-1 in MDL?
+                  // MDL colors are usually 0-1 range.
+                  color = [c[0], c[1], c[2], 1.0]
+
+                  debugRenderer.current.renderLight(
+                    gl as WebGLRenderingContext,
+                    nodeMVMatrix,
+                    projectionMatrix,
+                    type,
+                    attStart,
+                    attEnd,
+                    color
+                  )
+                })
+              }
+            }
+
           }
-        }
 
-        if (transformMode) {
-          const center = vec3.create()
-          let count = 0
-          let showGizmo = false
+          if ((appMainMode === 'geometry' && geometrySubMode === 'vertex') ||
+            (appMainMode === 'animation' && animationSubMode === 'binding')) {
+            for (const geoset of mdlRenderer.model.Geosets) {
+              if (geoset.Vertices) {
+                debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, geoset.Vertices, [0, 0, 1, 0.5], 4.0)
+              }
+            }
 
-          if (appMainMode === 'geometry') {
-            if (geometrySubMode === 'vertex' && selectedVertexIds.length > 0) {
+            if (selectedVertexIds.length > 0) {
+              const selectedPositions: number[] = []
               for (const sel of selectedVertexIds) {
                 const geoset = mdlRenderer.model.Geosets[sel.geosetIndex]
                 if (geoset) {
                   const vIndex = sel.index * 3
-                  center[0] += geoset.Vertices[vIndex]
-                  center[1] += geoset.Vertices[vIndex + 1]
-                  center[2] += geoset.Vertices[vIndex + 2]
-                  count++
+                  selectedPositions.push(
+                    geoset.Vertices[vIndex],
+                    geoset.Vertices[vIndex + 1],
+                    geoset.Vertices[vIndex + 2]
+                  )
                 }
               }
-              showGizmo = true
-            } else if (geometrySubMode === 'face' && selectedFaceIds.length > 0) {
+              debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, selectedPositions, [1, 0, 0, 1], 4.0)
+            }
+          }
+
+          if (appMainMode === 'geometry' && geometrySubMode === 'face') {
+            if (selectedFaceIds.length > 0) {
+              const selectedPositions: number[] = []
               for (const sel of selectedFaceIds) {
                 const geoset = mdlRenderer.model.Geosets[sel.geosetIndex]
                 if (geoset) {
                   const fIndex = sel.index * 3
-                  const i1 = geoset.Faces[fIndex] * 3, i2 = geoset.Faces[fIndex + 1] * 3, i3 = geoset.Faces[fIndex + 2] * 3
-                  center[0] += geoset.Vertices[i1] + geoset.Vertices[i2] + geoset.Vertices[i3]
-                  center[1] += geoset.Vertices[i1 + 1] + geoset.Vertices[i2 + 1] + geoset.Vertices[i3 + 1]
-                  center[2] += geoset.Vertices[i1 + 2] + geoset.Vertices[i2 + 2] + geoset.Vertices[i3 + 2]
-                  count += 3
+                  const i1 = geoset.Faces[fIndex] * 3
+                  const i2 = geoset.Faces[fIndex + 1] * 3
+                  const i3 = geoset.Faces[fIndex + 2] * 3
+
+                  selectedPositions.push(
+                    geoset.Vertices[i1], geoset.Vertices[i1 + 1], geoset.Vertices[i1 + 2],
+                    geoset.Vertices[i2], geoset.Vertices[i2 + 1], geoset.Vertices[i2 + 2],
+                    geoset.Vertices[i3], geoset.Vertices[i3 + 1], geoset.Vertices[i3 + 2]
+                  )
                 }
               }
-              showGizmo = true
-            }
-          }
-          else if (appMainMode === 'animation' && animationSubMode === 'binding') {
-            const { selectedNodeIds } = useSelectionStore.getState()
-            if (selectedNodeIds && selectedNodeIds.length > 0) {
-              for (const nodeId of selectedNodeIds) {
-                const nodeWrapper = mdlRenderer.rendererData.nodes[nodeId]
-                if (nodeWrapper && nodeWrapper.node && nodeWrapper.node.PivotPoint) {
-                  const pivot = nodeWrapper.node.PivotPoint
-                  center[0] += pivot[0]
-                  center[1] += pivot[1]
-                  center[2] += pivot[2]
-                  count++
-                }
+              debugRenderer.current.renderTriangles(gl as WebGLRenderingContext, mvMatrix, pMatrix, selectedPositions, [1, 0, 0, 0.5])
+
+              const linePositions: number[] = []
+              for (let i = 0; i < selectedPositions.length; i += 9) {
+                linePositions.push(selectedPositions[i], selectedPositions[i + 1], selectedPositions[i + 2])
+                linePositions.push(selectedPositions[i + 3], selectedPositions[i + 4], selectedPositions[i + 5])
+                linePositions.push(selectedPositions[i + 3], selectedPositions[i + 4], selectedPositions[i + 5])
+                linePositions.push(selectedPositions[i + 6], selectedPositions[i + 7], selectedPositions[i + 8])
+                linePositions.push(selectedPositions[i + 6], selectedPositions[i + 7], selectedPositions[i + 8])
+                linePositions.push(selectedPositions[i], selectedPositions[i + 1], selectedPositions[i + 2])
               }
-              showGizmo = true
+              debugRenderer.current.renderLines(gl as WebGLRenderingContext, mvMatrix, pMatrix, linePositions, [1, 0, 0, 1])
             }
           }
 
-          if (showGizmo && count > 0) {
-            vec3.scale(center, center, 1.0 / count)
+          if (transformMode) {
+            const center = vec3.create()
+            let count = 0
+            let showGizmo = false
 
-            // Fixed Gizmo Scale (no adaptive scaling)
-            const gizmoScale = 1.0
+            if (appMainMode === 'geometry') {
+              if (geometrySubMode === 'vertex' && selectedVertexIds.length > 0) {
+                for (const sel of selectedVertexIds) {
+                  const geoset = mdlRenderer.model.Geosets[sel.geosetIndex]
+                  if (geoset) {
+                    const vIndex = sel.index * 3
+                    center[0] += geoset.Vertices[vIndex]
+                    center[1] += geoset.Vertices[vIndex + 1]
+                    center[2] += geoset.Vertices[vIndex + 2]
+                    count++
+                  }
+                }
+                showGizmo = true
+              } else if (geometrySubMode === 'face' && selectedFaceIds.length > 0) {
+                for (const sel of selectedFaceIds) {
+                  const geoset = mdlRenderer.model.Geosets[sel.geosetIndex]
+                  if (geoset) {
+                    const fIndex = sel.index * 3
+                    const i1 = geoset.Faces[fIndex] * 3, i2 = geoset.Faces[fIndex + 1] * 3, i3 = geoset.Faces[fIndex + 2] * 3
+                    center[0] += geoset.Vertices[i1] + geoset.Vertices[i2] + geoset.Vertices[i3]
+                    center[1] += geoset.Vertices[i1 + 1] + geoset.Vertices[i2 + 1] + geoset.Vertices[i3 + 1]
+                    center[2] += geoset.Vertices[i1 + 2] + geoset.Vertices[i2 + 2] + geoset.Vertices[i3 + 2]
+                    count += 3
+                  }
+                }
+                showGizmo = true
+              }
+            }
+            else if (appMainMode === 'animation' && animationSubMode === 'binding') {
+              const { selectedNodeIds } = useSelectionStore.getState()
+              if (selectedNodeIds && selectedNodeIds.length > 0) {
+                for (const nodeId of selectedNodeIds) {
+                  const nodeWrapper = mdlRenderer.rendererData.nodes[nodeId]
+                  if (nodeWrapper && nodeWrapper.node && nodeWrapper.node.PivotPoint) {
+                    const pivot = nodeWrapper.node.PivotPoint
+                    center[0] += pivot[0]
+                    center[1] += pivot[1]
+                    center[2] += pivot[2]
+                    count++
+                  }
+                }
+                showGizmo = true
+              }
+            }
 
-            gizmoRenderer.current.render(gl as WebGLRenderingContext, mvMatrix, pMatrix, center, transformMode as any, gizmoState.current.activeAxis, gizmoScale)
+            if (showGizmo && count > 0) {
+              vec3.scale(center, center, 1.0 / count)
+
+              // Fixed Gizmo Scale (no adaptive scaling)
+              const gizmoScale = 1.0
+
+              gizmoRenderer.current.render(gl as WebGLRenderingContext, mvMatrix, pMatrix, center, transformMode as any, gizmoState.current.activeAxis, gizmoScale)
+            }
           }
-        }
 
-        if (showGridRef.current) {
-          gridRenderer.current.render(gl as WebGLRenderingContext, mvMatrix, pMatrix)
-        }
+          if (showGridRef.current) {
+            gridRenderer.current.render(gl as WebGLRenderingContext, mvMatrix, pMatrix)
+          }
 
-        // Always render the axis indicator in bottom-left corner
-        axisIndicator.current.render(gl as WebGLRenderingContext, mvMatrix, canvas.width, canvas.height)
+          // Always render the axis indicator in bottom-left corner
+          axisIndicator.current.render(gl as WebGLRenderingContext, mvMatrix, canvas.width, canvas.height)
 
-        frameCount.current++
-        if (time - lastFpsTime.current >= 1000) {
-          setFps(Math.round(frameCount.current * 1000 / (time - lastFpsTime.current)))
-          frameCount.current = 0
-          lastFpsTime.current = time
+          frameCount.current++
+          if (time - lastFpsTime.current >= 1000) {
+            setFps(Math.round(frameCount.current * 1000 / (time - lastFpsTime.current)))
+            frameCount.current = 0
+            lastFpsTime.current = time
+          }
+          // NOTE: requestAnimationFrame is called AFTER the catch block, not here!
+        } catch (e: any) {
+          console.error('[Viewer] Render Loop Crash:', e)
+          if (animationFrameId.current) {
+            cancelAnimationFrame(animationFrameId.current)
+            animationFrameId.current = null
+          }
+          return // Do NOT schedule next frame on error
         }
         animationFrameId.current = requestAnimationFrame(render)
       }
