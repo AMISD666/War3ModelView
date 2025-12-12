@@ -1167,12 +1167,11 @@ const MainLayout: React.FC = () => {
                         />
                     </UVModeLayout>
 
-                    {mainMode !== 'uv' && (
-                        <GeosetVisibilityPanel
-                            visible={showGeosetVisibility}
-                            onClose={() => setShowGeosetVisibility(false)}
-                        />
-                    )}
+
+                    <GeosetVisibilityPanel
+                        visible={showGeosetVisibility}
+                        onClose={() => setShowGeosetVisibility(false)}
+                    />
 
                     {isLoading && (
                         <div style={{

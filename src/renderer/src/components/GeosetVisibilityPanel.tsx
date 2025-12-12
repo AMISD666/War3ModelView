@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Checkbox } from 'antd';
 import { EyeOutlined, EyeInvisibleOutlined, CloseOutlined, MinusOutlined } from '@ant-design/icons';
 import { useModelStore } from '../store/modelStore';
@@ -20,41 +20,80 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
     } = useModelStore();
 
     const [position, setPosition] = useState({ x: 20, y: 80 });
+    const [size, setSize] = useState({ width: 200, height: 300 });
     const [isDragging, setIsDragging] = useState(false);
+    const [isResizing, setIsResizing] = useState<'right' | 'bottom' | 'corner' | null>(null);
     const [isMinimized, setIsMinimized] = useState(false);
-    const dragStart = useRef({ x: 0, y: 0, posX: 0, posY: 0 });
+    const dragStart = useRef({ x: 0, y: 0, posX: 0, posY: 0, width: 0, height: 0 });
     const panelRef = useRef<HTMLDivElement>(null);
+    const contentRef = useRef<HTMLDivElement>(null);
 
     const geosets = modelData?.Geosets || [];
 
-    // Handle dragging - fixed direction
+    // Calculate grid columns based on panel width (each item ~50px)
+    const gridColumns = Math.max(1, Math.floor((size.width - 16) / 50));
+
+    // Handle dragging
     const handleMouseDown = (e: React.MouseEvent) => {
         if ((e.target as HTMLElement).closest('.panel-control-btn')) return;
+        if ((e.target as HTMLElement).closest('.resize-handle')) return;
         setIsDragging(true);
         dragStart.current = {
             x: e.clientX,
             y: e.clientY,
             posX: position.x,
-            posY: position.y
+            posY: position.y,
+            width: size.width,
+            height: size.height
         };
     };
 
+    // Handle resize start
+    const handleResizeStart = useCallback((e: React.MouseEvent, direction: 'right' | 'bottom' | 'corner') => {
+        e.stopPropagation();
+        setIsResizing(direction);
+        dragStart.current = {
+            x: e.clientX,
+            y: e.clientY,
+            posX: position.x,
+            posY: position.y,
+            width: size.width,
+            height: size.height
+        };
+    }, [position, size]);
+
     useEffect(() => {
         const handleMouseMove = (e: MouseEvent) => {
-            if (!isDragging) return;
-            const deltaX = e.clientX - dragStart.current.x;
-            const deltaY = e.clientY - dragStart.current.y;
-            setPosition({
-                x: dragStart.current.posX - deltaX,  // Subtract for right-anchored
-                y: dragStart.current.posY + deltaY
-            });
+            if (isDragging) {
+                const deltaX = e.clientX - dragStart.current.x;
+                const deltaY = e.clientY - dragStart.current.y;
+                setPosition({
+                    x: dragStart.current.posX - deltaX,  // Subtract for right-anchored
+                    y: dragStart.current.posY + deltaY
+                });
+            }
+            if (isResizing) {
+                const deltaX = e.clientX - dragStart.current.x;
+                const deltaY = e.clientY - dragStart.current.y;
+
+                if (isResizing === 'right' || isResizing === 'corner') {
+                    // For right-anchored panel, moving right means decreasing width
+                    const newWidth = Math.max(120, dragStart.current.width - deltaX);
+                    setSize(prev => ({ ...prev, width: newWidth }));
+                }
+                if (isResizing === 'bottom' || isResizing === 'corner') {
+                    const newHeight = Math.max(100, dragStart.current.height + deltaY);
+                    setSize(prev => ({ ...prev, height: newHeight }));
+                }
+            }
         };
 
         const handleMouseUp = () => {
             setIsDragging(false);
+            setIsResizing(null);
         };
 
-        if (isDragging) {
+        if (isDragging || isResizing) {
             document.addEventListener('mousemove', handleMouseMove);
             document.addEventListener('mouseup', handleMouseUp);
         }
@@ -63,17 +102,13 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
             document.removeEventListener('mousemove', handleMouseMove);
             document.removeEventListener('mouseup', handleMouseUp);
         };
-    }, [isDragging]);
+    }, [isDragging, isResizing]);
 
     if (!visible) return null;
 
-    // New logic: checked = visible when Show All is OFF
-    // hiddenGeosetIds stores IDs that are NOT checked
     const isGeosetChecked = (id: number) => {
         return !hiddenGeosetIds.includes(id);
     };
-
-    // Grid uses 3 columns directly in CSS
 
     return (
         <div
@@ -82,9 +117,9 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                 position: 'fixed',
                 right: position.x,
                 top: position.y,
-                width: isMinimized ? 120 : 180,
-                maxHeight: isMinimized ? 'auto' : '400px',
-                backgroundColor: 'rgba(30, 30, 30, 0.9)',
+                width: isMinimized ? 120 : size.width,
+                height: isMinimized ? 'auto' : size.height,
+                backgroundColor: 'rgba(30, 30, 30, 0.95)',
                 border: '1px solid rgba(80, 80, 80, 0.6)',
                 borderRadius: 4,
                 boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
@@ -105,7 +140,8 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                     alignItems: 'center',
                     justifyContent: 'space-between',
                     cursor: isDragging ? 'grabbing' : 'grab',
-                    borderBottom: '1px solid rgba(60, 60, 60, 0.8)'
+                    borderBottom: '1px solid rgba(60, 60, 60, 0.8)',
+                    flexShrink: 0
                 }}
             >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -147,20 +183,22 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                 </div>
             </div>
 
-            {/* Content - 3 column grid */}
+            {/* Content - Adaptive grid */}
             {!isMinimized && (
                 <div
+                    ref={contentRef}
                     style={{
                         flex: 1,
                         overflowY: 'auto',
                         padding: '6px 8px',
                         display: 'grid',
-                        gridTemplateColumns: 'repeat(3, 1fr)',
-                        gap: '2px 4px'
+                        gridTemplateColumns: `repeat(${gridColumns}, 1fr)`,
+                        gap: '2px 4px',
+                        alignContent: 'start'
                     }}
                 >
                     {geosets.length === 0 ? (
-                        <div style={{ gridColumn: 'span 3', padding: 8, color: '#888', fontSize: 11, textAlign: 'center' }}>
+                        <div style={{ gridColumn: `span ${gridColumns}`, padding: 8, color: '#888', fontSize: 11, textAlign: 'center' }}>
                             无多边形
                         </div>
                     ) : (
@@ -204,13 +242,60 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                     borderTop: '1px solid rgba(60, 60, 60, 0.8)',
                     fontSize: 10,
                     color: '#888',
-                    textAlign: 'right'
+                    textAlign: 'right',
+                    flexShrink: 0
                 }}>
-                    共 {geosets.length} 个
+                    共 {geosets.length} 个 | {gridColumns} 列
                 </div>
+            )}
+
+            {/* Resize Handles */}
+            {!isMinimized && (
+                <>
+                    {/* Left edge resize (since panel is right-anchored) */}
+                    <div
+                        className="resize-handle"
+                        onMouseDown={(e) => handleResizeStart(e, 'right')}
+                        style={{
+                            position: 'absolute',
+                            left: 0,
+                            top: 0,
+                            width: 6,
+                            height: '100%',
+                            cursor: 'ew-resize'
+                        }}
+                    />
+                    {/* Bottom edge resize */}
+                    <div
+                        className="resize-handle"
+                        onMouseDown={(e) => handleResizeStart(e, 'bottom')}
+                        style={{
+                            position: 'absolute',
+                            bottom: 0,
+                            left: 0,
+                            width: '100%',
+                            height: 6,
+                            cursor: 'ns-resize'
+                        }}
+                    />
+                    {/* Bottom-left corner resize */}
+                    <div
+                        className="resize-handle"
+                        onMouseDown={(e) => handleResizeStart(e, 'corner')}
+                        style={{
+                            position: 'absolute',
+                            bottom: 0,
+                            left: 0,
+                            width: 12,
+                            height: 12,
+                            cursor: 'nesw-resize'
+                        }}
+                    />
+                </>
             )}
         </div>
     );
 };
 
 export default GeosetVisibilityPanel;
+

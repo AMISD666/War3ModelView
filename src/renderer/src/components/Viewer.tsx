@@ -8,6 +8,7 @@ import { useGizmoTransform } from './viewer/hooks/useGizmoTransform'
 import { loadAllTextures, loadTeamColorTextures as loadTeamColors } from './viewer/textureLoader'
 import { validateAllParticleEmitters } from './viewer/particleValidator'
 import { checkForStructuralChanges, lightweightSync, syncNodeData } from './viewer/modelSync'
+import { logModelInfo } from '../utils/debugLogger'
 import { renderGrid, renderCollisionShapes, renderSkeleton, renderNodes, renderLights, renderCameraFrustum, applyGeosetVisibility, restoreGeosetAlphas } from './viewer/renderHelpers'
 import { GizmoAxis as GizmoAxisType, CameraState, hexToRgb, isArrayLike, toArray, getPos, getVal, getVec } from './viewer/types'
 import { mat4, vec3, vec4, quat } from 'gl-matrix'
@@ -1200,7 +1201,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       console.timeEnd('[Viewer] MDX Parse')
       console.log(`[Viewer] Model Parsing took ${(performance.now() - parseStart).toFixed(1)}ms`)
 
-      // Debug logging to diagnose saved model issues
+      // Log to production CMD window
+      logModelInfo(path, model, performance.now() - parseStart)
       console.log('[Viewer] Parsed model:', {
         Sequences: model.Sequences?.length || 0,
         ParticleEmitters2: model.ParticleEmitters2?.length || 0,

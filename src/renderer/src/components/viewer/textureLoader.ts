@@ -7,6 +7,7 @@
 import { decodeBLP, getBLPImageData } from 'war3-model'
 import { readFile } from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'
+import { logTextureInfo, logTextureLoadComplete } from '../../utils/debugLogger'
 
 export interface TextureLoadResult {
     path: string
@@ -213,6 +214,7 @@ export async function loadAllTextures(
     modelPath: string
 ): Promise<TextureLoadResult[]> {
     console.time('[Viewer] Texture Load (Batch)')
+    const batchStart = performance.now()
     const results: TextureLoadResult[] = []
 
     if (!model.Textures) {
@@ -247,6 +249,16 @@ export async function loadAllTextures(
         }
     }
     console.timeEnd('[Viewer] Texture Upload (Sequential)')
+
+    // Log to production CMD window
+    const textureResults = decodedTextures.map((d, i) => ({
+        path: d.path,
+        loaded: d.imageData !== null,
+        time: undefined // timing not available per-texture in batch mode
+    }))
+    await logTextureInfo(textureResults)
+    const loadedCount = results.filter(r => r.loaded).length
+    await logTextureLoadComplete(texturePaths.length, loadedCount, performance.now() - batchStart)
 
     console.timeEnd('[Viewer] Texture Load (Batch)')
     return results

@@ -20,8 +20,10 @@ import {
     RedoOutlined,
     EyeOutlined,
     EyeInvisibleOutlined,
-    CompressOutlined
+    CompressOutlined,
+    BgColorsOutlined
 } from '@ant-design/icons'
+import { ColorPicker } from 'antd'
 
 interface UVEditorProps {
     modelPath: string | null
@@ -62,6 +64,8 @@ const UVEditor: React.FC<UVEditorProps> = ({
     const [selectionStart, setSelectionStart] = useState<{ x: number; y: number } | null>(null)
     const [selectionEnd, setSelectionEnd] = useState<{ x: number; y: number } | null>(null)
     const [textureImage, setTextureImage] = useState<HTMLImageElement | null>(null)
+    const [isLoadingTexture, setIsLoadingTexture] = useState(false)
+    const [canvasBackgroundColor, setCanvasBackgroundColor] = useState('#1a1a1a')
     const [selectedUVs, setSelectedUVs] = useState<UVSelection[]>([])
 
     // Dragging state for transforms
@@ -368,7 +372,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
         const ctx = canvas.getContext('2d')
         if (!ctx) return
 
-        ctx.fillStyle = '#1a1a1a'
+        ctx.fillStyle = canvasBackgroundColor
         ctx.fillRect(0, 0, canvas.width, canvas.height)
 
         const centerX = canvas.width / 2 + panX
@@ -539,7 +543,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
             )
             ctx.setLineDash([])
         }
-    }, [modelData, visibleGeosetIds, textureImage, panX, panY, zoom, uvToCanvas, selectedUVs, isSelecting, selectionStart, selectionEnd, hoveredAxis, activeAxis, getSelectionCenter, transformMode])
+    }, [modelData, visibleGeosetIds, textureImage, panX, panY, zoom, uvToCanvas, selectedUVs, isSelecting, selectionStart, selectionEnd, hoveredAxis, activeAxis, getSelectionCenter, transformMode, canvasBackgroundColor])
 
     // -------------------------------------------------------------------------
     // EVENT HANDLERS
@@ -866,8 +870,11 @@ const UVEditor: React.FC<UVEditorProps> = ({
         const loadTexture = async () => {
             if (!modelData || !modelPath || selectedTextureId === null) {
                 setTextureImage(null)
+                setIsLoadingTexture(false)
                 return
             }
+
+            setIsLoadingTexture(true)
 
             const texture = modelData.Textures?.[selectedTextureId]
             if (!texture?.Image) {
@@ -917,18 +924,25 @@ const UVEditor: React.FC<UVEditorProps> = ({
                                 ctx.putImageData(realImageData, 0, 0)
                                 const dataUrl = canvas.toDataURL()
                                 const img = new Image()
-                                img.onload = () => setTextureImage(img)
+                                img.onload = () => {
+                                    setTextureImage(img)
+                                    setIsLoadingTexture(false)
+                                }
                                 img.src = dataUrl
                             }
                         }
                     }
                 } else {
                     const img = new Image()
-                    img.onload = () => setTextureImage(img)
+                    img.onload = () => {
+                        setTextureImage(img)
+                        setIsLoadingTexture(false)
+                    }
                     img.src = `file://${fullPath}`
                 }
             } catch (e) {
                 console.error('[UVEditor] Failed to load texture:', e)
+                setIsLoadingTexture(false)
             }
         }
 
@@ -1067,6 +1081,18 @@ const UVEditor: React.FC<UVEditorProps> = ({
                 <Tooltip title={showModelView ? '隐藏3D视图' : '显示3D视图'}>
                     <Button size="small" icon={showModelView ? <EyeInvisibleOutlined /> : <EyeOutlined />} style={btnStyle} onClick={onToggleModelView} />
                 </Tooltip>
+
+                <div style={{ width: '1px', backgroundColor: '#555', margin: '0 4px' }} />
+
+                {/* Background color picker */}
+                <Tooltip title="画布背景颜色">
+                    <ColorPicker
+                        value={canvasBackgroundColor}
+                        onChange={(color) => setCanvasBackgroundColor(color.toHexString())}
+                        size="small"
+                        showText={false}
+                    />
+                </Tooltip>
             </div>
 
             {/* Canvas */}
@@ -1093,7 +1119,8 @@ const UVEditor: React.FC<UVEditorProps> = ({
             }}>
                 缩放: {(zoom * 100).toFixed(0)}% |
                 选中: {selectedUVs.reduce((sum, s) => sum + s.indices.length, 0)} 顶点 |
-                可见: {visibleGeosetIds.length}
+                可见: {visibleGeosetIds.length} |
+                贴图: {isLoadingTexture ? '加载中...' : (textureImage ? `${textureImage.width}×${textureImage.height}` : '无')}
             </div>
         </div>
     )
