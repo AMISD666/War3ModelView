@@ -144,8 +144,14 @@ export function lightweightSync(renderer: any, modelData: any): void {
     }
 
     // === GLOBAL SEQUENCES ===
+    // Sync GlobalSequences frames for new TextureAnimations to work
     if (modelData.GlobalSequences) {
         renderer.model.GlobalSequences = modelData.GlobalSequences
+        // Sync the globalSequencesFrames array for new entries
+        if (renderer.modelInstance?.syncGlobalSequences) {
+            renderer.modelInstance.syncGlobalSequences()
+            console.log('[modelSync] Called modelInstance.syncGlobalSequences() for GlobalSequences update')
+        }
     }
 
     // === PIVOT POINTS ===
@@ -156,6 +162,22 @@ export function lightweightSync(renderer: any, modelData: any): void {
     // === TEXTURE ANIMS ===
     if (modelData.TextureAnims) {
         renderer.model.TextureAnims = modelData.TextureAnims
+        // Debug: Log TextureAnims data to help trace sync issues
+        console.log('[modelSync] Synced TextureAnims:', modelData.TextureAnims.length, 'anims')
+        modelData.TextureAnims.forEach((anim: any, index: number) => {
+            const trans = anim.Translation
+            const rot = anim.Rotation
+            const scale = anim.Scaling
+            console.log(`[modelSync] TextureAnim[${index}]:`, {
+                hasTranslation: !!trans,
+                transGlobalSeqId: trans?.GlobalSeqId,
+                transKeysCount: trans?.Keys?.length,
+                hasRotation: !!rot,
+                rotGlobalSeqId: rot?.GlobalSeqId,
+                hasScaling: !!scale,
+                scaleGlobalSeqId: scale?.GlobalSeqId
+            })
+        })
     }
 
     console.log('[modelSync] Lightweight sync complete')

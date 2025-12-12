@@ -1594,6 +1594,13 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         }
         if (modelData.TextureAnims) {
           renderer.model.TextureAnims = modelData.TextureAnims
+          console.log('[Viewer] Synced TextureAnims:', modelData.TextureAnims.length, 'anims')
+          // Debug: log GlobalSeqId for each anim's Translation
+          modelData.TextureAnims.forEach((anim: any, i: number) => {
+            if (anim.Translation) {
+              console.log(`[Viewer] TextureAnim[${i}].Translation GlobalSeqId:`, anim.Translation.GlobalSeqId, 'Keys:', anim.Translation.Keys?.length)
+            }
+          })
         }
 
         // === GEOSETS ===
@@ -1624,8 +1631,15 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         }
 
         // === GLOBAL SEQUENCES ===
+        // CRITICAL: Must call syncGlobalSequences() to extend globalSequencesFrames array
+        // for new GlobalSequences, otherwise TextureAnimations using them won't animate
         if (modelData.GlobalSequences) {
           renderer.model.GlobalSequences = modelData.GlobalSequences
+          // Sync the globalSequencesFrames array for new entries
+          if ((renderer as any).modelInstance?.syncGlobalSequences) {
+            (renderer as any).modelInstance.syncGlobalSequences()
+            console.log('[Viewer] Called syncGlobalSequences() for', modelData.GlobalSequences.length, 'GlobalSequences')
+          }
         }
 
         // === PIVOT POINTS ===

@@ -153,8 +153,7 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({ visible, onCl
                             </div>
                             <div style={{ padding: '16px', backgroundColor: '#333333', borderRadius: '4px', border: '1px solid #4a4a4a' }}>
                                 <Text style={{ color: '#808080', fontSize: '12px' }}>
-                                    全局序列用于循环播放动画，例如持续的粒子效果或闪烁效果。
-                                    当动画绑定到全局序列时，它会使用这里设置的持续时间独立循环播放。
+                                    全局序列
                                 </Text>
                             </div>
                         </div>
