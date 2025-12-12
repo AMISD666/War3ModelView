@@ -3,6 +3,8 @@
  * Handles lightweight sync between store and renderer without full reloads
  */
 
+import { validateAllParticleEmitters } from './particleValidator'
+
 /**
  * Check if structural changes require a full renderer reload
  */
@@ -50,7 +52,9 @@ export function checkForStructuralChanges(
     if (geoChanged) return { needsReload: true, reason: 'Geoset count changed' }
     if (textureChanged) return { needsReload: true, reason: 'Texture count changed' }
     if (materialChanged) return { needsReload: true, reason: 'Material count changed' }
-    if (particleChanged) return { needsReload: true, reason: 'Particle count changed' }
+    // OPTIMIZATION: Particle changes are now handled via lightweight sync
+    // The ParticlesController.syncEmitters() method dynamically adds/removes emitters
+    // if (particleChanged) return { needsReload: true, reason: 'Particle count changed' }
     if (geosetMaterialChanged) return { needsReload: true, reason: 'Geoset MaterialID changed' }
     if (lightCountChanged) return { needsReload: true, reason: 'Light count changed' }
 
@@ -66,9 +70,12 @@ export function lightweightSync(renderer: any, modelData: any): void {
     if (!renderer?.model || !modelData) return
 
     // === PARTICLE EMITTERS ===
+    // Validate particles before syncing to prevent rendering crashes
     if (modelData.ParticleEmitters2) {
+        validateAllParticleEmitters(modelData)
         renderer.model.ParticleEmitters2 = modelData.ParticleEmitters2
         console.log('[modelSync] Synced ParticleEmitters2:', modelData.ParticleEmitters2.length, 'emitters')
+        // ParticlesController.syncEmitters() is called automatically in update()
     }
 
     // === RIBBON EMITTERS ===
@@ -82,8 +89,14 @@ export function lightweightSync(renderer: any, modelData: any): void {
     }
 
     // === NODES ===
+    // Sync nodes to both model and rendererData for particle emitter lookups
     if (modelData.Nodes) {
         renderer.model.Nodes = modelData.Nodes
+        // Also update rendererData.nodes for particles to find their node transforms
+        if (renderer.modelInstance?.syncNodes) {
+            renderer.modelInstance.syncNodes()
+            console.log('[modelSync] Called modelInstance.syncNodes() for node updates')
+        }
     }
 
     // === BONES ===
