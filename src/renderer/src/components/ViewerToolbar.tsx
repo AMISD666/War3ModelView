@@ -96,6 +96,10 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                                 icon={<SplitCellsOutlined />}
                                 onClick={onSplitVertices}
                                 disabled={!canSplit}
+                                style={{
+                                    opacity: canSplit ? 1 : 0.5,
+                                    color: canSplit ? undefined : '#888'
+                                }}
                             />
                         </Tooltip>
                         <Tooltip title="焊接 - 将选中顶点合并到中心点">
@@ -103,6 +107,10 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                                 icon={<MergeCellsOutlined />}
                                 onClick={onWeldVertices}
                                 disabled={!canWeld}
+                                style={{
+                                    opacity: canWeld ? 1 : 0.5,
+                                    color: canWeld ? undefined : '#888'
+                                }}
                             />
                         </Tooltip>
                     </Space>

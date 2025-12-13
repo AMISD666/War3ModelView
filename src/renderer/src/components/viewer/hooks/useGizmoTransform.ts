@@ -55,11 +55,11 @@ function calculateWorldMoveDelta(
 function getMoveVectorForAxis(worldMoveDelta: vec3, axis: GizmoAxis): vec3 {
     const moveVec = vec3.create()
     if (axis === 'x') moveVec[0] = -worldMoveDelta[0]
-    else if (axis === 'y') moveVec[1] = -worldMoveDelta[1]
+    else if (axis === 'y') moveVec[1] = worldMoveDelta[1]
     else if (axis === 'z') moveVec[2] = worldMoveDelta[2]
-    else if (axis === 'xy') { moveVec[0] = -worldMoveDelta[0]; moveVec[1] = -worldMoveDelta[1] }
+    else if (axis === 'xy') { moveVec[0] = -worldMoveDelta[0]; moveVec[1] = worldMoveDelta[1] }
     else if (axis === 'xz') { moveVec[0] = -worldMoveDelta[0]; moveVec[2] = worldMoveDelta[2] }
-    else if (axis === 'yz') { moveVec[1] = -worldMoveDelta[1]; moveVec[2] = worldMoveDelta[2] }
+    else if (axis === 'yz') { moveVec[1] = worldMoveDelta[1]; moveVec[2] = worldMoveDelta[2] }
     return moveVec
 }
 

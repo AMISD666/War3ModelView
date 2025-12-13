@@ -2,6 +2,7 @@ import { Command } from '../utils/CommandManager'
 import { pasteVertices, VertexCopyBuffer } from '../utils/vertexOperations'
 import { useModelStore } from '../store/modelStore'
 import { useSelectionStore } from '../store/selectionStore'
+import { ModelResourceManager } from 'war3-model'
 
 /**
  * Command to paste copied vertices/polygons as a new geoset
@@ -93,6 +94,9 @@ export class PasteVerticesCommand implements Command {
 
         console.log('[PasteVerticesCommand] Created new geoset at index', this.newGeosetIndex,
             'Total geosets:', this.renderer.model.Geosets.length)
+
+        // Create GPU buffers for the new geoset
+        ModelResourceManager.getInstance().addGeosetBuffers(this.renderer.model, this.newGeosetIndex)
 
         // Create geoset for store (plain arrays)
         const storeGeoset = {

@@ -78,13 +78,12 @@ export function findFacesUsingVertices(faces: Uint16Array | number[], vertexIndi
 
 /**
  * Split: Extract selected vertices and their faces into a NEW geoset
- * The original geoset is NOT modified - we only COPY faces to the new geoset.
- * This is equivalent to "detaching" geometry to a new geoset.
+ * AND REMOVE those faces from the original geoset.
  * 
  * @param geoset The original geoset
  * @param vertexIndices Array of vertex indices to extract
  * @param materialId Material ID for the new geoset
- * @returns SplitResult with empty updatedOriginalGeoset (no changes) and newGeoset
+ * @returns SplitResult with updatedOriginalGeoset (faces removed) and newGeoset (extracted faces)
  */
 export function splitVertices(geoset: GeosetData, vertexIndices: number[], materialId: number = 0): SplitResult {
     const vertexSet = new Set(vertexIndices)
@@ -95,7 +94,7 @@ export function splitVertices(geoset: GeosetData, vertexIndices: number[], mater
     if (facesToExtract.size === 0) {
         // No faces to extract
         return {
-            updatedOriginalGeoset: {}, // No changes to original
+            updatedOriginalGeoset: {},
             newGeoset: {},
             extractedFaceIndices: []
         }
@@ -110,23 +109,23 @@ export function splitVertices(geoset: GeosetData, vertexIndices: number[], mater
         verticesToExtractSet.add(geoset.Faces[faceStart + 2])
     }
 
-    // Sort vertices to ensure consistent order
+    // Sort vertices for consistent order in new geoset
     const sortedVerticesToExtract = Array.from(verticesToExtractSet).sort((a, b) => a - b)
 
-    // Build vertex index mapping for the new geoset (old index -> new index)
+    // Build vertex index mapping for the NEW geoset (old index -> new index)
     const oldToNewIndex = new Map<number, number>()
     sortedVerticesToExtract.forEach((oldIdx, newIdx) => {
         oldToNewIndex.set(oldIdx, newIdx)
     })
 
-    // Create new geoset data
+    // === Create NEW GEOSET data ===
     const newVertices: number[] = []
     const newNormals: number[] = []
     const newVertexGroups: number[] = []
     const newTVertices: number[][] = (geoset.TVertices as Float32Array[]).map(() => [])
     const newFaces: number[] = []
 
-    // Copy vertex data to new geoset (using sorted order)
+    // Copy vertex data to new geoset
     for (const oldIdx of sortedVerticesToExtract) {
         newVertices.push(
             geoset.Vertices[oldIdx * 3],
@@ -156,11 +155,83 @@ export function splitVertices(geoset: GeosetData, vertexIndices: number[], mater
         )
     }
 
+    // === Create UPDATED ORIGINAL GEOSET (faces removed) ===
+    // Get remaining faces (not extracted)
+    const totalFaces = geoset.Faces.length / 3
+    const remainingFaceIndices: number[] = []
+    for (let i = 0; i < totalFaces; i++) {
+        if (!facesToExtract.has(i)) {
+            remainingFaceIndices.push(i)
+        }
+    }
+
+    // Find vertices that are still used by remaining faces
+    const remainingVertexSet = new Set<number>()
+    for (const faceIdx of remainingFaceIndices) {
+        const faceStart = faceIdx * 3
+        remainingVertexSet.add(geoset.Faces[faceStart])
+        remainingVertexSet.add(geoset.Faces[faceStart + 1])
+        remainingVertexSet.add(geoset.Faces[faceStart + 2])
+    }
+
+    // Sort remaining vertices for consistent indexing
+    const sortedRemainingVertices = Array.from(remainingVertexSet).sort((a, b) => a - b)
+
+    // Build old -> new index mapping for original geoset
+    const oldToRemainingIndex = new Map<number, number>()
+    sortedRemainingVertices.forEach((oldIdx, newIdx) => {
+        oldToRemainingIndex.set(oldIdx, newIdx)
+    })
+
+    // Build updated original geoset data
+    const updatedVertices: number[] = []
+    const updatedNormals: number[] = []
+    const updatedVertexGroups: number[] = []
+    const updatedTVertices: number[][] = (geoset.TVertices as Float32Array[]).map(() => [])
+    const updatedFaces: number[] = []
+
+    // Copy remaining vertex data
+    for (const oldIdx of sortedRemainingVertices) {
+        updatedVertices.push(
+            geoset.Vertices[oldIdx * 3],
+            geoset.Vertices[oldIdx * 3 + 1],
+            geoset.Vertices[oldIdx * 3 + 2]
+        )
+        updatedNormals.push(
+            geoset.Normals[oldIdx * 3],
+            geoset.Normals[oldIdx * 3 + 1],
+            geoset.Normals[oldIdx * 3 + 2]
+        )
+        updatedVertexGroups.push(geoset.VertexGroup[oldIdx])
+
+        for (let layer = 0; layer < (geoset.TVertices as Float32Array[]).length; layer++) {
+            const tv = geoset.TVertices[layer] as Float32Array
+            updatedTVertices[layer].push(tv[oldIdx * 2], tv[oldIdx * 2 + 1])
+        }
+    }
+
+    // Remap remaining faces
+    for (const faceIdx of remainingFaceIndices) {
+        const faceStart = faceIdx * 3
+        updatedFaces.push(
+            oldToRemainingIndex.get(geoset.Faces[faceStart])!,
+            oldToRemainingIndex.get(geoset.Faces[faceStart + 1])!,
+            oldToRemainingIndex.get(geoset.Faces[faceStart + 2])!
+        )
+    }
+
     console.log('[splitVertices] Extracted', sortedVerticesToExtract.length, 'vertices and', newFaces.length / 3, 'faces to new geoset')
+    console.log('[splitVertices] Original geoset now has', sortedRemainingVertices.length, 'vertices and', updatedFaces.length / 3, 'faces')
 
     return {
-        // Return EMPTY object for original - we don't modify it!
-        updatedOriginalGeoset: {},
+        updatedOriginalGeoset: {
+            Vertices: new Float32Array(updatedVertices),
+            Normals: new Float32Array(updatedNormals),
+            VertexGroup: new Uint8Array(updatedVertexGroups),
+            Faces: new Uint16Array(updatedFaces),
+            TVertices: updatedTVertices.map(tv => new Float32Array(tv)),
+            MaterialID: geoset.MaterialID
+        },
         newGeoset: {
             Vertices: new Float32Array(newVertices),
             Normals: new Float32Array(newNormals),

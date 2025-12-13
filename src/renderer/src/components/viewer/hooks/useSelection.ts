@@ -115,7 +115,13 @@ export function useSelection({
         if (geometrySubMode === 'vertex' || (mainMode === 'animation' && animationSubMode === 'binding')) {
             const newSelection: { geosetIndex: number, index: number }[] = []
 
+            // Get hidden geoset IDs to skip during selection
+            const { hiddenGeosetIds, forceShowAllGeosets } = useModelStore.getState()
+
             for (let i = 0; i < rendererRef.current.model.Geosets.length; i++) {
+                // Skip hidden geosets
+                if (!forceShowAllGeosets && hiddenGeosetIds.includes(i)) continue
+
                 const geoset = rendererRef.current.model.Geosets[i]
                 const vertices = geoset.Vertices
 
@@ -139,7 +145,13 @@ export function useSelection({
         } else if (geometrySubMode === 'face') {
             const newSelection: { geosetIndex: number, index: number }[] = []
 
+            // Get hidden geoset IDs to skip during selection
+            const { hiddenGeosetIds, forceShowAllGeosets } = useModelStore.getState()
+
             for (let i = 0; i < rendererRef.current.model.Geosets.length; i++) {
+                // Skip hidden geosets
+                if (!forceShowAllGeosets && hiddenGeosetIds.includes(i)) continue
+
                 const geoset = rendererRef.current.model.Geosets[i]
                 const faces = geoset.Faces
                 const vertices = geoset.Vertices
@@ -157,7 +169,7 @@ export function useSelection({
                     const s1 = projectPoint(v1, viewProj, viewport)
                     const s2 = projectPoint(v2, viewProj, viewport)
 
-                    if (isInBox(s0) && isInBox(s1) && isInBox(s2)) {
+                    if (isInBox(s0) || isInBox(s1) || isInBox(s2)) {
                         newSelection.push({ geosetIndex: i, index: j / 3 })
                     }
                 }

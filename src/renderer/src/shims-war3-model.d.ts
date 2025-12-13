@@ -18,6 +18,12 @@ declare module 'war3-model' {
         updateGeosetVertices(geosetIndex: number, vertices: any): void;
         raycast(origin: any, dir: any, mode: string): any;
     }
+    export class ModelResourceManager {
+        static getInstance(): ModelResourceManager;
+        initGL(gl: WebGLRenderingContext | WebGL2RenderingContext): void;
+        addGeosetBuffers(model: any, geosetIndex: number): void;
+        updateGeosetTexCoords(model: any, geosetIndex: number, newTVertices: Float32Array): void;
+    }
     export const decodeBLP: any;
     export const getBLPImageData: any;
 }

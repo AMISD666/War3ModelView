@@ -2,6 +2,7 @@ import { Command } from '../utils/CommandManager'
 import { splitVertices, SplitResult } from '../utils/vertexOperations'
 import { useModelStore } from '../store/modelStore'
 import { useSelectionStore } from '../store/selectionStore'
+import { ModelResourceManager } from 'war3-model'
 
 interface VertexSelection {
     geosetIndex: number
@@ -75,8 +76,13 @@ export class SplitVerticesCommand implements Command {
             tVerticesLayers: this.splitResult.newGeoset.TVertices?.length
         })
 
-        // Update original geoset (now does nothing since updatedOriginalGeoset is empty)
-        Object.assign(geoset, this.splitResult.updatedOriginalGeoset)
+        // Update original geoset with remaining geometry (faces removed)
+        if (Object.keys(this.splitResult.updatedOriginalGeoset).length > 0) {
+            Object.assign(geoset, this.splitResult.updatedOriginalGeoset)
+            // Rebuild GPU buffers for modified original geoset
+            ModelResourceManager.getInstance().addGeosetBuffers(this.renderer.model, this.geosetIndex)
+            console.log('[SplitVerticesCommand] Updated original geoset, rebuilt GPU buffers')
+        }
 
         // Add new geoset to model
         const newGeoset = {
@@ -104,10 +110,13 @@ export class SplitVerticesCommand implements Command {
         console.log('[SplitVerticesCommand] Created new geoset at index', this.newGeosetIndex,
             'Total geosets now:', this.renderer.model.Geosets.length)
 
+        // Create GPU buffers for the new geoset
+        ModelResourceManager.getInstance().addGeosetBuffers(this.renderer.model, this.newGeosetIndex)
+
         // Clear selection
         useSelectionStore.getState().selectVertices([])
 
-        // Sync to store and trigger reload
+        // Sync to store
         this.syncToStore()
     }
 

@@ -662,7 +662,14 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     if (geometrySubMode === 'vertex' || (mainMode === 'animation' && animationSubMode === 'binding')) {
       const newSelection: { geosetIndex: number, index: number }[] = []
       if (!rendererRef.current) return
+
+      // Get hidden geoset IDs to skip during selection
+      const { hiddenGeosetIds, forceShowAllGeosets } = useModelStore.getState()
+
       for (let i = 0; i < rendererRef.current.model.Geosets.length; i++) {
+        // Skip hidden geosets
+        if (!forceShowAllGeosets && hiddenGeosetIds.includes(i)) continue
+
         const geoset = rendererRef.current.model.Geosets[i]
         const vertices = geoset.Vertices
 
@@ -690,7 +697,14 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     } else if (geometrySubMode === 'face') {
       const newSelection: { geosetIndex: number, index: number }[] = []
       if (!rendererRef.current) return
+
+      // Get hidden geoset IDs to skip during selection
+      const { hiddenGeosetIds, forceShowAllGeosets } = useModelStore.getState()
+
       for (let i = 0; i < rendererRef.current.model.Geosets.length; i++) {
+        // Skip hidden geosets
+        if (!forceShowAllGeosets && hiddenGeosetIds.includes(i)) continue
+
         const geoset = rendererRef.current.model.Geosets[i]
         const faces = geoset.Faces
         const vertices = geoset.Vertices
@@ -709,12 +723,12 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           const s2 = project(v2)
 
           if (s0 && s1 && s2) {
-            // Check if all vertices are inside (Window selection)
+            // Check if any vertex is inside (Partial selection - select face if any part is in box)
             const in0 = s0[0] >= boxLeft && s0[0] <= boxRight && s0[1] >= boxTop && s0[1] <= boxBottom
             const in1 = s1[0] >= boxLeft && s1[0] <= boxRight && s1[1] >= boxTop && s1[1] <= boxBottom
             const in2 = s2[0] >= boxLeft && s2[0] <= boxRight && s2[1] >= boxTop && s2[1] <= boxBottom
 
-            if (in0 && in1 && in2) {
+            if (in0 || in1 || in2) {
               newSelection.push({ geosetIndex: i, index: j / 3 })
             }
           }
@@ -2117,8 +2131,23 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
           if ((appMainMode === 'geometry' && geometrySubMode === 'vertex') ||
             (appMainMode === 'animation' && animationSubMode === 'binding')) {
-            for (const geoset of mdlRenderer.model.Geosets) {
-              if (geoset.Vertices) {
+            // Get geoset visibility state from modelStore
+            const { hiddenGeosetIds, forceShowAllGeosets, hoveredGeosetId } = useModelStore.getState()
+
+            // Render all visible geoset vertices
+            for (let geosetIndex = 0; geosetIndex < mdlRenderer.model.Geosets.length; geosetIndex++) {
+              const geoset = mdlRenderer.model.Geosets[geosetIndex]
+              if (!geoset.Vertices) continue
+
+              // Skip hidden geosets (based on hiddenGeosetIds from modelStore)
+              if (hiddenGeosetIds.includes(geosetIndex) && !forceShowAllGeosets) continue
+
+              // Use different color for hovered geoset vertices
+              if (hoveredGeosetId === geosetIndex) {
+                // Hovered geoset: yellow highlight
+                debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, geoset.Vertices, [1, 0.8, 0, 1], 6.0)
+              } else {
+                // Normal geoset: blue
                 debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, geoset.Vertices, [0, 0, 1, 0.5], 4.0)
               }
             }
@@ -2390,11 +2419,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         const moveVec = vec3.create()
 
         if (axis === 'x') moveVec[0] = -worldMoveDelta[0]
-        else if (axis === 'y') moveVec[1] = -worldMoveDelta[1]
+        else if (axis === 'y') moveVec[1] = worldMoveDelta[1]
         else if (axis === 'z') moveVec[2] = worldMoveDelta[2]
-        else if (axis === 'xy') { moveVec[0] = -worldMoveDelta[0]; moveVec[1] = -worldMoveDelta[1]; }
+        else if (axis === 'xy') { moveVec[0] = -worldMoveDelta[0]; moveVec[1] = worldMoveDelta[1]; }
         else if (axis === 'xz') { moveVec[0] = -worldMoveDelta[0]; moveVec[2] = worldMoveDelta[2]; }
-        else if (axis === 'yz') { moveVec[1] = -worldMoveDelta[1]; moveVec[2] = worldMoveDelta[2]; }
+        else if (axis === 'yz') { moveVec[1] = worldMoveDelta[1]; moveVec[2] = worldMoveDelta[2]; }
 
         if (selectedNodeIds.length > 0 && rendererRef.current && rendererRef.current.rendererData.nodes) {
           selectedNodeIds.forEach(nodeId => {
@@ -2904,17 +2933,23 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       const { mainMode, geometrySubMode } = useSelectionStore.getState()
 
       if (e.ctrlKey || e.metaKey) {
+        console.log('[Viewer] Keyboard: Ctrl+', e.key, 'mainMode:', mainMode, 'geometrySubMode:', geometrySubMode)
+
         if (e.key === 'z') {
           e.preventDefault()
+          console.log('[Viewer] Executing undo')
           commandManager.undo()
         } else if (e.key === 'y') {
           e.preventDefault()
+          console.log('[Viewer] Executing redo')
           commandManager.redo()
         } else if (e.key === 'c' && mainMode === 'geometry' && geometrySubMode === 'vertex') {
           e.preventDefault()
+          console.log('[Viewer] Executing copy')
           handleCopyVertices()
         } else if (e.key === 'v' && mainMode === 'geometry' && geometrySubMode === 'vertex') {
           e.preventDefault()
+          console.log('[Viewer] Executing paste')
           handlePasteVertices()
         }
       }

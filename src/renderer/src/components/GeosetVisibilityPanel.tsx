@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+﻿import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Checkbox, Dropdown, Menu, message } from 'antd';
 import { EyeOutlined, EyeInvisibleOutlined, CloseOutlined, MinusOutlined, DeleteOutlined, MergeCellsOutlined } from '@ant-design/icons';
 import { useModelStore } from '../store/modelStore';
@@ -107,7 +107,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
         setGeosets(newGeosets);
         setSelectedIndices([]);
         setContextMenuVisible(false);
-        message.success(`已删除 ${sortedIndices.length} 个多边形`);
+        message.success(`已删�?${sortedIndices.length} 个多边形`);
     };
 
     // Handle merge confirmation
@@ -304,7 +304,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
         useModelStore.getState().setGeosets(newGeosets);
         setSelectedIndices([]);
         setMergeDialogVisible(false);
-        message.success(`已合并 ${sortedIndices.length} 个多边形`);
+        message.success(`已合�?${sortedIndices.length} 个多边形`);
     };
 
     // Handle dragging
@@ -424,7 +424,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                         />
                         <span style={{ color: '#ddd', fontSize: 11, fontWeight: 500 }}>
                             {forceShowAllGeosets ? <EyeOutlined /> : <EyeInvisibleOutlined />} 全部
-                        </span>
+                            <button className="panel-control-btn" onClick={() => setSelectedIndices(geosets.map((_, i) => i))} style={{ background: "rgba(60,130,200,0.3)", border: "1px solid #4a9eff", borderRadius: 3, color: "#8bc4ff", cursor: "pointer", padding: "2px 6px", fontSize: 10, marginLeft: 4 }} title="全选">✓全选</button><button className="panel-control-btn" onClick={() => setSelectedIndices([])} style={{ background: "rgba(100,100,100,0.3)", border: "1px solid #666", borderRadius: 3, color: "#aaa", cursor: "pointer", padding: "2px 6px", fontSize: 10 }} title="取消全选">取消</button></span>
                     </div>
                     <div style={{ display: 'flex', gap: 4 }}>
                         <button
@@ -540,8 +540,8 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                         justifyContent: 'space-between',
                         flexShrink: 0
                     }}>
-                        <span>共 {geosets.length} 个</span>
-                        <span>{selectedIndices.length > 0 ? `已选 ${selectedIndices.length}` : ''}</span>
+                        <span>�?{geosets.length} �?/span>=
+                            <span>{selectedIndices.length > 0 ? `已�?${selectedIndices.length}` : ''}</span>
                     </div>
                 )}
 
