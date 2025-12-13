@@ -96,7 +96,26 @@ function extractNodesFromModel(data: ModelData | null): ModelNode[] {
         keys.forEach(key => {
             if (d[key] && Array.isArray(d[key])) {
                 d[key].forEach((item: any) => {
-                    nodes.push({ ...item, type } as ModelNode);
+                    const node: any = { ...item, type };
+
+                    // Extract Billboard flags from Flags bitfield into boolean properties
+                    // NodeFlags: Billboarded=8, BillboardedLockX=16, BillboardedLockY=32, BillboardedLockZ=64, CameraAnchored=128
+                    if (item.Flags !== undefined) {
+                        node.Billboarded = (item.Flags & 8) !== 0;
+                        node.BillboardedLockX = (item.Flags & 16) !== 0;
+                        node.BillboardedLockY = (item.Flags & 32) !== 0;
+                        node.BillboardedLockZ = (item.Flags & 64) !== 0;
+                        node.CameraAnchored = (item.Flags & 128) !== 0;
+
+                        // Extract DontInherit flags
+                        node.DontInherit = {
+                            Translation: (item.Flags & 256) !== 0,  // DontInheritTranslation
+                            Rotation: (item.Flags & 512) !== 0,     // DontInheritRotation
+                            Scaling: (item.Flags & 1024) !== 0      // DontInheritScaling
+                        };
+                    }
+
+                    nodes.push(node as ModelNode);
                 });
             }
         });
@@ -221,7 +240,30 @@ function updateModelDataWithNodes(
     // If we don't update this, transforms (parenting) will be broken or stale!
     // We should sort by ObjectId to hopefully match the original index structure, 
     // although ObjectId isn't strictly index-bound, typical parsers produce sorted lists.
-    updated.Nodes = [...nodes].sort((a, b) => a.ObjectId - b.ObjectId);
+
+    // Reconstruct Flags from boolean properties before saving
+    const nodesWithFlags = nodes.map(node => {
+        const n = node as any;
+        let flags = n.Flags || 0;
+
+        // Clear and reset billboard/inherit flags
+        // First clear these specific bits
+        flags &= ~(8 | 16 | 32 | 64 | 128 | 256 | 512 | 1024);
+
+        // Then set based on boolean properties
+        if (n.Billboarded) flags |= 8;
+        if (n.BillboardedLockX) flags |= 16;
+        if (n.BillboardedLockY) flags |= 32;
+        if (n.BillboardedLockZ) flags |= 64;
+        if (n.CameraAnchored) flags |= 128;
+        if (n.DontInherit?.Translation) flags |= 256;
+        if (n.DontInherit?.Rotation) flags |= 512;
+        if (n.DontInherit?.Scaling) flags |= 1024;
+
+        return { ...node, Flags: flags };
+    });
+
+    updated.Nodes = [...nodesWithFlags].sort((a, b) => a.ObjectId - b.ObjectId);
 
     // IMPORTANT: Reconstruct the PivotPoints array from node.PivotPoint properties
     // PivotPoints array is indexed by node position (same order as Nodes array)

@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useState } from 'react'
-import { Form, Input, InputNumber, Select, Checkbox, Row, Col, Card, Button } from 'antd'
+import { Form, Input, InputNumber, Select, Checkbox, Row, Col, Card, Button, message } from 'antd'
 import { DraggableModal } from '../DraggableModal'
 import KeyframeEditor from '../editors/KeyframeEditor'
 import type { ModelNode } from '../../types/node'
@@ -328,7 +328,9 @@ const NodeDialog: React.FC<NodeDialogProps> = ({ visible, nodeId, onClose }) => 
                     <Col span={12}>
                         <Card size="small" title="广告板 & 其他">
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                                <Form.Item name="billboarded" valuePropName="checked" noStyle><Checkbox>启用广告板</Checkbox></Form.Item>
+                                <Form.Item name="billboarded" valuePropName="checked" noStyle>
+                                    <Checkbox>启用广告板</Checkbox>
+                                </Form.Item>
                                 <Form.Item name="cameraAnchored" valuePropName="checked" noStyle><Checkbox>相机锚定</Checkbox></Form.Item>
                                 <div style={{ borderTop: '1px solid #444', margin: '4px 0' }}></div>
                                 <Form.Item name="billboardedLockX" valuePropName="checked" noStyle><Checkbox>锁定 X 轴</Checkbox></Form.Item>

@@ -35,7 +35,7 @@ import { SplitVerticesCommand } from '../commands/SplitVerticesCommand'
 import { WeldVerticesCommand } from '../commands/WeldVerticesCommand'
 import { DeleteVerticesCommand } from '../commands/DeleteVerticesCommand'
 import { PasteVerticesCommand } from '../commands/PasteVerticesCommand'
-import { copyVertices, VertexCopyBuffer } from '../utils/vertexOperations'
+import { copyVertices, copyFaces, VertexCopyBuffer } from '../utils/vertexOperations'
 import { Dropdown, Modal } from 'antd'
 import type { MenuProps } from 'antd'
 
@@ -229,7 +229,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       }
     },
     setCamera: (params: { distance: number; theta: number; phi: number; target: [number, number, number] }) => {
-      console.log('[Viewer setCamera] Setting camera:', params)
+
       const clampedPhi = Math.max(0.01, Math.min(Math.PI - 0.01, params.phi))
 
       // Update targetCamera (backup/fallback)
@@ -245,12 +245,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         cameraRef.current.verticalAngle = clampedPhi
         vec3.set(cameraRef.current.target, params.target[0], params.target[1], params.target[2])
         cameraRef.current.update()
-        console.log('[Viewer setCamera] Updated SimpleOrbitCamera:', {
-          distance: cameraRef.current.distance,
-          horizontalAngle: cameraRef.current.horizontalAngle,
-          verticalAngle: cameraRef.current.verticalAngle,
-          target: cameraRef.current.target
-        })
+
       }
     }
   }), [])
@@ -274,11 +269,13 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const gizmoState = useRef<{
     activeAxis: GizmoAxis,
     isDragging: boolean,
-    dragStartPos: vec3 | null
+    dragStartPos: vec3 | null,
+    isShiftDuplicate: boolean // Track if shift was held to trigger duplicate
   }>({
     activeAxis: null,
     isDragging: false,
-    dragStartPos: null
+    dragStartPos: null,
+    isShiftDuplicate: false
   })
 
   // Box selection overlay state
@@ -366,52 +363,27 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
   // Handle Animation and Mode Changes
   useEffect(() => {
-    console.log('[Viewer] Mode/Animation useEffect triggered:', {
-      hasRenderer: !!renderer,
-      hasRendererData: !!renderer?.rendererData,
-      appMainMode,
-      animationIndex,
-      animationInfoName: renderer?.rendererData?.animationInfo?.Name
-    })
-
     // Guard: Only set sequence if renderer is fully initialized
     if (renderer && renderer.rendererData) {
       if (appMainMode === 'geometry') {
         // Bind Pose: Set frame to the START of the current sequence's interval
-        // This avoids corrupting animationInfo by NOT calling setSequence(-1)
-        console.log('[Viewer] Geometry mode: Locking frame to sequence start')
         if (renderer.rendererData.animationInfo?.Interval) {
           renderer.rendererData.frame = renderer.rendererData.animationInfo.Interval[0]
-          console.log('[Viewer] Frame locked to:', renderer.rendererData.animationInfo.Interval[0])
         } else if (renderer.model?.Sequences?.[animationIndex]?.Interval) {
-          // Fallback if animationInfo not yet set
           renderer.rendererData.frame = renderer.model.Sequences[animationIndex].Interval[0]
-          console.log('[Viewer] Frame locked (fallback) to:', renderer.model.Sequences[animationIndex].Interval[0])
         } else {
           renderer.rendererData.frame = 0
-          console.log('[Viewer] Frame locked to: 0 (default)')
         }
       } else {
         // Restore Animation
-        // Check if animationInfo needs to be set/updated
         const currentSeqIndex = renderer.rendererData.animationInfo
           ? renderer.model?.Sequences?.findIndex((s: any) => s === renderer.rendererData.animationInfo) ?? -2
           : -2
-        console.log('[Viewer] View mode: Checking animation state', {
-          currentSeqIndex,
-          animationIndex,
-          needsSetSequence: currentSeqIndex !== animationIndex
-        })
 
         if (currentSeqIndex !== animationIndex && (renderer as any).setSequence) {
-          console.log('[Viewer] Calling setSequence:', animationIndex)
-            ; (renderer as any).setSequence(animationIndex)
-        } else {
-          console.log('[Viewer] Skipping setSequence - already at correct sequence')
+          ; (renderer as any).setSequence(animationIndex)
         }
       }
-    } else {
-      console.log('[Viewer] Mode/Animation useEffect: Renderer not ready, skipping')
     }
   }, [renderer, appMainMode, animationIndex])
 
@@ -494,15 +466,51 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     const shouldBlockGizmoForAlt = e.altKey && mainMode === 'animation'
 
     if (gizmoState.current.activeAxis && e.button === 0 && !shouldBlockGizmoForAlt) {
-      console.log('[Viewer] handleMouseDown: Starting Gizmo Drag. SubMode:', useSelectionStore.getState().geometrySubMode)
+
       if (cameraRef.current) cameraRef.current.enabled = false
       gizmoState.current.isDragging = true
+      gizmoState.current.isShiftDuplicate = e.shiftKey // Track if this is a shift-duplicate operation
       mouseState.current.lastMouseX = e.clientX
       mouseState.current.lastMouseY = e.clientY
 
-      // Capture initial positions for Undo
-      initialVertexPositions.current.clear()
       const { selectedVertexIds, selectedFaceIds, geometrySubMode } = useSelectionStore.getState()
+
+      // Shift+Drag = Duplicate then move
+      if (e.shiftKey && (geometrySubMode === 'vertex' || geometrySubMode === 'face') && rendererRef.current) {
+
+        let buffer: VertexCopyBuffer | null = null
+        let mode: 'vertex' | 'face' = 'vertex'
+
+        if (geometrySubMode === 'vertex' && selectedVertexIds.length > 0) {
+          const geosetIndex = selectedVertexIds[0].geosetIndex
+          const geoset = rendererRef.current.model.Geosets[geosetIndex]
+          if (geoset) {
+            const vertexIndices = selectedVertexIds.map(s => s.index)
+            buffer = copyVertices(geoset, vertexIndices, geosetIndex)
+            mode = 'vertex'
+          }
+        } else if (geometrySubMode === 'face' && selectedFaceIds.length > 0) {
+          const geosetIndex = selectedFaceIds[0].geosetIndex
+          const geoset = rendererRef.current.model.Geosets[geosetIndex]
+          if (geoset) {
+            const faceIndices = selectedFaceIds.map(s => s.index)
+            buffer = copyFaces(geoset, faceIndices, geosetIndex)
+            mode = 'face'
+          }
+        }
+
+        if (buffer) {
+          const cmd = new PasteVerticesCommand(rendererRef.current, buffer, true, [0, 0, 0], mode)
+          commandManager.execute(cmd)
+
+          // Note: PasteVerticesCommand automatically selects the new elements
+        }
+      }
+
+      // Capture initial positions for Undo (after potential paste)
+      initialVertexPositions.current.clear()
+      // Re-fetch selection in case it was updated by paste
+      const currentSelection = useSelectionStore.getState()
 
       const captureVertex = (geosetIndex: number, vertexIndex: number) => {
         if (!rendererRef.current) {
@@ -519,11 +527,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       }
 
       if (geometrySubMode === 'vertex') {
-        console.log('[Viewer] Capturing vertices for vertex mode. Selected count:', selectedVertexIds.length)
-        selectedVertexIds.forEach(sel => captureVertex(sel.geosetIndex, sel.index))
+        console.log('[Viewer] Capturing vertices for vertex mode. Selected count:', currentSelection.selectedVertexIds.length)
+        currentSelection.selectedVertexIds.forEach(sel => captureVertex(sel.geosetIndex, sel.index))
         console.log('[Viewer] Captured vertices:', initialVertexPositions.current.size)
       } else if (geometrySubMode === 'face') {
-        selectedFaceIds.forEach(sel => {
+        currentSelection.selectedFaceIds.forEach(sel => {
           if (!renderer) return
           const geoset = renderer.model.Geosets[sel.geosetIndex]
           if (geoset) {
@@ -1688,11 +1696,14 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         }
 
         // === GEOSETS ===
-        // Sync geoset data and update UV texture coordinate buffers for real-time rendering
-        if (modelData.Geosets) {
-          renderer.model.Geosets = modelData.Geosets
-          // Update UV buffers for each geoset to reflect changes made in UV Editor
-          modelData.Geosets.forEach((geoset: any, i: number) => {
+        // NOTE: Do NOT replace renderer.model.Geosets with modelData.Geosets!
+        // Commands (PasteVertices, Split, Delete) directly modify renderer.model.Geosets
+        // and create GPU buffers. Overwriting here would break buffer references.
+        // Only sync UV texture coordinate buffers for existing geosets.
+        if (modelData.Geosets && renderer.model.Geosets) {
+          const minLen = Math.min(modelData.Geosets.length, renderer.model.Geosets.length)
+          for (let i = 0; i < minLen; i++) {
+            const geoset = modelData.Geosets[i]
             if (geoset?.TVertices?.[0]) {
               const uvData = geoset.TVertices[0]
               // Convert to Float32Array if needed
@@ -1701,7 +1712,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 : new Float32Array(uvData)
               renderer.updateGeosetTexCoords(i, float32Data)
             }
-          })
+          }
         }
 
         // === GEOSET ANIMATIONS ===

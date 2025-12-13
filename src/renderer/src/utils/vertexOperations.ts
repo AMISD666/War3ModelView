@@ -458,7 +458,7 @@ export function pasteVertices(
     geoset: GeosetData,
     buffer: VertexCopyBuffer,
     offset: [number, number, number] = [10, 0, 0]
-): { updatedGeoset: Partial<GeosetData>; newVertexStartIndex: number } {
+): { updatedGeoset: Partial<GeosetData>; newVertexStartIndex: number; newFaceStartIndex: number } {
     const existingVertexCount = geoset.Vertices.length / 3
 
     // Append vertices with offset
@@ -495,6 +495,7 @@ export function pasteVertices(
     }
 
     // Append faces with offset indices
+    const faceCount = geoset.Faces.length / 3
     const newFaces: number[] = Array.from(geoset.Faces as Uint16Array)
     for (const faceIdx of buffer.faces) {
         newFaces.push(faceIdx + existingVertexCount)
@@ -508,6 +509,83 @@ export function pasteVertices(
             Faces: new Uint16Array(newFaces),
             TVertices: newTVertices.map(tv => new Float32Array(tv))
         },
-        newVertexStartIndex: existingVertexCount
+        newVertexStartIndex: existingVertexCount,
+        newFaceStartIndex: faceCount
+    }
+}
+
+/**
+ * Copy selected faces directly to a buffer
+ * Unlike copyVertices (which expands to complete faces), this takes specific face indices.
+ * 
+ * @param geoset The source geoset
+ * @param faceIndices Selected face indices
+ * @param geosetIndex Source geoset index
+ * @returns VertexCopyBuffer
+ */
+export function copyFaces(geoset: GeosetData, faceIndices: number[], geosetIndex: number): VertexCopyBuffer {
+    const faceSet = new Set(faceIndices)
+
+    // Collect all vertices used by these faces
+    const verticesToCopySet = new Set<number>()
+
+    for (const faceIdx of faceSet) {
+        const faceStart = faceIdx * 3
+        verticesToCopySet.add(geoset.Faces[faceStart])
+        verticesToCopySet.add(geoset.Faces[faceStart + 1])
+        verticesToCopySet.add(geoset.Faces[faceStart + 2])
+    }
+
+    // Sort for consistent order
+    const sortedVerticesToCopy = Array.from(verticesToCopySet).sort((a, b) => a - b)
+
+    // Build mapping
+    const oldToNew = new Map<number, number>()
+    sortedVerticesToCopy.forEach((oldIdx, newIdx) => {
+        oldToNew.set(oldIdx, newIdx)
+    })
+
+    const vertices: number[] = []
+    const normals: number[] = []
+    const vertexGroups: number[] = []
+    const tVertices: number[][] = (geoset.TVertices as Float32Array[]).map(() => [])
+    const faces: number[] = []
+
+    for (const oldIdx of sortedVerticesToCopy) {
+        vertices.push(
+            geoset.Vertices[oldIdx * 3],
+            geoset.Vertices[oldIdx * 3 + 1],
+            geoset.Vertices[oldIdx * 3 + 2]
+        )
+        normals.push(
+            geoset.Normals[oldIdx * 3],
+            geoset.Normals[oldIdx * 3 + 1],
+            geoset.Normals[oldIdx * 3 + 2]
+        )
+        vertexGroups.push(geoset.VertexGroup[oldIdx])
+
+        for (let layer = 0; layer < (geoset.TVertices as Float32Array[]).length; layer++) {
+            const tv = geoset.TVertices[layer] as Float32Array
+            tVertices[layer].push(tv[oldIdx * 2], tv[oldIdx * 2 + 1])
+        }
+    }
+
+    for (const faceIdx of faceSet) {
+        const faceStart = faceIdx * 3
+        faces.push(
+            oldToNew.get(geoset.Faces[faceStart])!,
+            oldToNew.get(geoset.Faces[faceStart + 1])!,
+            oldToNew.get(geoset.Faces[faceStart + 2])!
+        )
+    }
+
+    return {
+        vertices,
+        normals,
+        vertexGroups,
+        tVertices,
+        faces,
+        sourceGeosetIndex: geosetIndex,
+        groups: geoset.Groups ? JSON.parse(JSON.stringify(geoset.Groups)) : [[0]]
     }
 }
