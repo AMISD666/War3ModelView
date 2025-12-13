@@ -31,6 +31,13 @@ import { VertexEditor } from './VertexEditor'
 import BoneBindingPanel from './BoneBindingPanel'
 import { pickClosestGeoset } from '../utils/rayTriangle'
 import { recalculateAllNormals } from '../utils/geometryUtils'
+import { SplitVerticesCommand } from '../commands/SplitVerticesCommand'
+import { WeldVerticesCommand } from '../commands/WeldVerticesCommand'
+import { DeleteVerticesCommand } from '../commands/DeleteVerticesCommand'
+import { PasteVerticesCommand } from '../commands/PasteVerticesCommand'
+import { copyVertices, VertexCopyBuffer } from '../utils/vertexOperations'
+import { Dropdown, Modal } from 'antd'
+import type { MenuProps } from 'antd'
 
 // Ref interface for external access to camera methods
 export interface ViewerRef {
@@ -276,6 +283,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
   // Box selection overlay state
   const [selectionBox, setSelectionBox] = useState<{ x: number, y: number, width: number, height: number } | null>(null)
+
+  // Context menu state for vertex operations
+  const [contextMenu, setContextMenu] = useState<{ x: number, y: number } | null>(null)
 
   const loadTeamColorTextures = async (colorIndex: number) => {
     if (!renderer) return
@@ -2695,6 +2705,36 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     recalculateAllNormals(rendererRef.current, true)
   }
 
+  // Split vertices handler
+  const handleSplitVertices = () => {
+    if (!rendererRef.current) return
+    const { selectedVertexIds, geometrySubMode, mainMode } = useSelectionStore.getState()
+    if (mainMode !== 'geometry' || geometrySubMode !== 'vertex' || selectedVertexIds.length < 1) return
+
+    console.log('[Viewer] Splitting', selectedVertexIds.length, 'vertices')
+    const cmd = new SplitVerticesCommand(rendererRef.current, selectedVertexIds)
+    commandManager.execute(cmd)
+  }
+
+  // Weld vertices handler
+  const handleWeldVertices = () => {
+    if (!rendererRef.current) return
+    const { selectedVertexIds, geometrySubMode, mainMode } = useSelectionStore.getState()
+    if (mainMode !== 'geometry' || geometrySubMode !== 'vertex' || selectedVertexIds.length < 2) return
+
+    // Check all vertices are from the same geoset
+    const geosetIndex = selectedVertexIds[0].geosetIndex
+    const allSameGeoset = selectedVertexIds.every(s => s.geosetIndex === geosetIndex)
+    if (!allSameGeoset) {
+      console.warn('[Viewer] Cannot weld vertices from different geosets')
+      return
+    }
+
+    console.log('[Viewer] Welding', selectedVertexIds.length, 'vertices')
+    const cmd = new WeldVerticesCommand(rendererRef.current, selectedVertexIds)
+    commandManager.execute(cmd)
+  }
+
   const handleMouseUp = (e: any) => {
     const wasBoxSelecting = mouseState.current.isBoxSelecting
     const startX = mouseState.current.startX
@@ -2813,9 +2853,55 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     }
   }
 
+  // Global copy buffer for vertex operations
+  const vertexCopyBuffer = useRef<VertexCopyBuffer | null>(null)
+
+  // Handle vertex delete
+  const handleDeleteVertices = () => {
+    if (!rendererRef.current) return
+    const { selectedVertexIds, geometrySubMode, mainMode } = useSelectionStore.getState()
+    if (mainMode !== 'geometry' || geometrySubMode !== 'vertex' || selectedVertexIds.length < 1) return
+
+    console.log('[Viewer] Deleting', selectedVertexIds.length, 'vertices')
+    const cmd = new DeleteVerticesCommand(rendererRef.current, selectedVertexIds)
+    commandManager.execute(cmd)
+  }
+
+  // Handle vertex copy
+  const handleCopyVertices = () => {
+    if (!rendererRef.current) return
+    const { selectedVertexIds, geometrySubMode, mainMode } = useSelectionStore.getState()
+    if (mainMode !== 'geometry' || geometrySubMode !== 'vertex' || selectedVertexIds.length < 1) return
+
+    const geosetIndex = selectedVertexIds[0].geosetIndex
+    const geoset = rendererRef.current.model.Geosets[geosetIndex]
+    if (!geoset) return
+
+    const vertexIndices = selectedVertexIds.map(s => s.index)
+    vertexCopyBuffer.current = copyVertices(geoset, vertexIndices, geosetIndex)
+    console.log('[Viewer] Copied', vertexCopyBuffer.current.vertices.length / 3, 'vertices and', vertexCopyBuffer.current.faces.length / 3, 'faces')
+  }
+
+  // Handle vertex paste - always creates new geoset
+  const handlePasteVertices = () => {
+    if (!rendererRef.current || !vertexCopyBuffer.current) {
+      console.log('[Viewer] No vertices in copy buffer')
+      return
+    }
+
+    const { geometrySubMode, mainMode } = useSelectionStore.getState()
+    if (mainMode !== 'geometry' || geometrySubMode !== 'vertex') return
+
+    // Execute paste command directly (creates new geoset)
+    const cmd = new PasteVerticesCommand(rendererRef.current, vertexCopyBuffer.current, true)
+    commandManager.execute(cmd)
+  }
+
   useEffect(() => {
-    const handleUndoRedo = (e: KeyboardEvent) => {
+    const handleKeyboard = (e: KeyboardEvent) => {
       if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) return
+
+      const { mainMode, geometrySubMode } = useSelectionStore.getState()
 
       if (e.ctrlKey || e.metaKey) {
         if (e.key === 'z') {
@@ -2824,11 +2910,23 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         } else if (e.key === 'y') {
           e.preventDefault()
           commandManager.redo()
+        } else if (e.key === 'c' && mainMode === 'geometry' && geometrySubMode === 'vertex') {
+          e.preventDefault()
+          handleCopyVertices()
+        } else if (e.key === 'v' && mainMode === 'geometry' && geometrySubMode === 'vertex') {
+          e.preventDefault()
+          handlePasteVertices()
         }
       }
+
+      // Delete key
+      if (e.key === 'Delete' && mainMode === 'geometry' && geometrySubMode === 'vertex') {
+        e.preventDefault()
+        handleDeleteVertices()
+      }
     }
-    window.addEventListener('keydown', handleUndoRedo)
-    return () => window.removeEventListener('keydown', handleUndoRedo)
+    window.addEventListener('keydown', handleKeyboard)
+    return () => window.removeEventListener('keydown', handleKeyboard)
   }, [])
 
   return (
@@ -2839,7 +2937,14 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
-        onContextMenu={(e) => e.preventDefault()}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          const { mainMode, geometrySubMode, selectedVertexIds } = useSelectionStore.getState()
+          // Show context menu in vertex mode when vertices are selected
+          if (mainMode === 'geometry' && geometrySubMode === 'vertex' && selectedVertexIds.length > 0) {
+            setContextMenu({ x: e.clientX, y: e.clientY })
+          }
+        }}
         onWheel={handleWheel}
       />
 
@@ -3007,9 +3112,104 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         </ConfigProvider>
       )}
 
-      <ViewerToolbar onRecalculateNormals={handleRecalculateNormals} />
+      <ViewerToolbar
+        onRecalculateNormals={handleRecalculateNormals}
+        onSplitVertices={handleSplitVertices}
+        onWeldVertices={handleWeldVertices}
+      />
       <BoneBindingPanel />
       {appMainMode === 'geometry' && <VertexEditor renderer={renderer} onBeginUpdate={() => { ignoreNextModelDataUpdate.current = true }} />}
+
+      {/* Context Menu for Vertex Operations */}
+      {contextMenu && (
+        <div
+          style={{
+            position: 'fixed',
+            left: contextMenu.x,
+            top: contextMenu.y,
+            backgroundColor: 'rgba(40, 40, 40, 0.95)',
+            border: '1px solid #555',
+            borderRadius: '4px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+            zIndex: 2000,
+            minWidth: '120px',
+            padding: '4px 0',
+          }}
+          onClick={() => setContextMenu(null)}
+        >
+          <div
+            style={{
+              padding: '6px 12px',
+              cursor: useSelectionStore.getState().selectedVertexIds.length >= 1 ? 'pointer' : 'not-allowed',
+              color: useSelectionStore.getState().selectedVertexIds.length >= 1 ? 'white' : '#666',
+              fontSize: '13px',
+            }}
+            onMouseEnter={(e) => {
+              if (useSelectionStore.getState().selectedVertexIds.length >= 1) {
+                (e.target as HTMLDivElement).style.backgroundColor = '#1890ff'
+              }
+            }}
+            onMouseLeave={(e) => (e.target as HTMLDivElement).style.backgroundColor = 'transparent'}
+            onClick={() => {
+              if (useSelectionStore.getState().selectedVertexIds.length >= 1) {
+                handleSplitVertices()
+              }
+              setContextMenu(null)
+            }}
+          >
+            分离顶点
+          </div>
+          <div
+            style={{
+              padding: '6px 12px',
+              cursor: (() => {
+                const { selectedVertexIds } = useSelectionStore.getState()
+                return selectedVertexIds.length >= 2 && selectedVertexIds.every(v => v.geosetIndex === selectedVertexIds[0]?.geosetIndex) ? 'pointer' : 'not-allowed'
+              })(),
+              color: (() => {
+                const { selectedVertexIds } = useSelectionStore.getState()
+                return selectedVertexIds.length >= 2 && selectedVertexIds.every(v => v.geosetIndex === selectedVertexIds[0]?.geosetIndex) ? 'white' : '#666'
+              })(),
+              fontSize: '13px',
+            }}
+            onMouseEnter={(e) => {
+              const { selectedVertexIds } = useSelectionStore.getState()
+              if (selectedVertexIds.length >= 2 && selectedVertexIds.every(v => v.geosetIndex === selectedVertexIds[0]?.geosetIndex)) {
+                (e.target as HTMLDivElement).style.backgroundColor = '#1890ff'
+              }
+            }}
+            onMouseLeave={(e) => (e.target as HTMLDivElement).style.backgroundColor = 'transparent'}
+            onClick={() => {
+              const { selectedVertexIds } = useSelectionStore.getState()
+              if (selectedVertexIds.length >= 2 && selectedVertexIds.every(v => v.geosetIndex === selectedVertexIds[0]?.geosetIndex)) {
+                handleWeldVertices()
+              }
+              setContextMenu(null)
+            }}
+          >
+            焊接顶点
+          </div>
+        </div>
+      )}
+
+      {/* Click outside to close context menu */}
+      {contextMenu && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            zIndex: 1999,
+          }}
+          onClick={() => setContextMenu(null)}
+          onContextMenu={(e) => {
+            e.preventDefault()
+            setContextMenu(null)
+          }}
+        />
+      )}
     </div>
   )
 })

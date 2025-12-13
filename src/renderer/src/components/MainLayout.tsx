@@ -594,21 +594,11 @@ const MainLayout: React.FC = () => {
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) return
+
+            // Skip if Ctrl/Meta is pressed (used for copy/paste operations)
+            if (e.ctrlKey || e.metaKey) return
+
             const key = e.key.toLowerCase()
-
-            if (key === 'g') toggleNodeManager() // Wait, G is Geoset Manager? Image says: G = Geoset Manager
-            if (key === 'n') toggleNodeManager() // Image: Node Manager(N)
-
-            // Wait, let's map correctly from image
-            // Node Manager(N) -> toggleNodeManager()
-            // Camera Manager(C) -> setShowCameraModal(true/toggle)
-            // Geoset Manager(G) -> setShowGeosetModal(true/toggle)
-            // Geoset Anim Manager(U) -> setShowGeosetAnimModal
-            // Texture Manager(T) -> setShowTextureModal
-            // Texture Anim Manager(X) -> setShowTextureAnimModal
-            // Material Manager(M) -> setShowMaterialModal
-            // Model Sequence Manager(S) -> setShowSequenceModal (Ignore per instructions? "Ignore model action manager")
-            // Global Sequence Manager(L) -> setShowGlobalSeqModal
 
             switch (key) {
                 case 'n': toggleNodeManager(); break;

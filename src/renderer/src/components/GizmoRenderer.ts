@@ -259,12 +259,12 @@ export class GizmoRenderer {
         // Simplified ray-cylinder intersection (treating lines as cylinders/capsules)
         // For now, we use a distance check to the line segments
 
-        const threshold = 5.0 // World unit threshold - increased for easier selection
+        const threshold = 3.0 // World unit threshold - reduced for more precise selection
 
         // Scale threshold by distance to camera to maintain constant screen size feel
+        // Reduced multiplier from 8.0 to 2.0 for tighter hit detection
         const distToGizmo = vec3.distance(cameraPos, center)
-        // Use a more generous multiplier for hit detection
-        const hitThreshold = threshold * (distToGizmo / 500.0) * 8.0
+        const hitThreshold = threshold * (distToGizmo / 500.0) * 2.0
 
         const axisLen = this.axisLength * scale
 

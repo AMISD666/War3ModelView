@@ -38,16 +38,23 @@ export function checkForStructuralChanges(
 
     // Check for MaterialID changes on geosets
     let geosetMaterialChanged = false
+    let geosetVertexCountChanged = false
     if (modelData.Geosets && rendererModel.Geosets) {
         for (let i = 0; i < Math.min(modelData.Geosets.length, rendererModel.Geosets.length); i++) {
             if (modelData.Geosets[i]?.MaterialID !== rendererModel.Geosets[i]?.MaterialID) {
                 geosetMaterialChanged = true
-                break
+            }
+            // Check for vertex count changes (caused by Split/Weld operations)
+            const modelVertexCount = modelData.Geosets[i]?.Vertices?.length || 0
+            const rendererVertexCount = rendererModel.Geosets[i]?.Vertices?.length || 0
+            if (modelVertexCount !== rendererVertexCount) {
+                geosetVertexCountChanged = true
+                console.log(`[modelSync] Geoset ${i} vertex count changed: ${rendererVertexCount} -> ${modelVertexCount}`)
             }
         }
     }
 
-    console.log('[modelSync] Change flags:', { geoChanged, textureChanged, materialChanged, particleChanged, geosetMaterialChanged, lightCountChanged })
+    console.log('[modelSync] Change flags:', { geoChanged, textureChanged, materialChanged, particleChanged, geosetMaterialChanged, geosetVertexCountChanged, lightCountChanged })
 
     if (geoChanged) return { needsReload: true, reason: 'Geoset count changed' }
     if (textureChanged) return { needsReload: true, reason: 'Texture count changed' }
@@ -56,6 +63,7 @@ export function checkForStructuralChanges(
     // The ParticlesController.syncEmitters() method dynamically adds/removes emitters
     // if (particleChanged) return { needsReload: true, reason: 'Particle count changed' }
     if (geosetMaterialChanged) return { needsReload: true, reason: 'Geoset MaterialID changed' }
+    if (geosetVertexCountChanged) return { needsReload: true, reason: 'Geoset vertex count changed (Split/Weld)' }
     if (lightCountChanged) return { needsReload: true, reason: 'Light count changed' }
 
     console.log('[modelSync] No structural changes, using lightweight sync')

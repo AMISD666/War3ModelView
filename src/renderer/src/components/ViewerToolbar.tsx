@@ -1,5 +1,5 @@
 import React from 'react';
-import { Button, Tooltip, Space } from 'antd';
+import { Button, Tooltip, Space, Divider } from 'antd';
 import {
     GatewayOutlined, // Vertex/Point
     AppstoreOutlined, // Face
@@ -9,15 +9,23 @@ import {
     ExpandOutlined, // Scale
     SkinOutlined, // Binding
     VideoCameraOutlined, // Keyframe
-    ThunderboltOutlined // Recalculate Normals
+    ThunderboltOutlined, // Recalculate Normals
+    SplitCellsOutlined, // Split
+    MergeCellsOutlined // Weld
 } from '@ant-design/icons';
 import { useSelectionStore } from '../store/selectionStore';
 
 interface ViewerToolbarProps {
     onRecalculateNormals?: () => void
+    onSplitVertices?: () => void
+    onWeldVertices?: () => void
 }
 
-export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({ onRecalculateNormals }) => {
+export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
+    onRecalculateNormals,
+    onSplitVertices,
+    onWeldVertices
+}) => {
     const {
         mainMode,
         geometrySubMode,
@@ -25,10 +33,17 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({ onRecalculateNorma
         animationSubMode,
         setAnimationSubMode,
         transformMode,
-        setTransformMode
+        setTransformMode,
+        selectedVertexIds
     } = useSelectionStore();
 
     if (mainMode !== 'geometry' && mainMode !== 'animation') return null;
+
+    // Check if selected vertices are all from the same geoset (required for weld)
+    const canSplit = geometrySubMode === 'vertex' && selectedVertexIds.length >= 1
+    const canWeld = geometrySubMode === 'vertex' &&
+        selectedVertexIds.length >= 2 &&
+        selectedVertexIds.every(v => v.geosetIndex === selectedVertexIds[0]?.geosetIndex)
 
     return (
         <div style={{
@@ -73,6 +88,21 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({ onRecalculateNorma
                             <Button
                                 icon={<ThunderboltOutlined />}
                                 onClick={onRecalculateNormals}
+                            />
+                        </Tooltip>
+                        {/* Vertex Operations - always visible in geometry mode */}
+                        <Tooltip title="分离 - 将选中顶点及其面分离为新多边形">
+                            <Button
+                                icon={<SplitCellsOutlined />}
+                                onClick={onSplitVertices}
+                                disabled={!canSplit}
+                            />
+                        </Tooltip>
+                        <Tooltip title="焊接 - 将选中顶点合并到中心点">
+                            <Button
+                                icon={<MergeCellsOutlined />}
+                                onClick={onWeldVertices}
+                                disabled={!canWeld}
                             />
                         </Tooltip>
                     </Space>
@@ -155,3 +185,4 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({ onRecalculateNorma
         </div>
     );
 };
+
