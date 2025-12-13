@@ -132,6 +132,10 @@ export class SplitVerticesCommand implements Command {
         // Remove the new geoset
         this.renderer.model.Geosets.splice(this.newGeosetIndex, 1)
 
+        // Rebuild GPU buffers for the restored original geoset
+        ModelResourceManager.getInstance().addGeosetBuffers(this.renderer.model, this.geosetIndex)
+        console.log('[SplitVerticesCommand] Undo: Restored old geoset and rebuilt buffers')
+
         // Sync to store and trigger reload
         this.syncToStore()
     }

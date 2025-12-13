@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react'
+﻿import React, { useState, useCallback, useEffect, useRef } from 'react'
 import Viewer, { ViewerRef } from './Viewer'
 import AnimationPanel from './AnimationPanel'
 import MenuBar from './MenuBar'
@@ -120,7 +120,8 @@ function prepareModelDataForSave(modelData: any): any {
 
     // Fix Geoset data
     if (data.Geosets && Array.isArray(data.Geosets)) {
-        data.Geosets.forEach((geoset: any) => { if (!geoset) return;
+        data.Geosets.forEach((geoset: any) => {
+            if (!geoset) return;
             if (geoset.Vertices && !(geoset.Vertices instanceof Float32Array)) {
                 geoset.Vertices = toFloat32Array(geoset.Vertices, geoset.Vertices.length || 0);
             }
@@ -378,6 +379,7 @@ const MainLayout: React.FC = () => {
     const [mpqLoaded, setMpqLoaded] = useState<boolean>(false)
 
     const [isLoading, setIsLoading] = useState<boolean>(false)
+    const [isDragging, setIsDragging] = useState<boolean>(false) // For drag-drop visual feedback
 
     // Editor Panel Resizing
     const [editorWidth, setEditorWidth] = useState<number>(400)
@@ -579,7 +581,7 @@ const MainLayout: React.FC = () => {
                             // Save found paths to localStorage so user can see/manage them later if we add a manager
                             localStorage.setItem('mpq_paths', JSON.stringify(validPaths))
                             setMpqLoaded(true)
-                            // alert(`已自动检测并加载�?${count} 个魔兽争�?MPQ 文件！`)
+                            // alert(`已自动检测并加载�?${count} 个魔兽争�?MPQ 文件！`)
                         }
                     }
                 } catch (e) {
@@ -699,6 +701,89 @@ const MainLayout: React.FC = () => {
 
     const handleOpen = handleImport // Alias for MenuBar
 
+    // Handle file drop using Tauri's drag-drop events
+    // This is necessary because HTML5 drag-drop doesn't provide file paths in Tauri context
+    useEffect(() => {
+        let unlistenDrop: (() => void) | undefined
+        let unlistenEnter: (() => void) | undefined
+        let unlistenLeave: (() => void) | undefined
+
+        const setupDragDropListeners = async () => {
+            try {
+                const { listen } = await import('@tauri-apps/api/event')
+
+                // Listen for file drop
+                unlistenDrop = await listen<{ paths: string[] }>('tauri://drag-drop', async (event) => {
+                    setIsDragging(false)
+                    const paths = event.payload.paths
+                    if (!paths || paths.length === 0) return
+
+                    const filePath = paths[0]
+                    const ext = filePath.toLowerCase().split('.').pop()
+
+                    if (ext !== 'mdx' && ext !== 'mdl') {
+                        console.warn('[MainLayout] Invalid file type:', ext, '- only .mdx and .mdl are supported')
+                        return
+                    }
+
+                    console.log('[MainLayout] File dropped (Tauri):', filePath)
+
+                    // Check if a model is already loaded - if so, save path and refresh page
+                    const currentModelPath = useModelStore.getState().modelPath
+                    if (currentModelPath) {
+                        console.log('[MainLayout] Model already loaded, refreshing page before importing new model')
+                        localStorage.setItem('pending_model_path', filePath)
+                        window.location.reload()
+                        return
+                    }
+
+                    setIsLoading(true)
+                    setZustandLoading(true)
+                    setZustandModelData(null, filePath)
+                    setIsLoading(false)
+                    setZustandLoading(false)
+                })
+
+                // Listen for drag enter
+                unlistenEnter = await listen('tauri://drag-enter', () => {
+                    setIsDragging(true)
+                })
+
+                // Listen for drag leave
+                unlistenLeave = await listen('tauri://drag-leave', () => {
+                    setIsDragging(false)
+                })
+
+            } catch (error) {
+                console.error('[MainLayout] Failed to setup drag-drop listeners:', error)
+            }
+        }
+
+        setupDragDropListeners()
+
+        return () => {
+            unlistenDrop?.()
+            unlistenEnter?.()
+            unlistenLeave?.()
+        }
+    }, [setZustandModelData, setZustandLoading])
+
+    // Keep HTML5 handlers for visual feedback (they won't interfere with Tauri events)
+    const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+        e.preventDefault()
+        e.stopPropagation()
+    }, [])
+
+    const handleDragEnter = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+        e.preventDefault()
+        e.stopPropagation()
+    }, [])
+
+    const handleDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+        e.preventDefault()
+        e.stopPropagation()
+    }, [])
+
     const handleLoadMPQ = async () => {
         try {
             const { open } = await import('@tauri-apps/plugin-dialog')
@@ -726,7 +811,7 @@ const MainLayout: React.FC = () => {
                     }
                 }
                 if (count > 0) {
-                    alert(`成功加载 ${count} �?MPQ 文件！\n已保存路径，下次启动将自动加载。`)
+                    alert(`成功加载 ${count} �?MPQ 文件！\n已保存路径，下次启动将自动加载。`)
                 }
             }
         } catch (err) {
@@ -771,7 +856,7 @@ const MainLayout: React.FC = () => {
                 await writeFile(modelPath, new Uint8Array(buffer))
             }
 
-            alert('模型已保�?)
+            alert('模型已保存')
         } catch (err) {
             console.error('Failed to save file:', err)
             alert('保存失败: ' + err)
@@ -826,7 +911,7 @@ const MainLayout: React.FC = () => {
             }
         } catch (err) {
             console.error('Failed to save file as:', err)
-            alert('另存为失�? ' + err)
+            alert('另存为失�? ' + err)
         }
     }
 
@@ -946,16 +1031,50 @@ const MainLayout: React.FC = () => {
     }, [showDebugConsole])
 
     return (
-        <div style={{
-            display: 'flex',
-            flexDirection: 'column',
-            height: '100vh',
-            width: '100%',
-            overflow: 'hidden',
-            backgroundColor: '#1e1e1e',
-            color: '#eee',
-            fontFamily: 'Segoe UI, sans-serif'
-        }}>
+        <div
+            style={{
+                display: 'flex',
+                flexDirection: 'column',
+                height: '100vh',
+                width: '100%',
+                overflow: 'hidden',
+                backgroundColor: '#1e1e1e',
+                color: '#eee',
+                fontFamily: 'Segoe UI, sans-serif',
+                position: 'relative'
+            }}
+            onDragOver={handleDragOver}
+            onDragEnter={handleDragEnter}
+            onDragLeave={handleDragLeave}
+        >
+            {/* Drag-and-drop overlay */}
+            {isDragging && (
+                <div style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    backgroundColor: 'rgba(0, 120, 215, 0.3)',
+                    border: '3px dashed #0078d7',
+                    zIndex: 9999,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    pointerEvents: 'none'
+                }}>
+                    <div style={{
+                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                        padding: '20px 40px',
+                        borderRadius: '8px',
+                        fontSize: '18px',
+                        fontWeight: 'bold',
+                        color: '#fff'
+                    }}>
+                        拖放 MDX/MDL 文件以导入模型
+                    </div>
+                </div>
+            )}
             <MenuBar
                 onOpen={handleOpen}
                 onSave={handleSave}
@@ -1177,7 +1296,7 @@ const MainLayout: React.FC = () => {
                             color: 'white',
                             zIndex: 10
                         }}>
-                            加载�?..
+                            加载�?..
                         </div>
                     )}
                 </div>

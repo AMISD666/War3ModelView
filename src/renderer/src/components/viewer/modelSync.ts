@@ -56,14 +56,24 @@ export function checkForStructuralChanges(
 
     console.log('[modelSync] Change flags:', { geoChanged, textureChanged, materialChanged, particleChanged, geosetMaterialChanged, geosetVertexCountChanged, lightCountChanged })
 
-    if (geoChanged) return { needsReload: true, reason: 'Geoset count changed' }
+    // OPTIMIZATION: Geoset structure changes (Split/Weld/Delete) are now handled 
+    // by the commands themselves (rebuilding buffers). We can trust the live renderer.
+    if (geoChanged) {
+        console.log('[modelSync] Geoset count changed, but skipping reload (Trusting Command)')
+        // return { needsReload: true, reason: 'Geoset count changed' }
+    }
+
     if (textureChanged) return { needsReload: true, reason: 'Texture count changed' }
     if (materialChanged) return { needsReload: true, reason: 'Material count changed' }
     // OPTIMIZATION: Particle changes are now handled via lightweight sync
     // The ParticlesController.syncEmitters() method dynamically adds/removes emitters
     // if (particleChanged) return { needsReload: true, reason: 'Particle count changed' }
     if (geosetMaterialChanged) return { needsReload: true, reason: 'Geoset MaterialID changed' }
-    if (geosetVertexCountChanged) return { needsReload: true, reason: 'Geoset vertex count changed (Split/Weld)' }
+
+    if (geosetVertexCountChanged) {
+        console.log('[modelSync] Geoset vertex count changed, but skipping reload (Trusting Command)')
+        // return { needsReload: true, reason: 'Geoset vertex count changed (Split/Weld)' }
+    }
     if (lightCountChanged) return { needsReload: true, reason: 'Light count changed' }
 
     console.log('[modelSync] No structural changes, using lightweight sync')

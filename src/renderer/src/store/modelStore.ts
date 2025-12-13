@@ -78,6 +78,7 @@ interface ModelState {
     setForceShowAllGeosets: (show: boolean) => void;
     setHoveredGeosetId: (id: number | null) => void;
     setSelectedGeosetIndex: (index: number | null) => void;
+    setHiddenGeosetIds: (ids: number[]) => void;
     resetGeosetVisibility: () => void;
 }
 
@@ -330,6 +331,10 @@ export const useModelStore = create<ModelState>((set, get) => ({
         console.log('[ModelStore] Loaded model with', nodes.length, 'nodes');
 
         // Reset animation state on new model load
+        // Initialize geosets as hidden (User request: default unchecked)
+        const geosetCount = (data as any)?.Geosets?.length || 0;
+        const allGeosetIds = Array.from({ length: geosetCount }, (_, i) => i);
+
         set({
             modelData: data,
             modelPath: path,
@@ -337,7 +342,9 @@ export const useModelStore = create<ModelState>((set, get) => ({
             sequences: (data as any)?.Sequences || [],
             currentSequence: (data as any)?.Sequences?.length > 0 ? 0 : -1,
             currentFrame: 0,
-            isPlaying: (data as any)?.Sequences?.length > 0
+            isPlaying: (data as any)?.Sequences?.length > 0,
+            hiddenGeosetIds: allGeosetIds,
+            forceShowAllGeosets: true
         });
     },
 
@@ -883,6 +890,10 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
     setSelectedGeosetIndex: (index: number | null) => {
         set({ selectedGeosetIndex: index });
+    },
+
+    setHiddenGeosetIds: (ids: number[]) => {
+        set({ hiddenGeosetIds: ids });
     },
 
     resetGeosetVisibility: () => {

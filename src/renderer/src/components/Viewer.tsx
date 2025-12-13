@@ -492,7 +492,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     // In geometry mode: Alt = camera rotation (allow Gizmo)
     // In animation mode: Alt = box selection (block Gizmo)
     const shouldBlockGizmoForAlt = e.altKey && mainMode === 'animation'
+
     if (gizmoState.current.activeAxis && e.button === 0 && !shouldBlockGizmoForAlt) {
+      console.log('[Viewer] handleMouseDown: Starting Gizmo Drag. SubMode:', useSelectionStore.getState().geometrySubMode)
       if (cameraRef.current) cameraRef.current.enabled = false
       gizmoState.current.isDragging = true
       mouseState.current.lastMouseX = e.clientX
@@ -503,8 +505,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       const { selectedVertexIds, selectedFaceIds, geometrySubMode } = useSelectionStore.getState()
 
       const captureVertex = (geosetIndex: number, vertexIndex: number) => {
-        if (!renderer) return
-        const geoset = renderer.model.Geosets[geosetIndex]
+        if (!rendererRef.current) {
+          console.warn('[Viewer] CaptureVertex: No rendererRef')
+          return
+        }
+        const geoset = rendererRef.current.model.Geosets[geosetIndex]
         if (!geoset) return
         const vIndex = vertexIndex * 3
         const key = `${geosetIndex}-${vertexIndex}`
@@ -514,7 +519,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       }
 
       if (geometrySubMode === 'vertex') {
+        console.log('[Viewer] Capturing vertices for vertex mode. Selected count:', selectedVertexIds.length)
         selectedVertexIds.forEach(sel => captureVertex(sel.geosetIndex, sel.index))
+        console.log('[Viewer] Captured vertices:', initialVertexPositions.current.size)
       } else if (geometrySubMode === 'face') {
         selectedFaceIds.forEach(sel => {
           if (!renderer) return
@@ -592,6 +599,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     if (!rendererRef.current || !canvasRef.current) return
 
     const { mainMode, animationSubMode, geometrySubMode, addVertexSelection, addFaceSelection, removeVertexSelection, removeFaceSelection, selectVertices, selectFaces, selectNodes } = useSelectionStore.getState()
+    console.log('[Viewer] handleBoxSelection', { mainMode, geometrySubMode, box: { startX, startY, endX, endY } })
 
     if (mainMode !== 'geometry' && mainMode !== 'animation') return
 
@@ -659,9 +667,12 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       return vec3.fromValues(x, y, ndc[2])
     }
 
-    if (geometrySubMode === 'vertex' || (mainMode === 'animation' && animationSubMode === 'binding')) {
+    if (geometrySubMode === 'vertex' || geometrySubMode === 'group' || (mainMode === 'animation' && animationSubMode === 'binding')) {
       const newSelection: { geosetIndex: number, index: number }[] = []
+      const affectedGeosetIndices = new Set<number>()
+
       if (!rendererRef.current) return
+
 
       // Get hidden geoset IDs to skip during selection
       const { hiddenGeosetIds, forceShowAllGeosets } = useModelStore.getState()
@@ -684,6 +695,28 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             }
           }
         }
+      }
+
+      // If group mode, expand affected geosets to all their vertices based on the vertices we just collected
+      if (geometrySubMode === 'group') {
+        const engagedGeosetIndices = new Set<number>()
+        newSelection.forEach(s => engagedGeosetIndices.add(s.geosetIndex))
+
+        console.log('[Viewer] Group Mode: Engaged geosets from box:', engagedGeosetIndices.size)
+
+        // Clear initial vertex selection and replace with full geosets
+        newSelection.length = 0
+
+        engagedGeosetIndices.forEach(idx => {
+          const geo = rendererRef.current.model.Geosets[idx]
+          if (geo && geo.Vertices) {
+            const count = geo.Vertices.length / 3
+            // Add all vertices
+            for (let k = 0; k < count; k++) {
+              newSelection.push({ geosetIndex: idx, index: k })
+            }
+          }
+        })
       }
 
       if (isShift) {
@@ -776,7 +809,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const handleSelectionClick = (clientX: number, clientY: number, isShift: boolean, isCtrl: boolean) => {
     if (!rendererRef.current || !canvasRef.current) return
 
-    const { mainMode, animationSubMode, geometrySubMode, selectVertex, selectFace, addVertexSelection, addFaceSelection, removeVertexSelection, removeFaceSelection, clearAllSelections, selectNode, setPickedGeosetIndex } = useSelectionStore.getState()
+    const { mainMode, animationSubMode, geometrySubMode, selectVertex, selectVertices, selectFace, selectFaces, addVertexSelection, addFaceSelection, removeVertexSelection, removeFaceSelection, clearAllSelections, selectNode, setPickedGeosetIndex } = useSelectionStore.getState()
 
     // === Ctrl+Click Geoset Picking (works in any mode) ===
     if (isCtrl) {
@@ -1004,18 +1037,19 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     const rayDir = vec3.fromValues(rayWorld[0], rayWorld[1], rayWorld[2])
     vec3.normalize(rayDir, rayDir)
 
-    // In Binding Mode, treat as vertex selection
-    const effectiveSubMode = (mainMode === 'animation' && animationSubMode === 'binding') ? 'vertex' : geometrySubMode
+    // In Binding Mode OR Group Mode, treat as vertex selection for raycasting
+    const effectiveSubMode = ((mainMode === 'animation' && animationSubMode === 'binding') || geometrySubMode === 'group') ? 'vertex' : geometrySubMode
 
     // DISABLED: Single-click vertex/face selection in geometry mode
     // Only box selection is allowed for vertices/faces
     // But we still allow clicking to clear selection
     if (mainMode === 'geometry') {
       // In geometry mode, single-click only clears selection (if not shift/ctrl)
-      if (!isShift && !isCtrl) {
+      // EXCEPTION: Group Mode supports single click selection
+      if (!isShift && !isCtrl && geometrySubMode !== 'group') {
         clearAllSelections()
       }
-      return
+      if (geometrySubMode !== 'group') return
     }
 
     // Animation binding mode still supports single-click
@@ -1024,12 +1058,34 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     if (result) {
       if (effectiveSubMode === 'vertex') {
         const sel = result as { geosetIndex: number, index: number }
-        if (isShift) {
-          removeVertexSelection([sel])
-        } else if (isCtrl) {
-          addVertexSelection([sel])
+
+        if (geometrySubMode === 'group') {
+          // Group Selection: Select ALL vertices in this geoset
+          const geoset = rendererRef.current.model.Geosets[sel.geosetIndex]
+          if (geoset) {
+            const allVertices: { geosetIndex: number, index: number }[] = []
+            const count = geoset.Vertices.length / 3
+            for (let i = 0; i < count; i++) {
+              allVertices.push({ geosetIndex: sel.geosetIndex, index: i })
+            }
+
+            if (isShift) {
+              removeVertexSelection(allVertices)
+            } else if (isCtrl) {
+              addVertexSelection(allVertices)
+            } else {
+              selectVertices(allVertices)
+            }
+          }
         } else {
-          selectVertex(sel, false)
+          // Normal Vertex Selection (Actually disabled by block above, but keeping for reference/animation mode)
+          if (isShift) {
+            removeVertexSelection([sel])
+          } else if (isCtrl) {
+            addVertexSelection([sel])
+          } else {
+            selectVertex(sel, false)
+          }
         }
       } else if (geometrySubMode === 'face') {
         const sel = result as { geosetIndex: number, index: number }
@@ -1048,9 +1104,13 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if input is focused
+      // Ignore if input is focused, UNLESS it's a checkbox/radio/button which shouldn't block shortcuts like Undo
       if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) {
-        return
+        const type = (document.activeElement as HTMLInputElement).type
+        const allowedTypes = ['checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'image']
+        if (!allowedTypes.includes(type)) {
+          return
+        }
       }
 
       switch (e.key.toLowerCase()) {
@@ -1427,7 +1487,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         for (let i = 0; i < model.Geosets.length; i++) {
           const oldGeoset = oldGeosets[i]
           const newGeoset = model.Geosets[i]
-
+  
           // Always copy geometry data from old geoset, overwriting anything in new geoset
           if (oldGeoset.Vertices) {
             newGeoset.Vertices = oldGeoset.Vertices
@@ -1985,7 +2045,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               }
             }
 
-            mdlRenderer.render(mvMatrix, pMatrix, { wireframe: showWireframeRef.current || (appMainMode === 'geometry' && geometrySubMode === 'face') })
+            mdlRenderer.render(mvMatrix, pMatrix, { wireframe: showWireframeRef.current || (appMainMode === 'geometry' && (geometrySubMode === 'face' || geometrySubMode === 'group')) })
 
             // Restore original geoset alphas
             if (originalGeosetAlphas.size > 0 && mdlRenderer.rendererData.geosetAlpha) {
@@ -1997,29 +2057,49 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             // === Hover Highlight ===
             // If a geoset is hovered, render a highlight overlay
             if (hoveredGeosetId !== null && mdlRenderer.model.Geosets && mdlRenderer.model.Geosets[hoveredGeosetId]) {
-              // Save current GL state
-              const prevBlend = gl.isEnabled(gl.BLEND)
-              const prevDepthMask = gl.getParameter(gl.DEPTH_WRITEMASK)
-              const prevDepthTest = gl.isEnabled(gl.DEPTH_TEST)
-              const prevCullFace = gl.isEnabled(gl.CULL_FACE)
+              const isWireframeMode = showWireframeRef.current || (appMainMode === 'geometry' && (geometrySubMode === 'face' || geometrySubMode === 'group'))
 
-              // Render with red highlight color and high opacity
-              gl.enable(gl.BLEND)
-              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-              gl.depthMask(false)
-              gl.disable(gl.DEPTH_TEST)
-              // Disable culling for double-sided highlight
-              gl.disable(gl.CULL_FACE)
+              if (isWireframeMode && debugRenderer.current) {
+                // In wireframe mode, draw red wireframe for hovered geoset using debugRenderer
+                const geoset = mdlRenderer.model.Geosets[hoveredGeosetId]
+                if (geoset && geoset.Faces && geoset.Vertices) {
+                  const linePositions: number[] = []
+                  const faces = geoset.Faces
+                  const verts = geoset.Vertices
+                  for (let i = 0; i < faces.length; i += 3) {
+                    const i1 = faces[i] * 3, i2 = faces[i + 1] * 3, i3 = faces[i + 2] * 3
+                    linePositions.push(verts[i1], verts[i1 + 1], verts[i1 + 2], verts[i2], verts[i2 + 1], verts[i2 + 2])
+                    linePositions.push(verts[i2], verts[i2 + 1], verts[i2 + 2], verts[i3], verts[i3 + 1], verts[i3 + 2])
+                    linePositions.push(verts[i3], verts[i3 + 1], verts[i3 + 2], verts[i1], verts[i1 + 1], verts[i1 + 2])
+                  }
+                  gl.disable(gl.DEPTH_TEST)
+                  debugRenderer.current.renderLines(gl as WebGLRenderingContext, mvMatrix, pMatrix, linePositions, [1, 0, 0, 1])
+                  gl.enable(gl.DEPTH_TEST)
+                }
+              } else {
+                // Non-wireframe mode: use original renderGeosetHighlight
+                // Save current GL state
+                const prevBlend = gl.isEnabled(gl.BLEND)
+                const prevDepthMask = gl.getParameter(gl.DEPTH_WRITEMASK)
+                const prevDepthTest = gl.isEnabled(gl.DEPTH_TEST)
+                const prevCullFace = gl.isEnabled(gl.CULL_FACE)
 
-              if (typeof (mdlRenderer as any).renderGeosetHighlight === 'function') {
-                (mdlRenderer as any).renderGeosetHighlight(hoveredGeosetId, [1, 0, 0], 0.8, mvMatrix, pMatrix)
+                // Render with red highlight color and high opacity
+                gl.disable(gl.BLEND)
+                gl.depthMask(false)
+                gl.disable(gl.DEPTH_TEST)
+                gl.disable(gl.CULL_FACE)
+
+                if (typeof (mdlRenderer as any).renderGeosetHighlight === 'function') {
+                  (mdlRenderer as any).renderGeosetHighlight(hoveredGeosetId, [1, 0, 0], 1.0, mvMatrix, pMatrix)
+                }
+
+                // Restore GL state
+                if (prevCullFace) gl.enable(gl.CULL_FACE)
+                if (prevDepthTest) gl.enable(gl.DEPTH_TEST)
+                gl.depthMask(prevDepthMask)
+                if (!prevBlend) gl.disable(gl.BLEND)
               }
-
-              // Restore GL state
-              if (prevCullFace) gl.enable(gl.CULL_FACE)
-              if (prevDepthTest) gl.enable(gl.DEPTH_TEST)
-              gl.depthMask(prevDepthMask)
-              if (!prevBlend) gl.disable(gl.BLEND)
             }
 
             if ((showNodesRef.current || (appMainMode === 'animation' && animationSubMode === 'binding')) && mdlRenderer.rendererData.nodes && appMainMode !== 'geometry') {
@@ -2154,18 +2234,54 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
             if (selectedVertexIds.length > 0) {
               const selectedPositions: number[] = []
-              for (const sel of selectedVertexIds) {
-                const geoset = mdlRenderer.model.Geosets[sel.geosetIndex]
-                if (geoset) {
-                  const vIndex = sel.index * 3
-                  selectedPositions.push(
-                    geoset.Vertices[vIndex],
-                    geoset.Vertices[vIndex + 1],
-                    geoset.Vertices[vIndex + 2]
-                  )
+
+              if (geometrySubMode === 'group') {
+                // Group Mode: Render Red Wireframe (Lines) instead of Points
+                // Group selected vertices by geoset to identify engaged geosets
+                const engagedGeosets = new Set<number>()
+                selectedVertexIds.forEach(v => engagedGeosets.add(v.geosetIndex))
+
+                const linePositions: number[] = []
+                engagedGeosets.forEach(geosetIndex => {
+                  const geoset = mdlRenderer.model.Geosets[geosetIndex]
+                  if (geoset && geoset.Faces && geoset.Vertices) {
+                    // Render ALL faces of this geoset as lines
+                    const faces = geoset.Faces
+                    const verts = geoset.Vertices
+                    for (let i = 0; i < faces.length; i += 3) {
+                      const i1 = faces[i] * 3, i2 = faces[i + 1] * 3, i3 = faces[i + 2] * 3
+                      // Edge 1
+                      linePositions.push(verts[i1], verts[i1 + 1], verts[i1 + 2], verts[i2], verts[i2 + 1], verts[i2 + 2])
+                      // Edge 2
+                      linePositions.push(verts[i2], verts[i2 + 1], verts[i2 + 2], verts[i3], verts[i3 + 1], verts[i3 + 2])
+                      // Edge 3
+                      linePositions.push(verts[i3], verts[i3 + 1], verts[i3 + 2], verts[i1], verts[i1 + 1], verts[i1 + 2])
+                    }
+                  }
+                })
+                // Render lines with Red color, slightly OFFSET if possible to avoid z-fighting?
+                // Or just disable depth test for selection?
+                gl.disable(gl.DEPTH_TEST)
+                debugRenderer.current.renderLines(gl as WebGLRenderingContext, mvMatrix, pMatrix, linePositions, [1, 0, 0, 1])
+                gl.enable(gl.DEPTH_TEST)
+
+              } else {
+                // Vertex Mode: Render Points
+                for (const sel of selectedVertexIds) {
+                  const geoset = mdlRenderer.model.Geosets[sel.geosetIndex]
+                  if (geoset) {
+                    const vIndex = sel.index * 3
+                    selectedPositions.push(
+                      geoset.Vertices[vIndex],
+                      geoset.Vertices[vIndex + 1],
+                      geoset.Vertices[vIndex + 2]
+                    )
+                  }
                 }
+                gl.disable(gl.DEPTH_TEST)
+                debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, selectedPositions, [1, 0, 0, 1], 6.0)
+                gl.enable(gl.DEPTH_TEST)
               }
-              debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, selectedPositions, [1, 0, 0, 1], 4.0)
             }
           }
 
@@ -2187,7 +2303,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                   )
                 }
               }
-              debugRenderer.current.renderTriangles(gl as WebGLRenderingContext, mvMatrix, pMatrix, selectedPositions, [1, 0, 0, 0.5])
+              gl.disable(gl.DEPTH_TEST)
+              debugRenderer.current.renderTriangles(gl as WebGLRenderingContext, mvMatrix, pMatrix, selectedPositions, [1, 0, 0, 0.7])
 
               const linePositions: number[] = []
               for (let i = 0; i < selectedPositions.length; i += 9) {
@@ -2199,6 +2316,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 linePositions.push(selectedPositions[i], selectedPositions[i + 1], selectedPositions[i + 2])
               }
               debugRenderer.current.renderLines(gl as WebGLRenderingContext, mvMatrix, pMatrix, linePositions, [1, 0, 0, 1])
+              gl.enable(gl.DEPTH_TEST)
             }
           }
 
@@ -2787,6 +2905,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           if (initialVertexPositions.current.size > 0) {
             const changes: VertexChange[] = []
 
+            console.log('[Viewer] Checking vertex changes. Initial positions:', initialVertexPositions.current.size)
             initialVertexPositions.current.forEach((oldPos, key) => {
               const [geosetIndexStr, vertexIndexStr] = key.split('-')
               const geosetIndex = parseInt(geosetIndexStr)
@@ -2807,6 +2926,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 }
               }
             })
+
+            console.log('[Viewer] Detected vertex changes:', changes.length)
 
             if (changes.length > 0) {
               const cmd = new MoveVerticesCommand(
@@ -2898,13 +3019,24 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
   // Handle vertex copy
   const handleCopyVertices = () => {
-    if (!rendererRef.current) return
+    console.log('[Viewer] handleCopyVertices called')
+    if (!rendererRef.current) {
+      console.log('[Viewer] handleCopyVertices: No renderer')
+      return
+    }
     const { selectedVertexIds, geometrySubMode, mainMode } = useSelectionStore.getState()
-    if (mainMode !== 'geometry' || geometrySubMode !== 'vertex' || selectedVertexIds.length < 1) return
+    console.log('[Viewer] handleCopyVertices state:', { mainMode, geometrySubMode, selectedCount: selectedVertexIds.length })
+    if (mainMode !== 'geometry' || geometrySubMode !== 'vertex' || selectedVertexIds.length < 1) {
+      console.log('[Viewer] handleCopyVertices: Guard failed - mainMode:', mainMode, 'geometrySubMode:', geometrySubMode, 'selectedCount:', selectedVertexIds.length)
+      return
+    }
 
     const geosetIndex = selectedVertexIds[0].geosetIndex
     const geoset = rendererRef.current.model.Geosets[geosetIndex]
-    if (!geoset) return
+    if (!geoset) {
+      console.log('[Viewer] handleCopyVertices: Geoset not found at index', geosetIndex)
+      return
+    }
 
     const vertexIndices = selectedVertexIds.map(s => s.index)
     vertexCopyBuffer.current = copyVertices(geoset, vertexIndices, geosetIndex)
@@ -2928,7 +3060,14 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
   useEffect(() => {
     const handleKeyboard = (e: KeyboardEvent) => {
-      if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) return
+      // Only block keyboard shortcuts when focus is on text input elements
+      // Allow shortcuts when focus is on checkboxes, buttons, etc.
+      const activeEl = document.activeElement as HTMLInputElement | null
+      if (activeEl instanceof HTMLInputElement) {
+        const textInputTypes = ['text', 'password', 'email', 'search', 'tel', 'url', 'number']
+        if (textInputTypes.includes(activeEl.type)) return
+      }
+      if (document.activeElement instanceof HTMLTextAreaElement) return
 
       const { mainMode, geometrySubMode } = useSelectionStore.getState()
 
@@ -2975,8 +3114,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         onContextMenu={(e) => {
           e.preventDefault()
           const { mainMode, geometrySubMode, selectedVertexIds } = useSelectionStore.getState()
-          // Show context menu in vertex mode when vertices are selected
-          if (mainMode === 'geometry' && geometrySubMode === 'vertex' && selectedVertexIds.length > 0) {
+          // Show context menu in vertex mode when vertices are selected AND Alt is pressed
+          if (mainMode === 'geometry' && geometrySubMode === 'vertex' && selectedVertexIds.length > 0 && e.altKey) {
             setContextMenu({ x: e.clientX, y: e.clientY })
           }
         }}

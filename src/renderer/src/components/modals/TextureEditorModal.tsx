@@ -233,21 +233,35 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                         onClick: async () => {
                                             try {
                                                 const selected = await open({
-                                                    multiple: false,
+                                                    multiple: true,
                                                     filters: [{
                                                         name: '纹理文件',
                                                         extensions: ['blp', 'png', 'tga', 'jpg', 'jpeg']
                                                     }]
                                                 })
 
-                                                if (selected && typeof selected === 'string') {
+                                                // Handle both single and multiple selection
+                                                const paths = Array.isArray(selected) ? selected : (selected ? [selected] : [])
+
+                                                if (paths.length === 0) return
+
+                                                // Get existing texture paths for duplicate detection
+                                                const existingPaths = new Set(
+                                                    localTextures.map(t => (t.Image || '').toLowerCase())
+                                                )
+
+                                                const newTextures: any[] = []
+                                                let addedCount = 0
+                                                let skippedCount = 0
+
+                                                for (const filePath of paths) {
                                                     // 计算相对路径
-                                                    let relativePath = selected
+                                                    let relativePath = filePath
 
                                                     if (modelPath) {
                                                         // 获取模型所在目录
                                                         const modelDir = modelPath.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
-                                                        const selectedNormalized = selected.replace(/\\/g, '/')
+                                                        const selectedNormalized = filePath.replace(/\\/g, '/')
 
                                                         // 检查是否在模型目录下
                                                         if (selectedNormalized.toLowerCase().startsWith(modelDir.toLowerCase())) {
@@ -257,15 +271,37 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                                             relativePath = relativePath.replace(/\//g, '\\')
                                                         } else {
                                                             // 不在模型目录下，使用文件名
-                                                            relativePath = selected.replace(/\\/g, '/').split('/').pop() || selected
-                                                            message.warning('选择的文件不在模型目录下，仅使用文件名')
+                                                            relativePath = filePath.replace(/\\/g, '/').split('/').pop() || filePath
                                                         }
                                                     }
 
-                                                    const newTexture = { Image: relativePath, ReplaceableId: 0, Flags: 0 }
-                                                    setLocalTextures([...localTextures, newTexture])
-                                                    setSelectedIndex(localTextures.length)
-                                                    message.success(`已添加纹理: ${relativePath}`)
+                                                    // Check for duplicate (same path)
+                                                    if (existingPaths.has(relativePath.toLowerCase())) {
+                                                        skippedCount++
+                                                        continue
+                                                    }
+
+                                                    // Also add to existing set to prevent duplicates within the batch
+                                                    existingPaths.add(relativePath.toLowerCase())
+
+                                                    newTextures.push({ Image: relativePath, ReplaceableId: 0, Flags: 0 })
+                                                    addedCount++
+                                                }
+
+                                                if (newTextures.length > 0) {
+                                                    const updatedTextures = [...localTextures, ...newTextures]
+                                                    setLocalTextures(updatedTextures)
+                                                    setSelectedIndex(updatedTextures.length - 1) // Select the last added texture
+
+                                                    if (addedCount === 1 && skippedCount === 0) {
+                                                        message.success(`已添加纹理: ${newTextures[0].Image}`)
+                                                    } else if (skippedCount > 0) {
+                                                        message.success(`已添加 ${addedCount} 个纹理，跳过 ${skippedCount} 个重复`)
+                                                    } else {
+                                                        message.success(`已批量添加 ${addedCount} 个纹理`)
+                                                    }
+                                                } else if (skippedCount > 0) {
+                                                    message.warning(`所有选择的纹理都已存在，跳过 ${skippedCount} 个重复`)
                                                 }
                                             } catch (e) {
                                                 console.error('Failed to open file dialog:', e)

@@ -52,6 +52,9 @@ export class PasteVerticesCommand implements Command {
         }
 
         // Create geoset for renderer (TypedArrays)
+        // Calculate TotalGroupsCount (sum of all group lengths)
+        const totalGroupsCount = this.buffer.groups?.reduce((sum, g) => sum + g.length, 0) || 1
+
         const rendererGeoset = {
             Vertices: new Float32Array(newVertices),
             Normals: new Float32Array(this.buffer.normals),
@@ -61,9 +64,11 @@ export class PasteVerticesCommand implements Command {
             MaterialID: sourceGeoset.MaterialID || 0,
             SelectionGroup: sourceGeoset.SelectionGroup || 0,
             Unselectable: sourceGeoset.Unselectable || false,
-            Groups: this.buffer.groups,
-            MinimumExtent: sourceGeoset.MinimumExtent || [0, 0, 0],
-            MaximumExtent: sourceGeoset.MaximumExtent || [0, 0, 0],
+            Groups: this.buffer.groups || [[0]],
+            TotalGroupsCount: totalGroupsCount,
+            Anims: [], // Required for MDX export - empty array for new geosets
+            MinimumExtent: sourceGeoset.MinimumExtent || new Float32Array([0, 0, 0]),
+            MaximumExtent: sourceGeoset.MaximumExtent || new Float32Array([0, 0, 0]),
             BoundsRadius: sourceGeoset.BoundsRadius || 0
         }
 
@@ -108,7 +113,9 @@ export class PasteVerticesCommand implements Command {
             MaterialID: sourceGeoset.MaterialID || 0,
             SelectionGroup: sourceGeoset.SelectionGroup || 0,
             Unselectable: sourceGeoset.Unselectable || false,
-            Groups: this.buffer.groups,
+            Groups: this.buffer.groups || [[0]],
+            TotalGroupsCount: totalGroupsCount,
+            Anims: [], // Required for MDX export
             MinimumExtent: sourceGeoset.MinimumExtent || [0, 0, 0],
             MaximumExtent: sourceGeoset.MaximumExtent || [0, 0, 0],
             BoundsRadius: sourceGeoset.BoundsRadius || 0

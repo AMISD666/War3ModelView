@@ -2,6 +2,7 @@ import { Command } from '../utils/CommandManager'
 import { deleteVertices, DeleteResult } from '../utils/vertexOperations'
 import { useModelStore } from '../store/modelStore'
 import { useSelectionStore } from '../store/selectionStore'
+import { ModelResourceManager } from 'war3-model'
 
 interface VertexSelection {
     geosetIndex: number
@@ -60,10 +61,14 @@ export class DeleteVerticesCommand implements Command {
 
         console.log('[DeleteVerticesCommand] Deleted', this.deleteResult.verticesRemoved, 'vertices and', this.deleteResult.facesRemoved, 'faces')
 
+        // Rebuild GPU Buffers
+        ModelResourceManager.getInstance().addGeosetBuffers(this.renderer.model, this.geosetIndex)
+        console.log('[DeleteVerticesCommand] Rebuilt GPU buffers for geoset', this.geosetIndex)
+
         // Clear selection
         useSelectionStore.getState().selectVertices([])
 
-        // Sync to store and trigger reload
+        // Sync to store
         this.syncToStore()
     }
 
@@ -75,7 +80,11 @@ export class DeleteVerticesCommand implements Command {
             Object.assign(geoset, this.originalGeosetSnapshot)
         }
 
-        // Sync to store and trigger reload
+        // Rebuild GPU Buffers
+        ModelResourceManager.getInstance().addGeosetBuffers(this.renderer.model, this.geosetIndex)
+        console.log('[DeleteVerticesCommand] Undo: Restored geoset and rebuilt buffers')
+
+        // Sync to store
         this.syncToStore()
     }
 
@@ -89,7 +98,7 @@ export class DeleteVerticesCommand implements Command {
                 Faces: Array.from(geoset.Faces),
                 TVertices: geoset.TVertices.map((tv: Float32Array) => Array.from(tv))
             })
-            useModelStore.getState().triggerRendererReload()
+            // REMOVED triggerRendererReload - trusting command to have updated live renderer
         }
     }
 }

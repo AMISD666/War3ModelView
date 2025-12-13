@@ -2,6 +2,8 @@
 import { Checkbox, Dropdown, Menu, message } from 'antd';
 import { EyeOutlined, EyeInvisibleOutlined, CloseOutlined, MinusOutlined, DeleteOutlined, MergeCellsOutlined } from '@ant-design/icons';
 import { useModelStore } from '../store/modelStore';
+import { commandManager } from '../utils/CommandManager';
+import { SetGeosetVisibilityCommand } from '../commands/SetGeosetVisibilityCommand';
 import { GeosetMergeDialog } from './modals/GeosetMergeDialog';
 
 interface GeosetVisibilityPanelProps {
@@ -20,8 +22,14 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
         setHoveredGeosetId,
         setGeosets,
         setMaterials,
+        setHiddenGeosetIds,
         triggerRendererReload
     } = useModelStore();
+
+    // Imports for command manager (ensure these are imported at top of file)
+    // We'll trust the import block to be handled by the user or auto-added if I can't reach top.
+    // Wait, I should add imports at the top. But let's check if I can reach line 1.
+    // I'll do a separate chunk for imports.
 
     const [position, setPosition] = useState({ x: 20, y: 80 });
     const [size, setSize] = useState({ width: 220, height: 350 });
@@ -107,7 +115,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
         setGeosets(newGeosets);
         setSelectedIndices([]);
         setContextMenuVisible(false);
-        message.success(`已删�?${sortedIndices.length} 个多边形`);
+        message.success(`已删除 ${sortedIndices.length} 个多边形`);
     };
 
     // Handle merge confirmation
@@ -304,7 +312,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
         useModelStore.getState().setGeosets(newGeosets);
         setSelectedIndices([]);
         setMergeDialogVisible(false);
-        message.success(`已合�?${sortedIndices.length} 个多边形`);
+        message.success(`已合并 ${sortedIndices.length} 个多边形`);
     };
 
     // Handle dragging
@@ -424,7 +432,47 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                         />
                         <span style={{ color: '#ddd', fontSize: 11, fontWeight: 500 }}>
                             {forceShowAllGeosets ? <EyeOutlined /> : <EyeInvisibleOutlined />} 全部
-                            <button className="panel-control-btn" onClick={() => setSelectedIndices(geosets.map((_, i) => i))} style={{ background: "rgba(60,130,200,0.3)", border: "1px solid #4a9eff", borderRadius: 3, color: "#8bc4ff", cursor: "pointer", padding: "2px 6px", fontSize: 10, marginLeft: 4 }} title="全选">✓全选</button><button className="panel-control-btn" onClick={() => setSelectedIndices([])} style={{ background: "rgba(100,100,100,0.3)", border: "1px solid #666", borderRadius: 3, color: "#aaa", cursor: "pointer", padding: "2px 6px", fontSize: 10 }} title="取消全选">取消</button></span>
+                        </span>
+                        <div style={{ display: 'flex', gap: 4, marginLeft: 4 }}>
+                            <button
+                                className="panel-control-btn"
+                                onClick={() => {
+                                    const cmd = new SetGeosetVisibilityCommand([]);
+                                    commandManager.execute(cmd);
+                                }}
+                                style={{
+                                    background: 'rgba(60, 130, 200, 0.3)',
+                                    border: '1px solid #4a9eff',
+                                    borderRadius: 3,
+                                    color: '#8bc4ff',
+                                    cursor: 'pointer',
+                                    padding: '2px 6px',
+                                    fontSize: 10
+                                }}
+                                title="全选"
+                            >
+                                ✓全选
+                            </button>
+                            <button
+                                className="panel-control-btn"
+                                onClick={() => {
+                                    const cmd = new SetGeosetVisibilityCommand(geosets.map((_, i) => i));
+                                    commandManager.execute(cmd);
+                                }}
+                                style={{
+                                    background: 'rgba(100, 100, 100, 0.3)',
+                                    border: '1px solid #666',
+                                    borderRadius: 3,
+                                    color: '#aaa',
+                                    cursor: 'pointer',
+                                    padding: '2px 6px',
+                                    fontSize: 10
+                                }}
+                                title="取消全选"
+                            >
+                                取消
+                            </button>
+                        </div>
                     </div>
                     <div style={{ display: 'flex', gap: 4 }}>
                         <button
@@ -508,7 +556,25 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                                             checked={isGeosetVisible(index)}
                                             onChange={(e) => {
                                                 e.stopPropagation();
-                                                toggleGeosetVisibility(index);
+                                                const nativeEvent = e.nativeEvent as MouseEvent;
+                                                const isAlt = nativeEvent.altKey;
+
+                                                if (isAlt) {
+                                                    // Exclusive Visibility Mode
+                                                    console.log('[GeosetVisibilityPanel] Exclusive Visibility for Geoset', index);
+
+                                                    // Hide ALL except current index
+                                                    const allOtherIndices = geosets.map((_, i) => i).filter(i => i !== index);
+                                                    // Pass 'false' for forceShowAllGeosets (disable "Show All")
+                                                    commandManager.execute(new SetGeosetVisibilityCommand(allOtherIndices, false));
+                                                } else {
+                                                    // Standard Toggle Mode
+                                                    // Calculate new hidden IDs for undo support
+                                                    const newHiddenIds = hiddenGeosetIds.includes(index)
+                                                        ? hiddenGeosetIds.filter(id => id !== index)
+                                                        : [...hiddenGeosetIds, index];
+                                                    commandManager.execute(new SetGeosetVisibilityCommand(newHiddenIds));
+                                                }
                                             }}
                                             onClick={(e) => e.stopPropagation()}
                                             style={{ marginRight: 0 }}
@@ -540,8 +606,8 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                         justifyContent: 'space-between',
                         flexShrink: 0
                     }}>
-                        <span>�?{geosets.length} �?/span>=
-                            <span>{selectedIndices.length > 0 ? `已�?${selectedIndices.length}` : ''}</span>
+                        <span>共 {geosets.length} 个</span>
+                        <span>{selectedIndices.length > 0 ? `已选 ${selectedIndices.length}` : ''}</span>
                     </div>
                 )}
 
