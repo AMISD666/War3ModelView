@@ -700,94 +700,69 @@ const MainLayout: React.FC = () => {
 
     const handleOpen = handleImport // Alias for MenuBar
 
-    // HTML5 file drag-drop handlers (works with dragDropEnabled: false in tauri.conf.json)
-    // This allows file drag-drop while not interfering with node tree HTML5 drag-drop
-    const handleFileDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-        // Only show drop effect if dragging files from outside (not internal node drag)
-        if (e.dataTransfer.types.includes('Files')) {
-            e.preventDefault()
-            e.dataTransfer.dropEffect = 'copy'
-            setIsDragging(true)
-        }
-    }, [])
+    // Tauri file drag-drop listeners (works with dragDropEnabled: true and mouse-based node tree drag)
+    useEffect(() => {
+        let unlistenDrop: (() => void) | undefined
+        let unlistenEnter: (() => void) | undefined
+        let unlistenLeave: (() => void) | undefined
 
-    const handleFileDragEnter = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-        if (e.dataTransfer.types.includes('Files')) {
-            e.preventDefault()
-            setIsDragging(true)
-        }
-    }, [])
+        const setupDragDropListeners = async () => {
+            try {
+                const { listen } = await import('@tauri-apps/api/event')
 
-    const handleFileDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
-        // Only hide overlay if truly leaving the container
-        const rect = e.currentTarget.getBoundingClientRect()
-        const x = e.clientX
-        const y = e.clientY
-        if (x <= rect.left || x >= rect.right || y <= rect.top || y >= rect.bottom) {
-            setIsDragging(false)
-        }
-    }, [])
+                // Listen for file drop
+                unlistenDrop = await listen<{ paths: string[] }>('tauri://drag-drop', async (event) => {
+                    setIsDragging(false)
+                    const paths = event.payload.paths
+                    if (!paths || paths.length === 0) return
 
-    const handleFileDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>) => {
-        e.preventDefault()
-        setIsDragging(false)
+                    const filePath = paths[0]
+                    const ext = filePath.toLowerCase().split('.').pop()
 
-        // Check if this is a file drop (not internal node drag)
-        if (!e.dataTransfer.types.includes('Files')) {
-            return
-        }
+                    if (ext !== 'mdx' && ext !== 'mdl') {
+                        console.warn('[MainLayout] Invalid file type:', ext, '- only .mdx and .mdl are supported')
+                        return
+                    }
 
-        const files = e.dataTransfer.files
-        if (!files || files.length === 0) return
+                    console.log('[MainLayout] File dropped (Tauri):', filePath)
 
-        const file = files[0]
-        const fileName = file.name.toLowerCase()
+                    // Check if a model is already loaded - if so, save path and refresh page
+                    const currentModelPath = useModelStore.getState().modelPath
+                    if (currentModelPath) {
+                        console.log('[MainLayout] Model already loaded, refreshing page before importing new model')
+                        localStorage.setItem('pending_model_path', filePath)
+                        window.location.reload()
+                        return
+                    }
 
-        if (!fileName.endsWith('.mdx') && !fileName.endsWith('.mdl')) {
-            console.warn('[MainLayout] Invalid file type:', fileName, '- only .mdx and .mdl are supported')
-            return
-        }
+                    setIsLoading(true)
+                    setZustandLoading(true)
+                    setZustandModelData(null, filePath)
+                    setIsLoading(false)
+                    setZustandLoading(false)
+                })
 
-        // Check if a model is already loaded - if so, need to refresh
-        const currentModelPath = useModelStore.getState().modelPath
-        if (currentModelPath) {
-            console.log('[MainLayout] Model already loaded. For drag-drop, please close the current model first or use menu Open.')
-            alert('已有模型加载。请先关闭当前模型，或使用菜单中的"打开"功能。')
-            return
-        }
+                // Listen for drag enter
+                unlistenEnter = await listen('tauri://drag-enter', () => {
+                    setIsDragging(true)
+                })
 
-        setIsLoading(true)
-        setZustandLoading(true)
+                // Listen for drag leave
+                unlistenLeave = await listen('tauri://drag-leave', () => {
+                    setIsDragging(false)
+                })
 
-        try {
-            // Read file content using FileReader
-            const arrayBuffer = await file.arrayBuffer()
-
-            // Import parsers
-            const { parseMDX, parseMDL } = await import('war3-model')
-
-            let modelData: any
-            if (fileName.endsWith('.mdx')) {
-                modelData = parseMDX(arrayBuffer)
-            } else {
-                // MDL is text format
-                const text = new TextDecoder().decode(arrayBuffer)
-                modelData = parseMDL(text)
+            } catch (error) {
+                console.error('[MainLayout] Failed to setup drag-drop listeners:', error)
             }
+        }
 
-            console.log('[MainLayout] File dropped and parsed (HTML5):', file.name)
+        setupDragDropListeners()
 
-            // Use the file name as virtual path (without actual disk path)
-            // Note: Textures may not load correctly if they rely on relative paths
-            const virtualPath = `dropped:${file.name}`
-
-            setZustandModelData(modelData, virtualPath)
-        } catch (error) {
-            console.error('[MainLayout] Failed to parse dropped file:', error)
-            alert('解析拖放文件失败: ' + error)
-        } finally {
-            setIsLoading(false)
-            setZustandLoading(false)
+        return () => {
+            unlistenDrop?.()
+            unlistenEnter?.()
+            unlistenLeave?.()
         }
     }, [setZustandModelData, setZustandLoading])
 
@@ -1050,10 +1025,6 @@ const MainLayout: React.FC = () => {
                 fontFamily: 'Segoe UI, sans-serif',
                 position: 'relative'
             }}
-            onDragOver={handleFileDragOver}
-            onDragEnter={handleFileDragEnter}
-            onDragLeave={handleFileDragLeave}
-            onDrop={handleFileDrop}
         >
             {/* Drag-and-drop overlay */}
             {isDragging && (

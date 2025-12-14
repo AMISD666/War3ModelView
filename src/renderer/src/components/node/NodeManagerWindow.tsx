@@ -99,50 +99,32 @@ export const NodeManagerWindow: React.FC = () => {
     const [eventDialogVisible, setEventDialogVisible] = useState(false);
     const [ribbonDialogVisible, setRibbonDialogVisible] = useState(false);
 
-    // Manual Drag-Drop State
+    // Mouse-based Drag-Drop State (replaces HTML5 drag-drop to work with Tauri dragDropEnabled)
     const [draggedNodeId, setDraggedNodeId] = useState<number | null>(null);
     const [dropTargetNodeId, setDropTargetNodeId] = useState<number | null>(null);
     const [cutNodeId, setCutNodeId] = useState<number | null>(null); // For Cut/Paste functionality
+    const [isDragging, setIsDragging] = useState(false);
+    const [dragPosition, setDragPosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
 
-    // Use ref to track draggedNodeId in event handlers (state won't update in event listener closure)
+    // Use refs to track state in event handlers (React state won't update in event listener closures)
     const draggedNodeIdRef = React.useRef<number | null>(null);
+    const dropTargetNodeIdRef = React.useRef<number | null>(null);
+    const isDraggingRef = React.useRef(false);
 
     // Ref for tree wrapper
     const treeWrapperRef = React.useRef<HTMLDivElement>(null);
 
-    // Keep ref in sync with state
+    // Keep refs in sync with state
     React.useEffect(() => {
         draggedNodeIdRef.current = draggedNodeId;
     }, [draggedNodeId]);
 
-    // Force enable drop at DOCUMENT level (highest priority)
     React.useEffect(() => {
-        const handleDragOver = (e: DragEvent) => {
-            // Only handle if we're dragging a node
-            if (draggedNodeIdRef.current === null) return;
+        isDraggingRef.current = isDragging;
+    }, [isDragging]);
 
-            e.preventDefault();
-            if (e.dataTransfer) {
-                e.dataTransfer.dropEffect = 'move';
-            }
-        };
-
-        const handleDrop = (e: DragEvent) => {
-            if (draggedNodeIdRef.current === null) return;
-
-            e.preventDefault();
-            console.log('[DocDrag] Drop detected');
-        };
-
-        // Add to document with capture phase
-        document.addEventListener('dragover', handleDragOver, true);
-        document.addEventListener('drop', handleDrop, true);
-
-        return () => {
-            document.removeEventListener('dragover', handleDragOver, true);
-            document.removeEventListener('drop', handleDrop, true);
-        };
-    }, []);
+    // Note: Mouse-based drag-drop is handled entirely in onMouseDown closures
+    // No need for global listeners since each drag operation has its own handlers
 
     // 构建树形数据
     const treeData = useMemo(() => buildTreeData(nodes), [nodes]);
@@ -664,75 +646,87 @@ export const NodeManagerWindow: React.FC = () => {
 
                             return (
                                 <div
-                                    draggable
-                                    onDragStart={(e) => {
-                                        console.log('[ManualDrag] Start:', nodeId);
-                                        setDraggedNodeId(nodeId);
-                                        e.dataTransfer.effectAllowed = 'move';
-                                        e.dataTransfer.setData('text/plain', String(nodeId));
-                                        // Create a custom drag image (optional)
-                                        const dragImage = e.currentTarget.cloneNode(true) as HTMLElement;
-                                        dragImage.style.opacity = '0.7';
-                                        dragImage.style.position = 'absolute';
-                                        dragImage.style.top = '-1000px';
-                                        document.body.appendChild(dragImage);
-                                        e.dataTransfer.setDragImage(dragImage, 0, 0);
-                                        setTimeout(() => document.body.removeChild(dragImage), 0);
-                                    }}
-                                    onDragEnd={() => {
-                                        console.log('[ManualDrag] End');
-                                        setDraggedNodeId(null);
-                                        setDropTargetNodeId(null);
-                                    }}
-                                    onDragOver={(e) => {
+                                    data-node-id={nodeId}
+                                    onMouseDown={(e) => {
+                                        // Only start drag on left button
+                                        if (e.button !== 0) return;
+
+                                        // Prevent text selection during drag
                                         e.preventDefault();
-                                        e.stopPropagation();
-                                        e.dataTransfer.dropEffect = 'move';
-                                        if (draggedNodeId !== null && draggedNodeId !== nodeId) {
-                                            setDropTargetNodeId(nodeId);
-                                        }
-                                    }}
-                                    onDragEnter={(e) => {
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        if (draggedNodeId !== null && draggedNodeId !== nodeId) {
-                                            console.log('[ManualDrag] Enter target:', nodeId);
-                                            setDropTargetNodeId(nodeId);
-                                        }
-                                    }}
-                                    onDragLeave={(e) => {
-                                        e.preventDefault();
-                                        // Only clear if leaving this specific element
-                                        if (dropTargetNodeId === nodeId) {
-                                            // Check if we're leaving to a child - don't clear in that case
-                                            const rect = e.currentTarget.getBoundingClientRect();
-                                            const x = e.clientX;
-                                            const y = e.clientY;
-                                            if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
+
+                                        // Store the starting position
+                                        const startX = e.clientX;
+                                        const startY = e.clientY;
+                                        let dragStarted = false;
+
+                                        const handleMouseMove = (moveEvent: MouseEvent) => {
+                                            const deltaX = Math.abs(moveEvent.clientX - startX);
+                                            const deltaY = Math.abs(moveEvent.clientY - startY);
+
+                                            // Start dragging after threshold
+                                            if (!dragStarted && (deltaX > 5 || deltaY > 5)) {
+                                                console.log('[MouseDrag] Start:', nodeId);
+                                                dragStarted = true;
+                                                draggedNodeIdRef.current = nodeId;
+                                                isDraggingRef.current = true;
+                                                setDraggedNodeId(nodeId);
+                                                setIsDragging(true);
+                                            }
+
+                                            // Update position and target while dragging
+                                            if (dragStarted) {
+                                                setDragPosition({ x: moveEvent.clientX, y: moveEvent.clientY });
+
+                                                // Find element under mouse to determine drop target
+                                                const elementUnderMouse = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY);
+                                                if (elementUnderMouse) {
+                                                    const nodeItem = elementUnderMouse.closest('[data-node-id]') as HTMLElement;
+                                                    if (nodeItem) {
+                                                        const targetId = parseInt(nodeItem.dataset.nodeId || '');
+                                                        if (!isNaN(targetId) && targetId !== nodeId) {
+                                                            dropTargetNodeIdRef.current = targetId;
+                                                            setDropTargetNodeId(targetId);
+                                                        }
+                                                    } else {
+                                                        dropTargetNodeIdRef.current = null;
+                                                        setDropTargetNodeId(null);
+                                                    }
+                                                }
+                                            }
+                                        };
+
+                                        const handleMouseUp = () => {
+                                            document.removeEventListener('mousemove', handleMouseMove);
+                                            document.removeEventListener('mouseup', handleMouseUp);
+
+                                            if (dragStarted) {
+                                                const targetId = dropTargetNodeIdRef.current;
+                                                console.log('[MouseDrag] Drop:', nodeId, '->', targetId);
+
+                                                if (targetId !== null && targetId !== nodeId) {
+                                                    // Perform reparent
+                                                    const { selectedNodeIds } = useSelectionStore.getState();
+                                                    const { reparentNodes } = useModelStore.getState();
+                                                    let nodesToMove = [nodeId];
+                                                    if (selectedNodeIds.includes(nodeId)) {
+                                                        nodesToMove = [...selectedNodeIds];
+                                                    }
+                                                    reparentNodes(nodesToMove, targetId);
+                                                    message.success(nodesToMove.length > 1 ? `已移动 ${nodesToMove.length} 个节点` : '节点已移动');
+                                                }
+
+                                                // End drag
+                                                isDraggingRef.current = false;
+                                                draggedNodeIdRef.current = null;
+                                                dropTargetNodeIdRef.current = null;
+                                                setIsDragging(false);
+                                                setDraggedNodeId(null);
                                                 setDropTargetNodeId(null);
                                             }
-                                        }
-                                    }}
-                                    onDrop={(e) => {
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        console.log('[ManualDrag] Drop:', draggedNodeId, '->', nodeId);
+                                        };
 
-                                        if (draggedNodeId !== null && draggedNodeId !== nodeId) {
-                                            // Check for circular reference (can't drop parent onto child)
-                                            // Simple check: don't allow if target is in selected nodes
-                                            let nodesToMove = [draggedNodeId];
-                                            if (selectedNodeIds.includes(draggedNodeId)) {
-                                                nodesToMove = [...selectedNodeIds];
-                                            }
-
-                                            // Perform reparent
-                                            reparentNodes(nodesToMove, nodeId);
-                                            message.success(nodesToMove.length > 1 ? `已移动 ${nodesToMove.length} 个节点` : '节点已移动');
-                                        }
-
-                                        setDraggedNodeId(null);
-                                        setDropTargetNodeId(null);
+                                        document.addEventListener('mousemove', handleMouseMove);
+                                        document.addEventListener('mouseup', handleMouseUp);
                                     }}
                                     style={{
                                         display: 'flex',
@@ -740,12 +734,13 @@ export const NodeManagerWindow: React.FC = () => {
                                         width: '100%',
                                         minWidth: 0,
                                         padding: '2px 4px',
-                                        cursor: 'grab',
+                                        cursor: isDragging && draggedNodeId === nodeId ? 'grabbing' : 'grab',
                                         borderRadius: '2px',
                                         backgroundColor: isDropTarget ? 'rgba(24, 144, 255, 0.3)' : 'transparent',
                                         border: isDropTarget ? '1px dashed #1890ff' : '1px solid transparent',
-                                        opacity: isDragging ? 0.5 : (isCut ? 0.5 : 1),
-                                        transition: 'background-color 0.15s, border 0.15s'
+                                        opacity: isDragging && draggedNodeId === nodeId ? 0.5 : (isCut ? 0.5 : 1),
+                                        transition: 'background-color 0.15s, border 0.15s',
+                                        userSelect: 'none'
                                     }}
                                 >
                                     <span style={{ marginRight: 8, color: '#aaa' }}>{getNodeIcon(nodeData.type)}</span>
