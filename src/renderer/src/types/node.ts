@@ -213,4 +213,5 @@ export interface TreeNode {
     icon?: React.ReactNode;
     children?: TreeNode[];
     data: ModelNode;      // 原始节点数据
+    isVirtualRoot?: boolean; // 是否为虚拟根节点
 }

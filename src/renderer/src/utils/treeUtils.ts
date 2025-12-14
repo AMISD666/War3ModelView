@@ -7,6 +7,7 @@ import { getNodeIcon } from './nodeUtils';
 
 /**
  * 将扁平的节点数组转换为树形结构
+ * 添加一个虚拟根节点（ObjectId = -1）作为所有顶级节点的父节点
  */
 export function buildTreeData(nodes: ModelNode[]): TreeNode[] {
     const nodeMap = new Map<number, TreeNode>();
@@ -46,7 +47,24 @@ export function buildTreeData(nodes: ModelNode[]): TreeNode[] {
         }
     });
 
-    return rootNodes;
+    // 如果没有节点，直接返回空数组
+    if (nodes.length === 0) {
+        return [];
+    }
+
+    // 创建虚拟根节点，包含所有顶级节点
+    const virtualRootNode: TreeNode = {
+        key: '-1',
+        value: -1,
+        title: '🌐 模型根节点',
+        type: undefined as any,  // 虚拟节点没有类型
+        icon: null,
+        children: rootNodes,
+        data: { ObjectId: -1, Name: '模型根节点', Parent: undefined } as any,
+        isVirtualRoot: true  // 标记为虚拟根节点
+    };
+
+    return [virtualRootNode];
 }
 
 /**

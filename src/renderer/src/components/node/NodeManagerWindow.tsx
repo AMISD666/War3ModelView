@@ -258,6 +258,82 @@ export const NodeManagerWindow: React.FC = () => {
     // Manual drag-drop is implemented in titleRender instead.
 
     const getContextMenuItems = (nodeId: number): MenuProps['items'] => {
+        // Special handling for virtual root node (-1)
+        if (nodeId === -1) {
+            const items: MenuProps['items'] = [
+                {
+                    key: 'add_child',
+                    label: '新建子节点',
+                    icon: <PlusOutlined />,
+                    children: [
+                        {
+                            key: 'add_bone',
+                            label: '骨骼 (Bone)',
+                            onClick: () => {
+                                addNode({ type: NodeType.BONE, Name: 'New Bone', Parent: -1 });
+                                message.success('已在根节点下创建骨骼');
+                            }
+                        },
+                        {
+                            key: 'add_helper',
+                            label: '辅助器 (Helper)',
+                            onClick: () => {
+                                addNode({ type: NodeType.HELPER, Name: 'New Helper', Parent: -1 });
+                                message.success('已在根节点下创建辅助器');
+                            }
+                        },
+                        {
+                            key: 'add_attachment',
+                            label: '挂接点 (Attachment)',
+                            onClick: () => {
+                                addNode({ type: NodeType.ATTACHMENT, Name: 'New Attachment', Parent: -1 });
+                                message.success('已在根节点下创建挂接点');
+                            }
+                        },
+                        {
+                            key: 'add_particle',
+                            label: '粒子发射器2 (ParticleEmitter2)',
+                            onClick: () => {
+                                addNode({ type: NodeType.PARTICLE_EMITTER_2, Name: 'New Particle', Parent: -1 });
+                                message.success('已在根节点下创建粒子发射器');
+                            }
+                        },
+                        {
+                            key: 'add_light',
+                            label: '灯光 (Light)',
+                            onClick: () => {
+                                addNode({ type: NodeType.LIGHT, Name: 'New Light', Parent: -1 });
+                                message.success('已在根节点下创建灯光');
+                            }
+                        }
+                    ]
+                },
+                { type: 'divider' },
+                {
+                    key: 'paste',
+                    label: '粘贴节点',
+                    disabled: !clipboardNode,
+                    onClick: () => {
+                        pasteNode(-1);
+                        message.success('节点已粘贴到根节点');
+                    }
+                },
+                {
+                    key: 'moveHere',
+                    label: '移动到此处(作为根节点)',
+                    disabled: cutNodeId === null,
+                    onClick: () => {
+                        if (cutNodeId !== null) {
+                            reparentNodes([cutNodeId], -1);
+                            message.success('节点已移动到根节点');
+                            setCutNodeId(null);
+                        }
+                    }
+                }
+            ];
+            return items;
+        }
+
         const node = nodes.find(n => n.ObjectId === nodeId);
         if (!node) return [];
 
@@ -640,8 +716,9 @@ export const NodeManagerWindow: React.FC = () => {
                         blockNode
                         titleRender={(nodeData: any) => {
                             const nodeId = nodeData.data?.ObjectId ?? parseInt(nodeData.key);
+                            const isVirtualRoot = nodeData.isVirtualRoot === true || nodeId === -1;
                             const isDropTarget = dropTargetNodeId === nodeId;
-                            const isDragging = draggedNodeId === nodeId;
+                            const isDraggingThis = draggedNodeId === nodeId;
                             const isCut = cutNodeId === nodeId;
 
                             return (
@@ -650,6 +727,9 @@ export const NodeManagerWindow: React.FC = () => {
                                     onMouseDown={(e) => {
                                         // Only start drag on left button
                                         if (e.button !== 0) return;
+
+                                        // Don't allow dragging the virtual root node
+                                        if (isVirtualRoot) return;
 
                                         // Prevent text selection during drag
                                         e.preventDefault();
@@ -683,6 +763,7 @@ export const NodeManagerWindow: React.FC = () => {
                                                     const nodeItem = elementUnderMouse.closest('[data-node-id]') as HTMLElement;
                                                     if (nodeItem) {
                                                         const targetId = parseInt(nodeItem.dataset.nodeId || '');
+                                                        // Allow dropping to virtual root (-1) or any other node except self
                                                         if (!isNaN(targetId) && targetId !== nodeId) {
                                                             dropTargetNodeIdRef.current = targetId;
                                                             setDropTargetNodeId(targetId);
@@ -703,6 +784,7 @@ export const NodeManagerWindow: React.FC = () => {
                                                 const targetId = dropTargetNodeIdRef.current;
                                                 console.log('[MouseDrag] Drop:', nodeId, '->', targetId);
 
+                                                // Allow dropping to -1 (root) or any valid node
                                                 if (targetId !== null && targetId !== nodeId) {
                                                     // Perform reparent
                                                     const { selectedNodeIds } = useSelectionStore.getState();
@@ -712,7 +794,11 @@ export const NodeManagerWindow: React.FC = () => {
                                                         nodesToMove = [...selectedNodeIds];
                                                     }
                                                     reparentNodes(nodesToMove, targetId);
-                                                    message.success(nodesToMove.length > 1 ? `已移动 ${nodesToMove.length} 个节点` : '节点已移动');
+                                                    message.success(
+                                                        targetId === -1
+                                                            ? `已移动到根节点`
+                                                            : (nodesToMove.length > 1 ? `已移动 ${nodesToMove.length} 个节点` : '节点已移动')
+                                                    );
                                                 }
 
                                                 // End drag
@@ -734,20 +820,35 @@ export const NodeManagerWindow: React.FC = () => {
                                         width: '100%',
                                         minWidth: 0,
                                         padding: '2px 4px',
-                                        cursor: isDragging && draggedNodeId === nodeId ? 'grabbing' : 'grab',
+                                        cursor: isVirtualRoot ? 'default' : (isDragging && draggedNodeId === nodeId ? 'grabbing' : 'grab'),
                                         borderRadius: '2px',
-                                        backgroundColor: isDropTarget ? 'rgba(24, 144, 255, 0.3)' : 'transparent',
+                                        backgroundColor: isDropTarget ? 'rgba(24, 144, 255, 0.3)' : (isVirtualRoot ? 'rgba(80, 80, 80, 0.3)' : 'transparent'),
                                         border: isDropTarget ? '1px dashed #1890ff' : '1px solid transparent',
                                         opacity: isDragging && draggedNodeId === nodeId ? 0.5 : (isCut ? 0.5 : 1),
                                         transition: 'background-color 0.15s, border 0.15s',
                                         userSelect: 'none'
                                     }}
                                 >
-                                    <span style={{ marginRight: 8, color: '#aaa' }}>{getNodeIcon(nodeData.type)}</span>
-                                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+                                    <span style={{ marginRight: 8, color: isVirtualRoot ? '#1890ff' : '#aaa' }}>
+                                        {isVirtualRoot ? '🌐' : getNodeIcon(nodeData.type)}
+                                    </span>
+                                    <span style={{
+                                        flex: 1,
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        whiteSpace: 'nowrap',
+                                        minWidth: 0,
+                                        fontWeight: isVirtualRoot ? 'bold' : 'normal',
+                                        color: isVirtualRoot ? '#1890ff' : 'inherit'
+                                    }}>
                                         {nodeData.title}
                                     </span>
-                                    <span style={{ color: '#666', fontSize: '10px', marginLeft: '8px' }}>{nodeData.data.ObjectId ?? ''}</span>
+                                    {/* Don't show ObjectId for virtual root */}
+                                    {!isVirtualRoot && (
+                                        <span style={{ color: '#666', fontSize: '10px', marginLeft: '8px' }}>
+                                            {nodeData.data.ObjectId ?? ''}
+                                        </span>
+                                    )}
                                 </div>
                             );
                         }}
