@@ -1,9 +1,28 @@
-/**
- * Tree Data Utility Functions
- */
-
-import { ModelNode, TreeNode } from '../types/node';
+import { ModelNode, TreeNode, NodeType, ParticleEmitter2Node, RibbonEmitterNode } from '../types/node';
 import { getNodeIcon } from './nodeUtils';
+
+/**
+ * 生成节点显示标题（带类型前缀和贴图/材质ID）
+ */
+function getNodeDisplayTitle(node: ModelNode): string {
+    const baseName = node.Name || `未命名节点 ${node.ObjectId}`;
+
+    // 为粒子/丝带发射器添加类型前缀
+    switch (node.type) {
+        case NodeType.PARTICLE_EMITTER_2: {
+            const pe = node as ParticleEmitter2Node;
+            const texId = pe.TextureID ?? '?';
+            return `粒2[${texId}] ${baseName}`;
+        }
+        case NodeType.RIBBON_EMITTER: {
+            const re = node as RibbonEmitterNode;
+            const matId = re.MaterialID ?? '?';
+            return `丝带[${matId}] ${baseName}`;
+        }
+        default:
+            return baseName;
+    }
+}
 
 /**
  * 将扁平的节点数组转换为树形结构
@@ -18,7 +37,7 @@ export function buildTreeData(nodes: ModelNode[]): TreeNode[] {
         const treeNode: TreeNode = {
             key: String(objectId),
             value: objectId,  // 确保 value 始终有效
-            title: node.Name || `未命名节点 ${objectId}`,
+            title: getNodeDisplayTitle(node),
             type: node.type,
             icon: getNodeIcon(node.type),
             children: [],

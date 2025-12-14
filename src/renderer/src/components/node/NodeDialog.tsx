@@ -49,12 +49,10 @@ const NodeDialog: React.FC<NodeDialogProps> = ({ visible, nodeId, onClose }) => 
                 name: currentNode.Name,
                 parent: currentNode.Parent,
                 objectId: currentNode.ObjectId,
-                // Axis conversion for UI display: War3 data [X,Y,Z] -> UI [X,Y,Z]
-                // War3 data_X corresponds to -display_Z, data_Z corresponds to +display_X
-                // So: UI_X = data[2], UI_Y = data[1], UI_Z = -data[0]
-                pivotX: currentNode.PivotPoint?.[2] || 0,
+                // Direct 1:1 PivotPoint mapping - no swap
+                pivotX: currentNode.PivotPoint?.[0] || 0,
                 pivotY: currentNode.PivotPoint?.[1] || 0,
-                pivotZ: -(currentNode.PivotPoint?.[0] || 0),
+                pivotZ: currentNode.PivotPoint?.[2] || 0,
                 dontInheritTranslation: currentNode.DontInherit?.Translation || false,
                 dontInheritRotation: currentNode.DontInherit?.Rotation || false,
                 dontInheritScaling: currentNode.DontInherit?.Scaling || false,
@@ -86,13 +84,12 @@ const NodeDialog: React.FC<NodeDialogProps> = ({ visible, nodeId, onClose }) => 
             }
 
             // 构建更新后的节点数据
+            // Direct 1:1 PivotPoint mapping
             const updatedNode: ModelNode = {
                 ...currentNode,
                 Name: values.name,
                 Parent: values.parent,
-                // Reverse axis conversion for saving: UI [X,Y,Z] -> War3 data [X,Y,Z]
-                // data[0] = -UI_Z, data[1] = UI_Y, data[2] = UI_X
-                PivotPoint: [-values.pivotZ, values.pivotY, values.pivotX],
+                PivotPoint: [values.pivotX, values.pivotY, values.pivotZ],
                 DontInherit: {
                     Translation: values.dontInheritTranslation,
                     Rotation: values.dontInheritRotation,

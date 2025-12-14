@@ -94,10 +94,21 @@ const RibbonEmitterDialog: React.FC<RibbonEmitterDialogProps> = ({ visible, node
         setDynamicProps(prev => ({ ...prev, [prop]: checked }));
     };
 
-    // Helper to convert array [r, g, b] (0-1) to Antd Color
-    const toAntdColor = (rgb?: [number, number, number]) => {
-        if (!rgb) return 'rgb(255, 255, 255)';
-        return `rgb(${Math.round(rgb[0] * 255)}, ${Math.round(rgb[1] * 255)}, ${Math.round(rgb[2] * 255)})`;
+    // Helper to convert array/Float32Array [r, g, b] (0-1) to Antd Color
+    const toAntdColor = (rgb?: number[] | Float32Array) => {
+        if (!rgb || rgb.length < 3) {
+            console.log('[RibbonEmitterDialog] toAntdColor: No valid rgb, defaulting to white');
+            return 'rgb(255, 255, 255)';
+        }
+        // Convert to array if Float32Array
+        const arr = Array.from(rgb);
+        console.log('[RibbonEmitterDialog] toAntdColor: Input rgb values:', arr);
+        // Values should be 0-1 range from MDX parsing
+        const r = Math.round(arr[0] * 255);
+        const g = Math.round(arr[1] * 255);
+        const b = Math.round(arr[2] * 255);
+        console.log('[RibbonEmitterDialog] toAntdColor: Output rgb:', r, g, b);
+        return `rgb(${r}, ${g}, ${b})`;
     };
 
     // Helper to convert Antd Color to array [r, g, b] (0-1)
@@ -128,15 +139,36 @@ const RibbonEmitterDialog: React.FC<RibbonEmitterDialogProps> = ({ visible, node
         })) || [])
     ];
 
+    // Helper: Check if value is AnimVector object
+    const isAnimVector = (val: any): boolean =>
+        val !== null && val !== undefined && typeof val === 'object' && ('Keys' in val || Array.isArray(val?.Keys));
+
+    // Helper: Get static value or default for AnimVector
+    const getStaticOrDefault = (val: any, defaultVal: number): number => {
+        if (isAnimVector(val)) return defaultVal;
+        return typeof val === 'number' ? val : defaultVal;
+    };
+
     useEffect(() => {
         if (visible && currentNode) {
+            // Detect AnimVector properties and set dynamic flags
+            const newDynamicProps: Record<string, boolean> = {
+                Alpha: isAnimVector(currentNode.Alpha),
+                Visibility: isAnimVector((currentNode as any).Visibility),
+                HeightAbove: isAnimVector(currentNode.HeightAbove),
+                HeightBelow: isAnimVector(currentNode.HeightBelow),
+                TextureSlot: isAnimVector(currentNode.TextureSlot),
+                Color: isAnimVector(currentNode.Color),
+            };
+            setDynamicProps(newDynamicProps);
+
             form.setFieldsValue({
-                HeightAbove: currentNode.HeightAbove ?? 0,
-                HeightBelow: currentNode.HeightBelow ?? 0,
-                Alpha: currentNode.Alpha ?? 1,
-                Visibility: 1,
-                TextureSlot: currentNode.TextureSlot ?? 0,
-                Color: toAntdColor(currentNode.Color),
+                HeightAbove: getStaticOrDefault(currentNode.HeightAbove, 0),
+                HeightBelow: getStaticOrDefault(currentNode.HeightBelow, 0),
+                Alpha: getStaticOrDefault(currentNode.Alpha, 1),
+                Visibility: getStaticOrDefault((currentNode as any).Visibility, 1),
+                TextureSlot: getStaticOrDefault(currentNode.TextureSlot, 0),
+                Color: toAntdColor(Array.isArray(currentNode.Color) ? currentNode.Color : undefined),
                 MaterialID: currentNode.MaterialID ?? -1,
                 EmissionRate: currentNode.EmissionRate ?? 0,
                 LifeSpan: currentNode.LifeSpan ?? 0,
@@ -144,7 +176,6 @@ const RibbonEmitterDialog: React.FC<RibbonEmitterDialogProps> = ({ visible, node
                 Columns: currentNode.Columns ?? 1,
                 Gravity: currentNode.Gravity ?? 0,
             });
-            setDynamicProps({});
         } else if (visible) {
             form.setFieldsValue({
                 HeightAbove: 0,
@@ -366,7 +397,7 @@ const RibbonEmitterDialog: React.FC<RibbonEmitterDialogProps> = ({ visible, node
                             <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
                                 <span style={{ width: 70, color: '#888' }}>持续时间:</span>
                                 <Form.Item name="LifeSpan" noStyle>
-                                    <InputNumber style={{ ...inputStyle, flex: 1 }} size="small" min={0} step={0.1} />
+                                    <InputNumber style={{ ...inputStyle, flex: 1 }} size="small" min={0} step={0.01} precision={2} />
                                 </Form.Item>
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center' }}>

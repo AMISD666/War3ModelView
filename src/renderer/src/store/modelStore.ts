@@ -192,7 +192,25 @@ function extractNodesFromModel(data: ModelData | null): ModelNode[] {
         }
     });
 
-    extract(['RibbonEmitter', 'RibbonEmitters'], NodeType.RIBBON_EMITTER);
+    // Special handling for RibbonEmitter to convert Color Float32Array
+    const ribbonKeys = ['RibbonEmitter', 'RibbonEmitters'];
+    ribbonKeys.forEach(key => {
+        if (d[key] && Array.isArray(d[key])) {
+            d[key].forEach((item: any) => {
+                const node: any = { ...item, type: NodeType.RIBBON_EMITTER };
+
+                // Color - convert Float32Array to array for UI
+                if (item.Color instanceof Float32Array) {
+                    node.Color = Array.from(item.Color);
+                    console.log('[ModelStore] RibbonEmitter Color converted:', node.Color);
+                } else if (Array.isArray(item.Color)) {
+                    node.Color = item.Color;
+                }
+
+                nodes.push(node as ModelNode);
+            });
+        }
+    });
     extract(['EventObject', 'EventObjects'], NodeType.EVENT_OBJECT);
     extract(['CollisionShape', 'CollisionShapes'], NodeType.COLLISION_SHAPE);
     extract(['Camera', 'Cameras'], NodeType.CAMERA);
