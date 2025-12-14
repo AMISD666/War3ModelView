@@ -57,11 +57,26 @@ export function validateParticleEmitter2(emitter: any, idx: number, textureCount
         )
     }
 
-    // Convert UV anim arrays to Float32Array if present
+    // Convert UV anim arrays if needed
+    // Handle object format {"0": n, "1": n, "2": n} from store spread operations
+    // BUT preserve Uint32Array (from MDX parser) and Float32Array (already converted)
     const uvAnimProps = ['LifeSpanUVAnim', 'DecayUVAnim', 'TailUVAnim', 'TailDecayUVAnim']
     uvAnimProps.forEach(prop => {
-        if (emitter[prop] && !(emitter[prop] instanceof Float32Array)) {
-            emitter[prop] = new Float32Array(emitter[prop])
+        let val = emitter[prop]
+        if (!val) return
+
+        // Skip if already a typed array (Uint32Array from parser, or Float32Array)
+        if (val instanceof Uint32Array || val instanceof Float32Array) {
+            return
+        }
+
+        // If it's an object with numeric keys (from spread), convert to array first
+        if (!Array.isArray(val) && typeof val === 'object' && '0' in val) {
+            val = [val['0'] ?? 0, val['1'] ?? 0, val['2'] ?? 1]
+        }
+        // Convert to Uint32Array (frame indices are integers)
+        if (Array.isArray(val)) {
+            emitter[prop] = new Uint32Array(val)
         }
     })
 
