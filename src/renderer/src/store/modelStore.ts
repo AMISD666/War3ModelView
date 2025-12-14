@@ -170,6 +170,21 @@ function extractNodesFromModel(data: ModelData | null): ModelNode[] {
                     node.SegmentColor = item.SegmentColor.map((c: any) => Array.from(c));
                 }
 
+                // Convert UV animation TypedArrays to regular arrays for UI
+                // These are Uint32Array(3) [start, end, repeat] in parsed MDX
+                if (item.LifeSpanUVAnim) {
+                    node.LifeSpanUVAnim = Array.from(item.LifeSpanUVAnim);
+                }
+                if (item.DecayUVAnim) {
+                    node.DecayUVAnim = Array.from(item.DecayUVAnim);
+                }
+                if (item.TailUVAnim) {
+                    node.TailUVAnim = Array.from(item.TailUVAnim);
+                }
+                if (item.TailDecayUVAnim) {
+                    node.TailDecayUVAnim = Array.from(item.TailDecayUVAnim);
+                }
+
                 // Map FrameFlags
                 if (item.FrameFlags !== undefined) {
                     node.Head = (item.FrameFlags & 1) !== 0;

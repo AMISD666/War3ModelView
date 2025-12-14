@@ -561,7 +561,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
                                         <span style={{ marginRight: 4, fontSize: 12, width: 60 }}>持续时间:</span>
-                                        <Form.Item name="LifeSpan" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
+                                        <Form.Item name="LifeSpan" noStyle><InputNumber size="small" style={{ flex: 1 }} precision={1} /></Form.Item>
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
                                         <span style={{ marginRight: 4, fontSize: 12, width: 60 }}>优先平面:</span>
@@ -569,7 +569,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
                                         <span style={{ marginRight: 4, fontSize: 12, width: 30 }}>时间:</span>
-                                        <Form.Item name="Time" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
+                                        <Form.Item name="Time" noStyle><InputNumber size="small" style={{ flex: 1 }} precision={1} /></Form.Item>
                                     </div>
                                 </div>
                                 <div style={{ display: 'flex', gap: 16 }}>
@@ -579,7 +579,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
                                         <span style={{ marginRight: 4, fontSize: 12, width: 60 }}>尾部长度:</span>
-                                        <Form.Item name="TailLength" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
+                                        <Form.Item name="TailLength" noStyle><InputNumber size="small" style={{ flex: 1 }} precision={1} /></Form.Item>
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
                                         <span style={{ marginRight: 4, fontSize: 12, width: 60 }}>可替换ID:</span>
