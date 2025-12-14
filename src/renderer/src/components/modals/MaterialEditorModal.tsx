@@ -190,7 +190,9 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 
         if (checked) {
             const currentVal = layer[field]
-            const initialVal = typeof currentVal === 'number' ? currentVal : (vectorSize === 1 ? 1 : 0)
+            // For TextureID, default to 0 (first texture); for Alpha, default to 1
+            const defaultVal = field === 'TextureID' ? 0 : 1
+            const initialVal = typeof currentVal === 'number' ? currentVal : defaultVal
             const animVector = {
                 Keys: [{ Frame: 0, Vector: vectorSize === 1 ? [initialVal] : new Array(vectorSize).fill(0) }],
                 LineType: 0,
@@ -199,7 +201,8 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { [field]: animVector })
         } else {
             const currentVal = layer[field]
-            let staticVal = 1
+            // For TextureID, default to 0; for Alpha, default to 1
+            let staticVal = field === 'TextureID' ? 0 : 1
             if (currentVal && currentVal.Keys && currentVal.Keys.length > 0) {
                 staticVal = currentVal.Keys[0].Vector[0]
             }
@@ -396,14 +399,27 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                                     </div>
                                     <div>
                                         <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>贴图 ID:</Text>
-                                        <Select
-                                            size="small"
-                                            style={{ width: '100%' }}
-                                            value={selectedLayer.TextureID}
-                                            onChange={(v) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TextureID: v })}
-                                            options={textureOptions}
-                                            popupClassName="dark-theme-select-dropdown"
-                                        />
+                                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                            <Checkbox
+                                                checked={selectedLayer.TextureID && typeof selectedLayer.TextureID !== 'number'}
+                                                onChange={(e) => handleAnimToggle('TextureID', e.target.checked)}
+                                                style={{ color: '#e8e8e8' }}
+                                            >
+                                                动态
+                                            </Checkbox>
+                                            {selectedLayer.TextureID && typeof selectedLayer.TextureID !== 'number' ? (
+                                                <Button size="small" onClick={() => openKeyframeEditor('TextureID', 1)}>编辑动画</Button>
+                                            ) : (
+                                                <Select
+                                                    size="small"
+                                                    style={{ width: '150px' }}
+                                                    value={typeof selectedLayer.TextureID === 'number' ? selectedLayer.TextureID : 0}
+                                                    onChange={(v) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TextureID: v })}
+                                                    options={textureOptions}
+                                                    popupClassName="dark-theme-select-dropdown"
+                                                />
+                                            )}
+                                        </div>
                                     </div>
                                     <div>
                                         <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>纹理动画 (TVertexAnim):</Text>
@@ -477,6 +493,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                     title={`编辑 ${editingField}`}
                     vectorSize={editingVectorSize}
                     globalSequences={(modelData as any)?.GlobalSequences || []}
+                    fieldName={editingField || ''}
                 />
             )}
         </DraggableModal>

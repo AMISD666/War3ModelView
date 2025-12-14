@@ -14,6 +14,7 @@ interface KeyframeEditorProps {
     vectorSize?: number
     globalSequences?: number[]
     sequences?: any[]
+    fieldName?: string  // 'TextureID', 'Alpha', etc.
 }
 
 const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
@@ -24,8 +25,10 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
     title = 'Keyframe Editor',
     vectorSize = 1,
     globalSequences = [],
-    sequences = []
+    sequences = [],
+    fieldName = ''
 }) => {
+    const modelData = useModelStore(state => state.modelData) as any
     const [text, setText] = useState('')
     const [lineType, setLineType] = useState(0)
     const [globalSeqId, setGlobalSeqId] = useState<number | null>(null)
@@ -39,22 +42,38 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
     const [gridCols, setGridCols] = useState<number>(4)
     const [gridInterval, setGridInterval] = useState<number>(66)
 
+    // TextureID Batch Generation State
+    const textureCount = modelData?.Textures?.length || 1
+    const [textureBatchCount, setTextureBatchCount] = useState<number>(textureCount)
+    const [textureBatchInterval, setTextureBatchInterval] = useState<number>(100)
+
+    // Check if editing TextureID
+    const isTextureIDField = fieldName === 'TextureID' || title.includes('TextureID')
+
     // Helper to format a single vector/scalar value
-    const formatValue = (val: number | number[] | Float32Array): string => {
+    const formatValue = (val: number | number[] | Float32Array | undefined | null): string => {
+        // Handle undefined/null
+        if (val === undefined || val === null) {
+            return vectorSize === 1 ? '0' : `{ ${new Array(vectorSize).fill('0').join(', ')} }`
+        }
+
         let nums: number[] = []
         if (typeof val === 'number') {
             nums = [val]
         } else if (Array.isArray(val)) {
             nums = val
         } else {
-            nums = Array.from(val)
+            nums = Array.from(val as Float32Array)
         }
 
         // Format numbers
-        const parts = nums.map(n => Number((n || 0).toFixed(4)).toString())
+        const parts = nums.map(n => {
+            const num = n ?? 0
+            return Number(num.toFixed(4)).toString()
+        })
 
         // Scalar: just the number
-        if (vectorSize === 1) return parts[0]
+        if (vectorSize === 1) return parts[0] || '0'
 
         // Vector: { a, b, c }
         return `{ ${parts.join(', ')} }`
@@ -239,19 +258,63 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
     // Helper to normalize keys (handle Frame/Time and Vector/Value aliases)
     const normalizeKeys = (keys: any[]): any[] => {
         if (!Array.isArray(keys)) return [];
-        return keys.map(k => ({
-            Frame: k.Frame ?? k.Time ?? 0,
-            Vector: k.Vector ?? k.Value ?? new Array(vectorSize).fill(0),
-            InTan: k.InTan ?? k.InTan ?? new Array(vectorSize).fill(0),
-            OutTan: k.OutTan ?? k.OutTan ?? new Array(vectorSize).fill(0)
-        }));
+        return keys.map(k => {
+            // Handle various data formats: Vector, Value, or direct number
+            let vector = k.Vector ?? k.Value;
+
+            if (vector === undefined || vector === null) {
+                vector = new Array(vectorSize).fill(0);
+            } else if (typeof vector === 'number') {
+                vector = [vector];
+            } else if (Array.isArray(vector)) {
+                // Already an array, use as-is
+            } else if (typeof vector === 'object') {
+                // Handle object format like {"0": 0, "1": 1} - convert to array
+                // This happens with Int32Array or similar typed arrays serialized as objects
+                const objKeys = Object.keys(vector).sort((a, b) => parseInt(a) - parseInt(b));
+                vector = objKeys.map(key => vector[key]);
+                if (vector.length === 0) {
+                    vector = new Array(vectorSize).fill(0);
+                }
+            } else {
+                // Fallback to default
+                vector = new Array(vectorSize).fill(0);
+            }
+
+            return {
+                Frame: k.Frame ?? k.Time ?? 0,
+                Vector: vector,
+                InTan: k.InTan ?? new Array(vectorSize).fill(0),
+                OutTan: k.OutTan ?? new Array(vectorSize).fill(0)
+            };
+        });
     };
+
+    // Handle TextureID Batch Generation
+    const handleTextureIDBatchGenerate = () => {
+        const newKeys: any[] = []
+        // Generate frames for each texture (0 to textureBatchCount inclusive)
+        // This creates textureBatchCount+1 keyframes: 0, 1, 2, ..., textureBatchCount
+        for (let i = 0; i <= textureBatchCount; i++) {
+            newKeys.push({
+                Frame: i * textureBatchInterval,
+                Vector: [i],
+                InTan: [0],
+                OutTan: [0]
+            })
+        }
+        const newText = generateText(newKeys, lineType)
+        setText(newText)
+    }
 
     useEffect(() => {
         if (visible) {
+            console.log('[KeyframeEditor] Opening with initialData:', initialData, 'fieldName:', fieldName)
             if (initialData && initialData.Keys && initialData.Keys.length > 0) {
+                console.log('[KeyframeEditor] Raw Keys:', JSON.stringify(initialData.Keys))
                 // Normalize and load existing data
                 const normalizedKeys = normalizeKeys(initialData.Keys);
+                console.log('[KeyframeEditor] Normalized Keys:', JSON.stringify(normalizedKeys))
                 setLineType(initialData.LineType || 0)
                 setGlobalSeqId(initialData.GlobalSeqId)
                 setText(generateText(normalizedKeys, initialData.LineType || 0))
@@ -370,8 +433,44 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
                         </Col>
                     </Row>
 
-                    {/* Simplified Batch Generation Section - Only for Scalars */}
-                    {vectorSize === 1 && (
+                    {/* TextureID Batch Generation Section */}
+                    {isTextureIDField && (
+                        <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid #4a4a4a' }}>
+                            <div style={{ marginBottom: 8, color: '#b0b0b0' }}>贴图ID批量生成</div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                    <span style={{ color: '#ccc' }}>图片张数:</span>
+                                    <InputNumber
+                                        min={1}
+                                        value={textureBatchCount}
+                                        onChange={(v) => setTextureBatchCount(v || 1)}
+                                        style={{ width: 70 }}
+                                        size="small"
+                                    />
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                    <span style={{ color: '#ccc' }}>间隔帧:</span>
+                                    <InputNumber
+                                        min={1}
+                                        value={textureBatchInterval}
+                                        onChange={(v) => setTextureBatchInterval(v || 100)}
+                                        style={{ width: 70 }}
+                                        size="small"
+                                    />
+                                </div>
+                                <Button
+                                    type="primary"
+                                    size="small"
+                                    onClick={handleTextureIDBatchGenerate}
+                                >
+                                    生成
+                                </Button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Simplified Batch Generation Section - Only for Scalars (NOT TextureID) */}
+                    {vectorSize === 1 && !isTextureIDField && (
                         <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid #4a4a4a' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>

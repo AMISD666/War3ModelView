@@ -26,7 +26,9 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
         if (checked) {
             // Convert to AnimVector
             const currentVal = layer[field]
-            const initialVal = typeof currentVal === 'number' ? currentVal : (vectorSize === 1 ? 1 : 0)
+            // For TextureID, default to 0 (first texture); for Alpha, default to 1
+            const defaultVal = field === 'TextureID' ? 0 : 1
+            const initialVal = typeof currentVal === 'number' ? currentVal : defaultVal
 
             // Create default AnimVector structure
             const animVector = {
@@ -40,7 +42,8 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
         } else {
             // Convert to static value (take first key or default)
             const currentVal = layer[field]
-            let staticVal = 1
+            // For TextureID, default to 0; for Alpha, default to 1
+            let staticVal = field === 'TextureID' ? 0 : 1
             if (currentVal && currentVal.Keys && currentVal.Keys.length > 0) {
                 staticVal = currentVal.Keys[0].Vector[0]
             }
@@ -82,7 +85,7 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
     })) || []
 
     const isAlphaAnimated = layer.Alpha && typeof layer.Alpha !== 'number'
-    // const isTextureIDAnimated = layer.TextureID && typeof layer.TextureID !== 'number' // TextureID animation is complex (Int), let's focus on Alpha first
+    const isTextureIDAnimated = layer.TextureID && typeof layer.TextureID !== 'number'
 
     return (
         <div style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: '10px' }}>
@@ -124,17 +127,35 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
                 <div style={{ border: '1px solid #444', padding: 10, borderRadius: 4 }}>
                     <h4 style={{ margin: '0 0 10px 0', color: '#aaa' }}>贴图 ID (Texture ID)</h4>
                     <div style={{ marginBottom: 10 }}>
-                        <Checkbox disabled>动态化 (Animated)</Checkbox>
+                        <Checkbox
+                            checked={isTextureIDAnimated}
+                            onChange={(e) => handleAnimToggle('TextureID', e.target.checked, 1)}
+                        >
+                            动态化 (Animated)
+                        </Checkbox>
                     </div>
                     <Space direction="vertical" style={{ width: '100%' }}>
-                        <Button size="small" disabled>贴图 ID</Button>
-                        <Select
+                        <Button
                             size="small"
-                            style={{ width: '100%' }}
-                            value={typeof layer.TextureID === 'number' ? layer.TextureID : 0}
-                            onChange={(v) => handleChange('TextureID', v)}
-                            options={textureOptions}
-                        />
+                            disabled={!isTextureIDAnimated}
+                            onClick={() => openKeyframeEditor('TextureID', 1)}
+                        >
+                            编辑动画
+                        </Button>
+                        {!isTextureIDAnimated && (
+                            <Select
+                                size="small"
+                                style={{ width: '100%' }}
+                                value={typeof layer.TextureID === 'number' ? layer.TextureID : 0}
+                                onChange={(v) => handleChange('TextureID', v)}
+                                options={textureOptions}
+                            />
+                        )}
+                        {isTextureIDAnimated && (
+                            <div style={{ color: '#888', fontSize: 12 }}>
+                                已动态化，点击"编辑动画"修改关键帧
+                            </div>
+                        )}
                     </Space>
                 </div>
 
@@ -196,6 +217,7 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
                     title={`Edit ${editingField}`}
                     vectorSize={editingVectorSize}
                     globalSequences={(modelData as any)?.GlobalSequences || []}
+                    fieldName={editingField || ''}
                 />
             )}
 
