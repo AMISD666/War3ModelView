@@ -1,36 +1,80 @@
-import { mat4 } from 'gl-matrix'
+import { mat4, vec3, vec4 } from 'gl-matrix'
 
 /**
  * AxisIndicator - Renders a small 3D coordinate axis indicator in the corner of the viewport
- * X: Red, Y: Green, Z: Blue
+ * X: Red (+X), Y: Green (+Y), Z: Blue (+Z)
+ * Returns screen positions for labels to be rendered by React
  */
+
+export interface AxisLabelPosition {
+    label: string
+    x: number
+    y: number
+    color: string
+}
+
 export class AxisIndicator {
     private shaderProgram: WebGLProgram | null = null
     private positionBuffer: WebGLBuffer | null = null
     private colorBuffer: WebGLBuffer | null = null
     private initialized = false
 
+    // Last computed label positions for React overlay
+    public labelPositions: AxisLabelPosition[] = []
+
     private readonly AXIS_LENGTH = 1.0
+    private readonly ARROW_SIZE = 0.15
 
     // Axis vertices: origin to X, origin to Y, origin to Z
-    private vertices = new Float32Array([
-        // X axis
-        0, 0, 0, this.AXIS_LENGTH, 0, 0,
-        // Y axis
-        0, 0, 0, 0, this.AXIS_LENGTH, 0,
-        // Z axis
-        0, 0, 0, 0, 0, this.AXIS_LENGTH
-    ])
+    // Plus arrow heads for each axis
+    private vertices: Float32Array
 
-    // Colors: R, G, B for each axis
-    private colors = new Float32Array([
-        // X axis - Red
-        1, 0, 0, 1, 1, 0, 0, 1,
-        // Y axis - Green
-        0, 1, 0, 1, 0, 1, 0, 1,
-        // Z axis - Blue
-        0, 0, 1, 1, 0, 0, 1, 1
-    ])
+    // Colors: R, G, B for each axis (including arrows)
+    private colors: Float32Array
+
+    constructor() {
+        const L = this.AXIS_LENGTH
+        const A = this.ARROW_SIZE
+
+        // Build vertices: 3 main lines + 3 arrow heads (each arrow = 2 lines)
+        this.vertices = new Float32Array([
+            // X axis main line
+            0, 0, 0, L, 0, 0,
+            // X arrow head (two lines)
+            L, 0, 0, L - A, A * 0.5, 0,
+            L, 0, 0, L - A, -A * 0.5, 0,
+
+            // Y axis main line
+            0, 0, 0, 0, L, 0,
+            // Y arrow head (two lines)
+            0, L, 0, A * 0.5, L - A, 0,
+            0, L, 0, -A * 0.5, L - A, 0,
+
+            // Z axis main line
+            0, 0, 0, 0, 0, L,
+            // Z arrow head (two lines)
+            0, 0, L, A * 0.5, 0, L - A,
+            0, 0, L, -A * 0.5, 0, L - A
+        ])
+
+        // Colors for each vertex pair
+        this.colors = new Float32Array([
+            // X axis - Red (main + 2 arrow lines = 3 lines * 2 vertices * 4 color components)
+            1, 0, 0, 1, 1, 0, 0, 1,
+            1, 0, 0, 1, 1, 0, 0, 1,
+            1, 0, 0, 1, 1, 0, 0, 1,
+
+            // Y axis - Green
+            0, 1, 0, 1, 0, 1, 0, 1,
+            0, 1, 0, 1, 0, 1, 0, 1,
+            0, 1, 0, 1, 0, 1, 0, 1,
+
+            // Z axis - Blue
+            0, 0, 1, 1, 0, 0, 1, 1,
+            0, 0, 1, 1, 0, 0, 1, 1,
+            0, 0, 1, 1, 0, 0, 1, 1
+        ])
+    }
 
     private vertexShaderSource = `
     attribute vec3 aPosition;
@@ -97,22 +141,53 @@ export class AxisIndicator {
     }
 
     /**
+     * Project a 3D point to screen coordinates
+     */
+    private projectToScreen(
+        point: vec3,
+        mvMatrix: mat4,
+        pMatrix: mat4,
+        viewportX: number,
+        viewportY: number,
+        viewportW: number,
+        viewportH: number
+    ): { x: number; y: number } {
+        const mvp = mat4.create()
+        mat4.multiply(mvp, pMatrix, mvMatrix)
+
+        const clipPos = vec4.fromValues(point[0], point[1], point[2], 1)
+        vec4.transformMat4(clipPos, clipPos, mvp)
+
+        // Perspective divide
+        const ndcX = clipPos[0] / clipPos[3]
+        const ndcY = clipPos[1] / clipPos[3]
+
+        // Convert to screen coordinates
+        const screenX = viewportX + (ndcX + 1) * 0.5 * viewportW
+        const screenY = viewportY + (1 - ndcY) * 0.5 * viewportH // Flip Y
+
+        return { x: screenX, y: screenY }
+    }
+
+    /**
      * Render the axis indicator in the bottom-left corner
      * @param gl WebGL context
      * @param viewMatrix The current view matrix (used to extract rotation only)
      * @param canvasWidth Canvas width
      * @param canvasHeight Canvas height
      */
-    render(gl: WebGLRenderingContext, viewMatrix: mat4, _canvasWidth: number, _canvasHeight: number): void {
+    render(gl: WebGLRenderingContext, viewMatrix: mat4, canvasWidth: number, canvasHeight: number): void {
         if (!this.init(gl) || !this.shaderProgram) return
 
         // Save current viewport and state
         const currentViewport = gl.getParameter(gl.VIEWPORT) as Int32Array
 
-        // Set up a larger viewport in bottom-left corner (150x150 pixels)
-        const indicatorSize = 150
-        const margin = 15
-        gl.viewport(margin, margin, indicatorSize, indicatorSize)
+        // Set up a larger viewport in bottom-left corner
+        const indicatorSize = 300
+        const margin = 5
+        const vpX = margin
+        const vpY = margin
+        gl.viewport(vpX, vpY, indicatorSize, indicatorSize)
 
         // Disable depth test for overlay rendering
         gl.disable(gl.DEPTH_TEST)
@@ -128,9 +203,10 @@ export class AxisIndicator {
         const pMatrix = mat4.create()
         mat4.ortho(pMatrix, -2, 2, -2, 2, -10, 10)
 
-        // Move camera back slightly
+        // Move camera back slightly and shift down to verify visually
         const mvMatrix = mat4.create()
-        mat4.translate(mvMatrix, mvMatrix, [0, 0, -3])
+        // Shift Y down by 0.6 units to lower the axis origin in the viewport
+        mat4.translate(mvMatrix, mvMatrix, [0, -0.6, -3])
         mat4.multiply(mvMatrix, mvMatrix, rotationMatrix)
 
         gl.useProgram(this.shaderProgram)
@@ -153,13 +229,34 @@ export class AxisIndicator {
         gl.enableVertexAttribArray(colorLoc)
         gl.vertexAttribPointer(colorLoc, 4, gl.FLOAT, false, 0, 0)
 
-        // Draw XYZ axis lines (2 vertices each, 3 axes)
-        gl.lineWidth(3.0)
-        gl.drawArrays(gl.LINES, 0, 6)
+        // Draw XYZ axis lines with arrows (3 lines per axis = 18 vertices total)
+        gl.lineWidth(2.0)
+        gl.drawArrays(gl.LINES, 0, 18)
 
         // Clean up
         gl.disableVertexAttribArray(positionLoc)
         gl.disableVertexAttribArray(colorLoc)
+
+        // Calculate label screen positions
+        // Offset labels slightly beyond arrow tips
+        const labelOffset = this.AXIS_LENGTH + 0.3
+        const xTip = vec3.fromValues(labelOffset, 0, 0)
+        const yTip = vec3.fromValues(0, labelOffset, 0)
+        const zTip = vec3.fromValues(0, 0, labelOffset)
+
+        // Convert indicator viewport coordinates to canvas coordinates
+        // Indicator is at bottom-left, need to add vpY and flip for canvas (top-left origin)
+        const toCanvasY = (vpScreenY: number) => canvasHeight - vpScreenY
+
+        const xScreen = this.projectToScreen(xTip, mvMatrix, pMatrix, vpX, vpY, indicatorSize, indicatorSize)
+        const yScreen = this.projectToScreen(yTip, mvMatrix, pMatrix, vpX, vpY, indicatorSize, indicatorSize)
+        const zScreen = this.projectToScreen(zTip, mvMatrix, pMatrix, vpX, vpY, indicatorSize, indicatorSize)
+
+        this.labelPositions = [
+            { label: '+X', x: xScreen.x, y: toCanvasY(xScreen.y), color: '#ff4444' },
+            { label: '+Y', x: yScreen.x, y: toCanvasY(yScreen.y), color: '#44ff44' },
+            { label: '+Z', x: zScreen.x, y: toCanvasY(zScreen.y), color: '#4488ff' }
+        ]
 
         // Restore viewport and state
         gl.viewport(currentViewport[0], currentViewport[1], currentViewport[2], currentViewport[3])
