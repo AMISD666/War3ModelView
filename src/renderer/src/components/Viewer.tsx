@@ -432,7 +432,17 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     // Only reload on modelPath change, NOT on modelData change.
     // Auto-reloading on modelData change causes texture corruption and animation freeze.
     if (modelPath) {
-      loadModel(modelPath)
+      // Check if this is a dropped file (has in-memory data)
+      if (modelPath.startsWith('dropped:')) {
+        // Load from in-memory data stored in the model store
+        const storeModelData = useModelStore.getState().modelData
+        if (storeModelData) {
+          console.log('[Viewer] Loading from in-memory data for dropped file:', modelPath)
+          loadModel(modelPath, storeModelData)
+        }
+      } else {
+        loadModel(modelPath)
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelPath])

@@ -140,8 +140,32 @@ export async function loadTextureForRenderer(
         }
     }
 
-    // Strategy 2: Try local file system
-    if (modelPath) {
+    // Strategy 2: If not a standard MPQ path but might still be in MPQ, try MPQ anyway
+    if (!isMPQPath(texturePath)) {
+        try {
+            const mpqData = await invoke<number[]>('read_mpq_file', { path: texturePath })
+            if (mpqData && mpqData.length > 0) {
+                const mpqBuffer = new Uint8Array(mpqData).buffer
+                const blp = decodeBLP(mpqBuffer)
+                const mipLevel0 = getBLPImageData(blp, 0)
+                const imageData = new ImageData(
+                    new Uint8ClampedArray(mipLevel0.data),
+                    mipLevel0.width,
+                    mipLevel0.height
+                )
+                if (renderer.setTextureImageData) {
+                    renderer.setTextureImageData(texturePath, [imageData])
+                    console.debug(`${logPrefix} Loaded from MPQ (non-standard path) in ${(performance.now() - startTime).toFixed(1)}ms`)
+                    return true
+                }
+            }
+        } catch (e) {
+            // MPQ fallback failed
+        }
+    }
+
+    // Strategy 3: Try local file system (skip if dropped file with no real path)
+    if (modelPath && !modelPath.startsWith('dropped:')) {
         const candidates = getTextureCandidatePaths(modelPath, texturePath)
 
         for (const candidate of candidates) {
@@ -189,8 +213,29 @@ async function decodeTexture(
         }
     }
 
-    // Strategy 2: Try local file system
-    if (modelPath) {
+    // Strategy 2: If not a standard MPQ path, try MPQ anyway as fallback
+    if (!isMPQPath(texturePath)) {
+        try {
+            const mpqData = await invoke<number[]>('read_mpq_file', { path: texturePath })
+            if (mpqData && mpqData.length > 0) {
+                const mpqBuffer = new Uint8Array(mpqData).buffer
+                const blp = decodeBLP(mpqBuffer)
+                const mipLevel0 = getBLPImageData(blp, 0)
+                const imageData = new ImageData(
+                    new Uint8ClampedArray(mipLevel0.data),
+                    mipLevel0.width,
+                    mipLevel0.height
+                )
+                console.debug(`[Texture] ${texturePath}: Decoded from MPQ (non-standard path) in ${(performance.now() - startTime).toFixed(1)}ms`)
+                return { path: texturePath, imageData }
+            }
+        } catch (e) {
+            // MPQ fallback failed
+        }
+    }
+
+    // Strategy 3: Try local file system (skip if dropped file with no real path)
+    if (modelPath && !modelPath.startsWith('dropped:')) {
         const candidates = getTextureCandidatePaths(modelPath, texturePath)
         for (const candidate of candidates) {
             const imageData = await loadTextureFromFile(candidate)
