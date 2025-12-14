@@ -117,19 +117,33 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
             const newAnimDataMap: Record<string, any> = {};
 
             if (currentNode) {
-                // Helper to parse interval array [start, end, repeat] or old single number format
+                // Helper to parse interval array [start, end, repeat] or object format {"0":..,"1":..,"2":..}
+                // Object format occurs after save due to zustand/spread operations converting arrays
                 const parseInterval = (value: any): [number, number, number] => {
                     if (Array.isArray(value)) {
                         return [value[0] ?? 0, value[1] ?? 0, value[2] ?? 1];
+                    }
+                    // Handle object format {"0": n, "1": n, "2": n} from array-to-object conversion
+                    if (value && typeof value === 'object' && '0' in value) {
+                        return [value['0'] ?? 0, value['1'] ?? 0, value['2'] ?? 1];
                     }
                     // Old format: single number treated as start, end=0, repeat=1
                     return [typeof value === 'number' ? value : 0, 0, 1];
                 };
 
+                console.log('[ParticleDialog] Loading UV anims:', JSON.stringify({
+                    LifeSpanUVAnim: currentNode.LifeSpanUVAnim,
+                    DecayUVAnim: currentNode.DecayUVAnim,
+                    TailUVAnim: currentNode.TailUVAnim,
+                    TailDecayUVAnim: currentNode.TailDecayUVAnim
+                }));
+
                 const headLifeSpan = parseInterval(currentNode.LifeSpanUVAnim);
                 const headDecay = parseInterval(currentNode.DecayUVAnim);
                 const tailLifeSpan = parseInterval(currentNode.TailUVAnim);
                 const tailDecay = parseInterval(currentNode.TailDecayUVAnim);
+
+                console.log('[ParticleDialog] Parsed UV anims:', JSON.stringify({ headLifeSpan, headDecay, tailLifeSpan, tailDecay }));
 
                 form.setFieldsValue({
                     ...defaults,

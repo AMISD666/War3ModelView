@@ -1585,13 +1585,14 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
   // Watch for renderer reload trigger from store (e.g., when particles are updated)
   const rendererReloadTrigger = useModelStore((state) => state.rendererReloadTrigger)
-  const lastReloadTrigger = useRef(-1) // Start at -1 to detect first change from 0 to 1
+  const lastReloadTrigger = useRef(0) // Start at 0 to match initial store value
   useEffect(() => {
-    // Skip only initial mount (when lastReloadTrigger is -1 and trigger is 0)
-    const isInitialMount = lastReloadTrigger.current === -1 && rendererReloadTrigger === 0
+    // Skip only initial mount (when trigger is still 0)
+    // After that, any change should trigger sync
+    const isInitialMount = rendererReloadTrigger === 0
     const hasChanged = rendererReloadTrigger !== lastReloadTrigger.current
 
-    if (!isInitialMount && hasChanged && lastReloadTrigger.current !== -1) {
+    if (!isInitialMount && hasChanged) {
       console.log('[Viewer] Model data sync triggered, trigger:', rendererReloadTrigger)
 
       // Sync model data to renderer without recreating the entire renderer
