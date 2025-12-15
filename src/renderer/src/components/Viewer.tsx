@@ -24,6 +24,7 @@ import { ConfigProvider, theme } from 'antd'
 import { commandManager } from '../utils/CommandManager'
 import { MoveVerticesCommand, VertexChange } from '../commands/MoveVerticesCommand'
 import { MoveNodesCommand, NodeChange } from '../commands/MoveNodesCommand'
+import { SetNodeParentCommand } from '../commands/SetNodeParentCommand'
 import { VertexEditor } from './VertexEditor'
 import BoneBindingPanel from './BoneBindingPanel'
 import { pickClosestGeoset } from '../utils/rayTriangle'
@@ -591,13 +592,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     // const isCtrl = e.ctrlKey || e.metaKey
 
     // Box Selection behavior:
-    // - In Geometry mode: Direct Left Click = Box Selection, Alt+Left = Camera Rotation
-    // - In Animation mode: Alt + Left Click = Box Selection (legacy)
-    const isGeometryMode = mainMode === 'geometry'
-    const shouldStartBoxSelection = e.button === 0 && (
-      (isGeometryMode && !e.altKey) || // Geometry: direct left click
-      (!isGeometryMode && e.altKey && mainMode === 'animation') // Animation: alt+left
-    )
+    // - Direct Left Click = Box Selection (all modes)
+    // - Alt + Left Click = Camera Rotation (all modes)
+    const shouldStartBoxSelection = e.button === 0 && !e.altKey
 
     if (shouldStartBoxSelection) {
       if (cameraRef.current) cameraRef.current.enabled = false
@@ -1002,6 +999,18 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       }
 
       if (closestNodeId !== -1) {
+        // Check if we are in parent picking mode
+        const { isPickingParent, selectedNodeIds, setIsPickingParent } = useSelectionStore.getState()
+        if (isPickingParent && selectedNodeIds.length === 1) {
+          // Execute SetNodeParentCommand to change the selected node's parent to the clicked node
+          const selectedNodeId = selectedNodeIds[0]
+          if (closestNodeId !== selectedNodeId) { // Don't allow setting self as parent
+            const cmd = new SetNodeParentCommand(rendererRef.current, selectedNodeId, closestNodeId)
+            commandManager.execute(cmd)
+          }
+          setIsPickingParent(false) // Exit picking mode after setting parent
+          return
+        }
         selectNode(closestNodeId, isCtrl) // Support multi-select with Ctrl
         return // Stop here if we hit a node
       } else if (!isCtrl && animationSubMode !== 'binding') {
@@ -2818,7 +2827,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         vec3.add(targetCamera.current.target, targetCamera.current.target, panY)
       }
 
-      if (mouseState.current.dragButton === 0 && !mouseState.current.isBoxSelecting) {
+      // Camera rotation: Only when Alt is held (swapped: was plain left-click)
+      if (mouseState.current.dragButton === 0 && !mouseState.current.isBoxSelecting && e.altKey) {
         // Block camera rotation if Ctrl was held on mouseDown (for geoset picking mode)
         if (!mouseState.current.isCtrlPressed) {
           doRotate()

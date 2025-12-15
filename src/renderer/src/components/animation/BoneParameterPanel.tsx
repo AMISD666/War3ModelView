@@ -186,29 +186,71 @@ const BoneParameterPanel: React.FC = () => {
                             </div>
                             <div style={{ marginBottom: 6 }}>
                                 <Text style={{ color: '#888', fontSize: '11px' }}>位置 (XYZ)</Text>
-                                <Space style={{ marginTop: 4 }}>
-                                    <InputNumber
-                                        size="small"
-                                        style={{ width: 70 }}
-                                        value={position[0]?.toFixed(2)}
-                                        disabled
-                                        prefix={<span style={{ color: '#ff4d4f' }}>X</span>}
-                                    />
-                                    <InputNumber
-                                        size="small"
-                                        style={{ width: 70 }}
-                                        value={position[1]?.toFixed(2)}
-                                        disabled
-                                        prefix={<span style={{ color: '#52c41a' }}>Y</span>}
-                                    />
-                                    <InputNumber
-                                        size="small"
-                                        style={{ width: 70 }}
-                                        value={position[2]?.toFixed(2)}
-                                        disabled
-                                        prefix={<span style={{ color: '#1890ff' }}>Z</span>}
-                                    />
-                                </Space>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+                                    <div style={{ display: 'flex', alignItems: 'center' }}>
+                                        <span style={{ color: '#ff4d4f', marginRight: 8, fontSize: '11px', width: 12 }}>X</span>
+                                        <InputNumber
+                                            size="small"
+                                            controls={false}
+                                            style={{ flex: 1, background: '#1f1f1f', borderColor: '#444', color: '#fff' }}
+                                            value={parseFloat(position[0]?.toFixed(2)) || 0}
+                                            onChange={(val) => {
+                                                if (val === null || !renderer || !selectedNode) return
+                                                const objectId = selectedNode.ObjectId
+                                                if (renderer.model?.PivotPoints?.[objectId]) {
+                                                    renderer.model.PivotPoints[objectId][0] = val
+                                                }
+                                                const nodeWrapper = renderer.rendererData?.nodes?.[objectId]
+                                                if (nodeWrapper?.node?.PivotPoint) {
+                                                    nodeWrapper.node.PivotPoint[0] = val
+                                                }
+                                                renderer.updateHierarchy?.()
+                                            }}
+                                        />
+                                    </div>
+                                    <div style={{ display: 'flex', alignItems: 'center' }}>
+                                        <span style={{ color: '#52c41a', marginRight: 8, fontSize: '11px', width: 12 }}>Y</span>
+                                        <InputNumber
+                                            size="small"
+                                            controls={false}
+                                            style={{ flex: 1, background: '#1f1f1f', borderColor: '#444', color: '#fff' }}
+                                            value={parseFloat(position[1]?.toFixed(2)) || 0}
+                                            onChange={(val) => {
+                                                if (val === null || !renderer || !selectedNode) return
+                                                const objectId = selectedNode.ObjectId
+                                                if (renderer.model?.PivotPoints?.[objectId]) {
+                                                    renderer.model.PivotPoints[objectId][1] = val
+                                                }
+                                                const nodeWrapper = renderer.rendererData?.nodes?.[objectId]
+                                                if (nodeWrapper?.node?.PivotPoint) {
+                                                    nodeWrapper.node.PivotPoint[1] = val
+                                                }
+                                                renderer.updateHierarchy?.()
+                                            }}
+                                        />
+                                    </div>
+                                    <div style={{ display: 'flex', alignItems: 'center' }}>
+                                        <span style={{ color: '#1890ff', marginRight: 8, fontSize: '11px', width: 12 }}>Z</span>
+                                        <InputNumber
+                                            size="small"
+                                            controls={false}
+                                            style={{ flex: 1, background: '#1f1f1f', borderColor: '#444', color: '#fff' }}
+                                            value={parseFloat(position[2]?.toFixed(2)) || 0}
+                                            onChange={(val) => {
+                                                if (val === null || !renderer || !selectedNode) return
+                                                const objectId = selectedNode.ObjectId
+                                                if (renderer.model?.PivotPoints?.[objectId]) {
+                                                    renderer.model.PivotPoints[objectId][2] = val
+                                                }
+                                                const nodeWrapper = renderer.rendererData?.nodes?.[objectId]
+                                                if (nodeWrapper?.node?.PivotPoint) {
+                                                    nodeWrapper.node.PivotPoint[2] = val
+                                                }
+                                                renderer.updateHierarchy?.()
+                                            }}
+                                        />
+                                    </div>
+                                </div>
                             </div>
 
                             <div style={{ marginBottom: 6 }}>
