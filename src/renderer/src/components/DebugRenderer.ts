@@ -1,5 +1,6 @@
-import { mat4, vec3 } from 'gl-matrix'
+import { mat4, vec3, mat3 } from 'gl-matrix'
 
+// Simple shader for lines and points
 const vsSource = `
   attribute vec3 aPosition;
   uniform mat4 uMVMatrix;
@@ -16,6 +17,41 @@ const fsSource = `
   uniform vec4 uColor;
   void main() {
     gl_FragColor = uColor;
+  }
+`
+
+// Lit shader for solid cubes with normals
+const vsCubeSource = `
+  attribute vec3 aPosition;
+  attribute vec3 aNormal;
+  uniform mat4 uMVMatrix;
+  uniform mat4 uPMatrix;
+  uniform mat3 uNormalMatrix;
+  varying vec3 vNormal;
+  varying vec3 vPosition;
+  void main() {
+    vec4 worldPos = uMVMatrix * vec4(aPosition, 1.0);
+    gl_Position = uPMatrix * worldPos;
+    vNormal = uNormalMatrix * aNormal;
+    vPosition = worldPos.xyz;
+  }
+`
+
+const fsCubeSource = `
+  precision mediump float;
+  uniform vec4 uColor;
+  varying vec3 vNormal;
+  varying vec3 vPosition;
+  void main() {
+    vec3 normal = normalize(vNormal);
+    vec3 lightDir = normalize(vec3(0.5, 0.5, 1.0));
+    
+    float ambient = 0.35;
+    float diffuse = max(dot(normal, lightDir), 0.0) * 0.65;
+    float lighting = ambient + diffuse;
+    
+    vec3 finalColor = uColor.rgb * lighting;
+    gl_FragColor = vec4(finalColor, uColor.a);
   }
 `
 
@@ -37,7 +73,19 @@ export class DebugRenderer {
     private uPointSize: WebGLUniformLocation | null = null
     private buffer: WebGLBuffer | null = null
 
+    // Cube program
+    private cubeProgram: WebGLProgram | null = null
+    private cubeAPosition: number = -1
+    private cubeANormal: number = -1
+    private cubeUMVMatrix: WebGLUniformLocation | null = null
+    private cubeUPMatrix: WebGLUniformLocation | null = null
+    private cubeUNormalMatrix: WebGLUniformLocation | null = null
+    private cubeUColor: WebGLUniformLocation | null = null
+    private cubeVertBuffer: WebGLBuffer | null = null
+    private cubeNormBuffer: WebGLBuffer | null = null
+
     init(gl: WebGLRenderingContext | WebGL2RenderingContext) {
+        // Simple program
         const vs = this.compileShader(gl, gl.VERTEX_SHADER, vsSource)
         const fs = this.compileShader(gl, gl.FRAGMENT_SHADER, fsSource)
         if (!vs || !fs) return
@@ -59,8 +107,33 @@ export class DebugRenderer {
         this.uPMatrix = gl.getUniformLocation(this.program, 'uPMatrix')
         this.uColor = gl.getUniformLocation(this.program, 'uColor')
         this.uPointSize = gl.getUniformLocation(this.program, 'uPointSize')
-
         this.buffer = gl.createBuffer()
+
+        // Cube program
+        const vsCube = this.compileShader(gl, gl.VERTEX_SHADER, vsCubeSource)
+        const fsCube = this.compileShader(gl, gl.FRAGMENT_SHADER, fsCubeSource)
+        if (!vsCube || !fsCube) return
+
+        this.cubeProgram = gl.createProgram()
+        if (!this.cubeProgram) return
+
+        gl.attachShader(this.cubeProgram, vsCube)
+        gl.attachShader(this.cubeProgram, fsCube)
+        gl.linkProgram(this.cubeProgram)
+
+        if (!gl.getProgramParameter(this.cubeProgram, gl.LINK_STATUS)) {
+            console.error('DebugRenderer cube shader link error:', gl.getProgramInfoLog(this.cubeProgram))
+            return
+        }
+
+        this.cubeAPosition = gl.getAttribLocation(this.cubeProgram, 'aPosition')
+        this.cubeANormal = gl.getAttribLocation(this.cubeProgram, 'aNormal')
+        this.cubeUMVMatrix = gl.getUniformLocation(this.cubeProgram, 'uMVMatrix')
+        this.cubeUPMatrix = gl.getUniformLocation(this.cubeProgram, 'uPMatrix')
+        this.cubeUNormalMatrix = gl.getUniformLocation(this.cubeProgram, 'uNormalMatrix')
+        this.cubeUColor = gl.getUniformLocation(this.cubeProgram, 'uColor')
+        this.cubeVertBuffer = gl.createBuffer()
+        this.cubeNormBuffer = gl.createBuffer()
     }
 
     private compileShader(gl: WebGLRenderingContext | WebGL2RenderingContext, type: number, source: string) {
@@ -85,50 +158,135 @@ export class DebugRenderer {
         parentOfSelected: number | null = null,
         childrenOfSelected: number[] = []
     ) {
-        if (!this.program || !this.buffer) return
+        if (!this.cubeProgram || !this.cubeVertBuffer || !this.cubeNormBuffer) return
 
-        const defaultPositions: number[] = []
-        const selectedPositions: number[] = []
-        const parentPositions: number[] = []
-        const childrenPositions: number[] = []
+        const cubeSize = 1.2 // Half-size of cube
+        const s = cubeSize
 
-        const tempPos = vec3.create()
+        // Cube faces (6 faces, 2 triangles each = 36 vertices)
+        const baseCubeVerts = [
+            // Front face (Z+)
+            -s, -s, s, s, -s, s, s, s, s,
+            -s, -s, s, s, s, s, -s, s, s,
+            // Back face (Z-)
+            s, -s, -s, -s, -s, -s, -s, s, -s,
+            s, -s, -s, -s, s, -s, s, s, -s,
+            // Top face (Y+)
+            -s, s, s, s, s, s, s, s, -s,
+            -s, s, s, s, s, -s, -s, s, -s,
+            // Bottom face (Y-)
+            -s, -s, -s, s, -s, -s, s, -s, s,
+            -s, -s, -s, s, -s, s, -s, -s, s,
+            // Right face (X+)
+            s, -s, s, s, -s, -s, s, s, -s,
+            s, -s, s, s, s, -s, s, s, s,
+            // Left face (X-)
+            -s, -s, -s, -s, -s, s, -s, s, s,
+            -s, -s, -s, -s, s, s, -s, s, -s,
+        ]
+
+        // Per-vertex normals (same for each face)
+        const baseCubeNormals = [
+            // Front face
+            0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1,
+            // Back face
+            0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1,
+            // Top face
+            0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0,
+            // Bottom face
+            0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0,
+            // Right face
+            1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0,
+            // Left face
+            -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0,
+        ]
+
+        gl.useProgram(this.cubeProgram)
+        gl.disable(gl.DEPTH_TEST)
+        gl.enable(gl.CULL_FACE)
+        gl.cullFace(gl.BACK)
+
+        const tempVec = vec3.create()
+        const tempNormal = vec3.create()
+        const normalMatrix = mat3.create()
 
         for (const node of nodes) {
-            if (node.node.PivotPoint) {
-                vec3.transformMat4(tempPos, node.node.PivotPoint, node.matrix)
+            if (!node.node.PivotPoint) continue
 
-                if (selectedNodeIds.includes(node.node.ObjectId)) {
-                    selectedPositions.push(tempPos[0], tempPos[1], tempPos[2])
-                } else if (node.node.ObjectId === parentOfSelected) {
-                    parentPositions.push(tempPos[0], tempPos[1], tempPos[2])
-                } else if (childrenOfSelected.includes(node.node.ObjectId)) {
-                    childrenPositions.push(tempPos[0], tempPos[1], tempPos[2])
-                } else {
-                    defaultPositions.push(tempPos[0], tempPos[1], tempPos[2])
-                }
+            // Determine color based on selection state
+            let color: number[]
+            if (selectedNodeIds.includes(node.node.ObjectId)) {
+                color = [1, 0, 0, 1] // Red - selected
+            } else if (node.node.ObjectId === parentOfSelected) {
+                color = [0.2, 0.2, 0.2, 1] // Dark gray - parent (black is hard to see with lighting)
+            } else if (childrenOfSelected.includes(node.node.ObjectId)) {
+                color = [1, 1, 0, 1] // Yellow - children
+            } else {
+                color = [0.2, 0.8, 0.2, 1] // Green - default
             }
+
+            // Transform cube vertices by node matrix
+            // Cube vertices need to be offset by PivotPoint first (like original point rendering)
+            const pivot = node.node.PivotPoint
+            const transformedVerts: number[] = []
+            for (let i = 0; i < baseCubeVerts.length; i += 3) {
+                // Add PivotPoint offset to cube vertex, then transform
+                vec3.set(tempVec,
+                    baseCubeVerts[i] + pivot[0],
+                    baseCubeVerts[i + 1] + pivot[1],
+                    baseCubeVerts[i + 2] + pivot[2]
+                )
+                vec3.transformMat4(tempVec, tempVec, node.matrix)
+                transformedVerts.push(tempVec[0], tempVec[1], tempVec[2])
+            }
+
+            // Calculate normal matrix from node matrix
+            mat3.normalFromMat4(normalMatrix, node.matrix)
+
+            // Transform normals
+            const transformedNormals: number[] = []
+            for (let i = 0; i < baseCubeNormals.length; i += 3) {
+                vec3.set(tempNormal, baseCubeNormals[i], baseCubeNormals[i + 1], baseCubeNormals[i + 2])
+                vec3.transformMat3(tempNormal, tempNormal, normalMatrix)
+                vec3.normalize(tempNormal, tempNormal)
+                transformedNormals.push(tempNormal[0], tempNormal[1], tempNormal[2])
+            }
+
+            // Upload vertex data
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeVertBuffer)
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(transformedVerts), gl.DYNAMIC_DRAW)
+            gl.enableVertexAttribArray(this.cubeAPosition)
+            gl.vertexAttribPointer(this.cubeAPosition, 3, gl.FLOAT, false, 0, 0)
+
+            // Upload normal data
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeNormBuffer)
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(transformedNormals), gl.DYNAMIC_DRAW)
+            gl.enableVertexAttribArray(this.cubeANormal)
+            gl.vertexAttribPointer(this.cubeANormal, 3, gl.FLOAT, false, 0, 0)
+
+            // Set uniforms
+            gl.uniformMatrix4fv(this.cubeUMVMatrix, false, mvMatrix)
+            gl.uniformMatrix4fv(this.cubeUPMatrix, false, pMatrix)
+            gl.uniformMatrix3fv(this.cubeUNormalMatrix, false, normalMatrix)
+            gl.uniform4fv(this.cubeUColor, color)
+
+            // Draw
+            gl.drawArrays(gl.TRIANGLES, 0, 36)
         }
 
-        // Render Default (Green)
-        if (defaultPositions.length > 0) {
-            this.draw(gl, mvMatrix, pMatrix, defaultPositions, [0, 1, 0, 1], gl.POINTS, 6.0)
-        }
+        // Restore state
+        gl.disable(gl.CULL_FACE)
+        gl.enable(gl.DEPTH_TEST)
+    }
 
-        // Render Children (Yellow)
-        if (childrenPositions.length > 0) {
-            this.draw(gl, mvMatrix, pMatrix, childrenPositions, [1, 1, 0, 1], gl.POINTS, 7.0)
-        }
-
-        // Render Parent (Black)
-        if (parentPositions.length > 0) {
-            this.draw(gl, mvMatrix, pMatrix, parentPositions, [0, 0, 0, 1], gl.POINTS, 8.0)
-        }
-
-        // Render Selected (Red) - Draw last to be on top
-        if (selectedPositions.length > 0) {
-            this.draw(gl, mvMatrix, pMatrix, selectedPositions, [1, 0, 0, 1], gl.POINTS, 8.0)
-        }
+    renderBoneVertices(
+        gl: WebGLRenderingContext | WebGL2RenderingContext,
+        mvMatrix: mat4,
+        pMatrix: mat4,
+        positions: number[] | Float32Array
+    ) {
+        // Cyan color for bone-bound vertices
+        this.draw(gl, mvMatrix, pMatrix, positions, [0.0, 1.0, 1.0, 1.0], gl.POINTS, 8.0)
     }
 
     renderPoints(

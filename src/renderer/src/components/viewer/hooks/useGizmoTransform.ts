@@ -20,46 +20,28 @@ export interface UseGizmoTransformParams {
 }
 
 /**
- * Calculate world movement delta from screen delta
+ * Get move scale factor based on camera distance
  */
-function calculateWorldMoveDelta(
-    deltaX: number,
-    deltaY: number,
-    cameraState: CameraState
-): vec3 {
-    const { theta, phi, distance } = cameraState
-    const forward = vec3.fromValues(
-        Math.sin(phi) * Math.cos(theta),
-        Math.sin(phi) * Math.sin(theta),
-        Math.cos(phi)
-    )
-    const up = vec3.fromValues(0, 0, 1)
-    const right = vec3.create()
-    vec3.cross(right, forward, up)
-    vec3.normalize(right, right)
-    const camUp = vec3.create()
-    vec3.cross(camUp, right, forward)
-    vec3.normalize(camUp, camUp)
-
-    const moveScale = distance * 0.001
-    const worldMoveDelta = vec3.create()
-    vec3.scaleAndAdd(worldMoveDelta, worldMoveDelta, right, deltaX * moveScale)
-    vec3.scaleAndAdd(worldMoveDelta, worldMoveDelta, camUp, -deltaY * moveScale)
-
-    return worldMoveDelta
+function getMoveScale(cameraState: CameraState): number {
+    return cameraState.distance * 0.002
 }
 
 /**
- * Get move vector based on axis
+ * Get move vector based on axis - unified movement for all axes
+ * Screen X controls world X (horizontal drag), Screen Y controls world Y/Z (vertical drag)
+ * Note: Screen deltaY is negative when dragging up, so we negate it for Y/Z axes
  */
-function getMoveVectorForAxis(worldMoveDelta: vec3, axis: GizmoAxis): vec3 {
+function getMoveVectorForAxis(deltaX: number, deltaY: number, moveScale: number, axis: GizmoAxis): vec3 {
     const moveVec = vec3.create()
-    if (axis === 'x') moveVec[0] = -worldMoveDelta[0]
-    else if (axis === 'y') moveVec[1] = worldMoveDelta[1]
-    else if (axis === 'z') moveVec[2] = worldMoveDelta[2]
-    else if (axis === 'xy') { moveVec[0] = -worldMoveDelta[0]; moveVec[1] = worldMoveDelta[1] }
-    else if (axis === 'xz') { moveVec[0] = -worldMoveDelta[0]; moveVec[2] = worldMoveDelta[2] }
-    else if (axis === 'yz') { moveVec[1] = worldMoveDelta[1]; moveVec[2] = worldMoveDelta[2] }
+    // Use horizontal screen movement for horizontal world axes
+    // Use vertical screen movement for vertical world axis
+    // Screen Y is inverted (negative when dragging up), so negate for natural feel
+    if (axis === 'x') moveVec[0] = deltaX * moveScale       // Horizontal drag moves X
+    else if (axis === 'y') moveVec[1] = -deltaY * moveScale // Drag up = positive Y
+    else if (axis === 'z') moveVec[2] = -deltaY * moveScale // Drag up = positive Z
+    else if (axis === 'xy') { moveVec[0] = deltaX * moveScale; moveVec[1] = -deltaY * moveScale }
+    else if (axis === 'xz') { moveVec[0] = deltaX * moveScale; moveVec[2] = -deltaY * moveScale }
+    else if (axis === 'yz') { moveVec[1] = -deltaY * moveScale; moveVec[2] = deltaX * moveScale }
     return moveVec
 }
 
@@ -74,38 +56,38 @@ export function useGizmoTransform({
      * Handle gizmo drag for transformations
      */
     const handleGizmoDrag = useCallback((deltaX: number, deltaY: number) => {
-        const { transformMode, mainMode } = useSelectionStore.getState()
+        const { transformMode, mainMode, animationSubMode: subMode } = useSelectionStore.getState()
         const axis = gizmoState.current.activeAxis
 
         if (!axis) return
-        if (mainMode !== 'geometry' && !(mainMode === 'animation' && animationSubMode === 'binding')) {
+        if (mainMode !== 'geometry' && !(mainMode === 'animation' && subMode === 'binding')) {
             return
         }
 
-        const worldMoveDelta = calculateWorldMoveDelta(deltaX, deltaY, targetCamera.current)
+        const moveScale = getMoveScale(targetCamera.current)
 
         // === TRANSLATE MODE ===
         if (transformMode === 'translate' && mainMode === 'geometry') {
-            handleTranslateVertices(deltaX, deltaY, axis, worldMoveDelta)
-        } else if (transformMode === 'translate' && mainMode === 'animation' && animationSubMode === 'binding') {
-            handleTranslateNodes(axis, worldMoveDelta)
+            handleTranslateVertices(deltaX, deltaY, axis, moveScale)
+        } else if (transformMode === 'translate' && mainMode === 'animation' && subMode === 'binding') {
+            handleTranslateNodes(deltaX, deltaY, axis, moveScale)
         } else if (transformMode === 'rotate' || transformMode === 'scale') {
             handleRotateOrScaleVertices(deltaX, deltaY, transformMode, axis)
         }
-    }, [animationSubMode, targetCamera, gizmoState, rendererRef])
+    }, [targetCamera, gizmoState, rendererRef])
 
     /**
      * Translate vertices in geometry mode
      */
     const handleTranslateVertices = useCallback((
-        _deltaX: number,
-        _deltaY: number,
+        deltaX: number,
+        deltaY: number,
         axis: GizmoAxis,
-        worldMoveDelta: vec3
+        moveScale: number
     ) => {
         if (!rendererRef.current) return
 
-        const moveVec = getMoveVectorForAxis(worldMoveDelta, axis)
+        const moveVec = getMoveVectorForAxis(deltaX, deltaY, moveScale, axis)
         const { selectedVertexIds, selectedFaceIds, geometrySubMode } = useSelectionStore.getState()
         const affectedGeosets = new Set<number>()
 
@@ -150,10 +132,10 @@ export function useGizmoTransform({
     /**
      * Translate nodes in animation binding mode
      */
-    const handleTranslateNodes = useCallback((axis: GizmoAxis, worldMoveDelta: vec3) => {
+    const handleTranslateNodes = useCallback((deltaX: number, deltaY: number, axis: GizmoAxis, moveScale: number) => {
         if (!rendererRef.current?.rendererData?.nodes) return
 
-        const moveVec = getMoveVectorForAxis(worldMoveDelta, axis)
+        const moveVec = getMoveVectorForAxis(deltaX, deltaY, moveScale, axis)
         const { selectedNodeIds } = useSelectionStore.getState()
 
         selectedNodeIds.forEach(nodeId => {

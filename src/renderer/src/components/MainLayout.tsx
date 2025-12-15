@@ -1,6 +1,5 @@
 ﻿import React, { useState, useCallback, useEffect, useRef } from 'react'
 import Viewer, { ViewerRef } from './Viewer'
-import AnimationPanel from './AnimationPanel'
 import MenuBar from './MenuBar'
 import EditorPanel from './EditorPanel'
 import GeosetAnimationModal from './modals/GeosetAnimationModal'
@@ -9,7 +8,8 @@ import TextureAnimationManagerModal from './modals/TextureAnimationManagerModal'
 import SequenceEditorModal from './modals/SequenceEditorModal'
 import CameraManagerModal from './modals/CameraManagerModal'
 import UVModeLayout from './UVModeLayout'
-
+import AnimationModeLayout from './animation/AnimationModeLayout'
+import AnimationPanel from './AnimationPanel'
 import MaterialEditorModal from './modals/MaterialEditorModal'
 import GeosetEditorModal from './modals/GeosetEditorModal'
 import GlobalSequenceModal from './modals/GlobalSequenceModal'
@@ -56,14 +56,30 @@ function prepareModelDataForSave(modelData: any): any {
     };
 
     const toFloat32Array = (arr: any, size: number = 3): Float32Array => {
-        if (arr instanceof Float32Array) return arr;
-        if (Array.isArray(arr)) return new Float32Array(arr);
-        // Handle object-like {"0": x, "1": y, "2": z} from bad clones
+        // Always ensure output array is exactly 'size' elements
+        const result = new Float32Array(size);
+
+        if (arr instanceof Float32Array) {
+            for (let i = 0; i < Math.min(size, arr.length); i++) {
+                result[i] = arr[i];
+            }
+            return result;
+        }
+        if (Array.isArray(arr)) {
+            for (let i = 0; i < Math.min(size, arr.length); i++) {
+                result[i] = Number(arr[i]) || 0;
+            }
+            return result;
+        }
+        // Handle object-like {0: x, 1: y, 2: z} from bad clones
         if (arr && typeof arr === 'object') {
             const values = Object.values(arr).map(Number);
-            return new Float32Array(values);
+            for (let i = 0; i < Math.min(size, values.length); i++) {
+                result[i] = values[i] || 0;
+            }
+            return result;
         }
-        return new Float32Array(size);
+        return result; // Returns zero-filled array of correct size
     };
 
     const toUint16Array = (arr: any): Uint16Array => {
@@ -84,6 +100,60 @@ function prepareModelDataForSave(modelData: any): any {
             return new Uint8Array(values);
         }
         return new Uint8Array(0);
+    };
+
+    // Fix AnimVector to ensure Keys is a real array
+    const fixAnimVector = (animVec: any): any => {
+        if (!animVec) return null;
+        // If it's not an object, return null
+        if (typeof animVec !== 'object') return null;
+        // If Keys is not a proper array, convert or return null
+        if (animVec.Keys) {
+            if (!Array.isArray(animVec.Keys)) {
+                // Try to convert object-like {0: k1, 1: k2} to array
+                if (typeof animVec.Keys === 'object') {
+                    animVec.Keys = Object.values(animVec.Keys);
+                } else {
+                    animVec.Keys = [];
+                }
+            }
+        } else {
+            // No Keys, this AnimVector is invalid - make it empty
+            animVec.Keys = [];
+        }
+        // Ensure LineType is valid
+        if (animVec.LineType === undefined) {
+            animVec.LineType = 1; // Default to Linear
+        }
+        return animVec;
+    };
+
+    // Fix Node's animation properties (Translation, Rotation, Scaling)
+    const fixNode = (node: any): void => {
+        if (!node) return;
+        if (node.Translation) {
+            node.Translation = fixAnimVector(node.Translation);
+            if (!node.Translation || node.Translation.Keys.length === 0) {
+                node.Translation = null;
+            }
+        }
+        if (node.Rotation) {
+            node.Rotation = fixAnimVector(node.Rotation);
+            if (!node.Rotation || node.Rotation.Keys.length === 0) {
+                node.Rotation = null;
+            }
+        }
+        if (node.Scaling) {
+            node.Scaling = fixAnimVector(node.Scaling);
+            if (!node.Scaling || node.Scaling.Keys.length === 0) {
+                node.Scaling = null;
+            }
+        }
+        // Ensure required fields
+        if (node.Flags === undefined) node.Flags = 0;
+        if (node.ObjectId === undefined) node.ObjectId = 0;
+        if (node.Parent === undefined) node.Parent = -1;
+        if (!node.Name) node.Name = 'UnnamedNode';
     };
 
     // Fix Sequences - most critical for animation fix
@@ -311,19 +381,86 @@ function prepareModelDataForSave(modelData: any): any {
         });
     }
 
+    // Fix Cameras - ensure Position and TargetPosition are Float32Arrays
+    if (data.Cameras && Array.isArray(data.Cameras)) {
+        console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Cameras.length} cameras`);
+        data.Cameras.forEach((camera: any) => {
+            if (camera.Position) {
+                camera.Position = toFloat32Array(camera.Position, 3);
+            } else {
+                camera.Position = new Float32Array([0, 0, 0]);
+            }
+            if (camera.TargetPosition) {
+                camera.TargetPosition = toFloat32Array(camera.TargetPosition, 3);
+            } else {
+                camera.TargetPosition = new Float32Array([0, 0, 0]);
+            }
+            if (camera.Target !== undefined && !(camera.Target instanceof Float32Array)) {
+                camera.Target = toFloat32Array(camera.Target, 3);
+            }
+        });
+    }
+
+    // Fix CollisionShapes - ensure Vertices are Float32Arrays
+    if (data.CollisionShapes && Array.isArray(data.CollisionShapes)) {
+        console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.CollisionShapes.length} collision shapes`);
+        data.CollisionShapes.forEach((shape: any) => {
+            // Shape 0 = Box (6 floats), Shape 2 = Sphere (3 floats)
+            const vertexCount = shape.Shape === 0 ? 6 : 3;
+            if (shape.Vertices) {
+                shape.Vertices = toFloat32Array(shape.Vertices, vertexCount);
+            } else {
+                shape.Vertices = new Float32Array(vertexCount);
+            }
+            fixNode(shape); // CollisionShapes are also Nodes
+        });
+    }
+
+    // Fix all node-type arrays to ensure AnimVector data is valid
+    const nodeArrayNames = ['Bones', 'Helpers', 'Attachments', 'EventObjects', 'Lights', 'RibbonEmitters', 'ParticleEmitters', 'ParticleEmitters2', 'Cameras'];
+    nodeArrayNames.forEach(arrayName => {
+        if (data[arrayName] && Array.isArray(data[arrayName])) {
+            data[arrayName].forEach((node: any) => fixNode(node));
+        }
+    });
+
+    // Fix Geosets - ensure TotalGroupsCount is consistent with Groups array
+    if (data.Geosets && Array.isArray(data.Geosets)) {
+        console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Geosets.length} geosets`);
+        data.Geosets.forEach((geoset: any, index: number) => {
+            // Recalculate TotalGroupsCount from Groups array
+            if (geoset.Groups && Array.isArray(geoset.Groups)) {
+                const totalCount = geoset.Groups.reduce((sum: number, group: any) => {
+                    return sum + (Array.isArray(group) ? group.length : 0);
+                }, 0);
+                if (geoset.TotalGroupsCount !== totalCount) {
+                    console.log(`[MainLayout] Geoset ${index}: Updating TotalGroupsCount from ${geoset.TotalGroupsCount} to ${totalCount}`);
+                    geoset.TotalGroupsCount = totalCount;
+                }
+            }
+            // Ensure VertexGroup is Uint8Array
+            if (geoset.VertexGroup && !(geoset.VertexGroup instanceof Uint8Array)) {
+                geoset.VertexGroup = toUint8Array(geoset.VertexGroup);
+            }
+            // Ensure Faces is Uint16Array
+            if (geoset.Faces && !(geoset.Faces instanceof Uint16Array)) {
+                geoset.Faces = toUint16Array(geoset.Faces);
+            }
+        });
+    }
+
     return data;
 }
 
 const MainLayout: React.FC = () => {
     // Zustand stores
-    const {
-        modelPath,
-        setModelData: setZustandModelData,
-        setLoading: setZustandLoading,
-        currentSequence,
-        isPlaying,
-        setPlaying
-    } = useModelStore()
+    const modelPath = useModelStore(state => state.modelPath)
+    const setZustandModelData = useModelStore(state => state.setModelData)
+    const setZustandLoading = useModelStore(state => state.setLoading)
+    const currentSequence = useModelStore(state => state.currentSequence)
+    const isPlaying = useModelStore(state => state.isPlaying)
+    const playbackSpeed = useModelStore(state => state.playbackSpeed)
+    const setPlaying = useModelStore(state => state.setPlaying)
     const { toggleNodeManager, toggleModelInfo } = useUIStore()
     const { mainMode, setMainMode } = useSelectionStore()
 
@@ -1217,8 +1354,8 @@ const MainLayout: React.FC = () => {
             />
 
             <div style={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative' }}>
-                {/* Left Panel - Animation & Browser */}
-                {mainMode !== 'uv' && (
+                {/* Left Panel - Animation Panel (hidden in UV mode) */}
+                {mainMode !== 'uv' && mainMode !== 'animation' && (
                     <div style={{ width: '280px', display: 'flex', flexDirection: 'column', borderRight: '1px solid #333' }}>
                         <AnimationPanel
                             onImport={handleImport}
@@ -1226,34 +1363,38 @@ const MainLayout: React.FC = () => {
                     </div>
                 )}
 
-                {/* Center - 3D Viewer or UV Mode Layout */}
+                {/* Center - 3D Viewer or Animation/UV Mode Layout */}
                 <div style={{ flex: 1, position: 'relative', backgroundColor }}>
-                    <UVModeLayout
-                        modelPath={modelPath}
-                        isActive={mainMode === 'uv'}
-                    >
-                        <Viewer
-                            ref={viewerRef}
+                    <AnimationModeLayout isActive={mainMode === 'animation'}>
+                        <UVModeLayout
+
                             modelPath={modelPath}
-                            modelData={modelData}
-                            teamColor={teamColor}
-                            showGrid={showGrid}
-                            showNodes={mainMode !== 'uv' && showNodes}
-                            showSkeleton={mainMode !== 'uv' && showSkeleton}
-                            showCollisionShapes={mainMode !== 'uv' && showCollisionShapes}
-                            showCameras={mainMode !== 'uv' && showCameras}
-                            showLights={mainMode !== 'uv' && showLights}
-                            showWireframe={mainMode !== 'uv' && renderMode === 'wireframe'}
-                            onToggleWireframe={() => setRenderMode(prev => prev === 'textured' ? 'wireframe' : 'textured')}
-                            backgroundColor={backgroundColor}
-                            animationIndex={currentSequence}
-                            isPlaying={mainMode !== 'uv' && isPlaying}
-                            onTogglePlay={() => setPlaying(!isPlaying)}
-                            onModelLoaded={handleModelLoaded}
-                            showFPS={mainMode !== 'uv' && showFPS}
-                            viewPreset={viewPreset}
-                        />
-                    </UVModeLayout>
+                            isActive={mainMode === 'uv'}
+                        >
+                            <Viewer
+                                ref={viewerRef}
+                                modelPath={modelPath}
+                                modelData={modelData}
+                                teamColor={teamColor}
+                                showGrid={showGrid}
+                                showNodes={mainMode !== 'uv' && showNodes}
+                                showSkeleton={mainMode !== 'uv' && showSkeleton}
+                                showCollisionShapes={mainMode !== 'uv' && showCollisionShapes}
+                                showCameras={mainMode !== 'uv' && showCameras}
+                                showLights={mainMode !== 'uv' && mainMode !== 'animation' && showLights}
+                                showWireframe={mainMode !== 'uv' && renderMode === 'wireframe'}
+                                onToggleWireframe={() => setRenderMode(prev => prev === 'textured' ? 'wireframe' : 'textured')}
+                                backgroundColor={backgroundColor}
+                                animationIndex={currentSequence}
+                                isPlaying={mainMode !== 'uv' && isPlaying}
+                                onTogglePlay={() => setPlaying(!isPlaying)}
+                                onModelLoaded={handleModelLoaded}
+                                showFPS={mainMode !== 'uv' && showFPS}
+                                playbackSpeed={playbackSpeed}
+                                viewPreset={viewPreset}
+                            />
+                        </UVModeLayout>
+                    </AnimationModeLayout>
 
 
                     <GeosetVisibilityPanel

@@ -1,0 +1,219 @@
+import React, { useState } from 'react'
+import { Button, Input, Form, InputNumber, Checkbox, message, Modal } from 'antd'
+import { PlusOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons'
+import { DraggableModal } from '../DraggableModal'
+import { useModelStore } from '../../store/modelStore'
+
+/**
+ * 序列管理器 - 简化版，与主界面风格一致
+ */
+const SequenceManager: React.FC = () => {
+    const sequences = useModelStore(state => state.sequences)
+    const currentSequence = useModelStore(state => state.currentSequence)
+    const setSequence = useModelStore(state => state.setSequence)
+    const setSequences = useModelStore(state => state.setSequences)
+    const setPlaying = useModelStore(state => state.setPlaying)
+
+    const [isModalVisible, setIsModalVisible] = useState(false)
+    const [editingIndex, setEditingIndex] = useState<number | null>(null)
+    const [form] = Form.useForm()
+
+    const handleSelect = (index: number) => {
+        setSequence(index)
+        setPlaying(true)
+    }
+
+    const handleAdd = () => {
+        setEditingIndex(null)
+        form.resetFields()
+        // 计算新序列的默认区间
+        let newStart = 0
+        if (sequences && sequences.length > 0) {
+            const lastSeq = sequences[sequences.length - 1]
+            newStart = lastSeq.Interval[1] + 100
+        }
+        form.setFieldsValue({
+            Name: 'Stand',
+            Start: newStart,
+            End: newStart + 1000,
+            Rarity: 0,
+            MoveSpeed: 0,
+            NonLooping: false
+        })
+        setIsModalVisible(true)
+    }
+
+    const handleEdit = (index: number, e: React.MouseEvent) => {
+        e.stopPropagation()
+        const seq = sequences[index]
+        setEditingIndex(index)
+        form.setFieldsValue({
+            Name: seq.Name,
+            Start: seq.Interval[0],
+            End: seq.Interval[1],
+            Rarity: seq.Rarity || 0,
+            MoveSpeed: seq.MoveSpeed || 0,
+            NonLooping: !!seq.NonLooping
+        })
+        setIsModalVisible(true)
+    }
+
+    const handleDelete = (index: number, e: React.MouseEvent) => {
+        e.stopPropagation()
+        Modal.confirm({
+            title: '删除确认',
+            content: `确定要删除序列 "${sequences[index].Name}" 吗？`,
+            okText: '删除',
+            cancelText: '取消',
+            okButtonProps: { danger: true },
+            onOk() {
+                const newSequences = [...sequences]
+                newSequences.splice(index, 1)
+                setSequences(newSequences)
+                if (currentSequence === index) setSequence(-1)
+                else if (currentSequence > index) setSequence(currentSequence - 1)
+                message.success('序列已删除')
+            }
+        })
+    }
+
+    const handleModalOk = () => {
+        form.validateFields().then(values => {
+            const newSeq = {
+                Name: values.Name,
+                Interval: [values.Start, values.End],
+                Rarity: values.Rarity || 0,
+                MoveSpeed: values.MoveSpeed || 0,
+                NonLooping: values.NonLooping ? 1 : 0,
+                BoundsRadius: 60
+            }
+
+            const newSequences = [...(sequences || [])]
+            if (editingIndex !== null) {
+                newSequences[editingIndex] = { ...newSequences[editingIndex], ...newSeq }
+                message.success('序列已更新')
+            } else {
+                newSequences.push(newSeq)
+                message.success('序列已添加')
+            }
+            setSequences(newSequences)
+            setIsModalVisible(false)
+        })
+    }
+
+    return (
+        <div style={{
+            height: '100%',
+            display: 'flex',
+            flexDirection: 'column',
+            backgroundColor: '#2b2b2b',
+            color: '#eee'
+        }}>
+            {/* 标题栏 */}
+            <div style={{
+                padding: '8px 12px',
+                borderBottom: '1px solid #444',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+            }}>
+                <span style={{ fontWeight: 'bold' }}>序列管理</span>
+                <Button
+                    type="primary"
+                    size="small"
+                    icon={<PlusOutlined />}
+                    onClick={handleAdd}
+                >
+                    添加
+                </Button>
+            </div>
+
+            {/* 序列列表 */}
+            <div style={{ flex: 1, overflowY: 'auto' }}>
+                {(!sequences || sequences.length === 0) ? (
+                    <div style={{ padding: 20, textAlign: 'center', color: '#666' }}>
+                        暂无序列
+                    </div>
+                ) : (
+                    sequences.map((seq: any, index: number) => (
+                        <div
+                            key={index}
+                            onClick={() => handleSelect(index)}
+                            style={{
+                                padding: '8px 12px',
+                                cursor: 'pointer',
+                                backgroundColor: currentSequence === index ? '#4a90e2' : 'transparent',
+                                color: currentSequence === index ? 'white' : '#eee',
+                                borderBottom: '1px solid #444',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center'
+                            }}
+                        >
+                            <div style={{ flex: 1 }}>
+                                <div style={{ fontSize: '13px' }}>{seq.Name}</div>
+                                <div style={{ fontSize: '10px', color: currentSequence === index ? '#ccc' : '#888' }}>
+                                    {seq.Interval[0]} - {seq.Interval[1]} ({seq.Interval[1] - seq.Interval[0]}ms)
+                                </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: 4 }}>
+                                <Button
+                                    type="text"
+                                    size="small"
+                                    icon={<EditOutlined />}
+                                    onClick={(e) => handleEdit(index, e)}
+                                    style={{ color: currentSequence === index ? '#fff' : '#888' }}
+                                />
+                                <Button
+                                    type="text"
+                                    size="small"
+                                    danger
+                                    icon={<DeleteOutlined />}
+                                    onClick={(e) => handleDelete(index, e)}
+                                />
+                            </div>
+                        </div>
+                    ))
+                )}
+            </div>
+
+            {/* 编辑/添加弹窗 */}
+            <DraggableModal
+                title={editingIndex !== null ? "编辑序列" : "新建序列"}
+                open={isModalVisible}
+                onOk={handleModalOk}
+                onCancel={() => setIsModalVisible(false)}
+                okText="保存"
+                cancelText="取消"
+                width={350}
+            >
+                <Form form={form} layout="vertical" size="small">
+                    <Form.Item name="Name" label="名称" rules={[{ required: true, message: '请输入名称' }]}>
+                        <Input />
+                    </Form.Item>
+                    <div style={{ display: 'flex', gap: 10 }}>
+                        <Form.Item name="Start" label="起始帧" rules={[{ required: true }]} style={{ flex: 1 }}>
+                            <InputNumber min={0} style={{ width: '100%' }} />
+                        </Form.Item>
+                        <Form.Item name="End" label="结束帧" rules={[{ required: true }]} style={{ flex: 1 }}>
+                            <InputNumber min={0} style={{ width: '100%' }} />
+                        </Form.Item>
+                    </div>
+                    <div style={{ display: 'flex', gap: 10 }}>
+                        <Form.Item name="Rarity" label="稀有度" style={{ flex: 1 }}>
+                            <InputNumber min={0} style={{ width: '100%' }} />
+                        </Form.Item>
+                        <Form.Item name="MoveSpeed" label="移动速度" style={{ flex: 1 }}>
+                            <InputNumber min={0} style={{ width: '100%' }} />
+                        </Form.Item>
+                    </div>
+                    <Form.Item name="NonLooping" valuePropName="checked">
+                        <Checkbox>不循环</Checkbox>
+                    </Form.Item>
+                </Form>
+            </DraggableModal>
+        </div>
+    )
+}
+
+export default SequenceManager

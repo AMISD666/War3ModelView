@@ -1,5 +1,5 @@
 import React from 'react';
-import { Button, Tooltip, Space } from 'antd';
+import { Button, Tooltip, Space, message } from 'antd';
 import {
     GatewayOutlined, // Vertex/Point
     AppstoreOutlined, // Face
@@ -11,9 +11,16 @@ import {
     VideoCameraOutlined, // Keyframe
     ThunderboltOutlined, // Recalculate Normals
     SplitCellsOutlined, // Split
-    MergeCellsOutlined // Weld
+    MergeCellsOutlined, // Weld
+    LinkOutlined, // Bind
+    DisconnectOutlined, // Unbind
+    ApartmentOutlined // Parent
 } from '@ant-design/icons';
 import { useSelectionStore } from '../store/selectionStore';
+import { useModelStore } from '../store/modelStore';
+import { useRendererStore } from '../store/rendererStore';
+import { useCommandManager } from '../utils/CommandManager';
+import { BindVerticesCommand } from '../commands/BindVerticesCommand';
 
 interface ViewerToolbarProps {
     onRecalculateNormals?: () => void
@@ -34,8 +41,61 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         setAnimationSubMode,
         transformMode,
         setTransformMode,
-        selectedVertexIds
+        selectedVertexIds,
+        selectedNodeIds
     } = useSelectionStore();
+    const { modelData } = useModelStore();
+    const renderer = useRendererStore(state => state.renderer);
+    const { executeCommand } = useCommandManager();
+
+    const handleBind = () => {
+        if (!renderer || selectedNodeIds.length !== 1) {
+            message.warning('请先选择一个骨骼')
+            return
+        }
+        if (selectedVertexIds.length === 0) {
+            message.warning('请先选择要绑定的顶点')
+            return
+        }
+        const boneId = selectedNodeIds[0]
+        // Group vertices by geoset
+        const grouped = new Map<number, number[]>()
+        selectedVertexIds.forEach(v => {
+            if (!grouped.has(v.geosetIndex)) grouped.set(v.geosetIndex, [])
+            grouped.get(v.geosetIndex)!.push(v.index)
+        })
+        const targets = Array.from(grouped.entries()).map(([geosetIndex, vertexIndices]) => ({
+            geosetIndex,
+            vertexIndices
+        }))
+        const cmd = new BindVerticesCommand(renderer, targets, boneId, 'bind')
+        executeCommand(cmd)
+        message.success(`已绑定 ${selectedVertexIds.length} 个顶点到骨骼 ${boneId}`)
+    }
+
+    const handleUnbind = () => {
+        if (!renderer || selectedNodeIds.length !== 1) {
+            message.warning('请先选择一个骨骼')
+            return
+        }
+        if (selectedVertexIds.length === 0) {
+            message.warning('请先选择要解绑的顶点')
+            return
+        }
+        const boneId = selectedNodeIds[0]
+        const grouped = new Map<number, number[]>()
+        selectedVertexIds.forEach(v => {
+            if (!grouped.has(v.geosetIndex)) grouped.set(v.geosetIndex, [])
+            grouped.get(v.geosetIndex)!.push(v.index)
+        })
+        const targets = Array.from(grouped.entries()).map(([geosetIndex, vertexIndices]) => ({
+            geosetIndex,
+            vertexIndices
+        }))
+        const cmd = new BindVerticesCommand(renderer, targets, boneId, 'unbind')
+        executeCommand(cmd)
+        message.success(`已解绑 ${selectedVertexIds.length} 个顶点从骨骼 ${boneId}`)
+    }
 
     if (mainMode !== 'geometry' && mainMode !== 'animation') return null;
 
@@ -146,19 +206,13 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                         <>
                             <Space>
                                 <Tooltip title="绑定选中的顶点到选中的骨骼">
-                                    <Button onClick={() => console.log('Bind Action')}>
-                                        绑定
-                                    </Button>
+                                    <Button icon={<LinkOutlined />} onClick={handleBind} />
                                 </Tooltip>
                                 <Tooltip title="解除选中顶点的骨骼绑定">
-                                    <Button onClick={() => console.log('Unbind Action')}>
-                                        解绑
-                                    </Button>
+                                    <Button icon={<DisconnectOutlined />} onClick={handleUnbind} />
                                 </Tooltip>
                                 <Tooltip title="修改选中骨骼的父节点">
-                                    <Button onClick={() => useSelectionStore.getState().setIsPickingParent(true)}>
-                                        修改父节点
-                                    </Button>
+                                    <Button icon={<ApartmentOutlined />} onClick={() => useSelectionStore.getState().setIsPickingParent(true)} />
                                 </Tooltip>
                             </Space>
                             <div style={{ width: 1, backgroundColor: '#555', height: '24px', alignSelf: 'center' }} />
@@ -175,20 +229,25 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                         onClick={() => setTransformMode('translate')}
                     />
                 </Tooltip>
-                <Tooltip title="旋转 (E)">
-                    <Button
-                        type={transformMode === 'rotate' ? 'primary' : 'default'}
-                        icon={<RedoOutlined />}
-                        onClick={() => setTransformMode('rotate')}
-                    />
-                </Tooltip>
-                <Tooltip title="缩放 (R)">
-                    <Button
-                        type={transformMode === 'scale' ? 'primary' : 'default'}
-                        icon={<ExpandOutlined />}
-                        onClick={() => setTransformMode('scale')}
-                    />
-                </Tooltip>
+                {/* Hide rotate/scale in animation binding mode */}
+                {!(mainMode === 'animation' && animationSubMode === 'binding') && (
+                    <>
+                        <Tooltip title="旋转 (E)">
+                            <Button
+                                type={transformMode === 'rotate' ? 'primary' : 'default'}
+                                icon={<RedoOutlined />}
+                                onClick={() => setTransformMode('rotate')}
+                            />
+                        </Tooltip>
+                        <Tooltip title="缩放 (R)">
+                            <Button
+                                type={transformMode === 'scale' ? 'primary' : 'default'}
+                                icon={<ExpandOutlined />}
+                                onClick={() => setTransformMode('scale')}
+                            />
+                        </Tooltip>
+                    </>
+                )}
             </Space>
         </div>
     );

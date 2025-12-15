@@ -48,7 +48,7 @@ export function useMouseHandlers({
         if (!rendererRef.current) return
 
         initialVertexPositions.current.clear()
-        const { selectedVertexIds, selectedFaceIds, geometrySubMode, mainMode, selectedNodeIds } = useSelectionStore.getState()
+        const { selectedVertexIds, selectedFaceIds, geometrySubMode, mainMode, selectedNodeIds, animationSubMode: subMode } = useSelectionStore.getState()
         const renderer = rendererRef.current
 
         const captureVertex = (geosetIndex: number, vertexIndex: number) => {
@@ -77,7 +77,7 @@ export function useMouseHandlers({
                     captureVertex(sel.geosetIndex, geoset.Faces[fIndex + 2])
                 }
             })
-        } else if (mainMode === 'animation' && animationSubMode === 'binding') {
+        } else if (mainMode === 'animation' && subMode === 'binding') {
             // Capture initial node positions
             initialNodePositions.current.clear()
             if (renderer.rendererData?.nodes) {

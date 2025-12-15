@@ -47,3 +47,11 @@ export class CommandManager {
 }
 
 export const commandManager = new CommandManager()
+
+export const useCommandManager = () => {
+    return {
+        executeCommand: (cmd: Command) => commandManager.execute(cmd),
+        undo: () => commandManager.undo(),
+        redo: () => commandManager.redo()
+    }
+}

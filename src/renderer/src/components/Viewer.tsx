@@ -17,6 +17,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useUIStore } from '../store/uiStore'
 import { useSelectionStore } from '../store/selectionStore'
 import { useModelStore } from '../store/modelStore'
+import { useRendererStore } from '../store/rendererStore'
 import { ModelInfoPanel } from './info/ModelInfoPanel'
 import { ViewerToolbar } from './ViewerToolbar'
 import { ConfigProvider, theme } from 'antd'
@@ -56,6 +57,7 @@ interface ViewerProps {
   onModelLoaded: (model: any) => void
   backgroundColor: string
   showFPS: boolean
+  playbackSpeed: number
   viewPreset?: { type: string, time: number } | null
   modelData?: any
 }
@@ -77,6 +79,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   onModelLoaded,
   backgroundColor,
   showFPS,
+  playbackSpeed,
   viewPreset,
   modelData
 }, ref) => {
@@ -108,7 +111,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const showLightsRef = useRef(showLights)
   const showWireframeRef = useRef(showWireframe)
   const isPlayingRef = useRef(isPlaying)
+  const playbackSpeedRef = useRef(playbackSpeed)
   const backgroundColorRef = useRef(backgroundColor)
+
+  // Cache for bound vertex highlighting (to avoid per-frame recalculation)
+  const boundVerticesCache = useRef<{ boneId: number, vertices: number[] } | null>(null)
 
   // Progress bar state
   const [progress, setProgress] = useState(0)
@@ -125,14 +132,22 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     showLightsRef.current = showLights
     showWireframeRef.current = showWireframe
     isPlayingRef.current = isPlaying
+    playbackSpeedRef.current = playbackSpeed
     backgroundColorRef.current = backgroundColor
-  }, [showGrid, showNodes, showSkeleton, showCollisionShapes, showCameras, showLights, showWireframe, isPlaying, backgroundColor])
+  }, [showGrid, showNodes, showSkeleton, showCollisionShapes, showCameras, showLights, showWireframe, isPlaying, playbackSpeed, backgroundColor])
 
   useEffect(() => {
     if (canvasRef.current && !cameraRef.current) {
       cameraRef.current = new SimpleOrbitCamera(canvasRef.current)
     }
   }, [])
+
+  // Sync renderer to global store
+  const { setRenderer: setGlobalRenderer } = useRendererStore()
+  useEffect(() => {
+    setGlobalRenderer(renderer)
+  }, [renderer, setGlobalRenderer])
+
 
   useEffect(() => {
     rendererRef.current = renderer
@@ -477,7 +492,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       mouseState.current.lastMouseX = e.clientX
       mouseState.current.lastMouseY = e.clientY
 
-      const { selectedVertexIds, selectedFaceIds, geometrySubMode } = useSelectionStore.getState()
+      const { selectedVertexIds, selectedFaceIds, geometrySubMode, animationSubMode: subMode } = useSelectionStore.getState()
 
       // Shift+Drag = Duplicate then move
       if (e.shiftKey && (geometrySubMode === 'vertex' || geometrySubMode === 'face') && rendererRef.current) {
@@ -530,7 +545,21 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         }
       }
 
-      if (geometrySubMode === 'vertex') {
+      if (mainMode === 'animation' && subMode === 'binding') {
+        // Capture initial node positions for animation binding mode
+        initialNodePositions.current.clear()
+        const { selectedNodeIds } = useSelectionStore.getState()
+        console.log('[Viewer] Capturing node positions. Mode:', mainMode, subMode, 'Selected:', selectedNodeIds.length)
+        if (renderer && renderer.rendererData && renderer.rendererData.nodes) {
+          selectedNodeIds.forEach(nodeId => {
+            const nodeWrapper = renderer.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
+            if (nodeWrapper && nodeWrapper.node.PivotPoint) {
+              initialNodePositions.current.set(nodeId, [nodeWrapper.node.PivotPoint[0], nodeWrapper.node.PivotPoint[1], nodeWrapper.node.PivotPoint[2]])
+            }
+          })
+          console.log('[Viewer] Captured node positions:', initialNodePositions.current.size)
+        }
+      } else if (geometrySubMode === 'vertex') {
         console.log('[Viewer] Capturing vertices for vertex mode. Selected count:', currentSelection.selectedVertexIds.length)
         currentSelection.selectedVertexIds.forEach(sel => captureVertex(sel.geosetIndex, sel.index))
         console.log('[Viewer] Captured vertices:', initialVertexPositions.current.size)
@@ -545,18 +574,6 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             captureVertex(sel.geosetIndex, geoset.Faces[fIndex + 2])
           }
         })
-      } else if (mainMode === 'animation' && animationSubMode === 'binding') {
-        // Capture initial node positions
-        initialNodePositions.current.clear()
-        const { selectedNodeIds } = useSelectionStore.getState()
-        if (renderer && renderer.rendererData && renderer.rendererData.nodes) {
-          selectedNodeIds.forEach(nodeId => {
-            const nodeWrapper = renderer.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
-            if (nodeWrapper && nodeWrapper.node.PivotPoint) {
-              initialNodePositions.current.set(nodeId, [nodeWrapper.node.PivotPoint[0], nodeWrapper.node.PivotPoint[1], nodeWrapper.node.PivotPoint[2]])
-            }
-          })
-        }
       }
       return // Consume event
     }
@@ -1843,8 +1860,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             mat4.perspective(pMatrix, Math.PI / 4, canvas.width / canvas.height, 1, 100000)
           }
 
-          const { geometrySubMode, transformMode, selectedVertexIds, selectedFaceIds } = useSelectionStore.getState()
-          const isBindPoseMode = appMainMode === 'geometry' || (appMainMode === 'animation' && (animationSubMode === 'binding' || animationIndex === -1))
+          const { geometrySubMode, transformMode, selectedVertexIds, selectedFaceIds, animationSubMode: currentAnimationSubMode, mainMode: currentMainMode } = useSelectionStore.getState()
+          const isBindPoseMode = currentMainMode === 'geometry' || (currentMainMode === 'animation' && (currentAnimationSubMode === 'binding' || animationIndex === -1))
 
           // Debug logs commented out to reduce console noise
           // if (time - lastFpsTime.current > 1000) {
@@ -1875,7 +1892,12 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 animationInfo: mdlRenderer.rendererData?.animationInfo?.Name
               })
             }
-            mdlRenderer.update(delta)
+            mdlRenderer.update(delta * playbackSpeedRef.current)
+
+            // Sync frame to store for Timeline (Animation Mode only)
+            if (currentMainMode === 'animation' && mdlRenderer.rendererData) {
+              useModelStore.getState().setFrame(mdlRenderer.rendererData.frame)
+            }
           } else {
             // Log why animation is NOT updating (once per second)
             if (time - lastFpsTime.current > 1000) {
@@ -2064,7 +2086,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               }
             }
 
-            mdlRenderer.render(mvMatrix, pMatrix, { wireframe: showWireframeRef.current || (appMainMode === 'geometry' && (geometrySubMode === 'face' || geometrySubMode === 'group')) })
+            mdlRenderer.render(mvMatrix, pMatrix, { wireframe: showWireframeRef.current || (currentMainMode === 'geometry' && (geometrySubMode === 'face' || geometrySubMode === 'group')) })
 
             // Restore original geoset alphas
             if (originalGeosetAlphas.size > 0 && mdlRenderer.rendererData.geosetAlpha) {
@@ -2076,7 +2098,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             // === Hover Highlight ===
             // If a geoset is hovered, render a highlight overlay
             if (hoveredGeosetId !== null && mdlRenderer.model.Geosets && mdlRenderer.model.Geosets[hoveredGeosetId]) {
-              const isWireframeMode = showWireframeRef.current || (appMainMode === 'geometry' && (geometrySubMode === 'face' || geometrySubMode === 'group'))
+              const isWireframeMode = showWireframeRef.current || (currentMainMode === 'geometry' && (geometrySubMode === 'face' || geometrySubMode === 'group'))
 
               if (isWireframeMode && debugRenderer.current) {
                 // In wireframe mode, draw red wireframe for hovered geoset using debugRenderer
@@ -2121,7 +2143,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               }
             }
 
-            if ((showNodesRef.current || (appMainMode === 'animation' && animationSubMode === 'binding')) && mdlRenderer.rendererData.nodes && appMainMode !== 'geometry') {
+            if ((showNodesRef.current || (currentMainMode === 'animation' && currentAnimationSubMode === 'binding')) && mdlRenderer.rendererData.nodes && currentMainMode !== 'geometry') {
               const { selectedNodeIds } = useSelectionStore.getState()
               let parentOfSelected: number | null = null
               let childrenOfSelected: number[] = []
@@ -2136,6 +2158,69 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                   childrenOfSelected = mdlRenderer.rendererData.nodes
                     .filter((n: any) => n.node.Parent === selectedId)
                     .map((n: any) => n.node.ObjectId)
+
+                  // Recursively collect all descendants (children's children, etc.)
+                  const collectDescendants = (parentIds: number[]): number[] => {
+                    const children = mdlRenderer.rendererData.nodes
+                      .filter((n: any) => parentIds.includes(n.node.Parent))
+                      .map((n: any) => n.node.ObjectId)
+                    if (children.length === 0) return []
+                    return [...children, ...collectDescendants(children)]
+                  }
+                  childrenOfSelected = [...childrenOfSelected, ...collectDescendants(childrenOfSelected)]
+
+                  // render bound vertices highlight (with caching to avoid per-frame recalculation)
+                  if (currentMainMode === 'animation' && currentAnimationSubMode === 'binding' && debugRenderer.current) {
+                    // Check if we need to recalculate (only when bone selection changes)
+                    let boundVertices: number[]
+                    if (boundVerticesCache.current && boundVerticesCache.current.boneId === selectedId) {
+                      // Use cached data
+                      boundVertices = boundVerticesCache.current.vertices
+                    } else {
+                      // Recalculate and cache
+                      boundVertices = []
+                      const geosets = mdlRenderer.model.Geosets || []
+
+                      geosets.forEach((geoset: any) => {
+                        if (!geoset.VertexGroup || !geoset.Groups) return
+
+                        // Pre-calculate which groups contain our selected bone
+                        const containingGroupIndices = new Set<number>()
+                        geoset.Groups.forEach((group: number[], groupIdx: number) => {
+                          if (group.includes(selectedId)) {
+                            containingGroupIndices.add(groupIdx)
+                          }
+                        })
+
+                        if (containingGroupIndices.size > 0) {
+                          const vertices = geoset.Vertices
+                          const vertexGroup = geoset.VertexGroup
+                          const count = vertices.length / 3
+
+                          for (let i = 0; i < count; i++) {
+                            const groupIndex = vertexGroup[i]
+                            if (containingGroupIndices.has(groupIndex)) {
+                              boundVertices.push(vertices[i * 3], vertices[i * 3 + 1], vertices[i * 3 + 2])
+                            }
+                          }
+                        }
+                      })
+
+                      // Cache for future frames
+                      boundVerticesCache.current = { boneId: selectedId, vertices: boundVertices }
+                    }
+
+                    if (boundVertices.length > 0) {
+                      gl.disable(gl.DEPTH_TEST) // Make them visible through model
+                      debugRenderer.current.renderBoneVertices(
+                        gl as WebGLRenderingContext,
+                        mvMatrix,
+                        pMatrix,
+                        boundVertices
+                      )
+                      gl.enable(gl.DEPTH_TEST)
+                    }
+                  }
                 }
               }
 
@@ -2150,14 +2235,14 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               )
             }
 
-            if (showSkeletonRef.current && mdlRenderer.rendererData.nodes && appMainMode === 'animation') {
+            if (showSkeletonRef.current && mdlRenderer.rendererData.nodes && currentMainMode === 'animation') {
               gl.disable(gl.DEPTH_TEST)
               mdlRenderer.renderSkeleton(mvMatrix, pMatrix, null)
               gl.enable(gl.DEPTH_TEST)
             }
 
             // === Light Object Rendering ===
-            if ((showLightsRef.current || (appMainMode === 'animation')) && mdlRenderer.rendererData.nodes) {
+            if (showLightsRef.current && mdlRenderer.rendererData.nodes) {
               const { nodes } = useModelStore.getState()
               const lightNodes = nodes.filter((n: any) => n.type === 'Light')
 
@@ -2228,8 +2313,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
           }
 
-          if ((appMainMode === 'geometry' && geometrySubMode === 'vertex') ||
-            (appMainMode === 'animation' && animationSubMode === 'binding')) {
+          if ((currentMainMode === 'geometry' && geometrySubMode === 'vertex') ||
+            (currentMainMode === 'animation' && currentAnimationSubMode === 'binding')) {
             // Get geoset visibility state from modelStore
             const { hiddenGeosetIds, forceShowAllGeosets, hoveredGeosetId } = useModelStore.getState()
 
@@ -2304,7 +2389,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             }
           }
 
-          if (appMainMode === 'geometry' && geometrySubMode === 'face') {
+          if (currentMainMode === 'geometry' && geometrySubMode === 'face') {
             if (selectedFaceIds.length > 0) {
               const selectedPositions: number[] = []
               for (const sel of selectedFaceIds) {
@@ -2344,7 +2429,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             let count = 0
             let showGizmo = false
 
-            if (appMainMode === 'geometry') {
+            if (currentMainMode === 'geometry') {
               if (geometrySubMode === 'vertex' && selectedVertexIds.length > 0) {
                 for (const sel of selectedVertexIds) {
                   const geoset = mdlRenderer.model.Geosets[sel.geosetIndex]
@@ -2372,7 +2457,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 showGizmo = true
               }
             }
-            else if (appMainMode === 'animation' && animationSubMode === 'binding') {
+            else if (currentMainMode === 'animation' && currentAnimationSubMode === 'binding') {
               const { selectedNodeIds } = useSelectionStore.getState()
               if (selectedNodeIds && selectedNodeIds.length > 0) {
                 for (const nodeId of selectedNodeIds) {
@@ -2476,10 +2561,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       mouseState.current.lastMouseX = e.clientX
       mouseState.current.lastMouseY = e.clientY
 
-      const { transformMode, mainMode } = useSelectionStore.getState()
+      const { transformMode, mainMode, animationSubMode: subMode } = useSelectionStore.getState()
       const axis = gizmoState.current.activeAxis
 
-      if (mainMode !== 'geometry' && !(mainMode === 'animation' && animationSubMode === 'binding')) {
+      if (mainMode !== 'geometry' && !(mainMode === 'animation' && subMode === 'binding')) {
         return
       }
 
@@ -2493,7 +2578,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       vec3.cross(camUp, right, forward)
       vec3.normalize(camUp, camUp)
 
-      const moveScale = distance * 0.001
+      // Simplified movement speed - more consistent with mouse movement
+      const moveScale = distance * 0.002
 
       const worldMoveDelta = vec3.create()
       vec3.scaleAndAdd(worldMoveDelta, worldMoveDelta, right, deltaX * moveScale)
@@ -2551,16 +2637,17 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           }
         })
 
-      } else if (transformMode === 'translate' && mainMode === 'animation' && animationSubMode === 'binding') {
+      } else if (transformMode === 'translate' && mainMode === 'animation' && subMode === 'binding') {
         const { selectedNodeIds } = useSelectionStore.getState()
         const moveVec = vec3.create()
 
+        // Use worldMoveDelta with same direction as vertex movement
         if (axis === 'x') moveVec[0] = -worldMoveDelta[0]
-        else if (axis === 'y') moveVec[1] = worldMoveDelta[1]
+        else if (axis === 'y') moveVec[1] = -worldMoveDelta[1]
         else if (axis === 'z') moveVec[2] = worldMoveDelta[2]
-        else if (axis === 'xy') { moveVec[0] = -worldMoveDelta[0]; moveVec[1] = worldMoveDelta[1]; }
+        else if (axis === 'xy') { moveVec[0] = -worldMoveDelta[0]; moveVec[1] = -worldMoveDelta[1]; }
         else if (axis === 'xz') { moveVec[0] = -worldMoveDelta[0]; moveVec[2] = worldMoveDelta[2]; }
-        else if (axis === 'yz') { moveVec[1] = worldMoveDelta[1]; moveVec[2] = worldMoveDelta[2]; }
+        else if (axis === 'yz') { moveVec[1] = -worldMoveDelta[1]; moveVec[2] = worldMoveDelta[2]; }
 
         if (selectedNodeIds.length > 0 && rendererRef.current && rendererRef.current.rendererData.nodes) {
           selectedNodeIds.forEach(nodeId => {
@@ -2968,6 +3055,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             initialVertexPositions.current.clear()
           }
         } else if (mainMode === 'animation' && animationSubMode === 'binding') {
+          console.log('[Viewer] handleMouseUp - Animation binding mode, checking node changes. initialNodePositions size:', initialNodePositions.current.size)
           if (initialNodePositions.current.size > 0) {
             const changes: NodeChange[] = []
 
@@ -3141,50 +3229,52 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         onWheel={handleWheel}
       />
 
-      <div style={{
-        position: 'absolute',
-        bottom: '20px',
-        left: '50%',
-        transform: 'translateX(-50%)',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        gap: '5px',
-        width: '60%',
-        maxWidth: '600px',
-        backgroundColor: 'rgba(0, 0, 0, 0.5)',
-        padding: '10px',
-        borderRadius: '8px',
-        pointerEvents: 'auto'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', width: '100%' }}>
-          <button
-            onClick={onTogglePlay}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: 'white',
-              cursor: 'pointer',
-              fontSize: '20px',
-              width: '30px'
-            }}
-          >
-            {isPlaying ? '⏸' : '▶'}
-          </button>
-          <input
-            type="range"
-            min={renderer?.rendererData?.animationInfo?.Interval[0] || 0}
-            max={renderer?.rendererData?.animationInfo?.Interval[1] || 100}
-            value={progress}
-            onChange={handleSeek}
-            style={{ flex: 1, cursor: 'pointer' }}
-          />
-          <span style={{ color: 'white', fontSize: '12px', minWidth: '80px', textAlign: 'right' }}>
-            {Math.round(progress)} / {Math.round(duration)}
-          </span>
+      {/* Progress bar - hidden in animation mode (has its own timeline) */}
+      {appMainMode !== 'animation' && (
+        <div style={{
+          position: 'absolute',
+          bottom: '20px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: '5px',
+          width: '60%',
+          maxWidth: '600px',
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          padding: '10px',
+          borderRadius: '8px',
+          pointerEvents: 'auto'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', width: '100%' }}>
+            <button
+              onClick={onTogglePlay}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'white',
+                cursor: 'pointer',
+                fontSize: '20px',
+                width: '30px'
+              }}
+            >
+              {isPlaying ? '⏸' : '▶'}
+            </button>
+            <input
+              type="range"
+              min={renderer?.rendererData?.animationInfo?.Interval[0] || 0}
+              max={renderer?.rendererData?.animationInfo?.Interval[1] || 100}
+              value={progress}
+              onChange={handleSeek}
+              style={{ flex: 1, cursor: 'pointer' }}
+            />
+            <span style={{ color: 'white', fontSize: '12px', minWidth: '80px', textAlign: 'right' }}>
+              {Math.round(progress)} / {Math.round(duration)}
+            </span>
+          </div>
         </div>
-      </div>
-
+      )}
       {showFPS && (
         <div style={{
           position: 'absolute',
@@ -3310,6 +3400,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         onSplitVertices={handleSplitVertices}
         onWeldVertices={handleWeldVertices}
       />
+      {/* Bone Binding Panel - Rendered here to access rendererRef */}
       <BoneBindingPanel />
       {appMainMode === 'geometry' && <VertexEditor renderer={renderer} onBeginUpdate={() => { ignoreNextModelDataUpdate.current = true }} />}
 
