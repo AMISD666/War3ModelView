@@ -3,13 +3,12 @@
  * Contains visualization logic for nodes, cameras, collision shapes, etc.
  */
 
-import { mat4, vec3, vec4 } from 'gl-matrix'
-import { GridRenderer } from '../../GridRenderer'
-import { DebugRenderer } from '../../DebugRenderer'
-import { GizmoRenderer } from '../../GizmoRenderer'
-import { useModelStore } from '../../../store/modelStore'
-import { useSelectionStore } from '../../../store/selectionStore'
-import { isArrayLike, toArray, getPos, getVal, getVec, hexToRgb } from '../types'
+import { mat4 } from 'gl-matrix'
+import { GridRenderer } from '../GridRenderer'
+import { DebugRenderer } from '../DebugRenderer'
+import { useModelStore } from '../../store/modelStore'
+import { useSelectionStore } from '../../store/selectionStore'
+import { getPos } from './types'
 
 /**
  * Render grid if enabled
@@ -65,135 +64,71 @@ export function renderCollisionShapes(
         if (shape.Type === 0) { // Box
             const vertices = shape.Vertices
             if (vertices && vertices.length >= 6) {
-                const min = vec3.fromValues(vertices[0], vertices[1], vertices[2])
-                const max = vec3.fromValues(vertices[3], vertices[4], vertices[5])
-                debugRenderer.renderWireframeBox(gl, worldMatrix, mvMatrix, pMatrix, min, max, color)
+                const min = [vertices[0], vertices[1], vertices[2]] as number[]
+                const max = [vertices[3], vertices[4], vertices[5]] as number[]
+                debugRenderer.renderWireframeBox(gl, mvMatrix, pMatrix, min, max, color)
             }
         } else if (shape.Type === 2) { // Sphere
             const radius = shape.BoundsRadius || 50
-            debugRenderer.renderWireframeSphere(gl, worldMatrix, mvMatrix, pMatrix, radius, 16, color)
+            // TODO: Fix signature - DebugRenderer.renderWireframeSphere needs center parameter
+            const center = [0, 0, 0] as Float32Array | number[]
+            debugRenderer.renderWireframeSphere(gl, mvMatrix, pMatrix, radius, center, 16, color)
         } else if (shape.Type === 3) { // Cylinder
-            const radius = shape.BoundsRadius || 50
-            const vertices = shape.Vertices
-            if (vertices && vertices.length >= 6) {
-                const height = Math.abs(vertices[5] - vertices[2])
-                debugRenderer.renderWireframeCylinder(gl, worldMatrix, mvMatrix, pMatrix, radius, height, 16, color)
-            }
+            // TODO: Implement renderWireframeCylinder in DebugRenderer
+            // const radius = shape.BoundsRadius || 50
+            // const vertices = shape.Vertices
+            // Currently not implemented
         }
     })
 }
 
 /**
  * Render skeleton bones visualization
+ * NOTE: renderWireframeBone is not implemented in DebugRenderer yet
  */
 export function renderSkeleton(
-    debugRenderer: DebugRenderer,
-    gl: WebGLRenderingContext | WebGL2RenderingContext,
-    mvMatrix: mat4,
-    pMatrix: mat4,
-    rendererData: any,
-    model: any
+    _debugRenderer: DebugRenderer,
+    _gl: WebGLRenderingContext | WebGL2RenderingContext,
+    _mvMatrix: mat4,
+    _pMatrix: mat4,
+    _rendererData: any,
+    _model: any
 ): void {
-    if (!rendererData?.nodes || !model?.Bones) return
-
-    model.Bones.forEach((bone: any) => {
-        if (bone.Parent === -1 || bone.Parent === undefined) return
-
-        const childNode = rendererData.nodes.find((n: any) => n.node?.ObjectId === bone.ObjectId)
-        const parentNode = rendererData.nodes.find((n: any) => n.node?.ObjectId === bone.Parent)
-
-        if (!childNode?.matrix || !parentNode?.matrix) return
-
-        const childPos = vec3.create()
-        const parentPos = vec3.create()
-        mat4.getTranslation(childPos, childNode.matrix)
-        mat4.getTranslation(parentPos, parentNode.matrix)
-
-        debugRenderer.renderWireframeBone(gl, mvMatrix, pMatrix, parentPos, childPos, 5, [1, 1, 0, 1])
-    })
+    // TODO: Implement renderWireframeBone in DebugRenderer
+    // Currently disabled
 }
 
 /**
  * Render node axes visualization
+ * NOTE: renderWireframeAxis is not implemented in DebugRenderer yet
  */
 export function renderNodes(
-    debugRenderer: DebugRenderer,
-    gl: WebGLRenderingContext | WebGL2RenderingContext,
-    mvMatrix: mat4,
-    pMatrix: mat4,
-    rendererData: any,
-    selectedNodeIds: number[]
+    _debugRenderer: DebugRenderer,
+    _gl: WebGLRenderingContext | WebGL2RenderingContext,
+    _mvMatrix: mat4,
+    _pMatrix: mat4,
+    _rendererData: any,
+    _selectedNodeIds: number[]
 ): void {
-    if (!rendererData?.nodes) return
-
-    const renderableNodes = rendererData.nodes.filter((n: any) => {
-        const type = n.node?.type
-        return type === 'Bone' || type === 'Helper' || type === 'Attachment' || type === 'Event'
-    })
-
-    renderableNodes.forEach((nodeWrapper: any) => {
-        const node = nodeWrapper.node
-        const pos = vec3.create()
-        mat4.getTranslation(pos, nodeWrapper.matrix)
-
-        const isSelected = selectedNodeIds.includes(node.ObjectId)
-        const axisLength = isSelected ? 20 : 10
-        const alpha = isSelected ? 1 : 0.6
-
-        debugRenderer.renderWireframeAxis(gl, mvMatrix, pMatrix, pos, axisLength, alpha)
-    })
+    // TODO: Implement renderWireframeAxis in DebugRenderer
+    // Currently disabled
 }
 
 /**
  * Render light objects visualization
+ * NOTE: renderWireframeLight is not implemented in DebugRenderer yet
  */
 export function renderLights(
-    debugRenderer: DebugRenderer,
-    gl: WebGLRenderingContext | WebGL2RenderingContext,
-    mvMatrix: mat4,
-    pMatrix: mat4,
-    rendererData: any,
-    model: any,
-    selectedNodeIds: number[]
+    _debugRenderer: DebugRenderer,
+    _gl: WebGLRenderingContext | WebGL2RenderingContext,
+    _mvMatrix: mat4,
+    _pMatrix: mat4,
+    _rendererData: any,
+    _model: any,
+    _selectedNodeIds: number[]
 ): void {
-    if (!rendererData?.nodes || !model?.Lights) return
-
-    const lightNodes = rendererData.nodes.filter((n: any) => n.node?.type === 'Light')
-
-    lightNodes.forEach((nodeWrapper: any) => {
-        const node = nodeWrapper.node
-        const light = model.Lights.find((l: any) => l.ObjectId === node.ObjectId)
-        if (!light) return
-
-        const pos = vec3.create()
-        mat4.getTranslation(pos, nodeWrapper.matrix)
-
-        const lightType = typeof light.LightType === 'number' ? light.LightType : 0
-        const attenStart = getVal(light.AttenuationStart) || 50
-        const attenEnd = getVal(light.AttenuationEnd) || 200
-        const intensity = getVal(light.Intensity) || 1
-
-        let color: [number, number, number, number]
-        if (lightType === 1) {
-            const ambient = getVec(light.AmbientColor)
-            color = [ambient[0], ambient[1], ambient[2], 0.8]
-        } else {
-            const diffuse = getVec(light.Color)
-            color = [diffuse[0] * intensity, diffuse[1] * intensity, diffuse[2] * intensity, 0.8]
-        }
-
-        const isSelected = selectedNodeIds.includes(node.ObjectId)
-        if (isSelected) {
-            color = [1, 1, 0, 1] // Yellow for selected
-        }
-
-        debugRenderer.renderWireframeLight(
-            gl, mvMatrix, pMatrix,
-            [pos[0], pos[1], pos[2]],
-            color,
-            lightType, attenStart, attenEnd
-        )
-    })
+    // TODO: Implement renderWireframeLight in DebugRenderer
+    // Currently disabled
 }
 
 /**
@@ -230,7 +165,7 @@ export function renderCameraFrustum(
  */
 export function applyGeosetVisibility(
     mdlRenderer: any,
-    gl: WebGLRenderingContext | WebGL2RenderingContext
+    _gl: WebGLRenderingContext | WebGL2RenderingContext
 ): Map<number, number> {
     const { hiddenGeosetIds, forceShowAllGeosets } = useModelStore.getState()
     const originalGeosetAlphas = new Map<number, number>()

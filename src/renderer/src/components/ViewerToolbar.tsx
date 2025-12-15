@@ -1,5 +1,5 @@
 import React from 'react';
-import { Button, Tooltip, Space, Divider } from 'antd';
+import { Button, Tooltip, Space } from 'antd';
 import {
     GatewayOutlined, // Vertex/Point
     AppstoreOutlined, // Face

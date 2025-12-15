@@ -104,7 +104,7 @@ export const NodeManagerWindow: React.FC = () => {
     const [dropTargetNodeId, setDropTargetNodeId] = useState<number | null>(null);
     const [cutNodeId, setCutNodeId] = useState<number | null>(null); // For Cut/Paste functionality
     const [isDragging, setIsDragging] = useState(false);
-    const [dragPosition, setDragPosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+    const [_dragPosition, setDragPosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
 
     // Use refs to track state in event handlers (React state won't update in event listener closures)
     const draggedNodeIdRef = React.useRef<number | null>(null);
@@ -718,7 +718,7 @@ export const NodeManagerWindow: React.FC = () => {
                             const nodeId = nodeData.data?.ObjectId ?? parseInt(nodeData.key);
                             const isVirtualRoot = nodeData.isVirtualRoot === true || nodeId === -1;
                             const isDropTarget = dropTargetNodeId === nodeId;
-                            const isDraggingThis = draggedNodeId === nodeId;
+                            // isDraggingThis available for future styling: const isDraggingThis = draggedNodeId === nodeId;
                             const isCut = cutNodeId === nodeId;
 
                             return (

@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useState } from 'react'
-import { Form, Input, InputNumber, Select, Checkbox, Row, Col, Card, Button, message } from 'antd'
+import { Form, Input, InputNumber, Select, Checkbox, Row, Col, Card, Button } from 'antd'
 import { DraggableModal } from '../DraggableModal'
 import KeyframeEditor from '../editors/KeyframeEditor'
 import type { ModelNode } from '../../types/node'

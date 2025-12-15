@@ -20,8 +20,7 @@ import {
     RedoOutlined,
     EyeOutlined,
     EyeInvisibleOutlined,
-    CompressOutlined,
-    BgColorsOutlined
+    CompressOutlined
 } from '@ant-design/icons'
 import { ColorPicker } from 'antd'
 
@@ -132,7 +131,8 @@ const UVEditor: React.FC<UVEditorProps> = ({
         if (!canvas) return
 
         // Reset to fit the 0-1 UV space in the canvas
-        const canvasSize = Math.min(canvas.width, canvas.height)
+        // Canvas size calculation available for future use if needed
+        // const canvasSize = Math.min(canvas.width, canvas.height)
         setZoom(1)
         setPanX(0)
         setPanY(0)

@@ -3,8 +3,7 @@
  * Handles mouseDown, mouseMove, mouseUp, and wheel events
  */
 
-import { useCallback, useRef } from 'react'
-import { vec3 } from 'gl-matrix'
+import { useCallback } from 'react'
 import { useSelectionStore } from '../../../store/selectionStore'
 import { SimpleOrbitCamera } from '../../../utils/SimpleOrbitCamera'
 import type { MouseState, GizmoState, SelectionBox, CameraState } from '../types'

@@ -2,15 +2,11 @@
 // @ts-ignore
 import { decodeBLP, getBLPImageData, parseMDX, parseMDL, ModelRenderer } from 'war3-model'
 import { SimpleOrbitCamera } from '../utils/SimpleOrbitCamera'
-import { useViewerCamera } from './viewer/hooks/useViewerCamera'
-import { useSelection } from './viewer/hooks/useSelection'
-import { useGizmoTransform } from './viewer/hooks/useGizmoTransform'
-import { loadAllTextures, loadTeamColorTextures as loadTeamColors } from './viewer/textureLoader'
+import { loadAllTextures } from './viewer/textureLoader'
 import { validateAllParticleEmitters } from './viewer/particleValidator'
-import { checkForStructuralChanges, lightweightSync, syncNodeData } from './viewer/modelSync'
+import { checkForStructuralChanges } from './viewer/modelSync'
 import { logModelInfo } from '../utils/debugLogger'
-import { renderGrid, renderCollisionShapes, renderSkeleton, renderNodes, renderLights, renderCameraFrustum, applyGeosetVisibility, restoreGeosetAlphas } from './viewer/renderHelpers'
-import { GizmoAxis as GizmoAxisType, CameraState, hexToRgb, isArrayLike, toArray, getPos, getVal, getVec } from './viewer/types'
+import { hexToRgb } from './viewer/types'
 import { mat4, vec3, vec4, quat } from 'gl-matrix'
 import { GridRenderer } from './GridRenderer'
 import { DebugRenderer } from './DebugRenderer'
@@ -36,8 +32,6 @@ import { WeldVerticesCommand } from '../commands/WeldVerticesCommand'
 import { DeleteVerticesCommand } from '../commands/DeleteVerticesCommand'
 import { PasteVerticesCommand } from '../commands/PasteVerticesCommand'
 import { copyVertices, copyFaces, VertexCopyBuffer } from '../utils/vertexOperations'
-import { Dropdown, Modal } from 'antd'
-import type { MenuProps } from 'antd'
 
 // Ref interface for external access to camera methods
 export interface ViewerRef {
@@ -687,7 +681,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
     if (geometrySubMode === 'vertex' || geometrySubMode === 'group' || (mainMode === 'animation' && animationSubMode === 'binding')) {
       const newSelection: { geosetIndex: number, index: number }[] = []
-      const affectedGeosetIndices = new Set<number>()
+      // affectedGeosetIndices for future use: const affectedGeosetIndices = new Set<number>()
 
       if (!rendererRef.current) return
 
@@ -726,6 +720,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         newSelection.length = 0
 
         engagedGeosetIndices.forEach(idx => {
+          if (!rendererRef.current) return
           const geo = rendererRef.current.model.Geosets[idx]
           if (geo && geo.Vertices) {
             const count = geo.Vertices.length / 3
@@ -827,7 +822,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const handleSelectionClick = (clientX: number, clientY: number, isShift: boolean, isCtrl: boolean) => {
     if (!rendererRef.current || !canvasRef.current) return
 
-    const { mainMode, animationSubMode, geometrySubMode, selectVertex, selectVertices, selectFace, selectFaces, addVertexSelection, addFaceSelection, removeVertexSelection, removeFaceSelection, clearAllSelections, selectNode, setPickedGeosetIndex } = useSelectionStore.getState()
+    const { mainMode, animationSubMode, geometrySubMode, selectVertex, selectVertices, selectFace, addVertexSelection, addFaceSelection, removeVertexSelection, removeFaceSelection, clearAllSelections, selectNode, setPickedGeosetIndex } = useSelectionStore.getState()
 
     // === Ctrl+Click Geoset Picking (works in any mode) ===
     if (isCtrl) {
@@ -1451,10 +1446,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     console.time('[Viewer] ReloadModel')
     // CRITICAL: Capture old renderer's Geoset geometry BEFORE destroying
     // The TypedArrays (Vertices, Faces, Normals) are lost in store's spread operations
-    let oldGeosets: any[] | null = null
-    if (renderer && renderer.model && renderer.model.Geosets) {
-      oldGeosets = renderer.model.Geosets
-    }
+    // NOTE: This logic is currently disabled, see commented block below
+    // let oldGeosets: any[] | null = null
+    // if (renderer && renderer.model && renderer.model.Geosets) {
+    //   oldGeosets = renderer.model.Geosets
+    // }
 
     // Cleanup old renderer
     if (animationFrameId.current !== null) {
@@ -1721,7 +1717,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               const float32Data = uvData instanceof Float32Array
                 ? uvData
                 : new Float32Array(uvData)
-              renderer.updateGeosetTexCoords(i, float32Data)
+                // updateGeosetTexCoords is an optional method that may or may not exist
+                ; (renderer as any).updateGeosetTexCoords?.(i, float32Data)
             }
           }
         }

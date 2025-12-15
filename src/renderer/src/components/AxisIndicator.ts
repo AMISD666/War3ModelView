@@ -176,7 +176,7 @@ export class AxisIndicator {
      * @param canvasWidth Canvas width
      * @param canvasHeight Canvas height
      */
-    render(gl: WebGLRenderingContext, viewMatrix: mat4, canvasWidth: number, canvasHeight: number): void {
+    render(gl: WebGLRenderingContext, viewMatrix: mat4, _canvasWidth: number, canvasHeight: number): void {
         if (!this.init(gl) || !this.shaderProgram) return
 
         // Save current viewport and state

@@ -36,7 +36,7 @@ export async function debugLog(message: string, color?: 'green' | 'red'): Promis
  */
 export async function logModelInfo(
     modelPath: string,
-    model: any,
+    _model: any,
     parseTime: number
 ): Promise<void> {
     const modelName = modelPath.split(/[\\/]/).pop() || modelPath

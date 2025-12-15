@@ -127,7 +127,7 @@ export class PasteVerticesCommand implements Command {
     }
 
     private selectNewVertices(): void {
-        const newSelections = []
+        const newSelections: Array<{ geosetIndex: number; index: number }> = []
         const geosetIndex = this.createNewGeoset ? this.newGeosetIndex : this.targetGeosetIndex
 
         if (this.selectionMode === 'vertex') {

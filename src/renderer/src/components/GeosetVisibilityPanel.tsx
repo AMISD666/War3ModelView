@@ -1,5 +1,5 @@
 ﻿import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Checkbox, Dropdown, Menu, message } from 'antd';
+import { Checkbox, message } from 'antd';
 import { EyeOutlined, EyeInvisibleOutlined, CloseOutlined, MinusOutlined, DeleteOutlined, MergeCellsOutlined } from '@ant-design/icons';
 import { useModelStore } from '../store/modelStore';
 import { commandManager } from '../utils/CommandManager';
@@ -17,13 +17,10 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
         hiddenGeosetIds,
         forceShowAllGeosets,
         hoveredGeosetId,
-        toggleGeosetVisibility,
         setForceShowAllGeosets,
         setHoveredGeosetId,
         setGeosets,
-        setMaterials,
-        setHiddenGeosetIds,
-        triggerRendererReload
+        setMaterials
     } = useModelStore();
 
     // Imports for command manager (ensure these are imported at top of file)
@@ -94,11 +91,12 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
 
     // Close context menu when clicking elsewhere
     useEffect(() => {
-        const handleClick = () => setContextMenuVisible(false);
         if (contextMenuVisible) {
+            const handleClick = () => setContextMenuVisible(false);
             document.addEventListener('click', handleClick);
             return () => document.removeEventListener('click', handleClick);
         }
+        return undefined;
     }, [contextMenuVisible]);
 
     // Delete selected geosets

@@ -296,7 +296,7 @@ export async function loadAllTextures(
     console.timeEnd('[Viewer] Texture Upload (Sequential)')
 
     // Log to production CMD window
-    const textureResults = decodedTextures.map((d, i) => ({
+    const textureResults = decodedTextures.map((d, _i) => ({
         path: d.path,
         loaded: d.imageData !== null,
         time: undefined // timing not available per-texture in batch mode
