@@ -130,6 +130,23 @@ const SequenceManager: React.FC = () => {
 
             {/* 序列列表 */}
             <div style={{ flex: 1, overflowY: 'auto' }}>
+                {/* 全部动画按钮 */}
+                <div
+                    onClick={() => {
+                        setSequence(-1)
+                        setPlaying(false)
+                    }}
+                    style={{
+                        padding: '8px 12px',
+                        cursor: 'pointer',
+                        backgroundColor: currentSequence === -1 ? '#4a90e2' : '#333',
+                        color: currentSequence === -1 ? 'white' : '#eee',
+                        borderBottom: '1px solid #444',
+                        fontWeight: 'bold'
+                    }}
+                >
+                    全部动画
+                </div>
                 {(!sequences || sequences.length === 0) ? (
                     <div style={{ padding: 20, textAlign: 'center', color: '#666' }}>
                         暂无序列

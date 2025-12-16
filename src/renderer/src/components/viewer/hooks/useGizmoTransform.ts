@@ -6,6 +6,7 @@
 import { useCallback } from 'react'
 import { vec3, mat4 } from 'gl-matrix'
 import { useSelectionStore } from '../../../store/selectionStore'
+import { useModelStore } from '../../../store/modelStore'
 import type { GizmoAxis, CameraState } from '../types'
 
 export interface UseGizmoTransformParams {
@@ -45,6 +46,35 @@ function getMoveVectorForAxis(deltaX: number, deltaY: number, moveScale: number,
     return moveVec
 }
 
+/**
+ * 自动K帧：为选中节点在当前帧添加 Translation 关键帧
+ */
+function autoKeyframeTranslation(nodeId: number, translation: [number, number, number]) {
+    const { autoKeyframe, currentFrame, nodes, updateNode } = useModelStore.getState()
+    if (!autoKeyframe) return
+
+    const node = nodes.find((n: any) => n.ObjectId === nodeId)
+    if (!node) return
+
+    const frame = Math.round(currentFrame)
+    const existingProp = node.Translation || { Keys: [], InterpolationType: 1 }
+    const keys = [...(existingProp.Keys || [])]
+
+    // 查找或创建关键帧
+    const existingKeyIndex = keys.findIndex((k: any) => Math.abs(k.Frame - frame) < 0.1)
+
+    if (existingKeyIndex >= 0) {
+        keys[existingKeyIndex] = { ...keys[existingKeyIndex], Vector: translation }
+    } else {
+        keys.push({ Frame: frame, Vector: translation })
+        keys.sort((a: any, b: any) => a.Frame - b.Frame)
+    }
+
+    updateNode(nodeId, {
+        Translation: { ...existingProp, Keys: keys }
+    })
+}
+
 export function useGizmoTransform({
     rendererRef,
     targetCamera,
@@ -59,20 +89,35 @@ export function useGizmoTransform({
         const { transformMode, mainMode, animationSubMode: subMode } = useSelectionStore.getState()
         const axis = gizmoState.current.activeAxis
 
+        console.log('[handleGizmoDrag] mainMode:', mainMode, 'subMode:', subMode, 'transformMode:', transformMode, 'axis:', axis)
+
         if (!axis) return
-        if (mainMode !== 'geometry' && !(mainMode === 'animation' && subMode === 'binding')) {
+        // 支持 geometry 模式、animation/binding 模式、animation/keyframe 模式
+        const isGeometry = mainMode === 'geometry'
+        const isBinding = mainMode === 'animation' && subMode === 'binding'
+        const isKeyframe = mainMode === 'animation' && subMode === 'keyframe'
+
+        if (!isGeometry && !isBinding && !isKeyframe) {
+            console.log('[handleGizmoDrag] skipped: not in valid mode')
             return
         }
 
         const moveScale = getMoveScale(targetCamera.current)
 
         // === TRANSLATE MODE ===
-        if (transformMode === 'translate' && mainMode === 'geometry') {
-            handleTranslateVertices(deltaX, deltaY, axis, moveScale)
-        } else if (transformMode === 'translate' && mainMode === 'animation' && subMode === 'binding') {
-            handleTranslateNodes(deltaX, deltaY, axis, moveScale)
+        if (transformMode === 'translate') {
+            if (isGeometry) {
+                handleTranslateVertices(deltaX, deltaY, axis, moveScale)
+            } else if (isBinding) {
+                handleTranslateNodes(deltaX, deltaY, axis, moveScale)
+            } else if (isKeyframe) {
+                console.log('[Gizmo Keyframe] deltaX:', deltaX, 'deltaY:', deltaY, 'axis:', axis, 'moveScale:', moveScale)
+                handleTranslateNodesKeyframe(deltaX, deltaY, axis, moveScale)
+            }
         } else if (transformMode === 'rotate' || transformMode === 'scale') {
-            handleRotateOrScaleVertices(deltaX, deltaY, transformMode, axis)
+            if (isGeometry) {
+                handleRotateOrScaleVertices(deltaX, deltaY, transformMode, axis)
+            }
         }
     }, [targetCamera, gizmoState, rendererRef])
 
@@ -144,6 +189,59 @@ export function useGizmoTransform({
                 nodeWrapper.node.PivotPoint[0] += moveVec[0]
                 nodeWrapper.node.PivotPoint[1] += moveVec[1]
                 nodeWrapper.node.PivotPoint[2] += moveVec[2]
+            }
+        })
+    }, [rendererRef])
+
+    /**
+     * Translate nodes in keyframe mode - updates animation Translation property
+     * Accumulates delta and creates keyframe when drag ends
+     */
+    const keyframeDragDelta = { current: vec3.create() } // 累积拖拽偏移量
+
+    const handleTranslateNodesKeyframe = useCallback((deltaX: number, deltaY: number, axis: GizmoAxis, moveScale: number) => {
+        console.log('[handleTranslateNodesKeyframe] called')
+        if (!rendererRef.current?.rendererData?.nodes) {
+            console.log('[handleTranslateNodesKeyframe] no renderer nodes')
+            return
+        }
+
+        const moveVec = getMoveVectorForAxis(deltaX, deltaY, moveScale, axis)
+        const { selectedNodeIds } = useSelectionStore.getState()
+        console.log('[handleTranslateNodesKeyframe] selectedNodeIds:', selectedNodeIds, 'moveVec:', [moveVec[0], moveVec[1], moveVec[2]])
+
+        selectedNodeIds.forEach(nodeId => {
+            const nodeWrapper = rendererRef.current.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
+            console.log('[handleTranslateNodesKeyframe] nodeId:', nodeId, 'nodeWrapper:', !!nodeWrapper)
+            if (nodeWrapper?.node) {
+                // 累积拖拽偏移量（用于关键帧）
+                vec3.add(keyframeDragDelta.current, keyframeDragDelta.current, moveVec)
+
+                // 获取当前关键帧值并添加增量（实时预览）
+                const { currentFrame, nodes, autoKeyframe } = useModelStore.getState()
+                const storeNode = nodes.find((n: any) => n.ObjectId === nodeId)
+                const frame = Math.round(currentFrame)
+                console.log('[handleTranslateNodesKeyframe] autoKeyframe:', autoKeyframe, 'frame:', frame, 'storeNode:', !!storeNode)
+
+                // 从现有关键帧获取当前位置或使用 [0,0,0]
+                let currentTranslation = [0, 0, 0]
+                if (storeNode?.Translation?.Keys) {
+                    const exactKey = storeNode.Translation.Keys.find((k: any) => Math.abs(k.Frame - frame) < 0.1)
+                    if (exactKey?.Vector) {
+                        currentTranslation = [...exactKey.Vector]
+                    }
+                }
+
+                // 计算新的位移值
+                const newTranslation: [number, number, number] = [
+                    currentTranslation[0] + moveVec[0],
+                    currentTranslation[1] + moveVec[1],
+                    currentTranslation[2] + moveVec[2]
+                ]
+                console.log('[handleTranslateNodesKeyframe] newTranslation:', newTranslation)
+
+                // 如果自动K帧开启，创建/更新关键帧
+                autoKeyframeTranslation(nodeId, newTranslation)
             }
         })
     }, [rendererRef])
@@ -284,6 +382,7 @@ export function useGizmoTransform({
         handleGizmoDrag,
         handleTranslateVertices,
         handleTranslateNodes,
+        handleTranslateNodesKeyframe,
         handleRotateOrScaleVertices
     }
 }

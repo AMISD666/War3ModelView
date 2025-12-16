@@ -7,7 +7,7 @@ import { validateAllParticleEmitters } from './viewer/particleValidator'
 import { checkForStructuralChanges } from './viewer/modelSync'
 import { logModelInfo } from '../utils/debugLogger'
 import { hexToRgb } from './viewer/types'
-import { mat4, vec3, vec4, quat } from 'gl-matrix'
+import { mat3, mat4, vec3, vec4, quat } from 'gl-matrix'
 import { GridRenderer } from './GridRenderer'
 import { DebugRenderer } from './DebugRenderer'
 import { GizmoRenderer, GizmoAxis } from './GizmoRenderer'
@@ -34,6 +34,7 @@ import { WeldVerticesCommand } from '../commands/WeldVerticesCommand'
 import { DeleteVerticesCommand } from '../commands/DeleteVerticesCommand'
 import { PasteVerticesCommand } from '../commands/PasteVerticesCommand'
 import { copyVertices, copyFaces, VertexCopyBuffer } from '../utils/vertexOperations'
+import { UpdateKeyframeCommand, KeyframeChange } from '../commands/UpdateKeyframeCommand'
 
 // Ref interface for external access to camera methods
 export interface ViewerRef {
@@ -123,6 +124,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const [duration, setDuration] = useState(100)
   const lastProgressUpdate = useRef(0)
   const ignoreNextModelDataUpdate = useRef(false)
+  const lastFrameSyncTime = useRef(0) // For throttling setFrame calls
 
   useEffect(() => {
     showGridRef.current = showGrid
@@ -148,6 +150,22 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   useEffect(() => {
     setGlobalRenderer(renderer)
   }, [renderer, setGlobalRenderer])
+
+  // 空格键播放/暂停动画快捷键
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // 忽略输入框中的按键
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return
+      }
+      if (e.code === 'Space') {
+        e.preventDefault() // 防止页面滚动
+        onTogglePlay()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onTogglePlay])
 
 
   useEffect(() => {
@@ -287,6 +305,12 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     dragStartPos: null,
     isShiftDuplicate: false
   })
+
+  // Keyframe drag state (for Rotation/Scale injection)
+  const keyframeDragData = useRef<{
+    initialKeys: Map<number, any>, // NodeId -> { Rotation: [], Scaling: [] }
+    initialValues: Map<number, { rotation: Float32Array, scaling: Float32Array }> // NodeId -> { rotation, scaling } (snapshot at drag start)
+  } | null>(null)
 
   // Box selection overlay state
   const [selectionBox, setSelectionBox] = useState<{ x: number, y: number, width: number, height: number } | null>(null)
@@ -486,6 +510,17 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     const shouldBlockGizmoForAlt = e.altKey && mainMode === 'animation'
 
     if (gizmoState.current.activeAxis && e.button === 0 && !shouldBlockGizmoForAlt) {
+      // Block Gizmo in keyframe mode when autoKeyframe is disabled
+      const { animationSubMode: subMode } = useSelectionStore.getState()
+      const { autoKeyframe } = useModelStore.getState()
+      if (mainMode === 'animation' && subMode === 'keyframe' && !autoKeyframe) {
+        console.log('[Viewer] Gizmo blocked: autoKeyframe is OFF in keyframe mode')
+        // Clear activeAxis to prevent any visual feedback
+        gizmoState.current.activeAxis = null
+        // CRITICAL: Disable camera to prevent it from handling mouse events
+        if (cameraRef.current) cameraRef.current.enabled = false
+        return // Don't allow Gizmo interaction, fully consume event
+      }
 
       if (cameraRef.current) cameraRef.current.enabled = false
       gizmoState.current.isDragging = true
@@ -493,7 +528,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       mouseState.current.lastMouseX = e.clientX
       mouseState.current.lastMouseY = e.clientY
 
-      const { selectedVertexIds, selectedFaceIds, geometrySubMode, animationSubMode: subMode } = useSelectionStore.getState()
+      const { selectedVertexIds, selectedFaceIds, geometrySubMode, animationSubMode: subMode2 } = useSelectionStore.getState()
 
       // Shift+Drag = Duplicate then move
       if (e.shiftKey && (geometrySubMode === 'vertex' || geometrySubMode === 'face') && rendererRef.current) {
@@ -546,11 +581,131 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         }
       }
 
-      if (mainMode === 'animation' && subMode === 'binding') {
-        // Capture initial node positions for animation binding mode
+      if ((mainMode === 'animation' && subMode2 === 'binding') || (mainMode === 'animation' && subMode2 === 'keyframe')) {
+        // AUTO-PAUSE: Pause animation when starting Gizmo drag in keyframe mode
+        if (subMode2 === 'keyframe') {
+          useModelStore.getState().setPlaying(false)
+          console.log('[Viewer] Auto-paused animation for keyframe drag')
+
+          // Initialize keyframeDragData for stable Initial + Delta updates
+          // This fixes "double transform" and "jump on release" issues
+          const { nodes, currentFrame } = useModelStore.getState()
+          keyframeDragData.current = {
+            initialKeys: new Map(),
+            initialValues: new Map()
+          }
+
+          const { selectedNodeIds } = useSelectionStore.getState()
+          selectedNodeIds.forEach(nodeId => {
+            // 1. Snapshot original KEYS from STORE (source of truth)
+            const storeNode = nodes.find((n: any) => n.ObjectId === nodeId)
+            if (storeNode) {
+              // Deep copy relevant props
+              keyframeDragData.current!.initialKeys.set(nodeId, {
+                Translation: storeNode.Translation ? JSON.parse(JSON.stringify(storeNode.Translation)) : undefined,
+                Rotation: storeNode.Rotation ? JSON.parse(JSON.stringify(storeNode.Rotation)) : undefined,
+                Scaling: storeNode.Scaling ? JSON.parse(JSON.stringify(storeNode.Scaling)) : undefined
+              })
+            }
+
+            // 2. Snapshot current calculated VALUES from RENDERER (visual start point)
+            // These values are what the user SEES when they start dragging.
+            // We will apply Delta to these values.
+            if (rendererRef.current && rendererRef.current.rendererData && rendererRef.current.rendererData.nodes) {
+              const nodeWrapper = rendererRef.current.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
+              if (nodeWrapper) {
+                // Calculate current values at this frame
+                // Note: nodeWrapper.node has raw data, let's trust the renderer's calculated state if accessible,
+                // or use helper to interpolate from store keys.
+                // For now, let's rely on the Store keys interpolation or the Helper.
+                // Actually, for "Initial + Delta" logic, we need the Value at the START of drag.
+                // We can get this from the interpolated keys at currentFrame.
+
+                // Simpler: Just resolve the value from the STORE keys at currentFrame
+                // We can reuse the logic we had in MouseMove, but here.
+
+                const initialVals: any = {}
+
+                // Helper to interpolate value at frame (linear interpolation)
+                const interpolateValue = (keys: any[], frame: number, defaultVal: number[]): number[] => {
+                  if (!keys || keys.length === 0) return defaultVal
+
+                  // Sort keys by frame (should already be sorted, but safety first)
+                  const sortedKeys = [...keys].sort((a: any, b: any) => a.Frame - b.Frame)
+
+                  // Helper to safely convert Vector to Array (handles Float32Array)
+                  // Also checks for empty arrays and returns fallback in that case
+                  const toArray = (v: any, fallback: number[]): number[] => {
+                    if (!v) return fallback
+                    // Check if it's an array-like with length
+                    if (typeof v.length === 'number' && v.length === 0) return fallback
+                    const result = Array.isArray(v) ? [...v] : Array.from(v) as number[]
+                    // If result is empty, return fallback
+                    return result.length > 0 ? result : fallback
+                  }
+
+                  // Before first key - use first key's value
+                  if (frame <= sortedKeys[0].Frame) {
+                    return toArray(sortedKeys[0].Vector, defaultVal)
+                  }
+
+                  // After last key - use last key's value
+                  if (frame >= sortedKeys[sortedKeys.length - 1].Frame) {
+                    return toArray(sortedKeys[sortedKeys.length - 1].Vector, defaultVal)
+                  }
+
+                  // Find surrounding keys and interpolate
+                  for (let i = 0; i < sortedKeys.length - 1; i++) {
+                    if (frame >= sortedKeys[i].Frame && frame <= sortedKeys[i + 1].Frame) {
+                      const t = (frame - sortedKeys[i].Frame) / (sortedKeys[i + 1].Frame - sortedKeys[i].Frame)
+                      const from = toArray(sortedKeys[i].Vector, defaultVal)
+                      const to = toArray(sortedKeys[i + 1].Vector, defaultVal)
+
+                      // Linear interpolation
+                      return from.map((v: number, idx: number) => v + (to[idx] - v) * t)
+                    }
+                  }
+
+                  return defaultVal
+                }
+
+                const initialNodeKeys = keyframeDragData.current!.initialKeys.get(nodeId)
+
+                // IMPORTANT: Always set default values first, then override if keyframes exist
+                // This prevents empty arrays from causing NaN values later
+                initialVals.translation = [0, 0, 0]
+                initialVals.rotation = [0, 0, 0, 1]
+                initialVals.scaling = [1, 1, 1]
+
+                if (initialNodeKeys?.Translation?.Keys?.length > 0) {
+                  initialVals.translation = interpolateValue(initialNodeKeys.Translation.Keys, currentFrame, [0, 0, 0])
+                }
+                if (initialNodeKeys?.Rotation?.Keys?.length > 0) {
+                  initialVals.rotation = interpolateValue(initialNodeKeys.Rotation.Keys, currentFrame, [0, 0, 0, 1])
+                }
+                if (initialNodeKeys?.Scaling?.Keys?.length > 0) {
+                  initialVals.scaling = interpolateValue(initialNodeKeys.Scaling.Keys, currentFrame, [1, 1, 1])
+                }
+
+                keyframeDragData.current!.initialValues.set(nodeId, initialVals as any)
+
+                // DEBUG: Log initial state
+                console.log('[DEBUG MouseDown] NodeId:', nodeId)
+                console.log('[DEBUG MouseDown] PivotPoint:', [...nodeWrapper.node.PivotPoint])
+                console.log('[DEBUG MouseDown] Matrix (translation part):',
+                  nodeWrapper.matrix ? [nodeWrapper.matrix[12], nodeWrapper.matrix[13], nodeWrapper.matrix[14]] : 'N/A')
+                console.log('[DEBUG MouseDown] InitialVals.translation:', initialVals.translation || '[0,0,0]')
+                console.log('[DEBUG MouseDown] CurrentFrame:', currentFrame)
+              }
+            }
+          })
+        }
+
+        // Capture initial node positions for animation binding/keyframe mode
         initialNodePositions.current.clear()
+
         const { selectedNodeIds } = useSelectionStore.getState()
-        console.log('[Viewer] Capturing node positions. Mode:', mainMode, subMode, 'Selected:', selectedNodeIds.length)
+        console.log('[Viewer] Capturing node positions. Mode:', mainMode, subMode2, 'Selected:', selectedNodeIds.length)
         if (renderer && renderer.rendererData && renderer.rendererData.nodes) {
           selectedNodeIds.forEach(nodeId => {
             const nodeWrapper = renderer.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
@@ -592,9 +747,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     // const isCtrl = e.ctrlKey || e.metaKey
 
     // Box Selection behavior:
-    // - Direct Left Click = Box Selection (all modes)
-    // - Alt + Left Click = Camera Rotation (all modes)
-    const shouldStartBoxSelection = e.button === 0 && !e.altKey
+    // - View mode: 左键直接旋转摄像机，不进行框选
+    // - Other modes: 左键框选，Alt+左键旋转摄像机
+    const shouldStartBoxSelection = e.button === 0 && !e.altKey && mainMode !== 'view'
 
     if (shouldStartBoxSelection) {
       if (cameraRef.current) cameraRef.current.enabled = false
@@ -981,6 +1136,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         rendererRef.current.rendererData.nodes.forEach((nodeWrapper: any) => {
           // Check Pivot Point
           const pivot = nodeWrapper.node.PivotPoint
+          if (!pivot) return // 跳过没有 PivotPoint 的节点
           // Apply current transformation
           const worldPos = vec3.create()
           vec3.transformMat4(worldPos, pivot, nodeWrapper.matrix)
@@ -1891,31 +2047,21 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           if (isPlayingRef.current && !isBindPoseMode) {
             // Only log once per second to reduce noise
             if (time - lastFpsTime.current > 1000) {
-              const intervalStr = mdlRenderer.rendererData?.animationInfo?.Interval
-                ? `[${mdlRenderer.rendererData.animationInfo.Interval[0]}, ${mdlRenderer.rendererData.animationInfo.Interval[1]}]`
-                : 'N/A';
-              console.log('[Viewer] Animation update:', {
-                delta: delta.toFixed(1),
-                frame: mdlRenderer.rendererData?.frame,
-                interval: intervalStr,
-                animationInfo: mdlRenderer.rendererData?.animationInfo?.Name
-              })
+              // Logging removed
             }
             mdlRenderer.update(delta * playbackSpeedRef.current)
 
             // Sync frame to store for Timeline (Animation Mode only)
+            // PERFORMANCE: Throttle to 200ms to avoid excessive React re-renders
             if (currentMainMode === 'animation' && mdlRenderer.rendererData) {
-              useModelStore.getState().setFrame(mdlRenderer.rendererData.frame)
+              const FRAME_SYNC_INTERVAL = 200 // ms
+              if (time - lastFrameSyncTime.current >= FRAME_SYNC_INTERVAL) {
+                useModelStore.getState().setFrame(mdlRenderer.rendererData.frame)
+                lastFrameSyncTime.current = time
+              }
             }
           } else {
-            // Log why animation is NOT updating (once per second)
-            if (time - lastFpsTime.current > 1000) {
-              console.log('[Viewer] Animation NOT updating:', {
-                isPlaying: isPlayingRef.current,
-                isBindPoseMode,
-                frame: mdlRenderer.rendererData?.frame
-              })
-            }
+            // Animation not updating (paused or bind pose mode)
           }
 
           // === Collision Shape Rendering ===
@@ -2152,7 +2298,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               }
             }
 
-            if ((showNodesRef.current || (currentMainMode === 'animation' && currentAnimationSubMode === 'binding')) && mdlRenderer.rendererData.nodes && currentMainMode !== 'geometry') {
+            // 关键帧模式和绑定模式都显示节点
+            if ((showNodesRef.current || currentMainMode === 'animation') && mdlRenderer.rendererData.nodes && currentMainMode !== 'geometry') {
               const { selectedNodeIds } = useSelectionStore.getState()
               let parentOfSelected: number | null = null
               let childrenOfSelected: number[] = []
@@ -2466,17 +2613,30 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 showGizmo = true
               }
             }
-            else if (currentMainMode === 'animation' && currentAnimationSubMode === 'binding') {
+            // 动画模式（binding 和 keyframe）显示 Gizmo
+            else if (currentMainMode === 'animation') {
               const { selectedNodeIds } = useSelectionStore.getState()
               if (selectedNodeIds && selectedNodeIds.length > 0) {
                 for (const nodeId of selectedNodeIds) {
                   const nodeWrapper = mdlRenderer.rendererData.nodes[nodeId]
-                  if (nodeWrapper && nodeWrapper.node && nodeWrapper.node.PivotPoint) {
-                    const pivot = nodeWrapper.node.PivotPoint
-                    center[0] += pivot[0]
-                    center[1] += pivot[1]
-                    center[2] += pivot[2]
+                  if (nodeWrapper && nodeWrapper.matrix) {
+                    // 使用矩阵变换 PivotPoint 获取正确的世界坐标
+                    const matrix = nodeWrapper.matrix
+                    let pivot = [0, 0, 0]
+                    if (nodeWrapper.node && nodeWrapper.node.PivotPoint) {
+                      pivot = nodeWrapper.node.PivotPoint
+                    } else if (mdlRenderer.model.PivotPoints && mdlRenderer.model.PivotPoints[nodeId]) {
+                      pivot = mdlRenderer.model.PivotPoints[nodeId]
+                    }
+                    const x = matrix[0] * pivot[0] + matrix[4] * pivot[1] + matrix[8] * pivot[2] + matrix[12]
+                    const y = matrix[1] * pivot[0] + matrix[5] * pivot[1] + matrix[9] * pivot[2] + matrix[13]
+                    const z = matrix[2] * pivot[0] + matrix[6] * pivot[1] + matrix[10] * pivot[2] + matrix[14]
+                    center[0] += x
+                    center[1] += y
+                    center[2] += z
                     count++
+                    // 更新全局骨骼位置供 BoneParameterPanel 使用
+                    (window as any)._selectedBoneWorldPos = [x, y, z]
                   }
                 }
                 showGizmo = true
@@ -2573,7 +2733,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       const { transformMode, mainMode, animationSubMode: subMode } = useSelectionStore.getState()
       const axis = gizmoState.current.activeAxis
 
-      if (mainMode !== 'geometry' && !(mainMode === 'animation' && subMode === 'binding')) {
+      if (mainMode !== 'geometry' && !(mainMode === 'animation' && (subMode === 'binding' || subMode === 'keyframe'))) {
         return
       }
 
@@ -2646,8 +2806,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           }
         })
 
-      } else if (transformMode === 'translate' && mainMode === 'animation' && subMode === 'binding') {
+      } else if (transformMode === 'translate' && mainMode === 'animation' && (subMode === 'binding' || subMode === 'keyframe')) {
         const { selectedNodeIds } = useSelectionStore.getState()
+        const { autoKeyframe, currentFrame, nodes, updateNode } = useModelStore.getState()
         const moveVec = vec3.create()
 
         // Use worldMoveDelta with same direction as vertex movement
@@ -2662,13 +2823,105 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           selectedNodeIds.forEach(nodeId => {
             const nodeWrapper = rendererRef.current!.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
             if (nodeWrapper && nodeWrapper.node.PivotPoint) {
-              nodeWrapper.node.PivotPoint[0] += moveVec[0]
-              nodeWrapper.node.PivotPoint[1] += moveVec[1]
-              nodeWrapper.node.PivotPoint[2] += moveVec[2]
+              let localMoveVec = vec3.fromValues(moveVec[0], moveVec[1], moveVec[2])
+
+              // For keyframe mode: Transform world-space delta to bone's local space
+              // This is necessary because Translation keyframes are applied BEFORE rotation
+              // If we don't transform, the movement direction will be wrong for rotated bones
+              if (subMode === 'keyframe' && nodeWrapper.matrix) {
+                // Extract rotation from the bone's matrix (upper 3x3)
+                // nodeWrapper.matrix contains the accumulated transform (parent * local)
+                const m = nodeWrapper.matrix as mat4
+                const rotMat3 = mat3.fromValues(
+                  m[0], m[1], m[2],
+                  m[4], m[5], m[6],
+                  m[8], m[9], m[10]
+                )
+                // Invert the rotation to get local-to-world inverse (i.e., world-to-local)
+                const invRotMat3 = mat3.invert(mat3.create(), rotMat3)
+                if (invRotMat3) {
+                  // Transform world delta to local delta
+                  vec3.transformMat3(localMoveVec, localMoveVec, invRotMat3)
+                }
+              }
+
+              // binding 模式：修改 PivotPoint（静态绑定位置）
+              if (subMode === 'binding') {
+                nodeWrapper.node.PivotPoint[0] += localMoveVec[0]
+                nodeWrapper.node.PivotPoint[1] += localMoveVec[1]
+                nodeWrapper.node.PivotPoint[2] += localMoveVec[2]
+              }
+              // keyframe 模式：累积 delta 并注入临时 Translation 关键帧用于实时预览
+              else if (subMode === 'keyframe') {
+                // 累积 LOCAL 偏移到全局变量 (用于 MouseUp 时提交)
+                if (!(window as any)._keyframeDragDelta) {
+                  (window as any)._keyframeDragDelta = {}
+                }
+                if (!(window as any)._keyframeDragDelta[nodeId]) {
+                  (window as any)._keyframeDragDelta[nodeId] = [0, 0, 0]
+                }
+                (window as any)._keyframeDragDelta[nodeId][0] += localMoveVec[0];
+                (window as any)._keyframeDragDelta[nodeId][1] += localMoveVec[1];
+                (window as any)._keyframeDragDelta[nodeId][2] += localMoveVec[2];
+
+                // 实时预览：注入临时 Translation 关键帧到渲染器模型
+                // 使用 initialTranslation + accumulatedDelta 作为预览值
+                const dragData = keyframeDragData.current
+                if (dragData && rendererRef.current) {
+                  const initialVals = dragData.initialValues.get(nodeId) as any
+                  const delta = (window as any)._keyframeDragDelta[nodeId]
+
+                  if (initialVals && initialVals.translation) {
+                    const previewTranslation = [
+                      initialVals.translation[0] + delta[0],
+                      initialVals.translation[1] + delta[1],
+                      initialVals.translation[2] + delta[2]
+                    ]
+
+                    // 获取渲染器中的节点并注入临时 Translation
+                    const rendererNode = rendererRef.current.model?.Nodes?.find((n: any) => n.ObjectId === nodeId)
+                    if (rendererNode) {
+                      // 确保 Translation 属性存在
+                      if (!rendererNode.Translation) {
+                        rendererNode.Translation = { Keys: [], InterpolationType: 1 }
+                      }
+                      // 在当前帧注入临时关键帧用于预览
+                      // 标记为临时的，以便 MouseUp 时可以清理
+                      const frame = Math.round(currentFrame)
+                      const tempKeyIndex = rendererNode.Translation.Keys.findIndex((k: any) => k._isPreviewKey)
+                      if (tempKeyIndex >= 0) {
+                        rendererNode.Translation.Keys[tempKeyIndex].Vector = previewTranslation
+                        rendererNode.Translation.Keys[tempKeyIndex].Frame = frame
+                      } else {
+                        rendererNode.Translation.Keys.push({
+                          Frame: frame,
+                          Vector: previewTranslation,
+                          _isPreviewKey: true  // 标记为预览关键帧
+                        })
+                        rendererNode.Translation.Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                      }
+                    }
+                  }
+                }
+
+                // DEBUG: Log during drag (throttled)
+                if (!((window as any)._debugMoveCounter)) (window as any)._debugMoveCounter = 0
+                  ; (window as any)._debugMoveCounter++
+                if ((window as any)._debugMoveCounter % 10 === 0) {
+                  console.log('[DEBUG MouseMove] NodeId:', nodeId,
+                    'WorldDelta:', [moveVec[0].toFixed(2), moveVec[1].toFixed(2), moveVec[2].toFixed(2)],
+                    'LocalDelta:', [localMoveVec[0].toFixed(2), localMoveVec[1].toFixed(2), localMoveVec[2].toFixed(2)])
+                }
+              }
             }
           })
+
+          // Force renderer update for both binding and keyframe modes
+          if (subMode === 'binding' || subMode === 'keyframe') {
+            rendererRef.current!.update(0)
+          }
         }
-      } else if (transformMode === 'rotate' || transformMode === 'scale') {
+      } else if ((transformMode === 'rotate' || transformMode === 'scale') && mainMode === 'geometry') {
         const { selectedVertexIds, selectedFaceIds, geometrySubMode } = useSelectionStore.getState()
 
         const center = vec3.create()
@@ -2791,6 +3044,139 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           })
         }
       }
+      // === ANIMATION MODE: ROTATE & SCALE PREVIEW ===
+      else if ((transformMode === 'rotate' || transformMode === 'scale') && mainMode === 'animation' && subMode === 'keyframe') {
+        const { selectedNodeIds } = useSelectionStore.getState()
+        const { currentFrame, nodes } = useModelStore.getState()
+
+        // Initialize drag data if not exists
+        if (!keyframeDragData.current && rendererRef.current) {
+          keyframeDragData.current = {
+            initialKeys: new Map(),
+            initialValues: new Map()
+          }
+
+          selectedNodeIds.forEach(nodeId => {
+            // 1. Snapshot original KEYS from STORE (source of truth)
+            const storeNode = nodes.find((n: any) => n.ObjectId === nodeId)
+            if (storeNode) {
+              keyframeDragData.current!.initialKeys.set(nodeId, {
+                Rotation: storeNode.Rotation ? JSON.parse(JSON.stringify(storeNode.Rotation)) : undefined,
+                Scaling: storeNode.Scaling ? JSON.parse(JSON.stringify(storeNode.Scaling)) : undefined
+              })
+            }
+
+            // 2. Snapshot current visual values from RENDERER (for delta calculation)
+            const nodeWrapper = rendererRef.current!.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
+            if (nodeWrapper) {
+              // Get current interpolated value
+              const currentRot = nodeWrapper.localRotation ? quat.clone(nodeWrapper.localRotation) : quat.create()
+              const currentScale = nodeWrapper.localScale ? vec3.clone(nodeWrapper.localScale) : vec3.fromValues(1, 1, 1)
+
+              keyframeDragData.current!.initialValues.set(nodeId, {
+                rotation: currentRot as Float32Array,
+                scaling: currentScale as Float32Array
+              })
+            }
+          })
+        }
+
+        const center = vec3.create()
+        let count = 0
+        selectedNodeIds.forEach(nodeId => {
+          const nodeWrapper = rendererRef.current!.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
+          if (nodeWrapper) {
+            const matrix = nodeWrapper.matrix
+            let pivot = [0, 0, 0]
+            if (nodeWrapper.node && nodeWrapper.node.PivotPoint) pivot = nodeWrapper.node.PivotPoint
+            const x = matrix[0] * pivot[0] + matrix[4] * pivot[1] + matrix[8] * pivot[2] + matrix[12]
+            const y = matrix[1] * pivot[0] + matrix[5] * pivot[1] + matrix[9] * pivot[2] + matrix[13]
+            const z = matrix[2] * pivot[0] + matrix[6] * pivot[1] + matrix[10] * pivot[2] + matrix[14]
+            center[0] += x; center[1] += y; center[2] += z;
+            count++
+          }
+        })
+        if (count > 0) vec3.scale(center, center, 1.0 / count)
+
+        if (transformMode === 'rotate') {
+          let angle = 0
+          const rotAxis = vec3.create()
+          if (axis === 'x') { angle = -deltaY * 0.01; vec3.set(rotAxis, 1, 0, 0) }
+          else if (axis === 'y') { angle = -deltaX * 0.01; vec3.set(rotAxis, 0, 1, 0) }
+          else if (axis === 'z') { angle = deltaX * 0.01; vec3.set(rotAxis, 0, 0, 1) }
+
+          if (angle !== 0) {
+            const deltaQuat = quat.create()
+            quat.setAxisAngle(deltaQuat, rotAxis, angle)
+
+            selectedNodeIds.forEach(nodeId => {
+              const currentVal = keyframeDragData.current?.initialValues.get(nodeId)
+              if (currentVal) {
+                const newRot = quat.create()
+                // Aggregate rotation: New = Current * Delta (Local approximation)
+                quat.multiply(newRot, currentVal.rotation as any, deltaQuat)
+
+                // Update current value so next frame accumulates
+                quat.copy(currentVal.rotation as any, newRot)
+
+                // INJECT into Renderer Model for PREVIEW
+                const rendererNode = rendererRef.current!.model.Nodes.find((n: any) => n.ObjectId === nodeId)
+                if (rendererNode) {
+                  if (!rendererNode.Rotation) rendererNode.Rotation = { Keys: [], InterpolationType: 1 }
+                  const keys = rendererNode.Rotation.Keys
+                  const frame = Math.round(currentFrame)
+                  let key = keys.find((k: any) => Math.abs(k.Frame - frame) < 0.1)
+                  if (!key) {
+                    key = { Frame: frame, Vector: [0, 0, 0, 1] }
+                    keys.push(key)
+                    keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                  }
+                  key.Vector = [newRot[0], newRot[1], newRot[2], newRot[3]]
+                }
+              }
+            })
+          }
+        } else if (transformMode === 'scale') {
+          const scaleFactor = 1 + (deltaX - deltaY) * 0.005
+          const scaleVec = vec3.fromValues(1, 1, 1)
+          if (axis === 'x') scaleVec[0] = scaleFactor
+          else if (axis === 'y') scaleVec[1] = scaleFactor
+          else if (axis === 'z') scaleVec[2] = scaleFactor
+          else if (axis === 'center') vec3.set(scaleVec, scaleFactor, scaleFactor, scaleFactor)
+          else if (axis === 'xy') { scaleVec[0] = scaleFactor; scaleVec[1] = scaleFactor; }
+
+          selectedNodeIds.forEach(nodeId => {
+            const currentVal = keyframeDragData.current?.initialValues.get(nodeId)
+            if (currentVal) {
+              const newScale = vec3.create()
+              // Aggregate scale: New = Current * Delta
+              vec3.multiply(newScale, currentVal.scaling as any, scaleVec)
+
+              // Update current value
+              vec3.copy(currentVal.scaling as any, newScale)
+
+              // INJECT into Renderer Model for PREVIEW
+              const rendererNode = rendererRef.current!.model.Nodes.find((n: any) => n.ObjectId === nodeId)
+              if (rendererNode) {
+                if (!rendererNode.Scaling) rendererNode.Scaling = { Keys: [], InterpolationType: 1 }
+                const keys = rendererNode.Scaling.Keys
+                const frame = Math.round(currentFrame)
+                let key = keys.find((k: any) => Math.abs(k.Frame - frame) < 0.1)
+                if (!key) {
+                  key = { Frame: frame, Vector: [1, 1, 1] }
+                  keys.push(key)
+                  keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                }
+                key.Vector = [newScale[0], newScale[1], newScale[2]]
+              }
+            }
+          })
+        }
+
+        // CRITICAL: Force renderer to recalculate bone matrices with new keyframe values
+        // This makes the mesh update in real-time while dragging
+        rendererRef.current!.update(0)
+      }
       return
     }
 
@@ -2886,15 +3272,26 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           }
           showGizmo = true
         }
-      } else if (mainMode === 'animation' && animationSubMode === 'binding' && selectedNodeIds.length > 0) {
+        // 动画模式（binding 和 keyframe）
+      } else if (mainMode === 'animation' && selectedNodeIds.length > 0) {
         showGizmo = true
         for (const nodeId of selectedNodeIds) {
           const nodeWrapper = rendererRef.current.rendererData.nodes[nodeId]
-          if (nodeWrapper && nodeWrapper.node && nodeWrapper.node.PivotPoint) {
-            const pivot = nodeWrapper.node.PivotPoint
-            center[0] += pivot[0]
-            center[1] += pivot[1]
-            center[2] += pivot[2]
+          if (nodeWrapper && nodeWrapper.matrix) {
+            // 使用矩阵变换 PivotPoint 获取正确的世界坐标
+            const matrix = nodeWrapper.matrix
+            let pivot = [0, 0, 0]
+            if (nodeWrapper.node && nodeWrapper.node.PivotPoint) {
+              pivot = nodeWrapper.node.PivotPoint
+            } else if (rendererRef.current.model.PivotPoints && rendererRef.current.model.PivotPoints[nodeId]) {
+              pivot = rendererRef.current.model.PivotPoints[nodeId]
+            }
+            const x = matrix[0] * pivot[0] + matrix[4] * pivot[1] + matrix[8] * pivot[2] + matrix[12]
+            const y = matrix[1] * pivot[0] + matrix[5] * pivot[1] + matrix[9] * pivot[2] + matrix[13]
+            const z = matrix[2] * pivot[0] + matrix[6] * pivot[1] + matrix[10] * pivot[2] + matrix[14]
+            center[0] += x
+            center[1] += y
+            center[2] += z
             count++
           }
         }
@@ -3101,21 +3498,100 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             }
             initialNodePositions.current.clear()
           }
+        } else if (mainMode === 'animation' && animationSubMode === 'keyframe') {
+          // 1. Translation (using DragDelta)
+          const dragDelta = (window as any)._keyframeDragDelta
+          if (dragDelta) {
+            const { autoKeyframe, currentFrame, nodes } = useModelStore.getState()
+            const { selectedNodeIds } = useSelectionStore.getState()
+
+            // FIRST: Clean up preview keyframes from renderer model
+            if (rendererRef.current && rendererRef.current.model && rendererRef.current.model.Nodes) {
+              selectedNodeIds.forEach(nodeId => {
+                const rendererNode = rendererRef.current!.model.Nodes.find((n: any) => n.ObjectId === nodeId)
+                if (rendererNode && rendererNode.Translation && rendererNode.Translation.Keys) {
+                  // Remove all preview keys (marked with _isPreviewKey)
+                  rendererNode.Translation.Keys = rendererNode.Translation.Keys.filter((k: any) => !k._isPreviewKey)
+                }
+              })
+            }
+
+            if (autoKeyframe) {
+              const translationChanges: KeyframeChange[] = []
+              const frame = Math.round(currentFrame)
+
+              selectedNodeIds.forEach(nodeId => {
+                const delta = dragDelta[nodeId]
+                if (delta && (delta[0] !== 0 || delta[1] !== 0 || delta[2] !== 0)) {
+                  // Build KeyframeChange for Translation
+                  // Use interpolated initial value from keyframeDragData (captured in MouseDown)
+                  const storeNode = nodes.find((n: any) => n.ObjectId === nodeId)
+                  if (storeNode) {
+                    const oldKeys = storeNode.Translation?.Keys || []
+                    const existingKey = oldKeys.find((k: any) => Math.abs(k.Frame - frame) < 0.1)
+
+                    // Get interpolated translation from keyframeDragData (not exact frame match!)
+                    let currentTranslation = [0, 0, 0]
+                    const dragData = keyframeDragData.current
+                    if (dragData) {
+                      const initialVals = dragData.initialValues.get(nodeId) as any
+                      if (initialVals && initialVals.translation) {
+                        currentTranslation = [...initialVals.translation]
+                      }
+                    }
+
+                    const newTranslation = [
+                      currentTranslation[0] + delta[0],
+                      currentTranslation[1] + delta[1],
+                      currentTranslation[2] + delta[2]
+                    ]
+
+                    // DEBUG: Log commit data
+                    console.log('[DEBUG MouseUp] NodeId:', nodeId)
+                    console.log('[DEBUG MouseUp] Delta (accumulated):', [...delta])
+                    console.log('[DEBUG MouseUp] InitialTranslation (interpolated):', [...currentTranslation])
+                    console.log('[DEBUG MouseUp] NewTranslation:', [...newTranslation])
+                    console.log('[DEBUG MouseUp] Frame:', frame)
+
+                    translationChanges.push({
+                      nodeId,
+                      propertyName: 'Translation',
+                      frame,
+                      oldValue: existingKey ? [...existingKey.Vector] : null,
+                      newValue: newTranslation
+                    })
+                  }
+                }
+              })
+
+              if (translationChanges.length > 0) {
+                const cmd = new UpdateKeyframeCommand(rendererRef.current, translationChanges)
+                commandManager.execute(cmd)
+                console.log('[Viewer] Committed Translation Keyframe changes via command', translationChanges.length)
+              }
+            }
+            // Clear global delta
+            ; (window as any)._keyframeDragDelta = null
+          }
+
+          // NOTE: Rotation/Scale keyframe commit is handled separately by the Rotate/Scale gizmo
+          // This block was incorrectly running on Translation drag, overwriting keyframes with initial values
+          // The correct Rotation/Scale commit happens in the rotation/scale handleMouseMove + handleMouseUp flow
+
+          // Clear keyframeDragData after Translation commit
+          keyframeDragData.current = null
         }
       }
       return
     }
 
-    // Check if it was a click (not a drag)
     const deltaX = Math.abs(e.clientX - startX)
     const deltaY = Math.abs(e.clientY - startY)
     const isCtrl = e.ctrlKey || e.metaKey
 
     if (wasBoxSelecting && deltaX > 5 && deltaY > 5) {
-      // Perform Box Selection
       handleBoxSelection(startX, startY, e.clientX, e.clientY, e.shiftKey, isCtrl)
     } else if (deltaX < 5 && deltaY < 5 && dragButton === 0) {
-      // It's a left click
       handleSelectionClick(e.clientX, e.clientY, e.shiftKey, isCtrl)
     }
   }
@@ -3174,7 +3650,6 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     const cmd = new PasteVerticesCommand(rendererRef.current, vertexCopyBuffer.current, true)
     commandManager.execute(cmd)
   }
-
   useEffect(() => {
     const handleKeyboard = (e: KeyboardEvent) => {
       // Only block keyboard shortcuts when focus is on text input elements

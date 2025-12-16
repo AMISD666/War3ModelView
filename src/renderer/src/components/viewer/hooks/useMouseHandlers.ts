@@ -121,7 +121,15 @@ export function useMouseHandlers({
         mouseState.current.startY = e.clientY
         mouseState.current.isCtrlPressed = e.ctrlKey || e.metaKey
 
-        // Box Selection: Alt + Left Click
+        // View 模式：左键直接旋转视角，不进行框选
+        if (mainMode === 'view') {
+            mouseState.current.isBoxSelecting = false
+            setSelectionBox(null)
+            // 保持相机控制启用
+            return
+        }
+
+        // Box Selection: Alt + Left Click (only in geometry/animation mode)
         if (e.button === 0 && e.altKey && (mainMode === 'geometry' || mainMode === 'animation')) {
             if (cameraRef.current) cameraRef.current.enabled = false
             const rect = canvasRef.current?.getBoundingClientRect()

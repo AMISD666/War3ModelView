@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react'
+import React, { useMemo, useState, useEffect } from 'react'
 import { InputNumber, Space, Typography, Select, message } from 'antd'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useModelStore } from '../../store/modelStore'
@@ -25,6 +25,10 @@ const BoneParameterPanel: React.FC = () => {
     const selectedNode = selectedNodeIds.length === 1
         ? nodes.find((n: any) => n.ObjectId === selectedNodeIds[0])
         : null
+
+
+    // 订阅当前帧以便在帧变化时刷新位置
+    const currentFrame = useModelStore(state => state.currentFrame)
 
     // 计算该骨骼绑定的顶点数量
     const boneVertexCount = useMemo(() => {
@@ -75,44 +79,35 @@ const BoneParameterPanel: React.FC = () => {
         return Array.from(boneMap.entries()).map(([index, name]) => ({ index, name }))
     }, [modelData, nodes, selectedVertexIds])
 
-    // 获取骨骼位置（从绑定姿态下的世界坐标）- 使用 useMemo 缓存避免重复计算
-    const position = useMemo(() => {
-        if (!selectedNode) return [0, 0, 0]
+    // 骨骼位置 - 使用 useState 和定时器实时刷新
+    const [position, setPosition] = useState([0, 0, 0])
 
-        // Get position from renderer's rendererData.nodes (has computed world matrix)
-        if (renderer && renderer.rendererData && renderer.rendererData.nodes) {
-            const objectId = selectedNode.ObjectId
-            const nodeWrapper = renderer.rendererData.nodes[objectId]
-            if (nodeWrapper && nodeWrapper.node && nodeWrapper.node.PivotPoint && nodeWrapper.matrix) {
-                // Transform PivotPoint by the node's world matrix
-                const pivot = nodeWrapper.node.PivotPoint
-                const matrix = nodeWrapper.matrix
-                // Manual mat4 * vec3 transform (result = matrix * [pivot, 1])
-                const x = matrix[0] * pivot[0] + matrix[4] * pivot[1] + matrix[8] * pivot[2] + matrix[12]
-                const y = matrix[1] * pivot[0] + matrix[5] * pivot[1] + matrix[9] * pivot[2] + matrix[13]
-                const z = matrix[2] * pivot[0] + matrix[6] * pivot[1] + matrix[10] * pivot[2] + matrix[14]
-                return [x, y, z]
+    useEffect(() => {
+        const updatePosition = () => {
+            // 直接从 Viewer 渲染循环设置的全局变量读取位置
+            const pos = (window as any)._selectedBoneWorldPos
+            // 只打印一次日志
+            if (!(window as any)._bonePosReadLogged) {
+                console.log('[BonePos Read] _selectedBoneWorldPos:', pos)
+                    ; (window as any)._bonePosReadLogged = true
             }
-            // If nodeWrapper exists but no PivotPoint, try raw pivot from model
-            if (nodeWrapper && renderer.model && renderer.model.PivotPoints && renderer.model.PivotPoints[objectId]) {
-                const pivot = renderer.model.PivotPoints[objectId]
-                const matrix = nodeWrapper.matrix
-                if (pivot && matrix) {
-                    const x = matrix[0] * pivot[0] + matrix[4] * pivot[1] + matrix[8] * pivot[2] + matrix[12]
-                    const y = matrix[1] * pivot[0] + matrix[5] * pivot[1] + matrix[9] * pivot[2] + matrix[13]
-                    const z = matrix[2] * pivot[0] + matrix[6] * pivot[1] + matrix[10] * pivot[2] + matrix[14]
-                    return [x, y, z]
-                }
+            if (pos && Array.isArray(pos) && pos.length === 3) {
+                setPosition(pos)
+            } else {
+                setPosition([0, 0, 0])
             }
         }
 
-        // Fallback: Try node's PivotPoint directly (local space)
-        if (selectedNode.PivotPoint && Array.isArray(selectedNode.PivotPoint)) {
-            return selectedNode.PivotPoint
+        updatePosition()
+        // 使用 requestAnimationFrame 与渲染循环同步（比 setInterval 更精确）
+        let rafId: number
+        const loop = () => {
+            updatePosition()
+            rafId = requestAnimationFrame(loop)
         }
-
-        return [0, 0, 0]
-    }, [selectedNode, renderer])
+        rafId = requestAnimationFrame(loop)
+        return () => cancelAnimationFrame(rafId)
+    }, [selectedNode, currentFrame])
 
     const handleParentChange = (value: number | undefined) => {
         if (!renderer || !selectedNode) return

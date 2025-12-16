@@ -216,13 +216,13 @@ export class DebugRenderer {
             // Determine color based on selection state
             let color: number[]
             if (selectedNodeIds.includes(node.node.ObjectId)) {
-                color = [1, 0, 0, 1] // Red - selected
+                color = [1.0, 0.3, 0.3, 1] // Bright red - selected
             } else if (node.node.ObjectId === parentOfSelected) {
-                color = [0.2, 0.2, 0.2, 1] // Dark gray - parent (black is hard to see with lighting)
+                color = [1.0, 0.6, 0.0, 1] // Bright Orange - parent
             } else if (childrenOfSelected.includes(node.node.ObjectId)) {
-                color = [1, 1, 0, 1] // Yellow - children
+                color = [1.0, 1.0, 0.3, 1] // Bright yellow - children
             } else {
-                color = [0.2, 0.8, 0.2, 1] // Green - default
+                color = [0.4, 1.0, 0.4, 1] // Bright green - default
             }
 
             // Transform cube vertices by node matrix
@@ -250,6 +250,58 @@ export class DebugRenderer {
                 vec3.transformMat3(tempNormal, tempNormal, normalMatrix)
                 vec3.normalize(tempNormal, tempNormal)
                 transformedNormals.push(tempNormal[0], tempNormal[1], tempNormal[2])
+            }
+
+            // 为父骨骼和子骨骼渲染亮青色实体边框（不受光照影响）
+            const isParentOrChild = node.node.ObjectId === parentOfSelected || childrenOfSelected.includes(node.node.ObjectId)
+            if (isParentOrChild && this.program) {
+                const outlineSize = cubeSize * 1.1 // 边框比立方体大10%
+                const os = outlineSize
+                // 大一点的实体立方体顶点（与 baseCubeVerts 相同结构但尺寸不同）
+                const outlineCubeVerts = [
+                    // Front face (Z+)
+                    -os, -os, os, os, -os, os, os, os, os,
+                    -os, -os, os, os, os, os, -os, os, os,
+                    // Back face (Z-)
+                    os, -os, -os, -os, -os, -os, -os, os, -os,
+                    os, -os, -os, -os, os, -os, os, os, -os,
+                    // Top face (Y+)
+                    -os, os, os, os, os, os, os, os, -os,
+                    -os, os, os, os, os, -os, -os, os, -os,
+                    // Bottom face (Y-)
+                    -os, -os, -os, os, -os, -os, os, -os, os,
+                    -os, -os, -os, os, -os, os, -os, -os, os,
+                    // Right face (X+)
+                    os, -os, os, os, -os, -os, os, os, -os,
+                    os, -os, os, os, os, -os, os, os, os,
+                    // Left face (X-)
+                    -os, -os, -os, -os, -os, os, -os, os, os,
+                    -os, -os, -os, -os, os, os, -os, os, -os,
+                ]
+                // 变换顶点
+                const outlineTransformed: number[] = []
+                for (let i = 0; i < outlineCubeVerts.length; i += 3) {
+                    vec3.set(tempVec,
+                        outlineCubeVerts[i] + pivot[0],
+                        outlineCubeVerts[i + 1] + pivot[1],
+                        outlineCubeVerts[i + 2] + pivot[2]
+                    )
+                    vec3.transformMat4(tempVec, tempVec, node.matrix)
+                    outlineTransformed.push(tempVec[0], tempVec[1], tempVec[2])
+                }
+                // 使用简单着色器程序渲染（不受光照影响）
+                gl.useProgram(this.program)
+                gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer)
+                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(outlineTransformed), gl.DYNAMIC_DRAW)
+                gl.enableVertexAttribArray(this.aPosition)
+                gl.vertexAttribPointer(this.aPosition, 3, gl.FLOAT, false, 0, 0)
+                gl.uniformMatrix4fv(this.uMVMatrix, false, mvMatrix)
+                gl.uniformMatrix4fv(this.uPMatrix, false, pMatrix)
+                gl.uniform4fv(this.uColor, [0.0, 1.0, 1.0, 1.0]) // 亮青色
+                gl.uniform1f(this.uPointSize, 1.0)
+                gl.drawArrays(gl.TRIANGLES, 0, 36)
+                // 切换回立方体程序
+                gl.useProgram(this.cubeProgram)
             }
 
             // Upload vertex data
@@ -547,4 +599,58 @@ export class DebugRenderer {
             this.renderWireframeBox(gl, mvMatrix, pMatrix, [-10, -10, -10], [10, 10, 10], color);
         }
     }
+
+    /**
+     * 在指定位置渲染本地坐标轴（只读，用于关键帧模式选中骨骼）
+     * @param center 坐标轴中心位置
+     * @param matrix 节点变换矩阵（用于计算旋转后的轴向）
+     * @param scale 坐标轴长度
+     */
+    renderLocalAxes(
+        gl: WebGLRenderingContext | WebGL2RenderingContext,
+        mvMatrix: mat4,
+        pMatrix: mat4,
+        center: number[] | Float32Array,
+        nodeMatrix: mat4,
+        scale: number = 15
+    ) {
+        if (!this.program || !this.buffer) return
+
+        // 从节点矩阵中提取旋转后的轴向
+        const xAxis = vec3.fromValues(nodeMatrix[0], nodeMatrix[1], nodeMatrix[2])
+        const yAxis = vec3.fromValues(nodeMatrix[4], nodeMatrix[5], nodeMatrix[6])
+        const zAxis = vec3.fromValues(nodeMatrix[8], nodeMatrix[9], nodeMatrix[10])
+
+        // 归一化并缩放
+        vec3.normalize(xAxis, xAxis)
+        vec3.normalize(yAxis, yAxis)
+        vec3.normalize(zAxis, zAxis)
+        vec3.scale(xAxis, xAxis, scale)
+        vec3.scale(yAxis, yAxis, scale)
+        vec3.scale(zAxis, zAxis, scale)
+
+        const cx = center[0], cy = center[1], cz = center[2]
+
+        // X轴 - 红色
+        const xLines = [
+            cx, cy, cz,
+            cx + xAxis[0], cy + xAxis[1], cz + xAxis[2]
+        ]
+        this.renderLines(gl, mvMatrix, pMatrix, xLines, [1, 0, 0, 1])
+
+        // Y轴 - 绿色
+        const yLines = [
+            cx, cy, cz,
+            cx + yAxis[0], cy + yAxis[1], cz + yAxis[2]
+        ]
+        this.renderLines(gl, mvMatrix, pMatrix, yLines, [0, 1, 0, 1])
+
+        // Z轴 - 蓝色
+        const zLines = [
+            cx, cy, cz,
+            cx + zAxis[0], cy + zAxis[1], cz + zAxis[2]
+        ]
+        this.renderLines(gl, mvMatrix, pMatrix, zLines, [0, 0, 1, 1])
+    }
 }
+

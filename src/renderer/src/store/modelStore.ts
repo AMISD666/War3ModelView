@@ -48,6 +48,7 @@ interface ModelState {
     isPlaying: boolean;
     playbackSpeed: number;
     isLooping: boolean;
+    autoKeyframe: boolean;
 
     // Animation Actions
     setSequences: (sequences: any[]) => void;
@@ -56,6 +57,7 @@ interface ModelState {
     setPlaying: (playing: boolean) => void;
     setPlaybackSpeed: (speed: number) => void;
     setLooping: (looping: boolean) => void;
+    setAutoKeyframe: (enabled: boolean) => void;
     setTextures: (textures: any[]) => void;
     setGeosets: (geosets: any[]) => void;
     setMaterials: (materials: any[]) => void;
@@ -400,6 +402,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
     isPlaying: true,
     playbackSpeed: 1.0,
     isLooping: true,
+    autoKeyframe: false,
 
     setModelData: (data, path) => {
         const nodes = extractNodesFromModel(data);
@@ -815,6 +818,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
     setPlaying: (playing) => set({ isPlaying: playing }),
     setPlaybackSpeed: (speed) => set({ playbackSpeed: speed }),
     setLooping: (looping) => set({ isLooping: looping }),
+    setAutoKeyframe: (enabled) => set({ autoKeyframe: enabled }),
     setTextures: (textures) => set((state) => {
         const updatedModelData = state.modelData ? { ...state.modelData, Textures: textures } : state.modelData;
         return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };

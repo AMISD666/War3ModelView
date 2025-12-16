@@ -140,10 +140,28 @@ const AnimationModeLayout: React.FC<AnimationModeLayoutProps> = ({
                                 right: 0,
                                 bottom: 0,
                                 height: bottomPanelHeight,
+                                display: 'flex',
                                 backgroundColor: '#1e1e1e',
                                 borderTop: '1px solid #444'
                             }}>
-                                <TimelinePanel />
+                                {/* 左侧预留面板 */}
+                                <div style={{
+                                    width: LEFT_PANEL_WIDTH,
+                                    height: '100%',
+                                    backgroundColor: '#2b2b2b',
+                                    borderRight: '1px solid #444',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    color: '#666',
+                                    fontSize: '11px'
+                                }}>
+                                    {/* 预留区域 */}
+                                </div>
+                                {/* 时间轴主体 */}
+                                <div style={{ flex: 1, height: '100%' }}>
+                                    <TimelinePanel />
+                                </div>
                             </div>
                         </>
                     )}

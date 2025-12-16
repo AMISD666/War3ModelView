@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useModelStore } from '../../store/modelStore';
 import { Button, Slider, Select, Space, Tooltip, Typography } from 'antd';
 import {
@@ -12,10 +12,10 @@ const { Text } = Typography;
 const { Option } = Select;
 
 const TimelinePanel: React.FC = () => {
+    // PERFORMANCE: Don't subscribe to currentFrame directly - use polling instead
     const {
         sequences,
         currentSequence,
-        currentFrame,
         isPlaying,
         playbackSpeed,
         isLooping,
@@ -24,6 +24,16 @@ const TimelinePanel: React.FC = () => {
         setPlaybackSpeed,
         setLooping
     } = useModelStore();
+
+    // Poll currentFrame every 250ms to avoid per-frame re-renders
+    const [displayFrame, setDisplayFrame] = useState(0);
+    useEffect(() => {
+        setDisplayFrame(Math.round(useModelStore.getState().currentFrame));
+        const interval = setInterval(() => {
+            setDisplayFrame(Math.round(useModelStore.getState().currentFrame));
+        }, 250);
+        return () => clearInterval(interval);
+    }, []);
 
     const activeSequence = currentSequence !== -1 ? sequences[currentSequence] : null;
     const minFrame = activeSequence ? activeSequence.Interval[0] : 0;
@@ -41,6 +51,7 @@ const TimelinePanel: React.FC = () => {
 
     const handleSliderChange = useCallback((value: number) => {
         setFrame(value);
+        setDisplayFrame(value); // Immediate feedback
         // Optionally pause when scrubbing
         // setPlaying(false); 
     }, [setFrame]);
@@ -77,13 +88,13 @@ const TimelinePanel: React.FC = () => {
             {/* Top Row: Slider and Time */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '5px' }}>
                 <Text style={{ color: '#aaa', minWidth: '40px', textAlign: 'right' }}>
-                    {formatTime(currentFrame)}
+                    {formatTime(displayFrame)}
                 </Text>
                 <div style={{ flex: 1 }}>
                     <Slider
                         min={minFrame}
                         max={maxFrame}
-                        value={currentFrame}
+                        value={displayFrame}
                         onChange={handleSliderChange}
                         tooltip={{ formatter: (val) => val?.toFixed(0) }}
                         styles={{
