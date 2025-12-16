@@ -42,6 +42,7 @@ const TimelinePanel: React.FC = () => {
     const [displayFrame, setDisplayFrame] = useState(0)
     const [isDragging, setIsDragging] = useState(false)
     const [isEditingFrame, setIsEditingFrame] = useState(false)
+    const [inputFrameValue, setInputFrameValue] = useState('') // 独立的输入框值
 
     // 用 ref 存储变化频繁的值
     const frameRef = useRef(0)
@@ -83,25 +84,32 @@ const TimelinePanel: React.FC = () => {
     useEffect(() => {
         let lastDrawTime = 0
         let lastDisplayUpdate = 0
-        const FPS_LIMIT = 30 // 限制时间轴刷新率
+        const FPS_LIMIT = 60 // 限制时间轴刷新率
         const frameInterval = 1000 / FPS_LIMIT
-        const DISPLAY_UPDATE_INTERVAL = 250 // Update display every 250ms
+        const DISPLAY_UPDATE_INTERVAL = 16 // Update display every frame (60fps)
 
         const animate = (time: number) => {
             const elapsed = time - lastDrawTime
 
             if (elapsed >= frameInterval) {
                 lastDrawTime = time
-                // 拖动时不从 store 覆盖 frameRef（保留用户拖动的帧值）
+                // 直接从渲染器读取帧数（比 store 更新更频繁，避免光标跳跃）
                 if (!isDraggingRef.current) {
-                    frameRef.current = useModelStore.getState().currentFrame
+                    const renderer = useRendererStore.getState().renderer
+                    if (renderer && renderer.rendererData && typeof renderer.rendererData.frame === 'number') {
+                        frameRef.current = renderer.rendererData.frame
+                    } else {
+                        // Fallback to store
+                        frameRef.current = useModelStore.getState().currentFrame
+                    }
                 }
                 draw()
 
                 // Update displayFrame for the UI (only when not editing and not dragging)
                 if (!isEditingFrame && !isDraggingRef.current && time - lastDisplayUpdate >= DISPLAY_UPDATE_INTERVAL) {
                     lastDisplayUpdate = time
-                    setDisplayFrame(Math.round(frameRef.current))
+                    const roundedFrame = Math.round(frameRef.current)
+                    setDisplayFrame(roundedFrame)
                 }
             }
 
@@ -370,45 +378,63 @@ const TimelinePanel: React.FC = () => {
                     <span style={{ color: '#888', fontSize: '10px' }}>帧:</span>
                     <input
                         type="text"
-                        value={displayFrame}
-                        onFocus={() => setIsEditingFrame(true)}
+                        value={isEditingFrame ? inputFrameValue : displayFrame}
+                        onFocus={(e) => {
+                            setIsEditingFrame(true)
+                            setInputFrameValue(displayFrame.toString())
+                            // 选中全部文字方便输入
+                            e.target.select()
+                        }}
                         onChange={(e) => {
-                            const val = parseInt(e.target.value)
-                            if (!isNaN(val)) setDisplayFrame(val)
+                            setInputFrameValue(e.target.value)
                         }}
                         onKeyDown={(e) => {
+                            e.stopPropagation() // 阻止全局快捷键
                             if (e.key === 'Enter') {
-                                setFrame(displayFrame)
-                                frameRef.current = displayFrame
+                                const val = parseInt(inputFrameValue)
+                                if (!isNaN(val)) {
+                                    const clampedVal = Math.max(seqStart, Math.min(seqEnd, val))
+                                    setFrame(clampedVal)
+                                    frameRef.current = clampedVal
+                                    setDisplayFrame(clampedVal)
+                                    // 同步更新渲染器
+                                    const renderer = useRendererStore.getState().renderer
+                                    if (renderer && renderer.rendererData) {
+                                        renderer.rendererData.frame = clampedVal
+                                        if (typeof renderer.update === 'function') {
+                                            renderer.update(0)
+                                        }
+                                    }
+                                }
                                 setIsEditingFrame(false)
+                                    ; (e.target as HTMLInputElement).blur()
+                            } else if (e.key === 'Escape') {
+                                setIsEditingFrame(false)
+                                    ; (e.target as HTMLInputElement).blur()
+                            }
+                        }}
+                        onBlur={() => {
+                            const val = parseInt(inputFrameValue)
+                            if (!isNaN(val)) {
+                                const clampedVal = Math.max(seqStart, Math.min(seqEnd, val))
+                                setFrame(clampedVal)
+                                frameRef.current = clampedVal
+                                setDisplayFrame(clampedVal)
                                 // 同步更新渲染器
                                 const renderer = useRendererStore.getState().renderer
                                 if (renderer && renderer.rendererData) {
-                                    renderer.rendererData.frame = displayFrame
+                                    renderer.rendererData.frame = clampedVal
                                     if (typeof renderer.update === 'function') {
                                         renderer.update(0)
                                     }
                                 }
-                                ; (e.target as HTMLInputElement).blur()
                             }
-                        }}
-                        onBlur={() => {
-                            setFrame(displayFrame)
-                            frameRef.current = displayFrame
                             setIsEditingFrame(false)
-                            // 同步更新渲染器
-                            const renderer = useRendererStore.getState().renderer
-                            if (renderer && renderer.rendererData) {
-                                renderer.rendererData.frame = displayFrame
-                                if (typeof renderer.update === 'function') {
-                                    renderer.update(0)
-                                }
-                            }
                         }}
                         style={{
                             width: 60,
-                            backgroundColor: '#333',
-                            border: '1px solid #555',
+                            backgroundColor: isEditingFrame ? '#444' : '#333',
+                            border: isEditingFrame ? '1px solid #1890ff' : '1px solid #555',
                             borderRadius: 3,
                             color: '#fff',
                             padding: '2px 6px',
