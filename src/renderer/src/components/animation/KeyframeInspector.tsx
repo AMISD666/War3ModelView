@@ -173,6 +173,16 @@ const KeyframeInspector: React.FC = () => {
     const [, forceUpdate] = useState({})
     const currentFrameRef = useRef(0)
 
+    // 当选中节点变化或 renderer 变化时，强制刷新 renderer 以更新 _selectedBoneWorldPos
+    useEffect(() => {
+        if (renderer && selectedNodeIds.length > 0) {
+            // 强制刷新一帧以确保 _selectedBoneWorldPos 是最新的
+            renderer.update(0)
+            // 触发组件重渲染以显示更新后的值
+            forceUpdate({})
+        }
+    }, [renderer, selectedNodeIds])
+
     // 只在暂停时更新帧显示
     useEffect(() => {
         const interval = setInterval(() => {
