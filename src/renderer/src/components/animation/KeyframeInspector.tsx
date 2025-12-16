@@ -1,9 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
-import { Select } from 'antd'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
-
-const { Option } = Select
+import { useRendererStore } from '../../store/rendererStore'
 
 // 关键帧历史管理
 interface KeyframeHistoryEntry {
@@ -59,6 +57,56 @@ function eulerToQuat(euler: [number, number, number]): [number, number, number, 
     ]
 }
 
+// 非受控数字输入框，防止重渲染打断输入
+const UncontrolledInput: React.FC<{
+    value: number
+    onChange: (val: number) => void
+    step?: string
+    disabled?: boolean
+    style?: React.CSSProperties
+}> = ({ value, onChange, step, disabled, style }) => {
+    const [localVal, setLocalVal] = useState(value.toString())
+    const isEditing = useRef(false)
+
+    useEffect(() => {
+        if (!isEditing.current) {
+            setLocalVal(value.toString())
+        }
+    }, [value])
+
+    const handleCommit = () => {
+        isEditing.current = false
+        const num = parseFloat(localVal)
+        if (!isNaN(num)) {
+            onChange(num)
+        } else {
+            setLocalVal(value.toString()) // Reset on invalid
+        }
+    }
+
+    return (
+        <input
+            type="number"
+            step={step}
+            value={localVal}
+            onChange={(e) => {
+                isEditing.current = true
+                setLocalVal(e.target.value)
+            }}
+            onBlur={handleCommit}
+            onKeyDown={(e) => {
+                e.stopPropagation(); // 阻止全局快捷键
+                if (e.key === 'Enter') {
+                    handleCommit()
+                    e.currentTarget.blur()
+                }
+            }}
+            disabled={disabled}
+            style={style}
+        />
+    )
+}
+
 /**
  * 关键帧检查器
  */
@@ -67,26 +115,25 @@ const KeyframeInspector: React.FC = () => {
     const transformMode = useSelectionStore(state => state.transformMode)
     const nodes = useModelStore(state => state.nodes)
     const isPlaying = useModelStore(state => state.isPlaying)
-    const updateNode = useModelStore(state => state.updateNode)
-    const setFrame = useModelStore(state => state.setFrame)
+    const updateNodeSilent = useModelStore(state => state.updateNodeSilent)
+    // const setFrame = useModelStore(state => state.setFrame) // Unused
+    const renderer = useRendererStore(state => state.renderer)
 
     const [displayFrame, setDisplayFrame] = useState(0)
-    const [jumpFrame, setJumpFrame] = useState('')
+    // const [jumpFrame, setJumpFrame] = useState('') // Unused
     const [, forceUpdate] = useState({})
     const currentFrameRef = useRef(0)
 
     // 只在暂停时更新帧显示
     useEffect(() => {
-        currentFrameRef.current = useModelStore.getState().currentFrame
-        setDisplayFrame(Math.round(currentFrameRef.current))
         const interval = setInterval(() => {
-            const playing = useModelStore.getState().isPlaying
-            if (!playing) {
-                const frame = useModelStore.getState().currentFrame
-                if (Math.abs(frame - currentFrameRef.current) > 0.5) {
-                    currentFrameRef.current = frame
-                    setDisplayFrame(Math.round(frame))
-                }
+            // Update frame logic...
+            const store = useModelStore.getState()
+            const frame = store.currentFrame
+            currentFrameRef.current = frame
+
+            if (!store.isPlaying) {
+                setDisplayFrame(Math.round(frame))
             }
         }, 200)
         return () => clearInterval(interval)
@@ -132,16 +179,48 @@ const KeyframeInspector: React.FC = () => {
         const frame = Math.round(currentFrameRef.current)
 
         const existingKeyIndex = keys.findIndex((k: any) => Math.abs(k.Frame - frame) < 0.1)
+        const interpolationType = existingProp.InterpolationType || 0;
+
+        let newKey: any = { Frame: frame, Vector: newValues };
+
+        // 修复切线丢失问题：如果插值类型需要切线，则必须初始化
+        if (interpolationType > 1) { // 2=Hermite, 3=Bezier
+            if (existingKeyIndex >= 0) {
+                const oldKey = keys[existingKeyIndex];
+                if (oldKey.InTan) newKey.InTan = [...oldKey.InTan];
+                else newKey.InTan = propName === 'Rotation' ? [0, 0, 0, 0] : [0, 0, 0];
+                if (oldKey.OutTan) newKey.OutTan = [...oldKey.OutTan];
+                else newKey.OutTan = propName === 'Rotation' ? [0, 0, 0, 0] : [0, 0, 0];
+            } else {
+                newKey.InTan = propName === 'Rotation' ? [0, 0, 0, 0] : [0, 0, 0];
+                newKey.OutTan = propName === 'Rotation' ? [0, 0, 0, 0] : [0, 0, 0];
+            }
+        }
 
         if (existingKeyIndex >= 0) {
-            keys[existingKeyIndex] = { ...keys[existingKeyIndex], Vector: newValues }
+            keys[existingKeyIndex] = newKey
         } else {
-            keys.push({ Frame: frame, Vector: newValues })
+            keys.push(newKey)
             keys.sort((a: any, b: any) => a.Frame - b.Frame)
         }
 
         const newProp = { ...existingProp, Keys: keys }
-        updateNode(activeNode.ObjectId, { [propName]: newProp })
+
+        // 使用 Silent 更新避免全量重载导致 T-Pose
+        updateNodeSilent(activeNode.ObjectId, { [propName]: newProp })
+
+        // 手动同步 Renderer Runtime Data (实时更新)
+        if (renderer && (renderer as any).rendererData) {
+            const nodes = (renderer as any).rendererData.nodes;
+            const renderNode = nodes.find((n: any) => n.node && n.node.ObjectId === activeNode.ObjectId);
+            if (renderNode) {
+                // 直接更新运行时节点数据
+                renderNode.node[propName] = newProp;
+
+                // 强制刷新一帧动画 (dt=0) 以重新计算变换
+                renderer.update(0);
+            }
+        }
 
         pushHistory({
             nodeId: activeNode.ObjectId,
@@ -149,18 +228,10 @@ const KeyframeInspector: React.FC = () => {
             oldValue: oldProp,
             newValue: newProp
         })
-    }, [activeNode, updateNode])
+    }, [activeNode, updateNodeSilent, renderer])
 
-    // 跳转帧
-    const handleJumpFrame = () => {
-        const frame = parseInt(jumpFrame)
-        if (!isNaN(frame) && frame >= 0) {
-            setFrame(frame)
-            setDisplayFrame(frame)
-            currentFrameRef.current = frame
-            setJumpFrame('')
-        }
-    }
+    // 跳转帧 (Unused)
+    // const handleJumpFrame = () => { ... }
 
     // 当前显示的属性
     const getCurrentPropInfo = (): { label: string; propName: 'Translation' | 'Rotation' | 'Scaling'; isRotation: boolean } | null => {
@@ -179,18 +250,13 @@ const KeyframeInspector: React.FC = () => {
         const { label, propName, isRotation } = propInfo
         const prop = activeNode[propName]
 
-        // 位移模式始终使用世界位置
+        // 默认拿本地关键帧数据 (Local Only)
+        // REVERT: Removed World Position Logic entirely to stabilize input
         let rawValues = getKeyframeValues(prop, isRotation ? 4 : 3)
-        if (propName === 'Translation') {
-            // 始终使用 Viewer 计算的世界位置
-            const worldPos = (window as any)._selectedBoneWorldPos
-            if (worldPos && Array.isArray(worldPos) && worldPos.length === 3) {
-                rawValues = worldPos
-            }
-        }
+        let displayValues = [...rawValues]
 
         // 旋转使用欧拉角显示
-        const values = isRotation ? quatToEuler(rawValues) : rawValues
+        const values = isRotation ? quatToEuler(displayValues) : displayValues
         const axes = ['X', 'Y', 'Z']
         const axisColors = ['#ff4d4f', '#52c41a', '#1890ff']
 
@@ -198,14 +264,17 @@ const KeyframeInspector: React.FC = () => {
             <div style={{ marginBottom: 12 }}>
                 {/* 标题栏 + 插值选择 */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                    <span style={{ fontSize: '12px', fontWeight: 'bold', color: '#ccc' }}>{label}</span>
+                    <span style={{ fontSize: '12px', fontWeight: 'bold', color: '#ccc' }}>
+                        {label} {'(Local)'}
+                    </span>
                     <select
                         value={prop?.InterpolationType ?? 1}
                         onChange={(e) => {
                             const val = parseInt(e.target.value)
                             const existingProp = prop || { Keys: [], InterpolationType: 1 }
                             const newProp = { ...existingProp, InterpolationType: val }
-                            updateNode(activeNode.ObjectId, { [propName]: newProp })
+                            updateNodeSilent(activeNode.ObjectId, { [propName]: newProp })
+                            if (renderer) renderer.update(0);
                         }}
                         style={{
                             backgroundColor: '#333',
@@ -234,18 +303,19 @@ const KeyframeInspector: React.FC = () => {
                                 width: 14,
                                 textAlign: 'center'
                             }}>{axis}</span>
-                            <input
-                                type="number"
+                            <UncontrolledInput
                                 step={isRotation ? "1" : "0.01"}
                                 value={parseFloat(values[i]?.toFixed(2) ?? '0')}
-                                onChange={(e) => {
+                                onChange={(val) => {
                                     const newVals = [...values]
-                                    newVals[i] = parseFloat(e.target.value) || 0
+                                    newVals[i] = val
+
                                     if (isRotation) {
                                         // 欧拉角转回四元数
                                         const quat = eulerToQuat(newVals as [number, number, number])
                                         handleValueChange(propName, quat)
                                     } else {
+                                        // 位移/缩放直接使用 (Local)
                                         handleValueChange(propName, newVals)
                                     }
                                 }}
@@ -276,61 +346,17 @@ const KeyframeInspector: React.FC = () => {
         )
     }
 
-    if (!propInfo) {
-        return (
-            <div style={{ padding: 20, color: '#666', textAlign: 'center', fontSize: '12px' }}>
-                请选择变换模式（W/E/R）
-            </div>
-        )
-    }
-
     return (
-        <div style={{ padding: 10, overflowY: 'auto', height: '100%', color: 'white', backgroundColor: '#252525' }}>
-            {/* 节点信息 */}
-            <div style={{ marginBottom: 10, borderBottom: '1px solid #333', paddingBottom: 8 }}>
-                <div style={{ fontWeight: 'bold', fontSize: '14px', color: '#eee' }}>{activeNode.Name}</div>
-                <div style={{
-                    fontSize: '12px',
-                    marginTop: 4,
-                    fontWeight: 'bold',
-                    color: (() => {
-                        // 不同节点类型用不同颜色
-                        const typeColors: Record<string, string> = {
-                            'Bone': '#52c41a',      // 绿色
-                            'Helper': '#1890ff',    // 蓝色
-                            'Attachment': '#faad14', // 橙色
-                            'Light': '#ffe58f',     // 黄色
-                            'ParticleEmitter': '#ff4d4f', // 红色
-                            'ParticleEmitter2': '#ff7a45', // 橙红
-                            'RibbonEmitter': '#eb2f96', // 粉色
-                            'Camera': '#722ed1',    // 紫色
-                            'Event': '#13c2c2',     // 青色
-                            'CollisionShape': '#8c8c8c' // 灰色
-                        }
-                        return typeColors[activeNode.type] || '#888'
-                    })()
-                }}>
-                    {(() => {
-                        // 节点类型中文名称
-                        const typeNames: Record<string, string> = {
-                            'Bone': '骨骼',
-                            'Helper': '辅助点',
-                            'Attachment': '附着点',
-                            'Light': '灯光',
-                            'ParticleEmitter': '粒子发射器',
-                            'ParticleEmitter2': '粒子发射器2',
-                            'RibbonEmitter': '飘带发射器',
-                            'Camera': '摄像机',
-                            'Event': '事件',
-                            'CollisionShape': '碰撞体'
-                        }
-                        return typeNames[activeNode.type] || activeNode.type
-                    })()}
-                </div>
+        <div style={{ padding: 12, color: '#fff', fontSize: '12px' }}>
+            <div style={{ marginBottom: 12 }}>
+                <span style={{ color: '#888' }}>当前节点:</span>
+                <span style={{ marginLeft: 8, fontWeight: 'bold' }}>{activeNode.Name}</span>
+                <span style={{ marginLeft: 8, color: '#555', fontSize: '10px' }}>(ID: {activeNode.ObjectId})</span>
             </div>
 
-            {/* 属性编辑 */}
             {renderProperty()}
+
+            {/* Undo/Redo - hidden for now as global shortcut works */}
         </div>
     )
 }

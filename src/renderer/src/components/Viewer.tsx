@@ -2696,7 +2696,24 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) return
+      console.log('[Viewer Debug] KeyDown:', e.key, 'Target:', e.target, 'ActiveElement:', document.activeElement);
+
+      // 显式检查 input
+      if (e.target instanceof HTMLInputElement) {
+        console.log('[Viewer Debug] Target is Input, Type:', e.target.type);
+        // 如果是 number input，绝对返回
+        if (e.target.type === 'number') {
+          console.log('[Viewer Debug] Blocking shortcut for number input');
+          return;
+        }
+      }
+
+      if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) {
+        const type = (document.activeElement as HTMLInputElement).type
+        console.log('[Viewer Debug] ActiveElement is Input, Type:', type);
+        // ... (保留原有逻辑作为后备)
+        return;
+      }
 
       const key = e.key.toLowerCase()
       if (key === 'w') useSelectionStore.getState().setTransformMode('translate')

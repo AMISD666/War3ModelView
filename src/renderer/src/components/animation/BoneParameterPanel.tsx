@@ -1,10 +1,9 @@
-import React, { useMemo, useState, useEffect, useCallback } from 'react'
-import { InputNumber, Space, Typography, Select, message } from 'antd'
+import React, { useMemo, useCallback, useRef, useEffect } from 'react'
+import { Typography, Select, message } from 'antd'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useModelStore } from '../../store/modelStore'
 import { useRendererStore } from '../../store/rendererStore'
 import { SetNodeParentCommand } from '../../commands/SetNodeParentCommand'
-import { UpdateKeyframeCommand } from '../../commands/UpdateKeyframeCommand'
 import { useCommandManager } from '../../utils/CommandManager'
 
 const { Text } = Typography
@@ -124,32 +123,108 @@ const BoneParameterPanel: React.FC = () => {
         return selectedNode.Translation.Keys.some((k: any) => Math.abs(k.Frame - frame) < 0.1)
     }, [selectedNode, currentFrame])
 
-    // 处理 Translation 值变化
-    const handleTranslationChange = useCallback((axis: number, value: number | null) => {
-        if (value === null || !selectedNode || !renderer) return
+    // 本地编辑状态 - 使用 ref 来避免 Store 更新导致的重渲染问题
+    const inputRefs = useRef<{ x: HTMLInputElement | null, y: HTMLInputElement | null, z: HTMLInputElement | null }>({
+        x: null, y: null, z: null
+    })
+    const isEditingRef = useRef(false)
+    const baseValueRef = useRef<[number, number, number]>([0, 0, 0])
+
+    // 同步显示值到输入框（仅当不在编辑时）
+    useEffect(() => {
+        if (isEditingRef.current) return
+        if (inputRefs.current.x) inputRefs.current.x.value = (translation[0] || 0).toFixed(5)
+        if (inputRefs.current.y) inputRefs.current.y.value = (translation[1] || 0).toFixed(5)
+        if (inputRefs.current.z) inputRefs.current.z.value = (translation[2] || 0).toFixed(5)
+    }, [translation])
+
+    // 当用户开始编辑时，记录基础值
+    const handleFocus = useCallback(() => {
+        isEditingRef.current = true
+        baseValueRef.current = [
+            parseFloat(inputRefs.current.x?.value || '0') || 0,
+            parseFloat(inputRefs.current.y?.value || '0') || 0,
+            parseFloat(inputRefs.current.z?.value || '0') || 0
+        ]
+    }, [])
+
+    // 用户完成编辑时提交到 Store
+    const handleCommit = useCallback(() => {
+        if (!selectedNode) {
+            isEditingRef.current = false
+            return
+        }
+
+        // 读取当前输入框的值
+        const newTranslation: [number, number, number] = [
+            parseFloat(inputRefs.current.x?.value || '0') || 0,
+            parseFloat(inputRefs.current.y?.value || '0') || 0,
+            parseFloat(inputRefs.current.z?.value || '0') || 0
+        ]
 
         const frame = Math.round(currentFrame)
         const nodeId = selectedNode.ObjectId
 
-        // 获取当前的 Translation 值
-        const currentTranslation = [...translation]
-        currentTranslation[axis] = value
+        // 从 Store 获取最新的节点数据
+        const { nodes } = useModelStore.getState()
+        const { updateNodeSilent } = useModelStore.getState()
+        const storeNode = nodes.find((n: any) => n.ObjectId === nodeId)
+        if (!storeNode) {
+            isEditingRef.current = false
+            return
+        }
 
-        // 获取现有关键帧（如果有）
-        const oldKeys = selectedNode.Translation?.Keys || []
-        const existingKey = oldKeys.find((k: any) => Math.abs(k.Frame - frame) < 0.1)
+        // 获取现有的 Translation 属性
+        const existingProp = storeNode.Translation || { Keys: [], InterpolationType: 1 }
+        const keys = [...(existingProp.Keys || [])]
 
-        const cmd = new UpdateKeyframeCommand(renderer, [{
-            nodeId,
-            propertyName: 'Translation',
-            frame,
-            oldValue: existingKey ? [...existingKey.Vector] : null,
-            newValue: currentTranslation
-        }])
+        // 查找或创建关键帧
+        const existingKeyIndex = keys.findIndex((k: any) => Math.abs(k.Frame - frame) < 0.1)
+        const interpolationType = existingProp.InterpolationType || 0;
 
-        executeCommand(cmd)
+        let newKey: any = { Frame: frame, Vector: newTranslation };
+
+        // 如果是 Hermite (2) 或 Bezier (3) 插值，必须添加切线
+        // 否则可能导致插值计算错误（NaN 或 0），从而导致 T-Pose
+        if (interpolationType > 1) {
+            // 如果已存在关键帧，保留其切线
+            if (existingKeyIndex >= 0) {
+                const oldKey = keys[existingKeyIndex];
+                if (oldKey.InTan) newKey.InTan = [...oldKey.InTan];
+                else newKey.InTan = [0, 0, 0];
+
+                if (oldKey.OutTan) newKey.OutTan = [...oldKey.OutTan];
+                else newKey.OutTan = [0, 0, 0];
+            } else {
+                // 新关键帧默认使用 0 切线 (Flat)
+                newKey.InTan = [0, 0, 0];
+                newKey.OutTan = [0, 0, 0];
+            }
+        }
+
+        if (existingKeyIndex >= 0) {
+            keys[existingKeyIndex] = newKey;
+        } else {
+            keys.push(newKey)
+            keys.sort((a: any, b: any) => a.Frame - b.Frame)
+        }
+
+        // 使用 updateNodeSilent 更新 Store（不触发 renderer reload）
+        updateNodeSilent(nodeId, {
+            Translation: { ...existingProp, Keys: keys }
+        })
+
+        // 同步更新 renderer 中的节点数据
+        if (renderer && renderer.model && renderer.model.Nodes) {
+            const rendererNode = renderer.model.Nodes.find((n: any) => n.ObjectId === nodeId)
+            if (rendererNode) {
+                rendererNode.Translation = { ...existingProp, Keys: keys }
+            }
+        }
+
+        isEditingRef.current = false
         message.success(`已更新 Translation 关键帧 (帧 ${frame})`)
-    }, [selectedNode, currentFrame, translation, renderer, executeCommand])
+    }, [selectedNode, currentFrame, renderer])
 
     const handleParentChange = (value: number | undefined) => {
         if (!renderer || !selectedNode) return
@@ -229,38 +304,84 @@ const BoneParameterPanel: React.FC = () => {
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
                                     <div style={{ display: 'flex', alignItems: 'center' }}>
                                         <span style={{ color: '#ff4d4f', marginRight: 8, fontSize: '11px', width: 12 }}>X</span>
-                                        <InputNumber
-                                            size="small"
-                                            controls={false}
-                                            style={{ flex: 1, background: '#1f1f1f', borderColor: '#444', color: '#fff' }}
-                                            value={parseFloat(translation[0]?.toFixed(5)) || 0}
-                                            step={0.1}
-                                            onPressEnter={(e) => handleTranslationChange(0, parseFloat((e.target as HTMLInputElement).value))}
-                                            onBlur={(e) => handleTranslationChange(0, parseFloat(e.target.value))}
+                                        <input
+                                            ref={el => inputRefs.current.x = el}
+                                            type="number"
+                                            step="0.1"
+                                            defaultValue={(translation[0] || 0).toFixed(5)}
+                                            onFocus={handleFocus}
+                                            onBlur={handleCommit}
+                                            onKeyDown={(e) => {
+                                                // 阻止事件冒泡，防止触发全局快捷键
+                                                e.stopPropagation();
+                                                console.log('[BonePanel] Input X keydown:', e.key);
+                                                if (e.key === 'Enter') handleCommit();
+                                            }}
+                                            onChange={(e) => console.log('[BonePanel] Input X change:', e.target.value)}
+                                            style={{
+                                                flex: 1,
+                                                background: '#1f1f1f',
+                                                border: '1px solid #444',
+                                                borderRadius: 4,
+                                                color: '#fff',
+                                                padding: '4px 8px',
+                                                fontSize: '12px',
+                                                outline: 'none'
+                                            }}
                                         />
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center' }}>
                                         <span style={{ color: '#52c41a', marginRight: 8, fontSize: '11px', width: 12 }}>Y</span>
-                                        <InputNumber
-                                            size="small"
-                                            controls={false}
-                                            style={{ flex: 1, background: '#1f1f1f', borderColor: '#444', color: '#fff' }}
-                                            value={parseFloat(translation[1]?.toFixed(5)) || 0}
-                                            step={0.1}
-                                            onPressEnter={(e) => handleTranslationChange(1, parseFloat((e.target as HTMLInputElement).value))}
-                                            onBlur={(e) => handleTranslationChange(1, parseFloat(e.target.value))}
+                                        <input
+                                            ref={el => inputRefs.current.y = el}
+                                            type="number"
+                                            step="0.1"
+                                            defaultValue={(translation[1] || 0).toFixed(5)}
+                                            onFocus={handleFocus}
+                                            onBlur={handleCommit}
+                                            onKeyDown={(e) => {
+                                                e.stopPropagation();
+                                                console.log('[BonePanel] Input Y keydown:', e.key);
+                                                if (e.key === 'Enter') handleCommit();
+                                            }}
+                                            onChange={(e) => console.log('[BonePanel] Input Y change:', e.target.value)}
+                                            style={{
+                                                flex: 1,
+                                                background: '#1f1f1f',
+                                                border: '1px solid #444',
+                                                borderRadius: 4,
+                                                color: '#fff',
+                                                padding: '4px 8px',
+                                                fontSize: '12px',
+                                                outline: 'none'
+                                            }}
                                         />
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center' }}>
                                         <span style={{ color: '#1890ff', marginRight: 8, fontSize: '11px', width: 12 }}>Z</span>
-                                        <InputNumber
-                                            size="small"
-                                            controls={false}
-                                            style={{ flex: 1, background: '#1f1f1f', borderColor: '#444', color: '#fff' }}
-                                            value={parseFloat(translation[2]?.toFixed(5)) || 0}
-                                            step={0.1}
-                                            onPressEnter={(e) => handleTranslationChange(2, parseFloat((e.target as HTMLInputElement).value))}
-                                            onBlur={(e) => handleTranslationChange(2, parseFloat(e.target.value))}
+                                        <input
+                                            ref={el => inputRefs.current.z = el}
+                                            type="number"
+                                            step="0.1"
+                                            defaultValue={(translation[2] || 0).toFixed(5)}
+                                            onFocus={handleFocus}
+                                            onBlur={handleCommit}
+                                            onKeyDown={(e) => {
+                                                e.stopPropagation();
+                                                console.log('[BonePanel] Input Z keydown:', e.key);
+                                                if (e.key === 'Enter') handleCommit();
+                                            }}
+                                            onChange={(e) => console.log('[BonePanel] Input Z change:', e.target.value)}
+                                            style={{
+                                                flex: 1,
+                                                background: '#1f1f1f',
+                                                border: '1px solid #444',
+                                                borderRadius: 4,
+                                                color: '#fff',
+                                                padding: '4px 8px',
+                                                fontSize: '12px',
+                                                outline: 'none'
+                                            }}
                                         />
                                     </div>
                                 </div>

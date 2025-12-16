@@ -25,6 +25,8 @@ interface ModelState {
     setModelData: (data: ModelData | null, path: string | null) => void;
     setLoading: (loading: boolean) => void;
     updateNode: (objectId: number, updates: Partial<ModelNode>) => void;
+    // 静默更新节点 - 不触发 renderer reload（用于关键帧编辑等高频更新）
+    updateNodeSilent: (objectId: number, updates: Partial<ModelNode>) => void;
     addNode: (node: Partial<ModelNode> & { Name: string; type: NodeType }) => void;
     deleteNode: (objectId: number) => void;
 
@@ -447,6 +449,24 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 modelData: updatedModelData,
                 // Always trigger lightweight sync on any node modification
                 rendererReloadTrigger: state.rendererReloadTrigger + 1
+            };
+        });
+    },
+
+    // 静默更新节点 - 不触发 renderer reload（用于关键帧编辑等高频更新）
+    updateNodeSilent: (objectId, updates) => {
+        set((state) => {
+            const updatedNodes = state.nodes.map(node =>
+                node.ObjectId === objectId ? { ...node, ...updates } : node
+            );
+
+            // 同时更新 modelData
+            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[]);
+
+            // 不触发 rendererReloadTrigger，让调用者自行更新 renderer
+            return {
+                nodes: updatedNodes as ModelNode[],
+                modelData: updatedModelData
             };
         });
     },
