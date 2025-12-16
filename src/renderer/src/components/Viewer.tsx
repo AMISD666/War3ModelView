@@ -2826,35 +2826,42 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               let localMoveVec = vec3.fromValues(moveVec[0], moveVec[1], moveVec[2])
 
               // For keyframe mode: Transform world-space delta to bone's local space
-              // This is needed so that dragging world Y axis moves the bone in world Y direction
-              // The bone's matrix contains its accumulated world transform (parent * local * rotation)
-              // We need the inverse of the rotation part to convert world delta to local delta
-              if (subMode === 'keyframe' && nodeWrapper.matrix) {
-                const m = nodeWrapper.matrix as mat4
+              // Based on mdlvis AbsVectorToTranslation algorithm:
+              // Translation is relative to PARENT's coordinate system, not the bone's own rotation
+              // So we need to use the PARENT's rotation matrix inverse
+              if (subMode === 'keyframe') {
+                const storeNode = nodes.find((n: any) => n.ObjectId === nodeId)
+                const parentId = storeNode?.Parent
 
-                // Extract the 3x3 rotation part of the matrix
-                // and create its transpose (which equals inverse for orthonormal rotation matrices)
-                const rotMat3Transpose = mat3.fromValues(
-                  m[0], m[4], m[8],   // First row = transpose of first column
-                  m[1], m[5], m[9],   // Second row = transpose of second column
-                  m[2], m[6], m[10]   // Third row = transpose of third column
-                )
+                if (parentId !== undefined && parentId >= 0) {
+                  // Get parent's node wrapper from renderer
+                  const parentWrapper = rendererRef.current!.rendererData.nodes.find(
+                    (n: any) => n.node.ObjectId === parentId
+                  )
 
-                // Transform world delta to local delta using transpose (inverse) of rotation
-                vec3.transformMat3(localMoveVec, localMoveVec, rotMat3Transpose)
+                  if (parentWrapper?.matrix) {
+                    // Extract parent's rotation part and invert it (transpose for orthonormal)
+                    const pm = parentWrapper.matrix as mat4
+                    const invParentRot = mat3.fromValues(
+                      pm[0], pm[4], pm[8],   // Transpose row 0 = column 0
+                      pm[1], pm[5], pm[9],   // Transpose row 1 = column 1
+                      pm[2], pm[6], pm[10]   // Transpose row 2 = column 2
+                    )
+
+                    // Transform world delta through inverse parent rotation
+                    vec3.transformMat3(localMoveVec, localMoveVec, invParentRot)
+                  }
+                }
+                // If no parent (root bone), world delta = local delta (no transformation needed)
               }
 
-              // DEBUG: Log detailed info every 20th call
+              // DEBUG: Log every 20th call
               if (!((window as any)._debugCounter2)) (window as any)._debugCounter2 = 0
                 ; (window as any)._debugCounter2++
-              const shouldLog = (window as any)._debugCounter2 % 20 === 1
-
-              if (shouldLog && subMode === 'keyframe') {
-                console.log('[DEBUG Transform] NodeId:', nodeId)
-                console.log('[DEBUG Transform] WorldDelta:',
-                  moveVec[0].toFixed(3), moveVec[1].toFixed(3), moveVec[2].toFixed(3))
-                console.log('[DEBUG Transform] LocalDelta:',
-                  localMoveVec[0].toFixed(3), localMoveVec[1].toFixed(3), localMoveVec[2].toFixed(3))
+              if ((window as any)._debugCounter2 % 20 === 1 && subMode === 'keyframe') {
+                console.log('[DEBUG] NodeId:', nodeId, 'WorldDelta:',
+                  moveVec[0].toFixed(3), moveVec[1].toFixed(3), moveVec[2].toFixed(3),
+                  'LocalDelta:', localMoveVec[0].toFixed(3), localMoveVec[1].toFixed(3), localMoveVec[2].toFixed(3))
               }
 
               // binding 模式：修改 PivotPoint（静态绑定位置）
