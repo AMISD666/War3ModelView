@@ -594,6 +594,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             initialKeys: new Map(),
             initialValues: new Map()
           }
+            // Reset debug log flags
+            ; (window as any)._baseTransLogOnce = false
+            ; (window as any)._keyframeDragDelta = {}
 
           const { selectedNodeIds } = useSelectionStore.getState()
           selectedNodeIds.forEach(nodeId => {
@@ -2894,13 +2897,29 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                   // 获取渲染器中的节点
                   const rendererNode = rendererRef.current.model?.Nodes?.find((n: any) => n.ObjectId === nodeId)
                   if (rendererNode) {
-                    // 确保 Translation 属性存在
-                    if (!rendererNode.Translation) {
-                      rendererNode.Translation = { Keys: [], InterpolationType: 1 }
+                    // 确保 Translation 属性存在，并从 store 复制现有关键帧
+                    // 这样渲染器才能正确插值其他帧
+                    if (!rendererNode.Translation || !rendererNode.Translation.Keys?.length) {
+                      const storeNode = nodes.find((n: any) => n.ObjectId === nodeId)
+                      const storeKeys = storeNode?.Translation?.Keys || []
+                      // 深拷贝现有关键帧（不包括预览关键帧）
+                      const copiedKeys = storeKeys
+                        .filter((k: any) => !k._isPreviewKey)
+                        .map((k: any) => ({
+                          Frame: k.Frame,
+                          Vector: Array.isArray(k.Vector) ? [...k.Vector] : Array.from(k.Vector || [0, 0, 0]),
+                          InTan: k.InTan ? (Array.isArray(k.InTan) ? [...k.InTan] : Array.from(k.InTan)) : undefined,
+                          OutTan: k.OutTan ? (Array.isArray(k.OutTan) ? [...k.OutTan] : Array.from(k.OutTan)) : undefined
+                        }))
+                      rendererNode.Translation = {
+                        Keys: copiedKeys,
+                        InterpolationType: storeNode?.Translation?.InterpolationType || 1
+                      }
                     }
 
-                    // 获取基础值：优先使用现有关键帧，否则使用插值初始值
+                    // 获取基础值：优先使用现有关键帧，否则实时从 store 插值
                     let baseTranslation = [0, 0, 0]
+                    let baseSource = 'default'
                     const existingKey = rendererNode.Translation.Keys.find(
                       (k: any) => !k._isPreviewKey && Math.abs(k.Frame - frame) < 0.1
                     )
@@ -2908,11 +2927,49 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                     if (existingKey && existingKey.Vector) {
                       const v = existingKey.Vector
                       baseTranslation = Array.isArray(v) ? [...v] : Array.from(v) as number[]
+                      baseSource = 'exactKeyframe'
                     } else {
-                      const initialVals = dragData.initialValues.get(nodeId) as any
-                      if (initialVals && initialVals.translation && initialVals.translation.length >= 3) {
-                        baseTranslation = [...initialVals.translation]
+                      // 没有精确关键帧，从 store 节点的关键帧实时插值
+                      const storeNode = nodes.find((n: any) => n.ObjectId === nodeId)
+                      const storeKeys = storeNode?.Translation?.Keys
+                      if (storeKeys && storeKeys.length > 0) {
+                        // 插值计算
+                        const sortedKeys = [...storeKeys].filter((k: any) => !k._isPreviewKey).sort((a: any, b: any) => a.Frame - b.Frame)
+                        if (sortedKeys.length > 0) {
+                          const toArr = (v: any) => Array.isArray(v) ? [...v] : Array.from(v || [0, 0, 0]) as number[]
+                          if (frame <= sortedKeys[0].Frame) {
+                            baseTranslation = toArr(sortedKeys[0].Vector)
+                            baseSource = 'interpolated-first'
+                          } else if (frame >= sortedKeys[sortedKeys.length - 1].Frame) {
+                            baseTranslation = toArr(sortedKeys[sortedKeys.length - 1].Vector)
+                            baseSource = 'interpolated-last'
+                          } else {
+                            for (let i = 0; i < sortedKeys.length - 1; i++) {
+                              if (frame >= sortedKeys[i].Frame && frame <= sortedKeys[i + 1].Frame) {
+                                const t = (frame - sortedKeys[i].Frame) / (sortedKeys[i + 1].Frame - sortedKeys[i].Frame)
+                                const from = toArr(sortedKeys[i].Vector)
+                                const to = toArr(sortedKeys[i + 1].Vector)
+                                baseTranslation = from.map((v, idx) => v + (to[idx] - v) * t)
+                                baseSource = 'interpolated-middle'
+                                break
+                              }
+                            }
+                          }
+                        }
+                      } else {
+                        // Fallback to initialVals
+                        const initialVals = dragData.initialValues.get(nodeId) as any
+                        if (initialVals?.translation?.length >= 3) {
+                          baseTranslation = [...initialVals.translation]
+                          baseSource = 'initialVals'
+                        }
                       }
+                    }
+
+                    // Debug log (first call only per drag)
+                    if (!((window as any)._baseTransLogOnce)) {
+                      console.log('[DEBUG Preview] NodeId:', nodeId, 'Frame:', frame, 'BaseSource:', baseSource, 'BaseTranslation:', baseTranslation)
+                        ; (window as any)._baseTransLogOnce = true
                     }
 
                     const previewTranslation = [
@@ -3570,12 +3627,37 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                       const v = existingKey.Vector
                       baseTranslation = Array.isArray(v) ? [...v] : Array.from(v) as number[]
                     } else {
-                      // No keyframe at this frame, use interpolated value
-                      const dragData = keyframeDragData.current
-                      if (dragData) {
-                        const initialVals = dragData.initialValues.get(nodeId) as any
-                        if (initialVals && initialVals.translation && initialVals.translation.length >= 3) {
-                          baseTranslation = [...initialVals.translation]
+                      // No keyframe at this frame, interpolate from store keys in real-time
+                      const storeKeys = storeNode.Translation?.Keys
+                      if (storeKeys && storeKeys.length > 0) {
+                        const sortedKeys = [...storeKeys].filter((k: any) => !k._isPreviewKey).sort((a: any, b: any) => a.Frame - b.Frame)
+                        if (sortedKeys.length > 0) {
+                          const toArr = (v: any) => Array.isArray(v) ? [...v] : Array.from(v || [0, 0, 0]) as number[]
+                          if (frame <= sortedKeys[0].Frame) {
+                            baseTranslation = toArr(sortedKeys[0].Vector)
+                          } else if (frame >= sortedKeys[sortedKeys.length - 1].Frame) {
+                            baseTranslation = toArr(sortedKeys[sortedKeys.length - 1].Vector)
+                          } else {
+                            for (let i = 0; i < sortedKeys.length - 1; i++) {
+                              if (frame >= sortedKeys[i].Frame && frame <= sortedKeys[i + 1].Frame) {
+                                const t = (frame - sortedKeys[i].Frame) / (sortedKeys[i + 1].Frame - sortedKeys[i].Frame)
+                                const from = toArr(sortedKeys[i].Vector)
+                                const to = toArr(sortedKeys[i + 1].Vector)
+                                baseTranslation = from.map((v, idx) => v + (to[idx] - v) * t)
+                                break
+                              }
+                            }
+                          }
+                        }
+                      }
+                      // If still [0,0,0], try initialVals as fallback
+                      if (baseTranslation[0] === 0 && baseTranslation[1] === 0 && baseTranslation[2] === 0) {
+                        const dragData = keyframeDragData.current
+                        if (dragData) {
+                          const initialVals = dragData.initialValues.get(nodeId) as any
+                          if (initialVals?.translation?.length >= 3) {
+                            baseTranslation = [...initialVals.translation]
+                          }
                         }
                       }
                     }
