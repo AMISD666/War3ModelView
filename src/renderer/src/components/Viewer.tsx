@@ -2826,23 +2826,35 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               let localMoveVec = vec3.fromValues(moveVec[0], moveVec[1], moveVec[2])
 
               // For keyframe mode: Transform world-space delta to bone's local space
-              // This is necessary because Translation keyframes are applied BEFORE rotation
-              // If we don't transform, the movement direction will be wrong for rotated bones
+              // This is needed so that dragging world Y axis moves the bone in world Y direction
+              // The bone's matrix contains its accumulated world transform (parent * local * rotation)
+              // We need the inverse of the rotation part to convert world delta to local delta
               if (subMode === 'keyframe' && nodeWrapper.matrix) {
-                // Extract rotation from the bone's matrix (upper 3x3)
-                // nodeWrapper.matrix contains the accumulated transform (parent * local)
                 const m = nodeWrapper.matrix as mat4
-                const rotMat3 = mat3.fromValues(
-                  m[0], m[1], m[2],
-                  m[4], m[5], m[6],
-                  m[8], m[9], m[10]
+
+                // Extract the 3x3 rotation part of the matrix
+                // and create its transpose (which equals inverse for orthonormal rotation matrices)
+                const rotMat3Transpose = mat3.fromValues(
+                  m[0], m[4], m[8],   // First row = transpose of first column
+                  m[1], m[5], m[9],   // Second row = transpose of second column
+                  m[2], m[6], m[10]   // Third row = transpose of third column
                 )
-                // Invert the rotation to get local-to-world inverse (i.e., world-to-local)
-                const invRotMat3 = mat3.invert(mat3.create(), rotMat3)
-                if (invRotMat3) {
-                  // Transform world delta to local delta
-                  vec3.transformMat3(localMoveVec, localMoveVec, invRotMat3)
-                }
+
+                // Transform world delta to local delta using transpose (inverse) of rotation
+                vec3.transformMat3(localMoveVec, localMoveVec, rotMat3Transpose)
+              }
+
+              // DEBUG: Log detailed info every 20th call
+              if (!((window as any)._debugCounter2)) (window as any)._debugCounter2 = 0
+                ; (window as any)._debugCounter2++
+              const shouldLog = (window as any)._debugCounter2 % 20 === 1
+
+              if (shouldLog && subMode === 'keyframe') {
+                console.log('[DEBUG Transform] NodeId:', nodeId)
+                console.log('[DEBUG Transform] WorldDelta:',
+                  moveVec[0].toFixed(3), moveVec[1].toFixed(3), moveVec[2].toFixed(3))
+                console.log('[DEBUG Transform] LocalDelta:',
+                  localMoveVec[0].toFixed(3), localMoveVec[1].toFixed(3), localMoveVec[2].toFixed(3))
               }
 
               // binding 模式：修改 PivotPoint（静态绑定位置）
@@ -2865,41 +2877,55 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 (window as any)._keyframeDragDelta[nodeId][2] += localMoveVec[2];
 
                 // 实时预览：注入临时 Translation 关键帧到渲染器模型
-                // 使用 initialTranslation + accumulatedDelta 作为预览值
+                // 使用 baseTranslation + accumulatedDelta 作为预览值
+                // baseTranslation 优先使用当前帧的现有关键帧值
                 const dragData = keyframeDragData.current
                 if (dragData && rendererRef.current) {
-                  const initialVals = dragData.initialValues.get(nodeId) as any
                   const delta = (window as any)._keyframeDragDelta[nodeId]
+                  const frame = Math.round(currentFrame)
 
-                  if (initialVals && initialVals.translation) {
+                  // 获取渲染器中的节点
+                  const rendererNode = rendererRef.current.model?.Nodes?.find((n: any) => n.ObjectId === nodeId)
+                  if (rendererNode) {
+                    // 确保 Translation 属性存在
+                    if (!rendererNode.Translation) {
+                      rendererNode.Translation = { Keys: [], InterpolationType: 1 }
+                    }
+
+                    // 获取基础值：优先使用现有关键帧，否则使用插值初始值
+                    let baseTranslation = [0, 0, 0]
+                    const existingKey = rendererNode.Translation.Keys.find(
+                      (k: any) => !k._isPreviewKey && Math.abs(k.Frame - frame) < 0.1
+                    )
+
+                    if (existingKey && existingKey.Vector) {
+                      const v = existingKey.Vector
+                      baseTranslation = Array.isArray(v) ? [...v] : Array.from(v) as number[]
+                    } else {
+                      const initialVals = dragData.initialValues.get(nodeId) as any
+                      if (initialVals && initialVals.translation && initialVals.translation.length >= 3) {
+                        baseTranslation = [...initialVals.translation]
+                      }
+                    }
+
                     const previewTranslation = [
-                      initialVals.translation[0] + delta[0],
-                      initialVals.translation[1] + delta[1],
-                      initialVals.translation[2] + delta[2]
+                      baseTranslation[0] + delta[0],
+                      baseTranslation[1] + delta[1],
+                      baseTranslation[2] + delta[2]
                     ]
 
-                    // 获取渲染器中的节点并注入临时 Translation
-                    const rendererNode = rendererRef.current.model?.Nodes?.find((n: any) => n.ObjectId === nodeId)
-                    if (rendererNode) {
-                      // 确保 Translation 属性存在
-                      if (!rendererNode.Translation) {
-                        rendererNode.Translation = { Keys: [], InterpolationType: 1 }
-                      }
-                      // 在当前帧注入临时关键帧用于预览
-                      // 标记为临时的，以便 MouseUp 时可以清理
-                      const frame = Math.round(currentFrame)
-                      const tempKeyIndex = rendererNode.Translation.Keys.findIndex((k: any) => k._isPreviewKey)
-                      if (tempKeyIndex >= 0) {
-                        rendererNode.Translation.Keys[tempKeyIndex].Vector = previewTranslation
-                        rendererNode.Translation.Keys[tempKeyIndex].Frame = frame
-                      } else {
-                        rendererNode.Translation.Keys.push({
-                          Frame: frame,
-                          Vector: previewTranslation,
-                          _isPreviewKey: true  // 标记为预览关键帧
-                        })
-                        rendererNode.Translation.Keys.sort((a: any, b: any) => a.Frame - b.Frame)
-                      }
+                    // 在当前帧注入临时关键帧用于预览
+                    const tempKeyIndex = rendererNode.Translation.Keys.findIndex((k: any) => k._isPreviewKey)
+                    if (tempKeyIndex >= 0) {
+                      rendererNode.Translation.Keys[tempKeyIndex].Vector = previewTranslation
+                      rendererNode.Translation.Keys[tempKeyIndex].Frame = frame
+                    } else {
+                      rendererNode.Translation.Keys.push({
+                        Frame: frame,
+                        Vector: previewTranslation,
+                        _isPreviewKey: true
+                      })
+                      rendererNode.Translation.Keys.sort((a: any, b: any) => a.Frame - b.Frame)
                     }
                   }
                 }
@@ -3523,33 +3549,41 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               selectedNodeIds.forEach(nodeId => {
                 const delta = dragDelta[nodeId]
                 if (delta && (delta[0] !== 0 || delta[1] !== 0 || delta[2] !== 0)) {
-                  // Build KeyframeChange for Translation
-                  // Use interpolated initial value from keyframeDragData (captured in MouseDown)
                   const storeNode = nodes.find((n: any) => n.ObjectId === nodeId)
                   if (storeNode) {
                     const oldKeys = storeNode.Translation?.Keys || []
                     const existingKey = oldKeys.find((k: any) => Math.abs(k.Frame - frame) < 0.1)
 
-                    // Get interpolated translation from keyframeDragData (not exact frame match!)
-                    let currentTranslation = [0, 0, 0]
-                    const dragData = keyframeDragData.current
-                    if (dragData) {
-                      const initialVals = dragData.initialValues.get(nodeId) as any
-                      if (initialVals && initialVals.translation) {
-                        currentTranslation = [...initialVals.translation]
+                    // IMPORTANT: Use existing keyframe value as base (if present)
+                    // This ensures we only modify the axis the user actually dragged
+                    let baseTranslation = [0, 0, 0]
+
+                    if (existingKey && existingKey.Vector) {
+                      // Use existing keyframe value
+                      const v = existingKey.Vector
+                      baseTranslation = Array.isArray(v) ? [...v] : Array.from(v) as number[]
+                    } else {
+                      // No keyframe at this frame, use interpolated value
+                      const dragData = keyframeDragData.current
+                      if (dragData) {
+                        const initialVals = dragData.initialValues.get(nodeId) as any
+                        if (initialVals && initialVals.translation && initialVals.translation.length >= 3) {
+                          baseTranslation = [...initialVals.translation]
+                        }
                       }
                     }
 
+                    // Only add delta to the axes that were actually dragged (non-zero delta)
                     const newTranslation = [
-                      currentTranslation[0] + delta[0],
-                      currentTranslation[1] + delta[1],
-                      currentTranslation[2] + delta[2]
+                      baseTranslation[0] + delta[0],
+                      baseTranslation[1] + delta[1],
+                      baseTranslation[2] + delta[2]
                     ]
 
                     // DEBUG: Log commit data
                     console.log('[DEBUG MouseUp] NodeId:', nodeId)
-                    console.log('[DEBUG MouseUp] Delta (accumulated):', [...delta])
-                    console.log('[DEBUG MouseUp] InitialTranslation (interpolated):', [...currentTranslation])
+                    console.log('[DEBUG MouseUp] Delta:', [...delta])
+                    console.log('[DEBUG MouseUp] BaseTranslation:', [...baseTranslation], existingKey ? '(from keyframe)' : '(interpolated)')
                     console.log('[DEBUG MouseUp] NewTranslation:', [...newTranslation])
                     console.log('[DEBUG MouseUp] Frame:', frame)
 

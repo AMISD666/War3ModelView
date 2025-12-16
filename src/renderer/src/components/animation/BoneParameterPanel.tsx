@@ -1,15 +1,48 @@
-import React, { useMemo, useState, useEffect } from 'react'
+import React, { useMemo, useState, useEffect, useCallback } from 'react'
 import { InputNumber, Space, Typography, Select, message } from 'antd'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useModelStore } from '../../store/modelStore'
 import { useRendererStore } from '../../store/rendererStore'
 import { SetNodeParentCommand } from '../../commands/SetNodeParentCommand'
+import { UpdateKeyframeCommand } from '../../commands/UpdateKeyframeCommand'
 import { useCommandManager } from '../../utils/CommandManager'
 
 const { Text } = Typography
 
+// 插值函数：获取指定帧的 Translation 值
+const interpolateTranslation = (keys: any[], frame: number): number[] => {
+    if (!keys || keys.length === 0) return [0, 0, 0]
+
+    const sortedKeys = [...keys].sort((a: any, b: any) => a.Frame - b.Frame)
+
+    const toArray = (v: any): number[] => {
+        if (!v) return [0, 0, 0]
+        if (Array.isArray(v)) return [...v]
+        if (v.length !== undefined) return Array.from(v) as number[]
+        return [0, 0, 0]
+    }
+
+    if (frame <= sortedKeys[0].Frame) {
+        return toArray(sortedKeys[0].Vector)
+    }
+    if (frame >= sortedKeys[sortedKeys.length - 1].Frame) {
+        return toArray(sortedKeys[sortedKeys.length - 1].Vector)
+    }
+
+    for (let i = 0; i < sortedKeys.length - 1; i++) {
+        if (frame >= sortedKeys[i].Frame && frame <= sortedKeys[i + 1].Frame) {
+            const t = (frame - sortedKeys[i].Frame) / (sortedKeys[i + 1].Frame - sortedKeys[i].Frame)
+            const from = toArray(sortedKeys[i].Vector)
+            const to = toArray(sortedKeys[i + 1].Vector)
+            return from.map((v, idx) => v + (to[idx] - v) * t)
+        }
+    }
+
+    return [0, 0, 0]
+}
+
 /**
- * 骨骼参数面板 - 显示选中骨骼的位置信息和绑定骨骼列表
+ * 骨骼参数面板 - 显示选中骨骼的 Translation 信息和绑定骨骼列表
  */
 const BoneParameterPanel: React.FC = () => {
     const selectedNodeIds = useSelectionStore(state => state.selectedNodeIds)
@@ -17,6 +50,7 @@ const BoneParameterPanel: React.FC = () => {
     const selectedVertexIds = useSelectionStore(state => state.selectedVertexIds)
     const nodes = useModelStore(state => state.nodes)
     const modelData = useModelStore(state => state.modelData)
+    const currentFrame = useModelStore(state => state.currentFrame)
 
     const renderer = useRendererStore(state => state.renderer)
     const { executeCommand } = useCommandManager()
@@ -25,10 +59,6 @@ const BoneParameterPanel: React.FC = () => {
     const selectedNode = selectedNodeIds.length === 1
         ? nodes.find((n: any) => n.ObjectId === selectedNodeIds[0])
         : null
-
-
-    // 订阅当前帧以便在帧变化时刷新位置
-    const currentFrame = useModelStore(state => state.currentFrame)
 
     // 计算该骨骼绑定的顶点数量
     const boneVertexCount = useMemo(() => {
@@ -79,35 +109,47 @@ const BoneParameterPanel: React.FC = () => {
         return Array.from(boneMap.entries()).map(([index, name]) => ({ index, name }))
     }, [modelData, nodes, selectedVertexIds])
 
-    // 骨骼位置 - 使用 useState 和定时器实时刷新
-    const [position, setPosition] = useState([0, 0, 0])
-
-    useEffect(() => {
-        const updatePosition = () => {
-            // 直接从 Viewer 渲染循环设置的全局变量读取位置
-            const pos = (window as any)._selectedBoneWorldPos
-            // 只打印一次日志
-            if (!(window as any)._bonePosReadLogged) {
-                console.log('[BonePos Read] _selectedBoneWorldPos:', pos)
-                    ; (window as any)._bonePosReadLogged = true
-            }
-            if (pos && Array.isArray(pos) && pos.length === 3) {
-                setPosition(pos)
-            } else {
-                setPosition([0, 0, 0])
-            }
-        }
-
-        updatePosition()
-        // 使用 requestAnimationFrame 与渲染循环同步（比 setInterval 更精确）
-        let rafId: number
-        const loop = () => {
-            updatePosition()
-            rafId = requestAnimationFrame(loop)
-        }
-        rafId = requestAnimationFrame(loop)
-        return () => cancelAnimationFrame(rafId)
+    // 获取当前帧的 Translation 值（插值）
+    const translation = useMemo(() => {
+        if (!selectedNode) return [0, 0, 0]
+        const keys = selectedNode.Translation?.Keys
+        if (!keys || keys.length === 0) return [0, 0, 0]
+        return interpolateTranslation(keys, currentFrame)
     }, [selectedNode, currentFrame])
+
+    // 检查当前帧是否有精确的关键帧
+    const hasExactKeyframe = useMemo(() => {
+        if (!selectedNode?.Translation?.Keys) return false
+        const frame = Math.round(currentFrame)
+        return selectedNode.Translation.Keys.some((k: any) => Math.abs(k.Frame - frame) < 0.1)
+    }, [selectedNode, currentFrame])
+
+    // 处理 Translation 值变化
+    const handleTranslationChange = useCallback((axis: number, value: number | null) => {
+        if (value === null || !selectedNode || !renderer) return
+
+        const frame = Math.round(currentFrame)
+        const nodeId = selectedNode.ObjectId
+
+        // 获取当前的 Translation 值
+        const currentTranslation = [...translation]
+        currentTranslation[axis] = value
+
+        // 获取现有关键帧（如果有）
+        const oldKeys = selectedNode.Translation?.Keys || []
+        const existingKey = oldKeys.find((k: any) => Math.abs(k.Frame - frame) < 0.1)
+
+        const cmd = new UpdateKeyframeCommand(renderer, [{
+            nodeId,
+            propertyName: 'Translation',
+            frame,
+            oldValue: existingKey ? [...existingKey.Vector] : null,
+            newValue: currentTranslation
+        }])
+
+        executeCommand(cmd)
+        message.success(`已更新 Translation 关键帧 (帧 ${frame})`)
+    }, [selectedNode, currentFrame, translation, renderer, executeCommand])
 
     const handleParentChange = (value: number | undefined) => {
         if (!renderer || !selectedNode) return
@@ -180,7 +222,10 @@ const BoneParameterPanel: React.FC = () => {
                                 {selectedNode.Name} ({selectedNode.type})
                             </div>
                             <div style={{ marginBottom: 6 }}>
-                                <Text style={{ color: '#888', fontSize: '11px' }}>位置 (XYZ)</Text>
+                                <Text style={{ color: '#888', fontSize: '11px' }}>
+                                    位移 (Translation)
+                                    {hasExactKeyframe && <span style={{ color: '#52c41a', marginLeft: 4 }}>●</span>}
+                                </Text>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
                                     <div style={{ display: 'flex', alignItems: 'center' }}>
                                         <span style={{ color: '#ff4d4f', marginRight: 8, fontSize: '11px', width: 12 }}>X</span>
@@ -188,19 +233,10 @@ const BoneParameterPanel: React.FC = () => {
                                             size="small"
                                             controls={false}
                                             style={{ flex: 1, background: '#1f1f1f', borderColor: '#444', color: '#fff' }}
-                                            value={parseFloat(position[0]?.toFixed(2)) || 0}
-                                            onChange={(val) => {
-                                                if (val === null || !renderer || !selectedNode) return
-                                                const objectId = selectedNode.ObjectId
-                                                if (renderer.model?.PivotPoints?.[objectId]) {
-                                                    renderer.model.PivotPoints[objectId][0] = val
-                                                }
-                                                const nodeWrapper = renderer.rendererData?.nodes?.[objectId]
-                                                if (nodeWrapper?.node?.PivotPoint) {
-                                                    nodeWrapper.node.PivotPoint[0] = val
-                                                }
-                                                renderer.updateHierarchy?.()
-                                            }}
+                                            value={parseFloat(translation[0]?.toFixed(5)) || 0}
+                                            step={0.1}
+                                            onPressEnter={(e) => handleTranslationChange(0, parseFloat((e.target as HTMLInputElement).value))}
+                                            onBlur={(e) => handleTranslationChange(0, parseFloat(e.target.value))}
                                         />
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center' }}>
@@ -209,19 +245,10 @@ const BoneParameterPanel: React.FC = () => {
                                             size="small"
                                             controls={false}
                                             style={{ flex: 1, background: '#1f1f1f', borderColor: '#444', color: '#fff' }}
-                                            value={parseFloat(position[1]?.toFixed(2)) || 0}
-                                            onChange={(val) => {
-                                                if (val === null || !renderer || !selectedNode) return
-                                                const objectId = selectedNode.ObjectId
-                                                if (renderer.model?.PivotPoints?.[objectId]) {
-                                                    renderer.model.PivotPoints[objectId][1] = val
-                                                }
-                                                const nodeWrapper = renderer.rendererData?.nodes?.[objectId]
-                                                if (nodeWrapper?.node?.PivotPoint) {
-                                                    nodeWrapper.node.PivotPoint[1] = val
-                                                }
-                                                renderer.updateHierarchy?.()
-                                            }}
+                                            value={parseFloat(translation[1]?.toFixed(5)) || 0}
+                                            step={0.1}
+                                            onPressEnter={(e) => handleTranslationChange(1, parseFloat((e.target as HTMLInputElement).value))}
+                                            onBlur={(e) => handleTranslationChange(1, parseFloat(e.target.value))}
                                         />
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center' }}>
@@ -230,21 +257,15 @@ const BoneParameterPanel: React.FC = () => {
                                             size="small"
                                             controls={false}
                                             style={{ flex: 1, background: '#1f1f1f', borderColor: '#444', color: '#fff' }}
-                                            value={parseFloat(position[2]?.toFixed(2)) || 0}
-                                            onChange={(val) => {
-                                                if (val === null || !renderer || !selectedNode) return
-                                                const objectId = selectedNode.ObjectId
-                                                if (renderer.model?.PivotPoints?.[objectId]) {
-                                                    renderer.model.PivotPoints[objectId][2] = val
-                                                }
-                                                const nodeWrapper = renderer.rendererData?.nodes?.[objectId]
-                                                if (nodeWrapper?.node?.PivotPoint) {
-                                                    nodeWrapper.node.PivotPoint[2] = val
-                                                }
-                                                renderer.updateHierarchy?.()
-                                            }}
+                                            value={parseFloat(translation[2]?.toFixed(5)) || 0}
+                                            step={0.1}
+                                            onPressEnter={(e) => handleTranslationChange(2, parseFloat((e.target as HTMLInputElement).value))}
+                                            onBlur={(e) => handleTranslationChange(2, parseFloat(e.target.value))}
                                         />
                                     </div>
+                                </div>
+                                <div style={{ marginTop: 4, fontSize: '10px', color: '#666' }}>
+                                    输入数值或使用 Gizmo 编辑 · 帧 {Math.round(currentFrame)}
                                 </div>
                             </div>
 
