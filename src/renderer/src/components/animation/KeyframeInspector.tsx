@@ -3,6 +3,8 @@ import { mat4, vec3 } from 'gl-matrix'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useRendererStore } from '../../store/rendererStore'
+import { commandManager } from '../../utils/CommandManager'
+import { UpdateKeyframeCommand, KeyframeChange } from '../../commands/UpdateKeyframeCommand'
 
 /**
  * Convert World Space delta to Local Space delta
@@ -51,18 +53,6 @@ function worldDeltaToLocalDelta(renderer: any, nodeId: number, worldDelta: [numb
 
     return [localDelta[0], localDelta[1], localDelta[2]];
 }
-
-// 关键帧历史管理
-interface KeyframeHistoryEntry {
-    nodeId: number
-    propName: 'Translation' | 'Rotation' | 'Scaling'
-    oldValue: any
-    newValue: any
-}
-
-const MAX_HISTORY = 10
-let historyStack: KeyframeHistoryEntry[] = []
-let historyIndex = -1
 
 // 四元数转欧拉角 (弧度)
 function quatToEuler(q: number[]): [number, number, number] {
@@ -216,78 +206,31 @@ const KeyframeInspector: React.FC = () => {
         return closestKey.Vector || (size === 4 ? [0, 0, 0, 1] : [0, 0, 0])
     }, [displayFrame])
 
-    // 添加到历史记录
-    const pushHistory = (entry: KeyframeHistoryEntry) => {
-        historyStack = historyStack.slice(0, historyIndex + 1)
-        historyStack.push(entry)
-        if (historyStack.length > MAX_HISTORY) {
-            historyStack.shift()
-        } else {
-            historyIndex++
-        }
-        forceUpdate({})
-    }
-
-    // 修改关键帧值
+    // 修改关键帧值 - 使用 CommandManager 支持撤销/重做
     const handleValueChange = useCallback((propName: 'Translation' | 'Rotation' | 'Scaling', newValues: number[]) => {
         if (!activeNode) return
 
-        const oldProp = activeNode[propName] ? JSON.parse(JSON.stringify(activeNode[propName])) : null
-        const existingProp = activeNode[propName] || { Keys: [], InterpolationType: 1 }
-        const keys = [...(existingProp.Keys || [])]
         const frame = Math.round(currentFrameRef.current)
+        const existingProp = activeNode[propName] || { Keys: [], InterpolationType: 1 }
+        const keys = existingProp.Keys || []
 
-        const existingKeyIndex = keys.findIndex((k: any) => Math.abs(k.Frame - frame) < 0.1)
-        const interpolationType = existingProp.InterpolationType || 0;
+        // 查找当前帧的旧值
+        const existingKey = keys.find((k: any) => Math.abs(k.Frame - frame) < 0.1)
+        const oldValue = existingKey?.Vector ? [...existingKey.Vector] : null
 
-        let newKey: any = { Frame: frame, Vector: newValues };
-
-        // 修复切线丢失问题：如果插值类型需要切线，则必须初始化
-        if (interpolationType > 1) { // 2=Hermite, 3=Bezier
-            if (existingKeyIndex >= 0) {
-                const oldKey = keys[existingKeyIndex];
-                if (oldKey.InTan) newKey.InTan = [...oldKey.InTan];
-                else newKey.InTan = propName === 'Rotation' ? [0, 0, 0, 0] : [0, 0, 0];
-                if (oldKey.OutTan) newKey.OutTan = [...oldKey.OutTan];
-                else newKey.OutTan = propName === 'Rotation' ? [0, 0, 0, 0] : [0, 0, 0];
-            } else {
-                newKey.InTan = propName === 'Rotation' ? [0, 0, 0, 0] : [0, 0, 0];
-                newKey.OutTan = propName === 'Rotation' ? [0, 0, 0, 0] : [0, 0, 0];
-            }
-        }
-
-        if (existingKeyIndex >= 0) {
-            keys[existingKeyIndex] = newKey
-        } else {
-            keys.push(newKey)
-            keys.sort((a: any, b: any) => a.Frame - b.Frame)
-        }
-
-        const newProp = { ...existingProp, Keys: keys }
-
-        // 使用 Silent 更新避免全量重载导致 T-Pose
-        updateNodeSilent(activeNode.ObjectId, { [propName]: newProp })
-
-        // 手动同步 Renderer Runtime Data (实时更新)
-        if (renderer && (renderer as any).rendererData) {
-            const nodes = (renderer as any).rendererData.nodes;
-            const renderNode = nodes.find((n: any) => n.node && n.node.ObjectId === activeNode.ObjectId);
-            if (renderNode) {
-                // 直接更新运行时节点数据
-                renderNode.node[propName] = newProp;
-
-                // 强制刷新一帧动画 (dt=0) 以重新计算变换
-                renderer.update(0);
-            }
-        }
-
-        pushHistory({
+        // 创建 KeyframeChange
+        const change: KeyframeChange = {
             nodeId: activeNode.ObjectId,
-            propName,
-            oldValue: oldProp,
-            newValue: newProp
-        })
-    }, [activeNode, updateNodeSilent, renderer])
+            propertyName: propName,
+            frame: frame,
+            oldValue: oldValue,
+            newValue: newValues
+        }
+
+        // 使用 CommandManager 执行命令（支持撤销/重做）
+        const cmd = new UpdateKeyframeCommand(renderer, [change])
+        commandManager.execute(cmd)
+    }, [activeNode, renderer])
 
     // 跳转帧 (Unused)
     // const handleJumpFrame = () => { ... }
