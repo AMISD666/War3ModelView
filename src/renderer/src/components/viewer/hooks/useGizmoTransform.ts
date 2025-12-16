@@ -75,6 +75,68 @@ function autoKeyframeTranslation(nodeId: number, translation: [number, number, n
     })
 }
 
+/**
+ * Convert World Space delta to Local Space delta
+ * Uses the inverse of the parent's rotation matrix to transform the delta
+ */
+function worldDeltaToLocalDelta(renderer: any, nodeId: number, worldDelta: vec3): vec3 {
+    if (!renderer || !renderer.rendererData || !renderer.rendererData.nodes) {
+        return worldDelta; // Fallback: use world delta as-is
+    }
+
+    const nodes = renderer.rendererData.nodes;
+    const nodeWrapper = nodes.find((n: any) => n.node && n.node.ObjectId === nodeId);
+
+    if (!nodeWrapper || !nodeWrapper.node) return worldDelta;
+
+    const parentId = nodeWrapper.node.Parent;
+    if (parentId === undefined || parentId === -1) {
+        // No parent, Local == World
+        return worldDelta;
+    }
+
+    const parentWrapper = nodes.find((n: any) => n.node && n.node.ObjectId === parentId);
+    if (!parentWrapper || !parentWrapper.matrix) {
+        // Parent invalid, treat as root
+        return worldDelta;
+    }
+
+    // Extract rotation from parent matrix (upper-left 3x3)
+    const parentMat = parentWrapper.matrix;
+
+    // Create a 3x3 rotation matrix from the 4x4 matrix
+    // For delta transformation, we only need the inverse rotation (transpose for orthonormal)
+    // Parent matrix transforms Local -> World
+    // Inverse (transpose for rotation) transforms World -> Local
+    const invRotation = mat4.create();
+
+    // Copy rotation part and transpose it (for orthonormal matrices, transpose = inverse)
+    invRotation[0] = parentMat[0];
+    invRotation[1] = parentMat[4];
+    invRotation[2] = parentMat[8];
+    invRotation[4] = parentMat[1];
+    invRotation[5] = parentMat[5];
+    invRotation[6] = parentMat[9];
+    invRotation[8] = parentMat[2];
+    invRotation[9] = parentMat[6];
+    invRotation[10] = parentMat[10];
+    // No translation for delta transformation
+    invRotation[12] = 0;
+    invRotation[13] = 0;
+    invRotation[14] = 0;
+    invRotation[15] = 1;
+
+    // Transform world delta to local delta
+    const localDelta = vec3.create();
+    vec3.transformMat4(localDelta, worldDelta, invRotation);
+
+    console.log('[worldDeltaToLocalDelta] nodeId:', nodeId, 'parentId:', parentId,
+        'worldDelta:', [worldDelta[0].toFixed(2), worldDelta[1].toFixed(2), worldDelta[2].toFixed(2)],
+        'localDelta:', [localDelta[0].toFixed(2), localDelta[1].toFixed(2), localDelta[2].toFixed(2)]);
+
+    return localDelta;
+}
+
 export function useGizmoTransform({
     rendererRef,
     targetCamera,
@@ -206,16 +268,20 @@ export function useGizmoTransform({
             return
         }
 
-        const moveVec = getMoveVectorForAxis(deltaX, deltaY, moveScale, axis)
+        // World Space delta from screen movement
+        const worldDelta = getMoveVectorForAxis(deltaX, deltaY, moveScale, axis)
         const { selectedNodeIds } = useSelectionStore.getState()
-        console.log('[handleTranslateNodesKeyframe] selectedNodeIds:', selectedNodeIds, 'moveVec:', [moveVec[0], moveVec[1], moveVec[2]])
+        console.log('[handleTranslateNodesKeyframe] selectedNodeIds:', selectedNodeIds, 'worldDelta:', [worldDelta[0], worldDelta[1], worldDelta[2]])
 
         selectedNodeIds.forEach(nodeId => {
             const nodeWrapper = rendererRef.current.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
             console.log('[handleTranslateNodesKeyframe] nodeId:', nodeId, 'nodeWrapper:', !!nodeWrapper)
             if (nodeWrapper?.node) {
-                // 累积拖拽偏移量（用于关键帧）
-                vec3.add(keyframeDragDelta.current, keyframeDragDelta.current, moveVec)
+                // Convert World Space delta to Local Space delta using parent's inverse rotation
+                const localDelta = worldDeltaToLocalDelta(rendererRef.current, nodeId, worldDelta)
+
+                // 累积拖拽偏移量（用于关键帧）- now using local delta
+                vec3.add(keyframeDragDelta.current, keyframeDragDelta.current, localDelta)
 
                 // 获取当前关键帧值并添加增量（实时预览）
                 const { currentFrame, nodes, autoKeyframe } = useModelStore.getState()
@@ -232,11 +298,11 @@ export function useGizmoTransform({
                     }
                 }
 
-                // 计算新的位移值
+                // 计算新的位移值 - using LOCAL delta now
                 const newTranslation: [number, number, number] = [
-                    currentTranslation[0] + moveVec[0],
-                    currentTranslation[1] + moveVec[1],
-                    currentTranslation[2] + moveVec[2]
+                    currentTranslation[0] + localDelta[0],
+                    currentTranslation[1] + localDelta[1],
+                    currentTranslation[2] + localDelta[2]
                 ]
                 console.log('[handleTranslateNodesKeyframe] newTranslation:', newTranslation)
 

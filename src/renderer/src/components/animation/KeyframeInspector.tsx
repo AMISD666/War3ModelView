@@ -1,7 +1,56 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { mat4, vec3 } from 'gl-matrix'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useRendererStore } from '../../store/rendererStore'
+
+/**
+ * Convert World Space delta to Local Space delta
+ * Uses the inverse of the parent's rotation matrix to transform the delta
+ */
+function worldDeltaToLocalDelta(renderer: any, nodeId: number, worldDelta: [number, number, number]): [number, number, number] {
+    if (!renderer || !renderer.rendererData || !renderer.rendererData.nodes) {
+        return worldDelta;
+    }
+
+    const nodes = renderer.rendererData.nodes;
+    const nodeWrapper = nodes.find((n: any) => n.node && n.node.ObjectId === nodeId);
+
+    if (!nodeWrapper || !nodeWrapper.node) return worldDelta;
+
+    const parentId = nodeWrapper.node.Parent;
+    if (parentId === undefined || parentId === -1) {
+        return worldDelta; // No parent, Local == World
+    }
+
+    const parentWrapper = nodes.find((n: any) => n.node && n.node.ObjectId === parentId);
+    if (!parentWrapper || !parentWrapper.matrix) {
+        return worldDelta;
+    }
+
+    const parentMat = parentWrapper.matrix;
+    const invRotation = mat4.create();
+
+    // Transpose rotation part (for orthonormal matrices, transpose = inverse)
+    invRotation[0] = parentMat[0];
+    invRotation[1] = parentMat[4];
+    invRotation[2] = parentMat[8];
+    invRotation[4] = parentMat[1];
+    invRotation[5] = parentMat[5];
+    invRotation[6] = parentMat[9];
+    invRotation[8] = parentMat[2];
+    invRotation[9] = parentMat[6];
+    invRotation[10] = parentMat[10];
+    invRotation[12] = 0;
+    invRotation[13] = 0;
+    invRotation[14] = 0;
+    invRotation[15] = 1;
+
+    const localDelta = vec3.create();
+    vec3.transformMat4(localDelta, vec3.fromValues(worldDelta[0], worldDelta[1], worldDelta[2]), invRotation);
+
+    return [localDelta[0], localDelta[1], localDelta[2]];
+}
 
 // 关键帧历史管理
 interface KeyframeHistoryEntry {
@@ -250,10 +299,17 @@ const KeyframeInspector: React.FC = () => {
         const { label, propName, isRotation } = propInfo
         const prop = activeNode[propName]
 
-        // 默认拿本地关键帧数据 (Local Only)
-        // REVERT: Removed World Position Logic entirely to stabilize input
-        let rawValues = getKeyframeValues(prop, isRotation ? 4 : 3)
-        let displayValues = [...rawValues]
+        // 获取本地关键帧数据（用于编辑时的增量计算）
+        let localValues = getKeyframeValues(prop, isRotation ? 4 : 3)
+
+        // 对于位移，显示世界坐标（与 Gizmo 一致）
+        let displayValues = [...localValues]
+        if (propName === 'Translation') {
+            const worldPos = (window as any)._selectedBoneWorldPos
+            if (worldPos && Array.isArray(worldPos) && worldPos.length === 3) {
+                displayValues = worldPos
+            }
+        }
 
         // 旋转使用欧拉角显示
         const values = isRotation ? quatToEuler(displayValues) : displayValues
@@ -265,7 +321,7 @@ const KeyframeInspector: React.FC = () => {
                 {/* 标题栏 + 插值选择 */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                     <span style={{ fontSize: '12px', fontWeight: 'bold', color: '#ccc' }}>
-                        {label} {'(Local)'}
+                        {label} {propName === 'Translation' ? '(World)' : '(Local)'}
                     </span>
                     <select
                         value={prop?.InterpolationType ?? 1}
@@ -307,15 +363,32 @@ const KeyframeInspector: React.FC = () => {
                                 step={isRotation ? "1" : "0.01"}
                                 value={parseFloat(values[i]?.toFixed(2) ?? '0')}
                                 onChange={(val) => {
-                                    const newVals = [...values]
-                                    newVals[i] = val
-
                                     if (isRotation) {
                                         // 欧拉角转回四元数
+                                        const newVals = [...values]
+                                        newVals[i] = val
                                         const quat = eulerToQuat(newVals as [number, number, number])
                                         handleValueChange(propName, quat)
+                                    } else if (propName === 'Translation') {
+                                        // 位移使用增量模式：计算 World Delta，转换为 Local Delta
+                                        const oldWorldValue = values[i] || 0
+                                        const worldDelta: [number, number, number] = [0, 0, 0]
+                                        worldDelta[i] = val - oldWorldValue // 只有当前轴的增量
+
+                                        // 将 World Delta 转换为 Local Delta
+                                        const localDelta = worldDeltaToLocalDelta(renderer, activeNode.ObjectId, worldDelta)
+
+                                        // 将 Local Delta 加到当前 Local Translation
+                                        const newLocalValues: [number, number, number] = [
+                                            localValues[0] + localDelta[0],
+                                            localValues[1] + localDelta[1],
+                                            localValues[2] + localDelta[2]
+                                        ]
+                                        handleValueChange(propName, newLocalValues)
                                     } else {
-                                        // 位移/缩放直接使用 (Local)
+                                        // 缩放直接使用 Local
+                                        const newVals = [...localValues]
+                                        newVals[i] = val
                                         handleValueChange(propName, newVals)
                                     }
                                 }}
