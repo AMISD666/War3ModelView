@@ -20,6 +20,8 @@ const TimelinePanel: React.FC = () => {
     const canvasRef = useRef<HTMLCanvasElement>(null)
     const containerRef = useRef<HTMLDivElement>(null)
     const rafRef = useRef<number | null>(null)
+    // Cache container size to avoid forced reflow from reading clientWidth/Height every frame
+    const containerSizeRef = useRef<{ width: number; height: number }>({ width: 400, height: 180 })
 
     // 只订阅不会频繁变化的状态
     const currentSequence = useModelStore(state => state.currentSequence)
@@ -51,6 +53,7 @@ const TimelinePanel: React.FC = () => {
     const seqStartRef = useRef(seqStart)
     const seqEndRef = useRef(seqEnd)
     const isDraggingRef = useRef(false)
+    const lastDisplayedFrameRef = useRef(-1) // Track last displayed frame to avoid unnecessary re-renders
 
     // 同步 refs
     useEffect(() => { pixelsPerMsRef.current = pixelsPerMs }, [pixelsPerMs])
@@ -59,10 +62,8 @@ const TimelinePanel: React.FC = () => {
     useEffect(() => { seqEndRef.current = seqEnd }, [seqEnd])
     useEffect(() => { isDraggingRef.current = isDragging }, [isDragging])
 
-    // 计算最大帧（最后一个动画尾帧 + 100）
-    const maxFrame = sequences && sequences.length > 0
-        ? Math.max(...sequences.map((s: any) => s.Interval[1])) + 100
-        : 1100
+    // Note: maxFrame calculation removed as unused. If needed in future:
+    // const maxFrame = sequences?.length > 0 ? Math.max(...sequences.map((s: any) => s.Interval[1])) + 100 : 1100
 
     // 切换序列时自动调整时间轴范围和缩放
     useEffect(() => {
@@ -79,6 +80,28 @@ const TimelinePanel: React.FC = () => {
             setDisplayFrame(sequence.Interval[0])
         }
     }, [currentSequence, sequence, setFrame])
+
+    // ResizeObserver to cache container size - avoids reading clientWidth/Height every frame
+    useEffect(() => {
+        const container = containerRef.current
+        if (!container) return
+
+        const resizeObserver = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+                containerSizeRef.current = {
+                    width: entry.contentRect.width,
+                    height: entry.contentRect.height
+                }
+            }
+        })
+        resizeObserver.observe(container)
+        // Initialize with current size
+        containerSizeRef.current = {
+            width: container.clientWidth,
+            height: container.clientHeight
+        }
+        return () => resizeObserver.disconnect()
+    }, [])
 
     // 动画循环绘制 - 不依赖 React 渲染
     useEffect(() => {
@@ -105,11 +128,16 @@ const TimelinePanel: React.FC = () => {
                 }
                 draw()
 
-                // Update displayFrame for the UI (only when not editing and not dragging)
+                // Update displayFrame for the UI (only when not editing, not dragging, AND frame actually changed)
                 if (!isEditingFrame && !isDraggingRef.current && time - lastDisplayUpdate >= DISPLAY_UPDATE_INTERVAL) {
                     lastDisplayUpdate = time
                     const roundedFrame = Math.round(frameRef.current)
-                    setDisplayFrame(roundedFrame)
+                    // CRITICAL FIX: Only trigger React re-render if frame actually changed
+                    // This prevents Antd components from accumulating internal event listeners
+                    if (roundedFrame !== lastDisplayedFrameRef.current) {
+                        lastDisplayedFrameRef.current = roundedFrame
+                        setDisplayFrame(roundedFrame)
+                    }
                 }
             }
 
@@ -125,17 +153,18 @@ const TimelinePanel: React.FC = () => {
         }
     }, [])
 
-    // 绘制函数 - 直接读取 refs
+    // 绘制函数 - 直接读取 refs, 使用缓存的尺寸避免强制重排
     const draw = useCallback(() => {
         const canvas = canvasRef.current
-        const container = containerRef.current
-        if (!canvas || !container) return
+        if (!canvas) return
 
         const ctx = canvas.getContext('2d')
         if (!ctx) return
 
-        const width = container.clientWidth
-        const height = container.clientHeight
+        // CRITICAL: Use cached size from ResizeObserver instead of reading from DOM
+        // Reading clientWidth/Height every frame causes forced reflow (layout thrashing)
+        const width = containerSizeRef.current.width
+        const height = containerSizeRef.current.height
 
         if (canvas.width !== width || canvas.height !== height) {
             canvas.width = width
@@ -532,5 +561,5 @@ const TimelinePanel: React.FC = () => {
     )
 }
 
-export default TimelinePanel
+export default React.memo(TimelinePanel)
 

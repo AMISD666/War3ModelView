@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react'
 import { Button, Space, message, Tooltip } from 'antd'
-import { PlusCircleOutlined, MinusCircleOutlined, LinkOutlined, DisconnectOutlined } from '@ant-design/icons'
+import { LinkOutlined, DisconnectOutlined } from '@ant-design/icons'
 import { useSelectionStore } from '../store/selectionStore'
 import { useModelStore } from '../store/modelStore'
 import { useUIStore } from '../store/uiStore'

@@ -96,7 +96,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const cameraRef = useRef<SimpleOrbitCamera | null>(null)
 
   const appMainMode = useSelectionStore((state) => state.mainMode)
-  const animationSubMode = useSelectionStore((state) => state.animationSubMode)
+  // Note: animationSubMode removed as unused. Re-add if needed:
+  // const animationSubMode = useSelectionStore((state) => state.animationSubMode)
   const animationFrameId = useRef<number | null>(null)
   const lastFpsTime = useRef<number>(performance.now())
   const lastFrameTime = useRef<number>(performance.now())
@@ -142,6 +143,13 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   useEffect(() => {
     if (canvasRef.current && !cameraRef.current) {
       cameraRef.current = new SimpleOrbitCamera(canvasRef.current)
+    }
+    // CRITICAL: Cleanup camera listeners on unmount to prevent listener leak
+    return () => {
+      if (cameraRef.current) {
+        cameraRef.current.destroy()
+        cameraRef.current = null
+      }
     }
   }, [])
 
@@ -312,6 +320,16 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     initialValues: Map<number, { rotation: Float32Array, scaling: Float32Array }> // NodeId -> { rotation, scaling } (snapshot at drag start)
   } | null>(null)
 
+  // Pre-allocated vectors for handleMouseMove to avoid GC pressure
+  const mouseMoveVecs = useRef({
+    forward: vec3.create(),
+    up: vec3.fromValues(0, 0, 1),
+    right: vec3.create(),
+    camUp: vec3.create(),
+    worldMoveDelta: vec3.create(),
+    moveVec: vec3.create()
+  })
+
   // Box selection overlay state
   const [selectionBox, setSelectionBox] = useState<{ x: number, y: number, width: number, height: number } | null>(null)
 
@@ -422,18 +440,20 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   }, [renderer, appMainMode, animationIndex])
 
   // Sync Store Changes to Renderer (Hot Patching)
+  // Use proper Zustand subscription to detect nodes changes
+  const storeNodes = useModelStore(state => state.nodes)
+
   useEffect(() => {
     if (rendererRef.current && rendererRef.current.model) {
-      const { nodes } = useModelStore.getState()
       // Patch the model data in the renderer with the latest from store
       // This is crucial for "Lightweight Reload" and seeing changes like PivotPoint (Position) updates instantly.
 
       // 1. Update full Nodes list (contains structure and hierarchy info)
-      rendererRef.current.model.Nodes = nodes;
+      rendererRef.current.model.Nodes = storeNodes;
 
       // 2. Update specific lists used by renderer (Lights, etc.)
       // Note: war3-model might cache these, so we update them explicitly.
-      rendererRef.current.model.Lights = nodes.filter((n: any) => n.type === 'Light');
+      rendererRef.current.model.Lights = storeNodes.filter((n: any) => n.type === 'Light');
       // Update other types if necessary (cameras, emitters, etc.)
 
       // 3. Force caching/update if possible. 
@@ -443,7 +463,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         // The rendererData.nodes array holds wrappers { node: rawNode, ... }
         // We need to update the 'node' reference in these wrappers or update the properties.
         rendererRef.current.rendererData.nodes.forEach((wrapper: any) => {
-          const freshNode = nodes.find((n: any) => n.ObjectId === wrapper.node.ObjectId);
+          const freshNode = storeNodes.find((n: any) => n.ObjectId === wrapper.node.ObjectId);
           if (freshNode) {
             wrapper.node = freshNode;
             // If PivotPoint changed, the matrix calculation needs to happen again.
@@ -452,7 +472,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         });
       }
     }
-  }, [renderer, useModelStore.getState().nodes]) // Depend on nodes changing
+  }, [renderer, storeNodes]) // Now using proper Zustand selector for stable reference
 
   useEffect(() => {
     return () => {
@@ -2637,7 +2657,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                     center[0] += x
                     center[1] += y
                     center[2] += z
-                    count++
+                    count++;
                     // 更新全局骨骼位置供 BoneParameterPanel 使用
                     (window as any)._selectedBoneWorldPos = [x, y, z]
                   }
@@ -2692,26 +2712,21 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       }
     }
     return undefined
-  }, [renderer, appMainMode, animationSubMode, animationIndex])
+    // PERFORMANCE: animationSubMode is read via getState() inside render, so don't include in deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renderer, appMainMode, animationIndex])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      console.log('[Viewer Debug] KeyDown:', e.key, 'Target:', e.target, 'ActiveElement:', document.activeElement);
 
-      // 显式检查 input
       if (e.target instanceof HTMLInputElement) {
-        console.log('[Viewer Debug] Target is Input, Type:', e.target.type);
         // 如果是 number input，绝对返回
         if (e.target.type === 'number') {
-          console.log('[Viewer Debug] Blocking shortcut for number input');
           return;
         }
       }
 
       if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) {
-        const type = (document.activeElement as HTMLInputElement).type
-        console.log('[Viewer Debug] ActiveElement is Input, Type:', type);
-        // ... (保留原有逻辑作为后备)
         return;
       }
 
@@ -2729,8 +2744,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     // NOTE: Don't require animationInfo to be set - it gets set BY setSequence!
     // Requiring it creates chicken-and-egg problem where animation never starts.
     if (renderer && renderer.rendererData && typeof (renderer as any).setSequence === 'function') {
-      console.log('[Viewer] Setting sequence to:', animationIndex, 'rendererData exists:', !!renderer.rendererData, 'animationInfo:', renderer.rendererData?.animationInfo?.Name)
-        ; (renderer as any).setSequence(animationIndex)
+      ; (renderer as any).setSequence(animationIndex)
     }
   }, [renderer, animationIndex])
 
@@ -2758,31 +2772,30 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       }
 
       const { theta, phi, distance } = targetCamera.current
-      const forward = vec3.fromValues(Math.sin(phi) * Math.cos(theta), Math.sin(phi) * Math.sin(theta), Math.cos(phi))
-      const up = vec3.fromValues(0, 0, 1)
-      const right = vec3.create()
-      vec3.cross(right, forward, up)
-      vec3.normalize(right, right)
-      const camUp = vec3.create()
-      vec3.cross(camUp, right, forward)
-      vec3.normalize(camUp, camUp)
+      // Use pre-allocated vectors to avoid GC pressure
+      const vecs = mouseMoveVecs.current
+      vec3.set(vecs.forward, Math.sin(phi) * Math.cos(theta), Math.sin(phi) * Math.sin(theta), Math.cos(phi))
+      vec3.cross(vecs.right, vecs.forward, vecs.up)
+      vec3.normalize(vecs.right, vecs.right)
+      vec3.cross(vecs.camUp, vecs.right, vecs.forward)
+      vec3.normalize(vecs.camUp, vecs.camUp)
 
       // Simplified movement speed - more consistent with mouse movement
       const moveScale = distance * 0.002
 
-      const worldMoveDelta = vec3.create()
-      vec3.scaleAndAdd(worldMoveDelta, worldMoveDelta, right, deltaX * moveScale)
-      vec3.scaleAndAdd(worldMoveDelta, worldMoveDelta, camUp, -deltaY * moveScale)
+      vec3.zero(vecs.worldMoveDelta)
+      vec3.scaleAndAdd(vecs.worldMoveDelta, vecs.worldMoveDelta, vecs.right, deltaX * moveScale)
+      vec3.scaleAndAdd(vecs.worldMoveDelta, vecs.worldMoveDelta, vecs.camUp, -deltaY * moveScale)
 
       if (transformMode === 'translate' && mainMode === 'geometry') {
-        const moveVec = vec3.create()
+        vec3.zero(vecs.moveVec)
 
-        if (axis === 'x') moveVec[0] = -worldMoveDelta[0]
-        else if (axis === 'y') moveVec[1] = -worldMoveDelta[1]
-        else if (axis === 'z') moveVec[2] = worldMoveDelta[2]
-        else if (axis === 'xy') { moveVec[0] = -worldMoveDelta[0]; moveVec[1] = -worldMoveDelta[1]; }
-        else if (axis === 'xz') { moveVec[0] = -worldMoveDelta[0]; moveVec[2] = worldMoveDelta[2]; }
-        else if (axis === 'yz') { moveVec[1] = -worldMoveDelta[1]; moveVec[2] = worldMoveDelta[2]; }
+        if (axis === 'x') vecs.moveVec[0] = -vecs.worldMoveDelta[0]
+        else if (axis === 'y') vecs.moveVec[1] = -vecs.worldMoveDelta[1]
+        else if (axis === 'z') vecs.moveVec[2] = vecs.worldMoveDelta[2]
+        else if (axis === 'xy') { vecs.moveVec[0] = -vecs.worldMoveDelta[0]; vecs.moveVec[1] = -vecs.worldMoveDelta[1]; }
+        else if (axis === 'xz') { vecs.moveVec[0] = -vecs.worldMoveDelta[0]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
+        else if (axis === 'yz') { vecs.moveVec[1] = -vecs.worldMoveDelta[1]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
 
         const { selectedVertexIds, selectedFaceIds, geometrySubMode } = useSelectionStore.getState()
         const affectedGeosets = new Set<number>()
@@ -2813,9 +2826,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         }
 
         applyToSelection((v, i) => {
-          v[i] += moveVec[0]
-          v[i + 1] += moveVec[1]
-          v[i + 2] += moveVec[2]
+          v[i] += vecs.moveVec[0]
+          v[i + 1] += vecs.moveVec[1]
+          v[i + 2] += vecs.moveVec[2]
         })
 
         affectedGeosets.forEach(geosetIndex => {
@@ -2828,22 +2841,22 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
       } else if (transformMode === 'translate' && mainMode === 'animation' && (subMode === 'binding' || subMode === 'keyframe')) {
         const { selectedNodeIds } = useSelectionStore.getState()
-        const { autoKeyframe, currentFrame, nodes, updateNode } = useModelStore.getState()
-        const moveVec = vec3.create()
+        const { autoKeyframe: _autoKeyframe, currentFrame, nodes, updateNode: _updateNode } = useModelStore.getState()
+        vec3.zero(vecs.moveVec)
 
         // Use worldMoveDelta with same direction as vertex movement
-        if (axis === 'x') moveVec[0] = -worldMoveDelta[0]
-        else if (axis === 'y') moveVec[1] = -worldMoveDelta[1]
-        else if (axis === 'z') moveVec[2] = worldMoveDelta[2]
-        else if (axis === 'xy') { moveVec[0] = -worldMoveDelta[0]; moveVec[1] = -worldMoveDelta[1]; }
-        else if (axis === 'xz') { moveVec[0] = -worldMoveDelta[0]; moveVec[2] = worldMoveDelta[2]; }
-        else if (axis === 'yz') { moveVec[1] = -worldMoveDelta[1]; moveVec[2] = worldMoveDelta[2]; }
+        if (axis === 'x') vecs.moveVec[0] = -vecs.worldMoveDelta[0]
+        else if (axis === 'y') vecs.moveVec[1] = -vecs.worldMoveDelta[1]
+        else if (axis === 'z') vecs.moveVec[2] = vecs.worldMoveDelta[2]
+        else if (axis === 'xy') { vecs.moveVec[0] = -vecs.worldMoveDelta[0]; vecs.moveVec[1] = -vecs.worldMoveDelta[1]; }
+        else if (axis === 'xz') { vecs.moveVec[0] = -vecs.worldMoveDelta[0]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
+        else if (axis === 'yz') { vecs.moveVec[1] = -vecs.worldMoveDelta[1]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
 
         if (selectedNodeIds.length > 0 && rendererRef.current && rendererRef.current.rendererData.nodes) {
           selectedNodeIds.forEach(nodeId => {
             const nodeWrapper = rendererRef.current!.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
             if (nodeWrapper && nodeWrapper.node.PivotPoint) {
-              let localMoveVec = vec3.fromValues(moveVec[0], moveVec[1], moveVec[2])
+              let localMoveVec = vec3.fromValues(vecs.moveVec[0], vecs.moveVec[1], vecs.moveVec[2])
 
               // For keyframe mode: Transform world-space delta to bone's local space
               // Based on mdlvis AbsVectorToTranslation algorithm:
@@ -2873,15 +2886,6 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                   }
                 }
                 // If no parent (root bone), world delta = local delta (no transformation needed)
-              }
-
-              // DEBUG: Log every 20th call
-              if (!((window as any)._debugCounter2)) (window as any)._debugCounter2 = 0
-                ; (window as any)._debugCounter2++
-              if ((window as any)._debugCounter2 % 20 === 1 && subMode === 'keyframe') {
-                console.log('[DEBUG] NodeId:', nodeId, 'WorldDelta:',
-                  moveVec[0].toFixed(3), moveVec[1].toFixed(3), moveVec[2].toFixed(3),
-                  'LocalDelta:', localMoveVec[0].toFixed(3), localMoveVec[1].toFixed(3), localMoveVec[2].toFixed(3))
               }
 
               // binding 模式：修改 PivotPoint（静态绑定位置）
@@ -3009,15 +3013,6 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                       rendererNode.Translation.Keys.sort((a: any, b: any) => a.Frame - b.Frame)
                     }
                   }
-                }
-
-                // DEBUG: Log during drag (throttled)
-                if (!((window as any)._debugMoveCounter)) (window as any)._debugMoveCounter = 0
-                  ; (window as any)._debugMoveCounter++
-                if ((window as any)._debugMoveCounter % 10 === 0) {
-                  console.log('[DEBUG MouseMove] NodeId:', nodeId,
-                    'WorldDelta:', [moveVec[0].toFixed(2), moveVec[1].toFixed(2), moveVec[2].toFixed(2)],
-                    'LocalDelta:', [localMoveVec[0].toFixed(2), localMoveVec[1].toFixed(2), localMoveVec[2].toFixed(2)])
                 }
               }
             }
@@ -3346,7 +3341,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     }
 
     if (!gizmoState.current.isDragging && !mouseState.current.isDragging && rendererRef.current) {
-      const { transformMode, selectedVertexIds, selectedFaceIds, geometrySubMode, mainMode, animationSubMode, selectedNodeIds } = useSelectionStore.getState()
+      const { transformMode, selectedVertexIds, selectedFaceIds, geometrySubMode, mainMode, animationSubMode: _animSubMode, selectedNodeIds } = useSelectionStore.getState()
 
       let showGizmo = false
       const center = vec3.create()

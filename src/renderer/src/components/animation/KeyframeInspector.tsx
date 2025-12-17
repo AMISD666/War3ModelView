@@ -387,4 +387,4 @@ const KeyframeInspector: React.FC = () => {
     )
 }
 
-export default KeyframeInspector
+export default React.memo(KeyframeInspector)

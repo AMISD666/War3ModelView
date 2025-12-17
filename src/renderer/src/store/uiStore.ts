@@ -94,12 +94,10 @@ export const useUIStore = create<UIState>((set) => ({
     },
 
     setEditMode: (mode) => {
-        console.log('[UIStore] Edit mode changed to:', mode);
         set({ editMode: mode });
     },
 
     setToolMode: (mode) => {
-        console.log('[UIStore] Tool mode changed to:', mode);
         set({ toolMode: mode });
     },
 

@@ -10,6 +10,9 @@
         "composite": true,
         "jsx": "react-jsx",
         "baseUrl": ".",
+        "types": [
+            "@webgpu/types"
+        ],
         "paths": {
             "@renderer/*": [
                 "src/renderer/src/*"

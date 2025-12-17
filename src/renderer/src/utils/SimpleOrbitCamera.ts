@@ -22,6 +22,16 @@ export class SimpleOrbitCamera {
 
     public enabled: boolean = true
 
+    // Store event listener references for cleanup
+    private boundListeners: {
+        contextMenu: (e: Event) => void
+        selectStart: (e: Event) => void
+        mouseDown: (e: MouseEvent) => void
+        mouseUp: (e: MouseEvent) => void
+        mouseMove: (e: MouseEvent) => void
+        wheel: (e: WheelEvent) => void
+    } | null = null
+
     constructor(canvas: HTMLCanvasElement) {
         this.canvas = canvas
         this.moveSpeed = 2
@@ -44,52 +54,74 @@ export class SimpleOrbitCamera {
     }
 
     private initEvents() {
-        // Disable context menu
-        this.canvas.addEventListener('contextmenu', (e) => e.preventDefault())
-        this.canvas.addEventListener('selectstart', (e) => e.preventDefault())
+        // Create bound listener functions to enable removal later
+        this.boundListeners = {
+            contextMenu: (e: Event) => e.preventDefault(),
+            selectStart: (e: Event) => e.preventDefault(),
+            mouseDown: (e: MouseEvent) => {
+                if (!this.enabled) return
+                // Block camera interaction if Ctrl is held (for picking)
+                if (e.ctrlKey || e.metaKey) return
 
-        this.canvas.addEventListener('mousedown', (e) => {
-            if (!this.enabled) return
-            // Block camera interaction if Ctrl is held (for picking)
-            if (e.ctrlKey || e.metaKey) return
+                e.preventDefault()
+                this.mouse.buttons[e.button] = true
+            },
+            mouseUp: (e: MouseEvent) => {
+                if (e.button < 3) this.mouse.buttons[e.button] = false
+            },
+            mouseMove: (e: MouseEvent) => {
+                this.mouse.x2 = this.mouse.x
+                this.mouse.y2 = this.mouse.y
+                this.mouse.x = e.clientX
+                this.mouse.y = e.clientY
 
-            e.preventDefault()
-            this.mouse.buttons[e.button] = true
-        })
+                if (!this.enabled) return
 
-        document.addEventListener('mouseup', (e) => {
-            if (e.button < 3) this.mouse.buttons[e.button] = false
-        })
+                const dx = this.mouse.x - this.mouse.x2
+                const dy = this.mouse.y - this.mouse.y2
 
-        window.addEventListener('mousemove', (e) => {
-            this.mouse.x2 = this.mouse.x
-            this.mouse.y2 = this.mouse.y
-            this.mouse.x = e.clientX
-            this.mouse.y = e.clientY
+                if (this.mouse.buttons[0]) {
+                    this.rotate(dx, dy)
+                }
 
-            if (!this.enabled) return
-
-            const dx = this.mouse.x - this.mouse.x2
-            const dy = this.mouse.y - this.mouse.y2
-
-            if (this.mouse.buttons[0]) {
-                this.rotate(dx, dy)
+                if (this.mouse.buttons[2]) {
+                    this.move(-dx, dy)
+                }
+            },
+            wheel: (e: WheelEvent) => {
+                if (!this.enabled) return
+                e.preventDefault()
+                let deltaY = e.deltaY
+                if (e.deltaMode === 1) {
+                    deltaY = (deltaY / 3) * 100
+                }
+                this.zoom(deltaY / 100)
             }
+        }
 
-            if (this.mouse.buttons[2]) {
-                this.move(-dx, dy)
-            }
-        })
+        // Add event listeners
+        this.canvas.addEventListener('contextmenu', this.boundListeners.contextMenu)
+        this.canvas.addEventListener('selectstart', this.boundListeners.selectStart)
+        this.canvas.addEventListener('mousedown', this.boundListeners.mouseDown)
+        document.addEventListener('mouseup', this.boundListeners.mouseUp)
+        window.addEventListener('mousemove', this.boundListeners.mouseMove)
+        this.canvas.addEventListener('wheel', this.boundListeners.wheel)
+    }
 
-        this.canvas.addEventListener('wheel', (e) => {
-            if (!this.enabled) return
-            e.preventDefault()
-            let deltaY = e.deltaY
-            if (e.deltaMode === 1) {
-                deltaY = (deltaY / 3) * 100
-            }
-            this.zoom(deltaY / 100)
-        })
+    /**
+     * CRITICAL: Call this method when disposing of the camera to prevent event listener leaks.
+     * This removes all event listeners that were added in the constructor.
+     */
+    public destroy() {
+        if (this.boundListeners) {
+            this.canvas.removeEventListener('contextmenu', this.boundListeners.contextMenu)
+            this.canvas.removeEventListener('selectstart', this.boundListeners.selectStart)
+            this.canvas.removeEventListener('mousedown', this.boundListeners.mouseDown)
+            document.removeEventListener('mouseup', this.boundListeners.mouseUp)
+            window.removeEventListener('mousemove', this.boundListeners.mouseMove)
+            this.canvas.removeEventListener('wheel', this.boundListeners.wheel)
+            this.boundListeners = null
+        }
     }
 
     public update() {
@@ -169,3 +201,4 @@ export class SimpleOrbitCamera {
         mat4.perspective(outProjection, this.fov, this.canvas.width / this.canvas.height, this.nearClipPlane, this.farClipPlane)
     }
 }
+

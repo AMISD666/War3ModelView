@@ -44,7 +44,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         selectedVertexIds,
         selectedNodeIds
     } = useSelectionStore();
-    const { modelData } = useModelStore();
+    const { modelData: _modelData } = useModelStore();
     const renderer = useRendererStore(state => state.renderer);
     const { executeCommand } = useCommandManager();
 

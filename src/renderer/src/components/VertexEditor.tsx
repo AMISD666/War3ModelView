@@ -109,8 +109,6 @@ export const VertexEditor: React.FC<VertexEditorProps> = ({ renderer, onBeginUpd
 
         const cmd = new SplitVerticesCommand(renderer, selectedVertexIds)
         commandManager.execute(cmd)
-
-        console.log('[VertexEditor] Executed SplitVerticesCommand for', selectedVertexIds.length, 'vertices')
     }, [renderer, selectedVertexIds, onBeginUpdate])
 
     // Weld selected vertices
@@ -129,8 +127,6 @@ export const VertexEditor: React.FC<VertexEditorProps> = ({ renderer, onBeginUpd
 
         const cmd = new WeldVerticesCommand(renderer, selectedVertexIds)
         commandManager.execute(cmd)
-
-        console.log('[VertexEditor] Executed WeldVerticesCommand for', selectedVertexIds.length, 'vertices')
     }, [renderer, selectedVertexIds, onBeginUpdate])
 
     // Only show in geometry mode with vertex sub-mode when vertices are selected

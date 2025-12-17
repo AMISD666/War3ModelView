@@ -130,10 +130,6 @@ function worldDeltaToLocalDelta(renderer: any, nodeId: number, worldDelta: vec3)
     const localDelta = vec3.create();
     vec3.transformMat4(localDelta, worldDelta, invRotation);
 
-    console.log('[worldDeltaToLocalDelta] nodeId:', nodeId, 'parentId:', parentId,
-        'worldDelta:', [worldDelta[0].toFixed(2), worldDelta[1].toFixed(2), worldDelta[2].toFixed(2)],
-        'localDelta:', [localDelta[0].toFixed(2), localDelta[1].toFixed(2), localDelta[2].toFixed(2)]);
-
     return localDelta;
 }
 
@@ -141,7 +137,7 @@ export function useGizmoTransform({
     rendererRef,
     targetCamera,
     gizmoState,
-    animationSubMode
+    animationSubMode: _animationSubMode
 }: UseGizmoTransformParams) {
 
     /**
@@ -151,8 +147,6 @@ export function useGizmoTransform({
         const { transformMode, mainMode, animationSubMode: subMode } = useSelectionStore.getState()
         const axis = gizmoState.current.activeAxis
 
-        console.log('[handleGizmoDrag] mainMode:', mainMode, 'subMode:', subMode, 'transformMode:', transformMode, 'axis:', axis)
-
         if (!axis) return
         // 支持 geometry 模式、animation/binding 模式、animation/keyframe 模式
         const isGeometry = mainMode === 'geometry'
@@ -160,7 +154,6 @@ export function useGizmoTransform({
         const isKeyframe = mainMode === 'animation' && subMode === 'keyframe'
 
         if (!isGeometry && !isBinding && !isKeyframe) {
-            console.log('[handleGizmoDrag] skipped: not in valid mode')
             return
         }
 
@@ -173,7 +166,6 @@ export function useGizmoTransform({
             } else if (isBinding) {
                 handleTranslateNodes(deltaX, deltaY, axis, moveScale)
             } else if (isKeyframe) {
-                console.log('[Gizmo Keyframe] deltaX:', deltaX, 'deltaY:', deltaY, 'axis:', axis, 'moveScale:', moveScale)
                 handleTranslateNodesKeyframe(deltaX, deltaY, axis, moveScale)
             }
         } else if (transformMode === 'rotate' || transformMode === 'scale') {
@@ -262,20 +254,16 @@ export function useGizmoTransform({
     const keyframeDragDelta = { current: vec3.create() } // 累积拖拽偏移量
 
     const handleTranslateNodesKeyframe = useCallback((deltaX: number, deltaY: number, axis: GizmoAxis, moveScale: number) => {
-        console.log('[handleTranslateNodesKeyframe] called')
         if (!rendererRef.current?.rendererData?.nodes) {
-            console.log('[handleTranslateNodesKeyframe] no renderer nodes')
             return
         }
 
         // World Space delta from screen movement
         const worldDelta = getMoveVectorForAxis(deltaX, deltaY, moveScale, axis)
         const { selectedNodeIds } = useSelectionStore.getState()
-        console.log('[handleTranslateNodesKeyframe] selectedNodeIds:', selectedNodeIds, 'worldDelta:', [worldDelta[0], worldDelta[1], worldDelta[2]])
 
         selectedNodeIds.forEach(nodeId => {
             const nodeWrapper = rendererRef.current.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
-            console.log('[handleTranslateNodesKeyframe] nodeId:', nodeId, 'nodeWrapper:', !!nodeWrapper)
             if (nodeWrapper?.node) {
                 // Convert World Space delta to Local Space delta using parent's inverse rotation
                 const localDelta = worldDeltaToLocalDelta(rendererRef.current, nodeId, worldDelta)
@@ -284,10 +272,9 @@ export function useGizmoTransform({
                 vec3.add(keyframeDragDelta.current, keyframeDragDelta.current, localDelta)
 
                 // 获取当前关键帧值并添加增量（实时预览）
-                const { currentFrame, nodes, autoKeyframe } = useModelStore.getState()
+                const { currentFrame, nodes, autoKeyframe: _autoKeyframe } = useModelStore.getState()
                 const storeNode = nodes.find((n: any) => n.ObjectId === nodeId)
                 const frame = Math.round(currentFrame)
-                console.log('[handleTranslateNodesKeyframe] autoKeyframe:', autoKeyframe, 'frame:', frame, 'storeNode:', !!storeNode)
 
                 // 从现有关键帧获取当前位置或使用 [0,0,0]
                 let currentTranslation = [0, 0, 0]
@@ -304,7 +291,6 @@ export function useGizmoTransform({
                     currentTranslation[1] + localDelta[1],
                     currentTranslation[2] + localDelta[2]
                 ]
-                console.log('[handleTranslateNodesKeyframe] newTranslation:', newTranslation)
 
                 // 如果自动K帧开启，创建/更新关键帧
                 autoKeyframeTranslation(nodeId, newTranslation)

@@ -22,8 +22,8 @@ export class BindVerticesCommand implements Command {
         console.log('[BindVerticesCommand] Execute called')
         if (!this.changes) {
             this.calculateChanges()
-            console.log('[BindVerticesCommand] Changes calculated:', this.changes?.length)
         }
+        console.log('[BindVerticesCommand] Changes count:', this.changes?.length ?? 0)
         this.apply(true)
     }
 

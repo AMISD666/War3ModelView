@@ -314,10 +314,9 @@ const BoneParameterPanel: React.FC = () => {
                                             onKeyDown={(e) => {
                                                 // 阻止事件冒泡，防止触发全局快捷键
                                                 e.stopPropagation();
-                                                console.log('[BonePanel] Input X keydown:', e.key);
                                                 if (e.key === 'Enter') handleCommit();
                                             }}
-                                            onChange={(e) => console.log('[BonePanel] Input X change:', e.target.value)}
+                                            onChange={() => {/* Controlled by defaultValue */ }}
                                             style={{
                                                 flex: 1,
                                                 background: '#1f1f1f',
@@ -341,10 +340,9 @@ const BoneParameterPanel: React.FC = () => {
                                             onBlur={handleCommit}
                                             onKeyDown={(e) => {
                                                 e.stopPropagation();
-                                                console.log('[BonePanel] Input Y keydown:', e.key);
                                                 if (e.key === 'Enter') handleCommit();
                                             }}
-                                            onChange={(e) => console.log('[BonePanel] Input Y change:', e.target.value)}
+                                            onChange={() => {/* Controlled by defaultValue */ }}
                                             style={{
                                                 flex: 1,
                                                 background: '#1f1f1f',
@@ -368,10 +366,9 @@ const BoneParameterPanel: React.FC = () => {
                                             onBlur={handleCommit}
                                             onKeyDown={(e) => {
                                                 e.stopPropagation();
-                                                console.log('[BonePanel] Input Z keydown:', e.key);
                                                 if (e.key === 'Enter') handleCommit();
                                             }}
-                                            onChange={(e) => console.log('[BonePanel] Input Z change:', e.target.value)}
+                                            onChange={() => {/* Controlled by defaultValue */ }}
                                             style={{
                                                 flex: 1,
                                                 background: '#1f1f1f',
@@ -462,5 +459,4 @@ const BoneParameterPanel: React.FC = () => {
     )
 }
 
-export default BoneParameterPanel
-
+export default React.memo(BoneParameterPanel)
