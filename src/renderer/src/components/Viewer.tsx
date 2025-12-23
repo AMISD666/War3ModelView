@@ -2303,7 +2303,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
             // === Grid Rendering (BEFORE model so model can occlude it) ===
             if (showGridRef.current) {
-              gridRenderer.current.render(gl as WebGLRenderingContext, mvMatrix, pMatrix)
+              const { gridSettings } = useRendererStore.getState()
+              // Ensure buffers are up to date with current size
+              gridRenderer.current.updateBuffers(gl as WebGLRenderingContext, gridSettings.gridSize || 2048)
+              gridRenderer.current.render(gl as WebGLRenderingContext, mvMatrix, pMatrix, gridSettings)
             }
 
             // === Geoset Visibility Control ===
@@ -4083,10 +4086,14 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       )}
 
       <ViewerToolbar
+        // Remount toolbar if needed
+        key="viewer-toolbar"
         onRecalculateNormals={handleRecalculateNormals}
         onSplitVertices={handleSplitVertices}
         onWeldVertices={handleWeldVertices}
       />
+
+
       {/* Bone Binding Panel - Rendered here to access rendererRef */}
       <BoneBindingPanel />
       {appMainMode === 'geometry' && <VertexEditor renderer={renderer} onBeginUpdate={() => { ignoreNextModelDataUpdate.current = true }} />}

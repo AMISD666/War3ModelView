@@ -1,13 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react'
 
+
 interface MenuBarProps {
     onOpen: () => void
     onSave: () => void
     onSaveAs: () => void
     onExportMDL: () => void
     onExportMDX: () => void
-    onLoadMPQ: () => void
-    mpqLoaded: boolean
+    // onLoadMPQ removed
+    // mpqLoaded removed (accessed via store in ViewSettingsWindow)
     teamColor: number
     onSelectTeamColor: (color: number) => void
     showGrid: boolean
@@ -24,8 +25,8 @@ interface MenuBarProps {
     onToggleFPS: () => void
     showGeosetVisibility: boolean
     onToggleGeosetVisibility: () => void
-    showCollisionShapes: boolean // Add this
-    onToggleCollisionShapes: () => void // Add this
+    showCollisionShapes: boolean
+    onToggleCollisionShapes: () => void
     showCameras: boolean
     onToggleCameras: () => void
     showLights: boolean
@@ -44,8 +45,8 @@ const MenuBar: React.FC<MenuBarProps> = ({
     onSave,
     onExportMDL,
     onExportMDX,
-    onLoadMPQ,
-    mpqLoaded,
+    // onLoadMPQ,
+    // mpqLoaded,
     teamColor,
     onSelectTeamColor,
     showGrid,
@@ -423,157 +424,18 @@ const MenuBar: React.FC<MenuBarProps> = ({
                 )}
             </div>
 
-            {/* Settings Menu */}
-            <div style={menuStyle} onClick={() => toggleMenu('settings')}>
+            {/* Settings Menu Button - Direct Action */}
+            <div
+                style={{ ...menuStyle, backgroundColor: activeMenu === 'settings' ? '#444' : 'transparent' }}
+                onClick={() => {
+                    import('../store/rendererStore').then(({ useRendererStore }) => {
+                        useRendererStore.getState().setShowSettingsPanel(true);
+                    });
+                }}
+                onMouseEnter={hoverStyle}
+                onMouseLeave={activeMenu !== 'settings' ? unhoverStyle : undefined}
+            >
                 设置
-                {activeMenu === 'settings' && (
-                    <div style={dropdownStyle}>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onLoadMPQ(); closeMenu() }}
-                        >
-                            加载游戏 MPQ {mpqLoaded ? '（成功加载）' : '（未加载）'}
-                        </div>
-                        <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
-                        <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
-
-                        <div
-                            style={{ ...itemStyle, position: 'relative' }}
-                            onMouseEnter={(e) => { hoverStyle(e); setSettingsSubMenu('displayEffects'); }}
-                            onMouseLeave={unhoverStyle}
-                        >
-                            <span>显示效果 ▸</span>
-                            {settingsSubMenu === 'displayEffects' && (
-                                <div style={{
-                                    ...dropdownStyle,
-                                    top: 0,
-                                    left: '100%',
-                                    marginTop: '-5px'
-                                }}>
-                                    <div
-                                        style={itemStyle}
-                                        onMouseEnter={hoverStyle}
-                                        onMouseLeave={unhoverStyle}
-                                        onClick={() => { onToggleGrid(); }}
-                                    >
-                                        <span>显示网格</span>
-                                        <span>{showGrid ? '✓' : ''}</span>
-                                    </div>
-                                    <div
-                                        style={itemStyle}
-                                        onMouseEnter={hoverStyle}
-                                        onMouseLeave={unhoverStyle}
-                                        onClick={() => { onToggleNodes(); }}
-                                    >
-                                        <span>显示节点</span>
-                                        <span>{showNodes ? '✓' : ''}</span>
-                                    </div>
-                                    <div
-                                        style={itemStyle}
-                                        onMouseEnter={hoverStyle}
-                                        onMouseLeave={unhoverStyle}
-                                        onClick={() => { onToggleSkeleton(); }}
-                                    >
-                                        <span>显示骨架</span>
-                                        <span>{showSkeleton ? '✓' : ''}</span>
-                                    </div>
-                                    <div
-                                        style={itemStyle}
-                                        onMouseEnter={hoverStyle}
-                                        onMouseLeave={unhoverStyle}
-                                        onClick={() => { onToggleFPS(); }}
-                                    >
-                                        <span>显示 FPS</span>
-                                        <span>{showFPS ? '✓' : ''}</span>
-                                    </div>
-                                    <div
-                                        style={itemStyle}
-                                        onMouseEnter={hoverStyle}
-                                        onMouseLeave={unhoverStyle}
-                                        onClick={() => { onToggleGeosetVisibility(); }}
-                                    >
-                                        <span>多边形显示工具</span>
-                                        <span>{showGeosetVisibility ? '✓' : ''}</span>
-                                    </div>
-                                    <div
-                                        style={itemStyle}
-                                        onMouseEnter={hoverStyle}
-                                        onMouseLeave={unhoverStyle}
-                                        onClick={() => { onToggleCollisionShapes(); }}
-                                    >
-                                        <span>显示碰撞形状</span>
-                                        <span>{showCollisionShapes ? '✓' : ''}</span>
-                                    </div>
-                                    <div
-                                        style={itemStyle}
-                                        onMouseEnter={hoverStyle}
-                                        onMouseLeave={unhoverStyle}
-                                        onClick={() => { onToggleCameras(); }}
-                                    >
-                                        <span>显示相机</span>
-                                        <span>{showCameras ? '✓' : ''}</span>
-                                    </div>
-                                    <div
-                                        style={itemStyle}
-                                        onMouseEnter={hoverStyle}
-                                        onMouseLeave={unhoverStyle}
-                                        onClick={() => { onToggleLights(); }}
-                                    >
-                                        <span>显示灯光</span>
-                                        <span>{showLights ? '✓' : ''}</span>
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                        <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
-                        <div style={{ padding: '5px 15px', color: '#aaa', fontSize: '12px' }}>渲染模式</div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onChangeRenderMode('textured'); }}
-                        >
-                            <span>纹理</span>
-                            <span>{renderMode === 'textured' ? '●' : '○'}</span>
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onChangeRenderMode('wireframe'); }}
-                        >
-                            <span>线框</span>
-                            <span>{renderMode === 'wireframe' ? '●' : '○'}</span>
-                        </div>
-                        <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
-                        <div style={{ padding: '5px 15px', color: '#aaa', fontSize: '12px' }}>背景颜色</div>
-                        <div style={{ padding: '5px 15px' }} onClick={(e) => e.stopPropagation()}>
-                            <input
-                                type="color"
-                                value={backgroundColor}
-                                onChange={(e) => onChangeBackgroundColor(e.target.value)}
-                                onClick={(e) => e.stopPropagation()}
-                                style={{ width: '100%', cursor: 'pointer', border: 'none', padding: 0, height: '25px' }}
-                            />
-                        </div>
-                        <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
-                        <div style={{ padding: '5px 15px', color: '#aaa', fontSize: '12px' }}>队伍颜色</div>
-                        <div style={{ padding: '5px 15px' }}>
-                            <select
-                                value={teamColor}
-                                onChange={(e) => onSelectTeamColor(parseInt(e.target.value))}
-                                style={{ width: '100%', padding: '4px', background: '#444', color: 'white', border: '1px solid #555', borderRadius: '4px' }}
-                                onClick={(e) => e.stopPropagation()}
-                            >
-                                {Array.from({ length: 13 }).map((_, i) => (
-                                    <option key={i} value={i}>玩家 {i + 1} ({['红', '蓝', '青', '紫', '黄', '橙', '绿', '粉', '灰', '浅蓝', '暗绿', '棕', '栗'][i] || '未知'})</option>
-                                ))}
-                            </select>
-                        </div>
-                    </div>
-                )}
             </div>
 
             {/* Help Menu */}

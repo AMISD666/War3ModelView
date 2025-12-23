@@ -14,8 +14,10 @@ import {
     MergeCellsOutlined, // Weld
     LinkOutlined, // Bind
     DisconnectOutlined, // Unbind
-    ApartmentOutlined // Parent
+    ApartmentOutlined, // Parent
+    TableOutlined // Grid Settings
 } from '@ant-design/icons';
+
 import { useSelectionStore } from '../store/selectionStore';
 import { useModelStore } from '../store/modelStore';
 import { useRendererStore } from '../store/rendererStore';
@@ -45,7 +47,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         selectedNodeIds
     } = useSelectionStore();
     const { modelData: _modelData } = useModelStore();
-    const renderer = useRendererStore(state => state.renderer);
+    const { renderer, setShowSettingsPanel } = useRendererStore(state => state);
     const { executeCommand } = useCommandManager();
 
     const handleBind = () => {
@@ -249,6 +251,10 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                     </>
                 )}
             </Space>
+
+            <div style={{ width: 1, backgroundColor: '#555', height: '24px', alignSelf: 'center' }} />
+
+
         </div>
     );
 };

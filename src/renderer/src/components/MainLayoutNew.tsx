@@ -10,6 +10,7 @@ import MainLayoutOld from './MainLayout';
 import { NodeManagerWindow } from './node/NodeManagerWindow';
 import NodeDialog from './node/NodeDialog';
 import { CreateNodeDialog } from './node/CreateNodeDialog';
+import { ViewSettingsWindow } from './ViewSettingsWindow';
 
 const { Content } = Layout;
 
@@ -116,6 +117,7 @@ export const MainLayoutNew: React.FC = () => {
                 onClose={() => setNodeDialogVisible(false)}
             />
             <CreateNodeDialog />
+            <ViewSettingsWindow />
         </>
     );
 };

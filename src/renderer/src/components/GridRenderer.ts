@@ -1,9 +1,20 @@
 import { mat4 } from 'gl-matrix'
+import { GridSettings } from '../store/rendererStore'
 
 export class GridRenderer {
     private program: WebGLProgram | null = null
-    private buffer: WebGLBuffer | null = null
-    private count: number = 0
+
+    // Separate buffers for independent layers
+    private buffer128: WebGLBuffer | null = null
+    private count128: number = 0
+
+    private buffer512: WebGLBuffer | null = null
+    private count512: number = 0
+
+    private buffer1024: WebGLBuffer | null = null
+    private count1024: number = 0
+
+    private currentSize: number = 0
 
     init(gl: WebGLRenderingContext | WebGL2RenderingContext) {
         const vsSource = `
@@ -36,33 +47,66 @@ export class GridRenderer {
             return
         }
 
-        // Create grid vertices
-        const size = 1000
-        const step = 100
+        // Initial buffer creation (default 2048, but will be updated by render if needed)
+        this.updateBuffers(gl, 2048)
+    }
+
+    updateBuffers(gl: WebGLRenderingContext | WebGL2RenderingContext, size: number) {
+        if (size === this.currentSize) return
+        this.currentSize = size
+
+        // Delete old buffers
+        if (this.buffer128) gl.deleteBuffer(this.buffer128)
+        if (this.buffer512) gl.deleteBuffer(this.buffer512)
+        if (this.buffer1024) gl.deleteBuffer(this.buffer1024)
+
+        this.createBuffer(gl, size, 128, '128')
+        this.createBuffer(gl, size, 512, '512')
+        this.createBuffer(gl, size, 1024, '1024')
+    }
+
+    private createBuffer(gl: WebGLRenderingContext | WebGL2RenderingContext, size: number, step: number, type: '128' | '512' | '1024') {
         const vertices: number[] = []
 
+        // Generate lines
         for (let i = -size; i <= size; i += step) {
-            // X lines
+            // X lines (vertical lines moving along X)
             vertices.push(i, -size, 0)
             vertices.push(i, size, 0)
-            // Y lines
+
+            // Y lines (horizontal lines moving along Y)
             vertices.push(-size, i, 0)
             vertices.push(size, i, 0)
         }
 
-        this.count = vertices.length / 3
-        this.buffer = gl.createBuffer()
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer)
+        const buffer = gl.createBuffer()
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffer)
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW)
+
+        const count = vertices.length / 3
+
+        if (type === '128') {
+            this.buffer128 = buffer
+            this.count128 = count
+        } else if (type === '512') {
+            this.buffer512 = buffer
+            this.count512 = count
+        } else {
+            this.buffer1024 = buffer
+            this.count1024 = count
+        }
     }
 
-    render(gl: WebGLRenderingContext | WebGL2RenderingContext, mvMatrix: mat4, pMatrix: mat4) {
-        if (!this.program || !this.buffer) return
-
-        // IMPORTANT: Keep depth test ENABLED so the model can occlude the grid
-        // The grid should be rendered BEFORE the model, or the model will be hidden by it
-        gl.enable(gl.DEPTH_TEST)
-        gl.depthMask(true) // Allow writing to depth buffer
+    render(gl: WebGLRenderingContext | WebGL2RenderingContext, mvMatrix: mat4, pMatrix: mat4, settings: GridSettings) {
+        if (!this.program) return
+        if (!settings) return
+        if (settings.enableDepth) {
+            gl.enable(gl.DEPTH_TEST)
+            gl.depthMask(true)
+        } else {
+            gl.disable(gl.DEPTH_TEST)
+            gl.depthMask(false)
+        }
 
         gl.useProgram(this.program)
 
@@ -72,22 +116,39 @@ export class GridRenderer {
 
         const mvp = mat4.create()
         mat4.multiply(mvp, pMatrix, mvMatrix)
-
         gl.uniformMatrix4fv(uMVP, false, mvp)
-        gl.uniform4f(uColor, 0.5, 0.5, 0.5, 0.5) // Grey color
 
         // Force Alpha Blending state
         gl.enable(gl.BLEND)
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer)
-        gl.enableVertexAttribArray(aPosition)
-        gl.vertexAttribPointer(aPosition, 3, gl.FLOAT, false, 0, 0)
+        const drawLayer = (buffer: WebGLBuffer | null, count: number, color: number[]) => {
+            if (!buffer || count === 0) return
+            gl.uniform4f(uColor, color[0], color[1], color[2], color[3])
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffer)
+            gl.enableVertexAttribArray(aPosition)
+            gl.vertexAttribPointer(aPosition, 3, gl.FLOAT, false, 0, 0)
+            gl.drawArrays(gl.LINES, 0, count)
+        }
 
-        gl.drawArrays(gl.LINES, 0, this.count)
+        // Draw layers order: 128 (White) -> 512 (Yellow) -> 1024 (Red)
+        // Drawing smaller first ensures larger grids overlay cleanly
+        if (settings.show128) {
+            drawLayer(this.buffer128, this.count128, [1.0, 1.0, 1.0, 0.3]) // White with transparency
+        }
+        if (settings.show512) {
+            drawLayer(this.buffer512, this.count512, [1.0, 1.0, 0.0, 0.5]) // Yellow
+        }
+        if (settings.show1024) {
+            drawLayer(this.buffer1024, this.count1024, [1.0, 0.0, 0.0, 0.6]) // Red
+        }
 
         // Clean up WebGL state
         gl.disableVertexAttribArray(aPosition)
+
+        // Restore common state defaults if needed
+        gl.enable(gl.DEPTH_TEST)
+        gl.depthMask(true)
     }
 
     private compileShader(gl: WebGLRenderingContext | WebGL2RenderingContext, type: number, source: string) {
@@ -96,7 +157,7 @@ export class GridRenderer {
         gl.shaderSource(shader, source)
         gl.compileShader(shader)
         if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-            console.error('Shader compile error:', gl.getShaderInfoLog(shader))
+            console.error('Grid shader compile error:', gl.getShaderInfoLog(shader))
             gl.deleteShader(shader)
             return null
         }

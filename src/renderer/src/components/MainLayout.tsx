@@ -20,6 +20,7 @@ import { useModelStore } from '../store/modelStore'
 import { NodeType } from '../types/node'
 import { useUIStore } from '../store/uiStore'
 import { useSelectionStore } from '../store/selectionStore'
+import { useRendererStore } from '../store/rendererStore'
 
 /**
  * Normalize model data before saving to ensure typed arrays are correct.
@@ -464,26 +465,7 @@ const MainLayout: React.FC = () => {
     const { toggleNodeManager, toggleModelInfo } = useUIStore()
     const { mainMode, setMainMode } = useSelectionStore()
 
-    // Load settings from localStorage
-    const loadSetting = <T,>(key: string, defaultValue: T): T => {
-        const saved = localStorage.getItem(key)
-        if (saved !== null) {
-            try {
-                return JSON.parse(saved)
-            } catch (e) {
-                console.warn(`Failed to parse setting ${key}:`, e)
-            }
-        }
-        return defaultValue
-    }
 
-    const saveSetting = (key: string, value: any) => {
-        try {
-            localStorage.setItem(key, JSON.stringify(value))
-        } catch (e) {
-            console.warn(`Failed to save setting ${key}:`, e)
-        }
-    }
 
     const [activeEditor, setActiveEditor] = useState<string | null>(null)
     const [showGeosetAnimModal, setShowGeosetAnimModal] = useState<boolean>(false)
@@ -495,25 +477,34 @@ const MainLayout: React.FC = () => {
     const [showMaterialModal, setShowMaterialModal] = useState<boolean>(false)
     const [showGeosetModal, setShowGeosetModal] = useState<boolean>(false)
     const [showGlobalSeqModal, setShowGlobalSeqModal] = useState<boolean>(false)
-    const [showGeosetVisibility, setShowGeosetVisibility] = useState<boolean>(() => loadSetting('showGeosetVisibility', true))
+
 
     // Use modelData directly from store to ensure updates from NodeManager are reflected
     const modelData = useModelStore(state => state.modelData)
 
 
     // Persistent settings
-    const [teamColor, setTeamColor] = useState<number>(() => loadSetting('teamColor', 0))
-    const [showGrid, setShowGrid] = useState<boolean>(() => loadSetting('showGrid', true))
-    const [showNodes, setShowNodes] = useState<boolean>(false)
-    const [showSkeleton, setShowSkeleton] = useState<boolean>(false)
-    const [showCollisionShapes, setShowCollisionShapes] = useState<boolean>(() => loadSetting('showCollisionShapes', true))
-    const [showCameras, setShowCameras] = useState<boolean>(() => loadSetting('showCameras', false))
-    const [showLights, setShowLights] = useState<boolean>(() => loadSetting('showLights', true))
-    const [renderMode, setRenderMode] = useState<'textured' | 'wireframe'>(() => loadSetting('renderMode', 'textured'))
-    const [backgroundColor, setBackgroundColor] = useState<string>(() => loadSetting('backgroundColor', '#000000'))
-    const [showFPS, setShowFPS] = useState<boolean>(() => loadSetting('showFPS', false))
+    // Persistent settings replaced by store
+    const {
+        showGrid, setShowGrid,
+        showNodes, setShowNodes,
+        showSkeleton, setShowSkeleton,
+        showFPS, setShowFPS,
+        showGeosetVisibility, setShowGeosetVisibility,
+        showCollisionShapes, setShowCollisionShapes,
+        showCameras, setShowCameras,
+        showLights, setShowLights,
+        renderMode, setRenderMode,
+        backgroundColor, setBackgroundColor,
+        teamColor, setTeamColor,
+        mpqLoaded, setMpqLoaded
+    } = useRendererStore();
+
+    // Load initial settings into store (optional, or rely on store defaults)
+    // Settings are now handled by rendererStore persistence
     const [viewPreset, setViewPreset] = useState<{ type: string, time: number } | null>(null)
-    const [mpqLoaded, setMpqLoaded] = useState<boolean>(false)
+    // removed local mpqLoaded
+
 
     const [isLoading, setIsLoading] = useState<boolean>(false)
     const [isDragging, setIsDragging] = useState<boolean>(false) // For drag-drop visual feedback
@@ -903,41 +894,7 @@ const MainLayout: React.FC = () => {
         }
     }, [setZustandModelData, setZustandLoading])
 
-    const handleLoadMPQ = async () => {
-        try {
-            const { open } = await import('@tauri-apps/plugin-dialog')
-            const { invoke } = await import('@tauri-apps/api/core')
 
-            const selected = await open({
-                multiple: true,
-                filters: [{
-                    name: 'Warcraft 3 Archives',
-                    extensions: ['mpq']
-                }]
-            })
-
-            if (selected) {
-                const paths = Array.isArray(selected) ? selected : [selected]
-
-                // Save to localStorage
-                localStorage.setItem('mpq_paths', JSON.stringify(paths))
-
-                let count = 0
-                for (const path of paths) {
-                    if (path) {
-                        await invoke('load_mpq', { path })
-                        count++
-                    }
-                }
-                if (count > 0) {
-                    alert(`成功加载 ${count} �?MPQ 文件！\n已保存路径，下次启动将自动加载。`)
-                }
-            }
-        } catch (err) {
-            console.error('Failed to load MPQ:', err)
-            alert('加载 MPQ 失败: ' + err)
-        }
-    }
 
     const handleSave = async () => {
         if (!modelPath || !modelData) return
@@ -1138,7 +1095,12 @@ const MainLayout: React.FC = () => {
     }
 
     // Debug Console State
-    const [showDebugConsole, setShowDebugConsole] = useState<boolean>(() => loadSetting('showDebugConsole', false))
+    const [showDebugConsole, setShowDebugConsole] = useState<boolean>(() => {
+        try {
+            const saved = localStorage.getItem('showDebugConsole');
+            return saved ? JSON.parse(saved) : false;
+        } catch { return false; }
+    })
     const [showAbout, setShowAbout] = useState<boolean>(false)
 
     useEffect(() => {
@@ -1197,8 +1159,8 @@ const MainLayout: React.FC = () => {
                 onSaveAs={handleSaveAs}
                 onExportMDL={handleExportMDL}
                 onExportMDX={handleExportMDX}
-                onLoadMPQ={handleLoadMPQ}
-                mpqLoaded={mpqLoaded}
+                // onLoadMPQ={handleLoadMPQ} // Removed
+                // mpqLoaded={mpqLoaded} // Removed
                 teamColor={teamColor}
                 onSelectTeamColor={setTeamColor}
                 showGrid={showGrid}
@@ -1217,25 +1179,21 @@ const MainLayout: React.FC = () => {
                 onToggleGeosetVisibility={() => {
                     const newValue = !showGeosetVisibility;
                     setShowGeosetVisibility(newValue);
-                    localStorage.setItem('showGeosetVisibility', JSON.stringify(newValue));
                 }}
                 showCollisionShapes={showCollisionShapes}
                 onToggleCollisionShapes={() => {
                     const newVal = !showCollisionShapes
                     setShowCollisionShapes(newVal)
-                    saveSetting('showCollisionShapes', newVal)
                 }}
                 showCameras={showCameras}
                 onToggleCameras={() => {
                     const newVal = !showCameras
                     setShowCameras(newVal)
-                    saveSetting('showCameras', newVal)
                 }}
                 showLights={showLights}
                 onToggleLights={() => {
                     const newVal = !showLights
                     setShowLights(newVal)
-                    saveSetting('showLights', newVal)
                 }}
                 onSetViewPreset={(preset) => setViewPreset({ type: preset, time: Date.now() })}
                 onToggleEditor={(editor) => {
@@ -1262,7 +1220,7 @@ const MainLayout: React.FC = () => {
                     } else if (editor === 'globalSequence') {
                         setShowGlobalSeqModal(true)
                     } else if (editor === 'geosetVisibility') {
-                        setShowGeosetVisibility(prev => !prev)
+                        setShowGeosetVisibility(!showGeosetVisibility)
                     } else {
                         console.log('[MainLayout] Toggling editor:', editor)
                         toggleEditor(editor)
@@ -1383,7 +1341,7 @@ const MainLayout: React.FC = () => {
                                 showCameras={mainMode !== 'uv' && showCameras}
                                 showLights={mainMode !== 'uv' && mainMode !== 'animation' && showLights}
                                 showWireframe={mainMode !== 'uv' && renderMode === 'wireframe'}
-                                onToggleWireframe={() => setRenderMode(prev => prev === 'textured' ? 'wireframe' : 'textured')}
+                                onToggleWireframe={() => setRenderMode(renderMode === 'textured' ? 'wireframe' : 'textured')}
                                 backgroundColor={backgroundColor}
                                 animationIndex={currentSequence}
                                 isPlaying={mainMode !== 'uv' && isPlaying}
