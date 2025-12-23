@@ -118,6 +118,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const playbackSpeedRef = useRef(playbackSpeed)
   const backgroundColorRef = useRef(backgroundColor)
 
+  // Store-derived refs
+  const showVerticesRef = useRef(useRendererStore.getState().showVertices)
+  const vertexSettingsRef = useRef(useRendererStore.getState().vertexSettings)
+
   // Cache for bound vertex highlighting (to avoid per-frame recalculation)
   const boundVerticesCache = useRef<{ boneId: number, vertices: number[] } | null>(null)
 
@@ -141,7 +145,27 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     isPlayingRef.current = isPlaying
     playbackSpeedRef.current = playbackSpeed
     backgroundColorRef.current = backgroundColor
-  }, [showGrid, showNodes, showSkeleton, showCollisionShapes, showCameras, showLights, showWireframe, isPlaying, playbackSpeed, backgroundColor])
+
+    // Sync store-only settings
+    const state = useRendererStore.getState()
+    showVerticesRef.current = state.showVertices
+    vertexSettingsRef.current = state.vertexSettings
+  }, [showGrid, showNodes, showSkeleton, showCollisionShapes, showCameras, showLights, showWireframe, isPlaying, playbackSpeed, backgroundColor,
+    // Add implicit dependencies if they result in re-render, otherwise we rely on the loop checking refs.
+    // Actually, we should subscribe or just use .getState() in the loop for low-frequency changes?
+    // Refs are better for avoiding loop capturing stale closures.
+    // But we need to update refs when store changes.
+  ])
+
+  // Separate effect for store-driven updates (since they aren't props)
+  useEffect(() => {
+    const unsub = useRendererStore.subscribe((state) => {
+      showVerticesRef.current = state.showVertices
+      vertexSettingsRef.current = state.vertexSettings
+    })
+    return () => unsub()
+  }, [])
+
 
   useEffect(() => {
     if (canvasRef.current && !cameraRef.current) {
@@ -2301,13 +2325,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               }
             }
 
-            // === Grid Rendering (BEFORE model so model can occlude it) ===
-            if (showGridRef.current) {
-              const { gridSettings } = useRendererStore.getState()
-              // Ensure buffers are up to date with current size
-              gridRenderer.current.updateBuffers(gl as WebGLRenderingContext, gridSettings.gridSize || 2048)
-              gridRenderer.current.render(gl as WebGLRenderingContext, mvMatrix, pMatrix, gridSettings)
-            }
+
 
             // === Geoset Visibility Control ===
             // Get visibility state from store
@@ -2330,6 +2348,31 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             }
 
             mdlRenderer.render(mvMatrix, pMatrix, { wireframe: showWireframeRef.current || (currentMainMode === 'geometry' && (geometrySubMode === 'face' || geometrySubMode === 'group')) })
+
+            // === Grid Rendering (Moved AFTER model for correct depth/overlay handling) ===
+            if (showGridRef.current) {
+              const { gridSettings } = useRendererStore.getState()
+              gridRenderer.current.updateBuffers(gl as WebGLRenderingContext, gridSettings.gridSize || 2048)
+              gridRenderer.current.render(gl as WebGLRenderingContext, mvMatrix, pMatrix, gridSettings)
+            }
+
+            // === Vertices Rendering (Moved AFTER model for correct depth/overlay handling) ===
+            if (showVerticesRef.current && mdlRenderer.model.Geosets && (mdlRenderer as any).gl) {
+              const settings = vertexSettingsRef.current
+              mdlRenderer.model.Geosets.forEach((geoset: any) => {
+                if (geoset.Vertices) {
+                  debugRenderer.current.renderPoints(
+                    (mdlRenderer as any).gl,
+                    mvMatrix,
+                    pMatrix,
+                    geoset.Vertices,
+                    [1, 1, 1, 1], // White
+                    settings.size,
+                    settings.enableDepth
+                  )
+                }
+              })
+            }
 
             // Restore original geoset alphas
             if (originalGeosetAlphas.size > 0 && mdlRenderer.rendererData.geosetAlpha) {
@@ -2573,10 +2616,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               // Use different color for hovered geoset vertices
               if (hoveredGeosetId === geosetIndex) {
                 // Hovered geoset: yellow highlight
-                debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, geoset.Vertices, [1, 0.8, 0, 1], 6.0)
+                debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, geoset.Vertices, [1, 0.8, 0, 1], 6.0, vertexSettingsRef.current.enableDepth)
               } else {
                 // Normal geoset: blue
-                debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, geoset.Vertices, [0, 0, 1, 0.5], 4.0)
+                debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, geoset.Vertices, [0, 0, 1, 0.5], 4.0, vertexSettingsRef.current.enableDepth)
               }
             }
 
@@ -2627,7 +2670,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                   }
                 }
                 gl.disable(gl.DEPTH_TEST)
-                debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, selectedPositions, [1, 0, 0, 1], 6.0)
+                debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, selectedPositions, [1, 0, 0, 1], 6.0, false) // Selected always visible? or respect depth? Selected usually always visible.
                 gl.enable(gl.DEPTH_TEST)
               }
             }

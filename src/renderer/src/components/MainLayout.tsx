@@ -740,6 +740,11 @@ const MainLayout: React.FC = () => {
                 case 'm': setShowMaterialModal(prev => !prev); break;
                 case 's': setShowSequenceModal(prev => !prev); break;
                 case 'l': setShowGlobalSeqModal(prev => !prev); break;
+                // Mode Switching Shortcuts
+                case 'f1': e.preventDefault(); useSelectionStore.getState().setMainMode('view'); break;
+                case 'f2': e.preventDefault(); useSelectionStore.getState().setMainMode('geometry'); break;
+                case 'f3': e.preventDefault(); useSelectionStore.getState().setMainMode('uv'); break;
+                case 'f4': e.preventDefault(); useSelectionStore.getState().setMainMode('animation'); break;
             }
         }
         window.addEventListener('keydown', handleKeyDown)

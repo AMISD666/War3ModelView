@@ -58,7 +58,9 @@ export const ViewSettingsWindow: React.FC = () => {
         renderMode, setRenderMode,
         backgroundColor, setBackgroundColor,
         teamColor, setTeamColor,
-        mpqLoaded, setMpqLoaded
+        mpqLoaded, setMpqLoaded,
+        showVertices, setShowVertices,
+        vertexSettings, setVertexSettings
     } = useRendererStore();
 
 
@@ -160,6 +162,7 @@ export const ViewSettingsWindow: React.FC = () => {
                             gap: '12px'
                         }}>
                             <ToggleButton checked={showGrid} onChange={setShowGrid}>网格</ToggleButton>
+                            <ToggleButton checked={showVertices} onChange={setShowVertices}>顶点</ToggleButton>
                             <ToggleButton checked={showNodes} onChange={setShowNodes}>节点</ToggleButton>
                             <ToggleButton checked={showSkeleton} onChange={setShowSkeleton}>骨架</ToggleButton>
                             <ToggleButton checked={showFPS} onChange={setShowFPS}>FPS</ToggleButton>
@@ -208,7 +211,7 @@ export const ViewSettingsWindow: React.FC = () => {
                                 disabled={!showGrid}
                                 fullWidth
                             >
-                                深度测试
+                                网格深度
                             </ToggleButton>
 
                             {/* Compact Grid Size Slider */}
@@ -230,6 +233,22 @@ export const ViewSettingsWindow: React.FC = () => {
                                         rail: { backgroundColor: '#4a4a4a' }
                                     }}
                                 />
+                            </div>
+                        </div>
+
+                        {/* Vertex Details */}
+                        <div style={{ marginTop: '20px', borderTop: '1px solid #333', paddingTop: '16px' }}>
+                            <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#888', marginBottom: '12px' }}>
+                                顶点细节
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
+                                <ToggleButton
+                                    checked={vertexSettings.enableDepth}
+                                    onChange={v => setVertexSettings({ enableDepth: v })}
+                                    fullWidth
+                                >
+                                    顶点深度
+                                </ToggleButton>
                             </div>
                         </div>
                     </div>

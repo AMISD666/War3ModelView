@@ -10,16 +10,25 @@ export interface GridSettings {
     gridSize: number
 }
 
+export interface VertexSettings {
+    enableDepth: boolean
+    size: number
+}
+
 interface RendererStore {
     renderer: any | null
     setRenderer: (renderer: any | null) => void
     gridSettings: GridSettings
     setGridSettings: (settings: Partial<GridSettings>) => void
+    vertexSettings: VertexSettings
+    setVertexSettings: (settings: Partial<VertexSettings>) => void
     showSettingsPanel: boolean
     setShowSettingsPanel: (show: boolean) => void
     // Display Settings
     showGrid: boolean
     setShowGrid: (show: boolean) => void
+    showVertices: boolean
+    setShowVertices: (show: boolean) => void
     showNodes: boolean
     setShowNodes: (show: boolean) => void
     showSkeleton: boolean
@@ -63,8 +72,16 @@ export const useRendererStore = create<RendererStore>()(
                 enablePerspective: true,
                 gridSize: 2048
             },
+            vertexSettings: {
+                enableDepth: false, // Default to penetrate (visible through model)
+                size: 3
+            },
             setGridSettings: (settings) => set((state) => ({
                 gridSettings: { ...state.gridSettings, ...settings }
+            })),
+
+            setVertexSettings: (settings) => set((state) => ({
+                vertexSettings: { ...state.vertexSettings, ...settings }
             })),
 
             showSettingsPanel: false,
@@ -73,6 +90,8 @@ export const useRendererStore = create<RendererStore>()(
             // Default Display Settings
             showGrid: true,
             setShowGrid: (show) => set({ showGrid: show }),
+            showVertices: false, // Default hidden
+            setShowVertices: (show) => set({ showVertices: show }),
             showNodes: false,
             setShowNodes: (show) => set({ showNodes: show }),
             showSkeleton: false,
@@ -102,8 +121,10 @@ export const useRendererStore = create<RendererStore>()(
             name: 'renderer-settings-v2',
             partialize: (state) => ({
                 gridSettings: state.gridSettings,
+                vertexSettings: state.vertexSettings,
                 // showSettingsPanel: state.showSettingsPanel, // Don't persist panel open state
                 showGrid: state.showGrid,
+                showVertices: state.showVertices,
                 showNodes: state.showNodes,
                 showSkeleton: state.showSkeleton,
                 showFPS: state.showFPS,

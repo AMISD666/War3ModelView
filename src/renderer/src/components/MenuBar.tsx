@@ -318,7 +318,10 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             onClick={() => { onSetMainMode('view'); closeMenu() }}
                         >
                             <span>查看模式</span>
-                            <span>{mainMode === 'view' ? '✓' : ''}</span>
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                <span style={{ color: '#888', fontSize: '11px' }}>F1</span>
+                                <span style={{ width: '12px' }}>{mainMode === 'view' ? '✓' : ''}</span>
+                            </div>
                         </div>
                         <div
                             style={itemStyle}
@@ -327,7 +330,10 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             onClick={() => { onSetMainMode('geometry'); closeMenu() }}
                         >
                             <span>顶点模式</span>
-                            <span>{mainMode === 'geometry' ? '✓' : ''}</span>
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                <span style={{ color: '#888', fontSize: '11px' }}>F2</span>
+                                <span style={{ width: '12px' }}>{mainMode === 'geometry' ? '✓' : ''}</span>
+                            </div>
                         </div>
                         <div
                             style={itemStyle}
@@ -336,7 +342,10 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             onClick={() => { onSetMainMode('uv'); closeMenu() }}
                         >
                             <span>UV 模式</span>
-                            <span>{mainMode === 'uv' ? '✓' : ''}</span>
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                <span style={{ color: '#888', fontSize: '11px' }}>F3</span>
+                                <span style={{ width: '12px' }}>{mainMode === 'uv' ? '✓' : ''}</span>
+                            </div>
                         </div>
                         <div
                             style={itemStyle}
@@ -345,7 +354,10 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             onClick={() => { onSetMainMode('animation'); closeMenu() }}
                         >
                             <span>动画模式</span>
-                            <span>{mainMode === 'animation' ? '✓' : ''}</span>
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                <span style={{ color: '#888', fontSize: '11px' }}>F4</span>
+                                <span style={{ width: '12px' }}>{mainMode === 'animation' ? '✓' : ''}</span>
+                            </div>
                         </div>
                     </div>
                 )}

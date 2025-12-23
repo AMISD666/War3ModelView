@@ -6,8 +6,16 @@ const vsSource = `
   uniform mat4 uMVMatrix;
   uniform mat4 uPMatrix;
   uniform float uPointSize;
+  uniform float uDepthBias; // Add depth bias
   void main() {
     gl_Position = uPMatrix * uMVMatrix * vec4(aPosition, 1.0);
+    // Apply depth bias in clip space (towards camera)
+    // Z is distorted by W, so scale bias by W to keep it consistent-ish in screen space depth
+    // Or just subtract constant? In perspective, subtract from Z before division.
+    // Standard trick: gl_Position.z -= uDepthBias * gl_Position.w;
+    if (uDepthBias != 0.0) {
+        gl_Position.z -= uDepthBias * gl_Position.w;
+    }
     gl_PointSize = uPointSize;
   }
 `
@@ -71,6 +79,7 @@ export class DebugRenderer {
     private uPMatrix: WebGLUniformLocation | null = null
     private uColor: WebGLUniformLocation | null = null
     private uPointSize: WebGLUniformLocation | null = null
+    private uDepthBias: WebGLUniformLocation | null = null // New uniform
     private buffer: WebGLBuffer | null = null
 
     // Cube program
@@ -107,6 +116,7 @@ export class DebugRenderer {
         this.uPMatrix = gl.getUniformLocation(this.program, 'uPMatrix')
         this.uColor = gl.getUniformLocation(this.program, 'uColor')
         this.uPointSize = gl.getUniformLocation(this.program, 'uPointSize')
+        this.uDepthBias = gl.getUniformLocation(this.program, 'uDepthBias') // Get location
         this.buffer = gl.createBuffer()
 
         // Cube program
@@ -299,6 +309,7 @@ export class DebugRenderer {
                 gl.uniformMatrix4fv(this.uPMatrix, false, pMatrix)
                 gl.uniform4fv(this.uColor, [0.0, 1.0, 1.0, 1.0]) // 亮青色
                 gl.uniform1f(this.uPointSize, 1.0)
+                gl.uniform1f(this.uDepthBias, 0.0) // No bias for outline?
                 gl.drawArrays(gl.TRIANGLES, 0, 36)
                 // 切换回立方体程序
                 gl.useProgram(this.cubeProgram)
@@ -338,7 +349,8 @@ export class DebugRenderer {
         positions: number[] | Float32Array
     ) {
         // Cyan color for bone-bound vertices
-        this.draw(gl, mvMatrix, pMatrix, positions, [0.0, 1.0, 1.0, 1.0], gl.POINTS, 8.0)
+        // Always show bone vertices (disable depth)
+        this.draw(gl, mvMatrix, pMatrix, positions, [0.0, 1.0, 1.0, 1.0], gl.POINTS, 8.0, false)
     }
 
     renderPoints(
@@ -347,9 +359,12 @@ export class DebugRenderer {
         pMatrix: mat4,
         positions: number[] | Float32Array,
         color: number[],
-        size: number = 5.0
+        size: number = 5.0,
+        enableDepth: boolean = false
     ) {
-        this.draw(gl, mvMatrix, pMatrix, positions, color, gl.POINTS, size)
+        // Use a small depth bias when depth is enabled to prevent Z-fighting with surface
+        const depthBias = enableDepth ? 0.003 : 0.0
+        this.draw(gl, mvMatrix, pMatrix, positions, color, gl.POINTS, size, enableDepth, depthBias)
     }
 
     renderTriangles(
@@ -412,6 +427,7 @@ export class DebugRenderer {
         ];
         this.renderLines(gl, mvMatrix, pMatrix, lines, color);
     }
+
 
     renderWireframeSphere(
         gl: WebGLRenderingContext | WebGL2RenderingContext,
@@ -525,7 +541,8 @@ export class DebugRenderer {
         positions: number[] | Float32Array,
         color: number[],
         mode: number,
-        pointSize: number
+        pointSize: number,
+        enableDepth: boolean = false // Default to false (penetrate) to match previous behavior
     ) {
         if (!this.program || !this.buffer || positions.length === 0) return
 
@@ -543,8 +560,13 @@ export class DebugRenderer {
         gl.uniform4fv(this.uColor, color)
         gl.uniform1f(this.uPointSize, pointSize)
 
-        // Disable depth test to see through model
-        gl.disable(gl.DEPTH_TEST)
+        // Configure depth test based on parameter
+        if (enableDepth) {
+            gl.enable(gl.DEPTH_TEST)
+        } else {
+            gl.disable(gl.DEPTH_TEST)
+        }
+
         gl.enable(gl.BLEND)
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 

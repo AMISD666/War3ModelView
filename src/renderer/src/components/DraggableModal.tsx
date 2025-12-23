@@ -117,6 +117,26 @@ export const DraggableModal: React.FC<DraggableModalProps> = ({
         };
     }, [isDragging, isResizing, minWidth, minHeight]);
 
+    // Handle ESC key to close
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape' && open) {
+                // Only close if we are the top-most modal
+                // We assume zCounter holds the max zIndex
+                const currentMaxZ = (DraggableModal as any).zCounter || 1000;
+                if (zIndex >= currentMaxZ) {
+                    onCancel?.(e as any);
+                    e.stopPropagation(); // prevent closing multiple if they somehow share zIndex or event bubbles
+                }
+            }
+        };
+
+        if (open) {
+            window.addEventListener('keydown', handleKeyDown);
+        }
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [open, zIndex, onCancel]);
+
     const handleClose = useCallback((e: React.MouseEvent) => {
         onCancel?.(e as any);
     }, [onCancel]);
