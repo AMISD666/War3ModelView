@@ -455,11 +455,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         }
       } else {
         // Restore Animation
-        const currentSeqIndex = renderer.rendererData.animationInfo
-          ? renderer.model?.Sequences?.findIndex((s: any) => s === renderer.rendererData.animationInfo) ?? -2
-          : -2
-
-        if (currentSeqIndex !== animationIndex && (renderer as any).setSequence) {
+        // Always enforce the sequence when seeking or switching modes to prevent desync
+        // (e.g. Geometry mode manipulates frame directly, so we must reset state)
+        if ((renderer as any).setSequence) {
           ; (renderer as any).setSequence(animationIndex)
         }
       }
