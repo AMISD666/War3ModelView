@@ -59,11 +59,10 @@ export class GridRenderer {
     render(gl: WebGLRenderingContext | WebGL2RenderingContext, mvMatrix: mat4, pMatrix: mat4) {
         if (!this.program || !this.buffer) return
 
-        // Save current depth test state
-        const depthTestEnabled = gl.isEnabled(gl.DEPTH_TEST)
-
-        // Disable depth test so grid is always rendered behind everything
-        gl.disable(gl.DEPTH_TEST)
+        // IMPORTANT: Keep depth test ENABLED so the model can occlude the grid
+        // The grid should be rendered BEFORE the model, or the model will be hidden by it
+        gl.enable(gl.DEPTH_TEST)
+        gl.depthMask(true) // Allow writing to depth buffer
 
         gl.useProgram(this.program)
 
@@ -89,11 +88,6 @@ export class GridRenderer {
 
         // Clean up WebGL state
         gl.disableVertexAttribArray(aPosition)
-
-        // Restore depth test state
-        if (depthTestEnabled) {
-            gl.enable(gl.DEPTH_TEST)
-        }
     }
 
     private compileShader(gl: WebGLRenderingContext | WebGL2RenderingContext, type: number, source: string) {

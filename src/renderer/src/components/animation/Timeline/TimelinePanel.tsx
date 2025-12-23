@@ -2,7 +2,8 @@ import React, { useRef, useEffect, useState, useCallback } from 'react'
 import { useModelStore } from '../../../store/modelStore'
 import { useSelectionStore } from '../../../store/selectionStore'
 import { useRendererStore } from '../../../store/rendererStore'
-import { Button, Space, Tooltip, InputNumber, Slider } from 'antd'
+// 性能优化: 移除了 Antd 的 Button, Space, Tooltip, InputNumber, Slider
+// 替换为轻量级的原生 HTML 元素以减少 React 渲染开销
 import {
     PlayCircleOutlined,
     PauseCircleOutlined,
@@ -12,11 +13,16 @@ import {
     FastForwardOutlined
 } from '@ant-design/icons'
 
+interface TimelinePanelProps {
+    isActive?: boolean  // 当为 false 时暂停 RAF 循环
+}
+
 /**
  * 时间轴面板 - 使用 refs 避免每帧重渲染
  * 支持点击/拖动跳帧，自动K帧开关
+ * 性能优化: 当 isActive=false 时暂停 requestAnimationFrame 循环
  */
-const TimelinePanel: React.FC = () => {
+const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null)
     const containerRef = useRef<HTMLDivElement>(null)
     const rafRef = useRef<number | null>(null)
@@ -104,7 +110,26 @@ const TimelinePanel: React.FC = () => {
     }, [])
 
     // 动画循环绘制 - 不依赖 React 渲染
+    // 性能优化: 当 isActive=false 时完全暂停 RAF 循环
     useEffect(() => {
+        console.log('[TimelinePanel] useEffect triggered, isActive:', isActive)
+
+        // 如果不活跃，不启动循环
+        if (!isActive) {
+            // 确保清理任何现有的 RAF
+            console.log('[TimelinePanel] Stopping RAF (isActive=false)')
+            if (rafRef.current) {
+                cancelAnimationFrame(rafRef.current)
+                rafRef.current = null
+            }
+            return
+        }
+
+        // CRITICAL FIX: Use closure object instead of shared ref
+        // Each useEffect instance gets its own `runState` object
+        const runState = { shouldRun: true }
+        console.log('[TimelinePanel] Starting RAF loop (isActive=true)')
+
         let lastDrawTime = 0
         let lastDisplayUpdate = 0
         const FPS_LIMIT = 60 // 限制时间轴刷新率
@@ -112,6 +137,11 @@ const TimelinePanel: React.FC = () => {
         const DISPLAY_UPDATE_INTERVAL = 16 // Update display every frame (60fps)
 
         const animate = (time: number) => {
+            // CRITICAL: Check THIS closure's flag at the VERY START
+            if (!runState.shouldRun) {
+                return
+            }
+
             const elapsed = time - lastDrawTime
 
             if (elapsed >= frameInterval) {
@@ -141,17 +171,23 @@ const TimelinePanel: React.FC = () => {
                 }
             }
 
-            rafRef.current = requestAnimationFrame(animate)
+            // Only schedule next frame if THIS closure's flag is still true
+            if (runState.shouldRun) {
+                rafRef.current = requestAnimationFrame(animate)
+            }
         }
 
         rafRef.current = requestAnimationFrame(animate)
 
         return () => {
+            // CRITICAL: Set THIS closure's flag to false
+            runState.shouldRun = false
             if (rafRef.current) {
                 cancelAnimationFrame(rafRef.current)
+                rafRef.current = null
             }
         }
-    }, [])
+    }, [isActive]) // 依赖 isActive，当其变化时重新启动/停止循环
 
     // 绘制函数 - 直接读取 refs, 使用缓存的尺寸避免强制重排
     const draw = useCallback(() => {
@@ -473,62 +509,131 @@ const TimelinePanel: React.FC = () => {
                     />
                 </div>
 
-                {/* 中间播放控制 */}
-                <Space>
-                    <Tooltip title="跳到开始">
-                        <Button type="text" icon={<FastBackwardOutlined />} size="small" style={{ color: '#ccc' }} onClick={handleGoToStart} />
-                    </Tooltip>
-                    <Tooltip title="上一帧">
-                        <Button type="text" icon={<StepBackwardOutlined />} size="small" style={{ color: '#ccc' }} onClick={handlePrevFrame} />
-                    </Tooltip>
-                    <Button
-                        type="text"
-                        icon={isPlaying ? <PauseCircleOutlined style={{ fontSize: '18px', color: '#faad14' }} /> : <PlayCircleOutlined style={{ fontSize: '18px', color: '#52c41a' }} />}
+                {/* 中间播放控制 - 使用原生按钮替换 Antd */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <button
+                        title="跳到开始"
+                        onClick={handleGoToStart}
+                        style={{
+                            background: 'transparent',
+                            border: 'none',
+                            cursor: 'pointer',
+                            padding: '4px 8px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center'
+                        }}
+                    >
+                        <FastBackwardOutlined style={{ color: '#ccc', fontSize: 14 }} />
+                    </button>
+                    <button
+                        title="上一帧"
+                        onClick={handlePrevFrame}
+                        style={{
+                            background: 'transparent',
+                            border: 'none',
+                            cursor: 'pointer',
+                            padding: '4px 8px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center'
+                        }}
+                    >
+                        <StepBackwardOutlined style={{ color: '#ccc', fontSize: 14 }} />
+                    </button>
+                    <button
+                        title={isPlaying ? '暂停' : '播放'}
                         onClick={() => setPlaying(!isPlaying)}
-                    />
-                    <Tooltip title="下一帧">
-                        <Button type="text" icon={<StepForwardOutlined />} size="small" style={{ color: '#ccc' }} onClick={handleNextFrame} />
-                    </Tooltip>
-                    <Tooltip title="跳到结束">
-                        <Button type="text" icon={<FastForwardOutlined />} size="small" style={{ color: '#ccc' }} onClick={handleGoToEnd} />
-                    </Tooltip>
-
+                        style={{
+                            background: 'transparent',
+                            border: 'none',
+                            cursor: 'pointer',
+                            padding: '4px 8px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center'
+                        }}
+                    >
+                        {isPlaying
+                            ? <PauseCircleOutlined style={{ fontSize: 18, color: '#faad14' }} />
+                            : <PlayCircleOutlined style={{ fontSize: 18, color: '#52c41a' }} />}
+                    </button>
+                    <button
+                        title="下一帧"
+                        onClick={handleNextFrame}
+                        style={{
+                            background: 'transparent',
+                            border: 'none',
+                            cursor: 'pointer',
+                            padding: '4px 8px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center'
+                        }}
+                    >
+                        <StepForwardOutlined style={{ color: '#ccc', fontSize: 14 }} />
+                    </button>
+                    <button
+                        title="跳到结束"
+                        onClick={handleGoToEnd}
+                        style={{
+                            background: 'transparent',
+                            border: 'none',
+                            cursor: 'pointer',
+                            padding: '4px 8px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center'
+                        }}
+                    >
+                        <FastForwardOutlined style={{ color: '#ccc', fontSize: 14 }} />
+                    </button>
                     {/* K帧开关按钮 - 小圆点 */}
-                    <Tooltip title={autoKeyframe ? "自动K帧: 开启" : "自动K帧: 关闭"}>
-                        <Button
-                            type="text"
-                            size="small"
-                            onClick={() => setAutoKeyframe(!autoKeyframe)}
-                            style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                marginLeft: 8
-                            }}
-                        >
-                            <span style={{
-                                width: 10,
-                                height: 10,
-                                borderRadius: '50%',
-                                backgroundColor: autoKeyframe ? '#ff4444' : '#666',
-                                display: 'inline-block',
-                                transition: 'background-color 0.2s'
-                            }} />
-                        </Button>
-                    </Tooltip>
-                </Space>
+                    <button
+                        title={autoKeyframe ? '自动K帧: 开启' : '自动K帧: 关闭'}
+                        onClick={() => setAutoKeyframe(!autoKeyframe)}
+                        style={{
+                            background: 'transparent',
+                            border: 'none',
+                            cursor: 'pointer',
+                            padding: '4px 8px',
+                            marginLeft: 8,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center'
+                        }}
+                    >
+                        <span style={{
+                            width: 10,
+                            height: 10,
+                            borderRadius: '50%',
+                            backgroundColor: autoKeyframe ? '#ff4444' : '#666',
+                            display: 'inline-block',
+                            transition: 'background-color 0.2s'
+                        }} />
+                    </button>
+                </div>
 
-                {/* 右侧速度控制 */}
+                {/* 右侧速度控制 - 使用原生 input */}
                 <div style={{ position: 'absolute', right: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span style={{ color: '#888', fontSize: '11px' }}>速度:</span>
-                    <InputNumber
-                        size="small"
+                    <input
+                        type="number"
                         min={0.1}
                         max={10}
                         step={0.1}
                         value={playbackSpeed}
-                        onChange={(val) => setPlaybackSpeed(val || 1.0)}
-                        style={{ width: 55 }}
+                        onChange={(e) => setPlaybackSpeed(parseFloat(e.target.value) || 1.0)}
+                        style={{
+                            width: 50,
+                            backgroundColor: '#333',
+                            border: '1px solid #555',
+                            borderRadius: 3,
+                            color: '#fff',
+                            padding: '2px 4px',
+                            fontSize: '11px',
+                            textAlign: 'center'
+                        }}
                     />
                 </div>
             </div>
@@ -544,17 +649,23 @@ const TimelinePanel: React.FC = () => {
                     onMouseLeave={handleMouseLeave}
                 />
             </div>
-            {/* 底部缩放滑块 */}
+            {/* 底部缩放滑块 - 使用原生 range input */}
             <div style={{ height: '24px', borderTop: '1px solid #333', display: 'flex', alignItems: 'center', padding: '0 10px', gap: 8 }}>
                 <span style={{ color: '#888', fontSize: '10px' }}>缩放:</span>
-                <Slider
+                <input
+                    type="range"
                     min={0.01}
                     max={1}
                     step={0.01}
                     value={pixelsPerMs}
-                    onChange={(val) => setPixelsPerMs(val)}
-                    style={{ flex: 1, margin: 0 }}
-                    tooltip={{ formatter: (v) => `${(v || 0).toFixed(2)}` }}
+                    onChange={(e) => setPixelsPerMs(parseFloat(e.target.value))}
+                    style={{
+                        flex: 1,
+                        accentColor: '#1890ff',
+                        height: 4,
+                        cursor: 'pointer'
+                    }}
+                    title={`${pixelsPerMs.toFixed(2)}`}
                 />
             </div>
         </div>

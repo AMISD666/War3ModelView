@@ -99,6 +99,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   // Note: animationSubMode removed as unused. Re-add if needed:
   // const animationSubMode = useSelectionStore((state) => state.animationSubMode)
   const animationFrameId = useRef<number | null>(null)
+  const shouldRunRenderLoop = useRef<boolean>(true) // Flag to stop RAF loop on cleanup
   const lastFpsTime = useRef<number>(performance.now())
   const lastFrameTime = useRef<number>(performance.now())
   const frameCount = useRef<number>(0)
@@ -1485,7 +1486,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         }
 
         if (renderRef.current) {
-          renderRef.current(performance.now())
+          // CRITICAL: Pass false to prevent scheduling a new RAF loop
+          // ResizeObserver only needs a single update, not a new loop
+          renderRef.current(performance.now(), false)
         }
       }
     })
@@ -1960,9 +1963,27 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     }
     lastReloadTrigger.current = rendererReloadTrigger
   }, [rendererReloadTrigger, modelData, renderer])
-
   // Handle Animation and Mode Changes
   useEffect(() => {
+    // CRITICAL: Cancel any existing RAF loop BEFORE creating a new one
+    // This prevents duplicate loops when dependencies change (e.g., mode switch)
+    if (animationFrameId.current) {
+      cancelAnimationFrame(animationFrameId.current)
+      animationFrameId.current = null
+    }
+
+    // CRITICAL FIX: Use a closure object instead of shared ref
+    // Each useEffect instance gets its own `runState` object
+    // When cleanup sets shouldRun = false, it only affects THIS render function
+    const runState = { shouldRun: true }
+
+    console.log('[Viewer] useEffect triggered with deps:', { renderer: !!renderer, appMainMode, animationIndex })
+
+    // Debug: Log FPS after mode switch (wait 1 second for FPS to stabilize)
+    setTimeout(() => {
+      console.log('[Viewer] FPS after mode switch:', fps, 'mode:', appMainMode)
+    }, 1000)
+
     if (renderer && canvasRef.current) {
       const contextAttributes: WebGLContextAttributes = {
         alpha: true,
@@ -1981,13 +2002,24 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       gizmoRenderer.current.init(gl)
 
       // Reset time tracking to prevent huge delta on first frame after reload
+      // FPS FIX: Also reset frameCount and lastFpsTime to prevent FPS accumulation on mode switch
       lastFrameTime.current = performance.now()
+      lastFpsTime.current = performance.now()
+      frameCount.current = 0
 
-      const render = (time: DOMHighResTimeStamp) => {
+      const render = (time: DOMHighResTimeStamp, scheduleNext = true) => {
+        // CRITICAL: Check THIS closure's flag at the VERY START
+        if (!runState.shouldRun) {
+          return // Do not schedule next frame, loop is stopped
+        }
+
         try {
 
           if (!gl || !canvasRef.current || !renderer) {
-            animationFrameId.current = requestAnimationFrame(render)
+            // Only continue polling if we should still run
+            if (runState.shouldRun) {
+              animationFrameId.current = requestAnimationFrame(render)
+            }
             return
           }
 
@@ -2084,7 +2116,18 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               }
             }
           } else {
-            // Animation not updating (paused or bind pose mode)
+            // Animation paused or bind pose mode
+            // 性能优化: 仅在必要时更新骨骼矩阵（如 Gizmo 拖动或帧变化）
+            // 静态姿势时跳过矩阵计算，节省 CPU
+            const gizmoDragging = gizmoState.current.isDragging
+            const currentFrame = mdlRenderer.rendererData?.frame ?? 0
+            const lastFrame = (window as any)._lastStaticFrame ?? -1
+
+            if (gizmoDragging || currentFrame !== lastFrame) {
+              // Update with delta=0 to refresh bone matrices without advancing animation
+              mdlRenderer.update(0);
+              (window as any)._lastStaticFrame = currentFrame
+            }
           }
 
           // === Collision Shape Rendering ===
@@ -2242,6 +2285,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               if (mdlRenderer.rendererData.rootNode) {
                 mat4.identity(mdlRenderer.rendererData.rootNode.matrix)
               }
+            }
+
+            // === Grid Rendering (BEFORE model so model can occlude it) ===
+            if (showGridRef.current) {
+              gridRenderer.current.render(gl as WebGLRenderingContext, mvMatrix, pMatrix)
             }
 
             // === Geoset Visibility Control ===
@@ -2676,9 +2724,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             }
           }
 
-          if (showGridRef.current) {
-            gridRenderer.current.render(gl as WebGLRenderingContext, mvMatrix, pMatrix)
-          }
+          // Grid already rendered before model for proper depth occlusion
 
           // Always render the axis indicator in bottom-left corner
           axisIndicator.current.render(gl as WebGLRenderingContext, mvMatrix, canvas.width, canvas.height)
@@ -2698,13 +2744,20 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           }
           return // Do NOT schedule next frame on error
         }
-        animationFrameId.current = requestAnimationFrame(render)
+        // CRITICAL: Check THIS closure's flag before scheduling next frame
+        if (runState.shouldRun && scheduleNext) {
+          animationFrameId.current = requestAnimationFrame(render)
+        }
       }
 
       renderRef.current = render
       animationFrameId.current = requestAnimationFrame(render)
 
       return () => {
+        // CRITICAL: Set THIS closure's flag to false
+        // Only affects this specific render function, not new ones
+        console.log('[Viewer] Cleanup: stopping RAF loop for mode:', appMainMode)
+        runState.shouldRun = false
         if (animationFrameId.current) {
           cancelAnimationFrame(animationFrameId.current)
           animationFrameId.current = null
@@ -2844,7 +2897,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         const { autoKeyframe: _autoKeyframe, currentFrame, nodes, updateNode: _updateNode } = useModelStore.getState()
         vec3.zero(vecs.moveVec)
 
-        // Use worldMoveDelta with same direction as vertex movement
+        // Animation mode: negate X, Y only; Z stays positive
         if (axis === 'x') vecs.moveVec[0] = -vecs.worldMoveDelta[0]
         else if (axis === 'y') vecs.moveVec[1] = -vecs.worldMoveDelta[1]
         else if (axis === 'z') vecs.moveVec[2] = vecs.worldMoveDelta[2]

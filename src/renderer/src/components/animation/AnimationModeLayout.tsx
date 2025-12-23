@@ -121,7 +121,7 @@ const AnimationModeLayout: React.FC<AnimationModeLayoutProps> = ({
                     </div>
                     {/* 时间轴主体 */}
                     <div style={{ flex: 1, height: '100%' }}>
-                        <TimelinePanel />
+                        <TimelinePanel isActive={isActive && !isBindingMode} />
                     </div>
                 </div>
             </div>
