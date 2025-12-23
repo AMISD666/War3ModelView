@@ -127,6 +127,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const lastProgressUpdate = useRef(0)
   const ignoreNextModelDataUpdate = useRef(false)
   const lastFrameSyncTime = useRef(0) // For throttling setFrame calls
+  const frameCacheRef = useRef(-1) // Cache for bone matrix optimization
+
 
   useEffect(() => {
     showGridRef.current = showGrid
@@ -2121,12 +2123,24 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             // 静态姿势时跳过矩阵计算，节省 CPU
             const gizmoDragging = gizmoState.current.isDragging
             const currentFrame = mdlRenderer.rendererData?.frame ?? 0
-            const lastFrame = (window as any)._lastStaticFrame ?? -1
+
+            // 使用 ref 替代 window 全局变量，避免污染和潜在冲突
+            const lastFrame = frameCacheRef.current
 
             if (gizmoDragging || currentFrame !== lastFrame) {
               // Update with delta=0 to refresh bone matrices without advancing animation
-              mdlRenderer.update(0);
-              (window as any)._lastStaticFrame = currentFrame
+              mdlRenderer.update(0)
+              frameCacheRef.current = currentFrame
+            }
+
+            // CRITICAL FIX: Sync frame to store even when paused
+            // This prevents "stale keyframe" bug where keyframes are created at the wrong frame
+            // because the store wasn't updated with the final paused frame.
+            if (currentMainMode === 'animation' && mdlRenderer.rendererData) {
+              const storeFrame = useModelStore.getState().currentFrame
+              if (Math.abs(storeFrame - currentFrame) > 0.1) {
+                useModelStore.getState().setFrame(currentFrame)
+              }
             }
           }
 
