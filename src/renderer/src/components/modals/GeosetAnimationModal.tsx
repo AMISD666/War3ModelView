@@ -3,6 +3,7 @@ import { List, Checkbox, Button, InputNumber, Select, ColorPicker, Card, Typogra
 import { DraggableModal } from '../DraggableModal';
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
+import { useHistoryStore } from '../../store/historyStore'
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
 import KeyframeEditor from '../editors/KeyframeEditor'
 
@@ -76,6 +77,13 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
     }, [visible, localAnims])
 
     const handleOk = () => {
+        const oldAnims = modelData?.GeosetAnims || [];
+        useHistoryStore.getState().push({
+            name: 'Edit Geoset Animations',
+            undo: () => setGeosetAnims ? setGeosetAnims(oldAnims) : null,
+            redo: () => setGeosetAnims ? setGeosetAnims(localAnims) : null
+        });
+
         if (setGeosetAnims) {
             setGeosetAnims(localAnims)
         } else {

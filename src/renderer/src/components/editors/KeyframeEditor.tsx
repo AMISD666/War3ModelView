@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { Input, Select, Row, Col, InputNumber, Button } from 'antd'
 import { DraggableModal } from '../DraggableModal'
 import { useModelStore } from '../../store/modelStore'
+import { useHistoryStore } from '../../store/historyStore'
 
 const { TextArea } = Input
 
@@ -353,6 +354,8 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
         }
     }, [visible, initialData])
 
+    const { push } = useHistoryStore()
+
     const handleOk = () => {
         const keys = parseText(text)
 
@@ -361,6 +364,25 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
             LineType: lineType,
             GlobalSeqId: globalSeqId === -1 ? null : globalSeqId
         }
+
+        // --- History Logic ---
+        // Note: initialData is the "before" state. result is the "new" state.
+        // We need to know WHICH property of WHICH node we are editing to make the history restoration work.
+        // KeyframeEditor doesn't strictly know 'nodeId' unless passed, but usually the parent component 
+        // calling KeyframeEditor handles the actual store update (onOk).
+        // 
+        // HOWEVER, KeyframeEditor is used in many places. The `onOk` usually calls `updateNode`.
+        // Ideally, the CALLER should push the history because the caller knows the context (nodeId, propertyName).
+
+        // But the user asked to "Check all operations".
+        // Let's look at `NodeParameterPanel` or where this opened.
+        // Actually, `KeyframeEditor` is a dumb component? No, it calls `onOk`.
+        // The `onOk` prop usually contains the logic to update the store.
+
+        // Strategy: We can't easily push history HERE because we don't know the update function.
+        // We should add history in the `onOk` handlers in the PARENT components.
+        // Or, we ask the parents to pass a "historyContext" prop?
+        // Or we inspect `NodeManagerWindow` / `NodeParameterPanel` where it is used.
 
         onOk(result)
     }

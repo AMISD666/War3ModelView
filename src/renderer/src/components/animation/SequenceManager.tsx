@@ -4,6 +4,7 @@ import { PlusOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons'
 import { DraggableModal } from '../DraggableModal'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useModelStore } from '../../store/modelStore'
+import { useHistoryStore } from '../../store/historyStore'
 
 /**
  * 序列管理器 - 简化版，与主界面风格一致
@@ -20,6 +21,8 @@ const SequenceManager: React.FC = () => {
     const [isModalVisible, setIsModalVisible] = useState(false)
     const [editingIndex, setEditingIndex] = useState<number | null>(null)
     const [form] = Form.useForm()
+
+    const { push } = useHistoryStore() // Use History Store
 
     const handleSelect = (index: number) => {
         setSequence(index)
@@ -74,8 +77,17 @@ const SequenceManager: React.FC = () => {
             cancelText: '取消',
             okButtonProps: { danger: true },
             onOk() {
+                const oldSequences = [...sequences]
                 const newSequences = [...sequences]
                 newSequences.splice(index, 1)
+
+                // History
+                push({
+                    name: `Delete Sequence "${sequences[index].Name}"`,
+                    undo: () => setSequences(oldSequences),
+                    redo: () => setSequences(newSequences)
+                })
+
                 setSequences(newSequences)
                 if (currentSequence === index) setSequence(-1)
                 else if (currentSequence > index) setSequence(currentSequence - 1)
@@ -95,12 +107,30 @@ const SequenceManager: React.FC = () => {
                 BoundsRadius: 60
             }
 
+            const oldSequences = [...(sequences || [])]
             const newSequences = [...(sequences || [])]
+
             if (editingIndex !== null) {
+                // Edit
                 newSequences[editingIndex] = { ...newSequences[editingIndex], ...newSeq }
+
+                push({
+                    name: `Edit Sequence "${newSeq.Name}"`,
+                    undo: () => setSequences(oldSequences),
+                    redo: () => setSequences(newSequences)
+                })
+
                 message.success('序列已更新')
             } else {
+                // Add
                 newSequences.push(newSeq)
+
+                push({
+                    name: `Add Sequence "${newSeq.Name}"`,
+                    undo: () => setSequences(oldSequences),
+                    redo: () => setSequences(newSequences)
+                })
+
                 message.success('序列已添加')
             }
             setSequences(newSequences)

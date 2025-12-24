@@ -9,6 +9,7 @@ import { DraggableModal } from '../DraggableModal'
 import KeyframeEditor from '../editors/KeyframeEditor'
 import type { ModelNode } from '../../types/node'
 import { useModelStore } from '../../store/modelStore'
+import { useHistoryStore } from '../../store/historyStore'
 import { validateNodeName } from '../../utils/nodeUtils'
 
 
@@ -108,6 +109,15 @@ const NodeDialog: React.FC<NodeDialogProps> = ({ visible, nodeId, onClose }) => 
 
             // 更新节点
             if (nodeId !== null) {
+                const oldNode = currentNode
+                const newNode = updatedNode
+
+                useHistoryStore.getState().push({
+                    name: `Edit Node "${values.name}"`,
+                    undo: () => updateNode(nodeId, oldNode),
+                    redo: () => updateNode(nodeId, newNode)
+                })
+
                 updateNode(nodeId, updatedNode)
             }
             onClose()

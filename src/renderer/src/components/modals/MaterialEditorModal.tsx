@@ -5,6 +5,7 @@ import { DraggableModal } from '../DraggableModal'
 import KeyframeEditor from '../editors/KeyframeEditor'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
+import { useHistoryStore } from '../../store/historyStore'
 
 const { Text } = Typography
 
@@ -91,6 +92,12 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     }, [visible, modelData, localMaterials.length])
 
     const handleOk = () => {
+        const oldMaterials = modelData?.Materials || [];
+        useHistoryStore.getState().push({
+            name: 'Edit Materials',
+            undo: () => setMaterials(oldMaterials),
+            redo: () => setMaterials(localMaterials)
+        });
         setMaterials(localMaterials)
         message.success('材质已保存')
         onClose()

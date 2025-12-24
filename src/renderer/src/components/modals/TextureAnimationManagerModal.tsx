@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Button } from 'antd';
 import { MasterDetailLayout } from '../MasterDetailLayout';
 import { useModelStore } from '../../store/modelStore';
+import { useHistoryStore } from '../../store/historyStore';
 import { DraggableModal } from '../DraggableModal';
 import DynamicField from '../node/DynamicField';
 import KeyframeEditor from '../editors/KeyframeEditor';
@@ -30,12 +31,28 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
             // User can enable them via the checkboxes which will create valid blocks
         };
         const newAnims = [...textureAnims, newAnim];
+        const oldAnims = [...textureAnims];
+
+        useHistoryStore.getState().push({
+            name: 'Add Texture Animation',
+            undo: () => setTextureAnims(oldAnims),
+            redo: () => setTextureAnims(newAnims)
+        });
+
         setTextureAnims(newAnims);
         setSelectedIndex(newAnims.length - 1);
     };
 
     const handleDelete = (index: number) => {
         const newAnims = textureAnims.filter((_, i) => i !== index);
+        const oldAnims = [...textureAnims];
+
+        useHistoryStore.getState().push({
+            name: `Delete Texture Animation ${index}`,
+            undo: () => setTextureAnims(oldAnims),
+            redo: () => setTextureAnims(newAnims)
+        });
+
         setTextureAnims(newAnims);
         if (selectedIndex >= newAnims.length) {
             setSelectedIndex(newAnims.length - 1);
@@ -45,6 +62,14 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
     const updateAnim = (index: number, updates: any) => {
         const newAnims = [...textureAnims];
         newAnims[index] = { ...newAnims[index], ...updates };
+        const oldAnims = [...textureAnims];
+
+        useHistoryStore.getState().push({
+            name: `Update Texture Animation ${index}`,
+            undo: () => setTextureAnims(oldAnims),
+            redo: () => setTextureAnims(newAnims)
+        });
+
         setTextureAnims(newAnims);
     };
 
@@ -63,6 +88,12 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
             const { [key]: _, ...rest } = currentAnim as any;
             newAnims[index] = rest;
         }
+        const oldAnims = [...textureAnims];
+        useHistoryStore.getState().push({
+            name: `Toggle Texture Animation Block ${key}`,
+            undo: () => setTextureAnims(oldAnims),
+            redo: () => setTextureAnims(newAnims)
+        });
         setTextureAnims(newAnims);
     };
 

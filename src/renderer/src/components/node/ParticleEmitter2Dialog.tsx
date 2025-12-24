@@ -6,6 +6,7 @@ import KeyframeEditor from '../editors/KeyframeEditor';
 import type { Color } from 'antd/es/color-picker';
 import type { ParticleEmitter2Node } from '../../types/node';
 import { useModelStore } from '../../store/modelStore';
+import { useHistoryStore } from '../../store/historyStore';
 
 interface ParticleEmitter2DialogProps {
     visible: boolean;
@@ -252,6 +253,12 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
                     // If the user unchecked "Dynamic", ensure the anim key is removed or set to undefined
                     delete (updatedNode as any)[animKey];
                 }
+            });
+
+            useHistoryStore.getState().push({
+                name: `Edit Particle Emitter`,
+                undo: () => updateNode(nodeId, currentNode),
+                redo: () => updateNode(nodeId, updatedNode)
             });
 
             updateNode(nodeId, updatedNode);

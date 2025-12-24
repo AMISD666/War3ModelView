@@ -501,7 +501,11 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 const id = typeof n.ObjectId === 'number' && !isNaN(n.ObjectId) ? n.ObjectId : -1;
                 return Math.max(max, id);
             }, -1);
-            const newObjectId = maxObjectId + 1;
+
+            // Allow explicit ObjectId if provided (e.g. for Undo/Redo), otherwise auto-increment
+            const newObjectId = (nodePartial.ObjectId !== undefined && nodePartial.ObjectId >= 0)
+                ? nodePartial.ObjectId
+                : maxObjectId + 1;
 
             // 2. Create complete node object with defaults
             const defaults = getDefaultNodeProperties(nodePartial.type);

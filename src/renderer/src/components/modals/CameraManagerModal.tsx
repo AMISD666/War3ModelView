@@ -4,6 +4,7 @@ import { EyeOutlined, CameraOutlined } from '@ant-design/icons';
 import { MasterDetailLayout } from '../MasterDetailLayout';
 import { useModelStore } from '../../store/modelStore';
 import { DraggableModal } from '../DraggableModal';
+import { useHistoryStore } from '../../store/historyStore';
 
 import KeyframeEditor from '../editors/KeyframeEditor';
 import { CameraNode, NodeType } from '../../types/node';
@@ -47,12 +48,31 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
                 Keys: [{ Frame: 0, Vector: [100, 0, 0] }]
             }
         };
+
+        const currentNodes = useModelStore.getState().nodes;
+        const maxObjectId = currentNodes.reduce((max, n) => Math.max(max, n.ObjectId), -1);
+        const newObjectId = maxObjectId + 1;
+
+        useHistoryStore.getState().push({
+            name: 'Add Camera',
+            undo: () => deleteNode(newObjectId),
+            redo: () => addNode({ ...newCamera, ObjectId: newObjectId })
+        });
+
         addNode(newCamera);
     };
 
     const handleDelete = (index: number) => {
         if (index >= 0 && index < cameras.length) {
             const node = cameras[index];
+            const nodeClone = JSON.parse(JSON.stringify(node));
+
+            useHistoryStore.getState().push({
+                name: 'Delete Camera',
+                undo: () => addNode(nodeClone),
+                redo: () => deleteNode(node.ObjectId)
+            });
+
             deleteNode(node.ObjectId);
             if (selectedIndex >= index) setSelectedIndex(Math.max(-1, selectedIndex - 1));
         }
@@ -61,6 +81,19 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
     const updateCamera = (index: number, updates: Partial<CameraNode>) => {
         const camera = cameras[index];
         if (camera) {
+            const oldData: Partial<CameraNode> = {};
+            Object.keys(updates).forEach(key => {
+                const k = key as keyof CameraNode;
+                oldData[k] = (camera as any)[k];
+            });
+            const objectId = camera.ObjectId;
+
+            useHistoryStore.getState().push({
+                name: 'Update Camera',
+                undo: () => updateNodes([{ objectId, data: oldData }]),
+                redo: () => updateNodes([{ objectId, data: updates }])
+            });
+
             updateNodes([{ objectId: camera.ObjectId, data: updates }]);
         }
     };

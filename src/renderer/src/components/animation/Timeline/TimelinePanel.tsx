@@ -14,6 +14,7 @@ import {
     EyeOutlined,
     EyeInvisibleOutlined
 } from '@ant-design/icons'
+import { useHistoryStore } from '../../../store/historyStore'
 import { Button, Slider, Input, InputNumber } from 'antd'
 
 interface TimelinePanelProps {
@@ -147,7 +148,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                             frame: k.Frame,
                             nodeId,
                             type,
-                            uid: `${nodeId}-${type}-${idx}`,
+                            uid: `${nodeId} -${type} -${idx} `,
                             color
                         })
                     })
@@ -165,7 +166,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     // Auto-fit sequence change
     const lastSequenceIndexRef = useRef(currentSequence)
     useEffect(() => {
-        // Only auto-fit if the SEQUENCE INDEX changed, or if we toggled ShowAll
+        // Only auto-fit if the SEQUENCE INDEX changed
         // We do NOT want to auto-fit if we are just updating the start/end of the SAME sequence (dragging)
 
         const indexChanged = lastSequenceIndexRef.current !== currentSequence
@@ -176,16 +177,12 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         // If dragging, absolutely do not resize view
         if (isDraggingRef.current) return
 
-        // If only data changed but not index, and we are not in ShowAll, we probably still don't want to re-fit aggressively
-        // unless it's a fresh selection.
-        if (!indexChanged && !showAllKeyframes) return
+        // If only data changed but not index, we probably still don't want to re-fit aggressively
+        if (!indexChanged) return
 
         let start = 0
         let end = 1000
-        if (showAllKeyframes) {
-            start = 0
-            end = allSequencesMax
-        } else if (sequence) {
+        if (sequence) {
             start = sequence.Interval[0]
             end = sequence.Interval[1]
         }
@@ -199,7 +196,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         setPixelsPerMs(Math.max(0.01, Math.min(2, newPixelsPerMs)))
         setScrollX(Math.max(0, start - duration * 0.1))
 
-    }, [currentSequence, showAllKeyframes, allSequencesMax, sequence]) // Added sequence to dependency but guarded logic
+    }, [currentSequence, allSequencesMax, sequence]) // Removed showAllKeyframes from dep and logic
 
     // Resize Observer
     useEffect(() => {
@@ -360,7 +357,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         // Sequence Bounds Highlight (Ruler + Track)
         const startX = (start - scroll) * pxPerMs
         const endX = (end - scroll) * pxPerMs
-        ctx.fillStyle = 'rgba(70, 144, 226, 0.05)'
+        ctx.fillStyle = 'rgba(70, 144, 226, 0.15)' // Increased opacity from 0.05 to 0.15
         ctx.fillRect(startX, RULER_HEIGHT, Math.max(0, endX - startX), seqTrackY - RULER_HEIGHT)
 
         ctx.strokeStyle = 'rgba(70, 144, 226, 0.3)'
@@ -422,7 +419,10 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
                 ctx.textAlign = 'left'
                 ctx.fillStyle = isCurrent ? '#eee' : '#666'
+                // Draw name below Start Marker
                 ctx.fillText(seq.Name, sx, markerY + handleSize + 10)
+                // Draw name below End Marker
+                ctx.fillText(seq.Name, ex, markerY + handleSize + 10)
             })
         }
 
@@ -704,6 +704,43 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             confirmScrub()
         } else if (mode === 'dragSequenceStart' || mode === 'dragSequenceEnd') {
             setIsDragging(false)
+            const idx = interactionRef.current.dragSequenceIndex
+            const initialInterval = interactionRef.current.initialInterval
+
+            if (idx >= 0 && initialInterval) {
+                const sequences = useModelStore.getState().sequences
+                const newInterval = sequences[idx].Interval
+
+                // Only push history if actual change occurred
+                if (newInterval[0] !== initialInterval[0] || newInterval[1] !== initialInterval[1]) {
+                    useHistoryStore.getState().push({
+                        name: `Adjust Sequence ${sequences[idx].Name} Range`,
+                        undo: () => {
+                            useModelStore.getState().updateSequence(idx, { Interval: initialInterval })
+                            // Sync Renderer
+                            const renderer = useRendererStore.getState().renderer
+                            if (renderer?.model?.Sequences?.[idx]) {
+                                renderer.model.Sequences[idx].Interval = [...initialInterval]
+                                if (renderer.rendererData.animation === idx && renderer.rendererData.animationInfo) {
+                                    renderer.rendererData.animationInfo.Interval = [...initialInterval]
+                                }
+                            }
+                        },
+                        redo: () => {
+                            useModelStore.getState().updateSequence(idx, { Interval: newInterval })
+                            // Sync Renderer
+                            const renderer = useRendererStore.getState().renderer
+                            if (renderer?.model?.Sequences?.[idx]) {
+                                renderer.model.Sequences[idx].Interval = [...newInterval]
+                                if (renderer.rendererData.animation === idx && renderer.rendererData.animationInfo) {
+                                    renderer.rendererData.animationInfo.Interval = [...newInterval]
+                                }
+                            }
+                        }
+                    })
+                }
+            }
+
             setDragTargetSequenceIndex(null)
             // Force refresh global max if needed
         } else if (mode === 'boxSelect') {
@@ -866,36 +903,64 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     const handleSeqStartChange = (val: number | null) => {
         if (val !== null && currentSequence >= 0 && sequences) {
             const currentEnd = sequences[currentSequence].Interval[1]
-            useModelStore.getState().updateSequence(currentSequence, { Interval: [val, currentEnd] })
+            const oldInterval = [...sequences[currentSequence].Interval] // Snap old
+            const newInterval = [val, currentEnd]
 
-            // Sync Renderer
-            const renderer = useRendererStore.getState().renderer
-            if (renderer) {
-                if (renderer.rendererData.animation === currentSequence && renderer.rendererData.animationInfo) {
-                    renderer.rendererData.animationInfo.Interval = [val, currentEnd]
-                }
-                if (renderer.model && renderer.model.Sequences && renderer.model.Sequences[currentSequence]) {
-                    renderer.model.Sequences[currentSequence].Interval = [val, currentEnd]
+            const idx = currentSequence
+
+            const doUpdate = (interval: number[]) => {
+                useModelStore.getState().updateSequence(idx, { Interval: interval })
+                // Sync Renderer
+                const renderer = useRendererStore.getState().renderer
+                if (renderer) {
+                    if (renderer.rendererData.animation === idx && renderer.rendererData.animationInfo) {
+                        renderer.rendererData.animationInfo.Interval = [...interval]
+                    }
+                    if (renderer.model && renderer.model.Sequences && renderer.model.Sequences[idx]) {
+                        renderer.model.Sequences[idx].Interval = [...interval]
+                    }
                 }
             }
+
+            doUpdate(newInterval)
+
+            useHistoryStore.getState().push({
+                name: `Set Sequence Start`,
+                undo: () => doUpdate(oldInterval),
+                redo: () => doUpdate(newInterval)
+            })
         }
     }
 
     const handleSeqEndChange = (val: number | null) => {
         if (val !== null && currentSequence >= 0 && sequences) {
             const currentStart = sequences[currentSequence].Interval[0]
-            useModelStore.getState().updateSequence(currentSequence, { Interval: [currentStart, val] })
+            const oldInterval = [...sequences[currentSequence].Interval]
+            const newInterval = [currentStart, val]
 
-            // Sync Renderer
-            const renderer = useRendererStore.getState().renderer
-            if (renderer) {
-                if (renderer.rendererData.animation === currentSequence && renderer.rendererData.animationInfo) {
-                    renderer.rendererData.animationInfo.Interval = [currentStart, val]
-                }
-                if (renderer.model && renderer.model.Sequences && renderer.model.Sequences[currentSequence]) {
-                    renderer.model.Sequences[currentSequence].Interval = [currentStart, val]
+            const idx = currentSequence
+
+            const doUpdate = (interval: number[]) => {
+                useModelStore.getState().updateSequence(idx, { Interval: interval })
+                // Sync Renderer
+                const renderer = useRendererStore.getState().renderer
+                if (renderer) {
+                    if (renderer.rendererData.animation === idx && renderer.rendererData.animationInfo) {
+                        renderer.rendererData.animationInfo.Interval = [...interval]
+                    }
+                    if (renderer.model && renderer.model.Sequences && renderer.model.Sequences[idx]) {
+                        renderer.model.Sequences[idx].Interval = [...interval]
+                    }
                 }
             }
+
+            doUpdate(newInterval)
+
+            useHistoryStore.getState().push({
+                name: `Set Sequence End`,
+                undo: () => doUpdate(oldInterval),
+                redo: () => doUpdate(newInterval)
+            })
         }
     }
 
@@ -930,7 +995,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                     {/* Sequence Range Inputs */}
                     {sequence && (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 8 }}>
-                            <span style={{ color: '#aaa', fontSize: '12px' }}>Start:</span>
+                            <span style={{ color: '#aaa', fontSize: '12px' }}>开始:</span>
                             <InputNumber
                                 size="small"
                                 style={{ width: 60, height: 22, backgroundColor: '#333', border: '1px solid #555', color: '#eee' }}
@@ -938,7 +1003,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                                 onChange={handleSeqStartChange}
                                 controls={false}
                             />
-                            <span style={{ color: '#aaa', fontSize: '12px' }}>End:</span>
+                            <span style={{ color: '#aaa', fontSize: '12px' }}>结束:</span>
                             <InputNumber
                                 size="small"
                                 style={{ width: 60, height: 22, backgroundColor: '#333', border: '1px solid #555', color: '#eee' }}
@@ -965,17 +1030,35 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
                     <Button type="text" icon={<FastForwardOutlined />} onClick={handleNextFrame} style={{ color: '#eee' }} />
                     <Button type="text" icon={<StepForwardOutlined />} onClick={handleGoToEnd} style={{ color: '#eee' }} />
-                </div>
 
-                {/* Zoom & Options */}
-                <div style={{ position: 'absolute', right: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {/* Auto Keyframe Toggle (Moved to Right of Playback) */}
+                    <Button
+                        type="text"
+                        onClick={() => setAutoKeyframe(!autoKeyframe)}
+                        title="自动记录关键帧"
+                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', marginLeft: 8 }}
+                    >
+                        <div style={{
+                            width: 12,
+                            height: 12,
+                            borderRadius: '50%',
+                            backgroundColor: autoKeyframe ? '#ff4d4f' : '#555',
+                            border: '1px solid #777'
+                        }} />
+                    </Button>
+
+                    {/* Show All Keyframes Toggle (Moved to Right of Auto Key) */}
                     <Button
                         type="text"
                         icon={showAllKeyframes ? <EyeOutlined style={{ color: '#1890ff' }} /> : <EyeInvisibleOutlined />}
-                        title="Show All Keyframes (Auto-Range)"
+                        title="显示所有关键帧类型"
                         onClick={() => setShowAllKeyframes(!showAllKeyframes)}
                         style={{ color: showAllKeyframes ? '#1890ff' : '#eee' }}
                     />
+                </div>
+
+                {/* Zoom & Options (Right Aligned) */}
+                <div style={{ position: 'absolute', right: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span style={{ color: '#666', fontSize: '12px' }}>|</span>
                     <ZoomOutOutlined style={{ color: '#888' }} />
                     <Slider
