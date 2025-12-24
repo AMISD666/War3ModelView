@@ -105,7 +105,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
     // Interaction Refs
     const interactionRef = useRef({
-        mode: 'none' as 'none' | 'scrub' | 'pan' | 'boxSelect' | 'dragSequence' | 'dragSequenceStart' | 'dragSequenceEnd' | 'dragKeyframes',
+        mode: 'none' as 'none' | 'scrub' | 'pan' | 'boxSelect' | 'dragSequence' | 'dragSequenceStart' | 'dragSequenceEnd' | 'pendingDragKeyframes' | 'dragKeyframes',
         startX: 0,
         startY: 0,
         lastMouseX: 0,
@@ -899,6 +899,16 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 }
             }
 
+        } else if (mode === 'pendingDragKeyframes') {
+            // 检查是否超过拖动阈值，只有超过才进入真正的拖动模式
+            const DRAG_THRESHOLD = 8 // 像素
+            const dx = Math.abs(e.clientX - interactionRef.current.startX)
+            const dy = Math.abs(e.clientY - interactionRef.current.startY)
+            if (dx > DRAG_THRESHOLD || dy > DRAG_THRESHOLD) {
+                // 进入真正的拖动模式
+                interactionRef.current.mode = 'dragKeyframes'
+                setIsDragging(true)
+            }
         } else if (mode === 'dragKeyframes') {
             // Calculate frame offset from drag start
             const currentFrame = mouseToFrame(e.clientX)
@@ -978,6 +988,16 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
             setDragTargetSequenceIndex(null)
             // Force refresh global max if needed
+        } else if (mode === 'pendingDragKeyframes') {
+            // 未超过拖动阈值，视为点击操作 - 仅选中关键帧，不移动
+            setIsDragging(false)
+            // 如果点击的是关键帧，跳转到该帧
+            const clickedKf = getKeyframeAtPos(e.clientX, e.clientY)
+            if (clickedKf) {
+                updateFrame(clickedKf.frame)
+                confirmScrub()
+                setSelectedKeyframeUids(new Set([clickedKf.uid]))
+            }
         } else if (mode === 'dragKeyframes') {
             setIsDragging(false)
 
@@ -1142,7 +1162,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             // Check if clicking on a selected keyframe (to drag)
             const clickedKf = getKeyframeAtPos(e.clientX, e.clientY)
             if (clickedKf && selectedKeyframeUids.has(clickedKf.uid)) {
-                // Start drag mode for selected keyframes
+                // 开始待定拖动模式（需要移动超过阈值才能真正拖动）
                 const dragData = getSelectedKeyframeData().map(kf => ({
                     nodeId: kf.nodeId,
                     type: kf.type,
@@ -1151,9 +1171,9 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 }))
 
                 interactionRef.current = {
-                    mode: 'dragKeyframes',
-                    startX: mouseX,
-                    startY: mouseY,
+                    mode: 'pendingDragKeyframes',
+                    startX: e.clientX,
+                    startY: e.clientY,
                     lastMouseX: mouseX,
                     initialScrollX: 0,
                     dragSequenceIndex: -1,
@@ -1161,7 +1181,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                     dragKeyframeStartFrame: clickedKf.frame,
                     dragKeyframeData: dragData
                 }
-                setIsDragging(true)
+                // 注意：这里不设置 setIsDragging(true)，等待超过阈值后再设置
             } else {
                 // Box select mode
                 interactionRef.current = {
