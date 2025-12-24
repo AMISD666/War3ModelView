@@ -13,7 +13,7 @@ use winreg::RegKey;
 // ==========================
 // Constants
 // ==========================
-const REG_PATH: &str = "SOFTWARE\\War3ModelEditor";
+const REG_PATH: &str = "SOFTWARE\\GGWar3ModelEditor";
 const LICENSE_KEY: &str = "License";
 const MACHINE_ID_KEY: &str = "MachineId";
 const LAST_CHECK_TIME_KEY: &str = "LastCheckTime";

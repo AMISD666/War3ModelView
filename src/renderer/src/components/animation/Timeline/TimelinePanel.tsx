@@ -78,6 +78,16 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     const [selectionRect, setSelectionRect] = useState<{ startX: number, startY: number, endX: number, endY: number } | null>(null)
     const [hoveredSequenceIndex, setHoveredSequenceIndex] = useState<number | null>(null)
 
+    // Clipboard State for Keyframes
+    const [clipboardKeyframes, setClipboardKeyframes] = useState<{
+        keyframes: { nodeId: number, type: string, frame: number, value: any, inTan?: any, outTan?: any }[]
+        isCut: boolean
+        baseFrame: number
+    } | null>(null)
+
+    // Drag Keyframe Preview State
+    const [dragKeyframeOffset, setDragKeyframeOffset] = useState<number>(0)
+
     // Refs for RAF
     const frameRef = useRef(0)
     const pixelsPerMsRef = useRef(pixelsPerMs)
@@ -90,16 +100,19 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     const selectionRectRef = useRef<{ startX: number, startY: number, endX: number, endY: number } | null>(null)
     const showAllKeyframesRef = useRef(showAllKeyframes)
     const transformModeRef = useRef(transformMode)
+    const dragKeyframeOffsetRef = useRef(0)
 
     // Interaction Refs
     const interactionRef = useRef({
-        mode: 'none' as 'none' | 'scrub' | 'pan' | 'boxSelect' | 'dragSequence' | 'dragSequenceStart' | 'dragSequenceEnd',
+        mode: 'none' as 'none' | 'scrub' | 'pan' | 'boxSelect' | 'dragSequence' | 'dragSequenceStart' | 'dragSequenceEnd' | 'dragKeyframes',
         startX: 0,
         startY: 0,
         lastMouseX: 0,
         initialScrollX: 0,
         dragSequenceIndex: -1,
-        initialInterval: [0, 0]
+        initialInterval: [0, 0],
+        dragKeyframeStartFrame: 0,
+        dragKeyframeData: [] as { nodeId: number, type: string, originalFrame: number, keyIndex: number }[]
     })
 
     // Derived Global Info
@@ -127,6 +140,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     useEffect(() => { showAllKeyframesRef.current = showAllKeyframes }, [showAllKeyframes])
     useEffect(() => { transformModeRef.current = transformMode }, [transformMode])
     useEffect(() => { isDraggingRef.current = isDragging }, [isDragging])
+    useEffect(() => { dragKeyframeOffsetRef.current = dragKeyframeOffset }, [dragKeyframeOffset])
 
     // Cache active keyframes
     useEffect(() => {
@@ -450,13 +464,17 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
             const isSelected = selectedUids.has(kf.uid)
 
+            // Apply drag offset to selected keyframes for real-time preview
+            const dragOffset = dragKeyframeOffsetRef.current
+            const drawX = isSelected && dragOffset !== 0 ? kx + dragOffset * pxPerMs : kx
+
             ctx.fillStyle = isSelected ? '#ffcc00' : kf.color
 
             ctx.beginPath()
-            ctx.moveTo(kx, laneY - KEYFRAME_SIZE)
-            ctx.lineTo(kx + KEYFRAME_SIZE, laneY)
-            ctx.lineTo(kx, laneY + KEYFRAME_SIZE)
-            ctx.lineTo(kx - KEYFRAME_SIZE, laneY)
+            ctx.moveTo(drawX, laneY - KEYFRAME_SIZE)
+            ctx.lineTo(drawX + KEYFRAME_SIZE, laneY)
+            ctx.lineTo(drawX, laneY + KEYFRAME_SIZE)
+            ctx.lineTo(drawX - KEYFRAME_SIZE, laneY)
             ctx.fill()
 
             if (isSelected) {
@@ -604,6 +622,211 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         setFrame(clampedFrame)
     }, [setFrame])
 
+    // ================== KEYFRAME OPERATIONS ==================
+
+    // Helper: Get keyframe data for selected UIDs
+    const getSelectedKeyframeData = useCallback(() => {
+        const result: { nodeId: number, type: string, frame: number, keyIndex: number, value: any, inTan?: any, outTan?: any }[] = []
+        const nodes = useModelStore.getState().nodes as any[]
+
+        activeKeyframesRef.current.forEach((kf, _idx) => {
+            if (!selectedKeyframeUids.has(kf.uid)) return
+
+            const node = nodes.find((n: any) => n.ObjectId === kf.nodeId)
+            if (!node) return
+
+            const propData = node[kf.type]
+            if (!propData?.Keys) return
+
+            // Find actual key index by frame
+            const keyIndex = propData.Keys.findIndex((k: any) => k.Frame === kf.frame)
+            if (keyIndex === -1) return
+
+            const key = propData.Keys[keyIndex]
+            result.push({
+                nodeId: kf.nodeId,
+                type: kf.type,
+                frame: kf.frame,
+                keyIndex,
+                value: Array.isArray(key.Vector) ? [...key.Vector] : key.Vector,
+                inTan: key.InTan ? [...key.InTan] : undefined,
+                outTan: key.OutTan ? [...key.OutTan] : undefined
+            })
+        })
+        return result
+    }, [selectedKeyframeUids])
+
+    // Delete selected keyframes
+    const deleteSelectedKeyframes = useCallback(() => {
+        if (selectedKeyframeUids.size === 0) return
+
+        const keyframeData = getSelectedKeyframeData()
+        if (keyframeData.length === 0) return
+
+        const nodes = useModelStore.getState().nodes
+        const nodesCopy = JSON.parse(JSON.stringify(nodes))
+
+        // Group by nodeId and type for efficient deletion
+        const grouped = new Map<string, { nodeId: number, type: string, frames: number[] }>()
+        keyframeData.forEach(kf => {
+            const key = `${kf.nodeId}-${kf.type}`
+            if (!grouped.has(key)) {
+                grouped.set(key, { nodeId: kf.nodeId, type: kf.type, frames: [] })
+            }
+            grouped.get(key)!.frames.push(kf.frame)
+        })
+
+        // Delete keyframes (reverse order to preserve indices)
+        grouped.forEach(({ nodeId, type, frames }) => {
+            const node = nodesCopy.find((n: any) => n.ObjectId === nodeId)
+            if (!node || !node[type]?.Keys) return
+
+            node[type].Keys = node[type].Keys.filter((k: any) => !frames.includes(k.Frame))
+
+            // If no keys left, remove the AnimVector
+            if (node[type].Keys.length === 0) {
+                delete node[type]
+            }
+        })
+
+        // Push to history
+        const oldNodes = nodes
+        useHistoryStore.getState().push({
+            name: `删除 ${keyframeData.length} 个关键帧`,
+            undo: () => useModelStore.setState({ nodes: oldNodes as any }),
+            redo: () => useModelStore.setState({ nodes: nodesCopy })
+        })
+
+        useModelStore.setState({ nodes: nodesCopy })
+        setSelectedKeyframeUids(new Set())
+    }, [selectedKeyframeUids, getSelectedKeyframeData])
+
+    // Copy keyframes to clipboard (isCut = true for cut operation)
+    const copyKeyframes = useCallback((isCut: boolean) => {
+        if (selectedKeyframeUids.size === 0) return
+
+        const keyframeData = getSelectedKeyframeData()
+        if (keyframeData.length === 0) return
+
+        // Find minimum frame as base
+        const baseFrame = Math.min(...keyframeData.map(kf => kf.frame))
+
+        setClipboardKeyframes({
+            keyframes: keyframeData.map(kf => ({
+                nodeId: kf.nodeId,
+                type: kf.type,
+                frame: kf.frame,
+                value: kf.value,
+                inTan: kf.inTan,
+                outTan: kf.outTan
+            })),
+            isCut,
+            baseFrame
+        })
+
+        if (isCut) {
+            deleteSelectedKeyframes()
+        }
+    }, [selectedKeyframeUids, getSelectedKeyframeData, deleteSelectedKeyframes])
+
+    // Paste keyframes at current frame position
+    const pasteKeyframes = useCallback(() => {
+        if (!clipboardKeyframes || clipboardKeyframes.keyframes.length === 0) return
+
+        const currentFrame = frameRef.current
+        const offset = currentFrame - clipboardKeyframes.baseFrame
+
+        const nodes = useModelStore.getState().nodes
+        const nodesCopy = JSON.parse(JSON.stringify(nodes))
+
+        clipboardKeyframes.keyframes.forEach(kf => {
+            const node = nodesCopy.find((n: any) => n.ObjectId === kf.nodeId)
+            if (!node) return
+
+            const targetFrame = kf.frame + offset
+
+            // Ensure AnimVector exists
+            if (!node[kf.type]) {
+                node[kf.type] = {
+                    Keys: [],
+                    LineType: 1, // Linear interpolation default
+                    GlobalSeqId: -1
+                }
+            }
+
+            // Check if a key already exists at this frame
+            const existingIdx = node[kf.type].Keys.findIndex((k: any) => k.Frame === targetFrame)
+            const newKey: any = {
+                Frame: targetFrame,
+                Vector: Array.isArray(kf.value) ? [...kf.value] : kf.value
+            }
+            if (kf.inTan) newKey.InTan = [...kf.inTan]
+            if (kf.outTan) newKey.OutTan = [...kf.outTan]
+
+            if (existingIdx >= 0) {
+                node[kf.type].Keys[existingIdx] = newKey
+            } else {
+                node[kf.type].Keys.push(newKey)
+                // Sort by frame
+                node[kf.type].Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+            }
+        })
+
+        // Push to history
+        const oldNodes = nodes
+        useHistoryStore.getState().push({
+            name: `粘贴 ${clipboardKeyframes.keyframes.length} 个关键帧`,
+            undo: () => useModelStore.setState({ nodes: oldNodes as any }),
+            redo: () => useModelStore.setState({ nodes: nodesCopy })
+        })
+
+        useModelStore.setState({ nodes: nodesCopy })
+
+        // Clear clipboard if it was a cut operation
+        if (clipboardKeyframes.isCut) {
+            setClipboardKeyframes(null)
+        }
+    }, [clipboardKeyframes])
+
+    // Keyboard event handler for keyframe operations
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            // Only handle when timeline is active and has focus context
+            if (!isActive) return
+
+            // Delete key
+            if (e.key === 'Delete' && selectedKeyframeUids.size > 0) {
+                e.preventDefault()
+                deleteSelectedKeyframes()
+                return
+            }
+
+            // Ctrl+C - Copy
+            if (e.ctrlKey && e.key === 'c' && selectedKeyframeUids.size > 0) {
+                e.preventDefault()
+                copyKeyframes(false)
+                return
+            }
+
+            // Ctrl+X - Cut
+            if (e.ctrlKey && e.key === 'x' && selectedKeyframeUids.size > 0) {
+                e.preventDefault()
+                copyKeyframes(true)
+                return
+            }
+
+            // Ctrl+V - Paste
+            if (e.ctrlKey && e.key === 'v' && clipboardKeyframes) {
+                e.preventDefault()
+                pasteKeyframes()
+                return
+            }
+        }
+
+        window.addEventListener('keydown', handleKeyDown)
+        return () => window.removeEventListener('keydown', handleKeyDown)
+    }, [isActive, selectedKeyframeUids, clipboardKeyframes, deleteSelectedKeyframes, copyKeyframes, pasteKeyframes])
+
     // --- Global Window Handlers for Robust Dragging ---
 
     const handleGlobalMouseMove = useCallback((e: MouseEvent) => {
@@ -675,6 +898,17 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 }
             }
 
+        } else if (mode === 'dragKeyframes') {
+            // Calculate frame offset from drag start
+            const currentFrame = mouseToFrame(e.clientX)
+            const startFrame = interactionRef.current.dragKeyframeStartFrame
+            const frameOffset = Math.round(currentFrame - startFrame)
+
+            // Update lastMouseX for tracking
+            interactionRef.current.lastMouseX = e.clientX
+
+            // Update state for real-time visual feedback in draw
+            setDragKeyframeOffset(frameOffset)
         } else if (mode === 'boxSelect') {
             setSelectionRect(prev => ({
                 startX: interactionRef.current.startX,
@@ -743,6 +977,55 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
             setDragTargetSequenceIndex(null)
             // Force refresh global max if needed
+        } else if (mode === 'dragKeyframes') {
+            setIsDragging(false)
+
+            // Calculate final frame offset
+            const currentFrame = mouseToFrame(e.clientX)
+            const startFrame = interactionRef.current.dragKeyframeStartFrame
+            const frameOffset = Math.round(currentFrame - startFrame)
+
+            // Only process if there was actual movement
+            if (frameOffset !== 0 && interactionRef.current.dragKeyframeData.length > 0) {
+                const nodes = useModelStore.getState().nodes
+                const nodesCopy = JSON.parse(JSON.stringify(nodes))
+
+                // Apply frame offset to all dragged keyframes
+                interactionRef.current.dragKeyframeData.forEach(kfData => {
+                    const node = nodesCopy.find((n: any) => n.ObjectId === kfData.nodeId)
+                    if (!node || !node[kfData.type]?.Keys) return
+
+                    // Find and update the keyframe
+                    const keyIdx = node[kfData.type].Keys.findIndex((k: any) => k.Frame === kfData.originalFrame)
+                    if (keyIdx >= 0) {
+                        node[kfData.type].Keys[keyIdx].Frame = kfData.originalFrame + frameOffset
+                    }
+                })
+
+                // Sort keys by frame after moving
+                interactionRef.current.dragKeyframeData.forEach(kfData => {
+                    const node = nodesCopy.find((n: any) => n.ObjectId === kfData.nodeId)
+                    if (node && node[kfData.type]?.Keys) {
+                        node[kfData.type].Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                    }
+                })
+
+                // Push to history
+                const oldNodes = nodes
+                useHistoryStore.getState().push({
+                    name: `移动 ${interactionRef.current.dragKeyframeData.length} 个关键帧`,
+                    undo: () => useModelStore.setState({ nodes: oldNodes as any }),
+                    redo: () => useModelStore.setState({ nodes: nodesCopy })
+                })
+
+                useModelStore.setState({ nodes: nodesCopy })
+
+                // Clear selection as UIDs have changed
+                setSelectedKeyframeUids(new Set())
+            }
+
+            // Reset drag offset preview
+            setDragKeyframeOffset(0)
         } else if (mode === 'boxSelect') {
             const rect = canvas.getBoundingClientRect()
             const mouseX = e.clientX - rect.left
@@ -810,7 +1093,9 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 lastMouseX: e.clientX,
                 initialScrollX: scrollXRef.current,
                 dragSequenceIndex: -1,
-                initialInterval: [0, 0]
+                initialInterval: [0, 0],
+                dragKeyframeStartFrame: 0,
+                dragKeyframeData: []
             }
             return
         }
@@ -820,13 +1105,15 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         if (handleHit) {
             const seq = useModelStore.getState().sequences[handleHit.index]
             interactionRef.current = {
-                mode: handleHit.type === 'start' ? 'dragSequenceStart' : 'dragSequenceEnd', // Separate modes
+                mode: handleHit.type === 'start' ? 'dragSequenceStart' : 'dragSequenceEnd',
                 startX: e.clientX,
                 startY: e.clientY,
                 lastMouseX: e.clientX,
                 initialScrollX: 0,
                 dragSequenceIndex: handleHit.index,
-                initialInterval: [...seq.Interval]
+                initialInterval: [...seq.Interval],
+                dragKeyframeStartFrame: 0,
+                dragKeyframeData: []
             }
             setIsDragging(true)
             setDragTargetSequenceIndex(handleHit.index)
@@ -842,25 +1129,55 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 lastMouseX: e.clientX,
                 initialScrollX: 0,
                 dragSequenceIndex: -1,
-                initialInterval: [0, 0]
+                initialInterval: [0, 0],
+                dragKeyframeStartFrame: 0,
+                dragKeyframeData: []
             }
             setIsDragging(true)
             setPlaying(false)
             updateFrame(mouseToFrame(e.clientX))
             confirmScrub()
         } else {
-            interactionRef.current = {
-                mode: 'boxSelect',
-                startX: mouseX,
-                startY: mouseY,
-                lastMouseX: mouseX,
-                initialScrollX: 0,
-                dragSequenceIndex: -1,
-                initialInterval: [0, 0]
+            // Check if clicking on a selected keyframe (to drag)
+            const clickedKf = getKeyframeAtPos(e.clientX, e.clientY)
+            if (clickedKf && selectedKeyframeUids.has(clickedKf.uid)) {
+                // Start drag mode for selected keyframes
+                const dragData = getSelectedKeyframeData().map(kf => ({
+                    nodeId: kf.nodeId,
+                    type: kf.type,
+                    originalFrame: kf.frame,
+                    keyIndex: kf.keyIndex
+                }))
+
+                interactionRef.current = {
+                    mode: 'dragKeyframes',
+                    startX: mouseX,
+                    startY: mouseY,
+                    lastMouseX: mouseX,
+                    initialScrollX: 0,
+                    dragSequenceIndex: -1,
+                    initialInterval: [0, 0],
+                    dragKeyframeStartFrame: clickedKf.frame,
+                    dragKeyframeData: dragData
+                }
+                setIsDragging(true)
+            } else {
+                // Box select mode
+                interactionRef.current = {
+                    mode: 'boxSelect',
+                    startX: mouseX,
+                    startY: mouseY,
+                    lastMouseX: mouseX,
+                    initialScrollX: 0,
+                    dragSequenceIndex: -1,
+                    initialInterval: [0, 0],
+                    dragKeyframeStartFrame: 0,
+                    dragKeyframeData: []
+                }
+                setSelectionRect({ startX: mouseX, startY: mouseY, endX: mouseX, endY: mouseY })
             }
-            setSelectionRect({ startX: mouseX, startY: mouseY, endX: mouseX, endY: mouseY })
         }
-    }, [handleGlobalMouseMove, handleGlobalMouseUp, setPlaying])
+    }, [handleGlobalMouseMove, handleGlobalMouseUp, setPlaying, selectedKeyframeUids, getSelectedKeyframeData])
 
     useEffect(() => {
         return () => {
@@ -992,25 +1309,12 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                         />
                     </div>
 
-                    {/* Sequence Range Inputs */}
-                    {sequence && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 8 }}>
-                            <span style={{ color: '#aaa', fontSize: '12px' }}>开始:</span>
-                            <InputNumber
-                                size="small"
-                                style={{ width: 60, height: 22, backgroundColor: '#333', border: '1px solid #555', color: '#eee' }}
-                                value={sequence.Interval[0]}
-                                onChange={handleSeqStartChange}
-                                controls={false}
-                            />
-                            <span style={{ color: '#aaa', fontSize: '12px' }}>结束:</span>
-                            <InputNumber
-                                size="small"
-                                style={{ width: 60, height: 22, backgroundColor: '#333', border: '1px solid #555', color: '#eee' }}
-                                value={sequence.Interval[1]}
-                                onChange={handleSeqEndChange}
-                                controls={false}
-                            />
+                    {/* Drag Offset Display (only during drag) */}
+                    {dragKeyframeOffset !== 0 && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 8, backgroundColor: 'rgba(24, 144, 255, 0.2)', padding: '2px 8px', borderRadius: 4 }}>
+                            <span style={{ color: '#1890ff', fontSize: '12px', fontWeight: 'bold' }}>
+                                偏移: {dragKeyframeOffset > 0 ? '+' : ''}{dragKeyframeOffset}帧
+                            </span>
                         </div>
                     )}
 
@@ -1057,9 +1361,30 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                     />
                 </div>
 
-                {/* Zoom & Options (Right Aligned) */}
+                {/* Zoom & Sequence Range (Right Aligned) */}
                 <div style={{ position: 'absolute', right: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ color: '#666', fontSize: '12px' }}>|</span>
+                    {/* Sequence Range Inputs */}
+                    {sequence && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <span style={{ color: '#888', fontSize: '11px' }}>序列:</span>
+                            <InputNumber
+                                size="small"
+                                style={{ width: 55, height: 20, backgroundColor: '#333', border: '1px solid #555', color: '#eee', fontSize: '11px' }}
+                                value={sequence.Interval[0]}
+                                onChange={handleSeqStartChange}
+                                controls={false}
+                            />
+                            <span style={{ color: '#666', fontSize: '11px' }}>-</span>
+                            <InputNumber
+                                size="small"
+                                style={{ width: 55, height: 20, backgroundColor: '#333', border: '1px solid #555', color: '#eee', fontSize: '11px' }}
+                                value={sequence.Interval[1]}
+                                onChange={handleSeqEndChange}
+                                controls={false}
+                            />
+                        </div>
+                    )}
+                    <span style={{ color: '#444', fontSize: '12px' }}>|</span>
                     <ZoomOutOutlined style={{ color: '#888' }} />
                     <Slider
                         min={0.01}

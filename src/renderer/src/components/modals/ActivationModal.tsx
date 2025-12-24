@@ -1,9 +1,7 @@
 import React, { useState, useEffect } from 'react'
-import { Modal, Input, Button, message, Typography, Space, Spin, Alert } from 'antd'
+import { Modal, Input, Button, message, Spin, Alert } from 'antd'
 import { CopyOutlined, CheckCircleOutlined, ExclamationCircleOutlined } from '@ant-design/icons'
 import { invoke } from '@tauri-apps/api/core'
-
-const { Title, Text, Paragraph } = Typography
 
 interface ActivationStatus {
     is_activated: boolean
@@ -78,6 +76,14 @@ const ActivationModal: React.FC<ActivationModalProps> = ({ open, onActivated }) 
         }
     }
 
+    // Dark theme styles matching main interface
+    const darkInputStyle: React.CSSProperties = {
+        backgroundColor: '#2a2a2a',
+        border: '1px solid #555',
+        color: '#eee',
+        fontFamily: 'monospace'
+    }
+
     return (
         <Modal
             open={open}
@@ -89,73 +95,107 @@ const ActivationModal: React.FC<ActivationModalProps> = ({ open, onActivated }) 
             centered
             width={480}
             styles={{
+                content: {
+                    backgroundColor: '#333',
+                    border: '1px solid #555',
+                    borderRadius: '8px',
+                    boxShadow: '0 4px 20px rgba(0,0,0,0.6)'
+                },
                 body: { padding: '32px' },
                 mask: { backgroundColor: 'rgba(0, 0, 0, 0.85)' }
             }}
         >
-            <div style={{ textAlign: 'center', marginBottom: 24 }}>
-                <Title level={3} style={{ marginBottom: 8 }}>
-                    War3 Model Editor
-                </Title>
-                <Text type="secondary">软件需要激活后才能使用</Text>
+            {/* Header */}
+            <div style={{ textAlign: 'center', marginBottom: 28 }}>
+                <h2 style={{
+                    color: '#eee',
+                    margin: 0,
+                    marginBottom: 8,
+                    fontSize: '22px',
+                    fontWeight: 500
+                }}>
+                    咕咕War3模型编辑器
+                </h2>
+                <span style={{ color: '#888', fontSize: '13px' }}>
+                    软件需要激活后才能使用
+                </span>
             </div>
 
             {/* Machine ID Section */}
             <div style={{ marginBottom: 24 }}>
-                <Text strong style={{ display: 'block', marginBottom: 8 }}>
+                <div style={{ color: '#ccc', marginBottom: 8, fontSize: '13px', fontWeight: 500 }}>
                     您的机器码
-                </Text>
+                </div>
                 {machineIdLoading ? (
                     <div style={{ textAlign: 'center', padding: 16 }}>
                         <Spin size="small" />
-                        <Text type="secondary" style={{ marginLeft: 8 }}>正在获取机器码...</Text>
+                        <span style={{ color: '#888', marginLeft: 8 }}>正在获取机器码...</span>
                     </div>
                 ) : (
-                    <Space.Compact style={{ width: '100%' }}>
+                    <div style={{ display: 'flex', gap: 8 }}>
                         <Input
                             value={machineId}
                             readOnly
-                            style={{
-                                fontFamily: 'monospace',
-                                backgroundColor: '#f5f5f5'
-                            }}
+                            style={{ ...darkInputStyle, flex: 1 }}
                         />
                         <Button
                             icon={copied ? <CheckCircleOutlined /> : <CopyOutlined />}
                             onClick={handleCopyMachineId}
-                            type={copied ? 'primary' : 'default'}
+                            style={{
+                                backgroundColor: copied ? '#52c41a' : '#444',
+                                border: '1px solid #666',
+                                color: '#eee'
+                            }}
                         >
                             {copied ? '已复制' : '复制'}
                         </Button>
-                    </Space.Compact>
+                    </div>
                 )}
-                <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
+                <div style={{ color: '#666', fontSize: '11px', marginTop: 8 }}>
                     请将机器码发送给软件提供者以获取激活码
-                </Paragraph>
+                </div>
             </div>
 
             {/* License Code Input */}
             <div style={{ marginBottom: 24 }}>
-                <Text strong style={{ display: 'block', marginBottom: 8 }}>
+                <div style={{ color: '#ccc', marginBottom: 8, fontSize: '13px', fontWeight: 500 }}>
                     激活码
-                </Text>
+                </div>
                 <Input.TextArea
                     value={licenseCode}
                     onChange={(e) => setLicenseCode(e.target.value)}
                     placeholder="请在此输入激活码"
                     rows={4}
-                    style={{ fontFamily: 'monospace' }}
+                    styles={{
+                        textarea: {
+                            backgroundColor: '#2a2a2a',
+                            border: '1px solid #555',
+                            color: '#eee',
+                            fontFamily: 'monospace'
+                        }
+                    }}
+                    className="dark-textarea"
                 />
+                <style>{`
+                    .dark-textarea::placeholder,
+                    .dark-textarea textarea::placeholder {
+                        color: #888 !important;
+                    }
+                `}</style>
             </div>
 
             {/* Error Display */}
             {error && (
                 <Alert
-                    message={error}
+                    message={<span style={{ color: '#ff7875' }}>{error}</span>}
                     type="error"
                     showIcon
-                    icon={<ExclamationCircleOutlined />}
-                    style={{ marginBottom: 24 }}
+                    icon={<ExclamationCircleOutlined style={{ color: '#ff7875' }} />}
+                    style={{
+                        marginBottom: 24,
+                        backgroundColor: 'rgba(255, 77, 79, 0.15)',
+                        border: '1px solid #ff4d4f'
+                    }}
                 />
             )}
 
@@ -167,6 +207,12 @@ const ActivationModal: React.FC<ActivationModalProps> = ({ open, onActivated }) 
                 loading={loading}
                 onClick={handleActivate}
                 disabled={!machineId || machineIdLoading}
+                style={{
+                    height: 44,
+                    fontSize: '15px',
+                    backgroundColor: '#007acc',
+                    borderColor: '#007acc'
+                }}
             >
                 激活软件
             </Button>
@@ -175,3 +221,4 @@ const ActivationModal: React.FC<ActivationModalProps> = ({ open, onActivated }) 
 }
 
 export default ActivationModal
+

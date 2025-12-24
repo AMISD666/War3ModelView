@@ -193,17 +193,24 @@ const KeyframeInspector: React.FC = () => {
 
     // 获取关键帧数据或默认值
     const getKeyframeValues = useCallback((prop: any, size: 3 | 4): number[] => {
-        if (!prop || !prop.Keys || prop.Keys.length === 0) {
-            return size === 4 ? [0, 0, 0, 1] : [0, 0, 0]
+        const defaultVal = size === 4 ? [0, 0, 0, 1] : [0, 0, 0]
+        if (!prop || !prop.Keys || !Array.isArray(prop.Keys) || prop.Keys.length === 0) {
+            return defaultVal
         }
         const keys = prop.Keys
         let closestKey = keys[0]
         for (const k of keys) {
-            if (Math.abs(k.Frame - displayFrame) < Math.abs(closestKey.Frame - displayFrame)) {
-                closestKey = k
+            if (k && k.Frame !== undefined && closestKey && closestKey.Frame !== undefined) {
+                if (Math.abs(k.Frame - displayFrame) < Math.abs(closestKey.Frame - displayFrame)) {
+                    closestKey = k
+                }
             }
         }
-        return closestKey.Vector || (size === 4 ? [0, 0, 0, 1] : [0, 0, 0])
+        // Defensive check: ensure Vector is an array
+        if (closestKey && Array.isArray(closestKey.Vector)) {
+            return closestKey.Vector
+        }
+        return defaultVal
     }, [displayFrame])
 
     // 修改关键帧值 - 使用 CommandManager 支持撤销/重做
@@ -254,6 +261,11 @@ const KeyframeInspector: React.FC = () => {
 
         // 获取本地关键帧数据（用于编辑时的增量计算）
         let localValues = getKeyframeValues(prop, isRotation ? 4 : 3)
+
+        // Defensive check: ensure localValues is always an array
+        if (!Array.isArray(localValues)) {
+            localValues = isRotation ? [0, 0, 0, 1] : [0, 0, 0]
+        }
 
         // 对于位移，显示世界坐标（与 Gizmo 一致）
         let displayValues = [...localValues]
