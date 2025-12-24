@@ -1,97 +1,210 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react'
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import { useModelStore } from '../../../store/modelStore'
 import { useSelectionStore } from '../../../store/selectionStore'
 import { useRendererStore } from '../../../store/rendererStore'
-// 性能优化: 移除了 Antd 的 Button, Space, Tooltip, InputNumber, Slider
-// 替换为轻量级的原生 HTML 元素以减少 React 渲染开销
 import {
     PlayCircleOutlined,
     PauseCircleOutlined,
     StepBackwardOutlined,
     StepForwardOutlined,
     FastBackwardOutlined,
-    FastForwardOutlined
+    FastForwardOutlined,
+    ZoomInOutlined,
+    ZoomOutOutlined,
+    EyeOutlined,
+    EyeInvisibleOutlined
 } from '@ant-design/icons'
+import { Button, Slider, Input, InputNumber } from 'antd'
 
 interface TimelinePanelProps {
-    isActive?: boolean  // 当为 false 时暂停 RAF 循环
+    isActive?: boolean
 }
 
-/**
- * 时间轴面板 - 使用 refs 避免每帧重渲染
- * 支持点击/拖动跳帧，自动K帧开关
- * 性能优化: 当 isActive=false 时暂停 requestAnimationFrame 循环
- */
+// Constants
+const RULER_HEIGHT = 28
+// Track visual settings
+const KEYFRAME_SIZE = 5
+const SNAP_THRESHOLD_X = 50 // px, distance in X to snap (Large range)
+const CLICK_MOVE_THRESHOLD = 5 // px, max movement to count as click
+
+const LANE_HEIGHT = 14
+const OFFSET_TRANSLATION = 12
+const OFFSET_ROTATION = 26
+const OFFSET_SCALING = 40
+
 const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null)
     const containerRef = useRef<HTMLDivElement>(null)
     const rafRef = useRef<number | null>(null)
-    // Cache container size to avoid forced reflow from reading clientWidth/Height every frame
     const containerSizeRef = useRef<{ width: number; height: number }>({ width: 400, height: 180 })
 
-    // 只订阅不会频繁变化的状态
-    const currentSequence = useModelStore(state => state.currentSequence)
-    const sequences = useModelStore(state => state.sequences)
-    const isPlaying = useModelStore(state => state.isPlaying)
-    const playbackSpeed = useModelStore(state => state.playbackSpeed)
-    const autoKeyframe = useModelStore(state => state.autoKeyframe)
+    // Stores
+    const {
+        sequences,
+        currentSequence,
+        isPlaying,
+        playbackSpeed,
+        autoKeyframe,
+        modelData,
+        nodes: modelNodes,
+        setPlaying,
+        setPlaybackSpeed,
+        setFrame,
+        setAutoKeyframe
+    } = useModelStore()
 
-    const setPlaying = useModelStore(state => state.setPlaying)
-    const setPlaybackSpeed = useModelStore(state => state.setPlaybackSpeed)
-    const setFrame = useModelStore(state => state.setFrame)
-    const setAutoKeyframe = useModelStore(state => state.setAutoKeyframe)
+    const { selectedNodeIds, transformMode } = useSelectionStore()
 
+    // Derived Animation Info
     const sequence = currentSequence >= 0 && sequences ? sequences[currentSequence] : null
     const seqStart = sequence ? sequence.Interval[0] : 0
     const seqEnd = sequence ? sequence.Interval[1] : 1000
 
+    // State (Visual)
     const [pixelsPerMs, setPixelsPerMs] = useState(0.1)
     const [scrollX, setScrollX] = useState(0)
     const [displayFrame, setDisplayFrame] = useState(0)
-    const [isDragging, setIsDragging] = useState(false)
     const [isEditingFrame, setIsEditingFrame] = useState(false)
-    const [inputFrameValue, setInputFrameValue] = useState('') // 独立的输入框值
+    const [inputFrameValue, setInputFrameValue] = useState('')
+    const [showAllKeyframes, setShowAllKeyframes] = useState(false)
 
-    // 用 ref 存储变化频繁的值
+    // Missing State from previous error
+    const [isDragging, setIsDragging] = useState(false)
+    const [dragTargetSequenceIndex, setDragTargetSequenceIndex] = useState<number | null>(null)
+
+    // State (Selection)
+    const [selectedKeyframeUids, setSelectedKeyframeUids] = useState<Set<string>>(new Set())
+    const [selectionRect, setSelectionRect] = useState<{ startX: number, startY: number, endX: number, endY: number } | null>(null)
+    const [hoveredSequenceIndex, setHoveredSequenceIndex] = useState<number | null>(null)
+
+    // Refs for RAF
     const frameRef = useRef(0)
     const pixelsPerMsRef = useRef(pixelsPerMs)
     const scrollXRef = useRef(scrollX)
     const seqStartRef = useRef(seqStart)
     const seqEndRef = useRef(seqEnd)
-    const isDraggingRef = useRef(false)
-    const lastDisplayedFrameRef = useRef(-1) // Track last displayed frame to avoid unnecessary re-renders
+    const isDraggingRef = useRef(isDragging)
+    const activeKeyframesRef = useRef<any[]>([])
+    const selectedKeyframeUidsRef = useRef<Set<string>>(new Set())
+    const selectionRectRef = useRef<{ startX: number, startY: number, endX: number, endY: number } | null>(null)
+    const showAllKeyframesRef = useRef(showAllKeyframes)
+    const transformModeRef = useRef(transformMode)
 
-    // 同步 refs
+    // Interaction Refs
+    const interactionRef = useRef({
+        mode: 'none' as 'none' | 'scrub' | 'pan' | 'boxSelect' | 'dragSequence' | 'dragSequenceStart' | 'dragSequenceEnd',
+        startX: 0,
+        startY: 0,
+        lastMouseX: 0,
+        initialScrollX: 0,
+        dragSequenceIndex: -1,
+        initialInterval: [0, 0]
+    })
+
+    // Derived Global Info
+    const allSequencesMax = useMemo(() => {
+        if (!sequences || sequences.length === 0) return 1000
+        return sequences.reduce((max, s) => Math.max(max, s.Interval[1]), 0)
+    }, [sequences])
+
+    // Sync Refs
     useEffect(() => { pixelsPerMsRef.current = pixelsPerMs }, [pixelsPerMs])
     useEffect(() => { scrollXRef.current = scrollX }, [scrollX])
-    useEffect(() => { seqStartRef.current = seqStart }, [seqStart])
-    useEffect(() => { seqEndRef.current = seqEnd }, [seqEnd])
+    useEffect(() => {
+        // If showing all, use 0-Max. Else use current sequence.
+        if (showAllKeyframes) {
+            seqStartRef.current = 0
+            seqEndRef.current = allSequencesMax
+        } else {
+            seqStartRef.current = seqStart
+            seqEndRef.current = seqEnd
+        }
+    }, [seqStart, seqEnd, showAllKeyframes, allSequencesMax])
+
+    useEffect(() => { selectedKeyframeUidsRef.current = selectedKeyframeUids }, [selectedKeyframeUids])
+    useEffect(() => { selectionRectRef.current = selectionRect }, [selectionRect])
+    useEffect(() => { showAllKeyframesRef.current = showAllKeyframes }, [showAllKeyframes])
+    useEffect(() => { transformModeRef.current = transformMode }, [transformMode])
     useEffect(() => { isDraggingRef.current = isDragging }, [isDragging])
 
-    // Note: maxFrame calculation removed as unused. If needed in future:
-    // const maxFrame = sequences?.length > 0 ? Math.max(...sequences.map((s: any) => s.Interval[1])) + 100 : 1100
-
-    // 切换序列时自动调整时间轴范围和缩放
+    // Cache active keyframes
     useEffect(() => {
-        if (sequence && containerRef.current) {
-            const duration = sequence.Interval[1] - sequence.Interval[0]
-            const containerWidth = containerRef.current.clientWidth || 400
-            // 自动缩放以显示整个序列范围，前后各留 10% 空间
-            const paddedDuration = duration * 1.2
-            const newPixelsPerMs = containerWidth / paddedDuration
-            setPixelsPerMs(Math.max(0.01, Math.min(2, newPixelsPerMs)))
-            // 滚动到序列起始位置，留出 10% 空间
-            setScrollX(Math.max(0, sequence.Interval[0] - duration * 0.1))
-            setFrame(sequence.Interval[0])
-            setDisplayFrame(sequence.Interval[0])
+        if (!modelData || selectedNodeIds.length === 0) {
+            activeKeyframesRef.current = []
+            return
         }
-    }, [currentSequence, sequence, setFrame])
 
-    // ResizeObserver to cache container size - avoids reading clientWidth/Height every frame
+        const keyframes: any[] = []
+
+        selectedNodeIds.forEach(nodeId => {
+            const node = modelNodes.find((n: any) => n.ObjectId === nodeId)
+            if (!node) return
+
+            const addKeys = (propData: any, type: string, color: string) => {
+                if (propData && Array.isArray(propData.Keys)) {
+                    propData.Keys.forEach((k: any, idx: number) => {
+                        keyframes.push({
+                            frame: k.Frame,
+                            nodeId,
+                            type,
+                            uid: `${nodeId}-${type}-${idx}`,
+                            color
+                        })
+                    })
+                }
+            }
+
+            addKeys(node.Translation, 'Translation', '#ff4d4f')
+            addKeys(node.Rotation, 'Rotation', '#52c41a')
+            addKeys(node.Scaling, 'Scaling', '#1890ff')
+        })
+
+        activeKeyframesRef.current = keyframes
+    }, [modelData, selectedNodeIds, modelNodes])
+
+    // Auto-fit sequence change
+    const lastSequenceIndexRef = useRef(currentSequence)
+    useEffect(() => {
+        // Only auto-fit if the SEQUENCE INDEX changed, or if we toggled ShowAll
+        // We do NOT want to auto-fit if we are just updating the start/end of the SAME sequence (dragging)
+
+        const indexChanged = lastSequenceIndexRef.current !== currentSequence
+        lastSequenceIndexRef.current = currentSequence
+
+        if (!containerRef.current) return
+
+        // If dragging, absolutely do not resize view
+        if (isDraggingRef.current) return
+
+        // If only data changed but not index, and we are not in ShowAll, we probably still don't want to re-fit aggressively
+        // unless it's a fresh selection.
+        if (!indexChanged && !showAllKeyframes) return
+
+        let start = 0
+        let end = 1000
+        if (showAllKeyframes) {
+            start = 0
+            end = allSequencesMax
+        } else if (sequence) {
+            start = sequence.Interval[0]
+            end = sequence.Interval[1]
+        }
+
+        const duration = end - start
+        const containerWidth = containerRef.current.clientWidth || 400
+        const paddedDuration = Math.max(100, duration * 1.2)
+        const newPixelsPerMs = containerWidth / paddedDuration
+
+        // Apply
+        setPixelsPerMs(Math.max(0.01, Math.min(2, newPixelsPerMs)))
+        setScrollX(Math.max(0, start - duration * 0.1))
+
+    }, [currentSequence, showAllKeyframes, allSequencesMax, sequence]) // Added sequence to dependency but guarded logic
+
+    // Resize Observer
     useEffect(() => {
         const container = containerRef.current
         if (!container) return
-
         const resizeObserver = new ResizeObserver((entries) => {
             for (const entry of entries) {
                 containerSizeRef.current = {
@@ -101,23 +214,13 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             }
         })
         resizeObserver.observe(container)
-        // Initialize with current size
-        containerSizeRef.current = {
-            width: container.clientWidth,
-            height: container.clientHeight
-        }
+        containerSizeRef.current = { width: container.clientWidth, height: container.clientHeight }
         return () => resizeObserver.disconnect()
     }, [])
 
-    // 动画循环绘制 - 不依赖 React 渲染
-    // 性能优化: 当 isActive=false 时完全暂停 RAF 循环
+    // RAF Loop
     useEffect(() => {
-        console.log('[TimelinePanel] useEffect triggered, isActive:', isActive)
-
-        // 如果不活跃，不启动循环
         if (!isActive) {
-            // 确保清理任何现有的 RAF
-            console.log('[TimelinePanel] Stopping RAF (isActive=false)')
             if (rafRef.current) {
                 cancelAnimationFrame(rafRef.current)
                 rafRef.current = null
@@ -125,552 +228,788 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             return
         }
 
-        // CRITICAL FIX: Use closure object instead of shared ref
-        // Each useEffect instance gets its own `runState` object
         const runState = { shouldRun: true }
-        console.log('[TimelinePanel] Starting RAF loop (isActive=true)')
-
         let lastDrawTime = 0
         let lastDisplayUpdate = 0
-        const FPS_LIMIT = 60 // 限制时间轴刷新率
-        const frameInterval = 1000 / FPS_LIMIT
-        const DISPLAY_UPDATE_INTERVAL = 16 // Update display every frame (60fps)
+        const frameInterval = 1000 / 60
+        const DISPLAY_UPDATE_INTERVAL = 50
 
         const animate = (time: number) => {
-            // CRITICAL: Check THIS closure's flag at the VERY START
-            if (!runState.shouldRun) {
-                return
-            }
+            if (!runState.shouldRun) return
 
             const elapsed = time - lastDrawTime
-
             if (elapsed >= frameInterval) {
                 lastDrawTime = time
-                // 直接从渲染器读取帧数（比 store 更新更频繁，避免光标跳跃）
-                if (!isDraggingRef.current) {
+
+                if (!isDraggingRef.current && interactionRef.current.mode !== 'scrub' && interactionRef.current.mode !== 'dragSequence' && interactionRef.current.mode !== 'dragSequenceStart' && interactionRef.current.mode !== 'dragSequenceEnd') {
                     const renderer = useRendererStore.getState().renderer
                     if (renderer && renderer.rendererData && typeof renderer.rendererData.frame === 'number') {
                         frameRef.current = renderer.rendererData.frame
                     } else {
-                        // Fallback to store
                         frameRef.current = useModelStore.getState().currentFrame
                     }
                 }
+
                 draw()
 
-                // Update displayFrame for the UI (only when not editing, not dragging, AND frame actually changed)
-                if (!isEditingFrame && !isDraggingRef.current && time - lastDisplayUpdate >= DISPLAY_UPDATE_INTERVAL) {
+                if (!isEditingFrame && time - lastDisplayUpdate > DISPLAY_UPDATE_INTERVAL) {
                     lastDisplayUpdate = time
-                    const roundedFrame = Math.round(frameRef.current)
-                    // CRITICAL FIX: Only trigger React re-render if frame actually changed
-                    // This prevents Antd components from accumulating internal event listeners
-                    if (roundedFrame !== lastDisplayedFrameRef.current) {
-                        lastDisplayedFrameRef.current = roundedFrame
-                        setDisplayFrame(roundedFrame)
-                    }
+                    setDisplayFrame(Math.round(frameRef.current))
                 }
             }
 
-            // Only schedule next frame if THIS closure's flag is still true
             if (runState.shouldRun) {
                 rafRef.current = requestAnimationFrame(animate)
             }
         }
-
         rafRef.current = requestAnimationFrame(animate)
 
         return () => {
-            // CRITICAL: Set THIS closure's flag to false
             runState.shouldRun = false
             if (rafRef.current) {
                 cancelAnimationFrame(rafRef.current)
                 rafRef.current = null
             }
         }
-    }, [isActive]) // 依赖 isActive，当其变化时重新启动/停止循环
+    }, [isActive, isEditingFrame])
 
-    // 绘制函数 - 直接读取 refs, 使用缓存的尺寸避免强制重排
+    // Draw Function
     const draw = useCallback(() => {
         const canvas = canvasRef.current
         if (!canvas) return
-
         const ctx = canvas.getContext('2d')
         if (!ctx) return
 
-        // CRITICAL: Use cached size from ResizeObserver instead of reading from DOM
-        // Reading clientWidth/Height every frame causes forced reflow (layout thrashing)
         const width = containerSizeRef.current.width
         const height = containerSizeRef.current.height
+        const SEQUENCE_HEIGHT = 30 // Increased for Name below markers
 
         if (canvas.width !== width || canvas.height !== height) {
             canvas.width = width
             canvas.height = height
         }
 
-        const rulerHeight = 28
         const pxPerMs = pixelsPerMsRef.current
         const scroll = scrollXRef.current
         const start = seqStartRef.current
         const end = seqEndRef.current
         const frame = frameRef.current
+        const activeKeyframes = activeKeyframesRef.current
+        const selectedUids = selectedKeyframeUidsRef.current
+        const selRect = selectionRectRef.current
+        const showAll = showAllKeyframesRef.current
+        const currentMode = transformModeRef.current
 
-        // 清除背景
+        // Bg
         ctx.fillStyle = '#1e1e1e'
         ctx.fillRect(0, 0, width, height)
 
-        // 标尺背景
+        // Ruler Bg
         ctx.fillStyle = '#252526'
-        ctx.fillRect(0, 0, width, rulerHeight)
+        ctx.fillRect(0, 0, width, RULER_HEIGHT)
+        ctx.strokeStyle = '#333'
+        ctx.beginPath()
+        ctx.moveTo(0, RULER_HEIGHT)
+        ctx.lineTo(width, RULER_HEIGHT)
+        ctx.stroke()
 
-        // 刻度
+        // Sequence Track Bg (Bottom)
+        const seqTrackY = height - SEQUENCE_HEIGHT
+        ctx.fillStyle = '#202020'
+        ctx.fillRect(0, seqTrackY, width, SEQUENCE_HEIGHT)
+        ctx.strokeStyle = '#333'
+        ctx.beginPath()
+        ctx.moveTo(0, seqTrackY)
+        ctx.lineTo(width, seqTrackY)
+        ctx.stroke()
+
+        // Ticks
         const startTime = scroll
         const endTime = scroll + width / pxPerMs
 
-        let tickInterval = 100
+        let tickInterval = 50
         const idealMsPerTick = 100 / pxPerMs
         if (idealMsPerTick > 5000) tickInterval = 5000
         else if (idealMsPerTick > 1000) tickInterval = 1000
         else if (idealMsPerTick > 500) tickInterval = 500
         else if (idealMsPerTick > 100) tickInterval = 100
-        else tickInterval = 50
 
         const firstTick = Math.floor(startTime / tickInterval) * tickInterval
-
         ctx.font = '10px Microsoft YaHei'
-        ctx.fillStyle = '#888'
         ctx.textAlign = 'left'
 
         for (let t = firstTick; t <= endTime; t += tickInterval) {
             const x = (t - scroll) * pxPerMs
-            if (x < -50) continue
+            if (x < -20) continue
 
+            // Ruler Line
             ctx.strokeStyle = '#444'
             ctx.beginPath()
             ctx.moveTo(x, 0)
-            ctx.lineTo(x, rulerHeight)
+            ctx.lineTo(x, RULER_HEIGHT)
+            // Grid Line in Track
+            ctx.moveTo(x, RULER_HEIGHT)
+            ctx.lineTo(x, seqTrackY) // Stop at Sequence Track
             ctx.stroke()
 
-            ctx.fillText(t.toString(), x + 3, 11)
+            // Text
+            ctx.fillStyle = '#888'
+            ctx.fillText(t.toString(), x + 4, 12)
         }
 
-        // 序列范围高亮
+        // Sequence Bounds Highlight (Ruler + Track)
         const startX = (start - scroll) * pxPerMs
         const endX = (end - scroll) * pxPerMs
+        ctx.fillStyle = 'rgba(70, 144, 226, 0.05)'
+        ctx.fillRect(startX, RULER_HEIGHT, Math.max(0, endX - startX), seqTrackY - RULER_HEIGHT)
 
-        ctx.fillStyle = 'rgba(70, 144, 226, 0.15)'
-        ctx.fillRect(startX, rulerHeight, Math.max(0, endX - startX), height - rulerHeight)
-
-        ctx.strokeStyle = 'rgba(70, 144, 226, 0.6)'
+        ctx.strokeStyle = 'rgba(70, 144, 226, 0.3)'
         ctx.lineWidth = 1
         ctx.beginPath()
-        ctx.moveTo(startX, 0)
-        ctx.lineTo(startX, height)
-        ctx.moveTo(endX, 0)
-        ctx.lineTo(endX, height)
+        ctx.moveTo(startX, 0); ctx.lineTo(startX, seqTrackY)
+        ctx.moveTo(endX, 0); ctx.lineTo(endX, seqTrackY)
         ctx.stroke()
 
-        // 播放头
-        const scrubberX = (frame - scroll) * pxPerMs
+        // Draw Sequence Markers (Bottom Track)
+        const storeSequences = useModelStore.getState().sequences
+        /* 
+           Draw Markers: Start Triangle, End Triangle.
+           Name: Below the markers.
+        */
+        if (storeSequences) {
+            ctx.font = '10px Microsoft YaHei' // Smaller font for name
+            storeSequences.forEach((seq, idx) => {
+                const isCurrent = idx === useModelStore.getState().currentSequence
+                if (!showAll && !isCurrent) return
+
+                const sx = (seq.Interval[0] - scroll) * pxPerMs
+                const ex = (seq.Interval[1] - scroll) * pxPerMs
+
+                if (ex < 0 || sx > width) return
+
+                // Draw Markers at Top of Sequence Track
+                const markerY = seqTrackY + 2
+                const handleSize = 8
+
+                const isDragStart = interactionRef.current.mode === 'dragSequenceStart' && interactionRef.current.dragSequenceIndex === idx
+                const isDragEnd = interactionRef.current.mode === 'dragSequenceEnd' && interactionRef.current.dragSequenceIndex === idx
+
+                // Start Marker (Right pointing or Down pointing triangle?)
+                // Let's do Downward pointing triangle at start pos
+                ctx.fillStyle = (isCurrent || isDragStart) ? '#1890ff' : '#666'
+                ctx.beginPath()
+                ctx.moveTo(sx, markerY)
+                ctx.lineTo(sx + handleSize, markerY)
+                ctx.lineTo(sx, markerY + handleSize)
+                ctx.closePath()
+                ctx.fill()
+
+                // End Marker
+                ctx.fillStyle = (isCurrent || isDragEnd) ? '#1890ff' : '#666'
+                ctx.beginPath()
+                ctx.moveTo(ex, markerY)
+                ctx.lineTo(ex - handleSize, markerY)
+                ctx.lineTo(ex, markerY + handleSize)
+                ctx.closePath()
+                ctx.fill()
+
+                // Name Text - Below markers
+                // Centered between markers or below Start? User: "in respective marker's below" (在各自的标记的下面)
+                // "Each action's start/end frame has a drag marker, and displayed sequence name is below the respective markers"
+                // This might mean: Name under Start Marker, and Name under End Marker?
+                // Or just Name in the track. "Below the markers" likely means Y-axis below.
+                // Let's put text below the start marker for now, as is typical.
+
+                ctx.textAlign = 'left'
+                ctx.fillStyle = isCurrent ? '#eee' : '#666'
+                ctx.fillText(seq.Name, sx, markerY + handleSize + 10)
+            })
+        }
+
+        // Draw Keyframes (Track Area with Lanes)
+        activeKeyframes.forEach(kf => {
+            const kx = (kf.frame - scroll) * pxPerMs
+            if (kx < -10 || kx > width + 10) return
+
+            // Filter logic
+            let isVisible = false
+            if (showAll) {
+                isVisible = true
+            } else {
+                if (currentMode === 'translate' && kf.type === 'Translation') isVisible = true
+                else if (currentMode === 'rotate' && kf.type === 'Rotation') isVisible = true
+                else if (currentMode === 'scale' && kf.type === 'Scaling') isVisible = true
+            }
+
+            if (!isVisible) return
+
+            let laneY = RULER_HEIGHT + 20
+            if (kf.type === 'Translation') laneY = RULER_HEIGHT + OFFSET_TRANSLATION
+            else if (kf.type === 'Rotation') laneY = RULER_HEIGHT + OFFSET_ROTATION
+            else if (kf.type === 'Scaling') laneY = RULER_HEIGHT + OFFSET_SCALING
+
+            const isSelected = selectedUids.has(kf.uid)
+
+            ctx.fillStyle = isSelected ? '#ffcc00' : kf.color
+
+            ctx.beginPath()
+            ctx.moveTo(kx, laneY - KEYFRAME_SIZE)
+            ctx.lineTo(kx + KEYFRAME_SIZE, laneY)
+            ctx.lineTo(kx, laneY + KEYFRAME_SIZE)
+            ctx.lineTo(kx - KEYFRAME_SIZE, laneY)
+            ctx.fill()
+
+            if (isSelected) {
+                ctx.strokeStyle = '#fff'
+                ctx.lineWidth = 1
+                ctx.stroke()
+            }
+        })
+
+        // Draw Selection Rect
+        if (selRect) {
+            ctx.strokeStyle = '#1890ff'
+            ctx.fillStyle = 'rgba(24, 144, 255, 0.2)'
+            const rx = Math.min(selRect.startX, selRect.endX)
+            const ry = Math.min(selRect.startY, selRect.endY)
+            const rw = Math.abs(selRect.endX - selRect.startX)
+            const rh = Math.abs(selRect.endY - selRect.startY)
+            ctx.fillRect(rx, ry, rw, rh)
+            ctx.strokeRect(rx, ry, rw, rh)
+        }
+
+        // Playhead
+        const playheadX = (frame - scroll) * pxPerMs
 
         ctx.strokeStyle = '#ff4444'
-        ctx.lineWidth = 2
+        ctx.lineWidth = 1
         ctx.beginPath()
-        ctx.moveTo(scrubberX, 0)
-        ctx.lineTo(scrubberX, height)
+        ctx.moveTo(playheadX, 0)
+        ctx.lineTo(playheadX, height) // Full height
         ctx.stroke()
 
-        // 播放头三角
+        // Playhead handle
         ctx.fillStyle = '#ff4444'
         ctx.beginPath()
-        ctx.moveTo(scrubberX - 6, 0)
-        ctx.lineTo(scrubberX + 6, 0)
-        ctx.lineTo(scrubberX + 6, 10)
-        ctx.lineTo(scrubberX, 16)
-        ctx.lineTo(scrubberX - 6, 10)
+        ctx.moveTo(playheadX - 6, 0)
+        ctx.lineTo(playheadX + 6, 0)
+        ctx.lineTo(playheadX + 6, RULER_HEIGHT / 2)
+        ctx.lineTo(playheadX, RULER_HEIGHT - 2)
+        ctx.lineTo(playheadX - 6, RULER_HEIGHT / 2)
         ctx.closePath()
         ctx.fill()
+    }, [sequences]) // Added sequences dependency
 
-        // 绘制选中骨骼的关键帧（按模式着色）- 只显示当前序列范围内的关键帧
-        const { selectedNodeIds, transformMode } = useSelectionStore.getState()
-        const nodes = useModelStore.getState().nodes
-        const seqStart = seqStartRef.current
-        const seqEnd = seqEndRef.current
-        if (selectedNodeIds.length === 1) {
-            const node = nodes.find((n: any) => n.ObjectId === selectedNodeIds[0])
-            if (node) {
-                const drawKeyframesForProp = (prop: any, color: string) => {
-                    if (!prop || !prop.Keys) return
-                    ctx.fillStyle = color
-                    for (const key of prop.Keys) {
-                        // 只绘制当前序列范围内的关键帧
-                        if (key.Frame < seqStart || key.Frame > seqEnd) continue
-                        const kx = (key.Frame - scroll) * pxPerMs
-                        if (kx >= -5 && kx <= width + 5) {
-                            ctx.beginPath()
-                            ctx.arc(kx, rulerHeight + 12, 4, 0, Math.PI * 2)
-                            ctx.fill()
-                        }
-                    }
-                }
-                // 只绘制当前模式对应的关键帧
-                if (transformMode === 'translate') {
-                    drawKeyframesForProp(node.Translation, '#ff4d4f') // 红色
-                } else if (transformMode === 'rotate') {
-                    drawKeyframesForProp(node.Rotation, '#52c41a') // 绿色
-                } else if (transformMode === 'scale') {
-                    drawKeyframesForProp(node.Scaling, '#1890ff') // 蓝色
-                } else {
-                    // 默认显示所有
-                    drawKeyframesForProp(node.Translation, '#ff4d4f')
-                    drawKeyframesForProp(node.Rotation, '#52c41a')
-                    drawKeyframesForProp(node.Scaling, '#1890ff')
-                }
-            }
-        }
-
-    }, [])
-
-    const handleWheel = (e: React.WheelEvent) => {
-        e.preventDefault()
-        if (e.ctrlKey) {
-            const zoomSpeed = 0.001
-            const newPixelsPerMs = Math.max(0.01, Math.min(2, pixelsPerMs * (1 - e.deltaY * zoomSpeed)))
-            setPixelsPerMs(newPixelsPerMs)
-        } else {
-            setScrollX(prev => Math.max(0, prev + e.deltaY / pixelsPerMs))
-        }
-    }
-
-    // 拖动时只更新显示（红色光标跟随）
-    const updateRequestRef = useRef<number | null>(null)
-
-    const scrubToPositionVisual = useCallback((clientX: number) => {
+    // Interaction Handlers
+    const getKeyframeAtPos = (clientX: number, clientY: number) => {
         const canvas = canvasRef.current
-        if (!canvas) return
+        if (!canvas) return null
         const rect = canvas.getBoundingClientRect()
         const x = clientX - rect.left
-        const frame = scrollXRef.current + x / pixelsPerMsRef.current
-        const clampedFrame = Math.max(seqStartRef.current, Math.min(seqEndRef.current, Math.round(frame)))
+        const y = clientY - rect.top // Relative Y
 
-        frameRef.current = clampedFrame
-        setDisplayFrame(clampedFrame)
+        const pxPerMs = pixelsPerMsRef.current
+        const scroll = scrollXRef.current
+        const showAll = showAllKeyframesRef.current
+        const currentMode = transformModeRef.current
 
-        // 性能优化：直接设置渲染器帧，并使用 requestAnimationFrame 节流 update(0)
-        const renderer = useRendererStore.getState().renderer
-        if (renderer && renderer.rendererData) {
-            renderer.rendererData.frame = clampedFrame
+        let found: any = null // Explicit type fix
+        let minDistX = SNAP_THRESHOLD_X
 
-            if (updateRequestRef.current === null) {
-                updateRequestRef.current = requestAnimationFrame(() => {
-                    if (typeof renderer.update === 'function') {
-                        renderer.update(0)
-                    }
-                    updateRequestRef.current = null
-                })
+        activeKeyframesRef.current.forEach(kf => {
+            let isVisible = false
+            if (showAll) {
+                isVisible = true
+            } else {
+                if (currentMode === 'translate' && kf.type === 'Translation') isVisible = true
+                else if (currentMode === 'rotate' && kf.type === 'Rotation') isVisible = true
+                else if (currentMode === 'scale' && kf.type === 'Scaling') isVisible = true
             }
-        }
-    }, [])
+            if (!isVisible) return
 
-    // 確认跳帧 - 更新渲染器帧并刷新骨骼
-    const confirmScrub = useCallback(() => {
-        const clampedFrame = frameRef.current
-        setFrame(clampedFrame)
+            const kx = (kf.frame - scroll) * pxPerMs
+            const dist = Math.abs(kx - x)
+
+            // X Check only (vertical column snap)
+            if (dist < minDistX) {
+                minDistX = dist
+                found = kf
+            }
+        })
+        return found
+    }
+
+    // NEW Hit Test for Start/End Markers
+    const getSequenceHandleAtPos = (clientX: number, clientY: number) => {
+        const canvas = canvasRef.current
+        if (!canvas) return null
+        const rect = canvas.getBoundingClientRect()
+        const x = clientX - rect.left
+        const y = clientY - rect.top
+
+        const SEQUENCE_HEIGHT = 30 // Must match draw
+        const height = canvas.height
+        const seqTrackY = height - SEQUENCE_HEIGHT
+
+        if (y < seqTrackY) return null // Only check bottom track
+
+        const pxPerMs = pixelsPerMsRef.current
+        const scroll = scrollXRef.current
+        const sequences = useModelStore.getState().sequences
+        const currentIdx = useModelStore.getState().currentSequence
+
+        if (!sequences || currentIdx < 0) return null
+
+        // Only check current sequence handles
+        const seq = sequences[currentIdx]
+        const sx = (seq.Interval[0] - scroll) * pxPerMs
+        const ex = (seq.Interval[1] - scroll) * pxPerMs
+
+        const HIT_RADIUS = 10
+        const handleSize = 8
+        // Marker is [sx, seqTrackY+2] -> [sx+8, seqTrackY+2] ...
+
+        // Start: sx is left edge
+        if (x >= sx - 4 && x <= sx + handleSize + 4) return { type: 'start', index: currentIdx }
+
+        // End: ex is right edge
+        if (x >= ex - handleSize - 4 && x <= ex + 4) return { type: 'end', index: currentIdx }
+
+        return null
+    }
+
+    const mouseToFrame = (clientX: number) => {
+        const canvas = canvasRef.current
+        if (!canvas) return 0
+        const rect = canvas.getBoundingClientRect()
+        const x = clientX - rect.left
+        return scrollXRef.current + x / pixelsPerMsRef.current
+    }
+
+    const updateFrame = (targetFrame: number) => {
+        const clamped = Math.max(seqStartRef.current, Math.min(seqEndRef.current, Math.round(targetFrame)))
+        frameRef.current = clamped
+
         const renderer = useRendererStore.getState().renderer
         if (renderer && renderer.rendererData) {
-            renderer.rendererData.frame = clampedFrame
-            // 调用 update(0) 刷新骨骼矩阵
+            renderer.rendererData.frame = clamped
             if (typeof renderer.update === 'function') {
                 renderer.update(0)
             }
         }
+    }
+
+    const confirmScrub = useCallback(() => {
+        const clampedFrame = frameRef.current
+        setFrame(clampedFrame)
     }, [setFrame])
 
-    const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-        setIsDragging(true)
-        setPlaying(false) // 拖动时暂停播放
-        scrubToPositionVisual(e.clientX)
-        // 点击时立即跳帧
-        confirmScrub()
-    }, [setPlaying, scrubToPositionVisual, confirmScrub])
+    // --- Global Window Handlers for Robust Dragging ---
 
-    const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-        if (isDragging) {
-            scrubToPositionVisual(e.clientX)
-            // 移除这里的 confirmScrub()，因为 scrubToPositionVisual 现在已经包含了节流后的更新逻辑
+    const handleGlobalMouseMove = useCallback((e: MouseEvent) => {
+        // Failsafe state check
+        if (e.buttons === 0) {
+            // Stop any drag
+            if (interactionRef.current.mode !== 'none') {
+                setIsDragging(false)
+                interactionRef.current.mode = 'none'
+                setDragTargetSequenceIndex(null)
+                setSelectionRect(null)
+            }
+            return
         }
-    }, [isDragging, scrubToPositionVisual])
 
-    const handleMouseUp = useCallback(() => {
-        if (isDragging) {
+        const { mode, lastMouseX } = interactionRef.current
+
+        const canvas = canvasRef.current
+        if (!canvas) return
+        const rect = canvas.getBoundingClientRect()
+        const mouseX = e.clientX - rect.left
+        const mouseY = e.clientY - rect.top
+
+        if (mode === 'pan') {
+            const dx = e.clientX - lastMouseX
+            const scrollDelta = dx / pixelsPerMsRef.current
+            setScrollX(prev => Math.max(0, prev - scrollDelta))
+            interactionRef.current.lastMouseX = e.clientX
+        } else if (mode === 'scrub') {
+            updateFrame(mouseToFrame(e.clientX))
+        } else if (mode === 'dragSequenceStart' || mode === 'dragSequenceEnd') {
+            // Drag Sequence START ONLY or END ONLY
+            const idx = interactionRef.current.dragSequenceIndex
+            const dxPixels = e.clientX - interactionRef.current.startX
+            const dxFrames = Math.round(dxPixels / pixelsPerMsRef.current)
+
+            const initialInterval = interactionRef.current.initialInterval
+            if (initialInterval && idx >= 0) {
+                let updatedInterval = [initialInterval[0], initialInterval[1]]
+
+                if (mode === 'dragSequenceStart') {
+                    // Update Start
+                    let newStart = initialInterval[0] + dxFrames
+                    // Constraint: Start < End
+                    newStart = Math.min(newStart, initialInterval[1] - 1)
+                    updatedInterval = [newStart, initialInterval[1]]
+                } else {
+                    // Update End
+                    let newEnd = initialInterval[1] + dxFrames
+                    // Constraint: End > Start
+                    newEnd = Math.max(newEnd, initialInterval[0] + 1)
+                    updatedInterval = [initialInterval[0], newEnd]
+                }
+
+                // 1. Update Store (Updates UI)
+                useModelStore.getState().updateSequence(idx, { Interval: updatedInterval })
+
+                // 2. Update Live Renderer (Updates Playback Range IMMEDIATELY)
+                const renderer = useRendererStore.getState().renderer
+                if (renderer) {
+                    // Check if updating currently playing sequence
+                    if (renderer.rendererData.animation === idx && renderer.rendererData.animationInfo) {
+                        renderer.rendererData.animationInfo.Interval = [updatedInterval[0], updatedInterval[1]]
+                    }
+                    // Update model source data to persist change for this session's renderer instance
+                    if (renderer.model && renderer.model.Sequences && renderer.model.Sequences[idx]) {
+                        renderer.model.Sequences[idx].Interval = [updatedInterval[0], updatedInterval[1]]
+                    }
+                }
+            }
+
+        } else if (mode === 'boxSelect') {
+            setSelectionRect(prev => ({
+                startX: interactionRef.current.startX,
+                startY: interactionRef.current.startY,
+                endX: mouseX,
+                endY: mouseY
+            }))
+        }
+    }, [])
+
+    const handleGlobalMouseUp = useCallback((e: MouseEvent) => {
+        const { mode, startX } = interactionRef.current
+
+        window.removeEventListener('mousemove', handleGlobalMouseMove)
+        window.removeEventListener('mouseup', handleGlobalMouseUp)
+
+        const canvas = canvasRef.current
+        if (!canvas) {
+            interactionRef.current.mode = 'none'
+            setIsDragging(false)
+            setSelectionRect(null)
+            return
+        }
+
+        if (mode === 'scrub') {
+            setIsDragging(false)
             confirmScrub()
-        }
-        setIsDragging(false)
-    }, [isDragging, confirmScrub])
+        } else if (mode === 'dragSequenceStart' || mode === 'dragSequenceEnd') {
+            setIsDragging(false)
+            setDragTargetSequenceIndex(null)
+            // Force refresh global max if needed
+        } else if (mode === 'boxSelect') {
+            const rect = canvas.getBoundingClientRect()
+            const mouseX = e.clientX - rect.left
+            const mouseY = e.clientY - rect.top
 
-    const handleMouseLeave = useCallback(() => {
-        if (isDragging) {
-            confirmScrub() // 离开时也确保更新
-        }
-        setIsDragging(false)
-    }, [isDragging, confirmScrub])
+            const dist = Math.sqrt((mouseX - startX) ** 2 + (mouseY - interactionRef.current.startY) ** 2)
 
-    // 工具栏按钮功能
-    const handleGoToStart = () => {
-        setFrame(seqStart)
-        setDisplayFrame(seqStart)
+            if (dist < CLICK_MOVE_THRESHOLD) {
+                const kf = getKeyframeAtPos(e.clientX, e.clientY)
+                if (kf) {
+                    updateFrame(kf.frame)
+                    confirmScrub()
+                    setSelectedKeyframeUids(new Set([kf.uid]))
+                } else {
+                    setSelectedKeyframeUids(new Set())
+                }
+            } else {
+                const rectStart = Math.min(interactionRef.current.startX, mouseX)
+                const rectEnd = Math.max(interactionRef.current.startX, mouseX)
+
+                const pxPerMs = pixelsPerMsRef.current
+                const scroll = scrollXRef.current
+                const showAll = showAllKeyframesRef.current
+                const currentMode = transformModeRef.current
+
+                const ids = new Set<string>()
+                activeKeyframesRef.current.forEach(kf => {
+                    let isVisible = false
+                    if (showAll) isVisible = true
+                    else {
+                        if (currentMode === 'translate' && kf.type === 'Translation') isVisible = true
+                        else if (currentMode === 'rotate' && kf.type === 'Rotation') isVisible = true
+                        else if (currentMode === 'scale' && kf.type === 'Scaling') isVisible = true
+                    }
+                    if (!isVisible) return
+
+                    const kx = (kf.frame - scroll) * pxPerMs
+                    if (kx >= rectStart && kx <= rectEnd) {
+                        ids.add(kf.uid)
+                    }
+                })
+                setSelectedKeyframeUids(ids)
+            }
+            setSelectionRect(null)
+        }
+
+        interactionRef.current.mode = 'none'
+    }, [handleGlobalMouseMove])
+
+    const handleMouseDown = useCallback((e: React.MouseEvent) => {
+        const canvas = canvasRef.current
+        if (!canvas) return
+        const rect = canvas.getBoundingClientRect()
+        const mouseX = e.clientX - rect.left
+        const mouseY = e.clientY - rect.top
+
+        window.addEventListener('mousemove', handleGlobalMouseMove)
+        window.addEventListener('mouseup', handleGlobalMouseUp)
+
+        if (e.button === 2) {
+            interactionRef.current = {
+                mode: 'pan',
+                startX: e.clientX,
+                startY: e.clientY,
+                lastMouseX: e.clientX,
+                initialScrollX: scrollXRef.current,
+                dragSequenceIndex: -1,
+                initialInterval: [0, 0]
+            }
+            return
+        }
+
+        // 1. Check for Sequence Handles (Hit Test at Bottom)
+        const handleHit = getSequenceHandleAtPos(e.clientX, e.clientY)
+        if (handleHit) {
+            const seq = useModelStore.getState().sequences[handleHit.index]
+            interactionRef.current = {
+                mode: handleHit.type === 'start' ? 'dragSequenceStart' : 'dragSequenceEnd', // Separate modes
+                startX: e.clientX,
+                startY: e.clientY,
+                lastMouseX: e.clientX,
+                initialScrollX: 0,
+                dragSequenceIndex: handleHit.index,
+                initialInterval: [...seq.Interval]
+            }
+            setIsDragging(true)
+            setDragTargetSequenceIndex(handleHit.index)
+            return
+        }
+
+        if (mouseY < RULER_HEIGHT) {
+            // Scrub
+            interactionRef.current = {
+                mode: 'scrub',
+                startX: e.clientX,
+                startY: e.clientY,
+                lastMouseX: e.clientX,
+                initialScrollX: 0,
+                dragSequenceIndex: -1,
+                initialInterval: [0, 0]
+            }
+            setIsDragging(true)
+            setPlaying(false)
+            updateFrame(mouseToFrame(e.clientX))
+            confirmScrub()
+        } else {
+            interactionRef.current = {
+                mode: 'boxSelect',
+                startX: mouseX,
+                startY: mouseY,
+                lastMouseX: mouseX,
+                initialScrollX: 0,
+                dragSequenceIndex: -1,
+                initialInterval: [0, 0]
+            }
+            setSelectionRect({ startX: mouseX, startY: mouseY, endX: mouseX, endY: mouseY })
+        }
+    }, [handleGlobalMouseMove, handleGlobalMouseUp, setPlaying])
+
+    useEffect(() => {
+        return () => {
+            window.removeEventListener('mousemove', handleGlobalMouseMove)
+            window.removeEventListener('mouseup', handleGlobalMouseUp)
+        }
+    }, [handleGlobalMouseMove, handleGlobalMouseUp])
+
+
+    const handleWheel = (e: React.WheelEvent) => {
+        const zoomSpeed = 0.001
+        const delta = -e.deltaY
+        const factor = 1 + delta * zoomSpeed
+
+        const canvas = canvasRef.current
+        if (!canvas) return
+        const rect = canvas.getBoundingClientRect()
+        const mouseX = e.clientX - rect.left
+        const mouseFrame = scrollXRef.current + mouseX / pixelsPerMsRef.current
+
+        const newPixelsPerMs = Math.max(0.01, Math.min(5, pixelsPerMs * factor))
+        setPixelsPerMs(newPixelsPerMs)
+        setScrollX(Math.max(0, mouseFrame - mouseX / newPixelsPerMs))
     }
-    const handlePrevFrame = () => {
-        const newFrame = Math.max(seqStart, Math.round(frameRef.current) - 33) // ~30fps step
-        setFrame(newFrame)
-        setDisplayFrame(newFrame)
+
+    const handleGoToStart = () => { setFrame(seqStart); setDisplayFrame(seqStart) }
+    const handlePrevFrame = () => { setFrame(Math.max(seqStart, Math.round(frameRef.current) - 33)) }
+    const handleNextFrame = () => { setFrame(Math.min(seqEnd, Math.round(frameRef.current) + 33)) }
+    const handleGoToEnd = () => { setFrame(seqEnd); setDisplayFrame(seqEnd) }
+
+    // Toolbar Handlers
+    const handleFrameInputChange = (e: any) => {
+        const val = parseInt(e.target.value)
+        if (!isNaN(val)) {
+            setFrame(val)
+            setDisplayFrame(val)
+        }
     }
-    const handleNextFrame = () => {
-        const newFrame = Math.min(seqEnd, Math.round(frameRef.current) + 33)
-        setFrame(newFrame)
-        setDisplayFrame(newFrame)
+
+    const handleSeqStartChange = (val: number | null) => {
+        if (val !== null && currentSequence >= 0 && sequences) {
+            const currentEnd = sequences[currentSequence].Interval[1]
+            useModelStore.getState().updateSequence(currentSequence, { Interval: [val, currentEnd] })
+
+            // Sync Renderer
+            const renderer = useRendererStore.getState().renderer
+            if (renderer) {
+                if (renderer.rendererData.animation === currentSequence && renderer.rendererData.animationInfo) {
+                    renderer.rendererData.animationInfo.Interval = [val, currentEnd]
+                }
+                if (renderer.model && renderer.model.Sequences && renderer.model.Sequences[currentSequence]) {
+                    renderer.model.Sequences[currentSequence].Interval = [val, currentEnd]
+                }
+            }
+        }
     }
-    const handleGoToEnd = () => {
-        setFrame(seqEnd)
-        setDisplayFrame(seqEnd)
+
+    const handleSeqEndChange = (val: number | null) => {
+        if (val !== null && currentSequence >= 0 && sequences) {
+            const currentStart = sequences[currentSequence].Interval[0]
+            useModelStore.getState().updateSequence(currentSequence, { Interval: [currentStart, val] })
+
+            // Sync Renderer
+            const renderer = useRendererStore.getState().renderer
+            if (renderer) {
+                if (renderer.rendererData.animation === currentSequence && renderer.rendererData.animationInfo) {
+                    renderer.rendererData.animationInfo.Interval = [currentStart, val]
+                }
+                if (renderer.model && renderer.model.Sequences && renderer.model.Sequences[currentSequence]) {
+                    renderer.model.Sequences[currentSequence].Interval = [currentStart, val]
+                }
+            }
+        }
     }
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: '#1e1e1e' }}>
-            {/* 工具栏 - 居中布局 */}
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: '#1e1e1e', userSelect: 'none' }} onContextMenu={(e) => e.preventDefault()}>
+            {/* Toolbar */}
             <div style={{ height: '36px', borderBottom: '1px solid #333', display: 'flex', alignItems: 'center', padding: '0 10px', justifyContent: 'center', position: 'relative' }}>
-                {/* 左侧帧输入框 */}
-                <div style={{ position: 'absolute', left: 10, display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <span style={{ color: '#888', fontSize: '10px' }}>帧:</span>
-                    <input
+                <div style={{ position: 'absolute', left: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+
+                    {/* Frame/Current */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <span style={{ color: '#aaa', fontSize: '12px' }}>当前:</span>
+                        <Input
+                            size="small"
+                            style={{ width: 60, height: 22, backgroundColor: '#333', border: '1px solid #555', color: '#eee' }}
+                            value={isEditingFrame ? inputFrameValue : displayFrame}
+                            onChange={(e) => {
+                                setIsEditingFrame(true)
+                                setInputFrameValue(e.target.value)
+                            }}
+                            onBlur={(e) => {
+                                setIsEditingFrame(false)
+                                handleFrameInputChange(e)
+                            }}
+                            onPressEnter={(e: any) => {
+                                setIsEditingFrame(false)
+                                handleFrameInputChange(e)
+                            }}
+                        />
+                    </div>
+
+                    {/* Sequence Range Inputs */}
+                    {sequence && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 8 }}>
+                            <span style={{ color: '#aaa', fontSize: '12px' }}>Start:</span>
+                            <InputNumber
+                                size="small"
+                                style={{ width: 60, height: 22, backgroundColor: '#333', border: '1px solid #555', color: '#eee' }}
+                                value={sequence.Interval[0]}
+                                onChange={handleSeqStartChange}
+                                controls={false}
+                            />
+                            <span style={{ color: '#aaa', fontSize: '12px' }}>End:</span>
+                            <InputNumber
+                                size="small"
+                                style={{ width: 60, height: 22, backgroundColor: '#333', border: '1px solid #555', color: '#eee' }}
+                                value={sequence.Interval[1]}
+                                onChange={handleSeqEndChange}
+                                controls={false}
+                            />
+                        </div>
+                    )}
+
+                </div>
+
+                {/* Playback Controls */}
+                <div style={{ display: 'flex', gap: 8 }}>
+                    <Button type="text" icon={<StepBackwardOutlined />} onClick={handleGoToStart} style={{ color: '#eee' }} />
+                    <Button type="text" icon={<FastBackwardOutlined />} onClick={handlePrevFrame} style={{ color: '#eee' }} />
+
+                    <Button
                         type="text"
-                        value={isEditingFrame ? inputFrameValue : displayFrame}
-                        onFocus={(e) => {
-                            setIsEditingFrame(true)
-                            setInputFrameValue(displayFrame.toString())
-                            // 选中全部文字方便输入
-                            e.target.select()
-                        }}
-                        onChange={(e) => {
-                            setInputFrameValue(e.target.value)
-                        }}
-                        onKeyDown={(e) => {
-                            e.stopPropagation() // 阻止全局快捷键
-                            if (e.key === 'Enter') {
-                                const val = parseInt(inputFrameValue)
-                                if (!isNaN(val)) {
-                                    const clampedVal = Math.max(seqStart, Math.min(seqEnd, val))
-                                    setFrame(clampedVal)
-                                    frameRef.current = clampedVal
-                                    setDisplayFrame(clampedVal)
-                                    // 同步更新渲染器
-                                    const renderer = useRendererStore.getState().renderer
-                                    if (renderer && renderer.rendererData) {
-                                        renderer.rendererData.frame = clampedVal
-                                        if (typeof renderer.update === 'function') {
-                                            renderer.update(0)
-                                        }
-                                    }
-                                }
-                                setIsEditingFrame(false)
-                                    ; (e.target as HTMLInputElement).blur()
-                            } else if (e.key === 'Escape') {
-                                setIsEditingFrame(false)
-                                    ; (e.target as HTMLInputElement).blur()
-                            }
-                        }}
-                        onBlur={() => {
-                            const val = parseInt(inputFrameValue)
-                            if (!isNaN(val)) {
-                                const clampedVal = Math.max(seqStart, Math.min(seqEnd, val))
-                                setFrame(clampedVal)
-                                frameRef.current = clampedVal
-                                setDisplayFrame(clampedVal)
-                                // 同步更新渲染器
-                                const renderer = useRendererStore.getState().renderer
-                                if (renderer && renderer.rendererData) {
-                                    renderer.rendererData.frame = clampedVal
-                                    if (typeof renderer.update === 'function') {
-                                        renderer.update(0)
-                                    }
-                                }
-                            }
-                            setIsEditingFrame(false)
-                        }}
-                        style={{
-                            width: 60,
-                            backgroundColor: isEditingFrame ? '#444' : '#333',
-                            border: isEditingFrame ? '1px solid #1890ff' : '1px solid #555',
-                            borderRadius: 3,
-                            color: '#fff',
-                            padding: '2px 6px',
-                            fontSize: '11px',
-                            textAlign: 'center'
-                        }}
-                    />
-                </div>
-
-                {/* 中间播放控制 - 使用原生按钮替换 Antd */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <button
-                        title="跳到开始"
-                        onClick={handleGoToStart}
-                        style={{
-                            background: 'transparent',
-                            border: 'none',
-                            cursor: 'pointer',
-                            padding: '4px 8px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center'
-                        }}
-                    >
-                        <FastBackwardOutlined style={{ color: '#ccc', fontSize: 14 }} />
-                    </button>
-                    <button
-                        title="上一帧"
-                        onClick={handlePrevFrame}
-                        style={{
-                            background: 'transparent',
-                            border: 'none',
-                            cursor: 'pointer',
-                            padding: '4px 8px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center'
-                        }}
-                    >
-                        <StepBackwardOutlined style={{ color: '#ccc', fontSize: 14 }} />
-                    </button>
-                    <button
-                        title={isPlaying ? '暂停' : '播放'}
+                        shape="circle"
+                        icon={isPlaying ? <PauseCircleOutlined style={{ fontSize: '24px', color: '#1890ff' }} /> : <PlayCircleOutlined style={{ fontSize: '24px', color: '#eee' }} />}
                         onClick={() => setPlaying(!isPlaying)}
-                        style={{
-                            background: 'transparent',
-                            border: 'none',
-                            cursor: 'pointer',
-                            padding: '4px 8px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center'
-                        }}
-                    >
-                        {isPlaying
-                            ? <PauseCircleOutlined style={{ fontSize: 18, color: '#faad14' }} />
-                            : <PlayCircleOutlined style={{ fontSize: 18, color: '#52c41a' }} />}
-                    </button>
-                    <button
-                        title="下一帧"
-                        onClick={handleNextFrame}
-                        style={{
-                            background: 'transparent',
-                            border: 'none',
-                            cursor: 'pointer',
-                            padding: '4px 8px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center'
-                        }}
-                    >
-                        <StepForwardOutlined style={{ color: '#ccc', fontSize: 14 }} />
-                    </button>
-                    <button
-                        title="跳到结束"
-                        onClick={handleGoToEnd}
-                        style={{
-                            background: 'transparent',
-                            border: 'none',
-                            cursor: 'pointer',
-                            padding: '4px 8px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center'
-                        }}
-                    >
-                        <FastForwardOutlined style={{ color: '#ccc', fontSize: 14 }} />
-                    </button>
-                    {/* K帧开关按钮 - 小圆点 */}
-                    <button
-                        title={autoKeyframe ? '自动K帧: 开启' : '自动K帧: 关闭'}
-                        onClick={() => setAutoKeyframe(!autoKeyframe)}
-                        style={{
-                            background: 'transparent',
-                            border: 'none',
-                            cursor: 'pointer',
-                            padding: '4px 8px',
-                            marginLeft: 8,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center'
-                        }}
-                    >
-                        <span style={{
-                            width: 10,
-                            height: 10,
-                            borderRadius: '50%',
-                            backgroundColor: autoKeyframe ? '#ff4444' : '#666',
-                            display: 'inline-block',
-                            transition: 'background-color 0.2s'
-                        }} />
-                    </button>
+                    />
+
+                    <Button type="text" icon={<FastForwardOutlined />} onClick={handleNextFrame} style={{ color: '#eee' }} />
+                    <Button type="text" icon={<StepForwardOutlined />} onClick={handleGoToEnd} style={{ color: '#eee' }} />
                 </div>
 
-                {/* 右侧速度控制 - 使用原生 input */}
-                <div style={{ position: 'absolute', right: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ color: '#888', fontSize: '11px' }}>速度:</span>
-                    <input
-                        type="number"
-                        min={0.1}
-                        max={10}
-                        step={0.1}
-                        value={playbackSpeed}
-                        onChange={(e) => setPlaybackSpeed(parseFloat(e.target.value) || 1.0)}
-                        style={{
-                            width: 50,
-                            backgroundColor: '#333',
-                            border: '1px solid #555',
-                            borderRadius: 3,
-                            color: '#fff',
-                            padding: '2px 4px',
-                            fontSize: '11px',
-                            textAlign: 'center'
-                        }}
+                {/* Zoom & Options */}
+                <div style={{ position: 'absolute', right: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Button
+                        type="text"
+                        icon={showAllKeyframes ? <EyeOutlined style={{ color: '#1890ff' }} /> : <EyeInvisibleOutlined />}
+                        title="Show All Keyframes (Auto-Range)"
+                        onClick={() => setShowAllKeyframes(!showAllKeyframes)}
+                        style={{ color: showAllKeyframes ? '#1890ff' : '#eee' }}
                     />
+                    <span style={{ color: '#666', fontSize: '12px' }}>|</span>
+                    <ZoomOutOutlined style={{ color: '#888' }} />
+                    <Slider
+                        min={0.01}
+                        max={2}
+                        step={0.01}
+                        value={pixelsPerMs}
+                        onChange={(v) => {
+                            const centerFrame = scrollX + (containerSizeRef.current.width / 2) / pixelsPerMs
+                            setPixelsPerMs(v as number)
+                            // Keep center focused
+                            setScrollX(Math.max(0, centerFrame - (containerSizeRef.current.width / 2) / (v as number)))
+                        }}
+                        style={{ width: 100 }}
+                        tooltip={{ formatter: null }}
+                    />
+                    <ZoomInOutlined style={{ color: '#888' }} />
                 </div>
             </div>
-            {/* 时间轴画布 */}
-            <div ref={containerRef} style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+
+            {/* Canvas Container */}
+            <div ref={containerRef} style={{ flex: 1, position: 'relative', overflow: 'hidden' }} onWheel={handleWheel}>
                 <canvas
                     ref={canvasRef}
-                    style={{ display: 'block', cursor: isDragging ? 'grabbing' : 'pointer' }}
-                    onWheel={handleWheel}
+                    style={{ width: '100%', height: '100%', display: 'block', cursor: isDragging ? 'grabbing' : 'default' }}
                     onMouseDown={handleMouseDown}
-                    onMouseMove={handleMouseMove}
-                    onMouseUp={handleMouseUp}
-                    onMouseLeave={handleMouseLeave}
-                />
-            </div>
-            {/* 底部缩放滑块 - 使用原生 range input */}
-            <div style={{ height: '24px', borderTop: '1px solid #333', display: 'flex', alignItems: 'center', padding: '0 10px', gap: 8 }}>
-                <span style={{ color: '#888', fontSize: '10px' }}>缩放:</span>
-                <input
-                    type="range"
-                    min={0.01}
-                    max={1}
-                    step={0.01}
-                    value={pixelsPerMs}
-                    onChange={(e) => setPixelsPerMs(parseFloat(e.target.value))}
-                    style={{
-                        flex: 1,
-                        accentColor: '#1890ff',
-                        height: 4,
-                        cursor: 'pointer'
-                    }}
-                    title={`${pixelsPerMs.toFixed(2)}`}
                 />
             </div>
         </div>
     )
 }
 
-export default React.memo(TimelinePanel)
+const btnStyle: React.CSSProperties = {
+    background: 'transparent', border: 'none', cursor: 'pointer', padding: '4px 8px', display: 'flex', alignItems: 'center', color: '#ccc'
+}
 
+export default React.memo(TimelinePanel)

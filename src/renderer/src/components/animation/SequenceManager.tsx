@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { Button, Input, Form, InputNumber, Checkbox, message, Modal } from 'antd'
 import { PlusOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons'
 import { DraggableModal } from '../DraggableModal'
+import { useSelectionStore } from '../../store/selectionStore'
 import { useModelStore } from '../../store/modelStore'
 
 /**
@@ -14,13 +15,19 @@ const SequenceManager: React.FC = () => {
     const setSequences = useModelStore(state => state.setSequences)
     const setPlaying = useModelStore(state => state.setPlaying)
 
+    const { animationSubMode } = useSelectionStore()
+
     const [isModalVisible, setIsModalVisible] = useState(false)
     const [editingIndex, setEditingIndex] = useState<number | null>(null)
     const [form] = Form.useForm()
 
     const handleSelect = (index: number) => {
         setSequence(index)
-        setPlaying(true)
+
+        // Only auto-play if NOT in keyframe/binding mode
+        // User Request: "Keyframe mode ... do not auto play"
+        const isEditingMode = animationSubMode === 'keyframe' || animationSubMode === 'binding'
+        setPlaying(!isEditingMode)
     }
 
     const handleAdd = () => {

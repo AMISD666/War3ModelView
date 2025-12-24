@@ -60,6 +60,7 @@ interface ModelState {
     setPlaybackSpeed: (speed: number) => void;
     setLooping: (looping: boolean) => void;
     setAutoKeyframe: (enabled: boolean) => void;
+    updateSequence: (index: number, updates: any) => void; // New action
     setTextures: (textures: any[]) => void;
     setGeosets: (geosets: any[]) => void;
     setMaterials: (materials: any[]) => void;
@@ -425,6 +426,28 @@ export const useModelStore = create<ModelState>((set, get) => ({
             isPlaying: (data as any)?.Sequences?.length > 0,
             hiddenGeosetIds: allGeosetIds,
             forceShowAllGeosets: true
+        });
+    },
+
+    updateSequence: (index, updates) => {
+        set((state) => {
+            if (!state.modelData || !state.modelData.Sequences || index < 0 || index >= state.modelData.Sequences.length) {
+                return {};
+            }
+
+            const newSequences = [...state.modelData.Sequences];
+            newSequences[index] = { ...newSequences[index], ...updates };
+
+            // Also update the sequences array in store root if it exists distinct from modelData
+            // (In this store structure, 'sequences' seems to be a derived reference or copy? 
+            // setModelData sets 'sequences: (data as any)?.Sequences'. So we updates both.)
+
+            const updatedModelData = { ...state.modelData, Sequences: newSequences };
+
+            return {
+                modelData: updatedModelData,
+                sequences: newSequences
+            };
         });
     },
 

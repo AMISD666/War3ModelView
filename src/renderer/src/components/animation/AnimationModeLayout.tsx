@@ -1,9 +1,10 @@
-import React from 'react'
+import React, { useEffect } from 'react'
 import SequenceManager from './SequenceManager'
 import TimelinePanel from './Timeline/TimelinePanel'
 import KeyframeInspector from './KeyframeInspector'
 import BoneParameterPanel from './BoneParameterPanel'
 import { useSelectionStore } from '../../store/selectionStore'
+import { useModelStore } from '../../store/modelStore'
 
 interface AnimationModeLayoutProps {
     isActive: boolean
@@ -23,6 +24,14 @@ const AnimationModeLayout: React.FC<AnimationModeLayoutProps> = ({
 }) => {
     const animationSubMode = useSelectionStore(state => state.animationSubMode)
     const isBindingMode = animationSubMode === 'binding'
+    const setPlaying = useModelStore(state => state.setPlaying)
+
+    // 当进入关键帧模式时，自动暂停动画
+    useEffect(() => {
+        if (isActive && !isBindingMode) {
+            setPlaying(false)
+        }
+    }, [isActive, isBindingMode, setPlaying])
 
     // 固定布局尺寸 - 移除拖动调整功能以避免频繁重渲染
     const LEFT_PANEL_WIDTH = 250
@@ -130,4 +139,3 @@ const AnimationModeLayout: React.FC<AnimationModeLayoutProps> = ({
 }
 
 export default AnimationModeLayout
-
