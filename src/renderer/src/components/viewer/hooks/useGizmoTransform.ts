@@ -235,9 +235,19 @@ export function useGizmoTransform({
         if (!rendererRef.current?.rendererData?.nodes) return
 
         const moveVec = getMoveVectorForAxis(deltaX, deltaY, moveScale, axis)
-        const { selectedNodeIds } = useSelectionStore.getState()
+        const { selectedNodeIds, multiMoveMode } = useSelectionStore.getState()
 
-        selectedNodeIds.forEach(nodeId => {
+        // Multi-Move Mode logic:
+        // In 'worldUniform' mode, we only move nodes whose parent is NOT selected
+        const nodesToMove = multiMoveMode === 'worldUniform'
+            ? selectedNodeIds.filter(id => {
+                const node = rendererRef.current.rendererData.nodes.find((n: any) => n.node.ObjectId === id)?.node
+                if (!node) return true
+                return node.Parent === undefined || node.Parent === -1 || !selectedNodeIds.includes(node.Parent)
+            })
+            : selectedNodeIds
+
+        nodesToMove.forEach(nodeId => {
             const nodeWrapper = rendererRef.current.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
             if (nodeWrapper?.node.PivotPoint) {
                 nodeWrapper.node.PivotPoint[0] += moveVec[0]
@@ -260,9 +270,19 @@ export function useGizmoTransform({
 
         // World Space delta from screen movement
         const worldDelta = getMoveVectorForAxis(deltaX, deltaY, moveScale, axis)
-        const { selectedNodeIds } = useSelectionStore.getState()
+        const { selectedNodeIds, multiMoveMode } = useSelectionStore.getState()
 
-        selectedNodeIds.forEach(nodeId => {
+        // Multi-Move Mode logic:
+        // In 'worldUniform' mode, we only move nodes whose parent is NOT selected
+        const nodesToMove = multiMoveMode === 'worldUniform'
+            ? selectedNodeIds.filter(id => {
+                const node = rendererRef.current.rendererData.nodes.find((n: any) => n.node.ObjectId === id)?.node
+                if (!node) return true
+                return node.Parent === undefined || node.Parent === -1 || !selectedNodeIds.includes(node.Parent)
+            })
+            : selectedNodeIds
+
+        nodesToMove.forEach(nodeId => {
             const nodeWrapper = rendererRef.current.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
             if (nodeWrapper?.node) {
                 // Convert World Space delta to Local Space delta using parent's inverse rotation

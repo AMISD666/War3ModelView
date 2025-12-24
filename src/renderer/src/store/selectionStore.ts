@@ -22,11 +22,13 @@ interface SelectionState {
     geometrySubMode: GeometrySubMode;
     animationSubMode: 'binding' | 'keyframe';
     transformMode: TransformMode;
+    multiMoveMode: 'relative' | 'worldUniform';
 
     setMainMode: (mode: AppMode) => void;
     setGeometrySubMode: (mode: GeometrySubMode) => void;
     setAnimationSubMode: (mode: 'binding' | 'keyframe') => void;
     setTransformMode: (mode: TransformMode) => void;
+    setMultiMoveMode: (mode: 'relative' | 'worldUniform') => void;
 
     // Legacy (to be refactored)
     selectionMode: SelectionMode;
@@ -80,6 +82,7 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
     geometrySubMode: 'vertex',
     animationSubMode: 'binding',
     transformMode: 'translate',
+    multiMoveMode: 'relative',
 
     setMainMode: (mode) => {
         set({ mainMode: mode });
@@ -104,6 +107,9 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
         if (mode) {
             set({ gizmoMode: mode });
         }
+    },
+    setMultiMoveMode: (mode) => {
+        set({ multiMoveMode: mode });
     },
 
     // Legacy Init

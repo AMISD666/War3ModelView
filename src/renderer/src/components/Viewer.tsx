@@ -27,7 +27,6 @@ import { MoveVerticesCommand, VertexChange } from '../commands/MoveVerticesComma
 import { MoveNodesCommand, NodeChange } from '../commands/MoveNodesCommand'
 import { SetNodeParentCommand } from '../commands/SetNodeParentCommand'
 import { VertexEditor } from './VertexEditor'
-import BoneBindingPanel from './BoneBindingPanel'
 import { pickClosestGeoset } from '../utils/rayTriangle'
 import { recalculateAllNormals } from '../utils/geometryUtils'
 import { SplitVerticesCommand } from '../commands/SplitVerticesCommand'
@@ -4154,8 +4153,6 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       />
 
 
-      {/* Bone Binding Panel - Rendered here to access rendererRef */}
-      <BoneBindingPanel />
       {appMainMode === 'geometry' && <VertexEditor renderer={renderer} onBeginUpdate={() => { ignoreNextModelDataUpdate.current = true }} />}
 
       {/* Context Menu for Vertex Operations */}

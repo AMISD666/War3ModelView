@@ -391,10 +391,9 @@ const KeyframeInspector: React.FC = () => {
                 <span style={{ marginLeft: 8, fontWeight: 'bold' }}>{activeNode.Name}</span>
                 <span style={{ marginLeft: 8, color: '#555', fontSize: '10px' }}>(ID: {activeNode.ObjectId})</span>
             </div>
-
-            {renderProperty()}
-
-            {/* Undo/Redo - hidden for now as global shortcut works */}
+            <div style={{ color: '#666', fontSize: '11px', marginTop: 20, textAlign: 'center' }}>
+                关键帧编辑已迁移至上方参数面板
+            </div>
         </div>
     )
 }

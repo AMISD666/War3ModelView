@@ -15,7 +15,8 @@ import {
     EyeInvisibleOutlined
 } from '@ant-design/icons'
 import { useHistoryStore } from '../../../store/historyStore'
-import { Button, Slider, Input, InputNumber } from 'antd'
+import { Button, Slider, Input, InputNumber, Radio, Tooltip } from 'antd'
+import { SwapOutlined, GlobalOutlined } from '@ant-design/icons'
 
 interface TimelinePanelProps {
     isActive?: boolean
@@ -54,7 +55,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         setAutoKeyframe
     } = useModelStore()
 
-    const { selectedNodeIds, transformMode } = useSelectionStore()
+    const { selectedNodeIds, transformMode, multiMoveMode, setMultiMoveMode } = useSelectionStore()
 
     // Derived Animation Info
     const sequence = currentSequence >= 0 && sequences ? sequences[currentSequence] : null
@@ -1328,6 +1329,38 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                         )
                     })()}
 
+                </div>
+
+                {/* Multi-Move Mode Toggle */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginRight: 16 }}>
+                    <button
+                        onClick={() => setMultiMoveMode('relative')}
+                        style={{
+                            padding: '2px 8px',
+                            fontSize: '11px',
+                            border: 'none',
+                            borderRadius: '3px 0 0 3px',
+                            cursor: 'pointer',
+                            backgroundColor: multiMoveMode === 'relative' ? '#2a4a6a' : '#3a3a3a',
+                            color: multiMoveMode === 'relative' ? '#7eb8e8' : '#888'
+                        }}
+                    >
+                        相继移动
+                    </button>
+                    <button
+                        onClick={() => setMultiMoveMode('worldUniform')}
+                        style={{
+                            padding: '2px 8px',
+                            fontSize: '11px',
+                            border: 'none',
+                            borderRadius: '0 3px 3px 0',
+                            cursor: 'pointer',
+                            backgroundColor: multiMoveMode === 'worldUniform' ? '#2a4a6a' : '#3a3a3a',
+                            color: multiMoveMode === 'worldUniform' ? '#7eb8e8' : '#888'
+                        }}
+                    >
+                        世界移动
+                    </button>
                 </div>
 
                 {/* Playback Controls */}

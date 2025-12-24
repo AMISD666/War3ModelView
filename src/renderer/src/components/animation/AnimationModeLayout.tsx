@@ -78,27 +78,18 @@ const AnimationModeLayout: React.FC<AnimationModeLayoutProps> = ({
                     flexDirection: 'column',
                     overflow: 'hidden'
                 }}>
-                    {/* 绑定模式: 骨骼参数面板 - 始终挂载，用 display 控制 */}
                     <div style={{
-                        display: isBindingMode ? 'flex' : 'none',
+                        display: 'flex',
                         flexDirection: 'column',
                         height: '100%'
                     }}>
-                        <BoneParameterPanel />
-                    </div>
-
-                    {/* 关键帧模式: 序列管理 + 关键帧检查器 - 始终挂载，用 display 控制 */}
-                    <div style={{
-                        display: isBindingMode ? 'none' : 'flex',
-                        flexDirection: 'column',
-                        height: '100%'
-                    }}>
-                        <div style={{ flex: 1, overflow: 'auto' }}>
-                            <SequenceManager />
-                        </div>
-                        <div style={{ height: 1, backgroundColor: '#444' }} />
-                        <div style={{ flex: 1, overflow: 'auto' }}>
-                            <KeyframeInspector />
+                        {!isBindingMode && (
+                            <div style={{ flex: 1, overflow: 'auto', borderBottom: '1px solid #444' }}>
+                                <SequenceManager />
+                            </div>
+                        )}
+                        <div style={{ flex: isBindingMode ? 1 : 1.5, overflow: 'auto' }}>
+                            <BoneParameterPanel />
                         </div>
                     </div>
                 </div>
