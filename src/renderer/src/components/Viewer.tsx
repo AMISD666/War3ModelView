@@ -829,7 +829,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     if (!rendererRef.current || !canvasRef.current) return
 
     const { mainMode, animationSubMode, geometrySubMode, addVertexSelection, addFaceSelection, removeVertexSelection, removeFaceSelection, selectVertices, selectFaces, selectNodes } = useSelectionStore.getState()
-    console.log('[Viewer] handleBoxSelection', { mainMode, geometrySubMode, box: { startX, startY, endX, endY } })
+    console.log('[Viewer] handleBoxSelection', { mainMode, animationSubMode, geometrySubMode, box: { startX, startY, endX, endY } })
 
     if (mainMode !== 'geometry' && mainMode !== 'animation') return
 
@@ -897,7 +897,48 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       return vec3.fromValues(x, y, ndc[2])
     }
 
-    if (geometrySubMode === 'vertex' || geometrySubMode === 'group' || (mainMode === 'animation' && animationSubMode === 'binding')) {
+    // PRIORITY: Check animation keyframe mode FIRST (bone selection)
+    // Note: geometrySubMode remains 'vertex' even in animation mode, so we must check mainMode first
+    if (mainMode === 'animation' && animationSubMode !== 'binding') {
+      // Box Select Nodes (bones)
+      console.log('[Viewer] Box Select Nodes - entering animation keyframe mode branch')
+      const newSelection: number[] = []
+      if (!rendererRef.current || !rendererRef.current.rendererData || !rendererRef.current.rendererData.nodes) {
+        console.log('[Viewer] Box Select Nodes - no renderer data')
+        return
+      }
+
+      console.log('[Viewer] Box Select Nodes - checking', rendererRef.current.rendererData.nodes.length, 'nodes')
+      console.log('[Viewer] Box bounds:', { boxLeft, boxRight, boxTop, boxBottom })
+
+      rendererRef.current.rendererData.nodes.forEach((nodeWrapper: any) => {
+        const pivot = nodeWrapper.node.PivotPoint
+        const worldPos = vec3.create()
+        vec3.transformMat4(worldPos, pivot, nodeWrapper.matrix)
+
+        const screenPos = project(worldPos)
+        if (screenPos) {
+          if (screenPos[0] >= boxLeft && screenPos[0] <= boxRight &&
+            screenPos[1] >= boxTop && screenPos[1] <= boxBottom) {
+            console.log('[Viewer] Node in box:', nodeWrapper.node.ObjectId, nodeWrapper.node.Name || 'unnamed', 'screen:', screenPos)
+            newSelection.push(nodeWrapper.node.ObjectId)
+          }
+        }
+      })
+
+      console.log('[Viewer] Box Select Nodes - found', newSelection.length, 'nodes:', newSelection)
+
+      if (isCtrl) {
+        const current = useSelectionStore.getState().selectedNodeIds
+        const combined = Array.from(new Set([...current, ...newSelection]))
+        console.log('[Viewer] Ctrl+Box select - combining with existing:', current, '=> combined:', combined)
+        selectNodes(combined)
+      } else {
+        console.log('[Viewer] Box select - setting new selection:', newSelection)
+        selectNodes(newSelection)
+      }
+    } else if (mainMode === 'geometry' && (geometrySubMode === 'vertex' || geometrySubMode === 'group') || (mainMode === 'animation' && animationSubMode === 'binding')) {
+      // Vertex selection for geometry mode OR binding mode (which also selects vertices)
       const newSelection: { geosetIndex: number, index: number }[] = []
       // affectedGeosetIndices for future use: const affectedGeosetIndices = new Set<number>()
 
@@ -1006,33 +1047,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       } else {
         selectFaces(newSelection)
       }
-    } else if (mainMode === 'animation' && animationSubMode !== 'binding') {
-      // Box Select Nodes
-      const newSelection: number[] = []
-      if (!rendererRef.current || !rendererRef.current.rendererData || !rendererRef.current.rendererData.nodes) return
-
-      rendererRef.current.rendererData.nodes.forEach((nodeWrapper: any) => {
-        const pivot = nodeWrapper.node.PivotPoint
-        const worldPos = vec3.create()
-        vec3.transformMat4(worldPos, pivot, nodeWrapper.matrix)
-
-        const screenPos = project(worldPos)
-        if (screenPos) {
-          if (screenPos[0] >= boxLeft && screenPos[0] <= boxRight &&
-            screenPos[1] >= boxTop && screenPos[1] <= boxBottom) {
-            newSelection.push(nodeWrapper.node.ObjectId)
-          }
-        }
-      })
-
-      if (isCtrl) {
-        const current = useSelectionStore.getState().selectedNodeIds
-        const combined = Array.from(new Set([...current, ...newSelection]))
-        selectNodes(combined)
-      } else {
-        selectNodes(newSelection)
-      }
     }
+    // Animation keyframe bone selection is now handled at the top of this function
   }
 
 
@@ -2521,8 +2537,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             }
 
             if (showSkeletonRef.current && mdlRenderer.rendererData.nodes && currentMainMode === 'animation') {
+              const { selectedNodeIds } = useSelectionStore.getState()
               gl.disable(gl.DEPTH_TEST)
-              mdlRenderer.renderSkeleton(mvMatrix, pMatrix, null)
+              mdlRenderer.renderSkeleton(mvMatrix, pMatrix, null, selectedNodeIds)
               gl.enable(gl.DEPTH_TEST)
             }
 
@@ -3489,7 +3506,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       } else if (mainMode === 'animation' && selectedNodeIds.length > 0) {
         showGizmo = true
         for (const nodeId of selectedNodeIds) {
-          const nodeWrapper = rendererRef.current.rendererData.nodes[nodeId]
+          // FIX: Use .find() to lookup by ObjectId, not direct array index
+          const nodeWrapper = rendererRef.current.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
           if (nodeWrapper && nodeWrapper.matrix) {
             // 使用矩阵变换 PivotPoint 获取正确的世界坐标
             const matrix = nodeWrapper.matrix
@@ -3835,6 +3853,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     const deltaY = Math.abs(e.clientY - startY)
     const isCtrl = e.ctrlKey || e.metaKey
 
+    console.log('[Viewer] handleMouseUp check', { wasBoxSelecting, deltaX, deltaY, dragButton })
     if (wasBoxSelecting && deltaX > 5 && deltaY > 5) {
       handleBoxSelection(startX, startY, e.clientX, e.clientY, e.shiftKey, isCtrl)
     } else if (deltaX < 5 && deltaY < 5 && dragButton === 0) {

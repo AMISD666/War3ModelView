@@ -1310,13 +1310,23 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                     </div>
 
                     {/* Drag Offset Display (only during drag) */}
-                    {dragKeyframeOffset !== 0 && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 8, backgroundColor: 'rgba(24, 144, 255, 0.2)', padding: '2px 8px', borderRadius: 4 }}>
-                            <span style={{ color: '#1890ff', fontSize: '12px', fontWeight: 'bold' }}>
-                                偏移: {dragKeyframeOffset > 0 ? '+' : ''}{dragKeyframeOffset}帧
-                            </span>
-                        </div>
-                    )}
+                    {dragKeyframeOffset !== 0 && (() => {
+                        // Calculate target frame from first selected keyframe
+                        const firstSelectedKf = activeKeyframesRef.current.find(kf => selectedKeyframeUids.has(kf.uid))
+                        const targetFrame = firstSelectedKf ? firstSelectedKf.frame + dragKeyframeOffset : null
+                        return (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 8, backgroundColor: 'rgba(24, 144, 255, 0.2)', padding: '2px 8px', borderRadius: 4 }}>
+                                <span style={{ color: '#1890ff', fontSize: '12px', fontWeight: 'bold' }}>
+                                    偏移: {dragKeyframeOffset > 0 ? '+' : ''}{dragKeyframeOffset}帧
+                                </span>
+                                {targetFrame !== null && (
+                                    <span style={{ color: '#52c41a', fontSize: '12px', fontWeight: 'bold' }}>
+                                        → 帧 {targetFrame}
+                                    </span>
+                                )}
+                            </div>
+                        )
+                    })()}
 
                 </div>
 
