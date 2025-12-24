@@ -363,8 +363,8 @@ export class DebugRenderer {
         enableDepth: boolean = false
     ) {
         // Use a small depth bias when depth is enabled to prevent Z-fighting with surface
-        const depthBias = enableDepth ? 0.003 : 0.0
-        this.draw(gl, mvMatrix, pMatrix, positions, color, gl.POINTS, size, enableDepth, depthBias)
+        // Note: depthBias is handled internally by draw() when enableDepth is true
+        this.draw(gl, mvMatrix, pMatrix, positions, color, gl.POINTS, size, enableDepth)
     }
 
     renderTriangles(

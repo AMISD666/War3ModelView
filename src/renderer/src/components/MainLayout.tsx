@@ -1107,6 +1107,12 @@ const MainLayout: React.FC = () => {
         } catch { return false; }
     })
     const [showAbout, setShowAbout] = useState<boolean>(false)
+    const [activationStatus, setActivationStatus] = useState<{
+        is_activated: boolean;
+        license_type: string;
+        expiration_date: string | null;
+        days_remaining: number | null;
+    } | null>(null)
 
     useEffect(() => {
         localStorage.setItem('showDebugConsole', JSON.stringify(showDebugConsole))
@@ -1115,6 +1121,17 @@ const MainLayout: React.FC = () => {
             invoke('toggle_console', { show: showDebugConsole }).catch(e => console.error('Failed to toggle console:', e))
         })
     }, [showDebugConsole])
+
+    // Fetch activation status when About modal opens
+    useEffect(() => {
+        if (showAbout) {
+            import('@tauri-apps/api/core').then(({ invoke }) => {
+                invoke('get_activation_status').then((status: any) => {
+                    setActivationStatus(status)
+                }).catch(e => console.error('Failed to get activation status:', e))
+            })
+        }
+    }, [showAbout])
 
     return (
         <div
@@ -1262,10 +1279,41 @@ const MainLayout: React.FC = () => {
                         border: '1px solid #555'
                     }} onClick={e => e.stopPropagation()}>
                         <h3 style={{ marginTop: 0, marginBottom: '15px' }}>关于</h3>
-                        <p style={{ fontSize: '18px', margin: '20px 0' }}>测试1.0</p>
+                        <p style={{ fontSize: '18px', margin: '10px 0' }}>咕咕War3模型编辑器 v1.0.0</p>
+
+                        {/* Activation Status */}
+                        <div style={{
+                            marginTop: '15px',
+                            padding: '12px',
+                            backgroundColor: '#2a2a2a',
+                            borderRadius: '4px',
+                            textAlign: 'left'
+                        }}>
+                            <div style={{ marginBottom: '8px', color: '#aaa', fontSize: '12px' }}>授权状态</div>
+                            {activationStatus ? (
+                                activationStatus.is_activated ? (
+                                    <>
+                                        <div style={{ color: '#52c41a', fontWeight: 'bold', marginBottom: '4px' }}>
+                                            ✓ 已激活 ({activationStatus.license_type === 'PERM' ? '永久授权' : '时限授权'})
+                                        </div>
+                                        {activationStatus.license_type === 'TIME' && activationStatus.days_remaining !== null && (
+                                            <div style={{ color: activationStatus.days_remaining <= 7 ? '#ff7875' : '#eee', fontSize: '13px' }}>
+                                                到期日期: {activationStatus.expiration_date} (剩余 {activationStatus.days_remaining} 天)
+                                            </div>
+                                        )}
+                                    </>
+                                ) : (
+                                    <div style={{ color: '#ff7875' }}>未激活</div>
+                                )
+                            ) : (
+                                <div style={{ color: '#888' }}>加载中...</div>
+                            )}
+                        </div>
+
                         <button
                             onClick={() => setShowAbout(false)}
                             style={{
+                                marginTop: '20px',
                                 padding: '6px 16px',
                                 backgroundColor: '#007acc',
                                 color: 'white',

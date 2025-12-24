@@ -18,10 +18,11 @@ export function renderGrid(
     gl: WebGLRenderingContext | WebGL2RenderingContext,
     mvMatrix: mat4,
     pMatrix: mat4,
-    enabled: boolean
+    enabled: boolean,
+    settings?: any
 ): void {
     if (enabled) {
-        gridRenderer.render(gl, mvMatrix, pMatrix)
+        gridRenderer.render(gl, mvMatrix, pMatrix, settings || { gridVisible: true, gridSize: 2048, gridDivisions: 16 })
     }
 }
 

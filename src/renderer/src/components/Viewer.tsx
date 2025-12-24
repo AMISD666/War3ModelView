@@ -1511,9 +1511,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         }
 
         if (renderRef.current) {
-          // CRITICAL: Pass false to prevent scheduling a new RAF loop
-          // ResizeObserver only needs a single update, not a new loop
-          renderRef.current(performance.now(), false)
+          // CRITICAL: Call render once for resize event
+          renderRef.current(performance.now())
         }
       }
     })

@@ -73,10 +73,10 @@ export const ViewSettingsWindow: React.FC = () => {
         return idx !== -1 ? idx : 2; // Default to 2048 (index 2)
     })();
 
-    const sliderMarks: Record<number, React.ReactNode> = {};
+    const sliderMarks: Record<number, { style: React.CSSProperties; label: React.ReactNode }> = {};
     GRID_SIZES.forEach((size, index) => {
         sliderMarks[index] = {
-            style: { color: '#888', fontSize: '10px', marginTop: '4px' }, // Smaller font to fit
+            style: { color: '#888', fontSize: '10px', marginTop: '4px' },
             label: size >= 50000 ? '无限' : size.toString()
         };
     });

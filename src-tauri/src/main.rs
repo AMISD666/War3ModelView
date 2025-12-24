@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod activation;
 mod mpq_manager;
+
 use mpq_manager::MpqManager;
 use tauri::State;
 
@@ -70,6 +72,24 @@ fn read_local_files_batch(paths: Vec<String>) -> Vec<Option<Vec<u8>>> {
     paths.iter().map(|path| std::fs::read(path).ok()).collect()
 }
 
+// ==================
+// Activation Commands
+// ==================
+#[tauri::command]
+fn get_machine_id() -> Result<String, String> {
+    activation::get_machine_id()
+}
+
+#[tauri::command]
+fn get_activation_status() -> activation::ActivationStatus {
+    activation::get_activation_status()
+}
+
+#[tauri::command]
+fn activate_software(license_code: String) -> Result<activation::ActivationStatus, String> {
+    activation::activate_software(&license_code)
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(MpqManager::new())
@@ -83,7 +103,11 @@ fn main() {
             read_local_files_batch,
             detect_warcraft_path,
             toggle_console,
-            debug_log
+            debug_log,
+            // Activation Commands
+            get_machine_id,
+            get_activation_status,
+            activate_software
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
