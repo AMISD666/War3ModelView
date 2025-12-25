@@ -8,7 +8,5 @@ import { parseMDX } from 'war3-model'
 console.log('war3-model loaded:', parseMDX)
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
-    <React.StrictMode>
-        <App />
-    </React.StrictMode>
+    <App />
 )

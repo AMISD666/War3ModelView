@@ -43,6 +43,7 @@ interface MenuBarProps {
 const MenuBar: React.FC<MenuBarProps> = ({
     onOpen,
     onSave,
+    onSaveAs,
     onExportMDL,
     onExportMDX,
     // onLoadMPQ,
@@ -88,11 +89,27 @@ const MenuBar: React.FC<MenuBarProps> = ({
                 setSettingsSubMenu(null)
             }
         }
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+                if (event.code === 'KeyS') {
+                    event.preventDefault()
+                    if (event.shiftKey) {
+                        onSaveAs()
+                    } else {
+                        onSave()
+                    }
+                }
+            }
+        }
+
         document.addEventListener('mousedown', handleClickOutside)
+        window.addEventListener('keydown', handleKeyDown)
         return () => {
             document.removeEventListener('mousedown', handleClickOutside)
+            window.removeEventListener('keydown', handleKeyDown)
         }
-    }, [])
+    }, [onSave, onSaveAs])
 
     const toggleMenu = (menu: string) => {
         setActiveMenu(activeMenu === menu ? null : menu)

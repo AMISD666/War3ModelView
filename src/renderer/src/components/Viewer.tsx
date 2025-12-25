@@ -36,6 +36,9 @@ import { PasteVerticesCommand } from '../commands/PasteVerticesCommand'
 import { copyVertices, copyFaces, VertexCopyBuffer } from '../utils/vertexOperations'
 import { UpdateKeyframeCommand, KeyframeChange } from '../commands/UpdateKeyframeCommand'
 
+// Singleton loop counter to prevent runaway FPS
+let globalRenderLoopId = 0
+
 // Ref interface for external access to camera methods
 export interface ViewerRef {
   getCamera: () => { distance: number; theta: number; phi: number; target: [number, number, number] }
@@ -103,7 +106,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const lastFpsTime = useRef<number>(performance.now())
   const lastFrameTime = useRef<number>(performance.now())
   const frameCount = useRef<number>(0)
-  const renderRef = useRef<((time: number) => void) | null>(null)
+  const renderRef = useRef<((time: number, scheduleNext?: boolean) => void) | null>(null)
   const { showModelInfo } = useUIStore()
 
   // Refs for props to be accessible in render loop
@@ -1559,9 +1562,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           gl.viewport(0, 0, width, height)
         }
 
+        // Render immediately to prevent flicker (canvas clears on resize)
+        // scheduleNext=false prevents spawning new RAF chains
         if (renderRef.current) {
-          // CRITICAL: Call render once for resize event
-          renderRef.current(performance.now())
+          renderRef.current(performance.now(), false)
         }
       }
     })
@@ -2080,7 +2084,19 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       lastFpsTime.current = performance.now()
       frameCount.current = 0
 
+      // Singleton Loop Pattern:
+      // Increment global ID for this new effect instance
+      globalRenderLoopId++
+      const myLoopId = globalRenderLoopId
+
       const render = (time: DOMHighResTimeStamp, scheduleNext = true) => {
+        // STRONG GUARD: If a newer loop has started, kill this one immediately
+        if (globalRenderLoopId !== myLoopId) {
+          // Log only once when killing to avoid spam, or finding a way to log it without spamming
+          // console.warn(`[Viewer] Render Loop #${myLoopId} killed by new loop #${globalRenderLoopId}`)
+          return
+        }
+
         // CRITICAL: Check THIS closure's flag at the VERY START
         if (!runState.shouldRun) {
           return // Do not schedule next frame, loop is stopped
@@ -2089,8 +2105,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         try {
 
           if (!gl || !canvasRef.current || !renderer) {
-            // Only continue polling if we should still run
-            if (runState.shouldRun) {
+            // Only continue polling if we should still run AND this is still the active loop
+            if (runState.shouldRun && globalRenderLoopId === myLoopId) {
               animationFrameId.current = requestAnimationFrame(render)
             }
             return
@@ -2101,7 +2117,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           // to always get the LATEST renderer, even if component re-renders with new renderer
           const mdlRenderer = rendererRef.current
           if (!mdlRenderer) {
-            animationFrameId.current = requestAnimationFrame(render)
+            if (globalRenderLoopId === myLoopId) {
+              animationFrameId.current = requestAnimationFrame(render)
+            }
             return
           }
           const delta = time - lastFrameTime.current
@@ -2567,8 +2585,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
             if (showSkeletonRef.current && mdlRenderer.rendererData.nodes && currentMainMode === 'animation') {
               const { selectedNodeIds } = useSelectionStore.getState()
-              gl.disable(gl.DEPTH_TEST)
-              mdlRenderer.renderSkeleton(mvMatrix, pMatrix, null, selectedNodeIds)
+              gl.disable(gl.DEPTH_TEST);
+              (mdlRenderer as any).renderSkeleton(mvMatrix, pMatrix, null, selectedNodeIds)
               gl.enable(gl.DEPTH_TEST)
             }
 
@@ -2882,8 +2900,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           }
           return // Do NOT schedule next frame on error
         }
-        // CRITICAL: Check THIS closure's flag before scheduling next frame
-        if (runState.shouldRun && scheduleNext) {
+        // CRITICAL: Check THIS closure's flag AND singleton ID before scheduling next frame
+        if (runState.shouldRun && scheduleNext && globalRenderLoopId === myLoopId) {
           animationFrameId.current = requestAnimationFrame(render)
         }
       }
@@ -4268,7 +4286,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           <div
             style={{
               position: 'absolute',
-              top: 12,
+              top: 50,
               left: 12,
               width: 'auto',
               maxWidth: 200,

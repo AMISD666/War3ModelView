@@ -34,6 +34,9 @@ const OFFSET_TRANSLATION = 12
 const OFFSET_ROTATION = 26
 const OFFSET_SCALING = 40
 
+// Singleton loop counter for TimelinePanel (MUST be at module scope, not inside component)
+let globalTimelineLoopId = 0
+
 const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null)
     const containerRef = useRef<HTMLDivElement>(null)
@@ -240,6 +243,10 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             return
         }
 
+        // Singleton Guard
+        globalTimelineLoopId++
+        const myLoopId = globalTimelineLoopId
+
         const runState = { shouldRun: true }
         let lastDrawTime = 0
         let lastDisplayUpdate = 0
@@ -247,7 +254,10 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const DISPLAY_UPDATE_INTERVAL = 50
 
         const animate = (time: number) => {
+            // STRONG GUARD
+            if (globalTimelineLoopId !== myLoopId) return
             if (!runState.shouldRun) return
+
 
             const elapsed = time - lastDrawTime
             if (elapsed >= frameInterval) {
@@ -270,7 +280,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 }
             }
 
-            if (runState.shouldRun) {
+            if (runState.shouldRun && globalTimelineLoopId === myLoopId) {
                 rafRef.current = requestAnimationFrame(animate)
             }
         }
