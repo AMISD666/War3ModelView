@@ -11,18 +11,20 @@ import { useSelectionStore } from '../../store/selectionStore'
 import { getPos } from './types'
 
 /**
- * Render grid if enabled
+ * Render grid if enabled (any plane)
  */
 export function renderGrid(
     gridRenderer: GridRenderer,
     gl: WebGLRenderingContext | WebGL2RenderingContext,
     mvMatrix: mat4,
     pMatrix: mat4,
-    enabled: boolean,
+    showXY: boolean,
+    showXZ: boolean,
+    showYZ: boolean,
     settings?: any
 ): void {
-    if (enabled) {
-        gridRenderer.render(gl, mvMatrix, pMatrix, settings || { gridVisible: true, gridSize: 2048, gridDivisions: 16 })
+    if (showXY || showXZ || showYZ) {
+        gridRenderer.render(gl, mvMatrix, pMatrix, settings || { gridVisible: true, gridSize: 2048, gridDivisions: 16 }, showXY, showXZ, showYZ)
     }
 }
 

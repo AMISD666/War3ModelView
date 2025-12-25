@@ -25,8 +25,12 @@ interface RendererStore {
     showSettingsPanel: boolean
     setShowSettingsPanel: (show: boolean) => void
     // Display Settings
-    showGrid: boolean
-    setShowGrid: (show: boolean) => void
+    showGridXY: boolean
+    setShowGridXY: (show: boolean) => void
+    showGridXZ: boolean
+    setShowGridXZ: (show: boolean) => void
+    showGridYZ: boolean
+    setShowGridYZ: (show: boolean) => void
     showVertices: boolean
     setShowVertices: (show: boolean) => void
     showNodes: boolean
@@ -47,10 +51,20 @@ interface RendererStore {
     // Render Settings
     renderMode: 'textured' | 'wireframe'
     setRenderMode: (mode: 'textured' | 'wireframe') => void
-    backgroundColor: string
-    setBackgroundColor: (color: string) => void
     teamColor: number
     setTeamColor: (color: number) => void
+
+    // Color Settings
+    backgroundColor: string
+    setBackgroundColor: (color: string) => void
+    vertexColor: string
+    setVertexColor: (color: string) => void
+    wireframeColor: string
+    setWireframeColor: (color: string) => void
+    selectionColor: string
+    setSelectionColor: (color: string) => void
+    hoverColor: string
+    setHoverColor: (color: string) => void
 
     // System State
     mpqLoaded: boolean
@@ -88,8 +102,12 @@ export const useRendererStore = create<RendererStore>()(
             setShowSettingsPanel: (show) => set({ showSettingsPanel: show }),
 
             // Default Display Settings
-            showGrid: true,
-            setShowGrid: (show) => set({ showGrid: show }),
+            showGridXY: true,
+            setShowGridXY: (show) => set({ showGridXY: show }),
+            showGridXZ: false,
+            setShowGridXZ: (show) => set({ showGridXZ: show }),
+            showGridYZ: false,
+            setShowGridYZ: (show) => set({ showGridYZ: show }),
             showVertices: false, // Default hidden
             setShowVertices: (show) => set({ showVertices: show }),
             showNodes: false,
@@ -109,10 +127,20 @@ export const useRendererStore = create<RendererStore>()(
 
             renderMode: 'textured',
             setRenderMode: (mode) => set({ renderMode: mode }),
-            backgroundColor: '#333333',
-            setBackgroundColor: (color) => set({ backgroundColor: color }),
             teamColor: 0, // Player 1 (Red)
             setTeamColor: (color) => set({ teamColor: color }),
+
+            // Color Settings
+            backgroundColor: '#333333',
+            setBackgroundColor: (color) => set({ backgroundColor: color }),
+            vertexColor: '#0088ff',
+            setVertexColor: (color) => set({ vertexColor: color }),
+            wireframeColor: '#ffffff',
+            setWireframeColor: (color) => set({ wireframeColor: color }),
+            selectionColor: '#ff0000',
+            setSelectionColor: (color) => set({ selectionColor: color }),
+            hoverColor: '#ffff00',
+            setHoverColor: (color) => set({ hoverColor: color }),
 
             mpqLoaded: false,
             setMpqLoaded: (loaded) => set({ mpqLoaded: loaded })
@@ -123,7 +151,9 @@ export const useRendererStore = create<RendererStore>()(
                 gridSettings: state.gridSettings,
                 vertexSettings: state.vertexSettings,
                 // showSettingsPanel: state.showSettingsPanel, // Don't persist panel open state
-                showGrid: state.showGrid,
+                showGridXY: state.showGridXY,
+                showGridXZ: state.showGridXZ,
+                showGridYZ: state.showGridYZ,
                 showVertices: state.showVertices,
                 showNodes: state.showNodes,
                 showSkeleton: state.showSkeleton,
@@ -133,8 +163,12 @@ export const useRendererStore = create<RendererStore>()(
                 showCameras: state.showCameras,
                 showLights: state.showLights,
                 renderMode: state.renderMode,
+                teamColor: state.teamColor,
                 backgroundColor: state.backgroundColor,
-                teamColor: state.teamColor
+                vertexColor: state.vertexColor,
+                wireframeColor: state.wireframeColor,
+                selectionColor: state.selectionColor,
+                hoverColor: state.hoverColor
             }),
         }
     )

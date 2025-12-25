@@ -91,14 +91,20 @@ export function useSelection({
         const boxTop = Math.min(startY, endY) - rect.top
         const boxBottom = Math.max(startY, endY) - rect.top
 
-        const cameraPos = getCameraPosition(targetCamera.current)
-
         const pMatrix = mat4.create()
-        mat4.perspective(pMatrix, Math.PI / 4, canvasRef.current.width / canvasRef.current.height, 1, 100000)
-
         const mvMatrix = mat4.create()
-        const cameraUp = vec3.fromValues(0, 0, 1)
-        mat4.lookAt(mvMatrix, cameraPos, targetCamera.current.target, cameraUp)
+        const cameraPos = vec3.create() // Placeholder, we rely on matrices
+
+        if (cameraRef.current) {
+            cameraRef.current.getMatrix(mvMatrix, pMatrix)
+            vec3.copy(cameraPos, cameraRef.current.position)
+        } else {
+            const camPos = getCameraPosition(targetCamera.current)
+            vec3.copy(cameraPos, camPos)
+            mat4.perspective(pMatrix, Math.PI / 4, canvasRef.current.width / canvasRef.current.height, 1, 100000)
+            const cameraUp = vec3.fromValues(0, 0, 1)
+            mat4.lookAt(mvMatrix, cameraPos, targetCamera.current.target, cameraUp)
+        }
 
         const viewProj = mat4.create()
         mat4.multiply(viewProj, pMatrix, mvMatrix)
@@ -336,14 +342,17 @@ export function useSelection({
         // === Geometry Mode: Vertex/Face Selection ===
         if (mainMode !== 'geometry' && !(mainMode === 'animation' && animationSubMode === 'binding')) return
 
-        const cameraPos = getCameraPosition(targetCamera.current)
-
         const pMatrix = mat4.create()
-        mat4.perspective(pMatrix, Math.PI / 4, canvasRef.current.width / canvasRef.current.height, 1, 100000)
-
         const mvMatrix = mat4.create()
-        const cameraUp = vec3.fromValues(0, 0, 1)
-        mat4.lookAt(mvMatrix, cameraPos, targetCamera.current.target, cameraUp)
+
+        if (cameraRef.current) {
+            cameraRef.current.getMatrix(mvMatrix, pMatrix)
+        } else {
+            const camPos = getCameraPosition(targetCamera.current)
+            mat4.perspective(pMatrix, Math.PI / 4, canvasRef.current.width / canvasRef.current.height, 1, 100000)
+            const cameraUp = vec3.fromValues(0, 0, 1)
+            mat4.lookAt(mvMatrix, camPos, targetCamera.current.target, cameraUp)
+        }
 
         const ndcX = (x / canvasRef.current.width) * 2 - 1
         const ndcY = 1 - (y / canvasRef.current.height) * 2
@@ -354,20 +363,29 @@ export function useSelection({
         const invView = mat4.create()
         mat4.invert(invView, mvMatrix)
 
-        const rayClip = vec4.fromValues(ndcX, ndcY, -1.0, 1.0)
-        const rayEye = vec4.create()
-        vec4.transformMat4(rayEye, rayClip, invProj)
-        rayEye[2] = -1.0
-        rayEye[3] = 0.0
+        // Robust Ray Calculation (Unproject Near & Far)
+        const rayClipNear = vec4.fromValues(ndcX, ndcY, -1.0, 1.0)
+        const rayClipFar = vec4.fromValues(ndcX, ndcY, 1.0, 1.0)
 
-        const rayWorld = vec4.create()
-        vec4.transformMat4(rayWorld, rayEye, invView)
-        const rayDir = vec3.fromValues(rayWorld[0], rayWorld[1], rayWorld[2])
-        vec3.normalize(rayDir, rayDir)
+        const rayEyeNear = vec4.create(); vec4.transformMat4(rayEyeNear, rayClipNear, invProj)
+        const rayEyeFar = vec4.create(); vec4.transformMat4(rayEyeFar, rayClipFar, invProj)
+
+        if (rayEyeNear[3] !== 0) vec4.scale(rayEyeNear, rayEyeNear, 1.0 / rayEyeNear[3])
+        if (rayEyeFar[3] !== 0) vec4.scale(rayEyeFar, rayEyeFar, 1.0 / rayEyeFar[3])
+
+        const rayWorldNear = vec4.create(); vec4.transformMat4(rayWorldNear, rayEyeNear, invView)
+        const rayWorldFar = vec4.create(); vec4.transformMat4(rayWorldFar, rayEyeFar, invView)
+
+        const rayOrigin = vec3.fromValues(rayWorldNear[0], rayWorldNear[1], rayWorldNear[2])
+        const rayTarget = vec3.fromValues(rayWorldFar[0], rayWorldFar[1], rayWorldFar[2])
+        const rayDir = vec3.create(); vec3.subtract(rayDir, rayTarget, rayOrigin); vec3.normalize(rayDir, rayDir)
+
+        // For Orthographic, use rayOrigin as the start point. For Perspective, it's virtually the same as cameraPos but safer.
+        const effectiveCameraPos = rayOrigin
 
         const effectiveSubMode = (mainMode === 'animation' && animationSubMode === 'binding') ? 'vertex' : geometrySubMode
 
-        const result = rendererRef.current.raycast(cameraPos, rayDir, effectiveSubMode)
+        const result = rendererRef.current.raycast(effectiveCameraPos, rayDir, effectiveSubMode)
 
         if (result) {
             if (effectiveSubMode === 'vertex') {

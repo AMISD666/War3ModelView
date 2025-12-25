@@ -406,39 +406,69 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   // Handle view presets from prop
   useEffect(() => {
     if (!viewPreset) return
+    console.log('[Viewer] View preset changed:', viewPreset.type)
 
     switch (viewPreset.type) {
+      case 'perspective':
+        // 切换到透视模式
+        console.log('[Viewer] Switching to perspective mode')
+        if (cameraRef.current) {
+          cameraRef.current.setPerspective()
+        }
+        break
       case 'front':
         targetCamera.current.theta = -Math.PI / 2
         targetCamera.current.phi = Math.PI / 2
+        if (cameraRef.current) {
+          cameraRef.current.setOrthographic()
+        }
         break
       case 'back':
         targetCamera.current.theta = Math.PI / 2
         targetCamera.current.phi = Math.PI / 2
+        if (cameraRef.current) {
+          cameraRef.current.setOrthographic()
+        }
         break
       case 'left':
         targetCamera.current.theta = 0
         targetCamera.current.phi = Math.PI / 2
+        if (cameraRef.current) {
+          cameraRef.current.setOrthographic()
+        }
         break
       case 'right':
         targetCamera.current.theta = Math.PI
         targetCamera.current.phi = Math.PI / 2
+        if (cameraRef.current) {
+          cameraRef.current.setOrthographic()
+        }
         break
       case 'top':
+        targetCamera.current.theta = 0
         targetCamera.current.phi = 0.01
+        if (cameraRef.current) {
+          cameraRef.current.setOrthographic()
+        }
         break
       case 'bottom':
+        targetCamera.current.theta = 0
         targetCamera.current.phi = Math.PI - 0.01
+        if (cameraRef.current) {
+          cameraRef.current.setOrthographic()
+        }
         break
       case 'focus':
         vec3.set(targetCamera.current.target, 0, 0, 0)
         targetCamera.current.distance = 500
         targetCamera.current.theta = Math.PI / 4
         targetCamera.current.phi = Math.PI / 4
+        // focus 保持当前投影模式
         break
     }
-    loadTeamColorTextures(teamColor)
-  }, [renderer, animationIndex, teamColor])
+    // 同步相机角度
+    syncCameraToOrbit()
+  }, [viewPreset]) // 仅依赖 viewPreset
 
   // Handle Animation and Mode Changes
   useEffect(() => {
@@ -2139,10 +2169,6 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           }
 
           if (isPlayingRef.current && !isBindPoseMode) {
-            // Only log once per second to reduce noise
-            if (time - lastFpsTime.current > 1000) {
-              // Logging removed
-            }
             mdlRenderer.update(delta * playbackSpeedRef.current)
 
             // Sync frame to store for Timeline (Animation Mode only)
@@ -2363,10 +2389,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             mdlRenderer.render(mvMatrix, pMatrix, { wireframe: showWireframeRef.current || (currentMainMode === 'geometry' && (geometrySubMode === 'face' || geometrySubMode === 'group')) })
 
             // === Grid Rendering (Moved AFTER model for correct depth/overlay handling) ===
-            if (showGridRef.current) {
-              const { gridSettings } = useRendererStore.getState()
+            const { gridSettings, showGridXY, showGridXZ, showGridYZ } = useRendererStore.getState()
+            if (showGridXY || showGridXZ || showGridYZ) {
               gridRenderer.current.updateBuffers(gl as WebGLRenderingContext, gridSettings.gridSize || 2048)
-              gridRenderer.current.render(gl as WebGLRenderingContext, mvMatrix, pMatrix, gridSettings)
+              gridRenderer.current.render(gl as WebGLRenderingContext, mvMatrix, pMatrix, gridSettings, showGridXY, showGridXZ, showGridYZ)
             }
 
             // === Vertices Rendering (Moved AFTER model for correct depth/overlay handling) ===
@@ -2618,6 +2644,31 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             (currentMainMode === 'animation' && currentAnimationSubMode === 'binding')) {
             // Get geoset visibility state from modelStore
             const { hiddenGeosetIds, forceShowAllGeosets, hoveredGeosetId } = useModelStore.getState()
+            // Get color settings from rendererStore
+            const { vertexColor, selectionColor, hoverColor } = useRendererStore.getState()
+            const vertexColorRgb = hexToRgb(vertexColor)
+            const selectionColorRgb = hexToRgb(selectionColor)
+            const hoverColorRgb = hexToRgb(hoverColor)
+
+            // 计算动态顶点大小：根据相机缩放级别调整
+            // 放大视角 → 顶点变大，缩小视角 → 顶点变小
+            // 使用 sqrt 平滑缩放效果
+            let zoomScale = 1.0
+            if (cameraRef.current) {
+              if (cameraRef.current.projectionMode === 'orthographic') {
+                // 正交模式：基准 orthoSize = 200
+                zoomScale = Math.sqrt(200 / Math.max(1, cameraRef.current.orthoSize))
+              } else {
+                // 透视模式：基准 distance = 400
+                zoomScale = Math.sqrt(400 / Math.max(1, cameraRef.current.distance))
+              }
+            }
+            // 限制缩放范围：0.375 到 2（放大8px，缩小1.5px）
+            zoomScale = Math.max(0.375, Math.min(2, zoomScale))
+            const basePointSize = 4.0 * zoomScale
+            const hoverPointSize = 6.0 * zoomScale
+            // 选中顶点只改变颜色，大小和普通顶点一样
+            const selectedPointSize = basePointSize
 
             // Render all visible geoset vertices
             for (let geosetIndex = 0; geosetIndex < mdlRenderer.model.Geosets.length; geosetIndex++) {
@@ -2629,11 +2680,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
               // Use different color for hovered geoset vertices
               if (hoveredGeosetId === geosetIndex) {
-                // Hovered geoset: yellow highlight
-                debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, geoset.Vertices, [1, 0.8, 0, 1], 6.0, vertexSettingsRef.current.enableDepth)
+                // Hovered geoset: use hover color from settings
+                debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, geoset.Vertices, [...hoverColorRgb, 1], hoverPointSize, vertexSettingsRef.current.enableDepth)
               } else {
-                // Normal geoset: blue
-                debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, geoset.Vertices, [0, 0, 1, 0.5], 4.0, vertexSettingsRef.current.enableDepth)
+                // Normal geoset: use vertex color from settings
+                debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, geoset.Vertices, [...vertexColorRgb, 0.8], basePointSize, vertexSettingsRef.current.enableDepth)
               }
             }
 
@@ -2641,8 +2692,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               const selectedPositions: number[] = []
 
               if (geometrySubMode === 'group') {
-                // Group Mode: Render Red Wireframe (Lines) instead of Points
-                // Group selected vertices by geoset to identify engaged geosets
+                // Group Mode: Render Wireframe (Lines) using selection color
                 const engagedGeosets = new Set<number>()
                 selectedVertexIds.forEach(v => engagedGeosets.add(v.geosetIndex))
 
@@ -2664,14 +2714,13 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                     }
                   }
                 })
-                // Render lines with Red color, slightly OFFSET if possible to avoid z-fighting?
-                // Or just disable depth test for selection?
+                // Render lines with selection color
                 gl.disable(gl.DEPTH_TEST)
-                debugRenderer.current.renderLines(gl as WebGLRenderingContext, mvMatrix, pMatrix, linePositions, [1, 0, 0, 1])
+                debugRenderer.current.renderLines(gl as WebGLRenderingContext, mvMatrix, pMatrix, linePositions, [...selectionColorRgb, 1])
                 gl.enable(gl.DEPTH_TEST)
 
               } else {
-                // Vertex Mode: Render Points
+                // Vertex Mode: Render Points with selection color
                 for (const sel of selectedVertexIds) {
                   const geoset = mdlRenderer.model.Geosets[sel.geosetIndex]
                   if (geoset) {
@@ -2684,7 +2733,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                   }
                 }
                 gl.disable(gl.DEPTH_TEST)
-                debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, selectedPositions, [1, 0, 0, 1], 6.0, false) // Selected always visible? or respect depth? Selected usually always visible.
+                debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, selectedPositions, [...selectionColorRgb, 1], selectedPointSize, false) // Selected always visible
                 gl.enable(gl.DEPTH_TEST)
               }
             }
@@ -2791,8 +2840,19 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             if (showGizmo && count > 0) {
               vec3.scale(center, center, 1.0 / count)
 
-              // Fixed Gizmo Scale (no adaptive scaling)
-              const gizmoScale = 1.0
+              // Dynamic Gizmo Scale - 保持屏幕大小恒定
+              // 视角缩小（distance增大）时Gizmo放大，视角放大（distance减小）时Gizmo缩小
+              let gizmoScale = 1.0
+              if (cameraRef.current) {
+                if (cameraRef.current.projectionMode === 'orthographic') {
+                  // orthoSize 增大 = 视角缩小 → Gizmo 放大
+                  gizmoScale = cameraRef.current.orthoSize / 400
+                } else {
+                  // distance 增大 = 视角缩小 → Gizmo 放大
+                  gizmoScale = cameraRef.current.distance / 600
+                }
+              }
+              gizmoScale = Math.max(0.1, Math.min(10, gizmoScale))
 
               gizmoRenderer.current.render(gl as WebGLRenderingContext, mvMatrix, pMatrix, center, transformMode as any, gizmoState.current.activeAxis, gizmoScale)
             }
@@ -2885,13 +2945,76 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
   const handleMouseMove = (e: any) => {
     // 1. Gizmo Dragging
+    const { transformMode, mainMode, animationSubMode: subMode, selectedVertexIds, selectedFaceIds, geometrySubMode, selectedNodeIds } = useSelectionStore.getState()
+
+    // --- Calculate Gizmo Center (Hoisted) ---
+    // We need center for Ray-Plane intersection in drag mode
+    let gizmoCenter = vec3.create()
+    let gizmoCount = 0
+    let showGizmo = false
+
+    if (rendererRef.current) {
+      if (mainMode === 'geometry') {
+        if (geometrySubMode === 'vertex' && selectedVertexIds.length > 0) {
+          for (const sel of selectedVertexIds) {
+            const geoset = rendererRef.current.model.Geosets[sel.geosetIndex]
+            if (geoset) {
+              const vIndex = sel.index * 3
+              gizmoCenter[0] += geoset.Vertices[vIndex]
+              gizmoCenter[1] += geoset.Vertices[vIndex + 1]
+              gizmoCenter[2] += geoset.Vertices[vIndex + 2]
+              gizmoCount++
+            }
+          }
+          showGizmo = true
+        } else if (geometrySubMode === 'face' && selectedFaceIds.length > 0) {
+          for (const sel of selectedFaceIds) {
+            const geoset = rendererRef.current.model.Geosets[sel.geosetIndex]
+            if (geoset) {
+              const fIndex = sel.index * 3
+              const i1 = geoset.Faces[fIndex] * 3, i2 = geoset.Faces[fIndex + 1] * 3, i3 = geoset.Faces[fIndex + 2] * 3
+              gizmoCenter[0] += geoset.Vertices[i1] + geoset.Vertices[i2] + geoset.Vertices[i3]
+              gizmoCenter[1] += geoset.Vertices[i1 + 1] + geoset.Vertices[i2 + 1] + geoset.Vertices[i3 + 1]
+              gizmoCenter[2] += geoset.Vertices[i1 + 2] + geoset.Vertices[i2 + 2] + geoset.Vertices[i3 + 2]
+              gizmoCount += 3
+            }
+          }
+          showGizmo = true
+        }
+      } else if (mainMode === 'animation' && selectedNodeIds.length > 0) {
+        showGizmo = true
+        for (const nodeId of selectedNodeIds) {
+          const nodeWrapper = rendererRef.current.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
+          if (nodeWrapper && nodeWrapper.matrix) {
+            const matrix = nodeWrapper.matrix
+            let pivot = [0, 0, 0]
+            if (nodeWrapper.node && nodeWrapper.node.PivotPoint) {
+              pivot = nodeWrapper.node.PivotPoint
+            } else if (rendererRef.current.model.PivotPoints && rendererRef.current.model.PivotPoints[nodeId]) {
+              pivot = rendererRef.current.model.PivotPoints[nodeId]
+            }
+            const x = matrix[0] * pivot[0] + matrix[4] * pivot[1] + matrix[8] * pivot[2] + matrix[12]
+            const y = matrix[1] * pivot[0] + matrix[5] * pivot[1] + matrix[9] * pivot[2] + matrix[13]
+            const z = matrix[2] * pivot[0] + matrix[6] * pivot[1] + matrix[10] * pivot[2] + matrix[14]
+            gizmoCenter[0] += x
+            gizmoCenter[1] += y
+            gizmoCenter[2] += z
+            gizmoCount++
+          }
+        }
+      }
+    }
+
+    if (gizmoCount > 0) {
+      vec3.scale(gizmoCenter, gizmoCenter, 1.0 / gizmoCount)
+    }
+    // ----------------------------------------
+
     if (gizmoState.current.isDragging && gizmoState.current.activeAxis && rendererRef.current) {
       const deltaX = e.clientX - mouseState.current.lastMouseX
       const deltaY = e.clientY - mouseState.current.lastMouseY
       mouseState.current.lastMouseX = e.clientX
       mouseState.current.lastMouseY = e.clientY
-
-      const { transformMode, mainMode, animationSubMode: subMode } = useSelectionStore.getState()
       const axis = gizmoState.current.activeAxis
 
       if (mainMode !== 'geometry' && !(mainMode === 'animation' && (subMode === 'binding' || subMode === 'keyframe'))) {
@@ -2910,19 +3033,90 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       // Simplified movement speed - more consistent with mouse movement
       const moveScale = distance * 0.002
 
+
+      // Standard Camera-Plane Delta (Legacy for single axis)
       vec3.zero(vecs.worldMoveDelta)
       vec3.scaleAndAdd(vecs.worldMoveDelta, vecs.worldMoveDelta, vecs.right, deltaX * moveScale)
       vec3.scaleAndAdd(vecs.worldMoveDelta, vecs.worldMoveDelta, vecs.camUp, -deltaY * moveScale)
 
+      // Precise Ray-Plane Delta (For Dual Axis)
+      if (['xy', 'xz', 'yz'].includes(axis) && gizmoCount > 0) {
+        const planeNormal = vec3.create()
+        if (axis === 'xy') vec3.set(planeNormal, 0, 0, 1)
+        else if (axis === 'xz') vec3.set(planeNormal, 0, 1, 0)
+        else if (axis === 'yz') vec3.set(planeNormal, 1, 0, 0)
+
+        const getRay = (sx: number, sy: number) => {
+          const pMatrix = mat4.create()
+          const mvMatrix = mat4.create()
+          if (cameraRef.current) {
+            cameraRef.current.getMatrix(mvMatrix, pMatrix)
+          } else {
+            const { distance, theta, phi, target } = targetCamera.current
+            const cx = distance * Math.sin(phi) * Math.cos(theta)
+            const cy = distance * Math.sin(phi) * Math.sin(theta)
+            const cz = distance * Math.cos(phi)
+            const cameraPos = vec3.fromValues(cx, cy, cz)
+            vec3.add(cameraPos, cameraPos, target)
+            mat4.perspective(pMatrix, Math.PI / 4, canvasRef.current!.width / canvasRef.current!.height, 1, 5000)
+            const cameraUp = vec3.fromValues(0, 0, 1)
+            mat4.lookAt(mvMatrix, cameraPos, target, cameraUp)
+          }
+          const ndcX = (sx / canvasRef.current!.width) * 2 - 1
+          const ndcY = -((sy / canvasRef.current!.height) * 2 - 1)
+          const invProj = mat4.create(); mat4.invert(invProj, pMatrix)
+          const invView = mat4.create(); mat4.invert(invView, mvMatrix)
+          const rayClipNear = vec4.fromValues(ndcX, ndcY, -1.0, 1.0)
+          const rayClipFar = vec4.fromValues(ndcX, ndcY, 1.0, 1.0)
+          const rayEyeNear = vec4.create(); vec4.transformMat4(rayEyeNear, rayClipNear, invProj)
+          const rayEyeFar = vec4.create(); vec4.transformMat4(rayEyeFar, rayClipFar, invProj)
+          if (rayEyeNear[3] !== 0) vec4.scale(rayEyeNear, rayEyeNear, 1.0 / rayEyeNear[3])
+          if (rayEyeFar[3] !== 0) vec4.scale(rayEyeFar, rayEyeFar, 1.0 / rayEyeFar[3])
+          const rayWorldNear = vec4.create(); vec4.transformMat4(rayWorldNear, rayEyeNear, invView)
+          const rayWorldFar = vec4.create(); vec4.transformMat4(rayWorldFar, rayEyeFar, invView)
+          const origin = vec3.fromValues(rayWorldNear[0], rayWorldNear[1], rayWorldNear[2])
+          const target = vec3.fromValues(rayWorldFar[0], rayWorldFar[1], rayWorldFar[2])
+          const dir = vec3.create(); vec3.subtract(dir, target, origin); vec3.normalize(dir, dir)
+          return { origin, dir }
+        }
+
+        const rayCurr = getRay(e.clientX, e.clientY)
+        const rayPrev = getRay(e.clientX - deltaX, e.clientY - deltaY)
+
+        const denomCurr = vec3.dot(rayCurr.dir, planeNormal)
+        const denomPrev = vec3.dot(rayPrev.dir, planeNormal)
+
+        // Only process if not parallel
+        if (Math.abs(denomCurr) > 0.0001 && Math.abs(denomPrev) > 0.0001) {
+          const diffCurr = vec3.create()
+          vec3.sub(diffCurr, gizmoCenter, rayCurr.origin)
+          const tCurr = vec3.dot(diffCurr, planeNormal) / denomCurr
+
+          const hitCurr = vec3.create()
+          vec3.scaleAndAdd(hitCurr, rayCurr.origin, rayCurr.dir, tCurr)
+
+          const diffPrev = vec3.create()
+          vec3.sub(diffPrev, gizmoCenter, rayPrev.origin)
+          const tPrev = vec3.dot(diffPrev, planeNormal) / denomPrev
+
+          const hitPrev = vec3.create()
+          vec3.scaleAndAdd(hitPrev, rayPrev.origin, rayPrev.dir, tPrev)
+
+          vec3.sub(vecs.worldMoveDelta, hitCurr, hitPrev)
+        }
+      }
+
       if (transformMode === 'translate' && mainMode === 'geometry') {
         vec3.zero(vecs.moveVec)
 
+        // Single Axis: Use Legacy Projected Delta (inverted for some reason in legacy code, keeping behavior for now)
         if (axis === 'x') vecs.moveVec[0] = -vecs.worldMoveDelta[0]
         else if (axis === 'y') vecs.moveVec[1] = -vecs.worldMoveDelta[1]
         else if (axis === 'z') vecs.moveVec[2] = vecs.worldMoveDelta[2]
-        else if (axis === 'xy') { vecs.moveVec[0] = -vecs.worldMoveDelta[0]; vecs.moveVec[1] = -vecs.worldMoveDelta[1]; }
-        else if (axis === 'xz') { vecs.moveVec[0] = -vecs.worldMoveDelta[0]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
-        else if (axis === 'yz') { vecs.moveVec[1] = -vecs.worldMoveDelta[1]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
+        // Dual Axis: Use Precise Ray-Plane Delta Directly (No inversion needed)
+        else if (axis === 'xy') { vecs.moveVec[0] = vecs.worldMoveDelta[0]; vecs.moveVec[1] = vecs.worldMoveDelta[1]; }
+        else if (axis === 'xz') { vecs.moveVec[0] = vecs.worldMoveDelta[0]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
+        else if (axis === 'yz') { vecs.moveVec[1] = vecs.worldMoveDelta[1]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
 
         const { selectedVertexIds, selectedFaceIds, geometrySubMode } = useSelectionStore.getState()
         const affectedGeosets = new Set<number>()
@@ -2972,12 +3166,14 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         vec3.zero(vecs.moveVec)
 
         // Animation mode: negate X, Y only; Z stays positive
+        // Animation mode: negate X, Y only; Z stays positive (Legacy Logic for Single Axis)
         if (axis === 'x') vecs.moveVec[0] = -vecs.worldMoveDelta[0]
         else if (axis === 'y') vecs.moveVec[1] = -vecs.worldMoveDelta[1]
         else if (axis === 'z') vecs.moveVec[2] = vecs.worldMoveDelta[2]
-        else if (axis === 'xy') { vecs.moveVec[0] = -vecs.worldMoveDelta[0]; vecs.moveVec[1] = -vecs.worldMoveDelta[1]; }
-        else if (axis === 'xz') { vecs.moveVec[0] = -vecs.worldMoveDelta[0]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
-        else if (axis === 'yz') { vecs.moveVec[1] = -vecs.worldMoveDelta[1]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
+        // Dual Axis: Use Precise Ray-Plane Delta Directly
+        else if (axis === 'xy') { vecs.moveVec[0] = vecs.worldMoveDelta[0]; vecs.moveVec[1] = vecs.worldMoveDelta[1]; }
+        else if (axis === 'xz') { vecs.moveVec[0] = vecs.worldMoveDelta[0]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
+        else if (axis === 'yz') { vecs.moveVec[1] = vecs.worldMoveDelta[1]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
 
         if (selectedNodeIds.length > 0 && rendererRef.current && rendererRef.current.rendererData.nodes) {
           selectedNodeIds.forEach(nodeId => {
@@ -3468,77 +3664,24 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     }
 
     if (!gizmoState.current.isDragging && !mouseState.current.isDragging && rendererRef.current) {
-      const { transformMode, selectedVertexIds, selectedFaceIds, geometrySubMode, mainMode, animationSubMode: _animSubMode, selectedNodeIds } = useSelectionStore.getState()
-
-      let showGizmo = false
-      const center = vec3.create()
-      let count = 0
-
-      if (mainMode === 'geometry') {
-        if (geometrySubMode === 'vertex' && selectedVertexIds.length > 0) {
-          for (const sel of selectedVertexIds) {
-            const geoset = rendererRef.current.model.Geosets[sel.geosetIndex]
-            if (geoset) {
-              const vIndex = sel.index * 3
-              center[0] += geoset.Vertices[vIndex]
-              center[1] += geoset.Vertices[vIndex + 1]
-              center[2] += geoset.Vertices[vIndex + 2]
-              count++
-            }
-          }
-          showGizmo = true
-        } else if (geometrySubMode === 'face' && selectedFaceIds.length > 0) {
-          for (const sel of selectedFaceIds) {
-            const geoset = rendererRef.current.model.Geosets[sel.geosetIndex]
-            if (geoset) {
-              const fIndex = sel.index * 3
-              const i1 = geoset.Faces[fIndex] * 3, i2 = geoset.Faces[fIndex + 1] * 3, i3 = geoset.Faces[fIndex + 2] * 3
-              center[0] += geoset.Vertices[i1] + geoset.Vertices[i2] + geoset.Vertices[i3]
-              center[1] += geoset.Vertices[i1 + 1] + geoset.Vertices[i2 + 1] + geoset.Vertices[i3 + 1]
-              center[2] += geoset.Vertices[i1 + 2] + geoset.Vertices[i2 + 2] + geoset.Vertices[i3 + 2]
-              count += 3
-            }
-          }
-          showGizmo = true
-        }
-        // 动画模式（binding 和 keyframe）
-      } else if (mainMode === 'animation' && selectedNodeIds.length > 0) {
-        showGizmo = true
-        for (const nodeId of selectedNodeIds) {
-          // FIX: Use .find() to lookup by ObjectId, not direct array index
-          const nodeWrapper = rendererRef.current.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
-          if (nodeWrapper && nodeWrapper.matrix) {
-            // 使用矩阵变换 PivotPoint 获取正确的世界坐标
-            const matrix = nodeWrapper.matrix
-            let pivot = [0, 0, 0]
-            if (nodeWrapper.node && nodeWrapper.node.PivotPoint) {
-              pivot = nodeWrapper.node.PivotPoint
-            } else if (rendererRef.current.model.PivotPoints && rendererRef.current.model.PivotPoints[nodeId]) {
-              pivot = rendererRef.current.model.PivotPoints[nodeId]
-            }
-            const x = matrix[0] * pivot[0] + matrix[4] * pivot[1] + matrix[8] * pivot[2] + matrix[12]
-            const y = matrix[1] * pivot[0] + matrix[5] * pivot[1] + matrix[9] * pivot[2] + matrix[13]
-            const z = matrix[2] * pivot[0] + matrix[6] * pivot[1] + matrix[10] * pivot[2] + matrix[14]
-            center[0] += x
-            center[1] += y
-            center[2] += z
-            count++
+      // Center is already calculated at top of handleMouseMove
+      // gizmoCenter and gizmoCount are used here from closure
+      const center = gizmoCenter
+      const count = gizmoCount
+      if (gizmoCount > 0 && transformMode) {
+        // Dynamic Gizmo Scale - 保持屏幕大小恒定
+        // 视角缩小（distance增大）时Gizmo放大，视角放大（distance减小）时Gizmo缩小
+        let gizmoScale = 1.0
+        if (cameraRef.current) {
+          if (cameraRef.current.projectionMode === 'orthographic') {
+            // orthoSize 增大 = 视角缩小 → Gizmo 放大
+            gizmoScale = cameraRef.current.orthoSize / 400
+          } else {
+            // distance 增大 = 视角缩小 → Gizmo 放大
+            gizmoScale = cameraRef.current.distance / 600
           }
         }
-      }
-
-      if (showGizmo && count > 0 && transformMode) {
-        // Disable Gizmo if Alt is pressed for Box Selection
-        // In geometry mode: Alt = camera rotation (keep Gizmo active)
-        // In animation mode: Alt = box selection (disable Gizmo)
-        if (e.altKey && mainMode === 'animation') {
-          gizmoState.current.activeAxis = null
-          return
-        }
-
-        vec3.scale(center, center, 1.0 / count)
-        // Fixed Gizmo Scale (no adaptive scaling)
-        const gizmoScale = 1.0
+        gizmoScale = Math.max(0.1, Math.min(10, gizmoScale))
 
         if (canvasRef.current) {
           const rect = canvasRef.current.getBoundingClientRect()
@@ -3551,18 +3694,16 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           // Use the same camera matrices as render loop for accurate raycasting
           const pMatrix = mat4.create()
           const mvMatrix = mat4.create()
-          const cameraPos = vec3.create()
 
           if (cameraRef.current) {
             cameraRef.current.getMatrix(mvMatrix, pMatrix)
-            vec3.copy(cameraPos, cameraRef.current.position)
           } else {
             // Fallback
             const { distance, theta, phi, target } = targetCamera.current
             const cx = distance * Math.sin(phi) * Math.cos(theta)
             const cy = distance * Math.sin(phi) * Math.sin(theta)
             const cz = distance * Math.cos(phi)
-            vec3.set(cameraPos, cx, cy, cz)
+            const cameraPos = vec3.fromValues(cx, cy, cz)
             vec3.add(cameraPos, cameraPos, target)
 
             mat4.perspective(pMatrix, Math.PI / 4, canvasRef.current.width / canvasRef.current.height, 1, 5000)
@@ -3570,19 +3711,35 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             mat4.lookAt(mvMatrix, cameraPos, target, cameraUp)
           }
 
-          // NDC using canvas pixel coordinates
+          // Robust Raycasting (Perspective + Orthographic)
           const ndcX = (x / canvasRef.current.width) * 2 - 1
           const ndcY = -((y / canvasRef.current.height) * 2 - 1)
-          const rayClip = vec4.fromValues(ndcX, ndcY, -1.0, 1.0)
-          const invProj = mat4.create(); mat4.invert(invProj, pMatrix)
-          const rayEye = vec4.create(); vec4.transformMat4(rayEye, rayClip, invProj)
-          rayEye[2] = -1.0; rayEye[3] = 0.0
-          const invView = mat4.create(); mat4.invert(invView, mvMatrix)
-          const rayWorld = vec4.create(); vec4.transformMat4(rayWorld, rayEye, invView)
-          const rayDir = vec3.fromValues(rayWorld[0], rayWorld[1], rayWorld[2])
-          vec3.normalize(rayDir, rayDir)
 
-          const hit = gizmoRenderer.current.raycast(cameraPos, rayDir, center, transformMode as any, gizmoScale)
+          const invProj = mat4.create(); mat4.invert(invProj, pMatrix)
+          const invView = mat4.create(); mat4.invert(invView, mvMatrix)
+
+          // Unproject Near and Far points
+          const rayClipNear = vec4.fromValues(ndcX, ndcY, -1.0, 1.0)
+          const rayClipFar = vec4.fromValues(ndcX, ndcY, 1.0, 1.0)
+
+          const rayEyeNear = vec4.create(); vec4.transformMat4(rayEyeNear, rayClipNear, invProj)
+          const rayEyeFar = vec4.create(); vec4.transformMat4(rayEyeFar, rayClipFar, invProj)
+
+          // Perspective Divide (Normalize W)
+          if (rayEyeNear[3] !== 0) vec4.scale(rayEyeNear, rayEyeNear, 1.0 / rayEyeNear[3])
+          if (rayEyeFar[3] !== 0) vec4.scale(rayEyeFar, rayEyeFar, 1.0 / rayEyeFar[3])
+
+          // Transform to World Space
+          const rayWorldNear = vec4.create(); vec4.transformMat4(rayWorldNear, rayEyeNear, invView)
+          const rayWorldFar = vec4.create(); vec4.transformMat4(rayWorldFar, rayEyeFar, invView)
+
+          const rayOrigin = vec3.fromValues(rayWorldNear[0], rayWorldNear[1], rayWorldNear[2])
+          const rayTarget = vec3.fromValues(rayWorldFar[0], rayWorldFar[1], rayWorldFar[2])
+
+          const rayDir = vec3.create(); vec3.subtract(rayDir, rayTarget, rayOrigin); vec3.normalize(rayDir, rayDir)
+
+          // Pass rayOrigin as cameraPos to raycast (it serves as the ray start point)
+          const hit = gizmoRenderer.current.raycast(rayOrigin, rayDir, center, transformMode as any, gizmoScale)
           gizmoState.current.activeAxis = hit
         }
       }

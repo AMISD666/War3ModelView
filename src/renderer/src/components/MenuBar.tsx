@@ -372,38 +372,12 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             style={itemStyle}
                             onMouseEnter={hoverStyle}
                             onMouseLeave={unhoverStyle}
-                            onClick={() => { onSetViewPreset('front'); closeMenu() }}
+                            onClick={() => { onSetViewPreset('perspective'); closeMenu() }}
                         >
-                            <span>前视图</span>
-                            <span style={{ color: '#888', fontSize: '11px' }}>1</span>
+                            <span>透视</span>
+                            <span style={{ color: '#888', fontSize: '11px' }}>0</span>
                         </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onSetViewPreset('back'); closeMenu() }}
-                        >
-                            <span>后视图</span>
-                            <span style={{ color: '#888', fontSize: '11px' }}>2</span>
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onSetViewPreset('left'); closeMenu() }}
-                        >
-                            <span>左视图</span>
-                            <span style={{ color: '#888', fontSize: '11px' }}>3</span>
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onSetViewPreset('right'); closeMenu() }}
-                        >
-                            <span>右视图</span>
-                            <span style={{ color: '#888', fontSize: '11px' }}>4</span>
-                        </div>
+                        <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
                         <div
                             style={itemStyle}
                             onMouseEnter={hoverStyle}
@@ -411,7 +385,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             onClick={() => { onSetViewPreset('top'); closeMenu() }}
                         >
                             <span>顶视图</span>
-                            <span style={{ color: '#888', fontSize: '11px' }}>5</span>
+                            <span style={{ color: '#888', fontSize: '11px' }}>1</span>
                         </div>
                         <div
                             style={itemStyle}
@@ -420,17 +394,43 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             onClick={() => { onSetViewPreset('bottom'); closeMenu() }}
                         >
                             <span>底视图</span>
-                            <span style={{ color: '#888', fontSize: '11px' }}>6</span>
+                            <span style={{ color: '#888', fontSize: '11px' }}>2</span>
                         </div>
-                        <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
                         <div
                             style={itemStyle}
                             onMouseEnter={hoverStyle}
                             onMouseLeave={unhoverStyle}
-                            onClick={() => { onSetViewPreset('focus'); closeMenu() }}
+                            onClick={() => { onSetViewPreset('front'); closeMenu() }}
                         >
-                            <span>聚焦中心</span>
-                            <span style={{ color: '#888', fontSize: '11px' }}>0</span>
+                            <span>前视图</span>
+                            <span style={{ color: '#888', fontSize: '11px' }}>3</span>
+                        </div>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={() => { onSetViewPreset('back'); closeMenu() }}
+                        >
+                            <span>后视图</span>
+                            <span style={{ color: '#888', fontSize: '11px' }}>4</span>
+                        </div>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={() => { onSetViewPreset('left'); closeMenu() }}
+                        >
+                            <span>左视图</span>
+                            <span style={{ color: '#888', fontSize: '11px' }}>5</span>
+                        </div>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={() => { onSetViewPreset('right'); closeMenu() }}
+                        >
+                            <span>右视图</span>
+                            <span style={{ color: '#888', fontSize: '11px' }}>6</span>
                         </div>
                     </div>
                 )}

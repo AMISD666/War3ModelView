@@ -1,18 +1,13 @@
 import { mat4 } from 'gl-matrix'
 import { GridSettings } from '../store/rendererStore'
 
+export type GridPlane = 'xy' | 'xz' | 'yz'
+
 export class GridRenderer {
     private program: WebGLProgram | null = null
 
-    // Separate buffers for independent layers
-    private buffer128: WebGLBuffer | null = null
-    private count128: number = 0
-
-    private buffer512: WebGLBuffer | null = null
-    private count512: number = 0
-
-    private buffer1024: WebGLBuffer | null = null
-    private count1024: number = 0
+    // Separate buffers for independent layers per plane
+    private buffers: { [key: string]: { buffer: WebGLBuffer | null, count: number } } = {}
 
     private currentSize: number = 0
 
@@ -56,50 +51,69 @@ export class GridRenderer {
         this.currentSize = size
 
         // Delete old buffers
-        if (this.buffer128) gl.deleteBuffer(this.buffer128)
-        if (this.buffer512) gl.deleteBuffer(this.buffer512)
-        if (this.buffer1024) gl.deleteBuffer(this.buffer1024)
+        Object.values(this.buffers).forEach(b => {
+            if (b.buffer) gl.deleteBuffer(b.buffer)
+        })
+        this.buffers = {}
 
-        this.createBuffer(gl, size, 128, '128')
-        this.createBuffer(gl, size, 512, '512')
-        this.createBuffer(gl, size, 1024, '1024')
+        // Create buffers for all planes and grid sizes
+        const planes: GridPlane[] = ['xy', 'xz', 'yz']
+        const steps = [128, 512, 1024]
+
+        planes.forEach(plane => {
+            steps.forEach(step => {
+                this.createBuffer(gl, size, step, plane)
+            })
+        })
     }
 
-    private createBuffer(gl: WebGLRenderingContext | WebGL2RenderingContext, size: number, step: number, type: '128' | '512' | '1024') {
+    private createBuffer(gl: WebGLRenderingContext | WebGL2RenderingContext, size: number, step: number, plane: GridPlane) {
         const vertices: number[] = []
 
-        // Generate lines
+        // Generate lines based on plane
         for (let i = -size; i <= size; i += step) {
-            // X lines (vertical lines moving along X)
-            vertices.push(i, -size, 0)
-            vertices.push(i, size, 0)
-
-            // Y lines (horizontal lines moving along Y)
-            vertices.push(-size, i, 0)
-            vertices.push(size, i, 0)
+            if (plane === 'xy') {
+                // XY plane (z = 0)
+                vertices.push(i, -size, 0)
+                vertices.push(i, size, 0)
+                vertices.push(-size, i, 0)
+                vertices.push(size, i, 0)
+            } else if (plane === 'xz') {
+                // XZ plane (y = 0)
+                vertices.push(i, 0, -size)
+                vertices.push(i, 0, size)
+                vertices.push(-size, 0, i)
+                vertices.push(size, 0, i)
+            } else {
+                // YZ plane (x = 0)
+                vertices.push(0, i, -size)
+                vertices.push(0, i, size)
+                vertices.push(0, -size, i)
+                vertices.push(0, size, i)
+            }
         }
 
         const buffer = gl.createBuffer()
         gl.bindBuffer(gl.ARRAY_BUFFER, buffer)
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW)
 
-        const count = vertices.length / 3
-
-        if (type === '128') {
-            this.buffer128 = buffer
-            this.count128 = count
-        } else if (type === '512') {
-            this.buffer512 = buffer
-            this.count512 = count
-        } else {
-            this.buffer1024 = buffer
-            this.count1024 = count
-        }
+        const key = `${plane}_${step}`
+        this.buffers[key] = { buffer, count: vertices.length / 3 }
     }
 
-    render(gl: WebGLRenderingContext | WebGL2RenderingContext, mvMatrix: mat4, pMatrix: mat4, settings: GridSettings) {
+    render(
+        gl: WebGLRenderingContext | WebGL2RenderingContext,
+        mvMatrix: mat4,
+        pMatrix: mat4,
+        settings: GridSettings,
+        showXY: boolean,
+        showXZ: boolean,
+        showYZ: boolean
+    ) {
         if (!this.program) return
         if (!settings) return
+        if (!showXY && !showXZ && !showYZ) return
+
         if (settings.enableDepth) {
             gl.enable(gl.DEPTH_TEST)
             gl.depthMask(true)
@@ -122,26 +136,34 @@ export class GridRenderer {
         gl.enable(gl.BLEND)
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 
-        const drawLayer = (buffer: WebGLBuffer | null, count: number, color: number[]) => {
-            if (!buffer || count === 0) return
+        const drawLayer = (plane: GridPlane, step: number, color: number[]) => {
+            const key = `${plane}_${step}`
+            const data = this.buffers[key]
+            if (!data || !data.buffer || data.count === 0) return
             gl.uniform4f(uColor, color[0], color[1], color[2], color[3])
-            gl.bindBuffer(gl.ARRAY_BUFFER, buffer)
+            gl.bindBuffer(gl.ARRAY_BUFFER, data.buffer)
             gl.enableVertexAttribArray(aPosition)
             gl.vertexAttribPointer(aPosition, 3, gl.FLOAT, false, 0, 0)
-            gl.drawArrays(gl.LINES, 0, count)
+            gl.drawArrays(gl.LINES, 0, data.count)
         }
 
-        // Draw layers order: 128 (White) -> 512 (Yellow) -> 1024 (Red)
-        // Drawing smaller first ensures larger grids overlay cleanly
-        if (settings.show128) {
-            drawLayer(this.buffer128, this.count128, [1.0, 1.0, 1.0, 0.3]) // White with transparency
+        const drawPlane = (plane: GridPlane) => {
+            // Draw layers order: 128 (White) -> 512 (Yellow) -> 1024 (Red)
+            if (settings.show128) {
+                drawLayer(plane, 128, [1.0, 1.0, 1.0, 0.3])
+            }
+            if (settings.show512) {
+                drawLayer(plane, 512, [1.0, 1.0, 0.0, 0.5])
+            }
+            if (settings.show1024) {
+                drawLayer(plane, 1024, [1.0, 0.0, 0.0, 0.6])
+            }
         }
-        if (settings.show512) {
-            drawLayer(this.buffer512, this.count512, [1.0, 1.0, 0.0, 0.5]) // Yellow
-        }
-        if (settings.show1024) {
-            drawLayer(this.buffer1024, this.count1024, [1.0, 0.0, 0.0, 0.6]) // Red
-        }
+
+        // Draw enabled planes
+        if (showXY) drawPlane('xy')
+        if (showXZ) drawPlane('xz')
+        if (showYZ) drawPlane('yz')
 
         // Clean up WebGL state
         gl.disableVertexAttribArray(aPosition)
@@ -164,3 +186,4 @@ export class GridRenderer {
         return shader
     }
 }
+

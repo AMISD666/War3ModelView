@@ -486,7 +486,7 @@ const MainLayout: React.FC = () => {
     // Persistent settings
     // Persistent settings replaced by store
     const {
-        showGrid, setShowGrid,
+        showGridXY,
         showNodes, setShowNodes,
         showSkeleton, setShowSkeleton,
         showFPS, setShowFPS,
@@ -650,7 +650,7 @@ const MainLayout: React.FC = () => {
 
     // Save settings when they change
     useEffect(() => localStorage.setItem('teamColor', JSON.stringify(teamColor)), [teamColor])
-    useEffect(() => localStorage.setItem('showGrid', JSON.stringify(showGrid)), [showGrid])
+    useEffect(() => localStorage.setItem('showGrid', JSON.stringify(showGridXY)), [showGridXY])
     useEffect(() => localStorage.setItem('showNodes', JSON.stringify(showNodes)), [showNodes])
     useEffect(() => localStorage.setItem('showSkeleton', JSON.stringify(showSkeleton)), [showSkeleton])
     useEffect(() => localStorage.setItem('showLights', JSON.stringify(showLights)), [showLights])
@@ -745,6 +745,14 @@ const MainLayout: React.FC = () => {
                 case 'f2': e.preventDefault(); useSelectionStore.getState().setMainMode('geometry'); break;
                 case 'f3': e.preventDefault(); useSelectionStore.getState().setMainMode('uv'); break;
                 case 'f4': e.preventDefault(); useSelectionStore.getState().setMainMode('animation'); break;
+                // View Preset Shortcuts (0=perspective, 1-6=orthographic)
+                case '0': setViewPreset({ type: 'perspective', time: Date.now() }); break;
+                case '1': setViewPreset({ type: 'top', time: Date.now() }); break;
+                case '2': setViewPreset({ type: 'bottom', time: Date.now() }); break;
+                case '3': setViewPreset({ type: 'front', time: Date.now() }); break;
+                case '4': setViewPreset({ type: 'back', time: Date.now() }); break;
+                case '5': setViewPreset({ type: 'left', time: Date.now() }); break;
+                case '6': setViewPreset({ type: 'right', time: Date.now() }); break;
             }
         }
         window.addEventListener('keydown', handleKeyDown)
@@ -1185,8 +1193,8 @@ const MainLayout: React.FC = () => {
                 // mpqLoaded={mpqLoaded} // Removed
                 teamColor={teamColor}
                 onSelectTeamColor={setTeamColor}
-                showGrid={showGrid}
-                onToggleGrid={() => setShowGrid(!showGrid)}
+                showGrid={showGridXY}
+                onToggleGrid={() => useRendererStore.getState().setShowGridXY(!showGridXY)}
                 showNodes={showNodes}
                 onToggleNodes={() => setShowNodes(!showNodes)}
                 showSkeleton={showSkeleton}
@@ -1387,7 +1395,7 @@ const MainLayout: React.FC = () => {
                                 modelPath={modelPath}
                                 modelData={modelData}
                                 teamColor={teamColor}
-                                showGrid={showGrid}
+                                showGrid={showGridXY}
                                 showNodes={mainMode !== 'uv' && showNodes}
                                 showSkeleton={mainMode !== 'uv' && showSkeleton}
                                 showCollisionShapes={mainMode !== 'uv' && showCollisionShapes}

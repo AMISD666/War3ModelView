@@ -47,7 +47,9 @@ export const ViewSettingsWindow: React.FC = () => {
     const {
         showSettingsPanel, setShowSettingsPanel,
         gridSettings, setGridSettings,
-        showGrid, setShowGrid,
+        showGridXY, setShowGridXY,
+        showGridXZ, setShowGridXZ,
+        showGridYZ, setShowGridYZ,
         showNodes, setShowNodes,
         showSkeleton, setShowSkeleton,
         showFPS, setShowFPS,
@@ -57,6 +59,10 @@ export const ViewSettingsWindow: React.FC = () => {
         showLights, setShowLights,
         renderMode, setRenderMode,
         backgroundColor, setBackgroundColor,
+        vertexColor, setVertexColor,
+        wireframeColor, setWireframeColor,
+        selectionColor, setSelectionColor,
+        hoverColor, setHoverColor,
         teamColor, setTeamColor,
         mpqLoaded, setMpqLoaded,
         showVertices, setShowVertices,
@@ -151,25 +157,27 @@ export const ViewSettingsWindow: React.FC = () => {
                 {/* Top Section: Display & Grid */}
                 <div style={{ display: 'flex', gap: '32px' }}>
 
-                    {/* Display Elements - 2 Columns x 4 Rows */}
+                    {/* Display Elements - 4 Columns x 5 Rows */}
                     <div style={{ flex: 1 }}>
                         <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#888', marginBottom: '12px' }}>
                             显示元素
                         </div>
                         <div style={{
                             display: 'grid',
-                            gridTemplateColumns: 'repeat(2, 110px)',
-                            gap: '12px'
+                            gridTemplateColumns: 'repeat(4, 90px)',
+                            gap: '10px'
                         }}>
-                            <ToggleButton checked={showGrid} onChange={setShowGrid}>网格</ToggleButton>
-                            <ToggleButton checked={showVertices} onChange={setShowVertices}>顶点</ToggleButton>
-                            <ToggleButton checked={showNodes} onChange={setShowNodes}>节点</ToggleButton>
-                            <ToggleButton checked={showSkeleton} onChange={setShowSkeleton}>骨架</ToggleButton>
-                            <ToggleButton checked={showFPS} onChange={setShowFPS}>FPS</ToggleButton>
-                            <ToggleButton checked={showGeosetVisibility} onChange={setShowGeosetVisibility}>多边形工具</ToggleButton>
-                            <ToggleButton checked={showCollisionShapes} onChange={setShowCollisionShapes}>碰撞形状</ToggleButton>
-                            <ToggleButton checked={showCameras} onChange={setShowCameras}>相机对象</ToggleButton>
-                            <ToggleButton checked={showLights} onChange={setShowLights}>灯光对象</ToggleButton>
+                            <ToggleButton checked={showGridXY} onChange={setShowGridXY} style={{ width: '90px' }}>XY网格</ToggleButton>
+                            <ToggleButton checked={showGridXZ} onChange={setShowGridXZ} style={{ width: '90px' }}>XZ网格</ToggleButton>
+                            <ToggleButton checked={showGridYZ} onChange={setShowGridYZ} style={{ width: '90px' }}>YZ网格</ToggleButton>
+                            <ToggleButton checked={showVertices} onChange={setShowVertices} style={{ width: '90px' }}>顶点</ToggleButton>
+                            <ToggleButton checked={showNodes} onChange={setShowNodes} style={{ width: '90px' }}>节点</ToggleButton>
+                            <ToggleButton checked={showSkeleton} onChange={setShowSkeleton} style={{ width: '90px' }}>骨架</ToggleButton>
+                            <ToggleButton checked={showFPS} onChange={setShowFPS} style={{ width: '90px' }}>FPS</ToggleButton>
+                            <ToggleButton checked={showGeosetVisibility} onChange={setShowGeosetVisibility} style={{ width: '90px' }}>多边形工具</ToggleButton>
+                            <ToggleButton checked={showCollisionShapes} onChange={setShowCollisionShapes} style={{ width: '90px' }}>碰撞形状</ToggleButton>
+                            <ToggleButton checked={showCameras} onChange={setShowCameras} style={{ width: '90px' }}>相机对象</ToggleButton>
+                            <ToggleButton checked={showLights} onChange={setShowLights} style={{ width: '90px' }}>灯光对象</ToggleButton>
                         </div>
                     </div>
 
@@ -182,7 +190,7 @@ export const ViewSettingsWindow: React.FC = () => {
                             <ToggleButton
                                 checked={gridSettings.show128}
                                 onChange={v => setGridSettings({ show128: v })}
-                                disabled={!showGrid}
+                                disabled={!(showGridXY || showGridXZ || showGridYZ)}
                                 fullWidth
                             >
                                 128 (白)
@@ -190,7 +198,7 @@ export const ViewSettingsWindow: React.FC = () => {
                             <ToggleButton
                                 checked={gridSettings.show512}
                                 onChange={v => setGridSettings({ show512: v })}
-                                disabled={!showGrid}
+                                disabled={!(showGridXY || showGridXZ || showGridYZ)}
                                 fullWidth
                             // Removed custom yellow colors
                             >
@@ -199,7 +207,7 @@ export const ViewSettingsWindow: React.FC = () => {
                             <ToggleButton
                                 checked={gridSettings.show1024}
                                 onChange={v => setGridSettings({ show1024: v })}
-                                disabled={!showGrid}
+                                disabled={!(showGridXY || showGridXZ || showGridYZ)}
                                 fullWidth
                             // Removed custom red colors
                             >
@@ -208,7 +216,7 @@ export const ViewSettingsWindow: React.FC = () => {
                             <ToggleButton
                                 checked={gridSettings.enableDepth}
                                 onChange={v => setGridSettings({ enableDepth: v })}
-                                disabled={!showGrid}
+                                disabled={!(showGridXY || showGridXZ || showGridYZ)}
                                 fullWidth
                             >
                                 网格深度
@@ -226,7 +234,7 @@ export const ViewSettingsWindow: React.FC = () => {
                                     marks={sliderMarks as any}
                                     value={currentSizeIndex}
                                     onChange={(v) => setGridSettings({ gridSize: GRID_SIZES[v] })}
-                                    disabled={!showGrid}
+                                    disabled={!(showGridXY || showGridXZ || showGridYZ)}
                                     tooltip={{ formatter: (v) => (typeof v === 'number' && GRID_SIZES[v] >= 50000) ? '无限' : GRID_SIZES[v as number] }}
                                     styles={{
                                         track: { backgroundColor: '#1677ff' },
@@ -258,6 +266,87 @@ export const ViewSettingsWindow: React.FC = () => {
 
                 <div style={{ borderTop: '1px solid #333' }} />
 
+                {/* Color Settings Section */}
+                <div>
+                    <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#888', marginBottom: '12px' }}>
+                        颜色配置
+                    </div>
+                    <div style={{ display: 'flex', gap: '24px', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ color: '#aaa', fontSize: '13px', width: '70px' }}>背景颜色</span>
+                            <div style={{ position: 'relative', width: '36px', height: '22px', borderRadius: '4px', overflow: 'hidden', border: '1px solid #444' }}>
+                                <input
+                                    type="color"
+                                    value={backgroundColor}
+                                    onChange={(e) => setBackgroundColor(e.target.value)}
+                                    style={{
+                                        position: 'absolute', top: -5, left: -5, width: '50px', height: '40px',
+                                        padding: 0, margin: 0, border: 'none', cursor: 'pointer'
+                                    }}
+                                />
+                            </div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ color: '#aaa', fontSize: '13px', width: '70px' }}>顶点颜色</span>
+                            <div style={{ position: 'relative', width: '36px', height: '22px', borderRadius: '4px', overflow: 'hidden', border: '1px solid #444' }}>
+                                <input
+                                    type="color"
+                                    value={vertexColor}
+                                    onChange={(e) => setVertexColor(e.target.value)}
+                                    style={{
+                                        position: 'absolute', top: -5, left: -5, width: '50px', height: '40px',
+                                        padding: 0, margin: 0, border: 'none', cursor: 'pointer'
+                                    }}
+                                />
+                            </div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ color: '#aaa', fontSize: '13px', width: '70px' }}>线框颜色</span>
+                            <div style={{ position: 'relative', width: '36px', height: '22px', borderRadius: '4px', overflow: 'hidden', border: '1px solid #444' }}>
+                                <input
+                                    type="color"
+                                    value={wireframeColor}
+                                    onChange={(e) => setWireframeColor(e.target.value)}
+                                    style={{
+                                        position: 'absolute', top: -5, left: -5, width: '50px', height: '40px',
+                                        padding: 0, margin: 0, border: 'none', cursor: 'pointer'
+                                    }}
+                                />
+                            </div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ color: '#aaa', fontSize: '13px', width: '70px' }}>选中高亮</span>
+                            <div style={{ position: 'relative', width: '36px', height: '22px', borderRadius: '4px', overflow: 'hidden', border: '1px solid #444' }}>
+                                <input
+                                    type="color"
+                                    value={selectionColor}
+                                    onChange={(e) => setSelectionColor(e.target.value)}
+                                    style={{
+                                        position: 'absolute', top: -5, left: -5, width: '50px', height: '40px',
+                                        padding: 0, margin: 0, border: 'none', cursor: 'pointer'
+                                    }}
+                                />
+                            </div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ color: '#aaa', fontSize: '13px', width: '70px' }}>悬停高亮</span>
+                            <div style={{ position: 'relative', width: '36px', height: '22px', borderRadius: '4px', overflow: 'hidden', border: '1px solid #444' }}>
+                                <input
+                                    type="color"
+                                    value={hoverColor}
+                                    onChange={(e) => setHoverColor(e.target.value)}
+                                    style={{
+                                        position: 'absolute', top: -5, left: -5, width: '50px', height: '40px',
+                                        padding: 0, margin: 0, border: 'none', cursor: 'pointer'
+                                    }}
+                                />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div style={{ borderTop: '1px solid #333' }} />
+
                 {/* Render Settings */}
                 <div>
                     <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#888', marginBottom: '12px' }}>
@@ -270,7 +359,7 @@ export const ViewSettingsWindow: React.FC = () => {
                                 <ToggleButton
                                     checked={renderMode === 'textured'}
                                     onChange={() => setRenderMode('textured')}
-                                    style={{ width: '80px' }} // Slightly smaller for mode
+                                    style={{ width: '80px' }}
                                 >
                                     纹理
                                 </ToggleButton>
@@ -281,21 +370,6 @@ export const ViewSettingsWindow: React.FC = () => {
                                 >
                                     线框
                                 </ToggleButton>
-                            </div>
-                        </div>
-
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                            <span style={{ color: '#aaa', fontSize: '13px' }}>背景颜色</span>
-                            <div style={{ position: 'relative', width: '36px', height: '22px', borderRadius: '4px', overflow: 'hidden', border: '1px solid #444' }}>
-                                <input
-                                    type="color"
-                                    value={backgroundColor}
-                                    onChange={(e) => setBackgroundColor(e.target.value)}
-                                    style={{
-                                        position: 'absolute', top: -5, left: -5, width: '50px', height: '40px',
-                                        padding: 0, margin: 0, border: 'none', cursor: 'pointer'
-                                    }}
-                                />
                             </div>
                         </div>
 
