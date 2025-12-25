@@ -44,7 +44,9 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         transformMode,
         setTransformMode,
         selectedVertexIds,
-        selectedNodeIds
+        selectedNodeIds,
+        isPickingParent,
+        setIsPickingParent
     } = useSelectionStore();
     const { modelData: _modelData } = useModelStore();
     const { renderer, setShowSettingsPanel } = useRendererStore(state => state);
@@ -214,7 +216,15 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                                     <Button icon={<DisconnectOutlined />} onClick={handleUnbind} />
                                 </Tooltip>
                                 <Tooltip title="修改选中骨骼的父节点">
-                                    <Button icon={<ApartmentOutlined />} onClick={() => useSelectionStore.getState().setIsPickingParent(true)} />
+                                    <Button
+                                        icon={<ApartmentOutlined />}
+                                        onClick={() => setIsPickingParent(true)}
+                                        style={isPickingParent ? {
+                                            backgroundColor: '#faad14',
+                                            borderColor: '#faad14',
+                                            color: '#000'
+                                        } : undefined}
+                                    />
                                 </Tooltip>
                             </Space>
                             <div style={{ width: 1, backgroundColor: '#555', height: '24px', alignSelf: 'center' }} />

@@ -2465,28 +2465,36 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                   gl.enable(gl.DEPTH_TEST)
                 }
               } else {
-                // Non-wireframe mode: use original renderGeosetHighlight
+                // Non-wireframe mode: use additive blend for smooth highlight overlay
+                // This preserves the underlying texture's shading detail
                 // Save current GL state
                 const prevBlend = gl.isEnabled(gl.BLEND)
+                const prevBlendSrc = gl.getParameter(gl.BLEND_SRC_RGB)
+                const prevBlendDst = gl.getParameter(gl.BLEND_DST_RGB)
                 const prevDepthMask = gl.getParameter(gl.DEPTH_WRITEMASK)
                 const prevDepthTest = gl.isEnabled(gl.DEPTH_TEST)
                 const prevCullFace = gl.isEnabled(gl.CULL_FACE)
 
-                // Render with red highlight color and high opacity
-                gl.disable(gl.BLEND)
-                gl.depthMask(false)
-                gl.disable(gl.DEPTH_TEST)
+                // Enable additive blending for smooth overlay effect
+                gl.enable(gl.BLEND)
+                gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA) // Standard alpha blend
+                gl.depthMask(false) // Don't write to depth buffer
                 gl.disable(gl.CULL_FACE)
 
                 if (typeof (mdlRenderer as any).renderGeosetHighlight === 'function') {
-                  (mdlRenderer as any).renderGeosetHighlight(hoveredGeosetId, [1, 0, 0], 1.0, mvMatrix, pMatrix)
+                  // Stronger red tint with high alpha for better visibility
+                  (mdlRenderer as any).renderGeosetHighlight(hoveredGeosetId, [1, 0.2, 0.15], 0.9, mvMatrix, pMatrix)
                 }
 
                 // Restore GL state
                 if (prevCullFace) gl.enable(gl.CULL_FACE)
-                if (prevDepthTest) gl.enable(gl.DEPTH_TEST)
                 gl.depthMask(prevDepthMask)
-                if (!prevBlend) gl.disable(gl.BLEND)
+                if (prevDepthTest) gl.enable(gl.DEPTH_TEST)
+                if (prevBlend) {
+                  gl.blendFunc(prevBlendSrc, prevBlendDst)
+                } else {
+                  gl.disable(gl.BLEND)
+                }
               }
             }
 

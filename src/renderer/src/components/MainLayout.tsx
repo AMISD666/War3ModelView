@@ -529,6 +529,25 @@ const MainLayout: React.FC = () => {
             setIsLoading(false);
             setZustandLoading(false);
         }
+
+        // Check for file path from command line (Tauri - context menu launch)
+        const checkCliFilePath = async () => {
+            try {
+                const { invoke } = await import('@tauri-apps/api/core');
+                const cliPath = await invoke<string | null>('get_cli_file_path');
+                if (cliPath) {
+                    console.log('[MainLayout] File opened from command line:', cliPath);
+                    setIsLoading(true);
+                    setZustandLoading(true);
+                    setZustandModelData(null, cliPath);
+                    setIsLoading(false);
+                    setZustandLoading(false);
+                }
+            } catch (e) {
+                console.error('[MainLayout] Failed to get CLI file path:', e);
+            }
+        };
+        checkCliFilePath();
     }, []); // Run once on mount
 
     const handleAddCameraFromView = () => {
@@ -667,12 +686,12 @@ const MainLayout: React.FC = () => {
             if (savedPaths) {
                 try {
                     const paths = JSON.parse(savedPaths)
-                    let count = 0
-                    for (const path of paths) {
-                        await invoke('load_mpq', { path })
-                        count++
-                    }
-                    if (count > 0) {
+                    // OPTIMIZATION: Load all MPQs in parallel
+                    const results = await Promise.allSettled(
+                        paths.map((path: string) => invoke('load_mpq', { path }))
+                    )
+                    const successCount = results.filter(r => r.status === 'fulfilled').length
+                    if (successCount > 0) {
                         setMpqLoaded(true)
                     }
                 } catch (e) {
@@ -687,29 +706,21 @@ const MainLayout: React.FC = () => {
                     if (installPath) {
                         console.log('[MainLayout] Detected Warcraft III path:', installPath)
                         const mpqs = ['war3.mpq', 'War3Patch.mpq', 'War3x.mpq', 'War3xLocal.mpq']
-                        // Ensure path ends with backslash
                         const basePath = installPath.endsWith('\\') ? installPath : `${installPath}\\`
-
                         const pathsToLoad = mpqs.map(mpq => `${basePath}${mpq}`)
-                        const validPaths: string[] = []
 
-                        let count = 0
-                        for (const path of pathsToLoad) {
-                            try {
-                                await invoke('load_mpq', { path })
-                                validPaths.push(path)
-                                count++
-                                console.log(`[MainLayout] Loaded ${path}`)
-                            } catch (e) {
-                                console.warn(`[MainLayout] Failed to load ${path}:`, e)
-                            }
-                        }
+                        // OPTIMIZATION: Load all MPQs in parallel
+                        const results = await Promise.allSettled(
+                            pathsToLoad.map(path => invoke('load_mpq', { path }))
+                        )
 
-                        if (count > 0) {
-                            // Save found paths to localStorage so user can see/manage them later if we add a manager
+                        const validPaths = pathsToLoad.filter((_, i) => results[i].status === 'fulfilled')
+                        const successCount = validPaths.length
+
+                        if (successCount > 0) {
+                            console.log(`[MainLayout] Loaded ${successCount} MPQ files in parallel`)
                             localStorage.setItem('mpq_paths', JSON.stringify(validPaths))
                             setMpqLoaded(true)
-                            // alert(`已自动检测并加载�?${count} 个魔兽争�?MPQ 文件！`)
                         }
                     }
                 } catch (e) {

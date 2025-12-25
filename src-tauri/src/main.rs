@@ -90,6 +90,115 @@ fn activate_software(license_code: String) -> Result<activation::ActivationStatu
     activation::activate_software(&license_code)
 }
 
+// ==================
+// Context Menu Commands
+// ==================
+#[tauri::command]
+fn register_context_menu() -> Result<bool, String> {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let mut exe_path = std::env::current_exe()
+        .map_err(|e| e.to_string())?
+        .to_string_lossy()
+        .to_string();
+
+    // Fix: Remove UNC prefix if present, as it can confuse registry commands
+    if exe_path.starts_with("\\\\?\\") {
+        exe_path = exe_path[4..].to_string();
+    }
+
+    let extensions = ["mdx", "mdl"];
+
+    // Clean up old key name if it exists to avoid confusion
+    for ext in &extensions {
+        let old_shell_path = format!(
+            "Software\\Classes\\SystemFileAssociations\\.{}\\shell\\GGwar3Edit",
+            ext
+        );
+        let _ = hkcu.delete_subkey_all(&old_shell_path);
+    }
+
+    for ext in &extensions {
+        // Use a new, unique key name "GGWar3View"
+        let shell_path = format!(
+            "Software\\Classes\\SystemFileAssociations\\.{}\\shell\\GGWar3View",
+            ext
+        );
+        let command_path = format!("{}\\command", shell_path);
+
+        // 1. Create shell key (force new)
+        let (shell_key, _) = hkcu
+            .create_subkey(&shell_path)
+            .map_err(|e| format!("Failed to create shell key for .{}: {}", ext, e))?;
+
+        // 2. Set display name
+        shell_key
+            .set_value("", &"使用 GGwar3Edit 打开")
+            .map_err(|e| format!("Failed to set display name: {}", e))?;
+
+        // 3. Set icon
+        shell_key
+            .set_value("Icon", &format!("\"{}\",0", exe_path))
+            .map_err(|e| format!("Failed to set icon: {}", e))?;
+
+        // 4. Create command key
+        let (command_key, _) = hkcu
+            .create_subkey(&command_path)
+            .map_err(|e| format!("Failed to create command key: {}", e))?;
+
+        // 5. Set command string: "PATH" "%1"
+        command_key
+            .set_value("", &format!("\"{}\" \"%1\"", exe_path))
+            .map_err(|e| format!("Failed to set command: {}", e))?;
+    }
+
+    Ok(true)
+}
+
+#[tauri::command]
+fn unregister_context_menu() -> Result<bool, String> {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let extensions = ["mdx", "mdl"];
+
+    for ext in &extensions {
+        let shell_path = format!(
+            "Software\\Classes\\SystemFileAssociations\\.{}\\shell\\GGWar3View",
+            ext
+        );
+        let _ = hkcu.delete_subkey_all(&shell_path);
+
+        // Also clean up old key
+        let old_shell_path = format!(
+            "Software\\Classes\\SystemFileAssociations\\.{}\\shell\\GGwar3Edit",
+            ext
+        );
+        let _ = hkcu.delete_subkey_all(&old_shell_path);
+    }
+
+    Ok(true)
+}
+
+#[tauri::command]
+fn check_context_menu_status() -> bool {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let mdx_path = "Software\\Classes\\SystemFileAssociations\\.mdx\\shell\\GGWar3View";
+    let mdl_path = "Software\\Classes\\SystemFileAssociations\\.mdl\\shell\\GGWar3View";
+
+    hkcu.open_subkey(mdx_path).is_ok() && hkcu.open_subkey(mdl_path).is_ok()
+}
+
+#[tauri::command]
+fn get_cli_file_path() -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    // First arg is the executable, second would be the file path
+    for arg in args.iter().skip(1) {
+        let lower = arg.to_lowercase();
+        if lower.ends_with(".mdx") || lower.ends_with(".mdl") {
+            return Some(arg.clone());
+        }
+    }
+    None
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(MpqManager::new())
@@ -107,7 +216,12 @@ fn main() {
             // Activation Commands
             get_machine_id,
             get_activation_status,
-            activate_software
+            activate_software,
+            // Context Menu Commands
+            register_context_menu,
+            unregister_context_menu,
+            check_context_menu_status,
+            get_cli_file_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

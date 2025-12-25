@@ -2,13 +2,22 @@ import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join } from 'path'
 import { readFile } from 'fs/promises'
 import icon from '../../resources/icon.png?asset'
+import {
+    registerContextMenu,
+    unregisterContextMenu,
+    isContextMenuRegistered,
+    getFilePathFromArgs
+} from './contextMenuManager'
 
 // Simple isDev check
 const isDev = process.env.NODE_ENV !== 'production'
 
+// Global reference to main window
+let mainWindow: BrowserWindow | null = null
+
 function createWindow(): void {
     // Create the browser window.
-    const mainWindow = new BrowserWindow({
+    mainWindow = new BrowserWindow({
         width: 1440,
         height: 900,
         show: false,
@@ -21,12 +30,25 @@ function createWindow(): void {
     })
 
     mainWindow.on('ready-to-show', () => {
-        mainWindow.show()
+        mainWindow?.show()
+
+        // Check if app was opened with a file argument
+        const filePath = getFilePathFromArgs()
+        if (filePath) {
+            // Wait a bit for renderer to initialize, then send the file path
+            setTimeout(() => {
+                mainWindow?.webContents.send('open-file-from-args', filePath)
+            }, 500)
+        }
     })
 
     mainWindow.webContents.setWindowOpenHandler((details) => {
         shell.openExternal(details.url)
         return { action: 'deny' }
+    })
+
+    mainWindow.on('closed', () => {
+        mainWindow = null
     })
 
     // HMR for renderer base on electron-vite cli.
@@ -56,6 +78,28 @@ app.whenReady().then(() => {
     })
 })
 
+// Handle second instance (when opening file while app is already running)
+const gotTheLock = app.requestSingleInstanceLock()
+if (!gotTheLock) {
+    app.quit()
+} else {
+    app.on('second-instance', (_event, commandLine) => {
+        // Someone tried to run a second instance, focus our window
+        if (mainWindow) {
+            if (mainWindow.isMinimized()) mainWindow.restore()
+            mainWindow.focus()
+
+            // Check for file path in command line
+            for (const arg of commandLine) {
+                if (arg.endsWith('.mdx') || arg.endsWith('.mdl')) {
+                    mainWindow.webContents.send('open-file-from-args', arg)
+                    break
+                }
+            }
+        }
+    })
+}
+
 // Quit when all windows are closed, except on macOS. There, it's common
 // for applications and their menu bar to stay active until the user quits
 // explicitly with Cmd + Q.
@@ -84,4 +128,17 @@ ipcMain.handle('dialog:openFile', async () => {
 ipcMain.handle('fs:readFile', async (_, path: string) => {
     const buffer = await readFile(path)
     return buffer
+})
+
+// Context Menu IPC Handlers
+ipcMain.handle('context-menu:register', async () => {
+    return await registerContextMenu()
+})
+
+ipcMain.handle('context-menu:unregister', async () => {
+    return await unregisterContextMenu()
+})
+
+ipcMain.handle('context-menu:check-status', async () => {
+    return await isContextMenuRegistered()
 })

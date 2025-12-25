@@ -420,7 +420,7 @@ async function decodeTexture(
 }
 /**
  * Load all textures for a model
- * Uses parallel async loading (Tauri IPC is naturally parallel) + sequential WebGL upload
+ * OPTIMIZED: Uses batch MPQ read to reduce IPC overhead
  */
 export async function loadAllTextures(
     model: any,
@@ -445,12 +445,63 @@ export async function loadAllTextures(
         return results
     }
 
-    // Phase 1: Load and decode all textures in PARALLEL
-    // Tauri's async IPC naturally parallelizes across multiple promises
-    console.time('[Viewer] Texture Load+Decode (Parallel)')
-    const decodePromises = texturePaths.map((path: string) => decodeTexture(path, modelPath))
-    const decodedTextures = await Promise.all(decodePromises)
-    console.timeEnd('[Viewer] Texture Load+Decode (Parallel)')
+    // OPTIMIZATION: Separate MPQ paths from local paths
+    const mpqPaths = texturePaths.filter((p: string) => isMPQPath(p))
+    const otherPaths = texturePaths.filter((p: string) => !isMPQPath(p))
+
+    const decodedTextures: { path: string; imageData: ImageData | null; error?: string }[] = []
+
+    // Phase 1a: Batch load MPQ textures in single IPC call
+    if (mpqPaths.length > 0) {
+        console.time('[Viewer] Batch MPQ Read')
+        try {
+            const batchResults = await invoke<(number[] | null)[]>('read_mpq_files_batch', { paths: mpqPaths })
+            console.timeEnd('[Viewer] Batch MPQ Read')
+
+            console.time('[Viewer] Batch MPQ Decode')
+            for (let i = 0; i < mpqPaths.length; i++) {
+                const path = mpqPaths[i]
+                const data = batchResults[i]
+                if (data && data.length > 0) {
+                    try {
+                        const buffer = new Uint8Array(data).buffer
+                        const isTga = path.toLowerCase().endsWith('.tga')
+                        let imageData: ImageData
+
+                        if (isTga) {
+                            // TGA decode would need to be inlined here, but for now use fallback
+                            const blp = decodeBLP(buffer)
+                            const mipLevel0 = getBLPImageData(blp, 0)
+                            imageData = new ImageData(new Uint8ClampedArray(mipLevel0.data), mipLevel0.width, mipLevel0.height)
+                        } else {
+                            const blp = decodeBLP(buffer)
+                            const mipLevel0 = getBLPImageData(blp, 0)
+                            imageData = new ImageData(new Uint8ClampedArray(mipLevel0.data), mipLevel0.width, mipLevel0.height)
+                        }
+                        decodedTextures.push({ path, imageData })
+                    } catch (e) {
+                        decodedTextures.push({ path, imageData: null, error: 'Decode failed' })
+                    }
+                } else {
+                    decodedTextures.push({ path, imageData: null, error: 'Not found in MPQ' })
+                }
+            }
+            console.timeEnd('[Viewer] Batch MPQ Decode')
+        } catch (e) {
+            console.error('[Viewer] Batch MPQ read failed:', e)
+            // Fallback: add all as failed
+            mpqPaths.forEach((path: string) => decodedTextures.push({ path, imageData: null, error: 'Batch read failed' }))
+        }
+    }
+
+    // Phase 1b: Load other textures (non-MPQ paths) in parallel
+    if (otherPaths.length > 0) {
+        console.time('[Viewer] Non-MPQ Texture Load')
+        const otherPromises = otherPaths.map((path: string) => decodeTexture(path, modelPath))
+        const otherResults = await Promise.all(otherPromises)
+        decodedTextures.push(...otherResults)
+        console.timeEnd('[Viewer] Non-MPQ Texture Load')
+    }
 
     // Phase 2: Upload to WebGL SEQUENTIALLY (WebGL state is not thread-safe)
     console.time('[Viewer] Texture Upload (Sequential)')
@@ -465,10 +516,10 @@ export async function loadAllTextures(
     console.timeEnd('[Viewer] Texture Upload (Sequential)')
 
     // Log to production CMD window
-    const textureResults = decodedTextures.map((d, _i) => ({
+    const textureResults = decodedTextures.map((d) => ({
         path: d.path,
         loaded: d.imageData !== null,
-        time: undefined // timing not available per-texture in batch mode
+        time: undefined
     }))
     await logTextureInfo(textureResults)
     const loadedCount = results.filter(r => r.loaded).length

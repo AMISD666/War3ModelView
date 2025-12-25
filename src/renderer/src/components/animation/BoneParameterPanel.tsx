@@ -1,12 +1,10 @@
 import React, { useMemo, useCallback, useRef, useEffect } from 'react'
-import { Typography, Select, message, Button, Space, Radio } from 'antd'
-import { LinkOutlined, DisconnectOutlined } from '@ant-design/icons'
+import { Typography, Select, message } from 'antd'
 import { quat, vec3 } from 'gl-matrix'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useModelStore } from '../../store/modelStore'
 import { useRendererStore } from '../../store/rendererStore'
 import { SetNodeParentCommand } from '../../commands/SetNodeParentCommand'
-import { BindVerticesCommand } from '../../commands/BindVerticesCommand'
 import { useCommandManager } from '../../utils/CommandManager'
 
 const { Text } = Typography
@@ -296,23 +294,7 @@ const BoneParameterPanel: React.FC = () => {
         isEditingRef.current = false
     }
 
-    // 绑定/解绑逻辑
-    const handleBind = (isBind: boolean) => {
-        if (selectedNodeIds.length !== 1) { message.warning('请选择一个骨骼'); return }
-        if (selectedVertexIds.length === 0) { message.warning('请选择要绑定的顶点'); return }
-        if (!renderer) return
 
-        const targets = new Map<number, number[]>()
-        selectedVertexIds.forEach(v => {
-            if (!targets.has(v.geosetIndex)) targets.set(v.geosetIndex, [])
-            targets.get(v.geosetIndex)!.push(v.index)
-        })
-
-        const targetArr = Array.from(targets.entries()).map(([geosetIndex, vertexIndices]) => ({ geosetIndex, vertexIndices }))
-        const cmd = new BindVerticesCommand(renderer, targetArr, selectedNodeIds[0], isBind ? 'bind' : 'unbind')
-        executeCommand(cmd)
-        message.success(isBind ? '已绑定骨骼' : '已解绑骨骼')
-    }
 
     const handleParentChange = (value: number | undefined) => {
         if (!renderer || !selectedNode) return
@@ -499,17 +481,6 @@ const BoneParameterPanel: React.FC = () => {
                 </div>
             </div>
 
-
-            {/* 绑定工具 - 仅在绑定模式显示 */}
-            {animationSubMode === 'binding' && (
-                <div style={{ padding: '10px', borderBottom: '1px solid #444' }}>
-                    <Text strong style={{ color: '#fff', fontSize: '12px' }}>顶点绑定工具</Text>
-                    <Space style={{ width: '100%', marginTop: 8, justifyContent: 'space-between' }}>
-                        <Button size="small" type="primary" icon={<LinkOutlined />} onClick={() => handleBind(true)} disabled={selectedNodeIds.length !== 1 || selectedVertexIds.length === 0}>绑定</Button>
-                        <Button size="small" danger icon={<DisconnectOutlined />} onClick={() => handleBind(false)} disabled={selectedNodeIds.length !== 1 || selectedVertexIds.length === 0}>解绑</Button>
-                    </Space>
-                </div>
-            )}
 
             {/* 绑定骨骼列表 - 仅在绑定模式显示 */}
             {animationSubMode === 'binding' && (

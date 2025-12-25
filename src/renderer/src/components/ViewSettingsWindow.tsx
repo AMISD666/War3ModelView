@@ -1,8 +1,8 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Select, Button, message, Slider } from 'antd';
 import { DraggableModal } from './DraggableModal';
 import { useRendererStore } from '../store/rendererStore';
-import { DatabaseOutlined, CheckCircleFilled, CloseCircleFilled } from '@ant-design/icons';
+import { DatabaseOutlined, CheckCircleFilled, CloseCircleFilled, FolderOpenOutlined } from '@ant-design/icons';
 
 // Custom Toggle Button Component
 // Modified to support full width and center text
@@ -70,7 +70,46 @@ export const ViewSettingsWindow: React.FC = () => {
         vertexSettings, setVertexSettings
     } = useRendererStore();
 
+    // Context Menu Integration State
+    const [contextMenuEnabled, setContextMenuEnabled] = useState<boolean>(false);
+    const [contextMenuLoading, setContextMenuLoading] = useState<boolean>(false);
 
+    // Check context menu status on mount
+    useEffect(() => {
+        const checkStatus = async () => {
+            try {
+                const { invoke } = await import('@tauri-apps/api/core');
+                const isRegistered = await invoke<boolean>('check_context_menu_status');
+                setContextMenuEnabled(isRegistered);
+            } catch (e) {
+                console.error('Failed to check context menu status:', e);
+            }
+        };
+        if (showSettingsPanel) {
+            checkStatus();
+        }
+    }, [showSettingsPanel]);
+
+    const handleContextMenuToggle = async (enable: boolean) => {
+        setContextMenuLoading(true);
+        try {
+            const { invoke } = await import('@tauri-apps/api/core');
+
+            if (enable) {
+                await invoke('register_context_menu');
+                setContextMenuEnabled(true);
+                message.success('已添加右键菜单');
+            } else {
+                await invoke('unregister_context_menu');
+                setContextMenuEnabled(false);
+                message.success('已移除右键菜单');
+            }
+        } catch (e: any) {
+            message.error('操作失败: ' + e.toString());
+        } finally {
+            setContextMenuLoading(false);
+        }
+    };
 
     const GRID_SIZES = [512, 1024, 2048, 4096, 50000];
     const currentSizeIndex = (() => {
@@ -404,6 +443,19 @@ export const ViewSettingsWindow: React.FC = () => {
 
                 <div style={{ borderTop: '1px solid #333' }} />
 
+                {/* 程序配置 Section */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                    <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#888' }}>程序配置</span>
+                    <ToggleButton
+                        checked={contextMenuEnabled}
+                        onChange={() => handleContextMenuToggle(!contextMenuEnabled)}
+                        style={{ width: '90px' }}
+                        disabled={contextMenuLoading}
+                    >右键菜单</ToggleButton>
+                </div>
+
+                <div style={{ borderTop: '1px solid #333' }} />
+
                 {/* System / MPQ Section */}
                 <div style={{
                     display: 'flex',
@@ -441,7 +493,7 @@ export const ViewSettingsWindow: React.FC = () => {
                         <Button
                             onClick={handleLoadMPQ}
                             type="primary"
-                            size="middle" // Matched size
+                            size="middle"
                             style={{ borderRadius: '6px' }}
                         >
                             加载
