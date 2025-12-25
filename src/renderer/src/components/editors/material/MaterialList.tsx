@@ -3,10 +3,11 @@ import { Table, Tag } from 'antd'
 
 interface MaterialListProps {
     materials: any[]
+    selectedIndex: number
     onSelect: (index: number) => void
 }
 
-const MaterialList: React.FC<MaterialListProps> = ({ materials, onSelect }) => {
+const MaterialList: React.FC<MaterialListProps> = ({ materials, selectedIndex, onSelect }) => {
     const columns = [
         {
             title: 'ID',
@@ -41,12 +42,18 @@ const MaterialList: React.FC<MaterialListProps> = ({ materials, onSelect }) => {
             pagination={false}
             size="small"
             onRow={(_, index) => ({
+                onClick: () => {
+                    if (index !== undefined) onSelect(index)
+                },
                 onDoubleClick: () => {
                     if (index !== undefined) onSelect(index)
+                },
+                style: {
+                    backgroundColor: index === selectedIndex ? 'rgba(24, 144, 255, 0.2)' : undefined,
+                    cursor: 'pointer'
                 }
             })}
             rowClassName={() => 'editable-row'}
-            style={{ cursor: 'pointer' }}
         />
     )
 }

@@ -47,6 +47,8 @@ interface RendererStore {
     setShowCameras: (show: boolean) => void
     showLights: boolean
     setShowLights: (show: boolean) => void
+    enableLighting: boolean
+    setEnableLighting: (enable: boolean) => void
 
     // Render Settings
     renderMode: 'textured' | 'wireframe'
@@ -124,6 +126,8 @@ export const useRendererStore = create<RendererStore>()(
             setShowCameras: (show) => set({ showCameras: show }),
             showLights: false,
             setShowLights: (show) => set({ showLights: show }),
+            enableLighting: true,
+            setEnableLighting: (enable) => set({ enableLighting: enable }),
 
             renderMode: 'textured',
             setRenderMode: (mode) => set({ renderMode: mode }),
@@ -162,6 +166,7 @@ export const useRendererStore = create<RendererStore>()(
                 showCollisionShapes: state.showCollisionShapes,
                 showCameras: state.showCameras,
                 showLights: state.showLights,
+                enableLighting: state.enableLighting,
                 renderMode: state.renderMode,
                 teamColor: state.teamColor,
                 backgroundColor: state.backgroundColor,

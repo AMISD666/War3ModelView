@@ -43,6 +43,22 @@ const MaterialEditor: React.FC<MaterialEditorProps> = () => {
     const [selectedMaterialIndex, setSelectedMaterialIndex] = useState<number>(-1)
     const [selectedLayerIndex, setSelectedLayerIndex] = useState<number>(-1)
 
+    // Sync with global geoset selection
+    const selectedGeosetIndex = useModelStore(state => state.selectedGeosetIndex);
+    useEffect(() => {
+        if (selectedGeosetIndex !== null && modelData?.Geosets) {
+            const geoset = modelData.Geosets[selectedGeosetIndex];
+            if (geoset && typeof geoset.MaterialID === 'number') {
+                const matId = geoset.MaterialID;
+                if (matId !== selectedMaterialIndex && matId >= 0 && matId < materials.length) {
+                    setSelectedMaterialIndex(matId);
+                    // Open modal to show details (Jump to)
+                    setIsMaterialModalOpen(true);
+                }
+            }
+        }
+    }, [selectedGeosetIndex, modelData, materials]);
+
     // Modal visibility states
     const [isMaterialModalOpen, setIsMaterialModalOpen] = useState(false)
     const [isLayerModalOpen, setIsLayerModalOpen] = useState(false)
@@ -105,6 +121,7 @@ const MaterialEditor: React.FC<MaterialEditorProps> = () => {
             <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
                 <MaterialList
                     materials={materials}
+                    selectedIndex={selectedMaterialIndex}
                     onSelect={(index) => {
                         setSelectedMaterialIndex(index)
                         setIsMaterialModalOpen(true)

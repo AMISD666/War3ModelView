@@ -20,7 +20,9 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
         setForceShowAllGeosets,
         setHoveredGeosetId,
         setGeosets,
-        setMaterials
+        setMaterials,
+        selectedGeosetIndex,
+        setSelectedGeosetIndex
     } = useModelStore();
 
     // Imports for command manager (ensure these are imported at top of file)
@@ -40,6 +42,16 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
     // Selection state
     const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
     const [lastClickedIndex, setLastClickedIndex] = useState<number | null>(null);
+
+    // Sync from global store to local state
+    useEffect(() => {
+        if (selectedGeosetIndex !== null) {
+            // Only update if not already matching single selection to avoid thrashing
+            if (selectedIndices.length !== 1 || selectedIndices[0] !== selectedGeosetIndex) {
+                setSelectedIndices([selectedGeosetIndex]);
+            }
+        }
+    }, [selectedGeosetIndex]);
 
     // Context menu state
     const [contextMenuVisible, setContextMenuVisible] = useState(false);
@@ -71,6 +83,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
         } else {
             // Regular click: Clear and select one
             setSelectedIndices([index]);
+            setSelectedGeosetIndex(index);
         }
         setLastClickedIndex(index);
     };

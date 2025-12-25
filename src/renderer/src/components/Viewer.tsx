@@ -120,6 +120,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
   // Store-derived refs
   const showVerticesRef = useRef(useRendererStore.getState().showVertices)
+  const enableLightingRef = useRef(useRendererStore.getState().enableLighting)
   const vertexSettingsRef = useRef(useRendererStore.getState().vertexSettings)
 
   // Cache for bound vertex highlighting (to avoid per-frame recalculation)
@@ -160,8 +161,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   // Separate effect for store-driven updates (since they aren't props)
   useEffect(() => {
     const unsub = useRendererStore.subscribe((state) => {
-      showVerticesRef.current = state.showVertices
-      vertexSettingsRef.current = state.vertexSettings
+      const unsub = useRendererStore.subscribe((state) => {
+        showVerticesRef.current = state.showVertices
+        enableLightingRef.current = state.enableLighting
+        vertexSettingsRef.current = state.vertexSettings
+      })
     })
     return () => unsub()
   }, [])
@@ -2386,7 +2390,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               }
             }
 
-            mdlRenderer.render(mvMatrix, pMatrix, { wireframe: showWireframeRef.current || (currentMainMode === 'geometry' && (geometrySubMode === 'face' || geometrySubMode === 'group')) })
+            mdlRenderer.render(mvMatrix, pMatrix, { wireframe: showWireframeRef.current || (currentMainMode === 'geometry' && (geometrySubMode === 'face' || geometrySubMode === 'group')), enableLighting: enableLightingRef.current } as any)
 
             // === Grid Rendering (Moved AFTER model for correct depth/overlay handling) ===
             const { gridSettings, showGridXY, showGridXZ, showGridYZ } = useRendererStore.getState()

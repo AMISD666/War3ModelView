@@ -57,6 +57,7 @@ export const ViewSettingsWindow: React.FC = () => {
         showCollisionShapes, setShowCollisionShapes,
         showCameras, setShowCameras,
         showLights, setShowLights,
+        enableLighting, setEnableLighting,
         renderMode, setRenderMode,
         backgroundColor, setBackgroundColor,
         vertexColor, setVertexColor,
@@ -371,6 +372,17 @@ export const ViewSettingsWindow: React.FC = () => {
                                     线框
                                 </ToggleButton>
                             </div>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                            <span style={{ color: '#aaa', fontSize: '13px' }}>光照</span>
+                            <ToggleButton
+                                checked={enableLighting}
+                                onChange={setEnableLighting}
+                                style={{ width: '80px' }}
+                            >
+                                {enableLighting ? '开启' : '关闭'}
+                            </ToggleButton>
                         </div>
 
                         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
