@@ -1281,26 +1281,63 @@ const MainLayout: React.FC = () => {
         license_type: string;
         expiration_date: string | null;
         days_remaining: number | null;
+        level: number;
+        level_name: string;
     } | null>(null)
+    const [activationCode, setActivationCode] = useState<string>('')
+    const [activationLoading, setActivationLoading] = useState<boolean>(false)
+    const [activationError, setActivationError] = useState<string | null>(null)
 
     useEffect(() => {
         localStorage.setItem('showDebugConsole', JSON.stringify(showDebugConsole))
-        // Invoke Rust command to toggle console immediately (no delay)
         import('@tauri-apps/api/core').then(({ invoke }) => {
             invoke('toggle_console', { show: showDebugConsole }).catch(e => console.error('Failed to toggle console:', e))
         })
     }, [showDebugConsole])
 
     // Fetch activation status when About modal opens
+    const fetchActivationStatus = useCallback(async () => {
+        try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            const status: any = await invoke('get_activation_status');
+            setActivationStatus(status);
+        } catch (e) {
+            console.error('Failed to get activation status:', e);
+        }
+    }, []);
+
     useEffect(() => {
         if (showAbout) {
-            import('@tauri-apps/api/core').then(({ invoke }) => {
-                invoke('get_activation_status').then((status: any) => {
-                    setActivationStatus(status)
-                }).catch(e => console.error('Failed to get activation status:', e))
-            })
+            fetchActivationStatus();
+            setActivationError(null);
         }
-    }, [showAbout])
+    }, [showAbout, fetchActivationStatus])
+
+    // Handle activation
+    const handleActivate = async () => {
+        if (!activationCode.trim()) {
+            setActivationError('请输入激活码');
+            return;
+        }
+
+        setActivationLoading(true);
+        setActivationError(null);
+
+        try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            const result: any = await invoke('activate_software', { licenseCode: activationCode.trim() });
+            setActivationStatus(result);
+            setActivationCode('');
+
+            if (result.is_activated) {
+                alert(`激活成功！\n\n版本: ${result.level_name}\n授权类型: ${result.license_type === 'PERM' ? '永久授权' : '时限授权'}`);
+            }
+        } catch (e: any) {
+            setActivationError(typeof e === 'string' ? e : (e.message || '激活失败'));
+        } finally {
+            setActivationLoading(false);
+        }
+    }
 
     return (
         <div
@@ -1462,12 +1499,33 @@ const MainLayout: React.FC = () => {
                             {activationStatus ? (
                                 activationStatus.is_activated ? (
                                     <>
-                                        <div style={{ color: '#52c41a', fontWeight: 'bold', marginBottom: '4px' }}>
-                                            ✓ 已激活 ({activationStatus.license_type === 'PERM' ? '永久授权' : '时限授权'})
+                                        <div style={{
+                                            color: activationStatus.level >= 2 ? '#ffc53d' : '#52c41a',
+                                            fontWeight: 'bold',
+                                            marginBottom: '4px',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '8px'
+                                        }}>
+                                            <span>✓ {activationStatus.level_name}</span>
+                                            <span style={{
+                                                fontSize: '11px',
+                                                padding: '2px 6px',
+                                                backgroundColor: activationStatus.level >= 2 ? '#ffc53d22' : '#52c41a22',
+                                                borderRadius: '3px',
+                                                color: activationStatus.level >= 2 ? '#ffc53d' : '#52c41a'
+                                            }}>
+                                                {activationStatus.license_type === 'PERM' ? '永久' : '时限'}
+                                            </span>
                                         </div>
                                         {activationStatus.license_type === 'TIME' && activationStatus.days_remaining !== null && (
                                             <div style={{ color: activationStatus.days_remaining <= 7 ? '#ff7875' : '#eee', fontSize: '13px' }}>
                                                 到期日期: {activationStatus.expiration_date} (剩余 {activationStatus.days_remaining} 天)
+                                            </div>
+                                        )}
+                                        {activationStatus.level < 2 && (
+                                            <div style={{ marginTop: '8px', fontSize: '12px', color: '#888' }}>
+                                                输入高级版激活码可升级
                                             </div>
                                         )}
                                     </>
@@ -1476,6 +1534,61 @@ const MainLayout: React.FC = () => {
                                 )
                             ) : (
                                 <div style={{ color: '#888' }}>加载中...</div>
+                            )}
+                        </div>
+
+                        {/* Activation Input */}
+                        <div style={{
+                            marginTop: '15px',
+                            padding: '12px',
+                            backgroundColor: '#2a2a2a',
+                            borderRadius: '4px',
+                            textAlign: 'left'
+                        }}>
+                            <div style={{ marginBottom: '8px', color: '#aaa', fontSize: '12px' }}>
+                                {activationStatus?.is_activated ? '升级/更换激活码' : '输入激活码'}
+                            </div>
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                                <input
+                                    type="text"
+                                    value={activationCode}
+                                    onChange={(e) => setActivationCode(e.target.value)}
+                                    placeholder="请输入激活码"
+                                    style={{
+                                        flex: 1,
+                                        padding: '6px 10px',
+                                        backgroundColor: '#1e1e1e',
+                                        border: '1px solid #555',
+                                        borderRadius: '4px',
+                                        color: '#eee',
+                                        fontSize: '13px'
+                                    }}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter' && !activationLoading) {
+                                            handleActivate();
+                                        }
+                                    }}
+                                />
+                                <button
+                                    onClick={handleActivate}
+                                    disabled={activationLoading}
+                                    style={{
+                                        padding: '6px 12px',
+                                        backgroundColor: activationLoading ? '#555' : '#52c41a',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '4px',
+                                        cursor: activationLoading ? 'not-allowed' : 'pointer',
+                                        fontSize: '13px'
+                                    }}
+                                >
+                                    {activationLoading ? '验证中...' : '激活'}
+                                </button>
+                            </div>
+                            {activationError && (
+                                <div style={{ marginTop: '8px', color: '#ff7875', fontSize: '12px' }}>
+                                    {activationError}
+                                </div>
                             )}
                         </div>
 

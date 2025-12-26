@@ -31,6 +31,12 @@ pub struct LicensePayload {
     pub exp: i64,    // Expiration Unix timestamp (0 = forever)
     pub ver: u32,    // Schema version
     pub iss: String, // Issuer
+    #[serde(default = "default_level")]
+    pub lvl: u8, // License level: 1 = Basic, 2 = Pro (default: 1 for backward compat)
+}
+
+fn default_level() -> u8 {
+    1 // Default to Basic level for backward compatibility
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +46,17 @@ pub struct ActivationStatus {
     pub expiration_date: Option<String>, // ISO format or null
     pub days_remaining: Option<i64>,
     pub error: Option<String>,
+    pub level: u8,          // 0 = not activated, 1 = Basic, 2 = Pro
+    pub level_name: String, // "未激活", "基础版", "高级版"
+}
+
+fn level_to_name(level: u8) -> String {
+    match level {
+        0 => "未激活".to_string(),
+        1 => "基础版".to_string(),
+        2 => "高级版".to_string(),
+        _ => format!("等级 {}", level),
+    }
 }
 
 // ==========================
@@ -238,6 +255,8 @@ pub fn get_activation_status() -> ActivationStatus {
             expiration_date: None,
             days_remaining: None,
             error: Some("系统时间异常，请检查并恢复正确的系统时间".to_string()),
+            level: 0,
+            level_name: level_to_name(0),
         };
     }
 
@@ -251,6 +270,8 @@ pub fn get_activation_status() -> ActivationStatus {
                 expiration_date: None,
                 days_remaining: None,
                 error: None,
+                level: 0,
+                level_name: level_to_name(0),
             };
         }
     };
@@ -279,6 +300,8 @@ pub fn get_activation_status() -> ActivationStatus {
                 expiration_date: exp_date,
                 days_remaining: days_rem,
                 error: None,
+                level: payload.lvl,
+                level_name: level_to_name(payload.lvl),
             }
         }
         Err(e) => ActivationStatus {
@@ -287,6 +310,8 @@ pub fn get_activation_status() -> ActivationStatus {
             expiration_date: None,
             days_remaining: None,
             error: Some(e),
+            level: 0,
+            level_name: level_to_name(0),
         },
     }
 }
@@ -321,5 +346,7 @@ pub fn activate_software(license_code: &str) -> Result<ActivationStatus, String>
         expiration_date: exp_date,
         days_remaining: days_rem,
         error: None,
+        level: payload.lvl,
+        level_name: level_to_name(payload.lvl),
     })
 }
