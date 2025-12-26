@@ -537,6 +537,26 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     }
   }, [renderer, storeNodes]) // Now using proper Zustand selector for stable reference
 
+  // Handle Structural Changes (Add/Delete/Reorder Node)
+  const structureUpdateTrigger = useModelStore(state => state.rendererReloadTrigger)
+  useEffect(() => {
+    if (rendererRef.current && (rendererRef.current as any).modelInstance && structureUpdateTrigger > 0) {
+      console.log('[Viewer] Structural change detected (Trigger: ' + structureUpdateTrigger + '), rebuilding node hierarchy...')
+
+      // Update the model's master node list
+      rendererRef.current.model.Nodes = useModelStore.getState().nodes
+
+      // Call syncNodes to rebuild rendererData.nodes and rootNode children
+      // This ensures all wrappers match the new ObjectIds
+      const instance = (rendererRef.current as any).modelInstance;
+      instance.syncNodes()
+
+      // Also sync other potential structural dependencies
+      instance.syncMaterials()
+      instance.syncGlobalSequences()
+    }
+  }, [structureUpdateTrigger, renderer])
+
   useEffect(() => {
     return () => {
       if (animationFrameId.current !== null) {

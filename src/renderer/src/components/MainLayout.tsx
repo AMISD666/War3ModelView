@@ -658,6 +658,27 @@ const MainLayout: React.FC = () => {
                 const cliPath = await invoke<string | null>('get_cli_file_path');
                 if (cliPath) {
                     console.log('[MainLayout] File opened from command line:', cliPath);
+
+                    // CRITICAL: Load MPQ first before loading model (for textures)
+                    const savedPaths = localStorage.getItem('mpq_paths');
+                    if (savedPaths && !mpqLoaded) {
+                        console.log('[MainLayout] Loading MPQs before model...');
+                        try {
+                            const paths = JSON.parse(savedPaths);
+                            const results = await Promise.allSettled(
+                                paths.map((path: string) => invoke('load_mpq', { path }))
+                            );
+                            const successCount = results.filter(r => r.status === 'fulfilled').length;
+                            if (successCount > 0) {
+                                setMpqLoaded(true);
+                                console.log(`[MainLayout] Loaded ${successCount} MPQs before opening model`);
+                            }
+                        } catch (e) {
+                            console.error('[MainLayout] MPQ pre-load failed:', e);
+                        }
+                    }
+
+                    // Now load the model
                     setIsLoading(true);
                     setZustandLoading(true);
                     setZustandModelData(null, cliPath);

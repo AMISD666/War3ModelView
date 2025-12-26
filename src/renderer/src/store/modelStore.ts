@@ -255,7 +255,8 @@ function extractNodesFromModel(data: ModelData | null): ModelNode[] {
  */
 function updateModelDataWithNodes(
     modelData: ModelData | null,
-    nodes: ModelNode[]
+    nodes: ModelNode[],
+    reorderIds: boolean = true
 ): ModelData | null {
     if (!modelData) return null;
 
@@ -286,44 +287,56 @@ function updateModelDataWithNodes(
     //        → RibbonEmitters → EventObjects → CollisionShapes
     // Camera nodes do NOT have ObjectId and are handled separately
 
-    // Filter nodes by type (excluding Camera)
-    const bones = nodesWithFlags.filter(n => n.type === NodeType.BONE);
-    const lights = nodesWithFlags.filter(n => n.type === NodeType.LIGHT);
-    const helpers = nodesWithFlags.filter(n => n.type === NodeType.HELPER);
-    const attachments = nodesWithFlags.filter(n => n.type === NodeType.ATTACHMENT);
-    const particleEmitters = nodesWithFlags.filter(n => n.type === NodeType.PARTICLE_EMITTER);
-    const particleEmitters2 = nodesWithFlags.filter(n => n.type === NodeType.PARTICLE_EMITTER_2);
-    const ribbonEmitters = nodesWithFlags.filter(n => n.type === NodeType.RIBBON_EMITTER);
-    const eventObjects = nodesWithFlags.filter(n => n.type === NodeType.EVENT_OBJECT);
-    const collisionShapes = nodesWithFlags.filter(n => n.type === NodeType.COLLISION_SHAPE);
     const cameras = nodesWithFlags.filter(n => n.type === NodeType.CAMERA);
 
-    // Concatenate in WC3 order (excluding Camera)
-    const orderedNodes = [
-        ...bones,
-        ...lights,
-        ...helpers,
-        ...attachments,
-        ...particleEmitters,
-        ...particleEmitters2,
-        ...ribbonEmitters,
-        ...eventObjects,
-        ...collisionShapes
-    ];
-
-    // Build old→new ObjectId mapping and reassign ObjectIds
+    let orderedNodes: ModelNode[];
     const oldToNewId = new Map<number, number>();
-    orderedNodes.forEach((node, index) => {
-        const oldId = node.ObjectId;
-        const newId = index;
-        if (oldId !== newId) {
-            oldToNewId.set(oldId, newId);
-        }
-        node.ObjectId = newId;
-    });
 
-    // Update all Parent references to use new ObjectIds
-    if (oldToNewId.size > 0) {
+    if (reorderIds) {
+        // Filter nodes by type (excluding Camera)
+        const bones = nodesWithFlags.filter(n => n.type === NodeType.BONE);
+        const lights = nodesWithFlags.filter(n => n.type === NodeType.LIGHT);
+        const helpers = nodesWithFlags.filter(n => n.type === NodeType.HELPER);
+        const attachments = nodesWithFlags.filter(n => n.type === NodeType.ATTACHMENT);
+        const particleEmitters = nodesWithFlags.filter(n => n.type === NodeType.PARTICLE_EMITTER);
+        const particleEmitters2 = nodesWithFlags.filter(n => n.type === NodeType.PARTICLE_EMITTER_2);
+        const ribbonEmitters = nodesWithFlags.filter(n => n.type === NodeType.RIBBON_EMITTER);
+        const eventObjects = nodesWithFlags.filter(n => n.type === NodeType.EVENT_OBJECT);
+        const collisionShapes = nodesWithFlags.filter(n => n.type === NodeType.COLLISION_SHAPE);
+
+        // Concatenate in WC3 order (excluding Camera)
+        orderedNodes = [
+            ...bones,
+            ...lights,
+            ...helpers,
+            ...attachments,
+            ...particleEmitters,
+            ...particleEmitters2,
+            ...ribbonEmitters,
+            ...eventObjects,
+            ...collisionShapes
+        ];
+
+        // Build old→new ObjectId mapping and reassign ObjectIds
+        orderedNodes.forEach((node, index) => {
+            const oldId = node.ObjectId;
+            const newId = index;
+            if (oldId !== newId) {
+                oldToNewId.set(oldId, newId);
+            }
+            node.ObjectId = newId;
+        });
+    } else {
+        // Prepare nodes for saving without reordering 
+        // We filter out Cameras (no ID) and sort the rest by their EXISTING ObjectId
+        orderedNodes = nodesWithFlags
+            .filter(n => n.type !== NodeType.CAMERA)
+            .sort((a, b) => a.ObjectId - b.ObjectId);
+    }
+
+
+    // Update all Parent references to use new ObjectIds (Only if reordered)
+    if (reorderIds && oldToNewId.size > 0) {
         orderedNodes.forEach(node => {
             if (node.Parent !== null && node.Parent !== undefined && node.Parent >= 0) {
                 const newParentId = oldToNewId.get(node.Parent);
@@ -335,7 +348,7 @@ function updateModelDataWithNodes(
         console.log('[ModelStore] Reassigned ObjectIds for', oldToNewId.size, 'nodes to match WC3 type order');
     }
 
-    // Update type-specific arrays with reassigned nodes
+    // Update type-specific arrays with reassigned/ordered nodes
     updated.Bones = orderedNodes.filter(n => n.type === NodeType.BONE);
     updated.Lights = orderedNodes.filter(n => n.type === NodeType.LIGHT);
     updated.Helpers = orderedNodes.filter(n => n.type === NodeType.HELPER);
@@ -351,18 +364,50 @@ function updateModelDataWithNodes(
     updated.Nodes = [...orderedNodes].sort((a, b) => a.ObjectId - b.ObjectId);
 
     // Rebuild PivotPoints array indexed by new ObjectId
-    const maxObjectId = orderedNodes.length - 1;
-    const pivotPoints: (Float32Array | [number, number, number])[] = [];
+    const maxObjectId = orderedNodes.length > 0 ? orderedNodes[orderedNodes.length - 1].ObjectId : -1;
+    const pivotPoints: (Float32Array | [number, number, number])[] = []; // Sparse array
+
     for (const node of orderedNodes) {
         pivotPoints[node.ObjectId] = node.PivotPoint || [0, 0, 0];
     }
-    // Fill any holes (shouldn't exist after reassignment, but safety check)
+    // Fill any holes 
     for (let i = 0; i <= maxObjectId; i++) {
         if (!pivotPoints[i]) {
             pivotPoints[i] = [0, 0, 0];
         }
     }
     (updated as any).PivotPoints = pivotPoints;
+
+    // CRITICAL FIX: Update Geoset Groups references to match new ObjectIds
+    // When nodes are reordered and ObjectIds change, the bone indices in Geoset.Groups
+    // must be updated, otherwise vertices will be skinned to the wrong bones (or lights/helpers!)
+    // ONLY DO THIS IF WE REORDERED
+    if (reorderIds && oldToNewId.size > 0 && updated.Geosets) {
+        let updatedGroupsCount = 0;
+        updated.Geosets.forEach(geoset => {
+            if (geoset.Groups) {
+                // Groups is number[][], representing matrix groups for vertex skinning
+                for (let i = 0; i < geoset.Groups.length; i++) {
+                    const group = geoset.Groups[i] as any;
+
+                    // Handle both number[] (war3-model) and {matrices: number[]} (War3ModelView types)
+                    const matrices = Array.isArray(group) ? group : (group.matrices || []);
+
+                    for (let j = 0; j < matrices.length; j++) {
+                        const oldBoneId = matrices[j];
+                        const newBoneId = oldToNewId.get(oldBoneId);
+                        if (newBoneId !== undefined) {
+                            matrices[j] = newBoneId;
+                            updatedGroupsCount++;
+                        }
+                    }
+                }
+            }
+        });
+        if (updatedGroupsCount > 0) {
+            console.log('[ModelStore] Updated', updatedGroupsCount, 'bone references in Geoset Groups');
+        }
+    }
 
     return updated;
 }
@@ -460,10 +505,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
         const nodes = extractNodesFromModel(data);
         console.log('[ModelStore] Loaded model with', nodes.length, 'nodes');
 
-        // CRITICAL: Apply ObjectId reassignment on load to ensure WC3 type order
-        // This ensures models with incorrectly ordered ObjectIds (e.g., Light at 81 instead of 52)
-        // get corrected immediately, even if user doesn't edit anything before saving
-        const correctedData = updateModelDataWithNodes(data, nodes);
+        // FORCE NO REORDERING ON LOAD to prevent invalidating saved bone references
+        const correctedData = updateModelDataWithNodes(data, nodes, false);
 
         // Reset animation state on new model load
         // Initialize geosets as hidden (User request: default unchecked)
@@ -518,8 +561,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 node.ObjectId === objectId ? { ...node, ...updates } : node
             );
 
-            // Update modelData with ObjectId reassignment
-            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[]);
+            // Update modelData WITHOUT reordering ObjectIds (preserve existing order)
+            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[], false);
 
             // CRITICAL: Extract corrected nodes from modelData to sync ObjectIds
             const correctedNodes = extractNodesFromModel(updatedModelData);
@@ -540,7 +583,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 node.ObjectId === objectId ? { ...node, ...updates } : node
             );
 
-            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[]);
+            // No reordering
+            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[], false);
             const correctedNodes = extractNodesFromModel(updatedModelData);
 
             return {
@@ -577,21 +621,18 @@ export const useModelStore = create<ModelState>((set, get) => ({
             } as ModelNode;
 
             const updatedNodes = [...state.nodes, newNode];
-            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[]);
+            // ADDING a node: Must reorder to maintain WC3 type groupings and fill/shift IDs
+            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[], true);
 
             // CRITICAL: Extract corrected nodes with reassigned ObjectIds
             const correctedNodes = extractNodesFromModel(updatedModelData);
 
             console.log('[ModelStore] Added node', newNode.Name, '(ObjectId will be corrected by type order)');
 
-            const isParticleNode = nodePartial.type === NodeType.PARTICLE_EMITTER_2 ||
-                nodePartial.type === NodeType.PARTICLE_EMITTER ||
-                nodePartial.type === NodeType.RIBBON_EMITTER;
-
             return {
                 nodes: correctedNodes,
                 modelData: updatedModelData,
-                rendererReloadTrigger: isParticleNode ? state.rendererReloadTrigger + 1 : state.rendererReloadTrigger
+                rendererReloadTrigger: state.rendererReloadTrigger + 1
             };
         });
     },
@@ -610,7 +651,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
             });
 
             const updatedNodes = nodesWithUpdatedParents.filter(node => node.ObjectId !== objectId);
-            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[]);
+            // DELETING a node: Must reorder to close gaps in IDs
+            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[], true);
 
             // CRITICAL: Extract corrected nodes with reassigned ObjectIds
             const correctedNodes = extractNodesFromModel(updatedModelData);
@@ -647,7 +689,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
             };
 
             const updatedNodes = [...state.nodes, newNode];
-            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[]);
+            // PASTING is adding: Must reorder
+            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[], true);
 
             // CRITICAL: Extract corrected nodes with reassigned ObjectIds
             const correctedNodes = extractNodesFromModel(updatedModelData);
@@ -706,7 +749,16 @@ export const useModelStore = create<ModelState>((set, get) => ({
             }
 
             // 4. Update Model Data and extract corrected nodes
-            const updatedModelData = updateModelDataWithNodes(state.modelData, newNodes as any[]);
+            // Moving a node in hierarchy does NOT necessarily require changing ObjectIds if we rely on type ordering.
+            // If we reorderIds=true, we force canonical WC3 type sort, which might persist the user's manual "move" 
+            // only if that move respects the type buckets (e.g. moving a bone within bones).
+            // But if user moves a bone to be child of a helper, the IDs might shuffle if we resort.
+            // To be safe and stable, let's NOT reorder IDs during move, unless the user actually wants to change order.
+            // Since this function is "moveNodeTo" which implies structural change, let's keep reorder=true? 
+            // Wait, the user said "Only reorder when adding new nodes". 
+            // Reparenting shouldn't change IDs ideally.
+            // Let's set reorder=false for stability.
+            const updatedModelData = updateModelDataWithNodes(state.modelData, newNodes as any[], false);
             const correctedNodes = extractNodesFromModel(updatedModelData);
 
             console.log(`[ModelStore] Moved node ${nodeId} ${position} ${targetId}`);
