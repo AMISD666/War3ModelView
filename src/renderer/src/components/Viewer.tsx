@@ -5,6 +5,7 @@ import { SimpleOrbitCamera } from '../utils/SimpleOrbitCamera'
 import { loadAllTextures } from './viewer/textureLoader'
 import { validateAllParticleEmitters } from './viewer/particleValidator'
 import { checkForStructuralChanges } from './viewer/modelSync'
+import { getEnvironmentManager } from './viewer/EnvironmentManager'
 import { logModelInfo } from '../utils/debugLogger'
 import { hexToRgb } from './viewer/types'
 import { mat3, mat4, vec3, vec4, quat } from 'gl-matrix'
@@ -2054,13 +2055,6 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     // When cleanup sets shouldRun = false, it only affects THIS render function
     const runState = { shouldRun: true }
 
-    console.log('[Viewer] useEffect triggered with deps:', { renderer: !!renderer, appMainMode, animationIndex })
-
-    // Debug: Log FPS after mode switch (wait 1 second for FPS to stabilize)
-    setTimeout(() => {
-      console.log('[Viewer] FPS after mode switch:', fps, 'mode:', appMainMode)
-    }, 1000)
-
     if (renderer && canvasRef.current) {
       const contextAttributes: WebGLContextAttributes = {
         alpha: true,
@@ -2405,6 +2399,20 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 if (hiddenGeosetIds.includes(i)) {
                   mdlRenderer.rendererData.geosetAlpha[i] = 0
                 }
+              }
+            }
+
+            // === DNC Environment Lighting Update ===
+            const envManager = getEnvironmentManager()
+            if (envManager.isEnabled()) {
+              envManager.update(delta)
+              const envParams = envManager.getLightParams()
+              if (mdlRenderer.setEnvironmentLight) {
+                mdlRenderer.setEnvironmentLight(
+                  envParams.lightDirection,
+                  envParams.lightColor,
+                  envParams.ambientColor
+                )
               }
             }
 
@@ -4039,7 +4047,6 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     const deltaY = Math.abs(e.clientY - startY)
     const isCtrl = e.ctrlKey || e.metaKey
 
-    console.log('[Viewer] handleMouseUp check', { wasBoxSelecting, deltaX, deltaY, dragButton })
     if (wasBoxSelecting && deltaX > 5 && deltaY > 5) {
       handleBoxSelection(startX, startY, e.clientX, e.clientY, e.shiftKey, isCtrl)
     } else if (deltaX < 5 && deltaY < 5 && dragButton === 0) {
