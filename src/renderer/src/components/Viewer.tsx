@@ -2407,8 +2407,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             if (envManager.isEnabled()) {
               envManager.update(delta)
               const envParams = envManager.getLightParams()
-              if (mdlRenderer.setEnvironmentLight) {
-                mdlRenderer.setEnvironmentLight(
+              if ((mdlRenderer as any).setEnvironmentLight) {
+                (mdlRenderer as any).setEnvironmentLight(
                   envParams.lightDirection,
                   envParams.lightColor,
                   envParams.ambientColor

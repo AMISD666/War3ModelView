@@ -453,6 +453,126 @@ function prepareModelDataForSave(modelData: any): any {
     return data;
 }
 
+/**
+ * Validate model data before export to catch potential format errors.
+ * Returns an array of warning/error messages, empty array if valid.
+ */
+function validateModelData(data: any): string[] {
+    const errors: string[] = [];
+
+    if (!data) {
+        errors.push('Model data is null or undefined');
+        return errors;
+    }
+
+    // 1. Check ObjectId uniqueness
+    const allNodeArrays = [
+        ...(data.Bones || []),
+        ...(data.Lights || []),
+        ...(data.Helpers || []),
+        ...(data.Attachments || []),
+        ...(data.ParticleEmitters || []),
+        ...(data.ParticleEmitters2 || []),
+        ...(data.RibbonEmitters || []),
+        ...(data.EventObjects || []),
+        ...(data.CollisionShapes || [])
+    ];
+
+    const objectIds = allNodeArrays.map((n: any) => n.ObjectId);
+    const uniqueIds = new Set(objectIds);
+    if (uniqueIds.size !== objectIds.length) {
+        errors.push(`Duplicate ObjectIds detected: ${objectIds.length} nodes but only ${uniqueIds.size} unique IDs`);
+    }
+
+    // 2. Check for gaps in ObjectId sequence
+    const sortedIds = [...uniqueIds].filter(id => typeof id === 'number').sort((a, b) => a - b);
+    for (let i = 0; i < sortedIds.length; i++) {
+        if (sortedIds[i] !== i) {
+            errors.push(`ObjectId sequence has gaps: expected ${i}, found ${sortedIds[i]}`);
+            break;
+        }
+    }
+
+    // 3. Validate Parent references
+    const validIds = new Set(sortedIds);
+    validIds.add(-1); // -1 is valid (root)
+    for (const node of allNodeArrays) {
+        if (node.Parent !== undefined && node.Parent !== null && !validIds.has(node.Parent)) {
+            errors.push(`Node "${node.Name}" (ObjectId=${node.ObjectId}) has invalid Parent=${node.Parent}`);
+        }
+    }
+
+    // 4. Check PivotPoints count
+    const expectedPivotCount = sortedIds.length > 0 ? sortedIds[sortedIds.length - 1] + 1 : 0;
+    const actualPivotCount = data.PivotPoints?.length || 0;
+    if (actualPivotCount !== expectedPivotCount) {
+        errors.push(`PivotPoints count mismatch: expected ${expectedPivotCount}, found ${actualPivotCount}`);
+    }
+
+    // 5. Check node type order (WC3 format requirement)
+    const typeOrder = ['Bone', 'Light', 'Helper', 'Attachment', 'ParticleEmitter', 'ParticleEmitter2', 'RibbonEmitter', 'EventObject', 'CollisionShape'];
+    let lastTypeIndex = -1;
+    let lastObjectId = -1;
+
+    for (const typeName of typeOrder) {
+        const arrayName = typeName === 'Bone' ? 'Bones' :
+            typeName === 'Light' ? 'Lights' :
+                typeName === 'Helper' ? 'Helpers' :
+                    typeName === 'Attachment' ? 'Attachments' :
+                        typeName === 'ParticleEmitter' ? 'ParticleEmitters' :
+                            typeName === 'ParticleEmitter2' ? 'ParticleEmitters2' :
+                                typeName === 'RibbonEmitter' ? 'RibbonEmitters' :
+                                    typeName === 'EventObject' ? 'EventObjects' :
+                                        'CollisionShapes';
+
+        const nodes = data[arrayName] || [];
+        for (const node of nodes) {
+            if (node.ObjectId < lastObjectId) {
+                // This is okay if it's within the same type, but not across types
+            }
+            lastObjectId = Math.max(lastObjectId, node.ObjectId);
+        }
+    }
+
+    // 6. Check for missing required fields
+    for (const node of allNodeArrays) {
+        if (node.ObjectId === undefined || node.ObjectId === null) {
+            errors.push(`Node "${node.Name}" is missing ObjectId`);
+        }
+        if (!node.PivotPoint && !data.PivotPoints?.[node.ObjectId]) {
+            errors.push(`Node "${node.Name}" (ObjectId=${node.ObjectId}) is missing PivotPoint`);
+        }
+    }
+
+    // 7. Check Geoset integrity
+    if (data.Geosets) {
+        for (let i = 0; i < data.Geosets.length; i++) {
+            const geoset = data.Geosets[i];
+            if (!geoset.Vertices || geoset.Vertices.length === 0) {
+                errors.push(`Geoset ${i} has no vertices`);
+            }
+            if (!geoset.Faces || geoset.Faces.length === 0) {
+                errors.push(`Geoset ${i} has no faces`);
+            }
+            // Check bone references in Groups
+            if (geoset.Groups) {
+                for (let g = 0; g < geoset.Groups.length; g++) {
+                    const group = geoset.Groups[g];
+                    if (Array.isArray(group)) {
+                        for (const boneId of group) {
+                            if (!validIds.has(boneId) && boneId !== -1) {
+                                errors.push(`Geoset ${i} Group ${g} references invalid bone ObjectId=${boneId}`);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return errors;
+}
+
 const MainLayout: React.FC = () => {
     // Zustand stores
     const modelPath = useModelStore(state => state.modelPath)
@@ -928,21 +1048,26 @@ const MainLayout: React.FC = () => {
             // Prepare model data with correct typed arrays
             const preparedData = prepareModelDataForSave(modelData);
 
+            // Validate model data before export
+            const validationErrors = validateModelData(preparedData);
+            if (validationErrors.length > 0) {
+                console.warn('[MainLayout] Model validation warnings:', validationErrors);
+                // Show first 3 errors to user
+                const errorMsg = validationErrors.slice(0, 3).join('\n');
+                const proceed = confirm(`模型验证发现以下问题:\n${errorMsg}\n${validationErrors.length > 3 ? `...还有 ${validationErrors.length - 3} 个问题` : ''}\n\n是否仍然保存?`);
+                if (!proceed) return;
+            }
+
             // Fix FrameFlags for ParticleEmitter2 to prevent save corruption
             if (preparedData.ParticleEmitters2) {
                 preparedData.ParticleEmitters2.forEach((emitter: any) => {
-                    // Reconstruct FrameFlags from Head/Tail booleans if present
                     if (typeof emitter.Head === 'boolean' || typeof emitter.Tail === 'boolean') {
                         let flags = 0
-                        if (emitter.Head) flags |= 1 // Head
-                        if (emitter.Tail) flags |= 2 // Tail
-
-                        // Prevent corruption: generator writes nothing if flags is 0, shifting bytes
+                        if (emitter.Head) flags |= 1
+                        if (emitter.Tail) flags |= 2
                         if (flags === 0) flags = 1
-
                         emitter.FrameFlags = flags
                     } else if (emitter.FrameFlags === undefined) {
-                        // Handle new nodes that might miss FrameFlags
                         emitter.FrameFlags = 1
                     }
                 })
@@ -980,21 +1105,26 @@ const MainLayout: React.FC = () => {
                 // Prepare model data with correct typed arrays
                 const preparedData = prepareModelDataForSave(modelData);
 
-                // Fix FrameFlags for ParticleEmitter2 to prevent save corruption (Save As)
+                // Validate model data before export
+                const validationErrors = validateModelData(preparedData);
+                if (validationErrors.length > 0) {
+                    console.warn('[MainLayout] SaveAs validation warnings:', validationErrors);
+                    const errorMsg = validationErrors.slice(0, 3).join('\n');
+                    const proceed = confirm(`模型验证发现以下问题:\n${errorMsg}\n${validationErrors.length > 3 ? `...还有 ${validationErrors.length - 3} 个问题` : ''}\n\n是否仍然保存?`);
+                    if (!proceed) return;
+                }
+
+                // Fix FrameFlags for ParticleEmitter2
                 if (preparedData.ParticleEmitters2) {
-                    console.log('[MainLayout] Saving As - Checking ParticleEmitters2:', preparedData.ParticleEmitters2.length);
-                    preparedData.ParticleEmitters2.forEach((emitter: any, index: number) => {
-                        console.log(`[MainLayout] Emitter ${index} before: Head=${emitter.Head}, Tail=${emitter.Tail}, Flags=${emitter.FrameFlags}`);
+                    preparedData.ParticleEmitters2.forEach((emitter: any) => {
                         if (typeof emitter.Head === 'boolean' || typeof emitter.Tail === 'boolean') {
                             let flags = 0
                             if (emitter.Head) flags |= 1
                             if (emitter.Tail) flags |= 2
                             if (flags === 0) flags = 1
                             emitter.FrameFlags = flags
-                            console.log(`[MainLayout] Emitter ${index} fixed: Flags=${emitter.FrameFlags}`);
                         } else if (emitter.FrameFlags === undefined) {
                             emitter.FrameFlags = 1
-                            console.log(`[MainLayout] Emitter ${index} fixed (undefined): Flags=${emitter.FrameFlags}`);
                         }
                     })
                 }
@@ -1049,6 +1179,16 @@ const MainLayout: React.FC = () => {
                 }
 
                 const preparedData = prepareModelDataForSave(modelData)
+
+                // Validate before export
+                const validationErrors = validateModelData(preparedData);
+                if (validationErrors.length > 0) {
+                    console.warn('[MainLayout] Export MDL validation warnings:', validationErrors);
+                    const errorMsg = validationErrors.slice(0, 3).join('\n');
+                    const proceed = confirm(`模型验证发现以下问题:\n${errorMsg}\n${validationErrors.length > 3 ? `...还有 ${validationErrors.length - 3} 个问题` : ''}\n\n是否仍然导出?`);
+                    if (!proceed) return;
+                }
+
                 fixParticleEmitterFlags(preparedData)
 
                 const content = generateMDL(preparedData)
@@ -1085,6 +1225,16 @@ const MainLayout: React.FC = () => {
                 }
 
                 const preparedData = prepareModelDataForSave(modelData)
+
+                // Validate before export
+                const validationErrors = validateModelData(preparedData);
+                if (validationErrors.length > 0) {
+                    console.warn('[MainLayout] Export MDX validation warnings:', validationErrors);
+                    const errorMsg = validationErrors.slice(0, 3).join('\n');
+                    const proceed = confirm(`模型验证发现以下问题:\n${errorMsg}\n${validationErrors.length > 3 ? `...还有 ${validationErrors.length - 3} 个问题` : ''}\n\n是否仍然导出?`);
+                    if (!proceed) return;
+                }
+
                 fixParticleEmitterFlags(preparedData)
 
                 const buffer = generateMDX(preparedData)
