@@ -532,8 +532,8 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
                         </div>
                     )}
 
-                    {/* Grid Generation Section - Only for Vector3 (Translation/Scaling mainly) */}
-                    {vectorSize === 3 && (
+                    {/* Grid Generation Section - Only for Vector3 (Translation/UV, NOT Color) */}
+                    {vectorSize === 3 && !title.includes('颜色') && !title.includes('Color') && !title.includes('环境色') && (
                         <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid #4a4a4a', display: 'flex', alignItems: 'center', gap: 8 }}>
                             <span style={{ color: "#ccc" }}>行:</span>
                             <InputNumber

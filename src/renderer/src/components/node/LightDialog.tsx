@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { Form, InputNumber, Select, Button, Row, Col, Checkbox, ColorPicker } from 'antd';
 import { DraggableModal } from '../DraggableModal';
 import { useModelStore } from '../../store/modelStore';
+import { useHistoryStore } from '../../store/historyStore';
+import KeyframeEditor from '../editors/KeyframeEditor';
 import type { LightNode } from '../../types/node';
 import type { Color } from 'antd/es/color-picker';
 
@@ -13,91 +15,68 @@ interface LightDialogProps {
     onClose: () => void;
 }
 
-// Fieldset style matching the reference
-const fieldsetStyle: React.CSSProperties = {
-    border: '1px solid #484848',
-    padding: '8px 12px',
-    marginBottom: 8,
-    backgroundColor: 'transparent',
-    borderRadius: 0,
-    height: '100%'
+// Property mapping for animations (propName -> animKey on node)
+const PROP_TO_ANIM_KEY: Record<string, string> = {
+    Color: 'ColorAnim',
+    AmbientColor: 'AmbientColorAnim',
+    Intensity: 'IntensityAnim',
+    AmbientIntensity: 'AmbientIntensityAnim',
+    AttenuationStart: 'AttenuationStartAnim',
+    AttenuationEnd: 'AttenuationEndAnim',
+    Visibility: 'VisibilityAnim'
 };
 
-const legendStyle: React.CSSProperties = {
-    fontSize: 12,
-    color: '#ccc',
-    padding: '0 6px',
-    width: 'auto',
-    marginLeft: 4,
-    marginBottom: 0
+// Helper to check if a value is an AnimVector (animated)
+const isAnimVector = (val: any): boolean => {
+    return val && typeof val === 'object' && Array.isArray(val.Keys);
 };
 
-const inputStyle: React.CSSProperties = {
-    backgroundColor: '#2b2b2b',
-    borderColor: '#484848',
-    color: '#fff',
-    width: '100%'
+// Extract static value from AnimVector or return as-is
+const getStaticValue = (val: any, defaultVal: any = 0): any => {
+    if (isAnimVector(val)) {
+        // Use first keyframe value
+        const firstKey = val.Keys?.[0];
+        if (firstKey) {
+            const vec = firstKey.Vector ?? firstKey.Value;
+            if (Array.isArray(vec)) {
+                return vec.length === 1 ? vec[0] : vec;
+            }
+            return vec ?? defaultVal;
+        }
+        return defaultVal;
+    }
+    return val ?? defaultVal;
 };
-
-// Dynamic field component with checkbox
-const DynamicField = ({
-    label,
-    isDynamic,
-    onDynamicChange,
-    children,
-    buttonLabel
-}: {
-    label: string;
-    isDynamic: boolean;
-    onDynamicChange: (checked: boolean) => void;
-    children: React.ReactNode;
-    buttonLabel?: string;
-}) => (
-    <fieldset style={fieldsetStyle}>
-        <legend style={legendStyle}>{label}</legend>
-        <div style={{ marginBottom: 6 }}>
-            <Checkbox
-                checked={isDynamic}
-                onChange={(e) => onDynamicChange(e.target.checked)}
-                style={{ color: '#888', fontSize: 12 }}
-            >
-                动态化
-            </Checkbox>
-        </div>
-        <Button
-            size="small"
-            disabled={!isDynamic}
-            style={{
-                width: '100%',
-                marginBottom: 6,
-                backgroundColor: '#333',
-                borderColor: '#484848',
-                color: isDynamic ? '#fff' : '#666'
-            }}
-        >
-            {buttonLabel || label}
-        </Button>
-        {children}
-    </fieldset>
-);
 
 const LightDialog: React.FC<LightDialogProps> = ({ visible, nodeId, onClose }) => {
     const [form] = Form.useForm();
-    const { getNodeById, updateNode } = useModelStore();
+    const { getNodeById, updateNode, modelData } = useModelStore();
 
     const currentNode = nodeId !== null ? getNodeById(nodeId) as LightNode : null;
 
-    // Dynamic states for each property
-    const [dynamicProps, setDynamicProps] = useState<Record<string, boolean>>({});
-
-    const toggleDynamic = (prop: string, checked: boolean) => {
-        setDynamicProps(prev => ({ ...prev, [prop]: checked }));
-    };
+    // Animation State (same pattern as ParticleEmitter2Dialog)
+    const [animDataMap, setAnimDataMap] = useState<Record<string, any>>({});
+    const [keyframeEditorVisible, setKeyframeEditorVisible] = useState(false);
+    const [currentEditingProp, setCurrentEditingProp] = useState<string | null>(null);
+    const [currentEditingTitle, setCurrentEditingTitle] = useState<string>('');
+    const [currentVectorSize, setCurrentVectorSize] = useState<number>(1);
 
     // Helper to convert array [r, g, b] (0-1) to Antd Color
-    const toAntdColor = (rgb?: [number, number, number]) => {
+    const toAntdColor = (rgb?: [number, number, number] | any) => {
+        // Handle AnimVector
+        if (isAnimVector(rgb)) {
+            const firstKey = rgb.Keys?.[0];
+            const vec = firstKey?.Vector ?? firstKey?.Value;
+            if (Array.isArray(vec) && vec.length >= 3) {
+                return `rgb(${Math.round(vec[0] * 255)}, ${Math.round(vec[1] * 255)}, ${Math.round(vec[2] * 255)})`;
+            }
+            return 'rgb(255, 255, 255)';
+        }
         if (!rgb) return 'rgb(255, 255, 255)';
-        return `rgb(${Math.round(rgb[0] * 255)}, ${Math.round(rgb[1] * 255)}, ${Math.round(rgb[2] * 255)})`;
+        if (Array.isArray(rgb) && rgb.length >= 3) {
+            return `rgb(${Math.round(rgb[0] * 255)}, ${Math.round(rgb[1] * 255)}, ${Math.round(rgb[2] * 255)})`;
+        }
+        return 'rgb(255, 255, 255)';
     };
 
     // Helper to convert Antd Color to array [r, g, b] (0-1)
@@ -120,26 +99,8 @@ const LightDialog: React.FC<LightDialogProps> = ({ visible, nodeId, onClose }) =
     };
 
     useEffect(() => {
-        if (visible && currentNode) {
-            let lightTypeValue = currentNode.LightType;
-            if (typeof lightTypeValue === 'number') {
-                const typeNames = ['Omnidirectional', 'Directional', 'Ambient'];
-                lightTypeValue = typeNames[lightTypeValue] as any;
-            }
-
-            form.setFieldsValue({
-                LightType: lightTypeValue ?? 'Omnidirectional',
-                AttenuationStart: currentNode.AttenuationStart ?? 0,
-                AttenuationEnd: currentNode.AttenuationEnd ?? 500,
-                Intensity: currentNode.Intensity ?? 1,
-                AmbientIntensity: currentNode.AmbientIntensity ?? 0,
-                Visibility: currentNode.Visibility ?? 1,
-                Color: toAntdColor(currentNode.Color),
-                AmbientColor: toAntdColor(currentNode.AmbientColor),
-            });
-            setDynamicProps({});
-        } else if (visible) {
-            form.setFieldsValue({
+        if (visible) {
+            const defaults = {
                 LightType: 'Omnidirectional',
                 AttenuationStart: 0,
                 AttenuationEnd: 500,
@@ -148,8 +109,46 @@ const LightDialog: React.FC<LightDialogProps> = ({ visible, nodeId, onClose }) =
                 Visibility: 1,
                 Color: 'rgb(255, 255, 255)',
                 AmbientColor: 'rgb(255, 255, 255)',
-            });
-            setDynamicProps({});
+            };
+
+            const newAnimDataMap: Record<string, any> = {};
+
+            if (currentNode) {
+                let lightTypeValue = currentNode.LightType;
+                if (typeof lightTypeValue === 'number') {
+                    const typeNames = ['Omnidirectional', 'Directional', 'Ambient'];
+                    lightTypeValue = typeNames[lightTypeValue] as any;
+                }
+
+                // Check for animated properties and load them
+                Object.entries(PROP_TO_ANIM_KEY).forEach(([propName, animKey]) => {
+                    const value = (currentNode as any)[propName];
+                    if (isAnimVector(value)) {
+                        newAnimDataMap[propName] = value;
+                    }
+                    // Also check the anim key itself (if stored separately)
+                    const animValue = (currentNode as any)[animKey];
+                    if (isAnimVector(animValue)) {
+                        newAnimDataMap[propName] = animValue;
+                    }
+                });
+
+                form.setFieldsValue({
+                    LightType: lightTypeValue ?? defaults.LightType,
+                    // Use static value extraction for form fields
+                    AttenuationStart: getStaticValue(currentNode.AttenuationStart, defaults.AttenuationStart),
+                    AttenuationEnd: getStaticValue(currentNode.AttenuationEnd, defaults.AttenuationEnd),
+                    Intensity: getStaticValue(currentNode.Intensity, defaults.Intensity),
+                    AmbientIntensity: getStaticValue(currentNode.AmbientIntensity, defaults.AmbientIntensity),
+                    Visibility: getStaticValue((currentNode as any).Visibility, defaults.Visibility),
+                    Color: toAntdColor(currentNode.Color),
+                    AmbientColor: toAntdColor(currentNode.AmbientColor),
+                });
+            } else {
+                form.setFieldsValue(defaults);
+            }
+
+            setAnimDataMap(newAnimDataMap);
         }
     }, [currentNode, visible, form]);
 
@@ -164,22 +163,218 @@ const LightDialog: React.FC<LightDialogProps> = ({ visible, nodeId, onClose }) =
             else if (values.LightType === 'Ambient') lightTypeVal = 2;
             else lightTypeVal = 0; // Omnidirectional
 
-            const updatedNode: LightNode = {
+            // Build updated node with static or animated values
+            const updatedNode: any = {
                 ...currentNode,
                 LightType: lightTypeVal,
-                AttenuationStart: values.AttenuationStart,
-                AttenuationEnd: values.AttenuationEnd,
-                Intensity: values.Intensity,
-                AmbientIntensity: values.AmbientIntensity,
-                Color: fromAntdColor(values.Color),
-                AmbientColor: fromAntdColor(values.AmbientColor),
             };
+
+            // Handle each property - use animated data if available, otherwise static
+            const propConfigs: Array<{ prop: string, isColor: boolean, formField: string }> = [
+                { prop: 'AttenuationStart', isColor: false, formField: 'AttenuationStart' },
+                { prop: 'AttenuationEnd', isColor: false, formField: 'AttenuationEnd' },
+                { prop: 'Intensity', isColor: false, formField: 'Intensity' },
+                { prop: 'AmbientIntensity', isColor: false, formField: 'AmbientIntensity' },
+                { prop: 'Color', isColor: true, formField: 'Color' },
+                { prop: 'AmbientColor', isColor: true, formField: 'AmbientColor' },
+                { prop: 'Visibility', isColor: false, formField: 'Visibility' },
+            ];
+
+            propConfigs.forEach(({ prop, isColor, formField }) => {
+                const animKey = PROP_TO_ANIM_KEY[prop];
+                if (animDataMap[prop]) {
+                    // Animated - store both the property and the anim key
+                    updatedNode[prop] = animDataMap[prop];
+                    if (animKey) {
+                        updatedNode[animKey] = animDataMap[prop];
+                    }
+                } else {
+                    // Static
+                    if (isColor) {
+                        updatedNode[prop] = fromAntdColor(values[formField]);
+                    } else {
+                        updatedNode[prop] = Number(values[formField]);
+                    }
+                    // Remove anim key if it was previously animated
+                    if (animKey) {
+                        delete updatedNode[animKey];
+                    }
+                }
+            });
+
+            // History
+            useHistoryStore.getState().push({
+                name: `Edit Light`,
+                undo: () => updateNode(nodeId, currentNode),
+                redo: () => updateNode(nodeId, updatedNode)
+            });
 
             updateNode(nodeId, updatedNode);
             onClose();
         } catch (e) {
             console.error("Validation failed", e);
         }
+    };
+
+    const handleOpenKeyframeEditor = (propName: string, title: string, vectorSize: number = 1) => {
+        setCurrentEditingProp(propName);
+        setCurrentEditingTitle(title);
+        setCurrentVectorSize(vectorSize);
+        setKeyframeEditorVisible(true);
+    };
+
+    const handleKeyframeSave = (animVector: any) => {
+        if (currentEditingProp) {
+            setAnimDataMap(prev => ({
+                ...prev,
+                [currentEditingProp]: animVector
+            }));
+            setKeyframeEditorVisible(false);
+            setCurrentEditingProp(null);
+        }
+    };
+
+    const handleDynamicChange = (propName: string, checked: boolean) => {
+        if (checked) {
+            // Initialize empty animation if none exists
+            if (!animDataMap[propName]) {
+                setAnimDataMap(prev => ({
+                    ...prev,
+                    [propName]: { Keys: [], LineType: 1, GlobalSeqId: null }
+                }));
+            }
+        } else {
+            // Remove animation
+            setAnimDataMap(prev => {
+                const copy = { ...prev };
+                delete copy[propName];
+                return copy;
+            });
+        }
+    };
+
+    // Common styles
+    const boxStyle: React.CSSProperties = {
+        border: '1px solid #484848',
+        padding: '12px 6px 6px 6px',
+        position: 'relative',
+        marginTop: 8,
+        backgroundColor: '#2b2b2b',
+        borderRadius: 2,
+    };
+
+    const labelStyle: React.CSSProperties = {
+        position: 'absolute',
+        top: -9,
+        left: 8,
+        backgroundColor: '#1f1f1f',
+        padding: '0 4px',
+        fontSize: 12,
+        color: '#ccc'
+    };
+
+    const inputStyle: React.CSSProperties = {
+        width: '100%',
+        backgroundColor: '#333',
+        borderColor: '#444',
+        color: '#fff'
+    };
+
+    // Boxed Numeric Field (matches ParticleEmitter2Dialog style)
+    const BoxedNumericField = ({ label, name, min, max, precision, width }:
+        { label: string, name: string, min?: number, max?: number, precision?: number, width?: number | string }) => {
+        const isDynamic = !!animDataMap[name];
+
+        return (
+            <div style={{ ...boxStyle, width }}>
+                <span style={labelStyle}>{label}</span>
+
+                <div style={{ marginBottom: 6 }}>
+                    <Checkbox
+                        checked={isDynamic}
+                        onChange={(e) => handleDynamicChange(name, e.target.checked)}
+                        style={{ color: '#ccc', fontSize: 12 }}
+                    >
+                        动态化
+                    </Checkbox>
+                </div>
+
+                <Button
+                    block
+                    size="small"
+                    onClick={() => handleOpenKeyframeEditor(name, label, 1)}
+                    disabled={!isDynamic}
+                    style={{
+                        marginBottom: 6,
+                        backgroundColor: '#444',
+                        color: isDynamic ? '#fff' : '#888',
+                        borderColor: '#555',
+                        height: 28
+                    }}
+                >
+                    {label}
+                </Button>
+
+                <Form.Item name={name} noStyle>
+                    <InputNumber
+                        style={inputStyle}
+                        min={min}
+                        max={max}
+                        precision={precision}
+                        disabled={isDynamic}
+                        size="small"
+                        placeholder="0"
+                    />
+                </Form.Item>
+            </div>
+        );
+    };
+
+    // Boxed Color Field
+    const BoxedColorField = ({ label, name }:
+        { label: string, name: string }) => {
+        const isDynamic = !!animDataMap[name];
+
+        return (
+            <div style={boxStyle}>
+                <span style={labelStyle}>{label}</span>
+
+                <div style={{ marginBottom: 6 }}>
+                    <Checkbox
+                        checked={isDynamic}
+                        onChange={(e) => handleDynamicChange(name, e.target.checked)}
+                        style={{ color: '#ccc', fontSize: 12 }}
+                    >
+                        动态化
+                    </Checkbox>
+                </div>
+
+                <Button
+                    block
+                    size="small"
+                    onClick={() => handleOpenKeyframeEditor(name, label, 3)}
+                    disabled={!isDynamic}
+                    style={{
+                        marginBottom: 6,
+                        backgroundColor: '#444',
+                        color: isDynamic ? '#fff' : '#888',
+                        borderColor: '#555',
+                        height: 28
+                    }}
+                >
+                    {label}
+                </Button>
+
+                <Form.Item name={name} noStyle>
+                    <ColorPicker
+                        size="small"
+                        showText
+                        format="rgb"
+                        disabled={isDynamic}
+                    />
+                </Form.Item>
+            </div>
+        );
     };
 
     return (
@@ -189,155 +384,47 @@ const LightDialog: React.FC<LightDialogProps> = ({ visible, nodeId, onClose }) =
             onOk={handleOk}
             onCancel={onClose}
             footer={null}
-            width={550}
+            width={700}
             maskClosable={false}
             wrapClassName="dark-theme-modal"
             styles={{ body: { padding: '12px 16px', backgroundColor: '#1f1f1f', color: '#ccc' } }}
         >
             <Form form={form} layout="vertical">
                 {/* Row 1: 颜色 | 环境色 | 衰减开始 */}
-                <Row gutter={8}>
-                    <Col span={8}>
-                        <DynamicField
-                            label="颜色"
-                            isDynamic={!!dynamicProps['Color']}
-                            onDynamicChange={(c) => toggleDynamic('Color', c)}
-                            buttonLabel="颜色"
-                        >
-                            <Form.Item name="Color" noStyle>
-                                <ColorPicker
-                                    size="small"
-                                    showText
-                                    format="rgb"
-                                    disabled={dynamicProps['Color']}
-                                />
-                            </Form.Item>
-                        </DynamicField>
-                    </Col>
-                    <Col span={8}>
-                        <DynamicField
-                            label="环境色"
+                <div style={{ display: 'flex', gap: 8 }}>
+                    <div style={{ flex: 1 }}>
+                        <BoxedColorField label="颜色" name="Color" />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                        <BoxedColorField label="环境色" name="AmbientColor" />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                        <BoxedNumericField label="衰减开始" name="AttenuationStart" min={0} />
+                    </div>
+                </div>
 
-                            isDynamic={!!dynamicProps['AmbientColor']}
-                            onDynamicChange={(c) => toggleDynamic('AmbientColor', c)}
-                            buttonLabel="颜色"
-                        >
-                            <Form.Item name="AmbientColor" noStyle>
-                                <ColorPicker
-                                    size="small"
-                                    showText
-                                    format="rgb"
-                                    disabled={dynamicProps['AmbientColor']}
-                                />
-                            </Form.Item>
-                        </DynamicField>
-                    </Col>
-                    <Col span={8}>
-                        <DynamicField
-                            label="衰减开始"
+                {/* Row 2: 光照强度 | 环境强度 | 衰减结束 */}
+                <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                    <div style={{ flex: 1 }}>
+                        <BoxedNumericField label="光照强度" name="Intensity" min={0} precision={2} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                        <BoxedNumericField label="环境强度" name="AmbientIntensity" min={0} precision={2} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                        <BoxedNumericField label="衰减结束" name="AttenuationEnd" min={0} />
+                    </div>
+                </div>
 
-                            isDynamic={!!dynamicProps['AttenuationStart']}
-                            onDynamicChange={(c) => toggleDynamic('AttenuationStart', c)}
-                            buttonLabel="衰减"
-                        >
-                            <Form.Item name="AttenuationStart" noStyle>
-                                <InputNumber
-                                    style={inputStyle}
-                                    size="small"
-                                    min={0}
-                                    disabled={dynamicProps['AttenuationStart']}
-                                />
-                            </Form.Item>
-                        </DynamicField>
-                    </Col>
-                </Row>
-
-                {/* Row 2: 光照强度 | 阴影强度 | 衰减结束 */}
-                <Row gutter={8}>
-                    <Col span={8}>
-                        <DynamicField
-                            label="光照强度"
-
-                            isDynamic={!!dynamicProps['Intensity']}
-                            onDynamicChange={(c) => toggleDynamic('Intensity', c)}
-                            buttonLabel="光照强度"
-                        >
-                            <Form.Item name="Intensity" noStyle>
-                                <InputNumber
-                                    style={inputStyle}
-                                    size="small"
-                                    min={0}
-                                    step={0.1}
-                                    disabled={dynamicProps['Intensity']}
-                                />
-                            </Form.Item>
-                        </DynamicField>
-                    </Col>
-                    <Col span={8}>
-                        <DynamicField
-                            label="阴影强度"
-
-                            isDynamic={!!dynamicProps['AmbientIntensity']}
-                            onDynamicChange={(c) => toggleDynamic('AmbientIntensity', c)}
-                            buttonLabel="光照强度"
-                        >
-                            <Form.Item name="AmbientIntensity" noStyle>
-                                <InputNumber
-                                    style={inputStyle}
-                                    size="small"
-                                    min={0}
-                                    step={0.1}
-                                    disabled={dynamicProps['AmbientIntensity']}
-                                />
-                            </Form.Item>
-                        </DynamicField>
-                    </Col>
-                    <Col span={8}>
-                        <DynamicField
-                            label="衰减结束"
-
-                            isDynamic={!!dynamicProps['AttenuationEnd']}
-                            onDynamicChange={(c) => toggleDynamic('AttenuationEnd', c)}
-                            buttonLabel="衰减"
-                        >
-                            <Form.Item name="AttenuationEnd" noStyle>
-                                <InputNumber
-                                    style={inputStyle}
-                                    size="small"
-                                    min={0}
-                                    disabled={dynamicProps['AttenuationEnd']}
-                                />
-                            </Form.Item>
-                        </DynamicField>
-                    </Col>
-                </Row>
-
-                {/* Row 3: 可见度 | 其他 */}
-                <Row gutter={8}>
-                    <Col span={8}>
-                        <DynamicField
-                            label="可见度"
-
-                            isDynamic={!!dynamicProps['Visibility']}
-                            onDynamicChange={(c) => toggleDynamic('Visibility', c)}
-                            buttonLabel="可见度"
-                        >
-                            <Form.Item name="Visibility" noStyle>
-                                <InputNumber
-                                    style={inputStyle}
-                                    size="small"
-                                    min={0}
-                                    max={1}
-                                    step={0.1}
-                                    disabled={dynamicProps['Visibility']}
-                                />
-                            </Form.Item>
-                        </DynamicField>
-                    </Col>
-                    <Col span={16}>
-                        <fieldset style={{ ...fieldsetStyle, display: 'flex', flexDirection: 'column' }}>
-                            <legend style={legendStyle}>其他</legend>
-                            <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
+                {/* Row 3: 可见度 | 类型选择 | 按钮 */}
+                <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                    <div style={{ flex: 1 }}>
+                        <BoxedNumericField label="可见度" name="Visibility" min={0} max={1} precision={1} />
+                    </div>
+                    <div style={{ flex: 2 }}>
+                        <div style={boxStyle}>
+                            <span style={labelStyle}>其他</span>
+                            <div style={{ display: 'flex', alignItems: 'center', marginTop: 8 }}>
                                 <span style={{ marginRight: 12, color: '#888' }}>类型:</span>
                                 <Form.Item name="LightType" noStyle>
                                     <Select style={{ flex: 1 }} size="small">
@@ -347,16 +434,32 @@ const LightDialog: React.FC<LightDialogProps> = ({ visible, nodeId, onClose }) =
                                     </Select>
                                 </Form.Item>
                             </div>
-                        </fieldset>
-                    </Col>
-                </Row>
 
-                {/* Buttons */}
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
-                    <Button onClick={handleOk} style={{ minWidth: 70 }}>确 定</Button>
-                    <Button onClick={onClose} style={{ minWidth: 70 }}>取 消</Button>
+                            {/* Buttons */}
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+                                <Button onClick={handleOk} type="primary" size="small" style={{ minWidth: 70 }}>确定</Button>
+                                <Button onClick={onClose} size="small" style={{ minWidth: 70 }}>取消</Button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </Form>
+
+            {keyframeEditorVisible && (
+                <KeyframeEditor
+                    visible={keyframeEditorVisible}
+                    onCancel={() => {
+                        setKeyframeEditorVisible(false);
+                        setCurrentEditingProp(null);
+                    }}
+                    onOk={handleKeyframeSave}
+                    initialData={currentEditingProp ? animDataMap[currentEditingProp] : null}
+                    title={`编辑: ${currentEditingTitle}`}
+                    vectorSize={currentVectorSize}
+                    globalSequences={modelData?.GlobalSequences?.map((g: any) => g.Duration) || []}
+                    sequences={modelData?.Sequences || []}
+                />
+            )}
         </DraggableModal>
     );
 };

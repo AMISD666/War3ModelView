@@ -1,18 +1,19 @@
-﻿import React, { useState, useCallback, useEffect, useRef } from 'react'
+﻿import React, { useState, useCallback, useEffect, useRef, Suspense } from 'react'
 import Viewer, { ViewerRef } from './Viewer'
 import MenuBar from './MenuBar'
 import EditorPanel from './EditorPanel'
-import GeosetAnimationModal from './modals/GeosetAnimationModal'
-import TextureEditorModal from './modals/TextureEditorModal'
-import TextureAnimationManagerModal from './modals/TextureAnimationManagerModal'
-import SequenceEditorModal from './modals/SequenceEditorModal'
-import CameraManagerModal from './modals/CameraManagerModal'
-import UVModeLayout from './UVModeLayout'
-import AnimationModeLayout from './animation/AnimationModeLayout'
+// Lazy load modal components for faster startup
+const GeosetAnimationModal = React.lazy(() => import('./modals/GeosetAnimationModal'))
+const TextureEditorModal = React.lazy(() => import('./modals/TextureEditorModal'))
+const TextureAnimationManagerModal = React.lazy(() => import('./modals/TextureAnimationManagerModal'))
+const SequenceEditorModal = React.lazy(() => import('./modals/SequenceEditorModal'))
+const CameraManagerModal = React.lazy(() => import('./modals/CameraManagerModal'))
+const UVModeLayout = React.lazy(() => import('./UVModeLayout'))
+const AnimationModeLayout = React.lazy(() => import('./animation/AnimationModeLayout'))
 import AnimationPanel from './AnimationPanel'
-import MaterialEditorModal from './modals/MaterialEditorModal'
-import GeosetEditorModal from './modals/GeosetEditorModal'
-import GlobalSequenceModal from './modals/GlobalSequenceModal'
+const MaterialEditorModal = React.lazy(() => import('./modals/MaterialEditorModal'))
+const GeosetEditorModal = React.lazy(() => import('./modals/GeosetEditorModal'))
+const GlobalSequenceModal = React.lazy(() => import('./modals/GlobalSequenceModal'))
 import { GeosetVisibilityPanel } from './GeosetVisibilityPanel'
 import { open } from '@tauri-apps/plugin-dialog'
 import { generateMDL, generateMDX } from 'war3-model'
@@ -670,6 +671,34 @@ const MainLayout: React.FC = () => {
         checkCliFilePath();
     }, []); // Run once on mount
 
+    // Listen for file open from Electron context menu (right-click "Open with")
+    useEffect(() => {
+        // Check if running in Electron and api is available
+        const api = (window as any).api;
+        if (api && api.onOpenFile) {
+            console.log('[MainLayout] Registering Electron file open listener');
+            api.onOpenFile((filePath: string) => {
+                console.log('[MainLayout] File opened from context menu:', filePath);
+                if (filePath && (filePath.endsWith('.mdx') || filePath.endsWith('.mdl'))) {
+                    // Check if a model is already loaded - if so, save path and refresh page
+                    const currentModelPath = useModelStore.getState().modelPath;
+                    if (currentModelPath) {
+                        console.log('[MainLayout] Model already loaded, refreshing page before importing new model');
+                        localStorage.setItem('pending_model_path', filePath);
+                        window.location.reload();
+                        return;
+                    }
+
+                    setIsLoading(true);
+                    setZustandLoading(true);
+                    setZustandModelData(null, filePath);
+                    setIsLoading(false);
+                    setZustandLoading(false);
+                }
+            });
+        }
+    }, [setZustandModelData, setZustandLoading]);
+
     const handleAddCameraFromView = () => {
         if (viewerRef.current) {
             const cam = viewerRef.current.getCamera()
@@ -797,7 +826,7 @@ const MainLayout: React.FC = () => {
     useEffect(() => localStorage.setItem('backgroundColor', JSON.stringify(backgroundColor)), [backgroundColor])
     useEffect(() => localStorage.setItem('showFPS', JSON.stringify(showFPS)), [showFPS])
 
-    // Auto-load MPQs
+    // Auto-load MPQs (DEFERRED for faster startup)
     useEffect(() => {
         const loadSavedMpqs = async () => {
             const { invoke } = await import('@tauri-apps/api/core')
@@ -849,7 +878,11 @@ const MainLayout: React.FC = () => {
                 }
             }
         }
-        loadSavedMpqs()
+        // OPTIMIZATION: Defer MPQ loading by 500ms to allow UI to render first
+        const timer = setTimeout(() => {
+            loadSavedMpqs()
+        }, 500)
+        return () => clearTimeout(timer)
     }, [])
     // Manager Shortcuts
     useEffect(() => {

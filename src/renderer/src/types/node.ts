@@ -67,12 +67,23 @@ export interface AttachmentNode extends BaseNode {
 export interface LightNode extends BaseNode {
     type: NodeType.LIGHT;
     LightType?: 'Omnidirectional' | 'Directional' | 'Ambient' | number;
-    Color?: [number, number, number];
-    AmbientColor?: [number, number, number];
-    Intensity?: number;
-    AmbientIntensity?: number;
-    AttenuationStart?: number;
-    AttenuationEnd?: number;
+
+    // Static OR Animated properties (same pattern as war3-model library)
+    Color?: [number, number, number] | any;  // AnimVector for RGB
+    AmbientColor?: [number, number, number] | any;  // AnimVector for RGB
+    Intensity?: number | any;  // AnimVector for scalar
+    AmbientIntensity?: number | any;  // AnimVector for scalar
+    AttenuationStart?: number | any;  // AnimVector for scalar
+    AttenuationEnd?: number | any;  // AnimVector for scalar
+
+    // Animation keys (stored separately when animated)
+    ColorAnim?: any;
+    AmbientColorAnim?: any;
+    IntensityAnim?: any;
+    AmbientIntensityAnim?: any;
+    AttenuationStartAnim?: any;
+    AttenuationEndAnim?: any;
+    VisibilityAnim?: any;
 }
 
 // Particle Emitter 节点
