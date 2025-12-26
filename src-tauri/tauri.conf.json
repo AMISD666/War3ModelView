@@ -26,6 +26,12 @@
         "targets": [
             "nsis"
         ],
+        "windows": {
+            "webviewInstallMode": {
+                "type": "downloadBootstrapper",
+                "silent": false
+            }
+        },
         "icon": [
             "icons/icon.png",
             "icons/icon.ico"
