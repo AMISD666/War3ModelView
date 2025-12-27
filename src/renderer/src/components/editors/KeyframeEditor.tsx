@@ -420,7 +420,6 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
                     onChange={(e) => setText(e.target.value)}
                     style={{
                         flex: 1,
-                        fontFamily: 'monospace',
                         whiteSpace: 'pre',
                         backgroundColor: '#252525',
                         color: '#e8e8e8',

@@ -224,10 +224,14 @@ body,
 }
 
 /* TextArea Dark Theme */
-.dark-theme-modal textarea.ant-input {
+.dark-theme-modal textarea.ant-input,
+.dark-textarea,
+.dark-textarea textarea {
     background-color: #252525 !important;
     color: #e8e8e8 !important;
     border-color: #4a4a4a !important;
+    font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace !important;
+    font-size: 13px;
 }
 
 /* Force WHITE labels in Modal Form Items */

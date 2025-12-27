@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Button } from 'antd';
 import { MasterDetailLayout } from '../MasterDetailLayout';
 import { useModelStore } from '../../store/modelStore';
 import { useHistoryStore } from '../../store/historyStore';
+import { useSelectionStore } from '../../store/selectionStore';
 import { DraggableModal } from '../DraggableModal';
 import DynamicField from '../node/DynamicField';
 import KeyframeEditor from '../editors/KeyframeEditor';
@@ -22,6 +23,47 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
 
     const textureAnims = modelData?.TextureAnims || [];
     const globalSequences = (modelData?.GlobalSequences || []) as unknown as number[];
+
+    // Subscribe to Ctrl+Click geoset picking - auto-select texture animation
+    useEffect(() => {
+        if (!visible || !modelData) return
+
+        const trySelect = (pickedGeosetIndex: number | null) => {
+            if (pickedGeosetIndex !== null && modelData.Geosets && modelData.Geosets[pickedGeosetIndex]) {
+                const materialId = modelData.Geosets[pickedGeosetIndex].MaterialID
+                if (materialId !== undefined && modelData.Materials && modelData.Materials[materialId]) {
+                    const material = modelData.Materials[materialId]
+                    if (material.Layers && material.Layers.length > 0) {
+                        const layer = material.Layers[0] as any
+                        const animId = layer.TVertexAnimId
+                        if (typeof animId === 'number' && animId >= 0 && animId < textureAnims.length) {
+                            setSelectedIndex(animId)
+                            console.log('[TextureAnimManager] Auto-selected animation', animId, 'for geoset', pickedGeosetIndex)
+                            return true
+                        }
+                    }
+                }
+            }
+            return false
+        }
+
+        // Initial check
+        const initialPickedIndex = useSelectionStore.getState().pickedGeosetIndex
+        if (selectedIndex === -1) {
+            trySelect(initialPickedIndex)
+        }
+
+        // Subscribe
+        let lastPickedIndex: number | null = initialPickedIndex
+        const unsubscribe = useSelectionStore.subscribe((state) => {
+            const pickedGeosetIndex = state.pickedGeosetIndex
+            if (pickedGeosetIndex !== lastPickedIndex) {
+                lastPickedIndex = pickedGeosetIndex
+                trySelect(pickedGeosetIndex)
+            }
+        })
+        return unsubscribe
+    }, [visible, modelData, textureAnims.length])
 
     const handleAdd = () => {
         // Create an empty texture animation - do NOT add empty {} as blocks

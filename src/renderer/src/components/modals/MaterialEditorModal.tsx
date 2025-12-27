@@ -38,6 +38,9 @@ function normalizeMaterialsForUI(materials: any[]): any[] {
 function denormalizeMaterialsForSave(materials: any[]): any[] {
     return materials.map(material => ({
         ...material,
+        // Ensure material has required properties
+        PriorityPlane: material.PriorityPlane ?? 0,
+        RenderMode: material.RenderMode ?? 0,
         Layers: (material.Layers || []).map((layer: any) => {
             // Rebuild Shading bitmask from boolean flags
             let shading = 0;
@@ -53,9 +56,15 @@ function denormalizeMaterialsForSave(materials: any[]): any[] {
 
             return {
                 ...cleanLayer,
+                // Core required properties with defaults
+                FilterMode: layer.FilterMode ?? 0,
                 Shading: shading,
-                // Ensure CoordId is set (default to 0)
                 CoordId: layer.CoordId ?? 0,
+                Alpha: layer.Alpha ?? 1,
+                // TextureID - can be number or AnimVector
+                TextureID: layer.TextureID ?? 0,
+                // TVertexAnimId - null or a valid index (not undefined)
+                TVertexAnimId: layer.TVertexAnimId === undefined ? null : layer.TVertexAnimId,
             };
         })
     }));
@@ -102,7 +111,20 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     // Subscribe to Ctrl+Click geoset picking - auto-select material
     useEffect(() => {
         if (!visible || !modelData) return
-        let lastPickedIndex: number | null = null
+
+        // Read initial value immediately when modal opens
+        const initialPickedIndex = useSelectionStore.getState().pickedGeosetIndex
+        if (initialPickedIndex !== null && modelData.Geosets && modelData.Geosets[initialPickedIndex]) {
+            const materialId = modelData.Geosets[initialPickedIndex].MaterialID
+            if (materialId !== undefined && materialId >= 0 && materialId < localMaterials.length) {
+                setSelectedMaterialIndex(materialId)
+                setSelectedLayerIndex(-1)
+                console.log('[MaterialEditor] Initial auto-selected material', materialId, 'for geoset', initialPickedIndex)
+            }
+        }
+
+        // Subscribe to future changes
+        let lastPickedIndex: number | null = initialPickedIndex
         const unsubscribe = useSelectionStore.subscribe((state) => {
             const pickedGeosetIndex = state.pickedGeosetIndex
             if (pickedGeosetIndex !== lastPickedIndex) {

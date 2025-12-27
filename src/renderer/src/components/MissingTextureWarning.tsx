@@ -62,7 +62,7 @@ export const MissingTextureWarning: React.FC = () => {
             {/* Paths List */}
             <div style={{
                 fontSize: '12px',
-                fontFamily: 'Consolas, "Courier New", monospace',
+                fontFamily: "'JetBrains Mono', 'Fira Code', Consolas, monospace",
                 maxHeight: '200px',
                 overflowY: 'auto',
                 paddingRight: '4px'

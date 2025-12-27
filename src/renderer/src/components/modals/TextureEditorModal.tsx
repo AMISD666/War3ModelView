@@ -3,6 +3,8 @@ import { List, Button, Input, Checkbox, InputNumber, Card, Typography, message, 
 import type { MenuProps } from 'antd'
 import { DraggableModal } from '../DraggableModal';
 import { PlusOutlined, DeleteOutlined, FolderOpenOutlined, DatabaseOutlined } from '@ant-design/icons'
+import { useSelectionStore } from '../../store/selectionStore'
+
 import { useModelStore } from '../../store/modelStore'
 import { decodeBLP, getBLPImageData } from 'war3-model'
 import { readFile } from '@tauri-apps/plugin-fs'
@@ -33,12 +35,67 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
     useEffect(() => {
         if (visible && modelData && modelData.Textures) {
             setLocalTextures(JSON.parse(JSON.stringify(modelData.Textures)))
-            setSelectedIndex(modelData.Textures.length > 0 ? 0 : -1)
+
+            // If no selection yet, try to select based on picked geoset
+            const initialPickedIndex = useSelectionStore.getState().pickedGeosetIndex
+            let initialSelection = -1
+
+            if (initialPickedIndex !== null && modelData.Geosets && modelData.Geosets[initialPickedIndex]) {
+                const materialId = modelData.Geosets[initialPickedIndex].MaterialID
+                if (materialId !== undefined && modelData.Materials && modelData.Materials[materialId]) {
+                    const material = modelData.Materials[materialId]
+                    if (material.Layers && material.Layers.length > 0) {
+                        const textureId = material.Layers[0].TextureID
+                        if (typeof textureId === 'number' && textureId >= 0 && textureId < modelData.Textures.length) {
+                            initialSelection = textureId
+                            console.log('[TextureEditor] Initial auto-selected texture', textureId, 'for geoset', initialPickedIndex)
+                        }
+                    }
+                }
+            }
+
+            if (initialSelection !== -1) {
+                setSelectedIndex(initialSelection)
+            } else {
+                setSelectedIndex(modelData.Textures.length > 0 ? 0 : -1)
+            }
         } else if (visible) {
             setLocalTextures([])
             setSelectedIndex(-1)
         }
     }, [visible, modelData])
+
+    // Subscribe to Ctrl+Click geoset picking - auto-select texture
+    useEffect(() => {
+        if (!visible || !modelData) return
+
+        // Initial check is handled in the init effect above to avoid race conditions or double sets
+        // But we still need to subscribe to subsequent changes while modal is open
+
+        let lastPickedIndex: number | null = useSelectionStore.getState().pickedGeosetIndex
+
+        const unsubscribe = useSelectionStore.subscribe((state) => {
+            const pickedGeosetIndex = state.pickedGeosetIndex
+            if (pickedGeosetIndex !== lastPickedIndex) {
+                lastPickedIndex = pickedGeosetIndex
+                if (pickedGeosetIndex !== null && modelData.Geosets && modelData.Geosets[pickedGeosetIndex]) {
+                    const materialId = modelData.Geosets[pickedGeosetIndex].MaterialID
+                    if (materialId !== undefined && modelData.Materials && modelData.Materials[materialId]) {
+                        const material = modelData.Materials[materialId]
+                        if (material.Layers && material.Layers.length > 0) {
+                            const textureId = material.Layers[0].TextureID
+                            // Note: TextureID can be AnimVector, handle number only
+                            if (typeof textureId === 'number' && textureId >= 0 && textureId < localTextures.length) {
+                                setSelectedIndex(textureId)
+                                console.log('[TextureEditor] Auto-selected texture', textureId, 'for geoset', pickedGeosetIndex)
+                            }
+                        }
+                    }
+                }
+            }
+        })
+        return unsubscribe
+    }, [visible, modelData, localTextures.length])
 
     // Helper function to decode BLP and create canvas data URL
     const decodeBLPToDataUrl = (buffer: ArrayBuffer): string | null => {

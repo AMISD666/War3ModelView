@@ -2007,7 +2007,39 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           }
         }
         if (modelData.Textures) {
+          // Detect new textures that need to be loaded
+          const oldTexturePaths = new Set(renderer.model.Textures?.map((t: any) => t.Image) || [])
+          const newTextures = modelData.Textures.filter((t: any) => !oldTexturePaths.has(t.Image))
+
+          // Update the textures array first
           renderer.model.Textures = modelData.Textures
+
+          // Load any new textures asynchronously
+          if (newTextures.length > 0) {
+            console.log('[Viewer] Lightweight sync: Loading', newTextures.length, 'new textures')
+            // Import and call texture loader for each new texture
+            Promise.all(
+              newTextures.map(async (texture: any) => {
+                try {
+                  const { loadTextureForRenderer } = await import('./viewer/textureLoader')
+                  const loaded = await loadTextureForRenderer(renderer, texture.Image, modelPath || '')
+                  if (loaded) {
+                    console.log('[Viewer] Loaded new texture:', texture.Image)
+                  } else {
+                    console.warn('[Viewer] Failed to load new texture:', texture.Image)
+                  }
+                } catch (e) {
+                  console.error('[Viewer] Error loading new texture:', texture.Image, e)
+                }
+              })
+            ).then(() => {
+              // After all textures loaded, rebuild material layer cache
+              if ((renderer as any).modelInstance?.syncMaterials) {
+                (renderer as any).modelInstance.syncMaterials()
+                console.log('[Viewer] Rebuilt material cache after texture load')
+              }
+            })
+          }
         }
         if (modelData.TextureAnims) {
           renderer.model.TextureAnims = modelData.TextureAnims

@@ -37,7 +37,16 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose 
     // Subscribe to Ctrl+Click geoset picking - auto-select geoset
     useEffect(() => {
         if (!visible) return
-        let lastPickedIndex: number | null = null
+
+        // Read initial value immediately when modal opens
+        const initialPickedIndex = useSelectionStore.getState().pickedGeosetIndex
+        if (initialPickedIndex !== null && initialPickedIndex >= 0 && initialPickedIndex < localGeosets.length) {
+            setSelectedIndex(initialPickedIndex)
+            console.log('[GeosetEditor] Initial auto-selected geoset', initialPickedIndex)
+        }
+
+        // Subscribe to future changes
+        let lastPickedIndex: number | null = initialPickedIndex
         const unsubscribe = useSelectionStore.subscribe((state) => {
             const pickedGeosetIndex = state.pickedGeosetIndex
             if (pickedGeosetIndex !== lastPickedIndex) {

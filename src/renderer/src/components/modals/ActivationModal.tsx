@@ -81,7 +81,7 @@ const ActivationModal: React.FC<ActivationModalProps> = ({ open, onActivated }) 
         backgroundColor: '#2a2a2a',
         border: '1px solid #555',
         color: '#eee',
-        fontFamily: 'monospace'
+        fontFamily: "'JetBrains Mono', 'Fira Code', Consolas, monospace"
     }
 
     return (
@@ -170,8 +170,7 @@ const ActivationModal: React.FC<ActivationModalProps> = ({ open, onActivated }) 
                         textarea: {
                             backgroundColor: '#2a2a2a',
                             border: '1px solid #555',
-                            color: '#eee',
-                            fontFamily: 'monospace'
+                            color: '#eee'
                         }
                     }}
                     className="dark-textarea"

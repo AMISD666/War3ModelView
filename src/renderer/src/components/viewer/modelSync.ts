@@ -63,7 +63,12 @@ export function checkForStructuralChanges(
         // return { needsReload: true, reason: 'Geoset count changed' }
     }
 
-    if (textureChanged) return { needsReload: true, reason: 'Texture count changed' }
+    // OPTIMIZATION: Texture changes are now handled via lightweight sync
+    // New textures are loaded via setTextureImage() in the viewer
+    if (textureChanged) {
+        console.log('[modelSync] Texture count changed, but using lightweight sync')
+        // return { needsReload: true, reason: 'Texture count changed' }
+    }
     // OPTIMIZATION: Material changes are now handled via lightweight sync
     // syncMaterials() rebuilds the materialLayerTextureID cache
     if (materialChanged) {

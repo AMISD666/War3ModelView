@@ -104,8 +104,8 @@ function prepareModelDataForSave(modelData: any): any {
         return new Uint8Array(0);
     };
 
-    // Fix AnimVector to ensure Keys is a real array
-    const fixAnimVector = (animVec: any): any => {
+    // Fix AnimVector to ensure Keys is a real array and Vectors are typed arrays
+    const fixAnimVector = (animVec: any, vectorSize: number = 3, isInt: boolean = false): any => {
         if (!animVec) return null;
         // If it's not an object, return null
         if (typeof animVec !== 'object') return null;
@@ -119,6 +119,22 @@ function prepareModelDataForSave(modelData: any): any {
                     animVec.Keys = [];
                 }
             }
+            // Fix each Key's Vector, InTan, OutTan to be typed arrays
+            animVec.Keys.forEach((key: any) => {
+                if (key.Vector && !(key.Vector instanceof Float32Array) && !(key.Vector instanceof Int32Array)) {
+                    // Convert object-like {0: v} to typed array
+                    const values = Array.isArray(key.Vector) ? key.Vector : Object.values(key.Vector).map(Number);
+                    key.Vector = isInt ? new Int32Array(values) : new Float32Array(values);
+                }
+                if (key.InTan && !(key.InTan instanceof Float32Array) && !(key.InTan instanceof Int32Array)) {
+                    const values = Array.isArray(key.InTan) ? key.InTan : Object.values(key.InTan).map(Number);
+                    key.InTan = isInt ? new Int32Array(values) : new Float32Array(values);
+                }
+                if (key.OutTan && !(key.OutTan instanceof Float32Array) && !(key.OutTan instanceof Int32Array)) {
+                    const values = Array.isArray(key.OutTan) ? key.OutTan : Object.values(key.OutTan).map(Number);
+                    key.OutTan = isInt ? new Int32Array(values) : new Float32Array(values);
+                }
+            });
         } else {
             // No Keys, this AnimVector is invalid - make it empty
             animVec.Keys = [];
@@ -447,6 +463,66 @@ function prepareModelDataForSave(modelData: any): any {
             // Ensure Faces is Uint16Array
             if (geoset.Faces && !(geoset.Faces instanceof Uint16Array)) {
                 geoset.Faces = toUint16Array(geoset.Faces);
+            }
+        });
+    }
+
+    // Fix Materials - ensure all layer properties are valid for MDX generator
+    if (data.Materials && Array.isArray(data.Materials)) {
+        console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Materials.length} materials`);
+        data.Materials.forEach((material: any, matIndex: number) => {
+            // Ensure material properties
+            if (material.PriorityPlane === undefined) material.PriorityPlane = 0;
+            if (material.RenderMode === undefined) material.RenderMode = 0;
+
+            if (material.Layers && Array.isArray(material.Layers)) {
+                material.Layers.forEach((layer: any, layerIndex: number) => {
+                    // FilterMode - required, default to 0 (None)
+                    if (layer.FilterMode === undefined || layer.FilterMode === null) {
+                        layer.FilterMode = 0;
+                    }
+
+                    // Shading - required, default to 0
+                    // Rebuild from boolean flags if they exist
+                    if (layer.Shading === undefined) {
+                        let shading = 0;
+                        if (layer.Unshaded) shading |= 1;
+                        if (layer.SphereEnvMap) shading |= 2;
+                        if (layer.TwoSided) shading |= 16;
+                        if (layer.Unfogged) shading |= 32;
+                        if (layer.NoDepthTest) shading |= 64;
+                        if (layer.NoDepthSet) shading |= 128;
+                        layer.Shading = shading;
+                    }
+
+                    // TextureID - can be number or AnimVector, default to 0
+                    if (layer.TextureID === undefined || layer.TextureID === null) {
+                        layer.TextureID = 0;
+                    } else if (typeof layer.TextureID === 'object') {
+                        // Fix AnimVector Key Vectors to be Int32Array
+                        layer.TextureID = fixAnimVector(layer.TextureID, 1, true);
+                    }
+
+                    // TVertexAnimId - can be null or number, convert undefined to null
+                    if (layer.TVertexAnimId === undefined) {
+                        layer.TVertexAnimId = null;
+                    }
+
+                    // CoordId - required, default to 0
+                    if (layer.CoordId === undefined || layer.CoordId === null) {
+                        layer.CoordId = 0;
+                    }
+
+                    // Alpha - required, default to 1
+                    if (layer.Alpha === undefined || layer.Alpha === null) {
+                        layer.Alpha = 1;
+                    } else if (typeof layer.Alpha === 'object') {
+                        // Fix AnimVector Key Vectors to be Float32Array
+                        layer.Alpha = fixAnimVector(layer.Alpha, 1, false);
+                    }
+
+                    console.log(`[MainLayout] Material[${matIndex}].Layer[${layerIndex}]: FilterMode=${layer.FilterMode}, Shading=${layer.Shading}, TextureID=${typeof layer.TextureID === 'number' ? layer.TextureID : 'AnimVector'}, TVertexAnimId=${layer.TVertexAnimId}, CoordId=${layer.CoordId}, Alpha=${typeof layer.Alpha === 'number' ? layer.Alpha : 'AnimVector'}`);
+                });
             }
         });
     }

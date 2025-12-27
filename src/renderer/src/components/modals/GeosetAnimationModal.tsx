@@ -58,7 +58,19 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
     // Subscribe to Ctrl+Click geoset picking - auto-select matching geoset animation
     useEffect(() => {
         if (!visible) return
-        let lastPickedIndex: number | null = null
+
+        // Read initial value immediately when modal opens
+        const initialPickedIndex = useSelectionStore.getState().pickedGeosetIndex
+        if (initialPickedIndex !== null && localAnims.length > 0) {
+            const matchingIndex = localAnims.findIndex((anim: any) => anim.GeosetId === initialPickedIndex)
+            if (matchingIndex !== -1) {
+                setSelectedIndex(matchingIndex)
+                console.log('[GeosetAnimationEditor] Initial auto-selected animation', matchingIndex, 'for geoset', initialPickedIndex)
+            }
+        }
+
+        // Subscribe to future changes
+        let lastPickedIndex: number | null = initialPickedIndex
         const unsubscribe = useSelectionStore.subscribe((state) => {
             const pickedGeosetIndex = state.pickedGeosetIndex
             if (pickedGeosetIndex !== lastPickedIndex) {
