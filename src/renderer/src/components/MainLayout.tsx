@@ -739,25 +739,31 @@ const MainLayout: React.FC = () => {
 
             const cameraPos = [cx + target[0], cy + target[1], cz + target[2]]
 
+            // Create camera with required Position/TargetPosition (Float32Array) for MDX generator
+            // And optional Translation/TargetTranslation (AnimVector) for animation
             const newCamera = {
                 Name: `Camera ${nodes.filter((n: any) => n.type === NodeType.CAMERA).length + 1}`,
                 type: NodeType.CAMERA,
                 FieldOfView: 0.7853, // 45 deg
                 NearClip: 16,
                 FarClip: 5000,
+                // Static Position/TargetPosition required by MDX format (Float32Array)
+                Position: new Float32Array([cameraPos[0], cameraPos[1], cameraPos[2]]),
+                TargetPosition: new Float32Array([target[0], target[1], target[2]]),
+                // Animated Translation/TargetTranslation (optional, for camera animation keyframes)
                 Translation: {
-                    InterpolationType: 0,
+                    LineType: 0,
                     GlobalSeqId: null,
-                    Keys: [{ Frame: 0, Vector: cameraPos }]
+                    Keys: [{ Frame: 0, Vector: new Float32Array([cameraPos[0], cameraPos[1], cameraPos[2]]) }]
                 },
                 TargetTranslation: {
-                    InterpolationType: 0,
+                    LineType: 0,
                     GlobalSeqId: null,
-                    Keys: [{ Frame: 0, Vector: target }]
+                    Keys: [{ Frame: 0, Vector: new Float32Array([target[0], target[1], target[2]]) }]
                 }
             }
 
-            addNode(newCamera)
+            addNode(newCamera as any)
         }
     }
 

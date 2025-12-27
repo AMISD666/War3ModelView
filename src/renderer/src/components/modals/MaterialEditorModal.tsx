@@ -32,6 +32,35 @@ function normalizeMaterialsForUI(materials: any[]): any[] {
     }));
 }
 
+/**
+ * Convert boolean properties back to Shading bitmask for saving
+ */
+function denormalizeMaterialsForSave(materials: any[]): any[] {
+    return materials.map(material => ({
+        ...material,
+        Layers: (material.Layers || []).map((layer: any) => {
+            // Rebuild Shading bitmask from boolean flags
+            let shading = 0;
+            if (layer.Unshaded) shading |= 1;
+            if (layer.SphereEnvMap) shading |= 2;
+            if (layer.TwoSided) shading |= 16;
+            if (layer.Unfogged) shading |= 32;
+            if (layer.NoDepthTest) shading |= 64;
+            if (layer.NoDepthSet) shading |= 128;
+
+            // Create clean layer without UI-only boolean properties
+            const { Unshaded, SphereEnvMap, TwoSided, Unfogged, NoDepthTest, NoDepthSet, ...cleanLayer } = layer;
+
+            return {
+                ...cleanLayer,
+                Shading: shading,
+                // Ensure CoordId is set (default to 0)
+                CoordId: layer.CoordId ?? 0,
+            };
+        })
+    }));
+}
+
 interface MaterialEditorModalProps {
     visible: boolean
     onClose: () => void
@@ -92,13 +121,15 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     }, [visible, modelData, localMaterials.length])
 
     const handleOk = () => {
+        // Convert boolean flags back to Shading bitmask before saving
+        const materialsForSave = denormalizeMaterialsForSave(localMaterials);
         const oldMaterials = modelData?.Materials || [];
         useHistoryStore.getState().push({
             name: 'Edit Materials',
             undo: () => setMaterials(oldMaterials),
-            redo: () => setMaterials(localMaterials)
+            redo: () => setMaterials(materialsForSave)
         });
-        setMaterials(localMaterials)
+        setMaterials(materialsForSave)
         message.success('材质已保存')
         onClose()
     }
@@ -140,6 +171,28 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const handleDeleteMaterial = (index: number) => {
         const newMaterials = localMaterials.filter((_, i) => i !== index)
         setLocalMaterials(newMaterials)
+
+        // Update geoset MaterialID references - only for geosets that referenced the deleted material
+        // Set them to use material 0 (the first remaining material)
+        if (modelData?.Geosets) {
+            const updatedGeosets = modelData.Geosets.map((geoset: any) => {
+                const matId = geoset.MaterialID;
+                if (matId === index) {
+                    // Geoset was referencing the deleted material, set to 0
+                    return { ...geoset, MaterialID: 0 };
+                } else if (matId > index) {
+                    // Geoset was referencing a material after the deleted one
+                    // We need to decrement to keep the reference valid
+                    return { ...geoset, MaterialID: matId - 1 };
+                }
+                return geoset;
+            });
+            // Sync BOTH materials and geosets to the store together to prevent mismatch
+            // This ensures the renderer sees consistent data
+            setMaterials(newMaterials);
+            useModelStore.getState().setGeosets(updatedGeosets);
+        }
+
         if (selectedMaterialIndex === index) {
             setSelectedMaterialIndex(-1)
             setSelectedLayerIndex(-1)
@@ -368,7 +421,34 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                             </div>
 
                             <Card title={<span style={{ color: '#b0b0b0' }}>图层属性</span>} size="small" bordered={false} style={{ background: '#333333', border: '1px solid #4a4a4a' }} headStyle={{ borderBottom: '1px solid #4a4a4a' }}>
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+                                {/* Row 1: Texture ID (Full Width) */}
+                                <div style={{ marginBottom: 16 }}>
+                                    <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>贴图 ID:</Text>
+                                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                        <Checkbox
+                                            checked={selectedLayer.TextureID && typeof selectedLayer.TextureID !== 'number'}
+                                            onChange={(e) => handleAnimToggle('TextureID', e.target.checked)}
+                                            style={{ color: '#e8e8e8' }}
+                                        >
+                                            动态
+                                        </Checkbox>
+                                        {selectedLayer.TextureID && typeof selectedLayer.TextureID !== 'number' ? (
+                                            <Button size="small" onClick={() => openKeyframeEditor('TextureID', 1)}>编辑动画</Button>
+                                        ) : (
+                                            <Select
+                                                size="small"
+                                                style={{ flex: 1 }}
+                                                value={typeof selectedLayer.TextureID === 'number' ? selectedLayer.TextureID : 0}
+                                                onChange={(v) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TextureID: v })}
+                                                options={textureOptions}
+                                                popupClassName="dark-theme-select-dropdown"
+                                            />
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Row 2: Alpha, Filter Mode, TVertexAnim */}
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
                                     <div>
                                         <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>透明度 (Alpha):</Text>
                                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
@@ -403,30 +483,6 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                                             options={filterModeOptions}
                                             popupClassName="dark-theme-select-dropdown"
                                         />
-                                    </div>
-                                    <div>
-                                        <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>贴图 ID:</Text>
-                                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                                            <Checkbox
-                                                checked={selectedLayer.TextureID && typeof selectedLayer.TextureID !== 'number'}
-                                                onChange={(e) => handleAnimToggle('TextureID', e.target.checked)}
-                                                style={{ color: '#e8e8e8' }}
-                                            >
-                                                动态
-                                            </Checkbox>
-                                            {selectedLayer.TextureID && typeof selectedLayer.TextureID !== 'number' ? (
-                                                <Button size="small" onClick={() => openKeyframeEditor('TextureID', 1)}>编辑动画</Button>
-                                            ) : (
-                                                <Select
-                                                    size="small"
-                                                    style={{ width: '150px' }}
-                                                    value={typeof selectedLayer.TextureID === 'number' ? selectedLayer.TextureID : 0}
-                                                    onChange={(v) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TextureID: v })}
-                                                    options={textureOptions}
-                                                    popupClassName="dark-theme-select-dropdown"
-                                                />
-                                            )}
-                                        </div>
                                     </div>
                                     <div>
                                         <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>纹理动画 (TVertexAnim):</Text>

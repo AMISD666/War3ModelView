@@ -89,16 +89,52 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
 
     return (
         <div style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: '10px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-                {/* Top Left: Transparency */}
+            {/* Row 1: Texture ID (Full Width) */}
+            <div style={{ border: '1px solid #444', padding: 10, borderRadius: 4, marginBottom: 10 }}>
+                <h4 style={{ margin: '0 0 10px 0', color: '#aaa' }}>贴图 ID:</h4>
+                <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <Checkbox
+                        checked={isTextureIDAnimated}
+                        onChange={(e) => handleAnimToggle('TextureID', e.target.checked, 1)}
+                    >
+                        动态
+                    </Checkbox>
+                    {!isTextureIDAnimated && (
+                        <Select
+                            size="small"
+                            style={{ flex: 1 }}
+                            value={typeof layer.TextureID === 'number' ? layer.TextureID : 0}
+                            onChange={(v) => handleChange('TextureID', v)}
+                            options={textureOptions}
+                        />
+                    )}
+                    {isTextureIDAnimated && (
+                        <>
+                            <div style={{ color: '#888', fontSize: 12, flex: 1 }}>
+                                已动态化，点击"编辑动画"修改关键帧
+                            </div>
+                            <Button
+                                size="small"
+                                onClick={() => openKeyframeEditor('TextureID', 1)}
+                            >
+                                编辑动画
+                            </Button>
+                        </>
+                    )}
+                </div>
+            </div>
+
+            {/* Row 2: Alpha + Filter Mode + Texture Animation */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 10 }}>
+                {/* Alpha */}
                 <div style={{ border: '1px solid #444', padding: 10, borderRadius: 4 }}>
-                    <h4 style={{ margin: '0 0 10px 0', color: '#aaa' }}>透明度 (Alpha)</h4>
+                    <h4 style={{ margin: '0 0 10px 0', color: '#aaa' }}>透明度 (Alpha):</h4>
                     <div style={{ marginBottom: 10 }}>
                         <Checkbox
                             checked={isAlphaAnimated}
                             onChange={(e) => handleAnimToggle('Alpha', e.target.checked, 1)}
                         >
-                            动态化 (Animated)
+                            动态
                         </Checkbox>
                     </div>
                     <Space>
@@ -123,87 +159,50 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
                     </Space>
                 </div>
 
-                {/* Top Right: Texture ID */}
+                {/* Filter Mode */}
                 <div style={{ border: '1px solid #444', padding: 10, borderRadius: 4 }}>
-                    <h4 style={{ margin: '0 0 10px 0', color: '#aaa' }}>贴图 ID (Texture ID)</h4>
-                    <div style={{ marginBottom: 10 }}>
-                        <Checkbox
-                            checked={isTextureIDAnimated}
-                            onChange={(e) => handleAnimToggle('TextureID', e.target.checked, 1)}
-                        >
-                            动态化 (Animated)
-                        </Checkbox>
-                    </div>
-                    <Space direction="vertical" style={{ width: '100%' }}>
-                        <Button
-                            size="small"
-                            disabled={!isTextureIDAnimated}
-                            onClick={() => openKeyframeEditor('TextureID', 1)}
-                        >
-                            编辑动画
-                        </Button>
-                        {!isTextureIDAnimated && (
-                            <Select
-                                size="small"
-                                style={{ width: '100%' }}
-                                value={typeof layer.TextureID === 'number' ? layer.TextureID : 0}
-                                onChange={(v) => handleChange('TextureID', v)}
-                                options={textureOptions}
-                            />
-                        )}
-                        {isTextureIDAnimated && (
-                            <div style={{ color: '#888', fontSize: 12 }}>
-                                已动态化，点击"编辑动画"修改关键帧
-                            </div>
-                        )}
-                    </Space>
+                    <h4 style={{ margin: '0 0 10px 0', color: '#aaa' }}>过滤模式:</h4>
+                    <Select
+                        size="small"
+                        style={{ width: '100%' }}
+                        value={layer.FilterMode}
+                        onChange={(v) => handleChange('FilterMode', v)}
+                        options={filterModeOptions}
+                    />
                 </div>
 
-                {/* Bottom Left: Flags */}
+                {/* Texture Animation */}
                 <div style={{ border: '1px solid #444', padding: 10, borderRadius: 4 }}>
-                    <h4 style={{ margin: '0 0 10px 0', color: '#aaa' }}>标记 (Flags)</h4>
-                    <Space direction="vertical">
-                        <Checkbox checked={layer.Unshaded} onChange={(e) => handleChange('Unshaded', e.target.checked)}>无阴影 (Unshaded)</Checkbox>
-                        <Checkbox checked={layer.Unfogged} onChange={(e) => handleChange('Unfogged', e.target.checked)}>无迷雾 (Unfogged)</Checkbox>
-                        <Checkbox checked={layer.TwoSided} onChange={(e) => handleChange('TwoSided', e.target.checked)}>双面的 (Two Sided)</Checkbox>
-                        <Checkbox checked={layer.SphereEnvMap} onChange={(e) => handleChange('SphereEnvMap', e.target.checked)}>球面环境贴图 (Sphere Env Map)</Checkbox>
-                        <Checkbox checked={layer.NoDepthTest} onChange={(e) => handleChange('NoDepthTest', e.target.checked)}>无深度测试 (No Depth Test)</Checkbox>
-                        <Checkbox checked={layer.NoDepthSet} onChange={(e) => handleChange('NoDepthSet', e.target.checked)}>无深度设置 (No Depth Set)</Checkbox>
-                    </Space>
-                </div>
-
-                {/* Bottom Right: Animated Texture & Filter Mode */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <div style={{ border: '1px solid #444', padding: 10, borderRadius: 4 }}>
-                        <h4 style={{ margin: '0 0 10px 0', color: '#aaa' }}>动画纹理 ID (Animated Texture ID)</h4>
-                        <Space style={{ width: '100%' }}>
-                            <Select
-                                size="small"
-                                style={{ width: '100%' }}
-                                allowClear
-                                placeholder="(None)"
-                                value={layer.TVertexAnimId}
-                                onChange={(v) => handleChange('TVertexAnimId', v)}
-                                options={textureAnimOptions}
-                            />
-                            <Button
-                                size="small"
-                                icon={<EditOutlined />}
-                                onClick={() => setIsAnimManagerOpen(true)}
-                            />
-                        </Space>
-                    </div>
-
-                    <div style={{ border: '1px solid #444', padding: 10, borderRadius: 4, flex: 1 }}>
-                        <h4 style={{ margin: '0 0 10px 0', color: '#aaa' }}>过滤模式 (Filter Mode)</h4>
+                    <h4 style={{ margin: '0 0 10px 0', color: '#aaa' }}>纹理动画 (TVertexAnim):</h4>
+                    <Space style={{ width: '100%' }}>
                         <Select
                             size="small"
                             style={{ width: '100%' }}
-                            value={layer.FilterMode}
-                            onChange={(v) => handleChange('FilterMode', v)}
-                            options={filterModeOptions}
+                            allowClear
+                            placeholder="None"
+                            value={layer.TVertexAnimId}
+                            onChange={(v) => handleChange('TVertexAnimId', v)}
+                            options={textureAnimOptions}
                         />
-                    </div>
+                        <Button
+                            size="small"
+                            icon={<EditOutlined />}
+                            onClick={() => setIsAnimManagerOpen(true)}
+                        />
+                    </Space>
+                </div>
+            </div>
+
+            {/* Row 3: Flags */}
+            <div style={{ border: '1px solid #444', padding: 10, borderRadius: 4 }}>
+                <h4 style={{ margin: '0 0 10px 0', color: '#aaa' }}>标记 (Flags)</h4>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 5 }}>
+                    <Checkbox checked={layer.Unshaded} onChange={(e) => handleChange('Unshaded', e.target.checked)}>无阴影 (Unshaded)</Checkbox>
+                    <Checkbox checked={layer.Unfogged} onChange={(e) => handleChange('Unfogged', e.target.checked)}>无迷雾 (Unfogged)</Checkbox>
+                    <Checkbox checked={layer.TwoSided} onChange={(e) => handleChange('TwoSided', e.target.checked)}>双面的 (Two Sided)</Checkbox>
+                    <Checkbox checked={layer.SphereEnvMap} onChange={(e) => handleChange('SphereEnvMap', e.target.checked)}>球面环境贴图</Checkbox>
+                    <Checkbox checked={layer.NoDepthTest} onChange={(e) => handleChange('NoDepthTest', e.target.checked)}>无深度测试</Checkbox>
+                    <Checkbox checked={layer.NoDepthSet} onChange={(e) => handleChange('NoDepthSet', e.target.checked)}>无深度设置</Checkbox>
                 </div>
             </div>
 

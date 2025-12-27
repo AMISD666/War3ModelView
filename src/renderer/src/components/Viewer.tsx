@@ -36,6 +36,7 @@ import { DeleteVerticesCommand } from '../commands/DeleteVerticesCommand'
 import { PasteVerticesCommand } from '../commands/PasteVerticesCommand'
 import { copyVertices, copyFaces, VertexCopyBuffer } from '../utils/vertexOperations'
 import { UpdateKeyframeCommand, KeyframeChange } from '../commands/UpdateKeyframeCommand'
+import { MissingTextureWarning } from './MissingTextureWarning'
 
 // Singleton loop counter to prevent runaway FPS
 let globalRenderLoopId = 0
@@ -1725,7 +1726,18 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       console.log(`[Viewer] Renderer Init took ${(performance.now() - rendererStart).toFixed(1)}ms`)
 
       // Load textures using concurrent loader
-      await loadAllTextures(model, newRenderer, path)
+      const textureResults = await loadAllTextures(model, newRenderer, path)
+
+      // Track missing textures or unsupported formats for warning UI
+      const missingPaths = textureResults
+        .filter(r => {
+          if (!r.loaded) return true;
+          // Even if loaded, check for unsupported formats (non-BLP/TGA)
+          const ext = r.path.split('.').pop()?.toLowerCase();
+          return ext !== 'blp' && ext !== 'tga';
+        })
+        .map(r => r.path)
+      useRendererStore.getState().setMissingTextures(missingPaths)
 
       loadTeamColorTextures(teamColor)
 
@@ -2012,20 +2024,48 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         // NOTE: Do NOT replace renderer.model.Geosets with modelData.Geosets!
         // Commands (PasteVertices, Split, Delete) directly modify renderer.model.Geosets
         // and create GPU buffers. Overwriting here would break buffer references.
-        // Only sync UV texture coordinate buffers for existing geosets.
+        // However, we DO need to sync MaterialID and other property changes.
+        let geosetMaterialChanged = false
+        console.log('[Viewer] Geoset sync check - modelData.Geosets:', modelData.Geosets?.length, 'renderer.model.Geosets:', renderer.model.Geosets?.length)
         if (modelData.Geosets && renderer.model.Geosets) {
           const minLen = Math.min(modelData.Geosets.length, renderer.model.Geosets.length)
+          console.log('[Viewer] Syncing', minLen, 'geosets')
           for (let i = 0; i < minLen; i++) {
             const geoset = modelData.Geosets[i]
+            const rendererGeoset = renderer.model.Geosets[i]
+
+            // Sync MaterialID changes
+            if (geoset?.MaterialID !== undefined && rendererGeoset.MaterialID !== geoset.MaterialID) {
+              console.log(`[Viewer] Syncing Geoset[${i}] MaterialID: ${rendererGeoset.MaterialID} -> ${geoset.MaterialID}`)
+              rendererGeoset.MaterialID = geoset.MaterialID
+              geosetMaterialChanged = true
+            }
+
+            // Sync SelectionGroup changes
+            if (geoset?.SelectionGroup !== undefined && rendererGeoset.SelectionGroup !== geoset.SelectionGroup) {
+              rendererGeoset.SelectionGroup = geoset.SelectionGroup
+            }
+
+            // Sync UV texture coordinate buffers
             if (geoset?.TVertices?.[0]) {
               const uvData = geoset.TVertices[0]
-              // Convert to Float32Array if needed
               const float32Data = uvData instanceof Float32Array
                 ? uvData
                 : new Float32Array(uvData)
-                // updateGeosetTexCoords is an optional method that may or may not exist
                 ; (renderer as any).updateGeosetTexCoords?.(i, float32Data)
             }
+          }
+        }
+
+        // If any geoset MaterialID changed, rebuild material layer texture ID cache
+        if (geosetMaterialChanged) {
+          console.log('[Viewer] Geoset MaterialID changed, checking syncMaterials availability')
+          if ((renderer as any).modelInstance && typeof (renderer as any).modelInstance.syncMaterials === 'function') {
+            console.log('[Viewer] Calling syncMaterials to rebuild texture ID cache')
+              ; (renderer as any).modelInstance.syncMaterials()
+            console.log('[Viewer] syncMaterials completed')
+          } else {
+            console.warn('[Viewer] syncMaterials not available!')
           }
         }
 
@@ -4267,7 +4307,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             position: 'absolute',
             top: '10px',
             left: '10px',
-            zIndex: 10
+            zIndex: 10,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px'
           }}>
             <select
               id="camera-selector"
@@ -4296,6 +4339,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 <option key={i} value={i}>{cam.Name || `Camera ${i + 1}`}</option>
               ))}
             </select>
+            <MissingTextureWarning />
           </div>
         );
       })()}

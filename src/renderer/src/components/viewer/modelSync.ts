@@ -64,11 +64,21 @@ export function checkForStructuralChanges(
     }
 
     if (textureChanged) return { needsReload: true, reason: 'Texture count changed' }
-    if (materialChanged) return { needsReload: true, reason: 'Material count changed' }
+    // OPTIMIZATION: Material changes are now handled via lightweight sync
+    // syncMaterials() rebuilds the materialLayerTextureID cache
+    if (materialChanged) {
+        console.log('[modelSync] Material count changed, but using lightweight sync')
+        // return { needsReload: true, reason: 'Material count changed' }
+    }
     // OPTIMIZATION: Particle changes are now handled via lightweight sync
     // The ParticlesController.syncEmitters() method dynamically adds/removes emitters
     // if (particleChanged) return { needsReload: true, reason: 'Particle count changed' }
-    if (geosetMaterialChanged) return { needsReload: true, reason: 'Geoset MaterialID changed' }
+    // OPTIMIZATION: Geoset MaterialID changes are now handled via lightweight sync
+    // syncMaterials() rebuilds the materialLayerTextureID cache after MaterialID changes
+    if (geosetMaterialChanged) {
+        console.log('[modelSync] Geoset MaterialID changed, but using lightweight sync')
+        // return { needsReload: true, reason: 'Geoset MaterialID changed' }
+    }
 
     if (geosetVertexCountChanged) {
         console.log('[modelSync] Geoset vertex count changed, but skipping reload (Trusting Command)')

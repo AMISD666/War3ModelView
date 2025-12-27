@@ -71,6 +71,10 @@ interface RendererStore {
     // System State
     mpqLoaded: boolean
     setMpqLoaded: (loaded: boolean) => void
+
+    // Missing Textures Warning
+    missingTextures: string[]
+    setMissingTextures: (paths: string[]) => void
 }
 
 export const useRendererStore = create<RendererStore>()(
@@ -147,7 +151,11 @@ export const useRendererStore = create<RendererStore>()(
             setHoverColor: (color) => set({ hoverColor: color }),
 
             mpqLoaded: false,
-            setMpqLoaded: (loaded) => set({ mpqLoaded: loaded })
+            setMpqLoaded: (loaded) => set({ mpqLoaded: loaded }),
+
+            // Missing Textures Warning
+            missingTextures: [],
+            setMissingTextures: (paths) => set({ missingTextures: paths })
         }),
         {
             name: 'renderer-settings-v2',
