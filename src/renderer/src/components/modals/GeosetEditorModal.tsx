@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { List, Button, InputNumber, Select, Card, Typography, message } from 'antd'
 import { DraggableModal } from '../DraggableModal';
 import { useModelStore } from '../../store/modelStore'
@@ -18,6 +18,15 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose 
     const [localGeosets, setLocalGeosets] = useState<any[]>([])
     const [selectedIndex, setSelectedIndex] = useState<number>(-1)
     const [_hasChanges, setHasChanges] = useState(false)
+    const listRef = useRef<HTMLDivElement>(null)
+
+    // Helper to scroll to selected item
+    const scrollToItem = (index: number) => {
+        if (listRef.current && index >= 0) {
+            const itemHeight = 50 // Approximate height of list item
+            listRef.current.scrollTop = index * itemHeight
+        }
+    }
 
     // Initialize local state when modal opens
     useEffect(() => {
@@ -42,6 +51,7 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose 
         const initialPickedIndex = useSelectionStore.getState().pickedGeosetIndex
         if (initialPickedIndex !== null && initialPickedIndex >= 0 && initialPickedIndex < localGeosets.length) {
             setSelectedIndex(initialPickedIndex)
+            scrollToItem(initialPickedIndex)
             console.log('[GeosetEditor] Initial auto-selected geoset', initialPickedIndex)
         }
 
@@ -53,6 +63,7 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose 
                 lastPickedIndex = pickedGeosetIndex
                 if (pickedGeosetIndex !== null && pickedGeosetIndex >= 0 && pickedGeosetIndex < localGeosets.length) {
                     setSelectedIndex(pickedGeosetIndex)
+                    scrollToItem(pickedGeosetIndex)
                     console.log('[GeosetEditor] Auto-selected geoset', pickedGeosetIndex)
                 }
             }
@@ -112,7 +123,7 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose 
         >
             <div style={{ display: 'flex', height: '400px', border: '1px solid #4a4a4a', backgroundColor: '#252525' }}>
                 {/* List (Left) */}
-                <div style={{ width: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', backgroundColor: '#333333', borderRight: '1px solid #4a4a4a' }}>
+                <div ref={listRef} style={{ width: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', backgroundColor: '#333333', borderRight: '1px solid #4a4a4a' }}>
                     <div style={{ padding: '8px', borderBottom: '1px solid #4a4a4a', color: '#b0b0b0', fontSize: '12px' }}>
                         多边形列表
                     </div>

@@ -1111,7 +1111,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
 
 
-  const handleSelectionClick = (clientX: number, clientY: number, isShift: boolean, isCtrl: boolean) => {
+  const handleSelectionClick = (clientX: number, clientY: number, isShift: boolean, isCtrl: boolean, isAlt: boolean = false) => {
     if (!rendererRef.current || !canvasRef.current) return
 
     const { mainMode, animationSubMode, geometrySubMode, selectVertex, selectVertices, selectFace, addVertexSelection, addFaceSelection, removeVertexSelection, removeFaceSelection, clearAllSelections, selectNode, setPickedGeosetIndex } = useSelectionStore.getState()
@@ -1679,35 +1679,40 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         console.log('[Viewer] Loading model from in-memory data')
         model = inMemoryData
       } else {
+        console.time('[Viewer] FileRead')
         const buffer = await readFile(path)
+        console.timeEnd('[Viewer] FileRead')
+
+        console.time('[Viewer] ParseOnly')
         if (path.toLowerCase().endsWith('.mdl')) {
           const text = new TextDecoder().decode(buffer)
           model = parseMDL(text)
         } else {
           model = parseMDX(buffer.buffer)
         }
+        console.timeEnd('[Viewer] ParseOnly')
       }
       console.timeEnd('[Viewer] MDX Parse')
       console.log(`[Viewer] Model Parsing took ${(performance.now() - parseStart).toFixed(1)}ms`)
 
       // Log to production CMD window
       logModelInfo(path, model, performance.now() - parseStart)
-      console.log('[Viewer] Parsed model:', {
-        Sequences: model.Sequences?.length || 0,
-        ParticleEmitters2: model.ParticleEmitters2?.length || 0,
-        Nodes: model.Nodes?.length || 0,
-        Bones: model.Bones?.length || 0,
-        GlobalSequences: model.GlobalSequences?.length || 0,
-      })
+      // console.log('[Viewer] Parsed model:', {
+      //   Sequences: model.Sequences?.length || 0,
+      //   ParticleEmitters2: model.ParticleEmitters2?.length || 0,
+      //   Nodes: model.Nodes?.length || 0,
+      //   Bones: model.Bones?.length || 0,
+      //   GlobalSequences: model.GlobalSequences?.length || 0,
+      // })
       if (model.Sequences && model.Sequences.length > 0) {
         // Log ALL sequences with their intervals to trace corruption
-        model.Sequences.forEach((seq: any, index: number) => {
-          const intervalType = seq.Interval instanceof Uint32Array ? 'Uint32Array' : Array.isArray(seq.Interval) ? 'Array' : typeof seq.Interval;
-          console.log(`[Viewer] Sequence ${index} "${seq.Name}" Interval (${intervalType}): [${seq.Interval[0]}, ${seq.Interval[1]}]`);
-        });
+        // model.Sequences.forEach((seq: any, index: number) => {
+        //   const intervalType = seq.Interval instanceof Uint32Array ? 'Uint32Array' : Array.isArray(seq.Interval) ? 'Array' : typeof seq.Interval;
+        //   console.log(`[Viewer] Sequence ${index} "${seq.Name}" Interval (${intervalType}): [${seq.Interval[0]}, ${seq.Interval[1]}]`);
+        // });
       }
       if (model.ParticleEmitters2 && model.ParticleEmitters2.length > 0) {
-        console.log('[Viewer] First ParticleEmitter2:', model.ParticleEmitters2[0])
+        // console.log('[Viewer] First ParticleEmitter2:', model.ParticleEmitters2[0])
       }
 
       ignoreNextModelDataUpdate.current = true
@@ -4138,11 +4143,13 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     const deltaX = Math.abs(e.clientX - startX)
     const deltaY = Math.abs(e.clientY - startY)
     const isCtrl = e.ctrlKey || e.metaKey
+    const isAlt = e.altKey
 
     if (wasBoxSelecting && deltaX > 5 && deltaY > 5) {
       handleBoxSelection(startX, startY, e.clientX, e.clientY, e.shiftKey, isCtrl)
     } else if (deltaX < 5 && deltaY < 5 && dragButton === 0) {
-      handleSelectionClick(e.clientX, e.clientY, e.shiftKey, isCtrl)
+      // Pass isAlt for geoset picking, isCtrl for multi-select
+      handleSelectionClick(e.clientX, e.clientY, e.shiftKey, isCtrl, isAlt)
     }
   }
 

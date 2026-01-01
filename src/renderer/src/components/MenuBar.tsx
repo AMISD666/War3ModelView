@@ -38,6 +38,9 @@ interface MenuBarProps {
     showDebugConsole: boolean
     onToggleDebugConsole: () => void
     onShowAbout: () => void
+    onShowChangelog: () => void
+    onRecalculateNormals: () => void
+    onRecalculateExtents: () => void
 }
 
 const MenuBar: React.FC<MenuBarProps> = ({
@@ -76,7 +79,10 @@ const MenuBar: React.FC<MenuBarProps> = ({
     onSetMainMode,
     showDebugConsole,
     onToggleDebugConsole,
-    onShowAbout
+    onShowAbout,
+    onShowChangelog,
+    onRecalculateNormals,
+    onRecalculateExtents
 }) => {
     const [activeMenu, setActiveMenu] = useState<string | null>(null)
     const [settingsSubMenu, setSettingsSubMenu] = useState<string | null>(null)
@@ -467,6 +473,31 @@ const MenuBar: React.FC<MenuBarProps> = ({
                 设置
             </div>
 
+            {/* Function Menu */}
+            <div style={menuStyle} onClick={() => toggleMenu('function')}>
+                功能
+                {activeMenu === 'function' && (
+                    <div style={dropdownStyle}>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={() => { onRecalculateNormals(); closeMenu() }}
+                        >
+                            重新计算法线
+                        </div>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={() => { onRecalculateExtents(); closeMenu() }}
+                        >
+                            重新计算模型顶点范围
+                        </div>
+                    </div>
+                )}
+            </div>
+
             {/* Help Menu */}
             <div style={menuStyle} onClick={() => toggleMenu('help')}>
                 帮助
@@ -482,6 +513,14 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             <span>{showDebugConsole ? '✓' : ''}</span>
                         </div>
                         <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={() => { onShowChangelog(); closeMenu() }}
+                        >
+                            更新日志
+                        </div>
                         <div
                             style={itemStyle}
                             onMouseEnter={hoverStyle}

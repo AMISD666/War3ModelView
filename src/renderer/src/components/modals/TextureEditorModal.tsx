@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { List, Button, Input, Checkbox, InputNumber, Card, Typography, message, Dropdown } from 'antd'
 import type { MenuProps } from 'antd'
 import { DraggableModal } from '../DraggableModal';
@@ -27,6 +27,15 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
     const [isLoadingPreview, setIsLoadingPreview] = useState(false)
     const [previewError, setPreviewError] = useState<string | null>(null)
     const [previewSource, setPreviewSource] = useState<string | null>(null) // 'mpq' | 'file' | null
+    const listRef = useRef<HTMLDivElement>(null)
+
+    // Helper to scroll to selected item
+    const scrollToItem = (index: number) => {
+        if (listRef.current && index >= 0) {
+            const itemHeight = 48 // Approximate height of list item
+            listRef.current.scrollTop = index * itemHeight
+        }
+    }
 
     // Use prop modelPath if provided, otherwise fall back to store
     const modelPath = propModelPath || storeModelPath
@@ -56,6 +65,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
 
             if (initialSelection !== -1) {
                 setSelectedIndex(initialSelection)
+                setTimeout(() => scrollToItem(initialSelection), 0)
             } else {
                 setSelectedIndex(modelData.Textures.length > 0 ? 0 : -1)
             }
@@ -87,6 +97,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                             // Note: TextureID can be AnimVector, handle number only
                             if (typeof textureId === 'number' && textureId >= 0 && textureId < localTextures.length) {
                                 setSelectedIndex(textureId)
+                                scrollToItem(textureId)
                                 console.log('[TextureEditor] Auto-selected texture', textureId, 'for geoset', pickedGeosetIndex)
                             }
                         }
@@ -278,7 +289,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         >
             <div style={{ display: 'flex', height: '500px', border: '1px solid #4a4a4a', backgroundColor: '#252525' }}>
                 {/* List (Left) */}
-                <div style={{ width: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', backgroundColor: '#333333', borderRight: '1px solid #4a4a4a' }}>
+                <div ref={listRef} style={{ width: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', backgroundColor: '#333333', borderRight: '1px solid #4a4a4a' }}>
                     <div style={{ padding: '8px', borderBottom: '1px solid #4a4a4a' }}>
                         <Dropdown
                             menu={{
@@ -349,6 +360,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                                     const updatedTextures = [...localTextures, ...newTextures]
                                                     setLocalTextures(updatedTextures)
                                                     setSelectedIndex(updatedTextures.length - 1) // Select the last added texture
+                                                    setTimeout(() => scrollToItem(updatedTextures.length - 1), 0)
 
                                                     if (addedCount === 1 && skippedCount === 0) {
                                                         message.success(`已添加纹理: ${newTextures[0].Image}`)
@@ -383,6 +395,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                             const newTexture = { Image: 'Textures\\white.blp', ReplaceableId: 0, Flags: 0 }
                                             setLocalTextures([...localTextures, newTexture])
                                             setSelectedIndex(localTextures.length)
+                                            setTimeout(() => scrollToItem(localTextures.length), 0)
                                         }
                                     }
                                 ] as MenuProps['items']

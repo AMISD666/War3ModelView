@@ -248,6 +248,10 @@ interface ModelState {
     setGeosetAnims: (anims: any[]) => void;
     updateNodes: (updates: { objectId: number, data: Partial<ModelNode> }[]) => void;
 
+    // Recalculate Actions
+    recalculateExtents: () => void;
+    recalculateNormals: () => void;
+
     // Renderer reload
     triggerRendererReload: () => void;
 
@@ -1253,6 +1257,24 @@ export const useModelStore = create<ModelState>((set, get) => ({
             const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[]);
             console.log('[ModelStore] Batch updated', updates.length, 'nodes');
             return { nodes: updatedNodes as ModelNode[], modelData: updatedModelData };
+        });
+    },
+
+    recalculateExtents: () => {
+        set((state) => {
+            if (!state.modelData) return {};
+            recalculateModelExtent(state.modelData);
+            // Force update
+            return { modelData: { ...state.modelData }, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
+        });
+    },
+
+    recalculateNormals: () => {
+        set((state) => {
+            if (!state.modelData) return {};
+            recalculateModelNormals(state.modelData);
+            // Force update
+            return { modelData: { ...state.modelData }, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
         });
     },
 

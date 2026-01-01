@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { List, Button, Input, Checkbox, InputNumber, Card, Typography, message } from 'antd'
 import { DraggableModal } from '../DraggableModal';
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
@@ -15,6 +15,15 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
     const { sequences: storeSequences, setSequences: setStoreSequences } = useModelStore()
     const [localSequences, setLocalSequences] = useState<any[]>([])
     const [selectedIndex, setSelectedIndex] = useState<number>(-1)
+    const listRef = useRef<HTMLDivElement>(null)
+
+    // Helper to scroll to selected item
+    const scrollToItem = (index: number) => {
+        if (listRef.current && index >= 0) {
+            const itemHeight = 45 // Approximate height of list item
+            listRef.current.scrollTop = index * itemHeight
+        }
+    }
 
     // Initialize local state
     useEffect(() => {
@@ -69,7 +78,7 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
         >
             <div style={{ display: 'flex', height: '500px', border: '1px solid #4a4a4a', backgroundColor: '#252525' }}>
                 {/* List (Left) */}
-                <div style={{ width: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', backgroundColor: '#333333', borderRight: '1px solid #4a4a4a' }}>
+                <div ref={listRef} style={{ width: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', backgroundColor: '#333333', borderRight: '1px solid #4a4a4a' }}>
                     <div style={{ padding: '8px', borderBottom: '1px solid #4a4a4a' }}>
                         <Button
                             type="primary"
@@ -86,6 +95,7 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
                                 }
                                 setLocalSequences([...localSequences, newSequence])
                                 setSelectedIndex(localSequences.length)
+                                setTimeout(() => scrollToItem(localSequences.length), 0)
                             }}
                             style={{ backgroundColor: '#5a9cff', borderColor: '#5a9cff' }}
                         >

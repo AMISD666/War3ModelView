@@ -14,6 +14,7 @@ import AnimationPanel from './AnimationPanel'
 const MaterialEditorModal = React.lazy(() => import('./modals/MaterialEditorModal'))
 const GeosetEditorModal = React.lazy(() => import('./modals/GeosetEditorModal'))
 const GlobalSequenceModal = React.lazy(() => import('./modals/GlobalSequenceModal'))
+const ChangelogModal = React.lazy(() => import('./modals/ChangelogModal'))
 import { GeosetVisibilityPanel } from './GeosetVisibilityPanel'
 import { open } from '@tauri-apps/plugin-dialog'
 import { generateMDL, generateMDX } from 'war3-model'
@@ -39,6 +40,7 @@ function prepareModelDataForSave(modelData: any): any {
     // Use structuredClone to preserve typed arrays (available in modern browsers)
     // Falls back to the original data if structuredClone isn't available
     let data: any;
+    const typeMap: Record<number, number> = { 0: 0, 1: 1, 2: 2 };
     try {
         data = structuredClone(modelData);
     } catch {
@@ -47,14 +49,29 @@ function prepareModelDataForSave(modelData: any): any {
         data = modelData;
     }
 
+    // Helper to robustly convert object-like arrays (possibly sparse) to TypedArray
+    const objectToTypedArray = (obj: any, Constructor: any) => {
+        const keys = Object.keys(obj);
+        const numKeys = keys.filter(k => !isNaN(Number(k)) && Number(k) >= 0).map(Number);
+
+        // If we found numeric keys, use them to reconstruct array respecting indices
+        if (numKeys.length > 0) {
+            const maxKey = Math.max(...numKeys);
+            const arr = new Constructor(maxKey + 1);
+            numKeys.forEach(k => arr[k] = Number(obj[k]));
+            return arr;
+        }
+
+        // Fallback: just use values
+        return new Constructor(Object.values(obj).map(Number));
+    };
+
     // Helper to convert array-like to typed array if needed
     const toUint32Array = (arr: any): Uint32Array => {
         if (arr instanceof Uint32Array) return arr;
         if (Array.isArray(arr)) return new Uint32Array(arr);
-        // Handle object-like {"0": x, "1": y} from bad clones
         if (arr && typeof arr === 'object') {
-            const values = Object.values(arr).map(Number);
-            return new Uint32Array(values);
+            return objectToTypedArray(arr, Uint32Array);
         }
         return new Uint32Array([0, 0]);
     };
@@ -86,12 +103,21 @@ function prepareModelDataForSave(modelData: any): any {
         return result; // Returns zero-filled array of correct size
     };
 
+    // Helper for variable-length float arrays (Vertices, Normals, etc.)
+    const toDynamicFloat32Array = (arr: any): Float32Array => {
+        if (arr instanceof Float32Array) return arr;
+        if (Array.isArray(arr)) return new Float32Array(arr);
+        if (arr && typeof arr === 'object') {
+            return objectToTypedArray(arr, Float32Array);
+        }
+        return new Float32Array(0);
+    };
+
     const toUint16Array = (arr: any): Uint16Array => {
         if (arr instanceof Uint16Array) return arr;
         if (Array.isArray(arr)) return new Uint16Array(arr);
         if (arr && typeof arr === 'object') {
-            const values = Object.values(arr).map(Number);
-            return new Uint16Array(values);
+            return objectToTypedArray(arr, Uint16Array);
         }
         return new Uint16Array(0);
     };
@@ -100,8 +126,7 @@ function prepareModelDataForSave(modelData: any): any {
         if (arr instanceof Uint8Array) return arr;
         if (Array.isArray(arr)) return new Uint8Array(arr);
         if (arr && typeof arr === 'object') {
-            const values = Object.values(arr).map(Number);
-            return new Uint8Array(values);
+            return objectToTypedArray(arr, Uint8Array);
         }
         return new Uint8Array(0);
     };
@@ -178,16 +203,16 @@ function prepareModelDataForSave(modelData: any): any {
 
     // Fix Sequences - most critical for animation fix
     if (data.Sequences && Array.isArray(data.Sequences)) {
-        console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Sequences.length} sequences`);
+        // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Sequences.length} sequences`);
         data.Sequences.forEach((seq: any, index: number) => {
             // Always log interval info for debugging
             const intervalType = seq.Interval ? (seq.Interval instanceof Uint32Array ? 'Uint32Array' : Array.isArray(seq.Interval) ? 'Array' : typeof seq.Interval) : 'undefined';
             const intervalValues = seq.Interval ? `[${seq.Interval[0]}, ${seq.Interval[1]}]` : 'N/A';
-            console.log(`[MainLayout] Sequence ${index} "${seq.Name}" Interval (${intervalType}): ${intervalValues}`);
+            // console.log(`[MainLayout] Sequence ${index} "${seq.Name}" Interval (${intervalType}): ${intervalValues}`);
 
             if (seq.Interval && !(seq.Interval instanceof Uint32Array)) {
                 seq.Interval = toUint32Array(seq.Interval);
-                console.log(`[MainLayout] -> Converted to Uint32Array: [${seq.Interval[0]}, ${seq.Interval[1]}]`);
+                // console.log(`[MainLayout] -> Converted to Uint32Array: [${seq.Interval[0]}, ${seq.Interval[1]}]`);
             }
             if (seq.MinimumExtent && !(seq.MinimumExtent instanceof Float32Array)) {
                 seq.MinimumExtent = toFloat32Array(seq.MinimumExtent);
@@ -212,11 +237,12 @@ function prepareModelDataForSave(modelData: any): any {
     if (data.Geosets && Array.isArray(data.Geosets)) {
         data.Geosets.forEach((geoset: any) => {
             if (!geoset) return;
+            // Use toDynamicFloat32Array for variable length arrays
             if (geoset.Vertices && !(geoset.Vertices instanceof Float32Array)) {
-                geoset.Vertices = toFloat32Array(geoset.Vertices, geoset.Vertices.length || 0);
+                geoset.Vertices = toDynamicFloat32Array(geoset.Vertices);
             }
             if (geoset.Normals && !(geoset.Normals instanceof Float32Array)) {
-                geoset.Normals = toFloat32Array(geoset.Normals, geoset.Normals.length || 0);
+                geoset.Normals = toDynamicFloat32Array(geoset.Normals);
             }
             if (geoset.Faces && !(geoset.Faces instanceof Uint16Array)) {
                 geoset.Faces = toUint16Array(geoset.Faces);
@@ -230,10 +256,25 @@ function prepareModelDataForSave(modelData: any): any {
             if (geoset.MaximumExtent && !(geoset.MaximumExtent instanceof Float32Array)) {
                 geoset.MaximumExtent = toFloat32Array(geoset.MaximumExtent);
             }
-            if (geoset.TVertices && Array.isArray(geoset.TVertices)) {
-                geoset.TVertices = geoset.TVertices.map((tv: any) =>
-                    tv instanceof Float32Array ? tv : toFloat32Array(tv, tv?.length || 0)
-                );
+            if (geoset.TVertices) {
+                if (Array.isArray(geoset.TVertices)) {
+                    // Array of arrays format (from mdx parser usually)
+                    geoset.TVertices = geoset.TVertices.map((tv: any) =>
+                        tv instanceof Float32Array ? tv : toDynamicFloat32Array(tv)
+                    );
+                } else if (geoset.TVertices instanceof Float32Array) {
+                    // Single large array already typed
+                    geoset.TVertices = [geoset.TVertices];
+                } else {
+                    // Single object-like array or unknown format
+                    geoset.TVertices = [toDynamicFloat32Array(geoset.TVertices)];
+                }
+            }
+            if (geoset.Tangents && !(geoset.Tangents instanceof Float32Array)) {
+                geoset.Tangents = toDynamicFloat32Array(geoset.Tangents);
+            }
+            if (geoset.SkinWeights && !(geoset.SkinWeights instanceof Uint8Array)) {
+                geoset.SkinWeights = toUint8Array(geoset.SkinWeights);
             }
             if (geoset.Anims && Array.isArray(geoset.Anims)) {
                 geoset.Anims.forEach((anim: any) => {
@@ -271,7 +312,7 @@ function prepareModelDataForSave(modelData: any): any {
 
     // Fix Light node properties - ensure Color/AmbColor are Float32Array or valid AnimVector, and Visibility is valid
     if (data.Lights && Array.isArray(data.Lights)) {
-        console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Lights.length} lights`);
+        // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Lights.length} lights`);
         data.Lights.forEach((light: any) => {
             // FIRST: Map our naming convention to war3-model naming convention
             // This must happen BEFORE we process/default the war3-model properties!
@@ -363,13 +404,10 @@ function prepareModelDataForSave(modelData: any): any {
                 }
             }
 
-            // LightType should be a number (0=Omni, 1=Directional, 2=Ambient)
-            if (light.LightType !== undefined && typeof light.LightType === 'string') {
-                const typeMap: Record<string, number> = { 'Omnidirectional': 0, 'Directional': 1, 'Ambient': 2 };
-                light.LightType = typeMap[light.LightType] ?? 0;
-            }
+            light.LightType = typeMap[light.LightType] ?? 0;
 
-            console.log(`[MainLayout] Light "${light.Name}": Type=${light.LightType}, Intensity=${light.Intensity}, AmbIntensity=${light.AmbIntensity}, AmbColor=[${light.AmbColor[0]?.toFixed(2)},${light.AmbColor[1]?.toFixed(2)},${light.AmbColor[2]?.toFixed(2)}]`);
+
+            // console.log(`[MainLayout] Light "${light.Name}": Type=${light.LightType}, Intensity=${light.Intensity}, AmbIntensity=${light.AmbIntensity}, AmbColor=[${light.AmbColor[0]?.toFixed(2)},${light.AmbColor[1]?.toFixed(2)},${light.AmbColor[2]?.toFixed(2)}]`);
         });
     }
     // Fix ParticleEmitter2 Flags - convert boolean properties to bitmask
@@ -377,7 +415,7 @@ function prepareModelDataForSave(modelData: any): any {
     //                        Unfogged=262144, ModelSpace=524288, XYQuad=1048576
     // ParticleEmitter2FramesFlags: Head=1, Tail=2  
     if (data.ParticleEmitters2 && Array.isArray(data.ParticleEmitters2)) {
-        console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.ParticleEmitters2.length} particle emitters`);
+        // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.ParticleEmitters2.length} particle emitters`);
         data.ParticleEmitters2.forEach((emitter: any) => {
             // Reconstruct Flags bitmask from individual boolean properties
             let flags = emitter.Flags || 0;
@@ -397,13 +435,13 @@ function prepareModelDataForSave(modelData: any): any {
             if (frameFlags === 0) frameFlags = 1;
             emitter.FrameFlags = frameFlags;
 
-            console.log(`[MainLayout] ParticleEmitter2 "${emitter.Name}": Flags=${flags}, FrameFlags=${frameFlags}`);
+            // console.log(`[MainLayout] ParticleEmitter2 "${emitter.Name}": Flags=${flags}, FrameFlags=${frameFlags}`);
         });
     }
 
     // Fix Cameras - ensure Position and TargetPosition are Float32Arrays
     if (data.Cameras && Array.isArray(data.Cameras)) {
-        console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Cameras.length} cameras`);
+        // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Cameras.length} cameras`);
         data.Cameras.forEach((camera: any) => {
             if (camera.Position) {
                 camera.Position = toFloat32Array(camera.Position, 3);
@@ -423,7 +461,7 @@ function prepareModelDataForSave(modelData: any): any {
 
     // Fix CollisionShapes - ensure Vertices are Float32Arrays
     if (data.CollisionShapes && Array.isArray(data.CollisionShapes)) {
-        console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.CollisionShapes.length} collision shapes`);
+        // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.CollisionShapes.length} collision shapes`);
         data.CollisionShapes.forEach((shape: any) => {
             // Shape 0 = Box (6 floats), Shape 2 = Sphere (3 floats)
             const vertexCount = shape.Shape === 0 ? 6 : 3;
@@ -446,7 +484,7 @@ function prepareModelDataForSave(modelData: any): any {
 
     // Fix Geosets - ensure TotalGroupsCount is consistent with Groups array
     if (data.Geosets && Array.isArray(data.Geosets)) {
-        console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Geosets.length} geosets`);
+        // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Geosets.length} geosets`);
         data.Geosets.forEach((geoset: any, index: number) => {
             // Recalculate TotalGroupsCount from Groups array
             if (geoset.Groups && Array.isArray(geoset.Groups)) {
@@ -458,9 +496,9 @@ function prepareModelDataForSave(modelData: any): any {
                     geoset.TotalGroupsCount = totalCount;
                 }
             }
-            // Ensure VertexGroup is Uint8Array
-            if (geoset.VertexGroup && !(geoset.VertexGroup instanceof Uint8Array)) {
-                geoset.VertexGroup = toUint8Array(geoset.VertexGroup);
+            // Ensure VertexGroup is Uint16Array (supports > 255 groups)
+            if (geoset.VertexGroup && !(geoset.VertexGroup instanceof Uint16Array)) {
+                geoset.VertexGroup = toUint16Array(geoset.VertexGroup);
             }
             // Ensure Faces is Uint16Array
             if (geoset.Faces && !(geoset.Faces instanceof Uint16Array)) {
@@ -471,7 +509,7 @@ function prepareModelDataForSave(modelData: any): any {
 
     // Fix Materials - ensure all layer properties are valid for MDX generator
     if (data.Materials && Array.isArray(data.Materials)) {
-        console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Materials.length} materials`);
+        // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Materials.length} materials`);
         data.Materials.forEach((material: any, matIndex: number) => {
             // Ensure material properties
             if (material.PriorityPlane === undefined) material.PriorityPlane = 0;
@@ -523,7 +561,7 @@ function prepareModelDataForSave(modelData: any): any {
                         layer.Alpha = fixAnimVector(layer.Alpha, 1, false);
                     }
 
-                    console.log(`[MainLayout] Material[${matIndex}].Layer[${layerIndex}]: FilterMode=${layer.FilterMode}, Shading=${layer.Shading}, TextureID=${typeof layer.TextureID === 'number' ? layer.TextureID : 'AnimVector'}, TVertexAnimId=${layer.TVertexAnimId}, CoordId=${layer.CoordId}, Alpha=${typeof layer.Alpha === 'number' ? layer.Alpha : 'AnimVector'}`);
+                    // console.log(`[MainLayout] Material[${matIndex}].Layer[${layerIndex}]: FilterMode=${layer.FilterMode}, Shading=${layer.Shading}, TextureID=${typeof layer.TextureID === 'number' ? layer.TextureID : 'AnimVector'}, TVertexAnimId=${layer.TVertexAnimId}, CoordId=${layer.CoordId}, Alpha=${typeof layer.Alpha === 'number' ? layer.Alpha : 'AnimVector'}`);
                 });
             }
         });
@@ -1183,6 +1221,7 @@ const MainLayout: React.FC = () => {
         try {
             const { writeFile } = await import('@tauri-apps/plugin-fs')
 
+            console.time('[MainLayout] SavePrep')
             // Prepare model data with correct typed arrays
             const preparedData = prepareModelDataForSave(modelData);
 
@@ -1213,15 +1252,26 @@ const MainLayout: React.FC = () => {
                     }
                 })
             }
+            console.timeEnd('[MainLayout] SavePrep')
 
             if (modelPath.toLowerCase().endsWith('.mdl')) {
                 cleanupInvalidGeosets(preparedData)
+                console.time('[MainLayout] GenMDL')
                 const content = generateMDL(preparedData)
+                console.timeEnd('[MainLayout] GenMDL')
+
+                console.time('[MainLayout] FileWrite')
                 await writeFile(modelPath, new TextEncoder().encode(content))
+                console.timeEnd('[MainLayout] FileWrite')
             } else {
                 cleanupInvalidGeosets(preparedData)
+                console.time('[MainLayout] GenMDX')
                 const buffer = generateMDX(preparedData)
+                console.timeEnd('[MainLayout] GenMDX')
+
+                console.time('[MainLayout] FileWrite')
                 await writeFile(modelPath, new Uint8Array(buffer))
+                console.timeEnd('[MainLayout] FileWrite')
             }
 
             showMessage('success', '保存成功', '模型已保存')
@@ -1457,22 +1507,23 @@ const MainLayout: React.FC = () => {
         if (!preparedData.Geosets) return
 
         const originalCount = preparedData.Geosets.length
+
+        // Debug: Log all geosets before filtering
+        // console.log(`[MainLayout] cleanupInvalidGeosets: Checking ${originalCount} geosets`)
+        preparedData.Geosets.forEach((geoset: any, index: number) => {
+            // console.log(`[MainLayout] Geoset ${index}: Vertices=${geoset.Vertices?.length || 'undefined'}, Faces=${geoset.Faces?.length || 'undefined'}, type(V)=${typeof geoset.Vertices}, type(F)=${typeof geoset.Faces}`)
+        })
+
         preparedData.Geosets = preparedData.Geosets.filter((geoset: any, index: number) => {
-            // Check essential properties
+            // Only remove geosets that are truly empty (no vertices or no faces)
+            // This handles geosets that were emptied by split operations
             const hasVertices = geoset.Vertices && geoset.Vertices.length > 0
             const hasFaces = geoset.Faces && geoset.Faces.length > 0
-            const hasNormals = geoset.Normals && geoset.Normals.length > 0
-            const hasTVertices = geoset.TVertices && geoset.TVertices.length > 0 && geoset.TVertices[0]?.length > 0
 
-            const isValid = hasVertices && hasFaces && hasNormals && hasTVertices
+            const isValid = hasVertices && hasFaces
 
             if (!isValid) {
-                console.warn(`[MainLayout] Removing invalid Geoset ${index}:`, {
-                    hasVertices,
-                    hasFaces,
-                    hasNormals,
-                    hasTVertices
-                })
+                console.warn(`[MainLayout] Removing empty Geoset ${index}: vertices=${geoset.Vertices?.length || 0}, faces=${geoset.Faces?.length || 0}`)
             }
             return isValid
         })
@@ -1513,6 +1564,7 @@ const MainLayout: React.FC = () => {
         } catch { return false; }
     })
     const [showAbout, setShowAbout] = useState<boolean>(false)
+    const [showChangelog, setShowChangelog] = useState<boolean>(false)
     const [activationStatus, setActivationStatus] = useState<{
         is_activated: boolean;
         license_type: string;
@@ -1696,6 +1748,15 @@ const MainLayout: React.FC = () => {
                 showDebugConsole={showDebugConsole}
                 onToggleDebugConsole={() => setShowDebugConsole(!showDebugConsole)}
                 onShowAbout={() => setShowAbout(true)}
+                onShowChangelog={() => setShowChangelog(true)}
+                onRecalculateNormals={() => {
+                    useModelStore.getState().recalculateNormals();
+                    showMessage('success', '成功', '已重新计算法线');
+                }}
+                onRecalculateExtents={() => {
+                    useModelStore.getState().recalculateExtents();
+                    showMessage('success', '成功', '已重新计算模型顶点范围');
+                }}
             />
 
             {/* About Dialog */}
@@ -1882,6 +1943,14 @@ const MainLayout: React.FC = () => {
                 visible={showGlobalSeqModal}
                 onClose={() => setShowGlobalSeqModal(false)}
             />
+            <Suspense fallback={null}>
+                {showChangelog && (
+                    <ChangelogModal
+                        open={showChangelog}
+                        onClose={() => setShowChangelog(false)}
+                    />
+                )}
+            </Suspense>
 
             <div style={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative' }}>
                 {/* Left Panel - Animation Panel (hidden in UV mode) */}
