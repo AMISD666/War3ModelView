@@ -186,6 +186,51 @@ fn check_context_menu_status() -> bool {
     hkcu.open_subkey(mdx_path).is_ok() && hkcu.open_subkey(mdl_path).is_ok()
 }
 
+// ==================
+// Download Command (for auto-update)
+// ==================
+#[tauri::command]
+fn download_file(url: String, target_path: String) -> Result<String, String> {
+    use std::io::Write;
+
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("War3ModelEdit-Updater/1.0")
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let response = client
+        .get(&url)
+        .send()
+        .map_err(|e| format!("HTTP request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("Download failed: HTTP {}", response.status()));
+    }
+
+    let bytes = response
+        .bytes()
+        .map_err(|e| format!("Failed to read response body: {}", e))?;
+
+    let mut file =
+        std::fs::File::create(&target_path).map_err(|e| format!("Failed to create file: {}", e))?;
+
+    file.write_all(&bytes)
+        .map_err(|e| format!("Failed to write file: {}", e))?;
+
+    Ok(target_path)
+}
+
+#[tauri::command]
+fn launch_installer(path: String) -> Result<(), String> {
+    use std::process::Command;
+
+    Command::new(&path)
+        .spawn()
+        .map_err(|e| format!("Failed to launch installer: {}", e))?;
+
+    Ok(())
+}
+
 #[tauri::command]
 fn get_cli_file_path() -> Option<String> {
     let args: Vec<String> = std::env::args().collect();
@@ -223,7 +268,10 @@ fn main() {
             register_context_menu,
             unregister_context_menu,
             check_context_menu_status,
-            get_cli_file_path
+            get_cli_file_path,
+            // Download Command
+            download_file,
+            launch_installer
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

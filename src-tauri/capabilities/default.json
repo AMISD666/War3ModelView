@@ -14,6 +14,16 @@
         "dialog:default",
         "shell:allow-open",
         {
+            "identifier": "shell:allow-execute",
+            "allow": [
+                {
+                    "name": "curl",
+                    "cmd": "curl",
+                    "args": true
+                }
+            ]
+        },
+        {
             "identifier": "http:default",
             "allow": [
                 {

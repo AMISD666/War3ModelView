@@ -44,43 +44,40 @@ function isNewerVersion(current: string, remote: string): boolean {
 async function downloadAndInstall(assets: GiteeRelease['assets'], version: string) {
     const loadingId = showMessage('loading', '正在更新', '正在下载安装包，请稍候...', 0);
 
+    // Debug: Log all assets
+    console.log('[Update] Available assets:', assets);
+
     const exeAsset = assets.find(a => a.name.endsWith('.exe'));
     if (!exeAsset) {
-        console.error('[Update] No .exe asset found in release.');
+        console.error('[Update] No .exe asset found in release. Assets:', assets.map(a => a.name));
         useMessageStore.getState().removeMessage(loadingId);
         showMessage('error', '更新失败', '未找到可执行安装包。');
         return;
     }
 
     try {
-        // ENCODE THE URL to avoid "String contains non ISO-8859-1 code point" error in Headers if fetch uses it internally
-        // Gitee URLs often contain Chinese characters in filenames
-        const downloadUrl = encodeURI(exeAsset.browser_download_url);
+        const downloadUrl = exeAsset.browser_download_url;
         const fileName = exeAsset.name;
-        // const tempPath = await tempDir(); 
-        // tempDir() returns path with trailing slash on Windows usually, but let's be safe.
-        // Actually writeFile with baseDir: 1 writes relative to temp.
+        const tempDirPath = await tempDir();
+        const absolutePath = `${tempDirPath}${fileName}`;
 
-        const binResponse = await fetch(downloadUrl, {
-            method: 'GET',
-            // Explicitly set empty headers to avoid any auto-inference issues, though usually not needed
-        });
-        if (!binResponse.ok) throw new Error(`Download failed: ${binResponse.status} ${binResponse.statusText}`);
+        console.log('[Update] Download URL:', downloadUrl);
+        console.log('[Update] Target path:', absolutePath);
 
-        const blob = await binResponse.blob();
-        const arrayBuffer = await blob.arrayBuffer();
-        const uint8Array = new Uint8Array(arrayBuffer);
+        // Use Rust backend command to download - bypasses all JS HTTP/shell issues
+        const { invoke } = await import('@tauri-apps/api/core');
 
-        await writeFile(fileName, uint8Array, { baseDir: 1 }); // 1 = Temp
+        console.log('[Update] Invoking Rust download_file command...');
+
+        await invoke('download_file', { url: downloadUrl, targetPath: absolutePath });
+
+        console.log('[Update] Download completed successfully');
 
         useMessageStore.getState().removeMessage(loadingId);
         showMessage('success', '下载完成', '即将启动安装程序...', 2000);
 
-        const tempDirPath = await tempDir();
-        const absolutePath = `${tempDirPath}${fileName}`;
-
         console.log(`[Update] executing installer at: ${absolutePath}`);
-        await open(absolutePath);
+        await invoke('launch_installer', { path: absolutePath });
 
         setTimeout(async () => {
             await exit(0);

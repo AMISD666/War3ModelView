@@ -27,6 +27,7 @@ sha2 = "0.10"
 chrono = "0.4"
 rand = "0.8"
 uuid = { version = "1.7", features = ["v4"] }
+reqwest = { version = "0.12", features = ["blocking"] }
 
 [features]
 # this feature is used for production builds or when `devPath` points to the filesystem
