@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Select, Button, message, Slider, ColorPicker, Modal, Input } from 'antd';
+import { Select, Button, Slider, ColorPicker, Modal, Input } from 'antd';
 import { DraggableModal } from './DraggableModal';
 import { useRendererStore } from '../store/rendererStore';
+import { showMessage, useMessageStore } from '../store/messageStore';
 import { DatabaseOutlined, CheckCircleFilled, CloseCircleFilled, FolderOpenOutlined, SunOutlined } from '@ant-design/icons';
 import { DNC_PRESETS, getEnvironmentManager } from './viewer/EnvironmentManager';
 
@@ -68,7 +69,9 @@ export const ViewSettingsWindow: React.FC = () => {
         teamColor, setTeamColor,
         mpqLoaded, setMpqLoaded,
         showVertices, setShowVertices,
-        vertexSettings, setVertexSettings
+        vertexSettings, setVertexSettings,
+        autoRecalculateExtent, setAutoRecalculateExtent,
+        autoRecalculateNormals, setAutoRecalculateNormals
     } = useRendererStore();
 
     // Context Menu Integration State
@@ -158,7 +161,7 @@ export const ViewSettingsWindow: React.FC = () => {
             const key = getEnvironmentManager().saveAsPreset(newPresetName.trim());
             setAllPresets(getEnvironmentManager().getAllPresets());
             setSelectedDNCPreset(key);
-            message.success(`预设 "${newPresetName}" 已创建`);
+            showMessage('success', '操作成功', `预设 "${newPresetName}" 已创建`);
             setPresetModalOpen(false);
         }
     };
@@ -168,7 +171,7 @@ export const ViewSettingsWindow: React.FC = () => {
         if (!selectedDNCPreset) return;
         // For built-in presets, just show info
         if (DNC_PRESETS[selectedDNCPreset]) {
-            message.info('内置预设无法覆盖，请新建自定义预设');
+            showMessage('info', '提示', '内置预设无法覆盖，请新建自定义预设');
             return;
         }
         // Save to current custom preset
@@ -178,20 +181,20 @@ export const ViewSettingsWindow: React.FC = () => {
         envManager.deletePreset(selectedDNCPreset);
         setAllPresets(envManager.getAllPresets());
         setSelectedDNCPreset(key);
-        message.success('预设已保存');
+        showMessage('success', '操作成功', '预设已保存');
     };
 
     // Delete current preset
     const handleDeletePreset = () => {
         if (!selectedDNCPreset) return;
         if (DNC_PRESETS[selectedDNCPreset]) {
-            message.warning('无法删除内置预设');
+            showMessage('warning', '警告', '无法删除内置预设');
             return;
         }
         getEnvironmentManager().deletePreset(selectedDNCPreset);
         setAllPresets(getEnvironmentManager().getAllPresets());
         handleDNCChange('lordaeron'); // Trigger full update including renderer and UI state
-        message.success('预设已删除');
+        showMessage('success', '操作成功', '预设已删除');
     };
 
     // Check context menu status on mount
@@ -218,14 +221,14 @@ export const ViewSettingsWindow: React.FC = () => {
             if (enable) {
                 await invoke('register_context_menu');
                 setContextMenuEnabled(true);
-                message.success('已添加右键菜单');
+                showMessage('success', '操作成功', '已添加右键菜单');
             } else {
                 await invoke('unregister_context_menu');
                 setContextMenuEnabled(false);
-                message.success('已移除右键菜单');
+                showMessage('success', '操作成功', '已移除右键菜单');
             }
         } catch (e: any) {
-            message.error('操作失败: ' + e.toString());
+            showMessage('error', '操作失败', e.toString());
         } finally {
             setContextMenuLoading(false);
         }
@@ -268,7 +271,12 @@ export const ViewSettingsWindow: React.FC = () => {
                 // Save paths
                 localStorage.setItem('mpq_paths', JSON.stringify(paths));
 
-                const hide = message.loading('正在加载 MPQ...', 0);
+                const msgId = useMessageStore.getState().addMessage({
+                    type: 'loading',
+                    title: '请稍候',
+                    content: '正在加载 MPQ...'
+                });
+
                 let count = 0;
 
                 for (const path of paths) {
@@ -282,16 +290,16 @@ export const ViewSettingsWindow: React.FC = () => {
                     }
                 }
 
-                hide();
+                useMessageStore.getState().removeMessage(msgId);
 
                 if (count > 0) {
                     setMpqLoaded(true);
-                    message.success(`成功加载 ${count} 个 MPQ 文件`);
+                    showMessage('success', '操作成功', `成功加载 ${count} 个 MPQ 文件`);
                 }
             }
         } catch (err: any) {
             console.error('Failed to load MPQ:', err);
-            message.error('加载 MPQ 失败: ' + err.toString());
+            showMessage('error', '加载 MPQ 失败', err.toString());
         }
     };
 
@@ -565,7 +573,7 @@ export const ViewSettingsWindow: React.FC = () => {
                     <div style={{ borderTop: '1px solid #333' }} />
 
                     {/* 程序配置 Section */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
                         <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#888' }}>程序配置</span>
                         <ToggleButton
                             checked={contextMenuEnabled}
@@ -573,6 +581,16 @@ export const ViewSettingsWindow: React.FC = () => {
                             style={{ width: '90px' }}
                             disabled={contextMenuLoading}
                         >右键菜单</ToggleButton>
+                        <ToggleButton
+                            checked={autoRecalculateExtent}
+                            onChange={() => setAutoRecalculateExtent(!autoRecalculateExtent)}
+                            style={{ width: '110px' }}
+                        >自动点范围</ToggleButton>
+                        <ToggleButton
+                            checked={autoRecalculateNormals}
+                            onChange={() => setAutoRecalculateNormals(!autoRecalculateNormals)}
+                            style={{ width: '90px' }}
+                        >自动法线</ToggleButton>
                     </div>
 
                     {/* DNC Environment Lighting Section */}

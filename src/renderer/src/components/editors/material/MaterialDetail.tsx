@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
-import { Checkbox, InputNumber, Menu, Dropdown, message } from 'antd'
+import { Checkbox, InputNumber, Menu, Dropdown } from 'antd'
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
+import { showMessage } from '../../../store/messageStore'
 
 interface MaterialDetailProps {
     material: any
@@ -41,14 +42,14 @@ const MaterialDetail: React.FC<MaterialDetailProps> = ({ material, onUpdate, onS
         }
         const newLayers = [...(material.Layers || []), newLayer]
         handleSettingChange('Layers', newLayers)
-        message.success('图层已添加')
+        showMessage('success', '操作成功', '图层已添加')
     }
 
     const handleDeleteLayer = (layerIndex: number) => {
         const newLayers = [...material.Layers]
         newLayers.splice(layerIndex, 1)
         handleSettingChange('Layers', newLayers)
-        message.success('图层已删除')
+        showMessage('success', '操作成功', '图层已删除')
     }
 
     const getContextMenu = (layerIndex: number) => (

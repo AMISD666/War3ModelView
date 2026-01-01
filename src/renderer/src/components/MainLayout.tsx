@@ -22,6 +22,8 @@ import { NodeType } from '../types/node'
 import { useUIStore } from '../store/uiStore'
 import { useSelectionStore } from '../store/selectionStore'
 import { useRendererStore } from '../store/rendererStore'
+import { GlobalMessageLayer } from './GlobalMessageLayer'
+import { showMessage, showConfirm } from '../store/messageStore'
 
 /**
  * Normalize model data before saving to ensure typed arrays are correct.
@@ -1184,6 +1186,9 @@ const MainLayout: React.FC = () => {
             // Prepare model data with correct typed arrays
             const preparedData = prepareModelDataForSave(modelData);
 
+            // Cleanup invalid geosets BEFORE validation
+            cleanupInvalidGeosets(preparedData)
+
             // Validate model data before export
             const validationErrors = validateModelData(preparedData);
             if (validationErrors.length > 0) {
@@ -1210,17 +1215,19 @@ const MainLayout: React.FC = () => {
             }
 
             if (modelPath.toLowerCase().endsWith('.mdl')) {
+                cleanupInvalidGeosets(preparedData)
                 const content = generateMDL(preparedData)
                 await writeFile(modelPath, new TextEncoder().encode(content))
             } else {
+                cleanupInvalidGeosets(preparedData)
                 const buffer = generateMDX(preparedData)
                 await writeFile(modelPath, new Uint8Array(buffer))
             }
 
-            alert('模型已保存')
+            showMessage('success', '保存成功', '模型已保存')
         } catch (err) {
             console.error('Failed to save file:', err)
-            alert('保存失败: ' + err)
+            showMessage('error', '保存失败', '详细信息: ' + err)
         }
     }
 
@@ -1241,12 +1248,25 @@ const MainLayout: React.FC = () => {
                 // Prepare model data with correct typed arrays
                 const preparedData = prepareModelDataForSave(modelData);
 
+                // Cleanup invalid geosets BEFORE validation
+                cleanupInvalidGeosets(preparedData)
+
                 // Validate model data before export
                 const validationErrors = validateModelData(preparedData);
                 if (validationErrors.length > 0) {
                     console.warn('[MainLayout] SaveAs validation warnings:', validationErrors);
-                    const errorMsg = validationErrors.slice(0, 3).join('\n');
-                    const proceed = confirm(`模型验证发现以下问题:\n${errorMsg}\n${validationErrors.length > 3 ? `...还有 ${validationErrors.length - 3} 个问题` : ''}\n\n是否仍然保存?`);
+                    const errorMsg = validationErrors.slice(0, 3).map(e => <div key={e}>{e}</div>);
+                    const hasMore = validationErrors.length > 3;
+                    const proceed = await showConfirm('模型验证警告', (
+                        <div>
+                            <div>发现以下问题:</div>
+                            <div style={{ color: '#ff4d4f', margin: '10px 0' }}>
+                                {errorMsg}
+                                {hasMore && <div>...还有 {validationErrors.length - 3} 个问题</div>}
+                            </div>
+                            <div>是否仍然保存?</div>
+                        </div>
+                    ));
                     if (!proceed) return;
                 }
 
@@ -1266,18 +1286,20 @@ const MainLayout: React.FC = () => {
                 }
 
                 if (selected.toLowerCase().endsWith('.mdl')) {
+                    cleanupInvalidGeosets(preparedData)
                     const content = generateMDL(preparedData)
                     await writeFile(selected, new TextEncoder().encode(content))
                 } else {
+                    cleanupInvalidGeosets(preparedData)
                     const buffer = generateMDX(preparedData)
                     await writeFile(selected, new Uint8Array(buffer))
                 }
                 // Update store with new path if needed, but for now just alert
-                alert('模型已另存为: ' + selected)
+                showMessage('success', '另存为成功', '模型已另存为: ' + selected)
             }
         } catch (err) {
             console.error('Failed to save file as:', err)
-            alert('另存为失�? ' + err)
+            showMessage('error', '另存为失败', '详细信息: ' + err)
         }
     }
 
@@ -1316,24 +1338,38 @@ const MainLayout: React.FC = () => {
 
                 const preparedData = prepareModelDataForSave(modelData)
 
+                // Cleanup invalid geosets BEFORE validation
+                cleanupInvalidGeosets(preparedData)
+
                 // Validate before export
                 const validationErrors = validateModelData(preparedData);
                 if (validationErrors.length > 0) {
                     console.warn('[MainLayout] Export MDL validation warnings:', validationErrors);
-                    const errorMsg = validationErrors.slice(0, 3).join('\n');
-                    const proceed = confirm(`模型验证发现以下问题:\n${errorMsg}\n${validationErrors.length > 3 ? `...还有 ${validationErrors.length - 3} 个问题` : ''}\n\n是否仍然导出?`);
+                    const errorMsg = validationErrors.slice(0, 3).map(e => <div key={e}>{e}</div>);
+                    const hasMore = validationErrors.length > 3;
+                    const proceed = await showConfirm('模型验证警告', (
+                        <div>
+                            <div>发现以下问题:</div>
+                            <div style={{ color: '#ff4d4f', margin: '10px 0' }}>
+                                {errorMsg}
+                                {hasMore && <div>...还有 {validationErrors.length - 3} 个问题</div>}
+                            </div>
+                            <div>是否仍然导出?</div>
+                        </div>
+                    ));
                     if (!proceed) return;
                 }
 
                 fixParticleEmitterFlags(preparedData)
+                cleanupInvalidGeosets(preparedData)
 
                 const content = generateMDL(preparedData)
                 await writeFile(filePath, new TextEncoder().encode(content))
-                alert('已导出为 MDL: ' + filePath)
+                showMessage('success', '导出成功', '已导出为 MDL: ' + filePath)
             }
         } catch (err) {
             console.error('Failed to export MDL:', err)
-            alert('导出 MDL 失败: ' + err)
+            showMessage('error', '导出 MDL 失败', '详细信息: ' + err)
         }
     }
 
@@ -1362,24 +1398,40 @@ const MainLayout: React.FC = () => {
 
                 const preparedData = prepareModelDataForSave(modelData)
 
+                // Cleanup invalid geosets BEFORE validation
+                cleanupInvalidGeosets(preparedData)
+
                 // Validate before export
                 const validationErrors = validateModelData(preparedData);
                 if (validationErrors.length > 0) {
                     console.warn('[MainLayout] Export MDX validation warnings:', validationErrors);
-                    const errorMsg = validationErrors.slice(0, 3).join('\n');
-                    const proceed = confirm(`模型验证发现以下问题:\n${errorMsg}\n${validationErrors.length > 3 ? `...还有 ${validationErrors.length - 3} 个问题` : ''}\n\n是否仍然导出?`);
+                    const errorMsg = validationErrors.slice(0, 3).map(e => <div key={e}>{e}</div>);
+                    const hasMore = validationErrors.length > 3;
+                    const proceed = await showConfirm('模型验证警告', (
+                        <div>
+                            <div>发现以下问题:</div>
+                            <div style={{ color: '#ff4d4f', margin: '10px 0' }}>
+                                {errorMsg}
+                                {hasMore && <div>...还有 {validationErrors.length - 3} 个问题</div>}
+                            </div>
+                            <div>是否仍然导出?</div>
+                        </div>
+                    ));
                     if (!proceed) return;
                 }
 
                 fixParticleEmitterFlags(preparedData)
 
+                // Cleanup invalid geosets before export (e.g., empty geosets from split operations)
+                cleanupInvalidGeosets(preparedData)
+
                 const buffer = generateMDX(preparedData)
                 await writeFile(filePath, new Uint8Array(buffer))
-                alert('已导出为 MDX: ' + filePath)
+                showMessage('success', '导出成功', '已导出为 MDX: ' + filePath)
             }
         } catch (err) {
             console.error('Failed to export MDX:', err)
-            alert('导出 MDX 失败: ' + err)
+            showMessage('error', '导出 MDX 失败', '详细信息: ' + err)
         }
     }
 
@@ -1397,6 +1449,55 @@ const MainLayout: React.FC = () => {
                     emitter.FrameFlags = 1
                 }
             })
+        }
+    }
+
+    // Helper to remove empty/invalid geosets before export
+    const cleanupInvalidGeosets = (preparedData: any) => {
+        if (!preparedData.Geosets) return
+
+        const originalCount = preparedData.Geosets.length
+        preparedData.Geosets = preparedData.Geosets.filter((geoset: any, index: number) => {
+            // Check essential properties
+            const hasVertices = geoset.Vertices && geoset.Vertices.length > 0
+            const hasFaces = geoset.Faces && geoset.Faces.length > 0
+            const hasNormals = geoset.Normals && geoset.Normals.length > 0
+            const hasTVertices = geoset.TVertices && geoset.TVertices.length > 0 && geoset.TVertices[0]?.length > 0
+
+            const isValid = hasVertices && hasFaces && hasNormals && hasTVertices
+
+            if (!isValid) {
+                console.warn(`[MainLayout] Removing invalid Geoset ${index}:`, {
+                    hasVertices,
+                    hasFaces,
+                    hasNormals,
+                    hasTVertices
+                })
+            }
+            return isValid
+        })
+
+        // Ensure all remaining geosets have required properties for MDX generator
+        preparedData.Geosets.forEach((geoset: any, index: number) => {
+            // Anims is required by generate.ts:575
+            if (!geoset.Anims) {
+                geoset.Anims = []
+                console.log(`[MainLayout] Fixed Geoset ${index}: Added missing Anims array`)
+            }
+            // VertexGroup is required
+            if (!geoset.VertexGroup) {
+                geoset.VertexGroup = new Array(geoset.Vertices.length / 3).fill(0)
+                console.log(`[MainLayout] Fixed Geoset ${index}: Added missing VertexGroup`)
+            }
+            // Groups is required
+            if (!geoset.Groups) {
+                geoset.Groups = [[0]]
+                console.log(`[MainLayout] Fixed Geoset ${index}: Added missing Groups`)
+            }
+        })
+
+        if (preparedData.Geosets.length !== originalCount) {
+            console.log(`[MainLayout] Cleaned up ${originalCount - preparedData.Geosets.length} invalid geosets.`)
         }
     }
 
@@ -1884,6 +1985,8 @@ const MainLayout: React.FC = () => {
                     </div>
                 )}
             </div>
+            {/* Global Message Layer */}
+            <GlobalMessageLayer />
         </div>
     )
 }

@@ -5,6 +5,179 @@
 import { create } from 'zustand';
 import { ModelData } from '../types/model';
 import { ModelNode, NodeType } from '../types/node';
+import { useRendererStore } from './rendererStore';
+
+/**
+ * 重新计算 Geoset 的边界范围 (Extent)
+ * 遍历所有顶点，计算 MinimumExtent, MaximumExtent 和 BoundsRadius
+ */
+function recalculateGeosetExtent(geoset: any): void {
+    if (!geoset?.Vertices || geoset.Vertices.length === 0) return;
+
+    const vertices = geoset.Vertices;
+    const vertexCount = vertices.length / 3;
+
+    if (vertexCount === 0) return;
+
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+
+    for (let i = 0; i < vertexCount; i++) {
+        const x = vertices[i * 3];
+        const y = vertices[i * 3 + 1];
+        const z = vertices[i * 3 + 2];
+
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (z < minZ) minZ = z;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+        if (z > maxZ) maxZ = z;
+    }
+
+    // Update extent
+    if (geoset.MinimumExtent instanceof Float32Array) {
+        geoset.MinimumExtent[0] = minX;
+        geoset.MinimumExtent[1] = minY;
+        geoset.MinimumExtent[2] = minZ;
+    } else {
+        geoset.MinimumExtent = new Float32Array([minX, minY, minZ]);
+    }
+
+    if (geoset.MaximumExtent instanceof Float32Array) {
+        geoset.MaximumExtent[0] = maxX;
+        geoset.MaximumExtent[1] = maxY;
+        geoset.MaximumExtent[2] = maxZ;
+    } else {
+        geoset.MaximumExtent = new Float32Array([maxX, maxY, maxZ]);
+    }
+
+    // Calculate BoundsRadius as half the diagonal
+    const dx = maxX - minX;
+    const dy = maxY - minY;
+    const dz = maxZ - minZ;
+    geoset.BoundsRadius = Math.sqrt(dx * dx + dy * dy + dz * dz) / 2;
+}
+
+/**
+ * 重新计算 Geoset 的法线
+ * 使用面法线平均法：对每个顶点，累加其所属面的法线，然后归一化
+ */
+function recalculateGeosetNormals(geoset: any): void {
+    if (!geoset?.Vertices || !geoset?.Faces || geoset.Vertices.length === 0) return;
+
+    const vertices = geoset.Vertices;
+    const faces = geoset.Faces;
+    const vertexCount = vertices.length / 3;
+    const faceCount = faces.length / 3;
+
+    if (vertexCount === 0 || faceCount === 0) return;
+
+    // Initialize normals to zero
+    const normals = new Float32Array(vertexCount * 3);
+
+    // Accumulate face normals for each vertex
+    for (let f = 0; f < faceCount; f++) {
+        const i0 = faces[f * 3];
+        const i1 = faces[f * 3 + 1];
+        const i2 = faces[f * 3 + 2];
+
+        // Get vertex positions
+        const v0x = vertices[i0 * 3], v0y = vertices[i0 * 3 + 1], v0z = vertices[i0 * 3 + 2];
+        const v1x = vertices[i1 * 3], v1y = vertices[i1 * 3 + 1], v1z = vertices[i1 * 3 + 2];
+        const v2x = vertices[i2 * 3], v2y = vertices[i2 * 3 + 1], v2z = vertices[i2 * 3 + 2];
+
+        // Calculate edge vectors
+        const e1x = v1x - v0x, e1y = v1y - v0y, e1z = v1z - v0z;
+        const e2x = v2x - v0x, e2y = v2y - v0y, e2z = v2z - v0z;
+
+        // Cross product (face normal, not normalized yet)
+        const nx = e1y * e2z - e1z * e2y;
+        const ny = e1z * e2x - e1x * e2z;
+        const nz = e1x * e2y - e1y * e2x;
+
+        // Accumulate to each vertex of the face
+        normals[i0 * 3] += nx; normals[i0 * 3 + 1] += ny; normals[i0 * 3 + 2] += nz;
+        normals[i1 * 3] += nx; normals[i1 * 3 + 1] += ny; normals[i1 * 3 + 2] += nz;
+        normals[i2 * 3] += nx; normals[i2 * 3 + 1] += ny; normals[i2 * 3 + 2] += nz;
+    }
+
+    // Normalize all normals
+    for (let i = 0; i < vertexCount; i++) {
+        const x = normals[i * 3];
+        const y = normals[i * 3 + 1];
+        const z = normals[i * 3 + 2];
+        const len = Math.sqrt(x * x + y * y + z * z);
+        if (len > 0.0001) {
+            normals[i * 3] = x / len;
+            normals[i * 3 + 1] = y / len;
+            normals[i * 3 + 2] = z / len;
+        } else {
+            // Default to up vector if degenerate
+            normals[i * 3] = 0;
+            normals[i * 3 + 1] = 0;
+            normals[i * 3 + 2] = 1;
+        }
+    }
+
+    geoset.Normals = normals;
+}
+
+/**
+ * 重新计算模型的所有 Geoset 的 Extent
+ */
+function recalculateModelExtent(modelData: any): void {
+    if (!modelData?.Geosets) return;
+
+    for (const geoset of modelData.Geosets) {
+        recalculateGeosetExtent(geoset);
+    }
+
+    // Also update model-level extent
+    if (modelData.Geosets.length > 0) {
+        let minX = Infinity, minY = Infinity, minZ = Infinity;
+        let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+
+        for (const geoset of modelData.Geosets) {
+            if (geoset.MinimumExtent) {
+                const min = geoset.MinimumExtent;
+                if (min[0] < minX) minX = min[0];
+                if (min[1] < minY) minY = min[1];
+                if (min[2] < minZ) minZ = min[2];
+            }
+            if (geoset.MaximumExtent) {
+                const max = geoset.MaximumExtent;
+                if (max[0] > maxX) maxX = max[0];
+                if (max[1] > maxY) maxY = max[1];
+                if (max[2] > maxZ) maxZ = max[2];
+            }
+        }
+
+        if (modelData.Info) {
+            modelData.Info.MinimumExtent = new Float32Array([minX, minY, minZ]);
+            modelData.Info.MaximumExtent = new Float32Array([maxX, maxY, maxZ]);
+            const dx = maxX - minX;
+            const dy = maxY - minY;
+            const dz = maxZ - minZ;
+            modelData.Info.BoundsRadius = Math.sqrt(dx * dx + dy * dy + dz * dz) / 2;
+        }
+    }
+
+    console.log('[ModelStore] Recalculated extent for', modelData.Geosets.length, 'geosets');
+}
+
+/**
+ * 重新计算模型的所有 Geoset 的法线
+ */
+function recalculateModelNormals(modelData: any): void {
+    if (!modelData?.Geosets) return;
+
+    for (const geoset of modelData.Geosets) {
+        recalculateGeosetNormals(geoset);
+    }
+
+    console.log('[ModelStore] Recalculated normals for', modelData.Geosets.length, 'geosets');
+}
 
 interface ModelState {
     modelData: ModelData | null;
@@ -507,6 +680,15 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
         // FORCE NO REORDERING ON LOAD to prevent invalidating saved bone references
         const correctedData = updateModelDataWithNodes(data, nodes, false);
+
+        // Auto recalculate extent and normals based on settings
+        const rendererState = useRendererStore.getState();
+        if (rendererState.autoRecalculateExtent) {
+            recalculateModelExtent(correctedData);
+        }
+        if (rendererState.autoRecalculateNormals) {
+            recalculateModelNormals(correctedData);
+        }
 
         // Reset animation state on new model load
         // Initialize geosets as hidden (User request: default unchecked)

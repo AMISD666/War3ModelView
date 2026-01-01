@@ -87,6 +87,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const [editingVectorSize, setEditingVectorSize] = useState(1)
 
     const isInitialized = React.useRef(false)
+    const materialListRef = React.useRef<HTMLDivElement>(null)
 
     // Initialize local state
     useEffect(() => {
@@ -187,7 +188,14 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         const newMaterial = { PriorityPlane: 0, RenderMode: 0, Layers: [defaultLayer] }
         setLocalMaterials([...localMaterials, newMaterial])
         setSelectedMaterialIndex(localMaterials.length)
-        setSelectedLayerIndex(0) // Auto-select the default layer
+        // Don't auto-select layer - stay on material view to prevent flickering
+        setSelectedLayerIndex(-1)
+        // Auto-scroll to the new material after state update
+        setTimeout(() => {
+            if (materialListRef.current) {
+                materialListRef.current.scrollTop = materialListRef.current.scrollHeight
+            }
+        }, 0)
     }
 
     const handleDeleteMaterial = (index: number) => {
@@ -355,7 +363,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                             <Text style={{ color: '#e8e8e8', fontWeight: 'bold' }}>材质 (Materials)</Text>
                             <Button type="primary" size="small" icon={<PlusOutlined />} onClick={handleAddMaterial} style={{ backgroundColor: '#5a9cff', borderColor: '#5a9cff' }} />
                         </div>
-                        <div style={{ overflowY: 'auto', flex: 1 }}>
+                        <div ref={materialListRef} style={{ overflowY: 'auto', flex: 1 }}>
                             <List
                                 dataSource={localMaterials}
                                 renderItem={(_item: any, index: number) => (

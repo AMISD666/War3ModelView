@@ -49,7 +49,10 @@ export class SplitVerticesCommand implements Command {
             VertexGroup: new Uint8Array(geoset.VertexGroup),
             Faces: new Uint16Array(geoset.Faces),
             TVertices: geoset.TVertices.map((tv: Float32Array) => new Float32Array(tv)),
-            MaterialID: geoset.MaterialID
+            MaterialID: geoset.MaterialID,
+            Groups: geoset.Groups ? JSON.parse(JSON.stringify(geoset.Groups)) : [[0]],
+            SelectionGroup: geoset.SelectionGroup,
+            Unselectable: geoset.Unselectable
         }
 
         // Get vertex indices
@@ -66,14 +69,8 @@ export class SplitVerticesCommand implements Command {
         // Debug: log what splitResult contains
         console.log('[SplitVerticesCommand] splitResult.newGeoset:', {
             hasVertices: !!this.splitResult.newGeoset.Vertices,
-            verticesLength: this.splitResult.newGeoset.Vertices?.length,
             vertexCount: this.splitResult.newGeoset.Vertices?.length / 3,
-            hasFaces: !!this.splitResult.newGeoset.Faces,
-            facesLength: this.splitResult.newGeoset.Faces?.length,
             faceCount: this.splitResult.newGeoset.Faces?.length / 3,
-            hasNormals: !!this.splitResult.newGeoset.Normals,
-            hasTVertices: !!this.splitResult.newGeoset.TVertices,
-            tVerticesLayers: this.splitResult.newGeoset.TVertices?.length
         })
 
         // Update original geoset with remaining geometry (faces removed)
@@ -101,7 +98,6 @@ export class SplitVerticesCommand implements Command {
             vertexCount: (newGeoset as any).Vertices?.length / 3,
             faceCount: (newGeoset as any).Faces?.length / 3,
             MaterialID: newGeoset.MaterialID,
-            Groups: newGeoset.Groups?.length
         })
 
         this.renderer.model.Geosets.push(newGeoset)

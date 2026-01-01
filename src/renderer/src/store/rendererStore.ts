@@ -75,6 +75,12 @@ interface RendererStore {
     // Missing Textures Warning
     missingTextures: string[]
     setMissingTextures: (paths: string[]) => void
+
+    // Auto Processing Settings (on model load)
+    autoRecalculateExtent: boolean
+    setAutoRecalculateExtent: (enabled: boolean) => void
+    autoRecalculateNormals: boolean
+    setAutoRecalculateNormals: (enabled: boolean) => void
 }
 
 export const useRendererStore = create<RendererStore>()(
@@ -155,7 +161,13 @@ export const useRendererStore = create<RendererStore>()(
 
             // Missing Textures Warning
             missingTextures: [],
-            setMissingTextures: (paths) => set({ missingTextures: paths })
+            setMissingTextures: (paths) => set({ missingTextures: paths }),
+
+            // Auto Processing Settings (on model load) - defaults ON
+            autoRecalculateExtent: true,
+            setAutoRecalculateExtent: (enabled) => set({ autoRecalculateExtent: enabled }),
+            autoRecalculateNormals: true,
+            setAutoRecalculateNormals: (enabled) => set({ autoRecalculateNormals: enabled })
         }),
         {
             name: 'renderer-settings-v2',
@@ -181,7 +193,9 @@ export const useRendererStore = create<RendererStore>()(
                 vertexColor: state.vertexColor,
                 wireframeColor: state.wireframeColor,
                 selectionColor: state.selectionColor,
-                hoverColor: state.hoverColor
+                hoverColor: state.hoverColor,
+                autoRecalculateExtent: state.autoRecalculateExtent,
+                autoRecalculateNormals: state.autoRecalculateNormals
             }),
         }
     )
