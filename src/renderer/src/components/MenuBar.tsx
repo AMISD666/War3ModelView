@@ -41,6 +41,7 @@ interface MenuBarProps {
     onShowChangelog: () => void
     onRecalculateNormals: () => void
     onRecalculateExtents: () => void
+    onCheckUpdate: () => void
 }
 
 const MenuBar: React.FC<MenuBarProps> = ({
@@ -82,7 +83,8 @@ const MenuBar: React.FC<MenuBarProps> = ({
     onShowAbout,
     onShowChangelog,
     onRecalculateNormals,
-    onRecalculateExtents
+    onRecalculateExtents,
+    onCheckUpdate
 }) => {
     const [activeMenu, setActiveMenu] = useState<string | null>(null)
     const [settingsSubMenu, setSettingsSubMenu] = useState<string | null>(null)
@@ -517,6 +519,14 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             style={itemStyle}
                             onMouseEnter={hoverStyle}
                             onMouseLeave={unhoverStyle}
+                            onClick={() => { onCheckUpdate(); closeMenu() }}
+                        >
+                            检查更新
+                        </div>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
                             onClick={() => { onShowChangelog(); closeMenu() }}
                         >
                             更新日志
@@ -532,7 +542,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
                     </div>
                 )}
             </div>
-        </div>
+        </div >
     )
 }
 

@@ -14,7 +14,7 @@ import AnimationPanel from './AnimationPanel'
 const MaterialEditorModal = React.lazy(() => import('./modals/MaterialEditorModal'))
 const GeosetEditorModal = React.lazy(() => import('./modals/GeosetEditorModal'))
 const GlobalSequenceModal = React.lazy(() => import('./modals/GlobalSequenceModal'))
-const ChangelogModal = React.lazy(() => import('./modals/ChangelogModal'))
+
 import { GeosetVisibilityPanel } from './GeosetVisibilityPanel'
 import { open } from '@tauri-apps/plugin-dialog'
 import { generateMDL, generateMDX } from 'war3-model'
@@ -25,6 +25,7 @@ import { useSelectionStore } from '../store/selectionStore'
 import { useRendererStore } from '../store/rendererStore'
 import { GlobalMessageLayer } from './GlobalMessageLayer'
 import { showMessage, showConfirm } from '../store/messageStore'
+import { checkGiteeUpdate, showChangelog as showUpdateLog } from '../services/updateService';
 
 /**
  * Normalize model data before saving to ensure typed arrays are correct.
@@ -1628,6 +1629,8 @@ const MainLayout: React.FC = () => {
         }
     }
 
+
+
     return (
         <div
             style={{
@@ -1692,6 +1695,8 @@ const MainLayout: React.FC = () => {
                 onChangeBackgroundColor={setBackgroundColor}
                 showFPS={showFPS}
                 onToggleFPS={() => setShowFPS(!showFPS)}
+                onCheckUpdate={() => checkGiteeUpdate()}
+                onShowChangelog={() => showUpdateLog()}
                 showGeosetVisibility={showGeosetVisibility}
                 onToggleGeosetVisibility={() => {
                     const newValue = !showGeosetVisibility;
@@ -1748,7 +1753,6 @@ const MainLayout: React.FC = () => {
                 showDebugConsole={showDebugConsole}
                 onToggleDebugConsole={() => setShowDebugConsole(!showDebugConsole)}
                 onShowAbout={() => setShowAbout(true)}
-                onShowChangelog={() => setShowChangelog(true)}
                 onRecalculateNormals={() => {
                     useModelStore.getState().recalculateNormals();
                     showMessage('success', '成功', '已重新计算法线');
@@ -1943,14 +1947,7 @@ const MainLayout: React.FC = () => {
                 visible={showGlobalSeqModal}
                 onClose={() => setShowGlobalSeqModal(false)}
             />
-            <Suspense fallback={null}>
-                {showChangelog && (
-                    <ChangelogModal
-                        open={showChangelog}
-                        onClose={() => setShowChangelog(false)}
-                    />
-                )}
-            </Suspense>
+
 
             <div style={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative' }}>
                 {/* Left Panel - Animation Panel (hidden in UV mode) */}

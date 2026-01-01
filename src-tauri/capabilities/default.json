@@ -13,8 +13,19 @@
         "fs:allow-write-text-file",
         "dialog:default",
         "shell:allow-open",
+        {
+            "identifier": "http:default",
+            "allow": [
+                {
+                    "url": "https://gitee.com/**"
+                }
+            ]
+        },
         "core:webview:allow-internal-toggle-devtools",
         "core:event:default",
+        "core:app:allow-version",
+        "core:path:default",
+        "process:allow-exit",
         {
             "identifier": "fs:scope",
             "allow": [

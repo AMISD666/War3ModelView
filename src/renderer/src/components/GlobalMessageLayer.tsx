@@ -34,6 +34,7 @@ const Toast: React.FC<{ msg: any; onClose: () => void }> = ({ msg, onClose }) =>
             }, msg.duration || 3000);
             return () => clearTimeout(timer);
         }
+        return undefined; // Fix TS7030
     }, [msg, onClose]);
 
     return (
@@ -89,16 +90,16 @@ export const GlobalMessageLayer: React.FC = () => {
                         key={msg.id}
                         title={msg.title}
                         open={true}
-                        width={400}
+                        width={msg.width || 400}
                         onCancel={handleClose}
-                        footer={
+                        footer={msg.footer === null ? null : (
                             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
                                 <Button onClick={handleClose}>{msg.cancelText || '取消'}</Button>
                                 <Button type="primary" onClick={handleOk}>
                                     {msg.okText || '确定'}
                                 </Button>
                             </div>
-                        }
+                        )}
                         wrapClassName="message-modal"
                         minWidth={300}
                         minHeight={150}
