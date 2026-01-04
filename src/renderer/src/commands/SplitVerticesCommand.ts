@@ -17,13 +17,15 @@ export class SplitVerticesCommand implements Command {
     private renderer: any
     private selections: VertexSelection[]
     private geosetIndex: number
+    private targetMaterialId?: number
     private splitResult: SplitResult | null = null
     private originalGeosetSnapshot: any = null
     private newGeosetIndex: number = -1
 
-    constructor(renderer: any, selections: VertexSelection[]) {
+    constructor(renderer: any, selections: VertexSelection[], targetMaterialId?: number) {
         this.renderer = renderer
         this.selections = selections
+        this.targetMaterialId = targetMaterialId
 
         // All selections should be from the same geoset for split
         if (selections.length > 0) {
@@ -82,9 +84,11 @@ export class SplitVerticesCommand implements Command {
         }
 
         // Add new geoset to model
+        // Use targetMaterialId if provided, otherwise inherit from source
+        const materialId = this.targetMaterialId !== undefined ? this.targetMaterialId : (geoset.MaterialID || 0)
         const newGeoset = {
             ...this.splitResult.newGeoset,
-            MaterialID: geoset.MaterialID || 0,
+            MaterialID: materialId,
             SelectionGroup: geoset.SelectionGroup || 0,
             Unselectable: geoset.Unselectable || false,
             Groups: geoset.Groups ? JSON.parse(JSON.stringify(geoset.Groups)) : [[0]],

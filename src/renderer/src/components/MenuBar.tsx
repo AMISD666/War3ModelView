@@ -42,6 +42,9 @@ interface MenuBarProps {
     onRecalculateNormals: () => void
     onRecalculateExtents: () => void
     onCheckUpdate: () => void
+    onMergeSameMaterials: () => void
+    onCleanUnusedMaterials: () => void
+    onCleanUnusedTextures: () => void
 }
 
 const MenuBar: React.FC<MenuBarProps> = ({
@@ -84,7 +87,10 @@ const MenuBar: React.FC<MenuBarProps> = ({
     onShowChangelog,
     onRecalculateNormals,
     onRecalculateExtents,
-    onCheckUpdate
+    onCheckUpdate,
+    onMergeSameMaterials,
+    onCleanUnusedMaterials,
+    onCleanUnusedTextures
 }) => {
     const [activeMenu, setActiveMenu] = useState<string | null>(null)
     const [settingsSubMenu, setSettingsSubMenu] = useState<string | null>(null)
@@ -496,6 +502,31 @@ const MenuBar: React.FC<MenuBarProps> = ({
                         >
                             重新计算模型顶点范围
                         </div>
+                        <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={() => { onMergeSameMaterials(); closeMenu() }}
+                        >
+                            合并相同材质
+                        </div>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={() => { onCleanUnusedMaterials(); closeMenu() }}
+                        >
+                            清理未使用的材质
+                        </div>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={() => { onCleanUnusedTextures(); closeMenu() }}
+                        >
+                            清理未使用的贴图
+                        </div>
                     </div>
                 )}
             </div>
@@ -522,14 +553,6 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             onClick={() => { onCheckUpdate(); closeMenu() }}
                         >
                             检查更新
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onShowChangelog(); closeMenu() }}
-                        >
-                            更新日志
                         </div>
                         <div
                             style={itemStyle}

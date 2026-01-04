@@ -11,6 +11,9 @@ interface SequenceEditorProps {
 const SequenceEditor: React.FC<SequenceEditorProps> = () => {
     const storeSequences = useModelStore(state => state.sequences)
     const setStoreSequences = useModelStore(state => state.setSequences)
+    const currentSequence = useModelStore(state => state.currentSequence)
+    const setSequence = useModelStore(state => state.setSequence)
+    const setPlaying = useModelStore(state => state.setPlaying)
 
     const [sequences, setSequences] = useState<any[]>([])
     const [hasChanges, setHasChanges] = useState(false)
@@ -62,6 +65,16 @@ const SequenceEditor: React.FC<SequenceEditorProps> = () => {
         message.success('序列已更新')
     }
 
+    // Handle row click to select and play animation
+    const handleRowClick = (index: number) => {
+        const seq = storeSequences[index]
+        // Check if sequence has valid Interval
+        if (seq && seq.Interval && seq.Interval.length >= 2) {
+            setSequence(index)
+            setPlaying(true)
+        }
+    }
+
     const columns = [
         {
             title: '名称',
@@ -74,6 +87,7 @@ const SequenceEditor: React.FC<SequenceEditorProps> = () => {
                     onChange={(e) => handleChange(index, 'Name', e.target.value)}
                     bordered={false}
                     style={{ backgroundColor: '#333', color: '#fff' }}
+                    onClick={(e) => e.stopPropagation()}
                 />
             )
         },
@@ -84,13 +98,14 @@ const SequenceEditor: React.FC<SequenceEditorProps> = () => {
             width: 100,
             render: (_text: number, record: any, index: number) => (
                 <InputNumber
-                    value={record.Interval[0]}
+                    value={record.Interval?.[0] ?? 0}
                     onChange={(val) => {
-                        const newInterval = [...record.Interval]
+                        const newInterval = [...(record.Interval || [0, 1000])]
                         newInterval[0] = val
                         handleChange(index, 'Interval', newInterval)
                     }}
                     style={{ width: '100%', backgroundColor: '#333', color: '#fff', border: 'none' }}
+                    onClick={(e) => e.stopPropagation()}
                 />
             )
         },
@@ -101,13 +116,14 @@ const SequenceEditor: React.FC<SequenceEditorProps> = () => {
             width: 100,
             render: (_text: number, record: any, index: number) => (
                 <InputNumber
-                    value={record.Interval[1]}
+                    value={record.Interval?.[1] ?? 1000}
                     onChange={(val) => {
-                        const newInterval = [...record.Interval]
+                        const newInterval = [...(record.Interval || [0, 1000])]
                         newInterval[1] = val
                         handleChange(index, 'Interval', newInterval)
                     }}
                     style={{ width: '100%', backgroundColor: '#333', color: '#fff', border: 'none' }}
+                    onClick={(e) => e.stopPropagation()}
                 />
             )
         },
@@ -120,6 +136,7 @@ const SequenceEditor: React.FC<SequenceEditorProps> = () => {
                 <Checkbox
                     checked={!!val}
                     onChange={(e) => handleChange(index, 'NonLooping', e.target.checked ? 1 : 0)}
+                    onClick={(e) => e.stopPropagation()}
                 />
             )
         },
@@ -132,7 +149,7 @@ const SequenceEditor: React.FC<SequenceEditorProps> = () => {
                     type="text"
                     danger
                     icon={<DeleteOutlined />}
-                    onClick={() => handleRemoveSequence(index)}
+                    onClick={(e) => { e.stopPropagation(); handleRemoveSequence(index) }}
                 />
             )
         }
@@ -173,7 +190,11 @@ const SequenceEditor: React.FC<SequenceEditorProps> = () => {
                 pagination={false}
                 size="small"
                 scroll={{ y: 'calc(100vh - 200px)' }}
-                rowClassName={() => 'editable-row'}
+                rowClassName={(_, index) => index === currentSequence ? 'selected-row' : 'editable-row'}
+                onRow={(_, index) => ({
+                    onClick: () => index !== undefined && handleRowClick(index),
+                    style: { cursor: 'pointer' }
+                })}
                 style={{ flex: 1, overflow: 'hidden' }}
             />
             <style>{`
@@ -181,6 +202,8 @@ const SequenceEditor: React.FC<SequenceEditorProps> = () => {
                 .ant-table-thead > tr > th { background: #333 !important; color: #eee !important; border-bottom: 1px solid #444; }
                 .ant-table-tbody > tr > td { border-bottom: 1px solid #444; color: #eee; }
                 .ant-table-tbody > tr:hover > td { background: #333 !important; }
+                .ant-table-tbody > tr.selected-row > td { background: #1890ff !important; }
+                .ant-table-tbody > tr.selected-row:hover > td { background: #40a9ff !important; }
                 .ant-input-number-input { color: #eee; }
                 .ant-empty-description { color: #888; }
             `}</style>

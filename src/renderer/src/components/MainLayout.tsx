@@ -1761,6 +1761,39 @@ const MainLayout: React.FC = () => {
                     useModelStore.getState().recalculateExtents();
                     showMessage('success', '成功', '已重新计算模型顶点范围');
                 }}
+                onMergeSameMaterials={async () => {
+                    if (!modelData) return;
+                    const { mergeSameMaterials } = await import('../services/modelCleanupService');
+                    const result = mergeSameMaterials(modelData);
+                    if (result.removed > 0) {
+                        useModelStore.getState().setMaterials([...(modelData.Materials || [])]);
+                        showMessage('success', '成功', result.message);
+                    } else {
+                        showMessage('info', '提示', result.message);
+                    }
+                }}
+                onCleanUnusedMaterials={async () => {
+                    if (!modelData) return;
+                    const { cleanUnusedMaterials } = await import('../services/modelCleanupService');
+                    const result = cleanUnusedMaterials(modelData);
+                    if (result.removed > 0) {
+                        useModelStore.getState().setMaterials([...(modelData.Materials || [])]);
+                        showMessage('success', '成功', result.message);
+                    } else {
+                        showMessage('info', '提示', result.message);
+                    }
+                }}
+                onCleanUnusedTextures={async () => {
+                    if (!modelData) return;
+                    const { cleanUnusedTextures } = await import('../services/modelCleanupService');
+                    const result = cleanUnusedTextures(modelData);
+                    if (result.removed > 0) {
+                        useModelStore.getState().setTextures([...(modelData.Textures || [])]);
+                        showMessage('success', '成功', result.message);
+                    } else {
+                        showMessage('info', '提示', result.message);
+                    }
+                }}
             />
 
             {/* About Dialog */}

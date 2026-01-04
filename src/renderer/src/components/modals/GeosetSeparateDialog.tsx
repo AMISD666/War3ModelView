@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Select, Button, message, ConfigProvider, theme } from 'antd';
+import { Select, Button, Radio, ConfigProvider, theme } from 'antd';
 import { DraggableModal } from '../DraggableModal';
 import { useModelStore } from '../../store/modelStore';
 import { decodeBLP, getBLPImageData } from 'war3-model';
@@ -7,26 +7,38 @@ import { readFile } from '@tauri-apps/plugin-fs';
 import { invoke } from '@tauri-apps/api/core';
 import { MaterialLayerOptions, LayerConfig, DEFAULT_LAYER_CONFIG } from './MaterialLayerOptions';
 
-interface GeosetMergeDialogProps {
+type MaterialMode = 'keep' | 'new' | 'existing';
+
+interface GeosetSeparateDialogProps {
     visible: boolean;
-    selectedGeosetIndices: number[];
+    sourceGeosetIndex: number;
     onCancel: () => void;
-    onConfirm: (materialIndex: number, newLayerConfig?: LayerConfig) => void;
+    onConfirm: (config: {
+        mode: MaterialMode;
+        materialIndex?: number;  // for 'existing' or result of 'keep'
+        newLayerConfig?: LayerConfig;  // for 'new'
+    }) => void;
 }
 
-export const GeosetMergeDialog: React.FC<GeosetMergeDialogProps> = ({
+export const GeosetSeparateDialog: React.FC<GeosetSeparateDialogProps> = ({
     visible,
-    selectedGeosetIndices,
+    sourceGeosetIndex,
     onCancel,
     onConfirm
 }) => {
     const { modelData, modelPath } = useModelStore();
+    const [mode, setMode] = useState<MaterialMode>('keep');
     const [selectedMaterialIndex, setSelectedMaterialIndex] = useState<number>(-1);
     const [layerConfig, setLayerConfig] = useState<LayerConfig>(DEFAULT_LAYER_CONFIG);
     const [texturePreviewUrl, setTexturePreviewUrl] = useState<string | null>(null);
     const [loadingTexture, setLoadingTexture] = useState(false);
 
-    // Build texture list for MaterialLayerOptions
+    // Get source material info
+    const sourceGeoset = modelData?.Geosets?.[sourceGeosetIndex];
+    const sourceMaterialId = sourceGeoset?.MaterialID ?? 0;
+    const allMaterials = modelData?.Materials || [];
+
+    // Build texture list
     const textures = useMemo(() => {
         const list: { id: number; path: string }[] = [];
         (modelData?.Textures || []).forEach((tex: any, i: number) => {
@@ -35,58 +47,21 @@ export const GeosetMergeDialog: React.FC<GeosetMergeDialogProps> = ({
         return list;
     }, [modelData?.Textures]);
 
-    // Get materials used by selected geosets
-    const usedMaterialIndices = useMemo(() => {
-        const indices = new Set<number>();
-        selectedGeosetIndices.forEach(idx => {
-            const geoset = modelData?.Geosets?.[idx];
-            if (geoset && typeof geoset.MaterialID === 'number') {
-                indices.add(geoset.MaterialID);
-            }
-        });
-        return Array.from(indices);
-    }, [modelData?.Geosets, selectedGeosetIndices]);
+    // Build material options for 'existing' mode
+    const materialOptions = useMemo(() => {
+        return allMaterials.map((_: any, i: number) => ({
+            label: `材质 ${i}`,
+            value: i
+        }));
+    }, [allMaterials]);
 
-    // All materials
-    const allMaterials = modelData?.Materials || [];
-    const otherMaterialIndices = useMemo(() => {
-        const usedSet = new Set(usedMaterialIndices);
-        return allMaterials.map((_: any, i: number) => i).filter((i: number) => !usedSet.has(i));
-    }, [allMaterials, usedMaterialIndices]);
-
-    // Build flat options with dividers
-    const options = useMemo(() => {
-        const result: { label: string; value: number; disabled?: boolean }[] = [];
-
-        // New material option
-        result.push({ label: '新建材质', value: -1 });
-
-        // Used materials
-        if (usedMaterialIndices.length > 0) {
-            result.push({ label: '─── 选中引用的材质 ───', value: -999, disabled: true });
-            usedMaterialIndices.forEach(idx => {
-                result.push({ label: `材质 ${idx}`, value: idx });
-            });
-        }
-
-        // Other materials
-        if (otherMaterialIndices.length > 0) {
-            result.push({ label: '─── 其他材质 ───', value: -998, disabled: true });
-            otherMaterialIndices.forEach(idx => {
-                result.push({ label: `材质 ${idx}`, value: idx });
-            });
-        }
-
-        return result;
-    }, [usedMaterialIndices, otherMaterialIndices]);
-
-    // Default to first used material, initialize layerConfig from it
+    // Reset state on open
     useEffect(() => {
-        if (visible && usedMaterialIndices.length > 0) {
-            const matIdx = usedMaterialIndices[0];
-            setSelectedMaterialIndex(matIdx);
-            // Initialize layer config from this material
-            const srcMat = allMaterials[matIdx];
+        if (visible) {
+            setMode('keep');
+            setSelectedMaterialIndex(sourceMaterialId);
+            // Initialize layer config from source material's first layer
+            const srcMat = allMaterials[sourceMaterialId];
             if (srcMat?.Layers?.[0]) {
                 const layer = srcMat.Layers[0] as any;
                 const shading = layer.Shading || 0;
@@ -104,39 +79,31 @@ export const GeosetMergeDialog: React.FC<GeosetMergeDialogProps> = ({
             } else {
                 setLayerConfig(DEFAULT_LAYER_CONFIG);
             }
-        } else if (visible) {
-            setSelectedMaterialIndex(-1);
-            setLayerConfig(DEFAULT_LAYER_CONFIG);
         }
-    }, [visible, usedMaterialIndices, allMaterials]);
+    }, [visible, sourceMaterialId, allMaterials]);
 
-    // Load texture preview when material changes (or layerConfig for new mode)
+    // Load texture preview for current mode
     useEffect(() => {
-        const loadTexturePreview = async () => {
+        const loadPreview = async () => {
             let textureId: number = -1;
 
-            if (selectedMaterialIndex < 0) {
-                // New material mode - use layerConfig
-                textureId = layerConfig.textureId;
-            } else {
-                const material = allMaterials[selectedMaterialIndex] as any;
-                if (material?.Layers?.length) {
+            if (mode === 'keep' || mode === 'existing') {
+                const matIdx = mode === 'keep' ? sourceMaterialId : selectedMaterialIndex;
+                const material = allMaterials[matIdx];
+                if (material?.Layers?.[0]) {
                     textureId = typeof material.Layers[0].TextureID === 'number' ? material.Layers[0].TextureID : -1;
                 }
+            } else if (mode === 'new') {
+                textureId = layerConfig.textureId;
             }
 
-            if (textureId < 0) {
+            if (textureId < 0 || !modelData?.Textures?.[textureId]) {
                 setTexturePreviewUrl(null);
                 return;
             }
 
-            const texture: any = modelData?.Textures?.[textureId];
-            if (!texture?.Image) {
-                setTexturePreviewUrl(null);
-                return;
-            }
-
-            const texturePath = texture.Image as string;
+            const texture = modelData.Textures[textureId];
+            const texturePath = texture.Image || '';
             const isBlp = texturePath.toLowerCase().endsWith('.blp');
 
             if (isBlp) {
@@ -193,16 +160,17 @@ export const GeosetMergeDialog: React.FC<GeosetMergeDialogProps> = ({
             }
         };
 
-        loadTexturePreview();
-    }, [selectedMaterialIndex, layerConfig.textureId, allMaterials, modelData?.Textures, modelPath]);
+        loadPreview();
+    }, [mode, selectedMaterialIndex, layerConfig.textureId, allMaterials, modelData?.Textures, modelPath, sourceMaterialId]);
 
     const handleConfirm = () => {
-        if (selectedGeosetIndices.length < 2) {
-            message.error('请选择至少2个多边形进行合并');
-            return;
+        if (mode === 'keep') {
+            onConfirm({ mode: 'keep', materialIndex: sourceMaterialId });
+        } else if (mode === 'existing') {
+            onConfirm({ mode: 'existing', materialIndex: selectedMaterialIndex });
+        } else {
+            onConfirm({ mode: 'new', newLayerConfig: layerConfig });
         }
-        // Pass layerConfig only when new material mode
-        onConfirm(selectedMaterialIndex, selectedMaterialIndex < 0 ? layerConfig : undefined);
     };
 
     return (
@@ -219,7 +187,7 @@ export const GeosetMergeDialog: React.FC<GeosetMergeDialogProps> = ({
             }}
         >
             <DraggableModal
-                title="合并多边形"
+                title="分离多边形"
                 open={visible}
                 onCancel={onCancel}
                 footer={[
@@ -255,36 +223,28 @@ export const GeosetMergeDialog: React.FC<GeosetMergeDialogProps> = ({
                         )}
                     </div>
 
-                    {/* Material Selection */}
+                    {/* Options */}
                     <div style={{ flex: 1 }}>
-                        <div style={{ marginBottom: 10, color: '#aaa', fontSize: 13 }}>
-                            选择合并后使用的材质:
+                        <div style={{ marginBottom: 12, color: '#aaa', fontSize: 13 }}>
+                            选择分离后使用的材质:
                         </div>
-                        <Select
-                            style={{ width: '100%', marginBottom: 16 }}
-                            value={selectedMaterialIndex}
-                            onChange={setSelectedMaterialIndex}
-                            options={options}
-                            size="large"
-                            optionRender={(option) => (
-                                <div style={{
-                                    color: option.data.disabled ? '#666' : '#ddd',
-                                    textAlign: option.data.disabled ? 'center' : 'left',
-                                    fontSize: option.data.disabled ? 11 : 13
-                                }}>
-                                    {option.label}
-                                </div>
-                            )}
-                        />
+                        <Radio.Group
+                            value={mode}
+                            onChange={(e) => setMode(e.target.value)}
+                            style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}
+                        >
+                            <Radio value="keep" style={{ color: '#ddd' }}>保持原材质 (材质 {sourceMaterialId})</Radio>
+                            <Radio value="new" style={{ color: '#ddd' }}>新建材质</Radio>
+                            <Radio value="existing" style={{ color: '#ddd' }}>使用其他材质</Radio>
+                        </Radio.Group>
 
-                        {/* Show MaterialLayerOptions when New Material selected */}
-                        {selectedMaterialIndex < 0 && (
+                        {/* New Material Options */}
+                        {mode === 'new' && (
                             <div style={{
                                 backgroundColor: '#1a1a1a',
                                 padding: 12,
                                 borderRadius: 6,
-                                border: '1px solid #333',
-                                marginBottom: 12
+                                border: '1px solid #333'
                             }}>
                                 <MaterialLayerOptions
                                     value={layerConfig}
@@ -294,9 +254,16 @@ export const GeosetMergeDialog: React.FC<GeosetMergeDialogProps> = ({
                             </div>
                         )}
 
-                        <div style={{ color: '#777', fontSize: 12 }}>
-                            将合并 {selectedGeosetIndices.length} 个多边形
-                        </div>
+                        {/* Existing Material Selection */}
+                        {mode === 'existing' && (
+                            <Select
+                                style={{ width: '100%' }}
+                                value={selectedMaterialIndex}
+                                onChange={setSelectedMaterialIndex}
+                                options={materialOptions}
+                                size="large"
+                            />
+                        )}
                     </div>
                 </div>
             </DraggableModal>
@@ -304,4 +271,4 @@ export const GeosetMergeDialog: React.FC<GeosetMergeDialogProps> = ({
     );
 };
 
-export default GeosetMergeDialog;
+export default GeosetSeparateDialog;

@@ -65,6 +65,7 @@ export const showConfirm = (title: string, content: React.ReactNode, width?: num
             title,
             content,
             width,
+            duration: 0, // Confirm dialogs should not auto-dismiss
             onOk: () => resolve(true),
             onCancel: () => resolve(false)
         });

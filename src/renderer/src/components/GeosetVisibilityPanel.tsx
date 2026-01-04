@@ -5,6 +5,7 @@ import { useModelStore } from '../store/modelStore';
 import { commandManager } from '../utils/CommandManager';
 import { SetGeosetVisibilityCommand } from '../commands/SetGeosetVisibilityCommand';
 import { GeosetMergeDialog } from './modals/GeosetMergeDialog';
+import { LayerConfig, layerConfigToMaterialLayer } from './modals/MaterialLayerOptions';
 
 interface GeosetVisibilityPanelProps {
     visible: boolean;
@@ -130,7 +131,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
     };
 
     // Handle merge confirmation
-    const handleMergeConfirm = (materialIndex: number) => {
+    const handleMergeConfirm = (materialIndex: number, newLayerConfig?: LayerConfig) => {
         console.log('[Merge] Starting merge with selectedIndices:', selectedIndices);
         console.log('[Merge] Total geosets count:', geosets.length);
 
@@ -262,12 +263,28 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
 
         // Set material
         console.log('[Merge] Setting material. Selected Index:', materialIndex);
-        if (materialIndex === -1) {
-            // Create new white material
+        if (materialIndex === -1 && newLayerConfig) {
+            // Create new material with user-specified layer config
+            const materials: any[] = [...(modelData?.Materials || [])];
+
+            // Build new material layer from config
+            const newLayer = layerConfigToMaterialLayer(newLayerConfig);
+
+            // Add new material
+            const newMaterialIndex = materials.length;
+            materials.push({
+                Layers: [newLayer],
+                PriorityPlane: 0,
+                RenderMode: 0
+            });
+
+            targetGeoset.MaterialID = newMaterialIndex;
+            setMaterials(materials);
+        } else if (materialIndex === -1) {
+            // Fallback: create basic white material (shouldn't happen with new UI)
             const materials: any[] = [...(modelData?.Materials || [])];
             const textures: any[] = [...(modelData?.Textures || [])];
 
-            // Add white texture
             const newTextureIndex = textures.length;
             textures.push({
                 Path: 'Textures\\white.blp',
@@ -275,7 +292,6 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                 Flags: 0
             });
 
-            // Add new material referencing white texture
             const newMaterialIndex = materials.length;
             materials.push({
                 Layers: [{

@@ -222,11 +222,97 @@ fn download_file(url: String, target_path: String) -> Result<String, String> {
 
 #[tauri::command]
 fn launch_installer(path: String) -> Result<(), String> {
+    use std::fs;
     use std::process::Command;
 
-    Command::new(&path)
+    // Get current executable path
+    let exe_path =
+        std::env::current_exe().map_err(|e| format!("Failed to get current exe path: {}", e))?;
+
+    let exe_path_str = exe_path.to_string_lossy().to_string();
+
+    // Remove UNC prefix if present
+    let exe_path_str = if exe_path_str.starts_with("\\\\?\\") {
+        exe_path_str[4..].to_string()
+    } else {
+        exe_path_str
+    };
+
+    let exe_name = exe_path
+        .file_name()
+        .ok_or("Failed to get exe name")?
+        .to_string_lossy()
+        .to_string();
+
+    println!("[Update] New EXE path: {}", path);
+    println!("[Update] Current EXE path: {}", exe_path_str);
+    println!("[Update] Exe name: {}", exe_name);
+
+    // Create a PowerShell script that waits for the app to close, then copies the new EXE
+    let temp_dir = std::env::temp_dir();
+    let ps_path = temp_dir.join("war3modelview_update.ps1");
+
+    // Convert paths for PowerShell script
+    let new_exe_path = path.replace("/", "\\");
+    let current_exe_path = exe_path_str.replace("/", "\\");
+
+    // Get process name without extension for Get-Process
+    let process_name = exe_name.trim_end_matches(".exe");
+
+    // PowerShell script content:
+    // 1. Wait for app to close
+    // 2. Try to kill the process if still running
+    // 3. Copy new EXE over old EXE
+    // 4. Start the new version
+    // 5. Clean up
+    let ps_content = format!(
+        r#"
+Start-Sleep -Seconds 3
+
+# Kill the process if still running
+$proc = Get-Process -Name '{process}' -ErrorAction SilentlyContinue
+if ($proc) {{
+    $proc | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+}}
+
+# Copy new EXE over old EXE
+try {{
+    Copy-Item -Path '{new_exe}' -Destination '{current_exe}' -Force -ErrorAction Stop
+    Start-Sleep -Seconds 1
+    # Start the updated application
+    Start-Process -FilePath '{current_exe}'
+}} catch {{
+    Add-Type -AssemblyName System.Windows.Forms
+    [System.Windows.Forms.MessageBox]::Show("更新失败: $($_.Exception.Message)", "更新错误", 0, 16)
+}}
+
+# Clean up - remove the downloaded new EXE
+Remove-Item -Path '{new_exe}' -Force -ErrorAction SilentlyContinue
+"#,
+        process = process_name.replace("'", "''"),
+        new_exe = new_exe_path.replace("'", "''"),
+        current_exe = current_exe_path.replace("'", "''")
+    );
+
+    // Write PowerShell script as UTF-8 with BOM
+    let mut file_content = Vec::new();
+    file_content.extend_from_slice(&[0xEF, 0xBB, 0xBF]); // UTF-8 BOM
+    file_content.extend_from_slice(ps_content.as_bytes());
+
+    fs::write(&ps_path, &file_content)
+        .map_err(|e| format!("Failed to write PowerShell script: {}", e))?;
+
+    // Launch PowerShell with -Command to read the script file content
+    let ps_command = format!(
+        "Set-ExecutionPolicy Bypass -Scope Process -Force; & '{}'",
+        ps_path.to_string_lossy().replace("'", "''")
+    );
+
+    Command::new("powershell")
+        .args(&["-WindowStyle", "Hidden", "-Command", &ps_command])
         .spawn()
-        .map_err(|e| format!("Failed to launch installer: {}", e))?;
+        .map_err(|e| format!("Failed to launch update script: {}\nPath: {:?}", e, ps_path))?;
 
     Ok(())
 }

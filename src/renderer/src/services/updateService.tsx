@@ -120,7 +120,16 @@ export async function checkGiteeUpdate() {
                 await downloadAndInstall(data.assets, latestVersion);
             }
         } else {
-            showMessage('success', '已是最新版本', `当前版本 ${currentVersion} 已是最新`);
+            // Version is the same - still show changelog
+            await showConfirm(
+                `已是最新版本 (${currentVersion})`,
+                <UpdateLogContent
+                    version={data.tag_name}
+                    date={data.created_at ? data.created_at.split('T')[0] : new Date().toISOString().split('T')[0]}
+                    body={data.body || '暂无更新说明'}
+                />,
+                600
+            );
         }
     } catch (error) {
         console.error('Update check failed:', error);

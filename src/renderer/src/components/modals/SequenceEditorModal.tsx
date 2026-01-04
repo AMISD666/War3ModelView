@@ -12,7 +12,13 @@ interface SequenceEditorModalProps {
 }
 
 const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onClose }) => {
-    const { sequences: storeSequences, setSequences: setStoreSequences } = useModelStore()
+    const {
+        sequences: storeSequences,
+        setSequences: setStoreSequences,
+        currentSequence,
+        setSequence,
+        setPlaying
+    } = useModelStore()
     const [localSequences, setLocalSequences] = useState<any[]>([])
     const [selectedIndex, setSelectedIndex] = useState<number>(-1)
     const listRef = useRef<HTMLDivElement>(null)
@@ -25,16 +31,33 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
         }
     }
 
-    // Initialize local state
+    // Initialize local state and sync with currentSequence
     useEffect(() => {
         if (visible && storeSequences) {
             setLocalSequences(JSON.parse(JSON.stringify(storeSequences)))
-            setSelectedIndex(storeSequences.length > 0 ? 0 : -1)
+            // Sync with currentSequence from store
+            if (currentSequence >= 0 && currentSequence < storeSequences.length) {
+                setSelectedIndex(currentSequence)
+                setTimeout(() => scrollToItem(currentSequence), 0)
+            } else {
+                setSelectedIndex(storeSequences.length > 0 ? 0 : -1)
+            }
         } else if (visible) {
             setLocalSequences([])
             setSelectedIndex(-1)
         }
-    }, [visible, storeSequences])
+    }, [visible, storeSequences, currentSequence])
+
+    // Handle selecting a sequence - sync with store and play
+    const handleSelectSequence = (index: number) => {
+        setSelectedIndex(index)
+        // Also update store and play animation
+        const seq = storeSequences[index]
+        if (seq && seq.Interval && seq.Interval.length >= 2) {
+            setSequence(index)
+            setPlaying(true)
+        }
+    }
 
     const handleOk = () => {
         setStoreSequences(localSequences)
@@ -106,7 +129,7 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
                         dataSource={localSequences}
                         renderItem={(item, index) => (
                             <List.Item
-                                onClick={() => setSelectedIndex(index)}
+                                onClick={() => handleSelectSequence(index)}
                                 style={{
                                     cursor: 'pointer',
                                     padding: '8px 12px',

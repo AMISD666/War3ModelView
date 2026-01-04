@@ -7,6 +7,8 @@ import { SplitVerticesCommand } from '../commands/SplitVerticesCommand'
 import { WeldVerticesCommand } from '../commands/WeldVerticesCommand'
 import { useModelStore } from '../store/modelStore'
 import { SplitCellsOutlined, MergeCellsOutlined } from '@ant-design/icons'
+import { GeosetSeparateDialog } from './modals/GeosetSeparateDialog'
+import { LayerConfig, layerConfigToMaterialLayer } from './modals/MaterialLayerOptions'
 
 interface VertexEditorProps {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -16,8 +18,13 @@ interface VertexEditorProps {
 
 export const VertexEditor: React.FC<VertexEditorProps> = ({ renderer, onBeginUpdate }) => {
     const { selectedVertexIds, geometrySubMode, mainMode } = useSelectionStore()
+    const { modelData, setMaterials } = useModelStore()
     const [position, setPosition] = useState<[number, number, number] | null>(null)
     const startPosition = useRef<[number, number, number] | null>(null)
+
+    // Separate dialog state
+    const [separateDialogVisible, setSeparateDialogVisible] = useState(false)
+    const [sourceGeosetIndex, setSourceGeosetIndex] = useState(0)
 
     // Update position display when single vertex is selected
     useEffect(() => {
@@ -101,15 +108,56 @@ export const VertexEditor: React.FC<VertexEditorProps> = ({ renderer, onBeginUpd
         startPosition.current = [...position]
     }
 
-    // Split selected vertices
-    const handleSplit = useCallback(() => {
+    // Open separate dialog
+    const handleSplitClick = useCallback(() => {
+        console.log('[VertexEditor] handleSplitClick called', { renderer: !!renderer, selectedVertexIds })
         if (!renderer || selectedVertexIds.length < 1) return
+        // Get source geoset from first selected vertex
+        const geosetIdx = selectedVertexIds[0].geosetIndex
+        console.log('[VertexEditor] Opening separate dialog for geoset', geosetIdx)
+        setSourceGeosetIndex(geosetIdx)
+        setSeparateDialogVisible(true)
+    }, [renderer, selectedVertexIds])
+
+    // Handle separate confirmation with material config
+    const handleSeparateConfirm = useCallback((config: {
+        mode: 'keep' | 'new' | 'existing';
+        materialIndex?: number;
+        newLayerConfig?: LayerConfig;
+    }) => {
+        if (!renderer || selectedVertexIds.length < 1) return
+
+        let targetMaterialId: number
+
+        if (config.mode === 'keep') {
+            targetMaterialId = config.materialIndex!
+        } else if (config.mode === 'existing') {
+            targetMaterialId = config.materialIndex!
+        } else if (config.mode === 'new' && config.newLayerConfig) {
+            // Create new material from layer config
+            const materials: any[] = [...(modelData?.Materials || [])]
+            const newLayer = layerConfigToMaterialLayer(config.newLayerConfig)
+
+            materials.push({
+                Layers: [newLayer],
+                PriorityPlane: 0,
+                RenderMode: 0
+            })
+
+            targetMaterialId = materials.length - 1
+            setMaterials(materials)
+        } else {
+            // Fallback
+            targetMaterialId = renderer.model.Geosets[sourceGeosetIndex]?.MaterialID ?? 0
+        }
 
         if (onBeginUpdate) onBeginUpdate()
 
-        const cmd = new SplitVerticesCommand(renderer, selectedVertexIds)
+        const cmd = new SplitVerticesCommand(renderer, selectedVertexIds, targetMaterialId)
         commandManager.execute(cmd)
-    }, [renderer, selectedVertexIds, onBeginUpdate])
+
+        setSeparateDialogVisible(false)
+    }, [renderer, selectedVertexIds, onBeginUpdate, modelData?.Materials, setMaterials, sourceGeosetIndex])
 
     // Weld selected vertices
     const handleWeld = useCallback(() => {
@@ -136,93 +184,103 @@ export const VertexEditor: React.FC<VertexEditorProps> = ({ renderer, onBeginUpd
     const canWeld = selectedVertexIds.length >= 2 && selectedVertexIds.every(s => s.geosetIndex === selectedVertexIds[0].geosetIndex)
 
     return (
-        <div style={{
-            position: 'absolute',
-            top: '60px',
-            right: '20px',
-            backgroundColor: 'rgba(0, 0, 0, 0.85)',
-            padding: '12px',
-            borderRadius: '8px',
-            color: 'white',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '8px',
-            zIndex: 100,
-            minWidth: '160px',
-            border: '1px solid #434343'
-        }}>
-            {/* Position editing - only for single vertex */}
-            {position && selectedVertexIds.length === 1 && (
-                <>
-                    <div style={{ fontSize: '12px', marginBottom: '2px', color: '#aaa' }}>顶点坐标</div>
-                    <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
-                        <span style={{ color: '#ff4d4f', width: '15px' }}>X:</span>
-                        <InputNumber
-                            size="small"
-                            value={position[0]}
-                            onChange={(v) => handleChange(0, v)}
-                            onBlur={handleCommit}
-                            onPressEnter={handleCommit}
-                            style={{ width: '80px', backgroundColor: '#1f1f1f', color: 'white', border: '1px solid #434343' }}
-                        />
-                    </div>
-                    <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
-                        <span style={{ color: '#52c41a', width: '15px' }}>Y:</span>
-                        <InputNumber
-                            size="small"
-                            value={position[1]}
-                            onChange={(v) => handleChange(1, v)}
-                            onBlur={handleCommit}
-                            onPressEnter={handleCommit}
-                            style={{ width: '80px', backgroundColor: '#1f1f1f', color: 'white', border: '1px solid #434343' }}
-                        />
-                    </div>
-                    <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
-                        <span style={{ color: '#1890ff', width: '15px' }}>Z:</span>
-                        <InputNumber
-                            size="small"
-                            value={position[2]}
-                            onChange={(v) => handleChange(2, v)}
-                            onBlur={handleCommit}
-                            onPressEnter={handleCommit}
-                            style={{ width: '80px', backgroundColor: '#1f1f1f', color: 'white', border: '1px solid #434343' }}
-                        />
-                    </div>
-                    <Divider style={{ margin: '8px 0', borderColor: '#434343' }} />
-                </>
-            )}
+        <>
+            <div style={{
+                position: 'absolute',
+                top: '60px',
+                right: '20px',
+                backgroundColor: 'rgba(0, 0, 0, 0.85)',
+                padding: '12px',
+                borderRadius: '8px',
+                color: 'white',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px',
+                zIndex: 100,
+                minWidth: '160px',
+                border: '1px solid #434343'
+            }}>
+                {/* Position editing - only for single vertex */}
+                {position && selectedVertexIds.length === 1 && (
+                    <>
+                        <div style={{ fontSize: '12px', marginBottom: '2px', color: '#aaa' }}>顶点坐标</div>
+                        <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
+                            <span style={{ color: '#ff4d4f', width: '15px' }}>X:</span>
+                            <InputNumber
+                                size="small"
+                                value={position[0]}
+                                onChange={(v) => handleChange(0, v)}
+                                onBlur={handleCommit}
+                                onPressEnter={handleCommit}
+                                style={{ width: '80px', backgroundColor: '#1f1f1f', color: 'white', border: '1px solid #434343' }}
+                            />
+                        </div>
+                        <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
+                            <span style={{ color: '#52c41a', width: '15px' }}>Y:</span>
+                            <InputNumber
+                                size="small"
+                                value={position[1]}
+                                onChange={(v) => handleChange(1, v)}
+                                onBlur={handleCommit}
+                                onPressEnter={handleCommit}
+                                style={{ width: '80px', backgroundColor: '#1f1f1f', color: 'white', border: '1px solid #434343' }}
+                            />
+                        </div>
+                        <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
+                            <span style={{ color: '#1890ff', width: '15px' }}>Z:</span>
+                            <InputNumber
+                                size="small"
+                                value={position[2]}
+                                onChange={(v) => handleChange(2, v)}
+                                onBlur={handleCommit}
+                                onPressEnter={handleCommit}
+                                style={{ width: '80px', backgroundColor: '#1f1f1f', color: 'white', border: '1px solid #434343' }}
+                            />
+                        </div>
+                        <Divider style={{ margin: '8px 0', borderColor: '#434343' }} />
+                    </>
+                )}
 
-            {/* Selection info */}
-            <div style={{ fontSize: '11px', color: '#888', marginBottom: '4px' }}>
-                已选择 {selectedVertexIds.length} 个顶点
+                {/* Selection info */}
+                <div style={{ fontSize: '11px', color: '#888', marginBottom: '4px' }}>
+                    已选择 {selectedVertexIds.length} 个顶点
+                </div>
+
+                {/* Split/Weld buttons */}
+                <div style={{ display: 'flex', gap: '8px' }}>
+                    <Tooltip title="分离顶点 - 为每个面创建独立的顶点副本">
+                        <Button
+                            size="small"
+                            icon={<SplitCellsOutlined />}
+                            onClick={handleSplitClick}
+                            disabled={!canSplit}
+                            style={{ flex: 1 }}
+                        >
+                            分离
+                        </Button>
+                    </Tooltip>
+                    <Tooltip title="焊接顶点 - 将选中顶点合并到中心点">
+                        <Button
+                            size="small"
+                            icon={<MergeCellsOutlined />}
+                            onClick={handleWeld}
+                            disabled={!canWeld}
+                            style={{ flex: 1 }}
+                        >
+                            焊接
+                        </Button>
+                    </Tooltip>
+                </div>
             </div>
 
-            {/* Split/Weld buttons */}
-            <div style={{ display: 'flex', gap: '8px' }}>
-                <Tooltip title="分离顶点 - 为每个面创建独立的顶点副本">
-                    <Button
-                        size="small"
-                        icon={<SplitCellsOutlined />}
-                        onClick={handleSplit}
-                        disabled={!canSplit}
-                        style={{ flex: 1 }}
-                    >
-                        分离
-                    </Button>
-                </Tooltip>
-                <Tooltip title="焊接顶点 - 将选中顶点合并到中心点">
-                    <Button
-                        size="small"
-                        icon={<MergeCellsOutlined />}
-                        onClick={handleWeld}
-                        disabled={!canWeld}
-                        style={{ flex: 1 }}
-                    >
-                        焊接
-                    </Button>
-                </Tooltip>
-            </div>
-        </div>
+            {/* Separate Dialog */}
+            <GeosetSeparateDialog
+                visible={separateDialogVisible}
+                sourceGeosetIndex={sourceGeosetIndex}
+                onCancel={() => setSeparateDialogVisible(false)}
+                onConfirm={handleSeparateConfirm}
+            />
+        </>
     )
 }
 

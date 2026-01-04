@@ -62,8 +62,8 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
     // Derived Animation Info
     const sequence = currentSequence >= 0 && sequences ? sequences[currentSequence] : null
-    const seqStart = sequence ? sequence.Interval[0] : 0
-    const seqEnd = sequence ? sequence.Interval[1] : 1000
+    const seqStart = sequence?.Interval?.[0] ?? 0
+    const seqEnd = sequence?.Interval?.[1] ?? 1000
 
     // State (Visual)
     const [pixelsPerMs, setPixelsPerMs] = useState(0.1)
@@ -122,7 +122,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     // Derived Global Info
     const allSequencesMax = useMemo(() => {
         if (!sequences || sequences.length === 0) return 1000
-        return sequences.reduce((max, s) => Math.max(max, s.Interval[1]), 0)
+        return sequences.reduce((max, s) => Math.max(max, s?.Interval?.[1] ?? 0), 0)
     }, [sequences])
 
     // Sync Refs
@@ -200,9 +200,9 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
         let start = 0
         let end = 1000
-        if (sequence) {
-            start = sequence.Interval[0]
-            end = sequence.Interval[1]
+        if (sequence && sequence.Interval) {
+            start = sequence.Interval[0] ?? 0
+            end = sequence.Interval[1] ?? 1000
         }
 
         const duration = end - start
@@ -404,6 +404,9 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 const isCurrent = idx === useModelStore.getState().currentSequence
                 if (!showAll && !isCurrent) return
 
+                // Skip if Interval is missing
+                if (!seq.Interval || seq.Interval.length < 2) return
+
                 const sx = (seq.Interval[0] - scroll) * pxPerMs
                 const ex = (seq.Interval[1] - scroll) * pxPerMs
 
@@ -591,6 +594,8 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
         // Only check current sequence handles
         const seq = sequences[currentIdx]
+        if (!seq?.Interval || seq.Interval.length < 2) return null
+
         const sx = (seq.Interval[0] - scroll) * pxPerMs
         const ex = (seq.Interval[1] - scroll) * pxPerMs
 
@@ -1437,7 +1442,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 {/* Zoom & Sequence Range (Right Aligned) */}
                 <div style={{ position: 'absolute', right: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
                     {/* Sequence Range Inputs */}
-                    {sequence && (
+                    {sequence && sequence.Interval && sequence.Interval.length >= 2 && (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                             <span style={{ color: '#888', fontSize: '11px' }}>序列:</span>
                             <InputNumber

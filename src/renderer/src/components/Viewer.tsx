@@ -37,6 +37,8 @@ import { PasteVerticesCommand } from '../commands/PasteVerticesCommand'
 import { copyVertices, copyFaces, VertexCopyBuffer } from '../utils/vertexOperations'
 import { UpdateKeyframeCommand, KeyframeChange } from '../commands/UpdateKeyframeCommand'
 import { MissingTextureWarning } from './MissingTextureWarning'
+import { GeosetSeparateDialog } from './modals/GeosetSeparateDialog'
+import { LayerConfig, layerConfigToMaterialLayer } from './modals/MaterialLayerOptions'
 
 // Singleton loop counter to prevent runaway FPS
 let globalRenderLoopId = 0
@@ -138,6 +140,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const ignoreNextModelDataUpdate = useRef(false)
   const lastFrameSyncTime = useRef(0) // For throttling setFrame calls
   const frameCacheRef = useRef(-1) // Cache for bone matrix optimization
+
+  // Separate dialog state
+  const [separateDialogVisible, setSeparateDialogVisible] = useState(false)
+  const [separateSourceGeosetIndex, setSeparateSourceGeosetIndex] = useState(0)
 
 
   useEffect(() => {
@@ -3887,15 +3893,59 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     recalculateAllNormals(rendererRef.current, true)
   }
 
-  // Split vertices handler
+  // Split vertices handler - now opens dialog for material selection
   const handleSplitVertices = () => {
     if (!rendererRef.current) return
     const { selectedVertexIds, geometrySubMode, mainMode } = useSelectionStore.getState()
     if (mainMode !== 'geometry' || geometrySubMode !== 'vertex' || selectedVertexIds.length < 1) return
 
-    console.log('[Viewer] Splitting', selectedVertexIds.length, 'vertices')
-    const cmd = new SplitVerticesCommand(rendererRef.current, selectedVertexIds)
+    console.log('[Viewer] Opening separate dialog for', selectedVertexIds.length, 'vertices')
+    // Get source geoset from first selected vertex
+    const geosetIdx = selectedVertexIds[0].geosetIndex
+    setSeparateSourceGeosetIndex(geosetIdx)
+    setSeparateDialogVisible(true)
+  }
+
+  // Handle separate dialog confirmation
+  const handleSeparateConfirm = (config: {
+    mode: 'keep' | 'new' | 'existing';
+    materialIndex?: number;
+    newLayerConfig?: LayerConfig;
+  }) => {
+    if (!rendererRef.current) return
+    const { selectedVertexIds } = useSelectionStore.getState()
+    if (selectedVertexIds.length < 1) return
+
+    let targetMaterialId: number
+
+    if (config.mode === 'keep') {
+      targetMaterialId = config.materialIndex!
+    } else if (config.mode === 'existing') {
+      targetMaterialId = config.materialIndex!
+    } else if (config.mode === 'new' && config.newLayerConfig) {
+      // Create new material from layer config
+      const modelStore = useModelStore.getState()
+      const materials: any[] = [...(modelStore.modelData?.Materials || [])]
+      const newLayer = layerConfigToMaterialLayer(config.newLayerConfig)
+
+      materials.push({
+        Layers: [newLayer],
+        PriorityPlane: 0,
+        RenderMode: 0
+      })
+
+      targetMaterialId = materials.length - 1
+      modelStore.setMaterials(materials)
+    } else {
+      // Fallback
+      targetMaterialId = rendererRef.current.model.Geosets[separateSourceGeosetIndex]?.MaterialID ?? 0
+    }
+
+    console.log('[Viewer] Splitting', selectedVertexIds.length, 'vertices with materialId:', targetMaterialId)
+    const cmd = new SplitVerticesCommand(rendererRef.current, selectedVertexIds, targetMaterialId)
     commandManager.execute(cmd)
+
+    setSeparateDialogVisible(false)
   }
 
   // Weld vertices handler
@@ -4542,6 +4592,14 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           }}
         />
       )}
+
+      {/* Separate Dialog for Material Selection */}
+      <GeosetSeparateDialog
+        visible={separateDialogVisible}
+        sourceGeosetIndex={separateSourceGeosetIndex}
+        onCancel={() => setSeparateDialogVisible(false)}
+        onConfirm={handleSeparateConfirm}
+      />
     </div>
   )
 })
