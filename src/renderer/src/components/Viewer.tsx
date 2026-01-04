@@ -381,41 +381,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const loadTeamColorTextures = async (colorIndex: number) => {
     if (!renderer) return
 
-    const idStr = colorIndex.toString().padStart(2, '0')
-    const teamColorPath = `ReplaceableTextures\\TeamColor\\TeamColor${idStr}.blp`
-    const teamGlowPath = `ReplaceableTextures\\TeamGlow\\TeamGlow${idStr}.blp`
-
-    const loadTexture = async (path: string, id: number) => {
-      try {
-        const mpqData = await invoke<number[]>('read_mpq_file', { path }).catch(() => null)
-
-        if (mpqData) {
-          const buffer = new Uint8Array(mpqData)
-          const blp = decodeBLP(buffer.buffer)
-          const imageData = getBLPImageData(blp, 0)
-
-          const texCanvas = document.createElement('canvas')
-          texCanvas.width = imageData.width
-          texCanvas.height = imageData.height
-          const ctx = texCanvas.getContext('2d')
-          if (ctx) {
-            const idata = new ImageData(new Uint8ClampedArray(imageData.data), imageData.width, imageData.height)
-            ctx.putImageData(idata, 0, 0)
-            const img = await createImageBitmap(texCanvas)
-            if (renderer.setReplaceableTexture) {
-              renderer.setReplaceableTexture(id, img)
-            }
-          }
-        } else {
-          console.warn(`[Viewer] Failed to load replaceable texture: ${path}`)
-        }
-      } catch (e) {
-        console.error(`[Viewer] Error loading replaceable texture ${path}:`, e)
-      }
-    }
-
-    await loadTexture(teamColorPath, 1)
-    await loadTexture(teamGlowPath, 2)
+    const { loadTeamColorTextures: loadOptimizedTeamColor } = await import('./viewer/textureLoader')
+    await loadOptimizedTeamColor(renderer, colorIndex)
   }
 
   // Handle view presets from prop
@@ -1656,26 +1623,56 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         preserveDrawingBuffer: false
       }
 
-      let gl: WebGL2RenderingContext | WebGLRenderingContext | null = canvas.getContext('webgl2', contextAttributes) as WebGL2RenderingContext | null
-      if (!gl) {
-        gl = canvas.getContext('webgl', contextAttributes) as WebGLRenderingContext | null
+      let gl: WebGL2RenderingContext | WebGLRenderingContext | null = null
+      let device: any = null
+      let gpuContext: any = null
+
+      // Prefer WebGPU if available
+      if ((navigator as any).gpu) {
+        try {
+          const adapter = await (navigator as any).gpu.requestAdapter()
+          if (adapter) {
+            const tempDevice = await adapter.requestDevice()
+            if (tempDevice) {
+              const tempContext = canvas.getContext('webgpu') as any
+              if (tempContext) {
+                tempContext.configure({
+                  device: tempDevice,
+                  format: (navigator as any).gpu.getPreferredCanvasFormat(),
+                  alphaMode: 'premultiplied'
+                })
+                device = tempDevice
+                gpuContext = tempContext
+                console.log('[Viewer] WebGPU initialized')
+              } else {
+                console.log('[Viewer] WebGPU context not available, using WebGL2')
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('[Viewer] WebGPU initialization failed, falling back to WebGL2:', e)
+        }
       }
-      if (!gl) {
-        console.error('[Viewer] WebGL not supported')
-        return
+
+      if (!device) {
+        gl = canvas.getContext('webgl2', contextAttributes) as WebGL2RenderingContext | null
+        if (!gl) {
+          gl = canvas.getContext('webgl', contextAttributes) as WebGLRenderingContext | null
+        }
+        if (!gl) {
+          console.error('[Viewer] WebGL not supported')
+          return
+        }
+        gl.clearColor(0.2, 0.2, 0.2, 0)
+        gl.enable(gl.DEPTH_TEST)
+        gl.depthFunc(gl.LEQUAL)
+        gl.enable(gl.BLEND)
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+        gl.viewport(0, 0, canvas.width, canvas.height)
+
+        gridRenderer.current.init(gl)
+        debugRenderer.current.init(gl)
       }
-
-      gl.clearColor(0.2, 0.2, 0.2, 0)
-      gl.enable(gl.DEPTH_TEST)
-      gl.depthFunc(gl.LEQUAL)
-      gl.enable(gl.BLEND)
-      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-
-      // Set initial viewport
-      gl.viewport(0, 0, canvas.width, canvas.height)
-
-      gridRenderer.current.init(gl)
-      debugRenderer.current.init(gl)
 
       let model: any
 
@@ -1730,8 +1727,13 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
       const rendererStart = performance.now()
       const newRenderer = new ModelRenderer(model)
-      newRenderer.initGL(gl)
+      if (device && gpuContext) {
+        await newRenderer.initGPUDevice(canvas, device, gpuContext)
+      } else if (gl) {
+        newRenderer.initGL(gl)
+      }
       // NOTE: setRenderer(newRenderer) is called AFTER texture loading to avoid race condition
+      setRenderer(newRenderer)
       newRenderer.update(0)
       resetCamera()
       console.log(`[Viewer] Renderer Init took ${(performance.now() - rendererStart).toFixed(1)}ms`)
@@ -1754,7 +1756,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
       // Set renderer AFTER textures are loaded to avoid race condition
       console.log('[Viewer] loadModel: All textures loaded, setting renderer')
-      setRenderer(newRenderer)
+      // setRenderer(newRenderer) // This line was moved up
       console.timeEnd('[Viewer] FullModelLoad')
     } catch (error) {
       console.error('[Viewer] Error loading model:', error)
