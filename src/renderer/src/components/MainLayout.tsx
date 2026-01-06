@@ -1116,7 +1116,11 @@ const MainLayout: React.FC = () => {
         // Guard: If model path is same, don't reset state (it's a reload/update)
         const isSameModel = data.path === modelPath
         if (!isSameModel) {
-            setMainMode('view')
+            // CRITICAL: Do not switch away from batch mode when loading a model
+            const currentMode = useSelectionStore.getState().mainMode;
+            if (currentMode !== 'batch') {
+                setMainMode('view')
+            }
             useSelectionStore.getState().clearAllSelections()
         }
 

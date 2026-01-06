@@ -1,16 +1,21 @@
 /**
  * 集成了 Ant Design 和 Zustand的新版 MainLayout - 支持可调整大小的节点管理器
+ * 
+ * CRITICAL: Only ONE MainLayoutOld is rendered to avoid war3-model shared state corruption.
+ * In batch mode, BatchManager is shown on the left and the single MainLayoutOld on the right.
  */
 
-import React, { useState } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Layout, ConfigProvider, theme } from 'antd';
 import { useUIStore } from '../store/uiStore';
 import { useSelectionStore } from '../store/selectionStore';
+import { useModelStore } from '../store/modelStore';
 import MainLayoutOld from './MainLayout';
 import { NodeManagerWindow } from './node/NodeManagerWindow';
 import NodeDialog from './node/NodeDialog';
 import { CreateNodeDialog } from './node/CreateNodeDialog';
 import { ViewSettingsWindow } from './ViewSettingsWindow';
+import { BatchManager } from './batch/BatchManager';
 
 const { Content } = Layout;
 
@@ -24,91 +29,225 @@ export const MainLayoutNew: React.FC = () => {
 
     const mainMode = useSelectionStore(state => state.mainMode);
 
+    // Node Manager resizing
     const [nodeManagerWidth, setNodeManagerWidth] = useState(300);
-    const [isResizing, setIsResizing] = useState(false);
+    const [isResizingNodeMgr, setIsResizingNodeMgr] = useState(false);
 
-    const handleMouseDown = (e: React.MouseEvent) => {
-        setIsResizing(true);
+    // Batch mode panel resizing
+    const [batchPanelWidth, setBatchPanelWidth] = useState(60); // percentage
+    const [isResizingBatch, setIsResizingBatch] = useState(false);
+    const containerRef = useRef<HTMLDivElement>(null);
+
+    // Batch mode state: track selected model for preview
+    const [batchSelectedPath, setBatchSelectedPath] = useState<string | null>(null);
+    const [batchSelectedAnimation, setBatchSelectedAnimation] = useState<number>(0);
+    const { setModelData: setZustandModelData } = useModelStore();
+
+    // Handle model selection from BatchManager
+    const handleBatchSelectModel = useCallback((path: string, animationIndex: number) => {
+        console.log('[MainLayoutNew] Batch model selected:', path, 'animation:', animationIndex);
+        setBatchSelectedPath(path);
+        setBatchSelectedAnimation(animationIndex);
+        // Load the model into the main viewer
+        setZustandModelData(null, path);
+    }, [setZustandModelData]);
+
+    // Handle animation change from BatchManager
+    const handleBatchAnimationChange = useCallback((animationIndex: number) => {
+        setBatchSelectedAnimation(animationIndex);
+    }, []);
+
+    // Node Manager resize handlers
+    const handleNodeMgrMouseDown = (e: React.MouseEvent) => {
+        setIsResizingNodeMgr(true);
         e.preventDefault();
     };
 
-    const handleMouseMove = (e: MouseEvent) => {
-        if (!isResizing) return;
-        const newWidth = e.clientX;
-        if (newWidth >= 200 && newWidth <= 600) {
-            setNodeManagerWidth(newWidth);
-        }
+    // Batch divider resize handlers
+    const handleBatchDividerMouseDown = (e: React.MouseEvent) => {
+        setIsResizingBatch(true);
+        e.preventDefault();
     };
 
-    const handleMouseUp = () => {
-        setIsResizing(false);
-    };
+    useEffect(() => {
+        const handleMouseMove = (e: MouseEvent) => {
+            if (isResizingNodeMgr) {
+                const newWidth = e.clientX;
+                if (newWidth >= 200 && newWidth <= 600) {
+                    setNodeManagerWidth(newWidth);
+                }
+            }
+            if (isResizingBatch && containerRef.current) {
+                const containerRect = containerRef.current.getBoundingClientRect();
+                const newWidthPx = e.clientX - containerRect.left;
+                const newWidthPercent = (newWidthPx / containerRect.width) * 100;
+                if (newWidthPercent >= 30 && newWidthPercent <= 80) {
+                    setBatchPanelWidth(newWidthPercent);
+                }
+            }
+        };
 
-    React.useEffect(() => {
-        if (isResizing) {
+        const handleMouseUp = () => {
+            setIsResizingNodeMgr(false);
+            setIsResizingBatch(false);
+        };
+
+        if (isResizingNodeMgr || isResizingBatch) {
             document.addEventListener('mousemove', handleMouseMove);
             document.addEventListener('mouseup', handleMouseUp);
-        } else {
-            document.removeEventListener('mousemove', handleMouseMove);
-            document.removeEventListener('mouseup', handleMouseUp);
         }
+
         return () => {
             document.removeEventListener('mousemove', handleMouseMove);
             document.removeEventListener('mouseup', handleMouseUp);
         };
-    }, [isResizing]);
+    }, [isResizingNodeMgr, isResizingBatch]);
+
+    const isBatchMode = mainMode === 'batch';
 
     return (
         <>
-            <div style={{ height: '100vh', display: 'flex', overflow: 'hidden' }}>
-                {showNodeManager && mainMode !== 'uv' && (
-                    <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
+            <div
+                ref={containerRef}
+                style={{ height: '100vh', display: 'flex', overflow: 'hidden', position: 'relative' }}
+            >
+                {/* Batch Mode: Left Panel - BatchManager */}
+                {isBatchMode && (
+                    <>
+                        <div style={{
+                            width: `${batchPanelWidth}%`,
+                            height: '100%',
+                            overflow: 'hidden',
+                            flexShrink: 0
+                        }}>
+                            <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
+                                <BatchManager
+                                    onSelectModel={handleBatchSelectModel}
+                                    onAnimationChange={handleBatchAnimationChange}
+                                    selectedPath={batchSelectedPath}
+                                />
+                            </ConfigProvider>
+                        </div>
+
+                        {/* Resizable Divider */}
                         <div
+                            onMouseDown={handleBatchDividerMouseDown}
                             style={{
-                                width: nodeManagerWidth,
-                                borderRight: '1px solid #303030',
-                                backgroundColor: '#1e1e1e',
+                                width: '6px',
+                                height: '100%',
+                                cursor: 'ew-resize',
+                                backgroundColor: isResizingBatch ? '#007acc' : '#333',
+                                transition: isResizingBatch ? 'none' : 'background-color 0.2s',
+                                flexShrink: 0,
                                 display: 'flex',
-                                flexDirection: 'column',
-                                position: 'relative'
+                                alignItems: 'center',
+                                justifyContent: 'center'
+                            }}
+                            onMouseEnter={(e) => {
+                                if (!isResizingBatch) {
+                                    e.currentTarget.style.backgroundColor = '#007acc80';
+                                }
+                            }}
+                            onMouseLeave={(e) => {
+                                if (!isResizingBatch) {
+                                    e.currentTarget.style.backgroundColor = '#333';
+                                }
                             }}
                         >
-                            <div style={{ padding: '8px 12px', borderBottom: '1px solid #303030', fontWeight: 'bold', color: '#fff' }}>
-                                节点管理器
-                            </div>
-                            <div style={{ flex: 1, overflow: 'hidden' }}>
-                                <NodeManagerWindow />
-                            </div>
-                            <div
-                                onMouseDown={handleMouseDown}
-                                style={{
-                                    position: 'absolute',
-                                    right: 0,
-                                    top: 0,
-                                    bottom: 0,
-                                    width: '4px',
-                                    cursor: 'ew-resize',
-                                    backgroundColor: isResizing ? '#007acc' : 'transparent',
-                                    transition: 'background-color 0.2s'
-                                }}
-                                onMouseEnter={(e) => {
-                                    if (!isResizing) {
-                                        e.currentTarget.style.backgroundColor = '#007acc40';
-                                    }
-                                }}
-                                onMouseLeave={(e) => {
-                                    if (!isResizing) {
-                                        e.currentTarget.style.backgroundColor = 'transparent';
-                                    }
-                                }}
-                            />
+                            <div style={{
+                                width: '2px',
+                                height: '40px',
+                                backgroundColor: '#666',
+                                borderRadius: '1px'
+                            }} />
                         </div>
-                    </ConfigProvider>
+                    </>
                 )}
 
-                <Content style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                    <MainLayoutOld />
-                </Content>
+                {/* Main Content Area: Node Manager (non-batch) + MainLayoutOld */}
+                <div style={{
+                    flex: 1,
+                    display: 'flex',
+                    height: '100%',
+                    overflow: 'hidden'
+                }}>
+                    {/* Node Manager - only shown when not in batch/uv mode */}
+                    {showNodeManager && !isBatchMode && mainMode !== 'uv' && (
+                        <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
+                            <div
+                                style={{
+                                    width: nodeManagerWidth,
+                                    borderRight: '1px solid #303030',
+                                    backgroundColor: '#1e1e1e',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    position: 'relative',
+                                    flexShrink: 0
+                                }}
+                            >
+                                <div style={{ padding: '8px 12px', borderBottom: '1px solid #303030', fontWeight: 'bold', color: '#fff' }}>
+                                    节点管理器
+                                </div>
+                                <div style={{ flex: 1, overflow: 'hidden' }}>
+                                    <NodeManagerWindow />
+                                </div>
+                                <div
+                                    onMouseDown={handleNodeMgrMouseDown}
+                                    style={{
+                                        position: 'absolute',
+                                        right: 0,
+                                        top: 0,
+                                        bottom: 0,
+                                        width: '4px',
+                                        cursor: 'ew-resize',
+                                        backgroundColor: isResizingNodeMgr ? '#007acc' : 'transparent',
+                                        transition: 'background-color 0.2s'
+                                    }}
+                                    onMouseEnter={(e) => {
+                                        if (!isResizingNodeMgr) {
+                                            e.currentTarget.style.backgroundColor = '#007acc40';
+                                        }
+                                    }}
+                                    onMouseLeave={(e) => {
+                                        if (!isResizingNodeMgr) {
+                                            e.currentTarget.style.backgroundColor = 'transparent';
+                                        }
+                                    }}
+                                />
+                            </div>
+                        </ConfigProvider>
+                    )}
+
+                    {/* Preview Header - only in batch mode */}
+                    <div style={{
+                        flex: 1,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        overflow: 'hidden',
+                        backgroundColor: isBatchMode ? '#1a1a1a' : 'transparent'
+                    }}>
+                        {isBatchMode && (
+                            <div style={{
+                                padding: '10px 16px',
+                                borderBottom: '1px solid #333',
+                                color: '#fff',
+                                fontWeight: 'bold',
+                                fontSize: 13,
+                                backgroundColor: '#252525',
+                                flexShrink: 0
+                            }}>
+                                {batchSelectedPath
+                                    ? `预览: ${batchSelectedPath.split(/[/\\]/).pop()}`
+                                    : '点击左侧模型卡片预览'}
+                            </div>
+                        )}
+
+                        {/* SINGLE MainLayoutOld - always rendered, positioned based on mode */}
+                        <Content style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                            <MainLayoutOld />
+                        </Content>
+                    </div>
+                </div>
             </div>
 
             <NodeDialog

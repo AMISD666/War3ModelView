@@ -33,8 +33,8 @@ interface MenuBarProps {
     onToggleLights: () => void
     onSetViewPreset: (preset: string) => void
     onToggleEditor: (editor: string) => void
-    mainMode: 'view' | 'geometry' | 'uv' | 'animation'
-    onSetMainMode: (mode: 'view' | 'geometry' | 'uv' | 'animation') => void
+    mainMode: 'view' | 'geometry' | 'uv' | 'animation' | 'batch'
+    onSetMainMode: (mode: 'view' | 'geometry' | 'uv' | 'animation' | 'batch') => void
     showDebugConsole: boolean
     onToggleDebugConsole: () => void
     onShowAbout: () => void
@@ -337,6 +337,8 @@ const MenuBar: React.FC<MenuBarProps> = ({
                 )}
             </div>
 
+
+
             {/* Mode Menu */}
             <div style={menuStyle} onClick={() => toggleMenu('mode')}>
                 模式
@@ -564,6 +566,21 @@ const MenuBar: React.FC<MenuBarProps> = ({
                         </div>
                     </div>
                 )}
+            </div>
+
+            {/* Spacer to push potential right-aligned items to the right, or just keep spacing. 
+                For "most right", if user means distinct from left group, we might use margin-left: auto. 
+                But since current layout is flex-start, putting it last is "most right" of the current list. 
+            */}
+
+            {/* Batch Button - Direct Action */}
+            <div
+                style={{ ...menuStyle, backgroundColor: mainMode === 'batch' ? '#444' : 'transparent', marginLeft: 'auto' }}
+                onClick={() => onSetMainMode('batch')}
+                onMouseEnter={hoverStyle}
+                onMouseLeave={mainMode !== 'batch' ? unhoverStyle : undefined}
+            >
+                批量模式
             </div>
         </div >
     )
