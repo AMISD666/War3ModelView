@@ -4,19 +4,7 @@ mod activation;
 mod mpq_manager;
 
 use mpq_manager::MpqManager;
-use rayon::prelude::*;
-use serde::Serialize;
 use tauri::State;
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TextureData {
-    path: String,
-    width: u32,
-    height: u32,
-    format: String, // "bc1", "bc3", "rgba8", "tga"
-    mipmaps: Vec<Vec<u8>>,
-}
 
 use winreg::enums::*;
 use winreg::RegKey;
@@ -82,67 +70,6 @@ fn read_mpq_files_batch(paths: Vec<String>, state: State<MpqManager>) -> Vec<Opt
 #[tauri::command]
 fn read_local_files_batch(paths: Vec<String>) -> Vec<Option<Vec<u8>>> {
     paths.iter().map(|path| std::fs::read(path).ok()).collect()
-}
-
-#[tauri::command]
-fn load_textures_data(paths: Vec<String>, state: State<MpqManager>) -> Vec<Option<TextureData>> {
-    // 1. Fetch all buffers (MPQ or Local)
-    // We search MPQ first, then local if not found.
-    // This logic mimics the frontend's search strategy but in bulk.
-    let buffers: Vec<(String, Option<Vec<u8>>)> = paths
-        .par_iter()
-        .map(|path| {
-            // Try MPQ
-            if let Some(data) = state.read_file(path) {
-                return (path.clone(), Some(data));
-            }
-            // Try Local (absolute path should be provided or handled by frontend candidates)
-            if let Ok(data) = std::fs::read(path) {
-                return (path.clone(), Some(data));
-            }
-            (path.clone(), None)
-        })
-        .collect();
-
-    // 2. Parallel decode
-    buffers
-        .into_par_iter()
-        .map(|(path, buffer)| {
-            let buffer = buffer?;
-            let lower_path = path.to_lowercase();
-
-            if lower_path.ends_with(".blp") {
-                // Use wow_blp parser to decode BLP (parse_blp expects &[u8])
-                if let Ok(blp) = wow_blp::parser::parse_blp(&buffer) {
-                    // Convert to RGBA using blp_to_image
-                    if let Ok(img) = wow_blp::convert::blp_to_image(&blp, 0) {
-                        let rgba = img.to_rgba8();
-                        return Some(TextureData {
-                            path,
-                            width: rgba.width(),
-                            height: rgba.height(),
-                            format: "rgba8".to_string(),
-                            mipmaps: vec![rgba.into_raw()],
-                        });
-                    }
-                }
-            } else if lower_path.ends_with(".tga") {
-                // For TGA, we use the image crate to get RGBA
-                if let Ok(img) = image::load_from_memory(&buffer) {
-                    let rgba = img.to_rgba8();
-                    return Some(TextureData {
-                        path,
-                        width: rgba.width(),
-                        height: rgba.height(),
-                        format: "rgba8".to_string(),
-                        mipmaps: vec![rgba.into_raw()],
-                    });
-                }
-            }
-
-            None
-        })
-        .collect()
 }
 
 // ==================
@@ -430,8 +357,7 @@ fn main() {
             get_cli_file_path,
             // Download Command
             download_file,
-            launch_installer,
-            load_textures_data
+            launch_installer
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

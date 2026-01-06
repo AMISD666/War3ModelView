@@ -28,10 +28,6 @@ chrono = "0.4"
 rand = "0.8"
 uuid = { version = "1.7", features = ["v4"] }
 reqwest = { version = "0.12", features = ["blocking"] }
-rayon = "1.8"
-wow-blp = "0.1"
-image = "0.24"
-# image-blp = "0.3" # Alternative if wow-blp has issues
 
 [features]
 # this feature is used for production builds or when `devPath` points to the filesystem
