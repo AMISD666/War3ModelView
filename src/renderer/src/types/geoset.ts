@@ -31,12 +31,12 @@ export interface Extent {
 
 // Geoset
 export interface Geoset {
-    Vertices: number[][];        // [x, y, z][]
-    Normals: number[][];         // [nx, ny, nz][]
-    TVertices: number[][];       // [u, v][]
-    VertexGroup: number[];       // 每个顶点所属的组
-    Faces: number[][];           // 面的顶点索引
-    Groups: VertexGroup[];
+    Vertices: number[] | Float32Array;        // Flat array
+    Normals: number[] | Float32Array;         // Flat array
+    TVertices?: number[] | Float32Array;       // Flat array
+    VertexGroup?: number[] | Uint8Array;
+    Faces: number[] | Uint16Array | Uint32Array;
+    Groups?: VertexGroup[];
     MinimumExtent: [number, number, number];
     MaximumExtent: [number, number, number];
     BoundsRadius: number;

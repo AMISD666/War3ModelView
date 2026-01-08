@@ -98,9 +98,13 @@ const SequenceManager: React.FC = () => {
 
     const handleModalOk = () => {
         form.validateFields().then(values => {
+            // Ensure Interval values are valid numbers (InputNumber can return null)
+            const startValue = typeof values.Start === 'number' ? values.Start : 0;
+            const endValue = typeof values.End === 'number' ? values.End : 0;
+
             const newSeq = {
                 Name: values.Name,
-                Interval: [values.Start, values.End],
+                Interval: [startValue, endValue],
                 Rarity: values.Rarity || 0,
                 MoveSpeed: values.MoveSpeed || 0,
                 NonLooping: values.NonLooping ? 1 : 0,

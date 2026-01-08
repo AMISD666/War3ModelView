@@ -48,6 +48,7 @@ interface MenuBarProps {
     onCleanUnusedMaterials: () => void
     onCleanUnusedTextures: () => void
     onRepairModel: () => void
+    onTransformModel: () => void
 }
 
 const MenuBar: React.FC<MenuBarProps> = ({
@@ -96,7 +97,8 @@ const MenuBar: React.FC<MenuBarProps> = ({
     onMergeSameMaterials,
     onCleanUnusedMaterials,
     onCleanUnusedTextures,
-    onRepairModel
+    onRepairModel,
+    onTransformModel
 }) => {
     const [activeMenu, setActiveMenu] = useState<string | null>(null)
     const [settingsSubMenu, setSettingsSubMenu] = useState<string | null>(null)
@@ -509,6 +511,14 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             onClick={() => { onRecalculateExtents(); closeMenu() }}
                         >
                             重新计算模型顶点范围
+                        </div>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={() => { onTransformModel(); closeMenu() }}
+                        >
+                            修改模型位置/旋转/大小
                         </div>
                         <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
                         <div

@@ -31,10 +31,31 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
         }
     }
 
+    // Deep clone that properly handles TypedArrays (converts to plain arrays)
+    const deepCloneSequences = (sequences: any[]): any[] => {
+        return sequences.map(seq => {
+            const cloned: any = {}
+            for (const key in seq) {
+                const value = seq[key]
+                if (ArrayBuffer.isView(value)) {
+                    // Convert TypedArray to plain array
+                    cloned[key] = Array.from(value as any)
+                } else if (Array.isArray(value)) {
+                    cloned[key] = [...value]
+                } else if (value && typeof value === 'object') {
+                    cloned[key] = { ...value }
+                } else {
+                    cloned[key] = value
+                }
+            }
+            return cloned
+        })
+    }
+
     // Initialize local state and sync with currentSequence
     useEffect(() => {
         if (visible && storeSequences) {
-            setLocalSequences(JSON.parse(JSON.stringify(storeSequences)))
+            setLocalSequences(deepCloneSequences(storeSequences))
             // Sync with currentSequence from store
             if (currentSequence >= 0 && currentSequence < storeSequences.length) {
                 setSelectedIndex(currentSequence)

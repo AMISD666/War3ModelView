@@ -15,6 +15,7 @@ interface UIState {
     showFaceEditor: boolean;
     showNodeDialog: boolean;
     showCreateNodeDialog: boolean;
+    showTransformModelDialog: boolean;
 
     // 侧边栏折叠状态
     leftSiderCollapsed: boolean;
@@ -34,6 +35,7 @@ interface UIState {
     toggleFaceEditor: () => void;
     setNodeDialogVisible: (visible: boolean, nodeId?: number) => void;
     setCreateNodeDialogVisible: (visible: boolean) => void;
+    setTransformModelDialogVisible: (visible: boolean) => void;
 
     setLeftSiderCollapsed: (collapsed: boolean) => void;
     setRightSiderCollapsed: (collapsed: boolean) => void;
@@ -53,6 +55,7 @@ export const useUIStore = create<UIState>()(
             showFaceEditor: false,
             showNodeDialog: false,
             showCreateNodeDialog: false,
+            showTransformModelDialog: false,
 
             // 初始侧边栏状态
             leftSiderCollapsed: false,
@@ -87,6 +90,9 @@ export const useUIStore = create<UIState>()(
 
             setCreateNodeDialogVisible: (visible) => {
                 set({ showCreateNodeDialog: visible });
+            },
+            setTransformModelDialogVisible: (visible) => {
+                set({ showTransformModelDialog: visible });
             },
 
             setLeftSiderCollapsed: (collapsed) => {

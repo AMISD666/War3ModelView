@@ -102,6 +102,7 @@ export interface ModelData {
     EventObjects?: ModelNode[];
     CollisionShapes?: ModelNode[];
     Cameras?: ModelNode[];
+    PivotPoints?: [number, number, number][];
     _updateCounter?: number;
 }
 

@@ -3,6 +3,7 @@
  */
 
 import { create } from 'zustand';
+import { mat4, vec3, mat3 } from 'gl-matrix';
 import { ModelData } from '../types/model';
 import { ModelNode, NodeType } from '../types/node';
 import { useRendererStore } from './rendererStore';
@@ -252,6 +253,11 @@ interface ModelState {
     recalculateExtents: () => void;
     recalculateNormals: () => void;
     repairModel: () => void;
+    transformModel: (ops: {
+        translation?: [number, number, number],
+        rotation?: [number, number, number],
+        scale?: [number, number, number]
+    }) => void;
 
     // Renderer reload
     triggerRendererReload: () => void;
@@ -1299,6 +1305,182 @@ export const useModelStore = create<ModelState>((set, get) => ({
             const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[]);
             console.log('[ModelStore] Batch updated', updates.length, 'nodes');
             return { nodes: updatedNodes as ModelNode[], modelData: updatedModelData };
+        });
+    },
+
+    transformModel: (ops) => {
+        const { translation, rotation, scale } = ops;
+        set((state) => {
+            if (!state.modelData) return {};
+
+            const modelData = state.modelData;
+
+            // 1. Construct Transformation Matrices
+            // matrix: Full transformation (TRS) for absolute positions
+            // rotScaleMatrix: Only Rotation + Scale for vectors/normals/offsets
+            const matrix = mat4.create();
+            const rotScaleMatrix = mat4.create();
+            const normalMatrix = mat3.create();
+
+            if (translation) {
+                mat4.translate(matrix, matrix, translation);
+            }
+
+            const rotMatrix = mat4.create();
+            if (rotation) {
+                // War3 standard: Rotate X, then Y, then Z (Euler)
+                mat4.rotateX(rotMatrix, rotMatrix, rotation[0] * Math.PI / 180);
+                mat4.rotateY(rotMatrix, rotMatrix, rotation[1] * Math.PI / 180);
+                mat4.rotateZ(rotMatrix, rotMatrix, rotation[2] * Math.PI / 180);
+
+                mat4.multiply(matrix, matrix, rotMatrix);
+                mat4.multiply(rotScaleMatrix, rotScaleMatrix, rotMatrix);
+            }
+
+            if (scale) {
+                mat4.scale(matrix, matrix, scale);
+                mat4.scale(rotScaleMatrix, rotScaleMatrix, scale);
+            }
+
+            mat3.normalFromMat4(normalMatrix, matrix);
+
+            // 2. Unique Object Tracking System
+            // This prevents double-transforming arrays that are shared between lists
+            const transformedArrays = new Set<any>();
+
+            const transformPosition = (p: number[] | Float32Array | any) => {
+                if (!p || transformedArrays.has(p)) return;
+                const v = vec3.fromValues(p[0], p[1], p[2]);
+                vec3.transformMat4(v, v, matrix);
+                p[0] = v[0]; p[1] = v[1]; p[2] = v[2];
+                transformedArrays.add(p);
+            };
+
+            const transformVector = (p: number[] | Float32Array | any) => {
+                if (!p || transformedArrays.has(p)) return;
+                const v = vec3.fromValues(p[0], p[1], p[2]);
+                // Use rotScaleMatrix for relative offsets/vectors
+                vec3.transformMat4(v, v, rotScaleMatrix);
+                p[0] = v[0]; p[1] = v[1]; p[2] = v[2];
+                transformedArrays.add(p);
+            };
+
+            // 3. Transform Pivot Points (Absolute Positions)
+            if (modelData.PivotPoints) {
+                modelData.PivotPoints.forEach(p => transformPosition(p));
+            }
+
+            // 4. Transform Geoset Geometry (Bind Pose)
+            if (modelData.Geosets) {
+                for (const geoset of modelData.Geosets) {
+                    if (geoset.Vertices) {
+                        for (let i = 0; i < geoset.Vertices.length; i += 3) {
+                            const v = vec3.fromValues(geoset.Vertices[i], geoset.Vertices[i + 1], geoset.Vertices[i + 2]);
+                            vec3.transformMat4(v, v, matrix);
+                            geoset.Vertices[i] = v[0];
+                            geoset.Vertices[i + 1] = v[1];
+                            geoset.Vertices[i + 2] = v[2];
+                        }
+                    }
+                    if (geoset.Normals) {
+                        for (let i = 0; i < geoset.Normals.length; i += 3) {
+                            const n = vec3.fromValues(geoset.Normals[i], geoset.Normals[i + 1], geoset.Normals[i + 2]);
+                            vec3.transformMat3(n, n, normalMatrix);
+                            vec3.normalize(n, n);
+                            geoset.Normals[i] = n[0];
+                            geoset.Normals[i + 1] = n[1];
+                            geoset.Normals[i + 2] = n[2];
+                        }
+                    }
+                    if (geoset.MinimumExtent) transformPosition(geoset.MinimumExtent);
+                    if (geoset.MaximumExtent) transformPosition(geoset.MaximumExtent);
+                }
+            }
+
+            // 5. Transform All Nodes and Animations
+            const allNodeGroups = [
+                'Nodes', 'Bones', 'Helpers', 'Attachments', 'Lights',
+                'ParticleEmitters', 'ParticleEmitters2', 'RibbonEmitters',
+                'EventObjects', 'CollisionShapes'
+            ];
+            for (const group of allNodeGroups) {
+                const nodes = (modelData as any)[group];
+                if (nodes && Array.isArray(nodes)) {
+                    for (const node of nodes) {
+                        // Transform PivotPoint if it's not already transformed via global list
+                        if (node.PivotPoint) transformPosition(node.PivotPoint);
+
+                        // Transform Animation Translation Tracks
+                        // Animation offsets are relative vectors, so use transformVector (rot+scale only)
+                        if (node.Translation && node.Translation.Values) {
+                            node.Translation.Values.forEach((val: any) => transformVector(val));
+                        }
+                    }
+                }
+            }
+
+            // 6. Transform Collision Shapes / Cameras / etc.
+            if (modelData.CollisionShapes) {
+                for (const shape of modelData.CollisionShapes) {
+                    const s = shape as any;
+                    if (s.Vertex1) transformPosition(s.Vertex1);
+                    if (s.Vertex2) transformPosition(s.Vertex2);
+                    if (s.Vertices) s.Vertices.forEach((v: any) => transformPosition(v));
+
+                    if (scale && s.BoundsRadius !== undefined) {
+                        const maxScale = Math.max(Math.abs(scale[0]), Math.abs(scale[1]), Math.abs(scale[2]));
+                        s.BoundsRadius *= maxScale;
+                    }
+                }
+            }
+
+            if (modelData.Cameras) {
+                for (const cam of modelData.Cameras) {
+                    const c = cam as any;
+                    if (c.PivotPoint) transformPosition(c.PivotPoint);
+                    if (c.TargetPosition) transformPosition(c.TargetPosition);
+                }
+            }
+
+            // 7. Scale Size-Related Properties
+            if (scale) {
+                const maxScale = Math.max(Math.abs(scale[0]), Math.abs(scale[1]), Math.abs(scale[2]));
+                const scaleProp = (obj: any, prop: string, factor: number) => {
+                    if (obj[prop] !== undefined) {
+                        if (typeof obj[prop] === 'number') obj[prop] *= factor;
+                        else if (Array.isArray(obj[prop])) obj[prop] = obj[prop].map((v: number) => v * factor);
+                    }
+                };
+
+                (modelData.ParticleEmitters2 || []).forEach((p: any) => {
+                    ['Speed', 'Variation', 'Width', 'Length', 'Gravity', 'TailLength'].forEach(k => scaleProp(p, k, maxScale));
+                    if (p.ParticleScaling) p.ParticleScaling = p.ParticleScaling.map((v: number) => v * maxScale);
+                });
+
+                (modelData.RibbonEmitters || []).forEach((r: any) => {
+                    ['HeightAbove', 'HeightBelow', 'Gravity'].forEach(k => scaleProp(r, k, maxScale));
+                });
+
+                (modelData.ParticleEmitters || []).forEach((p: any) => {
+                    ['InitialVelocity', 'Gravity'].forEach(k => scaleProp(p, k, maxScale));
+                });
+
+                (modelData.Lights || []).forEach((l: any) => {
+                    ['AttenuationStart', 'AttenuationEnd'].forEach(k => scaleProp(l, k, maxScale));
+                });
+            }
+
+            // 8. Re-sync nodes state and recalculate derived data
+            const updatedNodes = extractNodesFromModel(modelData);
+            recalculateModelExtent(modelData);
+
+            console.log('[ModelStore] Applied global transformation with Unique Tracking & Animation Sync');
+
+            return {
+                modelData: { ...modelData },
+                nodes: updatedNodes,
+                rendererReloadTrigger: state.rendererReloadTrigger + 1
+            };
         });
     },
 

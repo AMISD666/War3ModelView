@@ -14,6 +14,7 @@ import AnimationPanel from './AnimationPanel'
 const MaterialEditorModal = React.lazy(() => import('./modals/MaterialEditorModal'))
 const GeosetEditorModal = React.lazy(() => import('./modals/GeosetEditorModal'))
 const GlobalSequenceModal = React.lazy(() => import('./modals/GlobalSequenceModal'))
+const TransformModelDialog = React.lazy(() => import('./node/TransformModelDialog').then(m => ({ default: m.TransformModelDialog })))
 
 import { GeosetVisibilityPanel } from './GeosetVisibilityPanel'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -522,7 +523,21 @@ function prepareModelDataForSave(modelData: any): any {
             // Shape 0 = Box (6 floats), Shape 2 = Sphere (3 floats)
             const vertexCount = shape.Shape === 0 ? 6 : 3;
             if (shape.Vertices) {
-                shape.Vertices = toFloat32Array(shape.Vertices, vertexCount);
+                // Fix: Vertex1/Vertex2/Vertices in CollisionShape are vectors [x, y, z]
+                // and should NOT be flattened into a single large Float32Array if they are stored as arrays of arrays.
+                // However, war3-model MDX generator expects a flattened Float32Array for 'Vertices' field.
+                if (Array.isArray(shape.Vertices[0])) {
+                    // It's [[x,y,z], [x,y,z]] - flatten it
+                    const flattened = new Float32Array(shape.Vertices.length * 3);
+                    for (let i = 0; i < shape.Vertices.length; i++) {
+                        flattened[i * 3] = shape.Vertices[i][0];
+                        flattened[i * 3 + 1] = shape.Vertices[i][1];
+                        flattened[i * 3 + 2] = shape.Vertices[i][2];
+                    }
+                    shape.Vertices = flattened;
+                } else {
+                    shape.Vertices = toFloat32Array(shape.Vertices, vertexCount);
+                }
             } else {
                 shape.Vertices = new Float32Array(vertexCount);
             }
@@ -767,11 +782,17 @@ function validateModelData(data: any): string[] {
     return errors;
 }
 
+
+
 const MainLayout: React.FC = () => {
     // Zustand stores
     const modelPath = useModelStore(state => state.modelPath)
     const setZustandModelData = useModelStore(state => state.setModelData)
     const setZustandLoading = useModelStore(state => state.setLoading)
+    const showCreateNodeDialog = useUIStore(state => state.showCreateNodeDialog);
+    const setCreateNodeDialogVisible = useUIStore(state => state.setCreateNodeDialogVisible);
+    const showTransformModelDialog = useUIStore(state => state.showTransformModelDialog);
+    const setTransformModelDialogVisible = useUIStore(state => state.setTransformModelDialogVisible);
     const currentSequence = useModelStore(state => state.currentSequence)
     const isPlaying = useModelStore(state => state.isPlaying)
     const playbackSpeed = useModelStore(state => state.playbackSpeed)
@@ -1890,6 +1911,7 @@ const MainLayout: React.FC = () => {
                         showMessage('info', '提示', result.message);
                     }
                 }}
+                onTransformModel={() => setTransformModelDialogVisible(true)}
             />
 
             {/* About Dialog */}
@@ -2076,6 +2098,10 @@ const MainLayout: React.FC = () => {
                 visible={showGlobalSeqModal}
                 onClose={() => setShowGlobalSeqModal(false)}
             />
+
+            <Suspense fallback={null}>
+                <TransformModelDialog />
+            </Suspense>
 
 
             <div style={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative' }}>

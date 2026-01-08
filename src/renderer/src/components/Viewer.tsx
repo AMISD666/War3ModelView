@@ -106,6 +106,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const cameraRef = useRef<SimpleOrbitCamera | null>(null)
 
   const appMainMode = useSelectionStore((state) => state.mainMode)
+  const rendererReloadTrigger = useModelStore((state) => state.rendererReloadTrigger)
   // Note: animationSubMode removed as unused. Re-add if needed:
   // const animationSubMode = useSelectionStore((state) => state.animationSubMode)
   const animationFrameId = useRef<number | null>(null)
@@ -576,10 +577,17 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     }
   }, [])
 
+  // Ref to track last reload trigger value
+  const lastModelLoadTrigger = useRef(rendererReloadTrigger)
+
   useEffect(() => {
     // Only reload on modelPath change, NOT on modelData change.
     // Auto-reloading on modelData change causes texture corruption and animation freeze.
     if (modelPath) {
+      // Determine if this is a triggered reload (structural change) vs a new model load
+      const isTriggeredReload = rendererReloadTrigger !== lastModelLoadTrigger.current
+      lastModelLoadTrigger.current = rendererReloadTrigger
+
       // Check if this is a dropped file (has in-memory data)
       if (modelPath.startsWith('dropped:')) {
         // Load from in-memory data stored in the model store
@@ -588,12 +596,20 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           console.log('[Viewer] Loading from in-memory data for dropped file:', modelPath)
           loadModel(modelPath, storeModelData)
         }
+      } else if (isTriggeredReload) {
+        // This is a triggered reload (e.g., after transformation) - use in-memory data
+        const storeModelData = useModelStore.getState().modelData
+        if (storeModelData) {
+          console.log('[Viewer] Triggered reload: Loading from in-memory data after transformation')
+          loadModel(modelPath, storeModelData)
+        }
       } else {
+        // Normal file open - parse from disk
         loadModel(modelPath)
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modelPath])
+  }, [modelPath, rendererReloadTrigger])
 
   const updateProgress = (currentFrame: number, totalDuration: number) => {
     const now = performance.now()
@@ -1924,7 +1940,6 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   }
 
   // Watch for renderer reload trigger from store (e.g., when particles are updated)
-  const rendererReloadTrigger = useModelStore((state) => state.rendererReloadTrigger)
   const lastReloadTrigger = useRef(0) // Start at 0 to match initial store value
   useEffect(() => {
     // Skip only initial mount (when trigger is still 0)
