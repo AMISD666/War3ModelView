@@ -34,6 +34,7 @@ import { SplitVerticesCommand } from '../commands/SplitVerticesCommand'
 import { WeldVerticesCommand } from '../commands/WeldVerticesCommand'
 import { DeleteVerticesCommand } from '../commands/DeleteVerticesCommand'
 import { PasteVerticesCommand } from '../commands/PasteVerticesCommand'
+import { GlobalTransformCommand } from '../commands/GlobalTransformCommand'
 import { copyVertices, copyFaces, VertexCopyBuffer } from '../utils/vertexOperations'
 import { UpdateKeyframeCommand, KeyframeChange } from '../commands/UpdateKeyframeCommand'
 import { MissingTextureWarning } from './MissingTextureWarning'
@@ -367,6 +368,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     initialKeys: Map<number, any>, // NodeId -> { Rotation: [], Scaling: [] }
     initialValues: Map<number, { rotation: Float32Array, scaling: Float32Array }> // NodeId -> { rotation, scaling } (snapshot at drag start)
   } | null>(null)
+  const previewTransformRef = useRef({
+    translation: [0, 0, 0] as [number, number, number],
+    rotation: [0, 0, 0] as [number, number, number],
+    scale: [1, 1, 1] as [number, number, number]
+  })
 
   // Pre-allocated vectors for handleMouseMove to avoid GC pressure
   const mouseMoveVecs = useRef({
@@ -641,9 +647,13 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
     if (gizmoState.current.activeAxis && e.button === 0 && !shouldBlockGizmoForAlt) {
       // Block Gizmo in keyframe mode when autoKeyframe is disabled
-      const { animationSubMode: subMode } = useSelectionStore.getState()
+      const { animationSubMode: subMode, isGlobalTransformMode } = useSelectionStore.getState()
       const { autoKeyframe } = useModelStore.getState()
-      if (mainMode === 'animation' && subMode === 'keyframe' && !autoKeyframe) {
+
+      // If we are in Global Transform Mode, we always allow dragging (no selection dependencies)
+      if (isGlobalTransformMode) {
+        // Carry on to dragging logic
+      } else if (mainMode === 'animation' && subMode === 'keyframe' && !autoKeyframe) {
         console.log('[Viewer] Gizmo blocked: autoKeyframe is OFF in keyframe mode')
         // Clear activeAxis to prevent any visual feedback
         gizmoState.current.activeAxis = null
@@ -2288,7 +2298,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             mat4.perspective(pMatrix, Math.PI / 4, canvas.width / canvas.height, 1, 100000)
           }
 
-          const { geometrySubMode, transformMode, selectedVertexIds, selectedFaceIds, animationSubMode: currentAnimationSubMode, mainMode: currentMainMode } = useSelectionStore.getState()
+          const { geometrySubMode, transformMode, selectedVertexIds, selectedFaceIds, animationSubMode: currentAnimationSubMode, mainMode: currentMainMode, isGlobalTransformMode, globalTransformPivot } = useSelectionStore.getState()
+          const previewTransform = previewTransformRef.current
+          const baseMvMatrix = isGlobalTransformMode ? mat4.clone(mvMatrix) : null
+          const globalPivot = globalTransformPivot === 'modelCenter' ? getModelCenter() : [0, 0, 0]
           const isBindPoseMode = currentMainMode === 'geometry' || (currentMainMode === 'animation' && (currentAnimationSubMode === 'binding' || animationIndex === -1))
 
           // Debug logs commented out to reduce console noise
@@ -2541,13 +2554,41 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               }
             }
 
+            // === Global Transform Preview Injection ===
+            // Apply previewMatrix to mvMatrix instead of individual bone matrices.
+            // This ensures:
+            // 1. Mesh moves correctly (mvMatrix affects final view position)
+            // 2. Particles move in real-time (rendered with same mvMatrix)
+            // 3. Skeleton visualization moves together (uses same mvMatrix)
+            // 4. Skinning is preserved (bone matrices remain untouched)
+            if (isGlobalTransformMode) {
+              const previewMatrix = mat4.create()
+              const rotQuat = quat.create()
+              // Convert degrees to radians for preview rotation
+              const radRot = previewTransform.rotation.map(d => d * Math.PI / 180) as [number, number, number]
+              quat.fromEuler(rotQuat, radRot[0], radRot[1], radRot[2])
+              const rotScale = mat4.create()
+              mat4.fromRotationTranslationScale(rotScale, rotQuat, [0, 0, 0], previewTransform.scale)
+              mat4.translate(previewMatrix, previewMatrix, previewTransform.translation)
+              if (globalTransformPivot === 'modelCenter') {
+                mat4.translate(previewMatrix, previewMatrix, globalPivot as [number, number, number])
+                mat4.multiply(previewMatrix, previewMatrix, rotScale)
+                mat4.translate(previewMatrix, previewMatrix, [-globalPivot[0], -globalPivot[1], -globalPivot[2]])
+              } else {
+                mat4.multiply(previewMatrix, previewMatrix, rotScale)
+              }
+
+              // Apply to mvMatrix - transforms the entire rendered scene including mesh, particles, skeleton
+              mat4.multiply(mvMatrix, mvMatrix, previewMatrix)
+            }
+
             mdlRenderer.render(mvMatrix, pMatrix, { wireframe: showWireframeRef.current || (currentMainMode === 'geometry' && (geometrySubMode === 'face' || geometrySubMode === 'group')), enableLighting: enableLightingRef.current } as any)
 
             // === Grid Rendering (Moved AFTER model for correct depth/overlay handling) ===
             const { gridSettings, showGridXY, showGridXZ, showGridYZ } = useRendererStore.getState()
             if (showGridXY || showGridXZ || showGridYZ) {
               gridRenderer.current.updateBuffers(gl as WebGLRenderingContext, gridSettings.gridSize || 2048)
-              gridRenderer.current.render(gl as WebGLRenderingContext, mvMatrix, pMatrix, gridSettings, showGridXY, showGridXZ, showGridYZ)
+              gridRenderer.current.render(gl as WebGLRenderingContext, baseMvMatrix || mvMatrix, pMatrix, gridSettings, showGridXY, showGridXZ, showGridYZ)
             }
 
             // === Vertices Rendering (Moved AFTER model for correct depth/overlay handling) ===
@@ -3026,7 +3067,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               const { selectedNodeIds } = useSelectionStore.getState()
               if (selectedNodeIds && selectedNodeIds.length > 0) {
                 for (const nodeId of selectedNodeIds) {
-                  const nodeWrapper = mdlRenderer.rendererData.nodes[nodeId]
+                  const nodeWrapper = mdlRenderer.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
                   if (nodeWrapper && nodeWrapper.matrix) {
                     // 使用矩阵变换 PivotPoint 获取正确的世界坐标
                     const matrix = nodeWrapper.matrix
@@ -3049,6 +3090,14 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 }
                 showGizmo = true
               }
+            }
+            // 全局变换模式显示 Gizmo
+            else if (isGlobalTransformMode) {
+              center[0] = globalPivot[0]
+              center[1] = globalPivot[1]
+              center[2] = globalPivot[2]
+              count = 1
+              showGizmo = true
             }
 
             if (showGizmo && count > 0) {
@@ -3075,7 +3124,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           // Grid already rendered before model for proper depth occlusion
 
           // Always render the axis indicator in bottom-left corner
-          axisIndicator.current.render(gl as WebGLRenderingContext, mvMatrix, canvas.width, canvas.height)
+          axisIndicator.current.render(gl as WebGLRenderingContext, baseMvMatrix || mvMatrix, canvas.width, canvas.height)
 
           frameCount.current++
           if (time - lastFpsTime.current >= 1000) {
@@ -3157,9 +3206,23 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     }
   }, [appMainMode, renderer])
 
+  const getModelCenter = (): [number, number, number] => {
+    const modelData = useModelStore.getState().modelData as any
+    const min = modelData?.Info?.MinimumExtent
+    const max = modelData?.Info?.MaximumExtent
+    if (min && max && min.length >= 3 && max.length >= 3) {
+      return [
+        (min[0] + max[0]) * 0.5,
+        (min[1] + max[1]) * 0.5,
+        (min[2] + max[2]) * 0.5
+      ]
+    }
+    return [0, 0, 0]
+  }
+
   const handleMouseMove = (e: any) => {
     // 1. Gizmo Dragging
-    const { transformMode, mainMode, animationSubMode: subMode, selectedVertexIds, selectedFaceIds, geometrySubMode, selectedNodeIds } = useSelectionStore.getState()
+    const { transformMode, mainMode, animationSubMode: subMode, selectedVertexIds, selectedFaceIds, geometrySubMode, selectedNodeIds, isGlobalTransformMode, globalTransformPivot } = useSelectionStore.getState()
 
     // --- Calculate Gizmo Center (Hoisted) ---
     // We need center for Ray-Plane intersection in drag mode
@@ -3216,6 +3279,13 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             gizmoCount++
           }
         }
+      } else if (isGlobalTransformMode) {
+        const pivot = globalTransformPivot === 'modelCenter' ? getModelCenter() : [0, 0, 0]
+        gizmoCenter[0] = pivot[0]
+        gizmoCenter[1] = pivot[1]
+        gizmoCenter[2] = pivot[2]
+        gizmoCount = 1
+        showGizmo = true
       }
     }
 
@@ -3231,7 +3301,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       mouseState.current.lastMouseY = e.clientY
       const axis = gizmoState.current.activeAxis
 
-      if (mainMode !== 'geometry' && !(mainMode === 'animation' && (subMode === 'binding' || subMode === 'keyframe'))) {
+      // Allowed modes for Gizmo dragging
+      if (!isGlobalTransformMode &&
+        mainMode !== 'geometry' &&
+        !(mainMode === 'animation' && (subMode === 'binding' || subMode === 'keyframe'))) {
         return
       }
 
@@ -3318,6 +3391,59 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
           vec3.sub(vecs.worldMoveDelta, hitCurr, hitPrev)
         }
+      }
+
+      if (isGlobalTransformMode) {
+        const previewTransform = previewTransformRef.current
+
+        if (transformMode === 'translate') {
+          vec3.zero(vecs.moveVec)
+          if (axis === 'x') vecs.moveVec[0] = -vecs.worldMoveDelta[0]
+          else if (axis === 'y') vecs.moveVec[1] = -vecs.worldMoveDelta[1]
+          else if (axis === 'z') vecs.moveVec[2] = vecs.worldMoveDelta[2]
+          else if (axis === 'xy') { vecs.moveVec[0] = vecs.worldMoveDelta[0]; vecs.moveVec[1] = vecs.worldMoveDelta[1]; }
+          else if (axis === 'xz') { vecs.moveVec[0] = vecs.worldMoveDelta[0]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
+          else if (axis === 'yz') { vecs.moveVec[1] = vecs.worldMoveDelta[1]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
+
+          previewTransform.translation = [
+            previewTransform.translation[0] + vecs.moveVec[0],
+            previewTransform.translation[1] + vecs.moveVec[1],
+            previewTransform.translation[2] + vecs.moveVec[2]
+          ]
+        } else if (transformMode === 'rotate') {
+          let angle = 0
+          const rotationSpeed = 1.2
+          if (axis === 'x') angle = deltaY * rotationSpeed
+          else if (axis === 'y') angle = -deltaX * rotationSpeed
+          else if (axis === 'z') angle = deltaX * rotationSpeed
+
+          if (angle !== 0) {
+            const currentRot = [...previewTransform.rotation]
+            if (axis === 'x') currentRot[0] += angle
+            else if (axis === 'y') currentRot[1] += angle
+            else if (axis === 'z') currentRot[2] += angle
+            previewTransform.rotation = currentRot as [number, number, number]
+          }
+        } else if (transformMode === 'scale') {
+          const scaleFactor = 1 + (deltaX - deltaY) * 0.005
+          const currentScale = [...previewTransform.scale]
+
+          if (axis === 'x') currentScale[0] *= scaleFactor
+          else if (axis === 'y') currentScale[1] *= scaleFactor
+          else if (axis === 'z') currentScale[2] *= scaleFactor
+          else if (axis === 'center') {
+            currentScale[0] *= scaleFactor
+            currentScale[1] *= scaleFactor
+            currentScale[2] *= scaleFactor
+          } else if (axis === 'xy') {
+            currentScale[0] *= scaleFactor
+            currentScale[1] *= scaleFactor
+          }
+
+          previewTransform.scale = currentScale as [number, number, number]
+        }
+
+        return
       }
 
       if (transformMode === 'translate' && mainMode === 'geometry') {
@@ -4045,6 +4171,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     const startX = mouseState.current.startX
     const startY = mouseState.current.startY
     const dragButton = mouseState.current.dragButton
+    const wasGizmoDragging = gizmoState.current.isDragging
 
     mouseState.current.isDragging = false
     mouseState.current.isBoxSelecting = false
@@ -4052,12 +4179,40 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     setSelectionBox(null)
     if (cameraRef.current) cameraRef.current.enabled = true
 
-    if (gizmoState.current.isDragging) {
+    if (wasGizmoDragging) {
       gizmoState.current.isDragging = false
       gizmoState.current.activeAxis = null
 
       if (rendererRef.current) {
-        const { mainMode, animationSubMode } = useSelectionStore.getState()
+        const { mainMode, animationSubMode, isGlobalTransformMode, globalTransformPivot } = useSelectionStore.getState()
+
+        if (isGlobalTransformMode) {
+          const previewTransform = previewTransformRef.current
+          const commitTransform = {
+            translation: [...previewTransform.translation] as [number, number, number],
+            rotation: [...previewTransform.rotation] as [number, number, number],
+            scale: [...previewTransform.scale] as [number, number, number]
+          }
+          const hasTransform = commitTransform.translation.some(v => v !== 0) ||
+            commitTransform.rotation.some(v => v !== 0) ||
+            commitTransform.scale.some(v => v !== 1)
+
+          // CRITICAL: Execute command FIRST to bake transform into model data,
+          // then reset preview. Otherwise model visually jumps back before bake completes.
+          if (hasTransform) {
+            const pivot = globalTransformPivot === 'modelCenter' ? getModelCenter() : null
+            const cmd = new GlobalTransformCommand(commitTransform, rendererRef.current, pivot)
+            commandManager.execute(cmd)
+            console.log('[Viewer] Global transform applied via command')
+          }
+
+          // Reset local preview transform reference
+          previewTransformRef.current = {
+            translation: [0, 0, 0],
+            rotation: [0, 0, 0],
+            scale: [1, 1, 1]
+          }
+        }
 
         if (mainMode === 'geometry') {
           if (initialVertexPositions.current.size > 0) {

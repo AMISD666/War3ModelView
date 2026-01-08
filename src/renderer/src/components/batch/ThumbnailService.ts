@@ -120,6 +120,17 @@ class ThumbnailService {
         }
     }
 
+    private createSolidImageData(r: number, g: number, b: number, a: number = 255, size: number = 64): ImageData {
+        const data = new Uint8ClampedArray(size * size * 4);
+        for (let i = 0; i < data.length; i += 4) {
+            data[i] = r;
+            data[i + 1] = g;
+            data[i + 2] = b;
+            data[i + 3] = a;
+        }
+        return new ImageData(data, size, size);
+    }
+
     private async initTeamColors() {
         const colors = [
             { id: 1, path: 'ReplaceableTextures\\TeamColor\\TeamColor00.blp' },
@@ -139,6 +150,10 @@ class ThumbnailService {
                 }
             } catch (e) {
                 console.warn(`Failed to pre-load team color ${col.path}`, e);
+                if (!this.teamColorData[col.id]) {
+                    if (col.id === 1) this.teamColorData[col.id] = this.createSolidImageData(220, 60, 60);
+                    else this.teamColorData[col.id] = this.createSolidImageData(255, 210, 0);
+                }
             }
         }
     }

@@ -144,7 +144,7 @@ export function useGizmoTransform({
      * Handle gizmo drag for transformations
      */
     const handleGizmoDrag = useCallback((deltaX: number, deltaY: number) => {
-        const { transformMode, mainMode, animationSubMode: subMode } = useSelectionStore.getState()
+        const { transformMode, mainMode, animationSubMode: subMode, isGlobalTransformMode } = useSelectionStore.getState()
         const axis = gizmoState.current.activeAxis
 
         if (!axis) return
@@ -153,7 +153,7 @@ export function useGizmoTransform({
         const isBinding = mainMode === 'animation' && subMode === 'binding'
         const isKeyframe = mainMode === 'animation' && subMode === 'keyframe'
 
-        if (!isGeometry && !isBinding && !isKeyframe) {
+        if (!isGeometry && !isBinding && !isKeyframe && !isGlobalTransformMode) {
             return
         }
 
@@ -171,7 +171,11 @@ export function useGizmoTransform({
         } else if (transformMode === 'rotate' || transformMode === 'scale') {
             if (isGeometry) {
                 handleRotateOrScaleVertices(deltaX, deltaY, transformMode, axis)
+            } else if (isGlobalTransformMode) {
+                handleGlobalTransform(deltaX, deltaY, transformMode, axis)
             }
+        } else if (transformMode === 'translate' && isGlobalTransformMode) {
+            handleGlobalTransform(deltaX, deltaY, transformMode, axis)
         }
     }, [targetCamera, gizmoState, rendererRef])
 
@@ -450,11 +454,66 @@ export function useGizmoTransform({
         })
     }, [rendererRef])
 
+    /**
+     * Handle global transformation (Translate, Rotate, Scale)
+     */
+    const handleGlobalTransform = useCallback((
+        deltaX: number,
+        deltaY: number,
+        mode: 'translate' | 'rotate' | 'scale',
+        axis: GizmoAxis
+    ) => {
+        const { setPreviewTransform, previewTransform } = useModelStore.getState()
+        const moveScale = getMoveScale(targetCamera.current)
+
+        if (mode === 'translate') {
+            const moveVec = getMoveVectorForAxis(deltaX, deltaY, moveScale, axis)
+            setPreviewTransform({
+                translation: [
+                    previewTransform.translation[0] + moveVec[0],
+                    previewTransform.translation[1] + moveVec[1],
+                    previewTransform.translation[2] + moveVec[2]
+                ]
+            })
+        } else if (mode === 'rotate') {
+            let angle = 0
+            if (axis === 'x') angle = deltaY * 0.5
+            else if (axis === 'y') angle = -deltaX * 0.5
+            else if (axis === 'z') angle = deltaX * 0.5
+
+            if (angle !== 0) {
+                const currentRot = [...previewTransform.rotation]
+                if (axis === 'x') currentRot[0] += angle
+                else if (axis === 'y') currentRot[1] += angle
+                else if (axis === 'z') currentRot[2] += angle
+                setPreviewTransform({ rotation: currentRot as [number, number, number] })
+            }
+        } else if (mode === 'scale') {
+            const scaleFactor = 1 + (deltaX - deltaY) * 0.005
+            const currentScale = [...previewTransform.scale]
+
+            if (axis === 'x') currentScale[0] *= scaleFactor
+            else if (axis === 'y') currentScale[1] *= scaleFactor
+            else if (axis === 'z') currentScale[2] *= scaleFactor
+            else if (axis === 'center') {
+                currentScale[0] *= scaleFactor
+                currentScale[1] *= scaleFactor
+                currentScale[2] *= scaleFactor
+            } else if (axis === 'xy') {
+                currentScale[0] *= scaleFactor
+                currentScale[1] *= scaleFactor
+            }
+
+            setPreviewTransform({ scale: currentScale as [number, number, number] })
+        }
+    }, [targetCamera])
+
     return {
         handleGizmoDrag,
         handleTranslateVertices,
         handleTranslateNodes,
         handleTranslateNodesKeyframe,
-        handleRotateOrScaleVertices
+        handleRotateOrScaleVertices,
+        handleGlobalTransform
     }
 }

@@ -15,6 +15,7 @@ export type TransformMode = 'translate' | 'rotate' | 'scale' | null;
 
 export type SelectionMode = 'object' | 'vertex' | 'face' | 'group'; // Deprecated in favor of AppMode + SubMode, keeping for compatibility for now
 export type GizmoMode = 'translate' | 'rotate' | 'scale'; // Deprecated in favor of TransformMode
+export type GlobalTransformPivot = 'origin' | 'modelCenter';
 
 interface SelectionState {
     // New Mode System
@@ -71,6 +72,12 @@ interface SelectionState {
     // Geoset Picking (Ctrl+Click in 3D view)
     pickedGeosetIndex: number | null;
     setPickedGeosetIndex: (index: number | null) => void;
+
+    // Global Transform Toggle
+    isGlobalTransformMode: boolean;
+    setIsGlobalTransformMode: (isGlobal: boolean) => void;
+    globalTransformPivot: GlobalTransformPivot;
+    setGlobalTransformPivot: (pivot: GlobalTransformPivot) => void;
 
     // 清除所有选择
     clearAllSelections: () => void;
@@ -260,6 +267,12 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
     // Geoset Picking (Ctrl+Click in 3D view)
     pickedGeosetIndex: null,
     setPickedGeosetIndex: (index) => set({ pickedGeosetIndex: index }),
+
+    // Global Transform Toggle
+    isGlobalTransformMode: false,
+    setIsGlobalTransformMode: (isGlobal) => set({ isGlobalTransformMode: isGlobal }),
+    globalTransformPivot: 'origin',
+    setGlobalTransformPivot: (pivot) => set({ globalTransformPivot: pivot }),
 
     // 清除所有选择
     clearAllSelections: () => {

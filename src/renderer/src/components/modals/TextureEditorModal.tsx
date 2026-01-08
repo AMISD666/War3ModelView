@@ -37,13 +37,41 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         }
     }
 
+    const getReplaceableLabel = (id?: number) => {
+        if (!id) return null
+        return `ReplaceableId ${id}`
+    }
+
+    const makeSolidDataUrl = (r: number, g: number, b: number, a: number = 255) => {
+        const canvas = document.createElement('canvas')
+        canvas.width = 64
+        canvas.height = 64
+        const ctx = canvas.getContext('2d')
+        if (ctx) {
+            ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${a / 255})`
+            ctx.fillRect(0, 0, canvas.width, canvas.height)
+            return canvas.toDataURL()
+        }
+        return null
+    }
+
     // Use prop modelPath if provided, otherwise fall back to store
     const modelPath = propModelPath || storeModelPath
 
     // Initialize local state
     useEffect(() => {
         if (visible && modelData && modelData.Textures) {
-            setLocalTextures(JSON.parse(JSON.stringify(modelData.Textures)))
+            const cloned = JSON.parse(JSON.stringify(modelData.Textures))
+            const withReplaceables = cloned.map((t: any) => {
+                if (!t?.Image && t?.ReplaceableId === 1) {
+                    return { ...t, Image: 'ReplaceableTextures\\TeamColor\\TeamColor00.blp' }
+                }
+                if (!t?.Image && t?.ReplaceableId === 2) {
+                    return { ...t, Image: 'ReplaceableTextures\\TeamGlow\\TeamGlow00.blp' }
+                }
+                return t
+            })
+            setLocalTextures(withReplaceables)
 
             // If no selection yet, try to select based on picked geoset
             const initialPickedIndex = useSelectionStore.getState().pickedGeosetIndex
@@ -146,9 +174,24 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
 
             const texture = localTextures[selectedIndex]
             if (!texture.Image) {
-                setPreviewUrl(null)
-                setPreviewError('无路径')
-                setPreviewSource(null)
+                const replaceableLabel = getReplaceableLabel(texture.ReplaceableId)
+                if (texture.ReplaceableId === 1) {
+                    setPreviewUrl(makeSolidDataUrl(220, 60, 60))
+                    setPreviewError(null)
+                    setPreviewSource('Replaceable')
+                } else if (texture.ReplaceableId === 2) {
+                    setPreviewUrl(makeSolidDataUrl(255, 210, 0))
+                    setPreviewError(null)
+                    setPreviewSource('Replaceable')
+                } else if (replaceableLabel) {
+                    setPreviewUrl(null)
+                    setPreviewError(replaceableLabel)
+                    setPreviewSource(null)
+                } else {
+                    setPreviewUrl(null)
+                    setPreviewError('No Path')
+                    setPreviewSource(null)
+                }
                 return
             }
 
@@ -183,10 +226,25 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                 } catch (mpqError) {
                     console.log('[TextureEditor] MPQ loading failed, trying file system:', mpqError)
                 }
+                if (!loaded) {
+                    if (texture.ReplaceableId === 1) {
+                        setPreviewUrl(makeSolidDataUrl(220, 60, 60))
+                        setPreviewError(null)
+                        setPreviewSource('Replaceable')
+                    } else if (texture.ReplaceableId === 2) {
+                        setPreviewUrl(makeSolidDataUrl(255, 210, 0))
+                        setPreviewError(null)
+                        setPreviewSource('Replaceable')
+                    } else {
+                        setPreviewError('MPQ 未找到')
+                    }
+                    setIsLoadingPreview(false)
+                    return
+                }
             }
 
             // Strategy 2: Try local file system if MPQ didn't work
-            if (!loaded && isBlp) {
+            if (!loaded && !isMPQPath && isBlp) {
                 try {
                     // Normalize path separators
                     let normalizedPath = imagePath.replace(/\//g, '\\')
@@ -430,7 +488,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                 <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
                                     <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px' }}>
                                         <span style={{ marginRight: '8px', opacity: 0.7 }}>{index}:</span>
-                                        {item.Image || 'No Path'}
+                                        {item.Image || getReplaceableLabel(item.ReplaceableId) || 'No Path'}
                                     </div>
                                     <DeleteOutlined
                                         onClick={(e) => {

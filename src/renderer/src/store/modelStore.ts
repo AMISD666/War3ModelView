@@ -256,7 +256,9 @@ interface ModelState {
     transformModel: (ops: {
         translation?: [number, number, number],
         rotation?: [number, number, number],
-        scale?: [number, number, number]
+        scale?: [number, number, number],
+        skipAnimationTracks?: boolean,
+        suppressReload?: boolean
     }) => void;
 
     // Renderer reload
@@ -1309,9 +1311,13 @@ export const useModelStore = create<ModelState>((set, get) => ({
     },
 
     transformModel: (ops) => {
-        const { translation, rotation, scale } = ops;
+        const { translation, rotation, scale, skipAnimationTracks, suppressReload } = ops;
+        console.log('[ModelStore] transformModel starting with ops:', { translation, rotation, scale, skipAnimationTracks, suppressReload });
         set((state) => {
-            if (!state.modelData) return {};
+            if (!state.modelData) {
+                console.warn('[ModelStore] transformModel: No modelData loaded.');
+                return {};
+            }
 
             const modelData = state.modelData;
 
@@ -1349,7 +1355,15 @@ export const useModelStore = create<ModelState>((set, get) => ({
             const transformedArrays = new Set<any>();
 
             const transformPosition = (p: number[] | Float32Array | any) => {
-                if (!p || transformedArrays.has(p)) return;
+                if (!p) return;
+                if (typeof p !== 'object') {
+                    console.error('[ModelStore] transformPosition: expected object but got', typeof p, p);
+                    return;
+                }
+                if (transformedArrays.has(p)) return;
+                // Safety: if p is not indexable or too short, skip
+                if (p.length < 3) return;
+
                 const v = vec3.fromValues(p[0], p[1], p[2]);
                 vec3.transformMat4(v, v, matrix);
                 p[0] = v[0]; p[1] = v[1]; p[2] = v[2];
@@ -1357,7 +1371,10 @@ export const useModelStore = create<ModelState>((set, get) => ({
             };
 
             const transformVector = (p: number[] | Float32Array | any) => {
-                if (!p || transformedArrays.has(p)) return;
+                if (!p || typeof p !== 'object' || transformedArrays.has(p)) return;
+                // Safety: if p is not indexable or too short, skip
+                if (p.length < 3) return;
+
                 const v = vec3.fromValues(p[0], p[1], p[2]);
                 // Use rotScaleMatrix for relative offsets/vectors
                 vec3.transformMat4(v, v, rotScaleMatrix);
@@ -1366,6 +1383,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             };
 
             // 3. Transform Pivot Points (Absolute Positions)
+            // These must be transformed along with vertices to maintain skinning relationship.
             if (modelData.PivotPoints) {
                 modelData.PivotPoints.forEach(p => transformPosition(p));
             }
@@ -1407,13 +1425,24 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 const nodes = (modelData as any)[group];
                 if (nodes && Array.isArray(nodes)) {
                     for (const node of nodes) {
-                        // Transform PivotPoint if it's not already transformed via global list
+                        const isRoot = node.Parent === -1 || node.Parent === undefined;
+
+                        // 1. Transform PivotPoint (Absolute Position)
+                        // All nodes need their PivotPoint transformed by TRS
                         if (node.PivotPoint) transformPosition(node.PivotPoint);
 
-                        // Transform Animation Translation Tracks
-                        // Animation offsets are relative vectors, so use transformVector (rot+scale only)
-                        if (node.Translation && node.Translation.Values) {
-                            node.Translation.Values.forEach((val: any) => transformVector(val));
+                        // 2. Transform Animation Tracks (Relative)
+                        // CRITICAL: Only transform animation tracks for ROOT nodes.
+                        // Child nodes inherit transformations through the bone hierarchy.
+                        // Also only apply Rotation/Scale (RS) to relative translation tracks.
+                        if (isRoot) {
+                            if (node.Translation && node.Translation.Values) {
+                                node.Translation.Values.forEach((val: any) => transformVector(val));
+                            }
+
+                            // Note: Rotation and Scaling tracks are not yet transformed here.
+                            // Prepending global rotation to quat/euler tracks is complex and
+                            // usually not needed for simple global translation/centering.
                         }
                     }
                 }
@@ -1425,7 +1454,20 @@ export const useModelStore = create<ModelState>((set, get) => ({
                     const s = shape as any;
                     if (s.Vertex1) transformPosition(s.Vertex1);
                     if (s.Vertex2) transformPosition(s.Vertex2);
-                    if (s.Vertices) s.Vertices.forEach((v: any) => transformPosition(v));
+                    if (s.Vertices) {
+                        if (s.Vertices instanceof Float32Array || (Array.isArray(s.Vertices) && typeof s.Vertices[0] === 'number')) {
+                            // Flat array: transform in chunks of 3
+                            for (let i = 0; i < s.Vertices.length; i += 3) {
+                                const vSegment = [s.Vertices[i], s.Vertices[i + 1], s.Vertices[i + 2]];
+                                const vec = vec3.fromValues(vSegment[0], vSegment[1], vSegment[2]);
+                                vec3.transformMat4(vec, vec, matrix);
+                                s.Vertices[i] = vec[0]; s.Vertices[i + 1] = vec[1]; s.Vertices[i + 2] = vec[2];
+                            }
+                        } else if (Array.isArray(s.Vertices)) {
+                            // Array of vectors
+                            s.Vertices.forEach((v: any) => transformPosition(v));
+                        }
+                    }
 
                     if (scale && s.BoundsRadius !== undefined) {
                         const maxScale = Math.max(Math.abs(scale[0]), Math.abs(scale[1]), Math.abs(scale[2]));
@@ -1474,12 +1516,16 @@ export const useModelStore = create<ModelState>((set, get) => ({
             const updatedNodes = extractNodesFromModel(modelData);
             recalculateModelExtent(modelData);
 
-            console.log('[ModelStore] Applied global transformation with Unique Tracking & Animation Sync');
+            console.log(`[ModelStore] Applied global transformation:
+                Geosets: ${modelData.Geosets?.length || 0}
+                Nodes processed in hierarchy: ${allNodeGroups.reduce((acc, group) => acc + ((modelData as any)[group]?.length || 0), 0)}
+                CollisionShapes: ${modelData.CollisionShapes?.length || 0}
+                Unique arrays transformed: ${transformedArrays.size}`);
 
             return {
                 modelData: { ...modelData },
                 nodes: updatedNodes,
-                rendererReloadTrigger: state.rendererReloadTrigger + 1
+                rendererReloadTrigger: state.rendererReloadTrigger + (suppressReload ? 0 : 1)
             };
         });
     },

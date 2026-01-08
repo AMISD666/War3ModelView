@@ -15,7 +15,9 @@ import {
     LinkOutlined, // Bind
     DisconnectOutlined, // Unbind
     ApartmentOutlined, // Parent
-    TableOutlined // Grid Settings
+    TableOutlined, // Grid Settings
+    GlobalOutlined, // Global Transform
+    AimOutlined // Pivot
 } from '@ant-design/icons';
 
 import { useSelectionStore } from '../store/selectionStore';
@@ -46,7 +48,11 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         selectedVertexIds,
         selectedNodeIds,
         isPickingParent,
-        setIsPickingParent
+        setIsPickingParent,
+        isGlobalTransformMode,
+        setIsGlobalTransformMode,
+        globalTransformPivot,
+        setGlobalTransformPivot
     } = useSelectionStore();
     const { modelData: _modelData } = useModelStore();
     const { renderer, setShowSettingsPanel } = useRendererStore(state => state);
@@ -101,7 +107,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         message.success(`已解绑 ${selectedVertexIds.length} 个顶点从骨骼 ${boneId}`)
     }
 
-    if (mainMode !== 'geometry' && mainMode !== 'animation') return null;
+    if (mainMode === 'uv' || mainMode === 'batch') return null;
 
     // Check if selected vertices are all from the same geoset (required for weld)
     const canSplit = geometrySubMode === 'vertex' && selectedVertexIds.length >= 1
@@ -264,8 +270,31 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
 
             <div style={{ width: 1, backgroundColor: '#555', height: '24px', alignSelf: 'center' }} />
 
+            <Space>
+                <Tooltip title="全局变换模式 (锁定在原点，对整个模型生效)">
+                    <Button
+                        type={isGlobalTransformMode ? 'primary' : 'default'}
+                        icon={<GlobalOutlined />}
+                        onClick={() => setIsGlobalTransformMode(!isGlobalTransformMode)}
+                        style={isGlobalTransformMode ? { backgroundColor: '#52c41a', borderColor: '#52c41a' } : undefined}
+                    >
+                        全局变换
+                    </Button>
+                </Tooltip>
+                <Tooltip title="全局枢轴：原点 / 模型中心">
+                    <Button
+                        type={globalTransformPivot === 'modelCenter' ? 'primary' : 'default'}
+                        icon={<AimOutlined />}
+                        onClick={() => setGlobalTransformPivot(globalTransformPivot === 'modelCenter' ? 'origin' : 'modelCenter')}
+                    >
+                        中心枢轴
+                    </Button>
+                </Tooltip>
+            </Space>
+
+            <div style={{ width: 1, backgroundColor: '#555', height: '24px', alignSelf: 'center' }} />
+
 
         </div>
     );
 };
-

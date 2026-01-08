@@ -104,6 +104,18 @@ const UVEditor: React.FC<UVEditorProps> = ({
         return { x, y }
     }, [panX, panY, zoom])
 
+    const getGeosetUVs = useCallback((geoset: any): Float32Array | number[] | null => {
+        if (!geoset?.TVertices) return null
+        const tv = geoset.TVertices as any
+        if (Array.isArray(tv)) {
+            if (tv.length === 0) return null
+            if (Array.isArray(tv[0]) || tv[0] instanceof Float32Array) return tv[0]
+            return tv
+        }
+        if (tv instanceof Float32Array) return tv
+        return null
+    }, [])
+
     const getSelectionCenter = useCallback(() => {
         if (!modelData?.Geosets || selectedUVs.length === 0) return null
 
@@ -111,8 +123,8 @@ const UVEditor: React.FC<UVEditorProps> = ({
 
         selectedUVs.forEach(sel => {
             const geoset = modelData.Geosets![sel.geosetIndex]
-            if (geoset?.TVertices?.[0]) {
-                const uvs = geoset.TVertices[0]
+            const uvs = getGeosetUVs(geoset)
+            if (uvs) {
                 sel.indices.forEach(i => {
                     sumU += (uvs[i * 2] as number)
                     sumV += (uvs[i * 2 + 1] as number)
@@ -123,7 +135,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
 
         if (count === 0) return null
         return { u: sumU / count, v: sumV / count }
-    }, [modelData, selectedUVs])
+    }, [modelData, selectedUVs, getGeosetUVs])
 
     // Fit to view - calculate zoom and pan to fit texture
     const fitToView = useCallback(() => {
@@ -147,10 +159,11 @@ const UVEditor: React.FC<UVEditorProps> = ({
 
         const snapshot = selectedUVs.map(sel => {
             const geoset = modelData.Geosets![sel.geosetIndex]
-            if (geoset && geoset.TVertices && geoset.TVertices[0]) {
+            const uvs = getGeosetUVs(geoset)
+            if (uvs) {
                 return {
                     geosetIndex: sel.geosetIndex,
-                    tVertices: new Float32Array(geoset.TVertices[0])
+                    tVertices: new Float32Array(uvs)
                 }
             }
             return null
@@ -176,16 +189,17 @@ const UVEditor: React.FC<UVEditorProps> = ({
 
         selectedUVs.forEach(sel => {
             const geoset = modelData.Geosets![sel.geosetIndex]
-            if (geoset?.TVertices?.[0]) {
+            const uvs = getGeosetUVs(geoset)
+            if (uvs) {
                 updateGeoset(sel.geosetIndex, {
-                    TVertices: [Array.from(geoset.TVertices[0])]
+                    TVertices: [Array.from(uvs)]
                 })
             }
         })
 
         // Trigger Viewer to refresh and re-render with updated UV data
         triggerRendererReload()
-    }, [modelData, selectedUVs, updateGeoset, triggerRendererReload])
+    }, [modelData, selectedUVs, updateGeoset, triggerRendererReload, getGeosetUVs])
 
     const undo = useCallback(() => {
         if (historyIndex < 0 || !modelData?.Geosets) return
@@ -233,9 +247,8 @@ const UVEditor: React.FC<UVEditorProps> = ({
 
         selectedUVs.forEach(sel => {
             const geoset = modelData.Geosets![sel.geosetIndex]
-            if (!geoset?.TVertices?.[0]) return
-
-            const uvs = geoset.TVertices[0]
+            const uvs = getGeosetUVs(geoset)
+            if (!uvs) return
             sel.indices.forEach(i => {
                 const currentU = uvs[i * 2] as number
                 const currentV = uvs[i * 2 + 1] as number
@@ -245,7 +258,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
         })
 
         setRenderTick(t => t + 1)
-    }, [modelData, selectedUVs, zoom])
+    }, [modelData, selectedUVs, zoom, getGeosetUVs])
 
     const applyScale = useCallback((dx: number, dy: number) => {
         if (!modelData?.Geosets) return
@@ -261,9 +274,8 @@ const UVEditor: React.FC<UVEditorProps> = ({
 
         selectedUVs.forEach(sel => {
             const geoset = modelData.Geosets![sel.geosetIndex]
-            if (!geoset?.TVertices?.[0]) return
-
-            const uvs = geoset.TVertices[0]
+            const uvs = getGeosetUVs(geoset)
+            if (!uvs) return
             sel.indices.forEach(i => {
                 const currentU = uvs[i * 2] as number
                 const currentV = uvs[i * 2 + 1] as number
@@ -284,7 +296,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
         })
 
         setRenderTick(t => t + 1)
-    }, [modelData, selectedUVs, zoom, getSelectionCenter, activeAxis])
+    }, [modelData, selectedUVs, zoom, getSelectionCenter, activeAxis, getGeosetUVs])
 
     const applyRotation = useCallback((dx: number, dy: number) => {
         if (!modelData?.Geosets) return
@@ -299,9 +311,8 @@ const UVEditor: React.FC<UVEditorProps> = ({
 
         selectedUVs.forEach(sel => {
             const geoset = modelData.Geosets![sel.geosetIndex]
-            if (!geoset?.TVertices?.[0]) return
-
-            const uvs = geoset.TVertices[0]
+            const uvs = getGeosetUVs(geoset)
+            if (!uvs) return
             sel.indices.forEach(i => {
                 const currentU = uvs[i * 2] as number
                 const currentV = uvs[i * 2 + 1] as number
@@ -316,7 +327,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
         })
 
         setRenderTick(t => t + 1)
-    }, [modelData, selectedUVs, getSelectionCenter])
+    }, [modelData, selectedUVs, getSelectionCenter, getGeosetUVs])
 
     const mirrorHorizontal = useCallback(() => {
         if (!modelData?.Geosets) return
@@ -324,9 +335,8 @@ const UVEditor: React.FC<UVEditorProps> = ({
 
         selectedUVs.forEach(sel => {
             const geoset = modelData.Geosets![sel.geosetIndex]
-            if (!geoset?.TVertices?.[0]) return
-
-            const uvs = geoset.TVertices[0]
+            const uvs = getGeosetUVs(geoset)
+            if (!uvs) return
             let sumU = 0
             sel.indices.forEach(i => { sumU += (uvs[i * 2] as number) })
             const centerU = sumU / sel.indices.length
@@ -338,7 +348,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
         })
 
         syncToStore()
-    }, [modelData, selectedUVs, addToHistory, syncToStore])
+    }, [modelData, selectedUVs, addToHistory, syncToStore, getGeosetUVs])
 
     const mirrorVertical = useCallback(() => {
         if (!modelData?.Geosets) return
@@ -346,9 +356,8 @@ const UVEditor: React.FC<UVEditorProps> = ({
 
         selectedUVs.forEach(sel => {
             const geoset = modelData.Geosets![sel.geosetIndex]
-            if (!geoset?.TVertices?.[0]) return
-
-            const uvs = geoset.TVertices[0]
+            const uvs = getGeosetUVs(geoset)
+            if (!uvs) return
             let sumV = 0
             sel.indices.forEach(i => { sumV += (uvs[i * 2 + 1] as number) })
             const centerV = sumV / sel.indices.length
@@ -360,7 +369,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
         })
 
         syncToStore()
-    }, [modelData, selectedUVs, addToHistory, syncToStore])
+    }, [modelData, selectedUVs, addToHistory, syncToStore, getGeosetUVs])
 
     // -------------------------------------------------------------------------
     // RENDERING
@@ -408,9 +417,8 @@ const UVEditor: React.FC<UVEditorProps> = ({
         if (modelData?.Geosets) {
             visibleGeosetIds.forEach((geosetIndex: number) => {
                 const geoset = modelData!.Geosets![geosetIndex]
-                if (!geoset?.TVertices?.[0] || !geoset.Faces) return
-
-                const uvs = geoset.TVertices[0]
+                const uvs = getGeosetUVs(geoset)
+                if (!uvs || !geoset.Faces) return
                 const faces = geoset.Faces
 
                 ctx.strokeStyle = '#0af'
@@ -718,9 +726,8 @@ const UVEditor: React.FC<UVEditorProps> = ({
             if (modelData?.Geosets) {
                 visibleGeosetIds.forEach((geosetIndex: number) => {
                     const geoset = modelData!.Geosets![geosetIndex]
-                    if (!geoset?.TVertices?.[0]) return
-
-                    const uvs = geoset.TVertices[0]
+                    const uvs = getGeosetUVs(geoset)
+                    if (!uvs) return
                     const faces = geoset.Faces
                     const vertexCount = uvs.length / 2
                     const selectedSet = new Set<number>()
