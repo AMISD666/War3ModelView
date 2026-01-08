@@ -40,9 +40,9 @@ export class GlobalTransformCommand implements Command {
     private applyMatrix(matrix: mat4) {
         const { transformModel } = useModelStore.getState()
         const ops = this.decomposeMatrix(matrix)
-        // Use the same approach as TransformModelDialog - call transformModel without special flags
-        // This transforms everything including animation tracks, which is correct for uniform global transform
-        transformModel({ ...ops })
+        // Suppress full reload - we will sync the renderer manually below.
+        // This prevents screen flicker while maintaining correct animation.
+        transformModel({ ...ops, suppressReload: true })
         this.syncRenderer()
     }
 
@@ -171,11 +171,16 @@ export class GlobalTransformCommand implements Command {
             const storeNodes = useModelStore.getState().nodes as any
             if (storeNodes && renderer.model) {
                 renderer.model.Nodes = storeNodes
-                if (renderer.modelInstance && typeof renderer.modelInstance.syncNodes === 'function') {
-                    renderer.modelInstance.syncNodes()
-                }
             }
         }
+
+        // CRITICAL FIX: Always rebuild NodeWrappers after patching nodes.
+        // This ensures rendererData.nodes references the updated node objects
+        // and corrects parent-child relationships in the bone hierarchy.
+        if (renderer.modelInstance && typeof renderer.modelInstance.syncNodes === 'function') {
+            renderer.modelInstance.syncNodes()
+        }
+
         if (typeof renderer.update === 'function') {
             renderer.update(0)
         }
