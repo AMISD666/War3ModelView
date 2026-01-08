@@ -31,6 +31,8 @@ interface MenuBarProps {
     onToggleCameras: () => void
     showLights: boolean
     onToggleLights: () => void
+    showAttachments: boolean
+    onToggleAttachments: () => void
     onSetViewPreset: (preset: string) => void
     onToggleEditor: (editor: string) => void
     mainMode: 'view' | 'geometry' | 'uv' | 'animation' | 'batch'
@@ -45,6 +47,7 @@ interface MenuBarProps {
     onMergeSameMaterials: () => void
     onCleanUnusedMaterials: () => void
     onCleanUnusedTextures: () => void
+    onRepairModel: () => void
 }
 
 const MenuBar: React.FC<MenuBarProps> = ({
@@ -77,6 +80,8 @@ const MenuBar: React.FC<MenuBarProps> = ({
     onToggleCameras,
     showLights,
     onToggleLights,
+    showAttachments,
+    onToggleAttachments,
     onSetViewPreset,
     onToggleEditor,
     mainMode,
@@ -90,7 +95,8 @@ const MenuBar: React.FC<MenuBarProps> = ({
     onCheckUpdate,
     onMergeSameMaterials,
     onCleanUnusedMaterials,
-    onCleanUnusedTextures
+    onCleanUnusedTextures,
+    onRepairModel
 }) => {
     const [activeMenu, setActiveMenu] = useState<string | null>(null)
     const [settingsSubMenu, setSettingsSubMenu] = useState<string | null>(null)
@@ -509,6 +515,15 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             style={itemStyle}
                             onMouseEnter={hoverStyle}
                             onMouseLeave={unhoverStyle}
+                            onClick={() => { onRepairModel(); closeMenu() }}
+                        >
+                            修复模型
+                        </div>
+                        <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
                             onClick={() => { onMergeSameMaterials(); closeMenu() }}
                         >
                             合并相同材质
@@ -568,14 +583,9 @@ const MenuBar: React.FC<MenuBarProps> = ({
                 )}
             </div>
 
-            {/* Spacer to push potential right-aligned items to the right, or just keep spacing. 
-                For "most right", if user means distinct from left group, we might use margin-left: auto. 
-                But since current layout is flex-start, putting it last is "most right" of the current list. 
-            */}
-
             {/* Batch Button - Direct Action */}
             <div
-                style={{ ...menuStyle, backgroundColor: mainMode === 'batch' ? '#444' : 'transparent', marginLeft: 'auto' }}
+                style={{ ...menuStyle, backgroundColor: mainMode === 'batch' ? '#444' : 'transparent' }}
                 onClick={() => onSetMainMode('batch')}
                 onMouseEnter={hoverStyle}
                 onMouseLeave={mainMode !== 'batch' ? unhoverStyle : undefined}

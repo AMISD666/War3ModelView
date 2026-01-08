@@ -1,19 +1,26 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Button, Empty, Layout, theme, Typography, Spin, message, Breadcrumb } from 'antd';
-import { FolderOpenOutlined, ArrowLeftOutlined, ReloadOutlined, ClearOutlined } from '@ant-design/icons';
-import { useSelectionStore } from '../../store/selectionStore';
+import { Button, Empty, Layout, theme, Typography, Spin, message, Pagination } from 'antd';
+import {
+    FolderOpenOutlined,
+    ReloadOutlined,
+    ClearOutlined,
+    ArrowLeftOutlined
+} from '@ant-design/icons';
 import { open } from '@tauri-apps/plugin-dialog';
-import { readDir, DirEntry, remove } from '@tauri-apps/plugin-fs';
+import { readFile } from '@tauri-apps/plugin-fs';
+import { useSelectionStore } from '../../store/selectionStore';
 import { ThumbnailGenerator } from './ThumbnailGenerator';
+import { thumbnailService } from './ThumbnailService';
 import { ModelCard } from './ModelCard';
+import { thumbnailEventBus } from './ThumbnailEventBus';
 
 const { Content, Header } = Layout;
-const { Title } = Typography;
+const { Text } = Typography;
 
 interface ModelFile {
     name: string;
-    path: string; // Relative path or name if flat
-    fullPath: string; // We might need to construct this manually if readDir doesn't return it
+    path: string;
+    fullPath: string;
 }
 
 interface BatchManagerProps {
@@ -27,61 +34,59 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
     onAnimationChange,
     selectedPath
 }) => {
-    const { setMainMode } = useSelectionStore();
     const { token } = theme.useToken();
-    const [currentPath, setCurrentPath] = useState<string | null>(null);
-    const [files, setFiles] = useState<ModelFile[]>([]);
+    const setMainMode = useSelectionStore(state => state.setMainMode);
+
     const [loading, setLoading] = useState(false);
+    const [files, setFiles] = useState<ModelFile[]>([]);
+    const [currentPath, setCurrentPath] = useState<string | null>(null);
+    const [queue, setQueue] = useState<{ name: string; fullPath: string }[]>([]);
 
-    // Thumbnail system
-    const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
-    const [queue, setQueue] = useState<{ name: string, fullPath: string }[]>([]);
+    // UI state
+    const [currentPage, setCurrentPage] = useState(1);
+    const [pageSize, setPageSize] = useState(12);
+    const [visiblePaths, setVisiblePaths] = useState<Set<string>>(new Set());
+    const [isAnimating, setAnimating] = useState(true);
+    const [selectedFile, setSelectedFile] = useState<string | null>(null);
 
-    // Animation data per model
+    // Shared states for animations
     const [modelAnimations, setModelAnimations] = useState<Record<string, string[]>>({});
     const [selectedAnimations, setSelectedAnimations] = useState<Record<string, string>>({});
-
-    // Selected model for playback (internal state synced with selectedPath prop)
-    const [selectedFile, setSelectedFile] = useState<string | null>(null);
 
     const handleOpenFolder = async () => {
         try {
             const selected = await open({
                 directory: true,
                 multiple: false,
-                recursive: false,
-                title: '选择模型文件夹'
+                title: '选择包含模型文件的文件夹'
             });
 
-            if (selected && typeof selected === 'string') {
-                setCurrentPath(selected);
-                scanFolder(selected);
+            if (selected) {
+                const path = Array.isArray(selected) ? selected[0] : selected;
+                setCurrentPath(path);
+                await scanFolder(path);
             }
         } catch (err) {
             console.error('Failed to open folder:', err);
-            message.error('打开文件夹失败');
+            message.error('打开文件夹失败: ' + String(err));
         }
     };
 
     const scanFolder = async (path: string) => {
         setLoading(true);
-        setFiles([]);
-        setThumbnails({});
-        setQueue([]); // Clear old queue
-        setModelAnimations({});
-        setSelectedAnimations({});
         try {
             const modelFiles: ModelFile[] = [];
 
             // Recursive function to scan directories
             const scanDirV2 = async (dirPath: string) => {
                 try {
+                    const { readDir } = await import('@tauri-apps/plugin-fs');
                     const entries = await readDir(dirPath);
                     for (const entry of entries) {
-                        const entryPath = `${dirPath}\\${entry.name}`;
+                        const entryPath = dirPath + (dirPath.endsWith('\\') || dirPath.endsWith('/') ? '' : '\\') + entry.name;
                         if (entry.isDirectory) {
                             await scanDirV2(entryPath);
-                        } else if (entry.isFile) {
+                        } else {
                             const name = entry.name.toLowerCase();
                             if (name.endsWith('.mdx') || name.endsWith('.mdl')) {
                                 modelFiles.push({
@@ -93,15 +98,18 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                         }
                     }
                 } catch (readErr) {
-                    console.warn(`Failed to read subdirectory: ${dirPath}`, readErr);
+                    console.warn(`Failed to read directory: ${dirPath}`, readErr);
                 }
             };
 
             await scanDirV2(path);
 
             setFiles(modelFiles);
-            // Initialize queue with all files
-            setQueue(modelFiles.map(f => ({ name: f.name, fullPath: f.fullPath })));
+
+            // Only queue the current page
+            const initialPageFiles = modelFiles.slice(0, pageSize);
+            setQueue(initialPageFiles.map(f => ({ name: f.name, fullPath: f.fullPath })));
+
             message.success(`找到 ${modelFiles.length} 个模型文件`);
         } catch (err) {
             console.error('Failed to read directory:', err);
@@ -112,39 +120,51 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
     };
 
     const handleDelete = async (file: ModelFile) => {
-        try {
-            await remove(file.fullPath);
-            message.success(`已删除 ${file.name}`);
-
-            setFiles(prev => prev.filter(f => f.fullPath !== file.fullPath));
-            setQueue(prev => prev.filter(q => q.fullPath !== file.fullPath));
-            setThumbnails(prev => {
-                const newThumbnails = { ...prev };
-                delete newThumbnails[file.fullPath];
-                return newThumbnails;
-            });
-        } catch (err) {
-            console.error('Delete failed:', err);
-            message.error('删除失败: ' + String(err));
-        }
+        // Mock delete for now, or implement via Rust
+        message.info('删除功能暂未完全开放: ' + file.name);
+        setFiles(prev => prev.filter(f => f.fullPath !== file.fullPath));
     };
 
     const handleEditTexture = (file: ModelFile) => {
         message.info('批量贴图路径修改功能即将上线');
     };
 
-    const handleThumbnailReady = useCallback((fullPath: string, dataUrl: string, animations?: string[]) => {
-        setThumbnails(prev => ({ ...prev, [fullPath]: dataUrl }));
+    const handleThumbnailReady = useCallback((fullPath: string, bitmap: ImageBitmap, animations?: string[]) => {
+        thumbnailEventBus.emitThumbnail(fullPath, bitmap);
+
         if (animations && animations.length > 0) {
             setModelAnimations(prev => ({ ...prev, [fullPath]: animations }));
-            // Auto-select first animation
-            setSelectedAnimations(prev => ({ ...prev, [fullPath]: animations[0] }));
+            thumbnailEventBus.emitAnimations(fullPath, animations);
+
+            // Default to the first animation if not set
+            setSelectedAnimations(prev => {
+                if (prev[fullPath]) return prev;
+                return { ...prev, [fullPath]: animations[0] };
+            });
         }
     }, []);
 
+    const handleVisibilityChange = useCallback((fullPath: string, isVisible: boolean) => {
+        setVisiblePaths(prev => {
+            const next = new Set(prev);
+            if (isVisible) next.add(fullPath);
+            else next.delete(fullPath);
+            return next;
+        });
+    }, []);
+
+    const handlePageChange = (page: number, size: number) => {
+        setCurrentPage(page);
+        setPageSize(size);
+
+        // When page changes, update the queue to process the new page's models
+        const start = (page - 1) * size;
+        const pageFiles = files.slice(start, start + size);
+        setQueue(pageFiles.map(f => ({ name: f.name, fullPath: f.fullPath })));
+    };
+
     const handleItemProcessed = useCallback((fullPath: string) => {
         setQueue(prev => {
-            // Remove the processed item (assuming it's usually the first one)
             if (prev.length > 0 && prev[0].fullPath === fullPath) {
                 return prev.slice(1);
             }
@@ -154,7 +174,6 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
 
     const handleAnimationChange = useCallback((file: ModelFile, animation: string) => {
         setSelectedAnimations(prev => ({ ...prev, [file.fullPath]: animation }));
-        // Find animation index for the callback
         const animations = modelAnimations[file.fullPath] || [];
         const animationIndex = animations.indexOf(animation);
         if (onAnimationChange && animationIndex >= 0) {
@@ -164,11 +183,9 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
 
     const handleSelect = useCallback((file: ModelFile) => {
         setSelectedFile(file.fullPath);
-        // Find animation index for the selected animation
         const selectedAnim = selectedAnimations[file.fullPath] || '';
         const animations = modelAnimations[file.fullPath] || [];
         const animationIndex = Math.max(0, animations.indexOf(selectedAnim));
-        // Notify parent of selection
         if (onSelectModel) {
             onSelectModel(file.fullPath, animationIndex);
         }
@@ -179,48 +196,75 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
             <Header style={{
                 display: 'flex',
                 alignItems: 'center',
-                background: '#1e1e1e',
+                background: '#1a1a1a',
                 borderBottom: '1px solid #333',
-                padding: '0 16px',
-                gap: 16
+                padding: '0 12px',
+                gap: 8,
+                height: 48
             }}>
                 <Button
-                    icon={<ArrowLeftOutlined />}
-                    onClick={() => setMainMode('view')}
                     type="text"
+                    icon={<ArrowLeftOutlined style={{ color: '#fff' }} />}
+                    onClick={() => setMainMode('view')}
                 />
-                <div style={{ flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-                    {currentPath ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
-                            <span style={{ fontSize: 12, color: token.colorTextSecondary }}>当前文件夹</span>
-                            <span style={{ fontWeight: 'bold' }}>{currentPath}</span>
-                        </div>
-                    ) : (
-                        <Title level={4} style={{ margin: 0 }}>批量模型预览</Title>
-                    )}
-                </div>
+                <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold', marginRight: 16 }}>批量预览</Text>
+
+                <Button
+                    type="primary"
+                    icon={<FolderOpenOutlined />}
+                    onClick={handleOpenFolder}
+                    loading={loading}
+                    size="small"
+                >
+                    导入文件夹
+                </Button>
+
+                <Button
+                    icon={<ReloadOutlined />}
+                    onClick={() => currentPath && scanFolder(currentPath)}
+                    loading={loading}
+                    disabled={!currentPath}
+                    size="small"
+                >
+                    刷新
+                </Button>
+
+                <Button
+                    icon={<ClearOutlined />}
+                    onClick={() => {
+                        setFiles([]);
+                        setQueue([]);
+                        setCurrentPath(null);
+                        setModelAnimations({});
+                        setSelectedAnimations({});
+                        thumbnailEventBus.clear();
+                        thumbnailService.clearAll();
+                    }}
+                    disabled={files.length === 0}
+                    size="small"
+                >
+                    清空
+                </Button>
 
                 {currentPath && (
-                    <>
-                        <Button icon={<ReloadOutlined />} onClick={() => scanFolder(currentPath)} loading={loading}>
-                            刷新
-                        </Button>
-                        <Button
-                            icon={<ClearOutlined />}
-                            onClick={() => { setFiles([]); setThumbnails({}); setQueue([]); setCurrentPath(null); setModelAnimations({}); setSelectedAnimations({}); }}
-                            disabled={files.length === 0}
-                        >
-                            清空
-                        </Button>
-                    </>
+                    <div style={{
+                        flex: 1,
+                        overflow: 'hidden',
+                        fontSize: 12,
+                        color: token.colorTextSecondary,
+                        background: 'rgba(255,255,255,0.05)',
+                        padding: '2px 8px',
+                        borderRadius: 4,
+                        marginLeft: 8,
+                        whiteSpace: 'nowrap',
+                        textOverflow: 'ellipsis'
+                    }}>
+                        {currentPath}
+                    </div>
                 )}
-
-                <Button type="primary" icon={<FolderOpenOutlined />} onClick={handleOpenFolder}>
-                    选择文件夹
-                </Button>
             </Header>
             <Content style={{
-                padding: 24,
+                padding: '16px 24px',
                 display: 'flex',
                 flexDirection: 'column',
                 height: '100%',
@@ -231,58 +275,74 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                         <Spin size="large" tip="正在扫描文件..." />
                     </div>
                 ) : files.length > 0 ? (
-                    <div style={{
-                        display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-                        gap: 16,
-                        overflowY: 'auto',
-                        height: '100%',
-                        paddingRight: 8,
-                        alignItems: 'start', // Prevent vertical stretching of cards
-                        alignContent: 'start' // Reduce vertical spacing distribution
-                    }}>
-                        {files.map((file) => (
-                            <ModelCard
-                                key={file.fullPath}
-                                file={file}
-                                thumbnail={thumbnails[file.fullPath]}
-                                animations={modelAnimations[file.fullPath]}
-                                selectedAnimation={selectedAnimations[file.fullPath]}
-                                isSelected={(selectedPath ?? selectedFile) === file.fullPath}
-                                onDelete={handleDelete}
-                                onEditTexture={handleEditTexture}
-                                onAnimationChange={handleAnimationChange}
-                                onSelect={handleSelect}
+                    <>
+                        <div style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(4, 1fr)',
+                            gap: 12,
+                            overflowY: 'auto',
+                            flex: 1,
+                            paddingRight: 8,
+                            alignItems: 'start',
+                            alignContent: 'start',
+                            marginBottom: 16
+                        }}>
+                            {files.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((file) => (
+                                <ModelCard
+                                    key={file.fullPath}
+                                    file={file}
+                                    initialAnimations={modelAnimations[file.fullPath]}
+                                    initialSelectedAnimation={selectedAnimations[file.fullPath]}
+                                    isSelected={(selectedPath ?? selectedFile) === file.fullPath}
+                                    onDelete={handleDelete}
+                                    onEditTexture={handleEditTexture}
+                                    onAnimationChange={handleAnimationChange}
+                                    onSelect={handleSelect}
+                                    onVisibilityChange={handleVisibilityChange}
+                                />
+                            ))}
+                        </div>
+                        <div style={{
+                            display: 'flex',
+                            justifyContent: 'center',
+                            padding: '8px 0',
+                            borderTop: '1px solid #333',
+                            background: '#1a1a1a',
+                            margin: '0 -24px -16px -24px'
+                        }}>
+                            <Pagination
+                                current={currentPage}
+                                pageSize={pageSize}
+                                total={files.length}
+                                onChange={handlePageChange}
+                                showSizeChanger={false}
+                                showTotal={(total: number) => `共 ${total} 个模型`}
+                                size="small"
                             />
-                        ))}
-                    </div>
+                        </div>
+                    </>
                 ) : (
                     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
                         <Empty
                             image={Empty.PRESENTED_IMAGE_SIMPLE}
-                            description={currentPath ? "该文件夹下没有找到模型文件 (.mdx, .mdl)" : "请选择一个包含模型的文件夹开始"}
-                        >
-                            {!currentPath && (
-                                <Button type="primary" icon={<FolderOpenOutlined />} onClick={handleOpenFolder}>
-                                    打开文件夹
-                                </Button>
-                            )}
-                        </Empty>
+                            description={
+                                <div style={{ color: '#666' }}>
+                                    {currentPath ? "该文件夹下没有找到模型文件" : "请将文件夹拖放到此处或点击按钮导入"}
+                                </div>
+                            }
+                        />
                     </div>
                 )}
 
-                {/* CRITICAL: Pause thumbnail generation when a model is selected for preview.
-                    ThumbnailGenerator calls ModelRenderer.initGL() on its own canvas, which corrupts
-                    war3-model's shared state when the main viewer is also active. 
-                    
-                    For now, completley DISABLE it to ensure stability.
-                */}
-                {/* <ThumbnailGenerator
+                <ThumbnailGenerator
                     queue={queue}
                     onThumbnailReady={handleThumbnailReady}
                     onItemProcessed={handleItemProcessed}
-                    paused={!!(selectedPath)}
-                /> */}
+                    visiblePaths={visiblePaths}
+                    isAnimating={isAnimating}
+                    selectedAnimations={selectedAnimations}
+                    modelAnimations={modelAnimations}
+                />
             </Content>
         </Layout>
     );

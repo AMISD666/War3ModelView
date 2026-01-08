@@ -52,11 +52,10 @@ const fsCubeSource = `
   varying vec3 vPosition;
   void main() {
     vec3 normal = normalize(vNormal);
-    vec3 lightDir = normalize(vec3(0.5, 0.5, 1.0));
+    vec3 lightDir = normalize(vec3(-0.2, 0.5, 1.0)); // Top-left-front
     
-    float ambient = 0.35;
-    float diffuse = max(dot(normal, lightDir), 0.0) * 0.65;
-    float lighting = ambient + diffuse;
+    // Base brightness 0.4 + 0.6 directional for high contrast
+    float lighting = 0.4 + 0.6 * max(dot(normal, lightDir), 0.0);
     
     vec3 finalColor = uColor.rgb * lighting;
     gl_FragColor = vec4(finalColor, uColor.a);
@@ -92,6 +91,18 @@ export class DebugRenderer {
     private cubeUColor: WebGLUniformLocation | null = null
     private cubeVertBuffer: WebGLBuffer | null = null
     private cubeNormBuffer: WebGLBuffer | null = null
+
+    // Sphere data (cached)
+    private sphereVerts: Float32Array | null = null
+    private sphereNormals: Float32Array | null = null
+    private sphereBuffer: WebGLBuffer | null = null
+    private sphereNormalBuffer: WebGLBuffer | null = null
+
+    // Tetrahedron data
+    private tetrahedronVerts: Float32Array | null = null
+    private tetrahedronNormals: Float32Array | null = null
+    private tetrahedronBuffer: WebGLBuffer | null = null
+    private tetrahedronNormalBuffer: WebGLBuffer | null = null
 
     init(gl: WebGLRenderingContext | WebGL2RenderingContext) {
         // Simple program
@@ -222,6 +233,8 @@ export class DebugRenderer {
 
         for (const node of nodes) {
             if (!node.node.PivotPoint) continue
+            // Skip attachment nodes - they are rendered separately as tetrahedrons
+            if ((node.node as any).type === 'Attachment') continue
 
             // Determine color based on selection state
             let color: number[]
@@ -351,6 +364,87 @@ export class DebugRenderer {
         // Cyan color for bone-bound vertices
         // Always show bone vertices (disable depth)
         this.draw(gl, mvMatrix, pMatrix, positions, [0.0, 1.0, 1.0, 1.0], gl.POINTS, 8.0, false)
+    }
+
+    /**
+     * Render attachment nodes as yellow tetrahedrons (matching view mode style)
+     */
+    renderAttachmentNodes(
+        gl: WebGLRenderingContext | WebGL2RenderingContext,
+        mvMatrix: mat4,
+        pMatrix: mat4,
+        nodes: NodeWrapper[],
+        selectedNodeIds: number[] = []
+    ) {
+        if (!this.cubeProgram) return
+
+        // Filter to only attachment nodes
+        const attachmentNodes = nodes.filter((n: any) =>
+            n.node.type === 'Attachment' && n.node.PivotPoint
+        )
+        if (attachmentNodes.length === 0) return
+
+        // Ensure tetrahedron geometry is generated
+        if (!this.tetrahedronVerts) {
+            const geo = this.generateTetrahedronGeometry(1.0);
+            this.tetrahedronVerts = geo.verts;
+            this.tetrahedronNormals = geo.normals;
+            this.tetrahedronBuffer = gl.createBuffer();
+            this.tetrahedronNormalBuffer = gl.createBuffer();
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.tetrahedronBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, this.tetrahedronVerts, gl.STATIC_DRAW);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.tetrahedronNormalBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, this.tetrahedronNormals, gl.STATIC_DRAW);
+        }
+
+        gl.useProgram(this.cubeProgram)
+        gl.disable(gl.DEPTH_TEST)
+        gl.disable(gl.CULL_FACE)
+
+        const modelMatrix = mat4.create()
+        const normalMatrix = mat3.create()
+        const nodeMVMatrix = mat4.create()
+        const tempVec = vec3.create()
+        const size = 1.5 // Same as view mode
+
+        // Setup attributes
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.tetrahedronBuffer)
+        gl.enableVertexAttribArray(this.cubeAPosition)
+        gl.vertexAttribPointer(this.cubeAPosition, 3, gl.FLOAT, false, 0, 0)
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.tetrahedronNormalBuffer)
+        gl.enableVertexAttribArray(this.cubeANormal)
+        gl.vertexAttribPointer(this.cubeANormal, 3, gl.FLOAT, false, 0, 0)
+
+        for (const node of attachmentNodes) {
+            const pivot = node.node.PivotPoint
+
+            // Transform pivot by node matrix to get world position
+            vec3.transformMat4(tempVec, pivot as vec3, node.matrix)
+
+            // Build model matrix for tetrahedron at this position
+            mat4.identity(modelMatrix)
+            mat4.translate(modelMatrix, modelMatrix, [tempVec[0], tempVec[1], tempVec[2]])
+            mat4.scale(modelMatrix, modelMatrix, [size, size, size])
+
+            mat4.multiply(nodeMVMatrix, mvMatrix, modelMatrix)
+            mat3.normalFromMat4(normalMatrix, nodeMVMatrix)
+
+            // Determine color: red if selected, yellow otherwise
+            const isSelected = selectedNodeIds.includes(node.node.ObjectId)
+            const color = isSelected ? [1.0, 0.3, 0.3, 1.0] : [1.0, 1.0, 0.0, 1.0]
+
+            gl.uniformMatrix4fv(this.cubeUMVMatrix, false, nodeMVMatrix)
+            gl.uniformMatrix4fv(this.cubeUPMatrix, false, pMatrix)
+            gl.uniformMatrix3fv(this.cubeUNormalMatrix, false, normalMatrix)
+            gl.uniform4fv(this.cubeUColor, color)
+
+            gl.drawArrays(gl.TRIANGLES, 0, 12) // 4 faces * 3 vertices
+        }
+
+        gl.enable(gl.DEPTH_TEST)
     }
 
     renderPoints(
@@ -559,6 +653,7 @@ export class DebugRenderer {
         gl.uniformMatrix4fv(this.uPMatrix, false, pMatrix)
         gl.uniform4fv(this.uColor, color)
         gl.uniform1f(this.uPointSize, pointSize)
+        gl.uniform1f(this.uDepthBias, 0.0) // Set default bias to 0 to avoid garbage values
 
         // Configure depth test based on parameter
         if (enableDepth) {
@@ -673,6 +768,243 @@ export class DebugRenderer {
             cx + zAxis[0], cy + zAxis[1], cz + zAxis[2]
         ]
         this.renderLines(gl, mvMatrix, pMatrix, zLines, [0, 0, 1, 1])
+    }
+
+    private generateSphereGeometry(radius: number, segments: number): { verts: Float32Array, normals: Float32Array } {
+        const verts: number[] = [];
+        const normals: number[] = [];
+
+        for (let lat = 0; lat <= segments; lat++) {
+            const theta = lat * Math.PI / segments;
+            const sinTheta = Math.sin(theta);
+            const cosTheta = Math.cos(theta);
+
+            for (let lon = 0; lon <= segments; lon++) {
+                const phi = lon * 2 * Math.PI / segments;
+                const sinPhi = Math.sin(phi);
+                const cosPhi = Math.cos(phi);
+
+                const x = cosPhi * sinTheta;
+                const y = cosTheta;
+                const z = sinPhi * sinTheta;
+
+                normals.push(x, y, z);
+                verts.push(radius * x, radius * y, radius * z);
+            }
+        }
+
+        const triVerts: number[] = [];
+        const triNormals: number[] = [];
+
+        for (let lat = 0; lat < segments; lat++) {
+            for (let lon = 0; lon < segments; lon++) {
+                const first = (lat * (segments + 1)) + lon;
+                const second = first + segments + 1;
+
+                // Triangle 1
+                triVerts.push(verts[first * 3], verts[first * 3 + 1], verts[first * 3 + 2]);
+                triVerts.push(verts[second * 3], verts[second * 3 + 1], verts[second * 3 + 2]);
+                triVerts.push(verts[(first + 1) * 3], verts[(first + 1) * 3 + 1], verts[(first + 1) * 3 + 2]);
+
+                triNormals.push(normals[first * 3], normals[first * 3 + 1], normals[first * 3 + 2]);
+                triNormals.push(normals[second * 3], normals[second * 3 + 1], normals[second * 3 + 2]);
+                triNormals.push(normals[(first + 1) * 3], normals[(first + 1) * 3 + 1], normals[(first + 1) * 3 + 2]);
+
+                // Triangle 2
+                triVerts.push(verts[(first + 1) * 3], verts[(first + 1) * 3 + 1], verts[(first + 1) * 3 + 2]);
+                triVerts.push(verts[second * 3], verts[second * 3 + 1], verts[second * 3 + 2]);
+                triVerts.push(verts[(second + 1) * 3], verts[(second + 1) * 3 + 1], verts[(second + 1) * 3 + 2]);
+
+                triNormals.push(normals[(first + 1) * 3], normals[(first + 1) * 3 + 1], normals[(first + 1) * 3 + 2]);
+                triNormals.push(normals[second * 3], normals[second * 3 + 1], normals[second * 3 + 2]);
+                triNormals.push(normals[(second + 1) * 3], normals[(second + 1) * 3 + 1], normals[(second + 1) * 3 + 2]);
+            }
+        }
+
+        return {
+            verts: new Float32Array(triVerts),
+            normals: new Float32Array(triNormals)
+        };
+    }
+
+    renderSolidSpheres(
+        gl: WebGLRenderingContext | WebGL2RenderingContext,
+        mvMatrix: mat4,
+        pMatrix: mat4,
+        positions: number[],
+        radius: number,
+        color: number[],
+        enableDepth: boolean = true
+    ) {
+        if (!this.cubeProgram) return;
+
+        // Ensure sphere geometry is generated
+        if (!this.sphereVerts) {
+            const geo = this.generateSphereGeometry(1.0, 32); // High quality sphere
+            this.sphereVerts = geo.verts;
+            this.sphereNormals = geo.normals;
+            this.sphereBuffer = gl.createBuffer();
+            this.sphereNormalBuffer = gl.createBuffer();
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.sphereBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, this.sphereVerts, gl.STATIC_DRAW);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.sphereNormalBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, this.sphereNormals, gl.STATIC_DRAW);
+        }
+
+        gl.useProgram(this.cubeProgram);
+
+        if (enableDepth) {
+            gl.enable(gl.DEPTH_TEST);
+        } else {
+            gl.disable(gl.DEPTH_TEST);
+        }
+
+        gl.disable(gl.CULL_FACE); // Ensure spheres are visible regardless of winding/orientation
+
+        const modelMatrix = mat4.create();
+        const normalMatrix = mat3.create();
+        const nodeMVMatrix = mat4.create();
+
+        // Setup attributes
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.sphereBuffer);
+        gl.enableVertexAttribArray(this.cubeAPosition);
+        gl.vertexAttribPointer(this.cubeAPosition, 3, gl.FLOAT, false, 0, 0);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.sphereNormalBuffer);
+        gl.enableVertexAttribArray(this.cubeANormal);
+        gl.vertexAttribPointer(this.cubeANormal, 3, gl.FLOAT, false, 0, 0);
+
+        gl.uniform4fv(this.cubeUColor, color);
+
+        for (let i = 0; i < positions.length; i += 3) {
+            mat4.identity(modelMatrix);
+            mat4.translate(modelMatrix, modelMatrix, [positions[i], positions[i + 1], positions[i + 2]]);
+            mat4.scale(modelMatrix, modelMatrix, [radius, radius, radius]);
+
+            mat4.multiply(nodeMVMatrix, mvMatrix, modelMatrix);
+            mat3.normalFromMat4(normalMatrix, nodeMVMatrix);
+
+            gl.uniformMatrix4fv(this.cubeUMVMatrix, false, nodeMVMatrix);
+            gl.uniformMatrix4fv(this.cubeUPMatrix, false, pMatrix);
+            gl.uniformMatrix3fv(this.cubeUNormalMatrix, false, normalMatrix);
+
+            gl.drawArrays(gl.TRIANGLES, 0, this.sphereVerts!.length / 3);
+        }
+
+        gl.enable(gl.DEPTH_TEST);
+    }
+
+    private generateTetrahedronGeometry(size: number): { verts: Float32Array, normals: Float32Array } {
+        // Standard regular tetrahedron vertices
+        const s = size;
+        const v0 = [0, s, 0];
+        const v1 = [-s * 0.94, -s * 0.33, s * 0.54];
+        const v2 = [s * 0.94, -s * 0.33, s * 0.54];
+        const v3 = [0, -s * 0.33, -s * 1.0];
+
+        const triVerts: number[] = [
+            ...v0, ...v2, ...v1, // CCW winding for outward normals
+            ...v0, ...v3, ...v2,
+            ...v0, ...v1, ...v3,
+            ...v1, ...v2, ...v3  // bottom face
+        ];
+
+        const calculateNormal = (p1: number[], p2: number[], p3: number[]) => {
+            const u = [p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]];
+            const v = [p3[0] - p1[0], p3[1] - p1[1], p3[2] - p1[2]];
+            const n = [
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0]
+            ];
+            const len = Math.sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+            return [n[0] / len, n[1] / len, n[2] / len];
+        };
+
+        const n1 = calculateNormal(v0, v2, v1);
+        const n2 = calculateNormal(v0, v3, v2);
+        const n3 = calculateNormal(v0, v1, v3);
+        const n4 = calculateNormal(v1, v2, v3);
+
+        const triNormals: number[] = [
+            ...n1, ...n1, ...n1,
+            ...n2, ...n2, ...n2,
+            ...n3, ...n3, ...n3,
+            ...n4, ...n4, ...n4
+        ];
+
+        return {
+            verts: new Float32Array(triVerts),
+            normals: new Float32Array(triNormals)
+        };
+    }
+
+    renderSolidTetrahedrons(
+        gl: WebGLRenderingContext | WebGL2RenderingContext,
+        mvMatrix: mat4,
+        pMatrix: mat4,
+        positions: number[],
+        size: number,
+        color: number[],
+        enableDepth: boolean = true
+    ) {
+        if (!this.cubeProgram) return;
+
+        if (!this.tetrahedronVerts) {
+            const geo = this.generateTetrahedronGeometry(1.0);
+            this.tetrahedronVerts = geo.verts;
+            this.tetrahedronNormals = geo.normals;
+            this.tetrahedronBuffer = gl.createBuffer();
+            this.tetrahedronNormalBuffer = gl.createBuffer();
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.tetrahedronBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, this.tetrahedronVerts, gl.STATIC_DRAW);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.tetrahedronNormalBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, this.tetrahedronNormals, gl.STATIC_DRAW);
+        }
+
+        gl.useProgram(this.cubeProgram);
+        gl.disable(gl.CULL_FACE);
+
+        if (enableDepth) {
+            gl.enable(gl.DEPTH_TEST);
+        } else {
+            gl.disable(gl.DEPTH_TEST);
+        }
+
+        const modelMatrix = mat4.create();
+        const normalMatrix = mat3.create();
+        const nodeMVMatrix = mat4.create();
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.tetrahedronBuffer);
+        gl.enableVertexAttribArray(this.cubeAPosition);
+        gl.vertexAttribPointer(this.cubeAPosition, 3, gl.FLOAT, false, 0, 0);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.tetrahedronNormalBuffer);
+        gl.enableVertexAttribArray(this.cubeANormal);
+        gl.vertexAttribPointer(this.cubeANormal, 3, gl.FLOAT, false, 0, 0);
+
+        gl.uniform4fv(this.cubeUColor, color);
+
+        for (let i = 0; i < positions.length; i += 3) {
+            mat4.identity(modelMatrix);
+            mat4.translate(modelMatrix, modelMatrix, [positions[i], positions[i + 1], positions[i + 2]]);
+            mat4.scale(modelMatrix, modelMatrix, [size, size, size]);
+
+            mat4.multiply(nodeMVMatrix, mvMatrix, modelMatrix);
+            mat3.normalFromMat4(normalMatrix, nodeMVMatrix);
+
+            gl.uniformMatrix4fv(this.cubeUMVMatrix, false, nodeMVMatrix);
+            gl.uniformMatrix4fv(this.cubeUPMatrix, false, pMatrix);
+            gl.uniformMatrix3fv(this.cubeUNormalMatrix, false, normalMatrix);
+
+            gl.drawArrays(gl.TRIANGLES, 0, 12); // 4 faces * 3 vertices
+        }
+
+        gl.enable(gl.DEPTH_TEST);
     }
 }
 

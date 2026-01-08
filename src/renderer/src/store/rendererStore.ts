@@ -47,6 +47,8 @@ interface RendererStore {
     setShowCameras: (show: boolean) => void
     showLights: boolean
     setShowLights: (show: boolean) => void
+    showAttachments: boolean
+    setShowAttachments: (show: boolean) => void
     enableLighting: boolean
     setEnableLighting: (enable: boolean) => void
 
@@ -120,7 +122,7 @@ export const useRendererStore = create<RendererStore>()(
             setShowGridXZ: (show) => set({ showGridXZ: show }),
             showGridYZ: false,
             setShowGridYZ: (show) => set({ showGridYZ: show }),
-            showVertices: false, // Default hidden
+            showVertices: true, // Default shown
             setShowVertices: (show) => set({ showVertices: show }),
             showNodes: false,
             setShowNodes: (show) => set({ showNodes: show }),
@@ -136,6 +138,8 @@ export const useRendererStore = create<RendererStore>()(
             setShowCameras: (show) => set({ showCameras: show }),
             showLights: false,
             setShowLights: (show) => set({ showLights: show }),
+            showAttachments: false, // Default off
+            setShowAttachments: (show) => set({ showAttachments: show }),
             enableLighting: true,
             setEnableLighting: (enable) => set({ enableLighting: enable }),
 
@@ -186,6 +190,7 @@ export const useRendererStore = create<RendererStore>()(
                 showCollisionShapes: state.showCollisionShapes,
                 showCameras: state.showCameras,
                 showLights: state.showLights,
+                showAttachments: state.showAttachments,
                 enableLighting: state.enableLighting,
                 renderMode: state.renderMode,
                 teamColor: state.teamColor,

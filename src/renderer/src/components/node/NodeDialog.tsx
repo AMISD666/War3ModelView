@@ -238,8 +238,34 @@ const NodeDialog: React.FC<NodeDialogProps> = ({ visible, nodeId, onClose }) => 
                     </Row>
                 </Card>
 
-                {/* Pivot Point */}
-                <Card size="small" title="轴心点 (Pivot Point)" style={{ marginBottom: 16 }}>
+                <Card size="small" title={
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span>轴心点 (Pivot Point)</span>
+                        <Button
+                            size="small"
+                            type="link"
+                            style={{ padding: 0, height: 'auto' }}
+                            onClick={() => {
+                                const parentId = form.getFieldValue('parent');
+                                if (parentId === -1 || parentId === undefined) {
+                                    // Root or no parent
+                                    form.setFieldsValue({ pivotX: 0, pivotY: 0, pivotZ: 0 });
+                                } else {
+                                    const parentNode = getNodeById(parentId);
+                                    if (parentNode && parentNode.PivotPoint) {
+                                        form.setFieldsValue({
+                                            pivotX: parentNode.PivotPoint[0] || 0,
+                                            pivotY: parentNode.PivotPoint[1] || 0,
+                                            pivotZ: parentNode.PivotPoint[2] || 0
+                                        });
+                                    }
+                                }
+                            }}
+                        >
+                            复制父节点轴心
+                        </Button>
+                    </div>
+                } style={{ marginBottom: 16 }}>
                     <div style={{ display: 'flex', gap: 10 }}>
                         <Form.Item name="pivotX" label="X" style={{ flex: 1, marginBottom: 0 }}>
                             <InputNumber style={{ width: '100%' }} step={0.1} precision={4} />

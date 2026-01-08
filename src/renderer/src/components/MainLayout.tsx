@@ -179,19 +179,19 @@ function prepareModelDataForSave(modelData: any): any {
         if (!node) return;
         if (node.Translation) {
             node.Translation = fixAnimVector(node.Translation);
-            if (!node.Translation || node.Translation.Keys.length === 0) {
+            if (!node.Translation || !node.Translation.Keys || node.Translation.Keys.length === 0) {
                 node.Translation = null;
             }
         }
         if (node.Rotation) {
             node.Rotation = fixAnimVector(node.Rotation);
-            if (!node.Rotation || node.Rotation.Keys.length === 0) {
+            if (!node.Rotation || !node.Rotation.Keys || node.Rotation.Keys.length === 0) {
                 node.Rotation = null;
             }
         }
         if (node.Scaling) {
             node.Scaling = fixAnimVector(node.Scaling);
-            if (!node.Scaling || node.Scaling.Keys.length === 0) {
+            if (!node.Scaling || !node.Scaling.Keys || node.Scaling.Keys.length === 0) {
                 node.Scaling = null;
             }
         }
@@ -436,6 +436,61 @@ function prepareModelDataForSave(modelData: any): any {
             if (frameFlags === 0) frameFlags = 1;
             emitter.FrameFlags = frameFlags;
 
+            // Fix SegmentColor - must be array of 3 Float32Array(3) color vectors
+            if (emitter.SegmentColor) {
+                if (Array.isArray(emitter.SegmentColor)) {
+                    emitter.SegmentColor = emitter.SegmentColor.map((color: any) => {
+                        if (color instanceof Float32Array) return color;
+                        if (Array.isArray(color)) return new Float32Array(color);
+                        if (color && typeof color === 'object') {
+                            return new Float32Array([color[0] || 1, color[1] || 1, color[2] || 1]);
+                        }
+                        return new Float32Array([1, 1, 1]); // Default white
+                    });
+                    // Ensure exactly 3 colors
+                    while (emitter.SegmentColor.length < 3) {
+                        emitter.SegmentColor.push(new Float32Array([1, 1, 1]));
+                    }
+                } else {
+                    // Invalid SegmentColor, set default
+                    emitter.SegmentColor = [
+                        new Float32Array([1, 1, 1]),
+                        new Float32Array([1, 1, 1]),
+                        new Float32Array([1, 1, 1])
+                    ];
+                }
+            }
+
+            // Fix Alpha - must be Uint8Array(3) or array of 3 numbers
+            if (emitter.Alpha) {
+                if (!(emitter.Alpha instanceof Uint8Array)) {
+                    if (Array.isArray(emitter.Alpha)) {
+                        emitter.Alpha = new Uint8Array(emitter.Alpha);
+                    } else if (typeof emitter.Alpha === 'object') {
+                        emitter.Alpha = new Uint8Array([emitter.Alpha[0] || 255, emitter.Alpha[1] || 255, emitter.Alpha[2] || 0]);
+                    } else {
+                        emitter.Alpha = new Uint8Array([255, 255, 0]);
+                    }
+                }
+            }
+
+            // Fix ParticleScaling - must be Float32Array(3)
+            if (emitter.ParticleScaling) {
+                if (!(emitter.ParticleScaling instanceof Float32Array)) {
+                    if (Array.isArray(emitter.ParticleScaling)) {
+                        emitter.ParticleScaling = new Float32Array(emitter.ParticleScaling);
+                    } else if (typeof emitter.ParticleScaling === 'object') {
+                        emitter.ParticleScaling = new Float32Array([
+                            emitter.ParticleScaling[0] || 1,
+                            emitter.ParticleScaling[1] || 1,
+                            emitter.ParticleScaling[2] || 1
+                        ]);
+                    } else {
+                        emitter.ParticleScaling = new Float32Array([1, 1, 1]);
+                    }
+                }
+            }
+
             // console.log(`[MainLayout] ParticleEmitter2 "${emitter.Name}": Flags=${flags}, FrameFlags=${frameFlags}`);
         });
     }
@@ -482,6 +537,27 @@ function prepareModelDataForSave(modelData: any): any {
             data[arrayName].forEach((node: any) => fixNode(node));
         }
     });
+
+    // Fix Attachment-specific properties
+    if (data.Attachments && Array.isArray(data.Attachments)) {
+        data.Attachments.forEach((attachment: any) => {
+            // Ensure AttachmentID is defined
+            if (attachment.AttachmentID === undefined) {
+                attachment.AttachmentID = 0;
+            }
+            // Path must be a string (empty is fine for war3-model)
+            if (attachment.Path === undefined) {
+                attachment.Path = '';
+            }
+            // Visibility is an AnimVector - fix or remove if invalid
+            if (attachment.Visibility) {
+                attachment.Visibility = fixAnimVector(attachment.Visibility, 1);
+                if (!attachment.Visibility || !attachment.Visibility.Keys || attachment.Visibility.Keys.length === 0) {
+                    delete attachment.Visibility;
+                }
+            }
+        });
+    }
 
     // Fix Geosets - ensure TotalGroupsCount is consistent with Groups array
     if (data.Geosets && Array.isArray(data.Geosets)) {
@@ -732,6 +808,7 @@ const MainLayout: React.FC = () => {
         showCollisionShapes, setShowCollisionShapes,
         showCameras, setShowCameras,
         showLights, setShowLights,
+        showAttachments, setShowAttachments,
         renderMode, setRenderMode,
         backgroundColor, setBackgroundColor,
         teamColor, setTeamColor,
@@ -1061,6 +1138,12 @@ const MainLayout: React.FC = () => {
                 case '4': setViewPreset({ type: 'back', time: Date.now() }); break;
                 case '5': setViewPreset({ type: 'left', time: Date.now() }); break;
                 case '6': setViewPreset({ type: 'right', time: Date.now() }); break;
+                // Vertex visibility toggle
+                case 'v': {
+                    const { showVertices, setShowVertices } = useRendererStore.getState();
+                    setShowVertices(!showVertices);
+                    break;
+                }
             }
         }
         window.addEventListener('keydown', handleKeyDown)
@@ -1721,6 +1804,11 @@ const MainLayout: React.FC = () => {
                     const newVal = !showLights
                     setShowLights(newVal)
                 }}
+                showAttachments={showAttachments}
+                onToggleAttachments={() => {
+                    const newVal = !showAttachments
+                    setShowAttachments(newVal)
+                }}
                 onSetViewPreset={(preset) => setViewPreset({ type: preset, time: Date.now() })}
                 onToggleEditor={(editor) => {
                     console.log('[MainLayout] onToggleEditor called with:', editor)
@@ -1764,6 +1852,10 @@ const MainLayout: React.FC = () => {
                 onRecalculateExtents={() => {
                     useModelStore.getState().recalculateExtents();
                     showMessage('success', '成功', '已重新计算模型顶点范围');
+                }}
+                onRepairModel={() => {
+                    useModelStore.getState().repairModel();
+                    showMessage('success', '成功', '模型修复完成');
                 }}
                 onMergeSameMaterials={async () => {
                     if (!modelData) return;
@@ -2015,6 +2107,7 @@ const MainLayout: React.FC = () => {
                                 showCollisionShapes={mainMode !== 'uv' && showCollisionShapes}
                                 showCameras={mainMode !== 'uv' && showCameras}
                                 showLights={mainMode !== 'uv' && mainMode !== 'animation' && showLights}
+                                showAttachments={mainMode !== 'uv' && showAttachments}
                                 showWireframe={mainMode !== 'uv' && renderMode === 'wireframe'}
                                 onToggleWireframe={() => setRenderMode(renderMode === 'textured' ? 'wireframe' : 'textured')}
                                 backgroundColor={backgroundColor}

@@ -251,6 +251,7 @@ interface ModelState {
     // Recalculate Actions
     recalculateExtents: () => void;
     recalculateNormals: () => void;
+    repairModel: () => void;
 
     // Renderer reload
     triggerRendererReload: () => void;
@@ -648,6 +649,32 @@ function getDefaultNodeProperties(type: NodeType): Partial<ModelNode> {
                 AmbientIntensity: 0,
                 AmbientColor: [1, 1, 1]
             };
+        case NodeType.ATTACHMENT:
+            return {
+                AttachmentID: -1, // Mark for auto-calculation in addNode
+                Path: ""
+            };
+        case NodeType.HELPER:
+            return {
+                // Helpers don't strictly need extra props, but explicit is better
+            };
+        case NodeType.EVENT_OBJECT:
+            return {
+                GlobalSequenceId: -1,
+                // Valid EventTrack structure required by writer
+                EventTrack: {
+                    LineType: 0,
+                    GlobalSeqId: null,
+                    Keys: []
+                }
+            };
+        case NodeType.COLLISION_SHAPE:
+            return {
+                Shape: 0, // Box
+                // Box needs 2 vertices (min/max) represented as [vector, vector]
+                Vertices: [[0, 0, 0], [0, 0, 0]],
+                BoundsRadius: 0
+            };
         default:
             return {};
     }
@@ -794,6 +821,20 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
             // 2. Create complete node object with defaults
             const defaults = getDefaultNodeProperties(nodePartial.type);
+
+            // Special handling for AttachmentID to ensure uniqueness
+            let attachmentId = (nodePartial as any).AttachmentID ?? (defaults as any).AttachmentID;
+            if (nodePartial.type === NodeType.ATTACHMENT && (attachmentId === undefined || attachmentId === -1 || attachmentId === 0)) {
+                const maxAttachmentId = state.nodes.reduce((max, n) => {
+                    if (n.type === NodeType.ATTACHMENT && typeof (n as any).AttachmentID === 'number') {
+                        return Math.max(max, (n as any).AttachmentID);
+                    }
+                    return max;
+                }, -1);
+                attachmentId = maxAttachmentId + 1;
+                console.log('[ModelStore] Calculated unique AttachmentID:', attachmentId);
+            }
+
             const newNode: ModelNode = {
                 ...defaults,
                 ...nodePartial,
@@ -804,6 +845,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 Rotation: nodePartial.Rotation ?? defaults.Rotation,
                 Scaling: nodePartial.Scaling ?? defaults.Scaling,
                 Visibility: nodePartial.Visibility ?? defaults.Visibility,
+                ...(nodePartial.type === NodeType.ATTACHMENT ? { AttachmentID: attachmentId } : {})
             } as ModelNode;
 
             const updatedNodes = [...state.nodes, newNode];
@@ -1275,6 +1317,45 @@ export const useModelStore = create<ModelState>((set, get) => ({
             recalculateModelNormals(state.modelData);
             // Force update
             return { modelData: { ...state.modelData }, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
+        });
+    },
+
+    repairModel: () => {
+        set((state) => {
+            if (!state.nodes || state.nodes.length === 0) return {};
+
+            console.log('[ModelStore] Starting model repair...');
+            let repairCount = 0;
+
+            // 1. Repair AttachmentIDs (Sequential starting from 0)
+            let nextAttachmentId = 0;
+            const updatedNodes = state.nodes.map(node => {
+                if (node.type === NodeType.ATTACHMENT) {
+                    const currentId = (node as any).AttachmentID;
+                    if (currentId !== nextAttachmentId) {
+                        repairCount++;
+                        return { ...node, AttachmentID: nextAttachmentId++ };
+                    }
+                    nextAttachmentId++;
+                }
+                return node;
+            });
+
+            if (repairCount > 0) {
+                // Update modelData without reordering ObjectIds (just updating properties)
+                const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[], false);
+                const correctedNodes = extractNodesFromModel(updatedModelData);
+
+                console.log(`[ModelStore] Repair complete. Fixed ${repairCount} AttachmentIDs.`);
+                return {
+                    nodes: correctedNodes,
+                    modelData: updatedModelData,
+                    rendererReloadTrigger: state.rendererReloadTrigger + 1
+                };
+            }
+
+            console.log('[ModelStore] No repairs needed.');
+            return {};
         });
     },
 

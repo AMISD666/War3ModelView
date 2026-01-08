@@ -3,8 +3,9 @@
 mod activation;
 mod mpq_manager;
 
+use base64::Engine;
 use mpq_manager::MpqManager;
-use tauri::State;
+use tauri::{ipc::Response, State};
 
 use winreg::enums::*;
 use winreg::RegKey;
@@ -55,21 +56,32 @@ fn load_mpq(path: String, state: State<MpqManager>) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn read_mpq_file(path: String, state: State<MpqManager>) -> Result<Vec<u8>, String> {
+fn read_mpq_file(path: String, state: State<'_, MpqManager>) -> Result<Response, String> {
     match state.read_file(&path) {
-        Some(data) => Ok(data),
+        Some(data) => Ok(Response::new(data)),
         None => Err(format!("File not found in MPQs: {}", path)),
     }
 }
 
 #[tauri::command]
-fn read_mpq_files_batch(paths: Vec<String>, state: State<MpqManager>) -> Vec<Option<Vec<u8>>> {
-    state.read_files_batch(&paths)
+fn read_mpq_files_batch(paths: Vec<String>, state: State<'_, MpqManager>) -> Vec<Option<String>> {
+    state
+        .read_files_batch(&paths)
+        .into_iter()
+        .map(|opt| opt.map(|data| base64::engine::general_purpose::STANDARD.encode(data)))
+        .collect()
 }
 
 #[tauri::command]
-fn read_local_files_batch(paths: Vec<String>) -> Vec<Option<Vec<u8>>> {
-    paths.iter().map(|path| std::fs::read(path).ok()).collect()
+fn read_local_files_batch(paths: Vec<String>) -> Vec<Option<String>> {
+    paths
+        .iter()
+        .map(|path| {
+            std::fs::read(path)
+                .ok()
+                .map(|data| base64::engine::general_purpose::STANDARD.encode(data))
+        })
+        .collect()
 }
 
 // ==================

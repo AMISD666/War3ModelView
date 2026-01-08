@@ -59,6 +59,7 @@ export const ViewSettingsWindow: React.FC = () => {
         showCollisionShapes, setShowCollisionShapes,
         showCameras, setShowCameras,
         showLights, setShowLights,
+        showAttachments, setShowAttachments,
         enableLighting, setEnableLighting,
         renderMode, setRenderMode,
         backgroundColor, setBackgroundColor,
@@ -339,7 +340,6 @@ export const ViewSettingsWindow: React.FC = () => {
                                 <ToggleButton checked={showGridXY} onChange={setShowGridXY} style={{ width: '90px' }}>XY网格</ToggleButton>
                                 <ToggleButton checked={showGridXZ} onChange={setShowGridXZ} style={{ width: '90px' }}>XZ网格</ToggleButton>
                                 <ToggleButton checked={showGridYZ} onChange={setShowGridYZ} style={{ width: '90px' }}>YZ网格</ToggleButton>
-                                <ToggleButton checked={showVertices} onChange={setShowVertices} style={{ width: '90px' }}>顶点</ToggleButton>
                                 <ToggleButton checked={showNodes} onChange={setShowNodes} style={{ width: '90px' }}>节点</ToggleButton>
                                 <ToggleButton checked={showSkeleton} onChange={setShowSkeleton} style={{ width: '90px' }}>骨架</ToggleButton>
                                 <ToggleButton checked={showFPS} onChange={setShowFPS} style={{ width: '90px' }}>FPS</ToggleButton>
@@ -347,6 +347,7 @@ export const ViewSettingsWindow: React.FC = () => {
                                 <ToggleButton checked={showCollisionShapes} onChange={setShowCollisionShapes} style={{ width: '90px' }}>碰撞形状</ToggleButton>
                                 <ToggleButton checked={showCameras} onChange={setShowCameras} style={{ width: '90px' }}>相机对象</ToggleButton>
                                 <ToggleButton checked={showLights} onChange={setShowLights} style={{ width: '90px' }}>灯光对象</ToggleButton>
+                                <ToggleButton checked={showAttachments} onChange={setShowAttachments} style={{ width: '90px' }}>附件点</ToggleButton>
                             </div>
                         </div>
 
@@ -419,6 +420,13 @@ export const ViewSettingsWindow: React.FC = () => {
                                     顶点细节
                                 </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
+                                    <ToggleButton
+                                        checked={showVertices}
+                                        onChange={setShowVertices}
+                                        fullWidth
+                                    >
+                                        显示顶点
+                                    </ToggleButton>
                                     <ToggleButton
                                         checked={vertexSettings.enableDepth}
                                         onChange={v => setVertexSettings({ enableDepth: v })}

@@ -34,7 +34,7 @@ export const MainLayoutNew: React.FC = () => {
     const [isResizingNodeMgr, setIsResizingNodeMgr] = useState(false);
 
     // Batch mode panel resizing
-    const [batchPanelWidth, setBatchPanelWidth] = useState(60); // percentage
+    const [batchPanelWidth, setBatchPanelWidth] = useState(50); // percentage (1:1 ratio)
     const [isResizingBatch, setIsResizingBatch] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
 

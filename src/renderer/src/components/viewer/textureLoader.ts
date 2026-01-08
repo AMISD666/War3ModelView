@@ -26,7 +26,20 @@ function normalizePath(p: string): string {
  * Check if a path looks like a standard War3 MPQ path
  */
 function isMPQPath(path: string): boolean {
-    return /^(Textures|UI|ReplaceableTextures|Units|Buildings|Doodads|Environment)[\\\/]/i.test(path)
+    return /^(Textures|UI|ReplaceableTextures|Units|Buildings|Doodads|Environment|Abilities|Characters|Objects|Splats|SpawnedEffects|SharedModels)[\\\/]/i.test(path)
+}
+
+/**
+ * Utility to decode base64 string to Uint8Array
+ */
+function base64ToUint8Array(base64: string): Uint8Array {
+    const binaryString = atob(base64)
+    const len = binaryString.length
+    const bytes = new Uint8Array(len)
+    for (let i = 0; i < len; i++) {
+        bytes[i] = binaryString.charCodeAt(i)
+    }
+    return bytes
 }
 
 /**
@@ -34,11 +47,10 @@ function isMPQPath(path: string): boolean {
  */
 export async function loadTextureFromMPQ(texturePath: string): Promise<ImageData | null> {
     try {
-        const mpqData = await invoke<number[]>('read_mpq_file', { path: texturePath })
+        const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: texturePath })
 
         if (mpqData && mpqData.length > 0) {
-            const mpqBuffer = new Uint8Array(mpqData).buffer
-            const blp = decodeBLP(mpqBuffer)
+            const blp = decodeBLP(mpqData.buffer as ArrayBuffer)
             const mipLevel0 = getBLPImageData(blp, 0)
             return new ImageData(
                 new Uint8ClampedArray(mipLevel0.data),
@@ -101,6 +113,29 @@ export function getTextureCandidatePaths(modelPath: string, texturePath: string)
     return candidates
 }
 
+/**
+ * Robustly decode a texture buffer (BLP or TGA)
+ */
+export function decodeTextureData(buffer: ArrayBuffer, path: string): ImageData | null {
+    const isTga = path.toLowerCase().endsWith('.tga');
+    try {
+        if (isTga) {
+            return decodeTGA(buffer);
+        } else {
+            const blp = decodeBLP(buffer);
+            const mip0 = getBLPImageData(blp, 0);
+            return new ImageData(
+                (mip0.data instanceof Uint8ClampedArray ? mip0.data : new Uint8ClampedArray(mip0.data)) as any,
+                mip0.width,
+                mip0.height
+            );
+        }
+    } catch (e) {
+        console.warn(`[Texture] Failed to decode ${path}:`, e);
+        return null;
+    }
+}
+
 
 /**
  * Load a texture for a model renderer
@@ -116,52 +151,19 @@ export async function loadTextureForRenderer(
     const startTime = performance.now()
     const logPrefix = `[Texture] ${texturePath}:`
 
-    // Strategy 1: Try MPQ first for standard War3 paths
-    if (isMPQPath(texturePath)) {
-        try {
-            const mpqData = await invoke<number[]>('read_mpq_file', { path: texturePath })
-            if (mpqData && mpqData.length > 0) {
-                const mpqBuffer = new Uint8Array(mpqData).buffer
-                const blp = decodeBLP(mpqBuffer)
-                const mipLevel0 = getBLPImageData(blp, 0)
-                const imageData = new ImageData(
-                    new Uint8ClampedArray(mipLevel0.data),
-                    mipLevel0.width,
-                    mipLevel0.height
-                )
-                if (renderer.setTextureImageData) {
-                    renderer.setTextureImageData(texturePath, [imageData])
-                    console.debug(`${logPrefix} Loaded from MPQ in ${(performance.now() - startTime).toFixed(1)}ms`)
-                    return true
-                }
+    // Strategy 1: Try MPQ
+    try {
+        const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: texturePath })
+        if (mpqData && mpqData.length > 0) {
+            const imageData = decodeTextureData(mpqData.buffer as ArrayBuffer, texturePath);
+            if (imageData && renderer.setTextureImageData) {
+                renderer.setTextureImageData(texturePath, [imageData])
+                console.debug(`${logPrefix} Loaded from MPQ in ${(performance.now() - startTime).toFixed(1)}ms`)
+                return true
             }
-        } catch (e) {
-            // MPQ failed silently, continue to fallback
         }
-    }
-
-    // Strategy 2: If not a standard MPQ path but might still be in MPQ, try MPQ anyway
-    if (!isMPQPath(texturePath)) {
-        try {
-            const mpqData = await invoke<number[]>('read_mpq_file', { path: texturePath })
-            if (mpqData && mpqData.length > 0) {
-                const mpqBuffer = new Uint8Array(mpqData).buffer
-                const blp = decodeBLP(mpqBuffer)
-                const mipLevel0 = getBLPImageData(blp, 0)
-                const imageData = new ImageData(
-                    new Uint8ClampedArray(mipLevel0.data),
-                    mipLevel0.width,
-                    mipLevel0.height
-                )
-                if (renderer.setTextureImageData) {
-                    renderer.setTextureImageData(texturePath, [imageData])
-                    console.debug(`${logPrefix} Loaded from MPQ (non-standard path) in ${(performance.now() - startTime).toFixed(1)}ms`)
-                    return true
-                }
-            }
-        } catch (e) {
-            // MPQ fallback failed
-        }
+    } catch (e) {
+        // MPQ failed
     }
 
     // Strategy 3: Try local file system (skip if dropped file with no real path)
@@ -346,7 +348,7 @@ function decodeTGA(buffer: ArrayBuffer): ImageData {
 /**
  * Decode a single texture to ImageData (pure data operation, can run in parallel)
  */
-async function decodeTexture(
+export async function decodeTexture(
     texturePath: string,
     modelPath: string
 ): Promise<{ path: string; imageData: ImageData | null; error?: string }> {
@@ -371,10 +373,9 @@ async function decodeTexture(
     // Strategy 1: Try MPQ first for standard War3 paths
     if (isMPQPath(texturePath)) {
         try {
-            const mpqData = await invoke<number[]>('read_mpq_file', { path: texturePath })
+            const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: texturePath })
             if (mpqData && mpqData.length > 0) {
-                const mpqBuffer = new Uint8Array(mpqData).buffer
-                const imageData = decodeBuffer(mpqBuffer, isTga)
+                const imageData = decodeBuffer(mpqData.buffer as ArrayBuffer, isTga)
                 console.debug(`[Texture] ${texturePath}: Decoded from MPQ in ${(performance.now() - startTime).toFixed(1)}ms`)
                 return { path: texturePath, imageData }
             }
@@ -386,10 +387,9 @@ async function decodeTexture(
     // Strategy 2: If not a standard MPQ path, try MPQ anyway as fallback
     if (!isMPQPath(texturePath)) {
         try {
-            const mpqData = await invoke<number[]>('read_mpq_file', { path: texturePath })
+            const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: texturePath })
             if (mpqData && mpqData.length > 0) {
-                const mpqBuffer = new Uint8Array(mpqData).buffer
-                const imageData = decodeBuffer(mpqBuffer, isTga)
+                const imageData = decodeBuffer(mpqData.buffer as ArrayBuffer, isTga)
                 console.debug(`[Texture] ${texturePath}: Decoded from MPQ (non-standard path) in ${(performance.now() - startTime).toFixed(1)}ms`)
                 return { path: texturePath, imageData }
             }
@@ -455,28 +455,28 @@ export async function loadAllTextures(
     if (mpqPaths.length > 0) {
         console.time('[Viewer] Batch MPQ Read')
         try {
-            const batchResults = await invoke<(number[] | null)[]>('read_mpq_files_batch', { paths: mpqPaths })
+            const batchResults = await invoke<(string | null)[]>('read_mpq_files_batch', { paths: mpqPaths })
             console.timeEnd('[Viewer] Batch MPQ Read')
 
             console.time('[Viewer] Batch MPQ Decode')
             for (let i = 0; i < mpqPaths.length; i++) {
                 const path = mpqPaths[i]
-                const data = batchResults[i]
-                if (data && data.length > 0) {
+                const b64Data = batchResults[i]
+                if (b64Data && b64Data.length > 0) {
                     try {
-                        const buffer = new Uint8Array(data).buffer
+                        const data = base64ToUint8Array(b64Data)
                         const isTga = path.toLowerCase().endsWith('.tga')
                         let imageData: ImageData
 
                         if (isTga) {
                             // TGA decode would need to be inlined here, but for now use fallback
-                            const blp = decodeBLP(buffer)
+                            const blp = decodeBLP(data.buffer as any)
                             const mipLevel0 = getBLPImageData(blp, 0)
-                            imageData = new ImageData(new Uint8ClampedArray(mipLevel0.data), mipLevel0.width, mipLevel0.height)
+                            imageData = new ImageData(mipLevel0.data as any, mipLevel0.width, mipLevel0.height)
                         } else {
-                            const blp = decodeBLP(buffer)
+                            const blp = decodeBLP(data.buffer as any)
                             const mipLevel0 = getBLPImageData(blp, 0)
-                            imageData = new ImageData(new Uint8ClampedArray(mipLevel0.data), mipLevel0.width, mipLevel0.height)
+                            imageData = new ImageData(mipLevel0.data as any, mipLevel0.width, mipLevel0.height)
                         }
                         decodedTextures.push({ path, imageData })
                     } catch (e) {

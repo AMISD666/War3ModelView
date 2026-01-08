@@ -3,9 +3,11 @@
  */
 
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import { EditMode, ToolMode } from '../types/store';
 
 interface UIState {
+    // ... (rest of interface remains same)
     // 窗口显示状态
     showNodeManager: boolean;
     showModelInfo: boolean;
@@ -41,67 +43,79 @@ interface UIState {
     setShowNodeManager: (visible: boolean) => void;
 }
 
-export const useUIStore = create<UIState>((set) => ({
-    // 初始窗口状态 - 默认隐藏，通过菜单打开
-    showNodeManager: true,
-    showModelInfo: false,
-    showVertexEditor: false,
-    showFaceEditor: false,
-    showNodeDialog: false,
-    showCreateNodeDialog: false,
+export const useUIStore = create<UIState>()(
+    persist(
+        (set) => ({
+            // 初始窗口状态 - 默认隐藏
+            showNodeManager: false,
+            showModelInfo: false,
+            showVertexEditor: false,
+            showFaceEditor: false,
+            showNodeDialog: false,
+            showCreateNodeDialog: false,
 
-    // 初始侧边栏状态
-    leftSiderCollapsed: false,
-    rightSiderCollapsed: false,
+            // 初始侧边栏状态
+            leftSiderCollapsed: false,
+            rightSiderCollapsed: false,
 
-    // 初始编辑模式
-    editMode: EditMode.OBJECT,
-    toolMode: ToolMode.SELECT,
+            // 初始编辑模式
+            editMode: EditMode.OBJECT,
+            toolMode: ToolMode.SELECT,
 
-    editingNodeId: null,
+            editingNodeId: null,
 
-    // 切换方法实现
-    toggleNodeManager: () => {
-        set((state) => ({ showNodeManager: !state.showNodeManager }));
-    },
+            // 切换方法实现
+            toggleNodeManager: () => {
+                set((state) => ({ showNodeManager: !state.showNodeManager }));
+            },
 
-    toggleModelInfo: () => {
-        set((state) => ({ showModelInfo: !state.showModelInfo }));
-    },
+            toggleModelInfo: () => {
+                set((state) => ({ showModelInfo: !state.showModelInfo }));
+            },
 
-    toggleVertexEditor: () => {
-        set((state) => ({ showVertexEditor: !state.showVertexEditor }));
-    },
+            toggleVertexEditor: () => {
+                set((state) => ({ showVertexEditor: !state.showVertexEditor }));
+            },
 
-    toggleFaceEditor: () => {
-        set((state) => ({ showFaceEditor: !state.showFaceEditor }));
-    },
+            toggleFaceEditor: () => {
+                set((state) => ({ showFaceEditor: !state.showFaceEditor }));
+            },
 
-    setNodeDialogVisible: (visible, nodeId) => {
-        set({ showNodeDialog: visible, editingNodeId: nodeId ?? null });
-    },
+            setNodeDialogVisible: (visible, nodeId) => {
+                set({ showNodeDialog: visible, editingNodeId: nodeId ?? null });
+            },
 
-    setCreateNodeDialogVisible: (visible) => {
-        set({ showCreateNodeDialog: visible });
-    },
+            setCreateNodeDialogVisible: (visible) => {
+                set({ showCreateNodeDialog: visible });
+            },
 
-    setLeftSiderCollapsed: (collapsed) => {
-        set({ leftSiderCollapsed: collapsed });
-    },
+            setLeftSiderCollapsed: (collapsed) => {
+                set({ leftSiderCollapsed: collapsed });
+            },
 
-    setRightSiderCollapsed: (collapsed) => {
-        set({ rightSiderCollapsed: collapsed });
-    },
+            setRightSiderCollapsed: (collapsed) => {
+                set({ rightSiderCollapsed: collapsed });
+            },
 
-    setEditMode: (mode) => {
-        set({ editMode: mode });
-    },
+            setEditMode: (mode) => {
+                set({ editMode: mode });
+            },
 
-    setToolMode: (mode) => {
-        set({ toolMode: mode });
-    },
+            setToolMode: (mode) => {
+                set({ toolMode: mode });
+            },
 
-    setShowNodeManager: (visible: boolean) => {
-        set({ showNodeManager: visible });
-    }
-}));
+            setShowNodeManager: (visible: boolean) => {
+                set({ showNodeManager: visible });
+            }
+        }),
+        {
+            name: 'ui-storage', // name of the item in the storage (must be unique)
+            partialize: (state) => ({
+                showNodeManager: state.showNodeManager,
+                leftSiderCollapsed: state.leftSiderCollapsed,
+                rightSiderCollapsed: state.rightSiderCollapsed
+            }),
+        }
+    )
+);

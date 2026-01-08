@@ -39,6 +39,7 @@ import { UpdateKeyframeCommand, KeyframeChange } from '../commands/UpdateKeyfram
 import { MissingTextureWarning } from './MissingTextureWarning'
 import { GeosetSeparateDialog } from './modals/GeosetSeparateDialog'
 import { LayerConfig, layerConfigToMaterialLayer } from './modals/MaterialLayerOptions'
+import { NodeType } from '../types/node'
 
 // Singleton loop counter to prevent runaway FPS
 let globalRenderLoopId = 0
@@ -59,6 +60,7 @@ interface ViewerProps {
   showCollisionShapes: boolean
   showCameras: boolean
   showLights: boolean
+  showAttachments?: boolean
   showWireframe: boolean
   isPlaying: boolean
   onTogglePlay: () => void
@@ -81,6 +83,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   showCollisionShapes,
   showCameras,
   showLights,
+  showAttachments,
   showWireframe,
   isPlaying,
   onTogglePlay,
@@ -120,6 +123,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const showCollisionShapesRef = useRef(showCollisionShapes)
   const showCamerasRef = useRef(showCameras)
   const showLightsRef = useRef(showLights)
+  const showAttachmentsRef = useRef(showAttachments)
   const showWireframeRef = useRef(showWireframe)
   const isPlayingRef = useRef(isPlaying)
   const playbackSpeedRef = useRef(playbackSpeed)
@@ -153,6 +157,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     showCollisionShapesRef.current = showCollisionShapes
     showCamerasRef.current = showCameras
     showLightsRef.current = showLights
+    showAttachmentsRef.current = !!showAttachments
     showWireframeRef.current = showWireframe
     isPlayingRef.current = isPlaying
     playbackSpeedRef.current = playbackSpeed
@@ -162,7 +167,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     const state = useRendererStore.getState()
     showVerticesRef.current = state.showVertices
     vertexSettingsRef.current = state.vertexSettings
-  }, [showGrid, showNodes, showSkeleton, showCollisionShapes, showCameras, showLights, showWireframe, isPlaying, playbackSpeed, backgroundColor,
+  }, [showGrid, showNodes, showSkeleton, showCollisionShapes, showCameras, showLights, showAttachments, showWireframe, isPlaying, playbackSpeed, backgroundColor,
     // Add implicit dependencies if they result in re-render, otherwise we rely on the loop checking refs.
     // Actually, we should subscribe or just use .getState() in the loop for low-frequency changes?
     // Refs are better for avoiding loop capturing stale closures.
@@ -387,11 +392,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
     const loadTexture = async (path: string, id: number) => {
       try {
-        const mpqData = await invoke<number[]>('read_mpq_file', { path }).catch(() => null)
+        const mpqData = await invoke<Uint8Array>('read_mpq_file', { path }).catch(() => null)
 
-        if (mpqData) {
-          const buffer = new Uint8Array(mpqData)
-          const blp = decodeBLP(buffer.buffer)
+        if (mpqData && mpqData.length > 0) {
+          const blp = decodeBLP(mpqData.buffer as any)
           const imageData = getBLPImageData(blp, 0)
 
           const texCanvas = document.createElement('canvas')
@@ -861,8 +865,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
     // Box Selection behavior:
     // - View mode: 左键直接旋转摄像机，不进行框选
+    // - Batch mode: 同view mode，左键旋转摄像机
     // - Other modes: 左键框选，Alt+左键旋转摄像机
-    const shouldStartBoxSelection = e.button === 0 && !e.altKey && mainMode !== 'view'
+    const shouldStartBoxSelection = e.button === 0 && !e.altKey && mainMode !== 'view' && mainMode !== 'batch'
 
     if (shouldStartBoxSelection) {
       if (cameraRef.current) cameraRef.current.enabled = false
@@ -2461,6 +2466,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             }
           }
 
+
+
           if (mdlRenderer.rendererData && mdlRenderer.rendererData.animationInfo) {
             const info = mdlRenderer.rendererData.animationInfo
             const current = mdlRenderer.rendererData.frame
@@ -2544,6 +2551,46 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                   )
                 }
               })
+            }
+
+            // === Attachment Point Rendering (Moved AFTER main scene to handle depth/overlay) ===
+            if (showAttachmentsRef.current && (mdlRenderer as any).gl && mdlRenderer.rendererData?.nodes) {
+              const gl = (mdlRenderer as any).gl;
+              // Filter nodes that are attachments
+              const attachmentNodes = (mdlRenderer.rendererData.nodes as any[]).filter((n: any) =>
+                n.node.type === NodeType.ATTACHMENT ||
+                n.node.type === 'Attachment' ||
+                n.node.AttachmentID !== undefined ||
+                n.node.hasOwnProperty('AttachmentID')
+              );
+
+              if (attachmentNodes.length > 0) {
+                const attachmentPositions: number[] = [];
+                const tempPos = vec3.create();
+
+                attachmentNodes.forEach((nodeWrapper: any) => {
+                  const matrix = nodeWrapper.matrix || nodeWrapper.worldMatrix;
+                  // Handle potential differences in property capitalization
+                  const pivot = nodeWrapper.node.PivotPoint || nodeWrapper.node.pivot || [0, 0, 0];
+
+                  if (matrix) {
+                    vec3.transformMat4(tempPos, pivot as vec3, matrix);
+                    attachmentPositions.push(tempPos[0], tempPos[1], tempPos[2]);
+                  }
+                });
+
+                if (attachmentPositions.length > 0) {
+                  debugRenderer.current.renderSolidTetrahedrons(
+                    gl,
+                    mvMatrix,
+                    pMatrix,
+                    attachmentPositions,
+                    1.5, // Scale down further
+                    [1.0, 1.0, 0.0, 1.0], // Yellow
+                    false // Disable depth test so points are always visible
+                  );
+                }
+              }
             }
 
             // Restore original geoset alphas
@@ -2677,7 +2724,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                       boundVerticesCache.current = { boneId: selectedId, vertices: boundVertices }
                     }
 
-                    if (boundVertices.length > 0) {
+                    if (boundVertices.length > 0 && showVerticesRef.current) {
                       gl.disable(gl.DEPTH_TEST) // Make them visible through model
                       debugRenderer.current.renderBoneVertices(
                         gl as WebGLRenderingContext,
@@ -2699,6 +2746,15 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 selectedNodeIds,
                 parentOfSelected,
                 childrenOfSelected
+              )
+
+              // Render attachment nodes as yellow tetrahedrons
+              debugRenderer.current.renderAttachmentNodes(
+                gl as WebGLRenderingContext,
+                mvMatrix,
+                pMatrix,
+                mdlRenderer.rendererData.nodes as any,
+                selectedNodeIds
               )
             }
 
@@ -2811,25 +2867,27 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             // 选中顶点只改变颜色，大小和普通顶点一样
             const selectedPointSize = basePointSize
 
-            // Render all visible geoset vertices
-            for (let geosetIndex = 0; geosetIndex < mdlRenderer.model.Geosets.length; geosetIndex++) {
-              const geoset = mdlRenderer.model.Geosets[geosetIndex]
-              if (!geoset.Vertices) continue
+            // Render all visible geoset vertices (only if show vertices is enabled)
+            if (showVerticesRef.current) {
+              for (let geosetIndex = 0; geosetIndex < mdlRenderer.model.Geosets.length; geosetIndex++) {
+                const geoset = mdlRenderer.model.Geosets[geosetIndex]
+                if (!geoset.Vertices) continue
 
-              // Skip hidden geosets (based on hiddenGeosetIds from modelStore)
-              if (hiddenGeosetIds.includes(geosetIndex) && !forceShowAllGeosets) continue
+                // Skip hidden geosets (based on hiddenGeosetIds from modelStore)
+                if (hiddenGeosetIds.includes(geosetIndex) && !forceShowAllGeosets) continue
 
-              // Use different color for hovered geoset vertices
-              if (hoveredGeosetId === geosetIndex) {
-                // Hovered geoset: use hover color from settings
-                debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, geoset.Vertices, [...hoverColorRgb, 1], hoverPointSize, vertexSettingsRef.current.enableDepth)
-              } else {
-                // Normal geoset: use vertex color from settings
-                debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, geoset.Vertices, [...vertexColorRgb, 0.8], basePointSize, vertexSettingsRef.current.enableDepth)
+                // Use different color for hovered geoset vertices
+                if (hoveredGeosetId === geosetIndex) {
+                  // Hovered geoset: use hover color from settings
+                  debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, geoset.Vertices, [...hoverColorRgb, 1], hoverPointSize, vertexSettingsRef.current.enableDepth)
+                } else {
+                  // Normal geoset: use vertex color from settings
+                  debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, geoset.Vertices, [...vertexColorRgb, 0.8], basePointSize, vertexSettingsRef.current.enableDepth)
+                }
               }
             }
 
-            if (selectedVertexIds.length > 0) {
+            if (selectedVertexIds.length > 0 && showVerticesRef.current) {
               const selectedPositions: number[] = []
 
               if (geometrySubMode === 'group') {

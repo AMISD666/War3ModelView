@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Button, Typography, Tooltip, Popconfirm, Select } from 'antd';
 import { DeleteOutlined, FileImageOutlined } from '@ant-design/icons';
 import { AnimatedPreview } from './AnimatedPreview';
+import { thumbnailEventBus } from './ThumbnailEventBus';
 
 const { Text } = Typography;
 
@@ -13,38 +14,80 @@ interface ModelFile {
 
 interface ModelCardProps {
     file: ModelFile;
-    thumbnail?: string;
-    animations?: string[];
-    selectedAnimation?: string;
+    initialAnimations?: string[];
+    initialSelectedAnimation?: string;
     isSelected?: boolean;
     onDelete: (file: ModelFile) => void;
     onEditTexture: (file: ModelFile) => void;
     onAnimationChange?: (file: ModelFile, animation: string) => void;
     onSelect?: (file: ModelFile) => void;
+    onVisibilityChange?: (fullPath: string, isVisible: boolean) => void;
 }
 
-export const ModelCard: React.FC<ModelCardProps> = ({
+export const ModelCard: React.FC<ModelCardProps> = React.memo(({
     file,
-    thumbnail,
-    animations = [],
-    selectedAnimation,
+    initialAnimations = [],
+    initialSelectedAnimation,
     isSelected = false,
     onDelete,
     onEditTexture,
     onAnimationChange,
-    onSelect
+    onSelect,
+    onVisibilityChange
 }) => {
+    const [bitmap, setBitmap] = useState<ImageBitmap | null>(thumbnailEventBus.getBitmap(file.fullPath) || null);
+    const [animations, setAnimations] = useState<string[]>(initialAnimations);
+    const [selectedAnimation, setSelectedAnimation] = useState<string | undefined>(initialSelectedAnimation);
+    const cardRef = useRef<HTMLDivElement>(null);
+
+    // 1. Subscribe to Thumbnail Updates (Bypass parent re-render)
+    useEffect(() => {
+        const handleUpdate = (newBitmap: ImageBitmap) => {
+            setBitmap(newBitmap);
+        };
+        const handleAnims = (newAnims: string[]) => {
+            setAnimations(newAnims);
+            if (!selectedAnimation && newAnims.length > 0) {
+                setSelectedAnimation(newAnims[0]);
+            }
+        };
+
+        thumbnailEventBus.on(`update:${file.fullPath}`, handleUpdate);
+        thumbnailEventBus.on(`animations:${file.fullPath}`, handleAnims);
+
+        return () => {
+            thumbnailEventBus.off(`update:${file.fullPath}`, handleUpdate);
+            thumbnailEventBus.off(`animations:${file.fullPath}`, handleAnims);
+        };
+    }, [file.fullPath, selectedAnimation]);
+
+    // 2. Visibility Tracking (Intersection Observer)
+    useEffect(() => {
+        if (!cardRef.current || !onVisibilityChange) return;
+
+        const observer = new IntersectionObserver(
+            ([entry]) => {
+                onVisibilityChange(file.fullPath, entry.isIntersecting);
+            },
+            { threshold: 0.1 }
+        );
+
+        observer.observe(cardRef.current);
+        return () => observer.disconnect();
+    }, [file.fullPath, onVisibilityChange]);
+
     return (
         <div
+            ref={cardRef}
             style={{
                 position: 'relative',
                 background: '#1a1a1a',
                 border: isSelected ? '2px solid #1677ff' : '1px solid #333',
                 borderRadius: 8,
-                padding: 8,
+                padding: 4,
                 display: 'flex',
                 flexDirection: 'column',
-                gap: 8,
+                gap: 4,
                 transition: 'all 0.2s',
                 height: 'fit-content',
                 cursor: 'pointer',
@@ -63,27 +106,10 @@ export const ModelCard: React.FC<ModelCardProps> = ({
                 overflow: 'hidden',
                 position: 'relative'
             }}>
-                {/* NOTE: AnimatedPreview is temporarily disabled.
-                    The war3-model library uses shared global state for WebGL resources.
-                    Creating multiple ModelRenderer instances (main viewer + preview) corrupts
-                    the shared state and causes 'bindTexture: object does not belong to this context' errors.
-                    Using static thumbnails until a proper isolation solution is implemented. */}
-                {thumbnail ? (
-                    <img
-                        src={thumbnail}
-                        alt={file.name}
-                        style={{
-                            width: '100%',
-                            height: '100%',
-                            objectFit: 'contain',
-                            border: isSelected ? '2px solid #1677ff' : 'none',
-                            boxSizing: 'border-box'
-                        }}
-                        draggable={false}
-                    />
-                ) : (
-                    <div style={{ fontSize: 24, color: '#666', fontWeight: 'bold' }}>MDX</div>
-                )}
+                <AnimatedPreview
+                    bitmap={bitmap}
+                    isSelected={isSelected}
+                />
 
                 {/* Overlay Buttons */}
                 <div className="card-actions" style={{
@@ -129,9 +155,10 @@ export const ModelCard: React.FC<ModelCardProps> = ({
                 ellipsis={{ tooltip: file.name }}
                 style={{
                     textAlign: 'center',
-                    fontSize: 12,
+                    fontSize: 11,
                     width: '100%',
-                    color: '#ccc'
+                    color: '#ccc',
+                    padding: '0 2px'
                 }}
             >
                 {file.name}
@@ -143,7 +170,10 @@ export const ModelCard: React.FC<ModelCardProps> = ({
                     size="small"
                     placeholder="选择动画"
                     value={selectedAnimation}
-                    onChange={(value) => onAnimationChange?.(file, value)}
+                    onChange={(value) => {
+                        setSelectedAnimation(value);
+                        onAnimationChange?.(file, value);
+                    }}
                     style={{ width: '100%' }}
                     options={animations.map(anim => ({ label: anim, value: anim }))}
                     onClick={(e) => e.stopPropagation()}
@@ -162,4 +192,4 @@ export const ModelCard: React.FC<ModelCardProps> = ({
             `}</style>
         </div>
     );
-};
+});
