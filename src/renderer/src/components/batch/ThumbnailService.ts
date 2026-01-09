@@ -9,6 +9,7 @@ import { parseMDX, parseMDL, decodeBLP, getBLPImageData } from 'war3-model';
 import { readFile } from '@tauri-apps/plugin-fs';
 import { invoke } from '@tauri-apps/api/core';
 import { decodeTexture, decodeTextureData } from '../viewer/textureLoader';
+import { useRendererStore } from '../../store/rendererStore';
 
 // We import the worker using Vite's ?worker suffix
 // @ts-ignore
@@ -29,11 +30,17 @@ class ThumbnailService {
     private workerModelCache: string[][] = []; // Per-worker LRU cache (array of paths)
     private workerCount = 12;
     private teamColorData: Record<number, ImageData> = {};
+    private teamColorsLoaded = false;
+    private teamColorsLoading: Promise<void> | null = null;
     private workerTimeouts: (ReturnType<typeof setTimeout> | null)[] = [];
     private readonly CACHE_LIMIT = 64; // Increased limit for robust paging
 
     constructor() {
-        this.initTeamColors();
+        useRendererStore.subscribe((state) => {
+            if (state.mpqLoaded) {
+                void this.ensureTeamColorsLoaded();
+            }
+        });
         for (let i = 0; i < this.workerCount; i++) {
             const worker = new ThumbnailWorker();
             this.workers.push(worker);
@@ -131,6 +138,24 @@ class ThumbnailService {
         return new ImageData(data, size, size);
     }
 
+    private async ensureTeamColorsLoaded() {
+        if (this.teamColorsLoaded) return;
+        if (!useRendererStore.getState().mpqLoaded) return;
+
+        if (this.teamColorsLoading) {
+            await this.teamColorsLoading;
+            return;
+        }
+
+        this.teamColorsLoading = this.initTeamColors();
+        try {
+            await this.teamColorsLoading;
+            this.teamColorsLoaded = true;
+        } finally {
+            this.teamColorsLoading = null;
+        }
+    }
+
     private async initTeamColors() {
         const colors = [
             { id: 1, path: 'ReplaceableTextures\\TeamColor\\TeamColor00.blp' },
@@ -180,6 +205,7 @@ class ThumbnailService {
         frame: number = 0,
         sequenceIndex: number = 0
     ): Promise<RenderResult> {
+        await this.ensureTeamColorsLoaded();
         const workerIndex = this.getAvailableWorkerIndex();
         if (workerIndex === -1 || this.callbacks.has(fullPath)) return { bitmap: null as any, status: 'busy' };
 

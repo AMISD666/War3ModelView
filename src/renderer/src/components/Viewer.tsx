@@ -1919,8 +1919,18 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
       // Load textures using concurrent loader
       console.log('[Viewer] Step 6: Loading textures...')
-      await loadAllTextures(model, newRenderer, path)
+      const textureResults = await loadAllTextures(model, newRenderer, path)
       console.log('[Viewer] Step 6: Textures loaded')
+
+      // Keep missing texture warning in sync after a full reload
+      const missingPaths = textureResults
+        .filter(r => {
+          if (!r.loaded) return true
+          const ext = r.path.split('.').pop()?.toLowerCase()
+          return ext !== 'blp' && ext !== 'tga'
+        })
+        .map(r => r.path)
+      useRendererStore.getState().setMissingTextures(missingPaths)
 
       console.log('[Viewer] Step 7: Loading team color textures...')
       loadTeamColorTextures(teamColor)

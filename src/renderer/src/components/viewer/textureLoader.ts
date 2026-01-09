@@ -25,8 +25,34 @@ function normalizePath(p: string): string {
 /**
  * Check if a path looks like a standard War3 MPQ path
  */
-function isMPQPath(path: string): boolean {
-    return /^(Textures|UI|ReplaceableTextures|Units|Buildings|Doodads|Environment|Abilities|Characters|Objects|Splats|SpawnedEffects|SharedModels)[\\\/]/i.test(path)
+const MPQ_PATH_PREFIXES = [
+    'Abilities',
+    'BattleNet',
+    'Buildings',
+    'Characters',
+    'Doodads',
+    'Environment',
+    'Font',
+    'Fonts',
+    'Maps',
+    'Objects',
+    'PathTextures',
+    'ReplaceableTextures',
+    'Scripts',
+    'SharedModels',
+    'Sound',
+    'Splats',
+    'SpawnedEffects',
+    'TerrainArt',
+    'Textures',
+    'UI',
+    'Units',
+]
+
+const MPQ_PATH_REGEX = new RegExp(`^(${MPQ_PATH_PREFIXES.join('|')})[\\\\/]`, 'i')
+
+export function isMPQPath(path: string): boolean {
+    return MPQ_PATH_REGEX.test(path)
 }
 
 /**
@@ -445,67 +471,67 @@ export async function loadAllTextures(
         return results
     }
 
-    // OPTIMIZATION: Separate MPQ paths from local paths
-    const mpqPaths = texturePaths.filter((p: string) => isMPQPath(p))
-    const otherPaths = texturePaths.filter((p: string) => !isMPQPath(p))
-
-    const decodedTextures: { path: string; imageData: ImageData | null; error?: string }[] = []
+    const decodedTextures = new Map<string, { path: string; imageData: ImageData | null; error?: string }>()
+    const missingPaths: string[] = []
 
     // Phase 1a: Batch load MPQ textures in single IPC call
-    if (mpqPaths.length > 0) {
+    if (texturePaths.length > 0) {
         console.time('[Viewer] Batch MPQ Read')
         try {
-            const batchResults = await invoke<(string | null)[]>('read_mpq_files_batch', { paths: mpqPaths })
+            const batchResults = await invoke<(string | null)[]>('read_mpq_files_batch', { paths: texturePaths })
             console.timeEnd('[Viewer] Batch MPQ Read')
 
             console.time('[Viewer] Batch MPQ Decode')
-            for (let i = 0; i < mpqPaths.length; i++) {
-                const path = mpqPaths[i]
+            for (let i = 0; i < texturePaths.length; i++) {
+                const path = texturePaths[i]
                 const b64Data = batchResults[i]
                 if (b64Data && b64Data.length > 0) {
                     try {
                         const data = base64ToUint8Array(b64Data)
-                        const isTga = path.toLowerCase().endsWith('.tga')
-                        let imageData: ImageData
-
-                        if (isTga) {
-                            // TGA decode would need to be inlined here, but for now use fallback
-                            const blp = decodeBLP(data.buffer as any)
-                            const mipLevel0 = getBLPImageData(blp, 0)
-                            imageData = new ImageData(mipLevel0.data as any, mipLevel0.width, mipLevel0.height)
+                        const imageData = decodeTextureData(data.buffer as ArrayBuffer, path)
+                        if (imageData) {
+                            decodedTextures.set(path, { path, imageData })
                         } else {
-                            const blp = decodeBLP(data.buffer as any)
-                            const mipLevel0 = getBLPImageData(blp, 0)
-                            imageData = new ImageData(mipLevel0.data as any, mipLevel0.width, mipLevel0.height)
+                            decodedTextures.set(path, { path, imageData: null, error: 'Decode failed' })
+                            missingPaths.push(path)
                         }
-                        decodedTextures.push({ path, imageData })
                     } catch (e) {
-                        decodedTextures.push({ path, imageData: null, error: 'Decode failed' })
+                        decodedTextures.set(path, { path, imageData: null, error: 'Decode failed' })
+                        missingPaths.push(path)
                     }
                 } else {
-                    decodedTextures.push({ path, imageData: null, error: 'Not found in MPQ' })
+                    decodedTextures.set(path, { path, imageData: null, error: 'Not found in MPQ' })
+                    missingPaths.push(path)
                 }
             }
             console.timeEnd('[Viewer] Batch MPQ Decode')
         } catch (e) {
             console.error('[Viewer] Batch MPQ read failed:', e)
-            // Fallback: add all as failed
-            mpqPaths.forEach((path: string) => decodedTextures.push({ path, imageData: null, error: 'Batch read failed' }))
+            // Fallback: mark all for local FS fallback
+            texturePaths.forEach((path: string) => {
+                decodedTextures.set(path, { path, imageData: null, error: 'Batch read failed' })
+                missingPaths.push(path)
+            })
         }
     }
 
-    // Phase 1b: Load other textures (non-MPQ paths) in parallel
-    if (otherPaths.length > 0) {
+    // Phase 1b: Load missing textures from local file system in parallel
+    if (missingPaths.length > 0) {
         console.time('[Viewer] Non-MPQ Texture Load')
-        const otherPromises = otherPaths.map((path: string) => decodeTexture(path, modelPath))
-        const otherResults = await Promise.all(otherPromises)
-        decodedTextures.push(...otherResults)
+        const otherResults = await Promise.all(missingPaths.map((path: string) => decodeTexture(path, modelPath)))
+        for (const result of otherResults) {
+            if (result.imageData) {
+                decodedTextures.set(result.path, result)
+            } else if (!decodedTextures.has(result.path)) {
+                decodedTextures.set(result.path, result)
+            }
+        }
         console.timeEnd('[Viewer] Non-MPQ Texture Load')
     }
 
     // Phase 2: Upload to WebGL SEQUENTIALLY (WebGL state is not thread-safe)
     console.time('[Viewer] Texture Upload (Sequential)')
-    for (const decoded of decodedTextures) {
+    for (const decoded of decodedTextures.values()) {
         if (decoded.imageData && renderer.setTextureImageData) {
             renderer.setTextureImageData(decoded.path, [decoded.imageData])
             results.push({ path: decoded.path, loaded: true })
@@ -516,7 +542,7 @@ export async function loadAllTextures(
     console.timeEnd('[Viewer] Texture Upload (Sequential)')
 
     // Log to production CMD window
-    const textureResults = decodedTextures.map((d) => ({
+    const textureResults = Array.from(decodedTextures.values()).map((d) => ({
         path: d.path,
         loaded: d.imageData !== null,
         time: undefined

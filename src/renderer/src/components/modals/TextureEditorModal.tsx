@@ -6,10 +6,10 @@ import { PlusOutlined, DeleteOutlined, FolderOpenOutlined, DatabaseOutlined } fr
 import { useSelectionStore } from '../../store/selectionStore'
 
 import { useModelStore } from '../../store/modelStore'
-import { decodeBLP, getBLPImageData } from 'war3-model'
 import { readFile } from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
+import { decodeTextureData, isMPQPath } from '../viewer/textureLoader'
 
 const { Text } = Typography
 
@@ -28,6 +28,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
     const [previewError, setPreviewError] = useState<string | null>(null)
     const [previewSource, setPreviewSource] = useState<string | null>(null) // 'mpq' | 'file' | null
     const listRef = useRef<HTMLDivElement>(null)
+    const previewLoadIdRef = useRef(0)
 
     // Helper to scroll to selected item
     const scrollToItem = (index: number) => {
@@ -136,34 +137,23 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         return unsubscribe
     }, [visible, modelData, localTextures.length])
 
-    // Helper function to decode BLP and create canvas data URL
-    const decodeBLPToDataUrl = (buffer: ArrayBuffer): string | null => {
-        try {
-            const blp = decodeBLP(buffer)
-            const imageData = getBLPImageData(blp, 0)
-            if (imageData) {
-                const canvas = document.createElement('canvas')
-                canvas.width = imageData.width
-                canvas.height = imageData.height
-                const ctx = canvas.getContext('2d')
-                if (ctx) {
-                    const realImageData = new ImageData(
-                        new Uint8ClampedArray(imageData.data),
-                        imageData.width,
-                        imageData.height
-                    )
-                    ctx.putImageData(realImageData, 0, 0)
-                    return canvas.toDataURL()
-                }
-            }
-        } catch (e) {
-            console.error('[TextureEditor] BLP decode error:', e)
+    const imageDataToDataUrl = (imageData: ImageData): string | null => {
+        const canvas = document.createElement('canvas')
+        canvas.width = imageData.width
+        canvas.height = imageData.height
+        const ctx = canvas.getContext('2d')
+        if (ctx) {
+            ctx.putImageData(imageData, 0, 0)
+            return canvas.toDataURL()
         }
         return null
     }
 
     // Load preview when selection changes
     useEffect(() => {
+        const loadId = ++previewLoadIdRef.current
+        const isStale = () => previewLoadIdRef.current !== loadId
+
         const loadTexture = async () => {
             if (selectedIndex < 0 || !localTextures[selectedIndex]) {
                 setPreviewUrl(null)
@@ -197,6 +187,8 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
 
             const imagePath = texture.Image
             const isBlp = imagePath.toLowerCase().endsWith('.blp')
+            const isTga = imagePath.toLowerCase().endsWith('.tga')
+            const isSupported = isBlp || isTga
 
             setIsLoadingPreview(true)
             setPreviewError(null)
@@ -206,16 +198,18 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
             let loaded = false
 
             // Strategy 1: Try MPQ first for standard Warcraft 3 paths
-            const isMPQPath = /^(Textures|UI|ReplaceableTextures|Units|Buildings|Doodads|Environment)[\\\/]/i.test(imagePath)
+            const isMpqPath = isMPQPath(imagePath)
 
-            if (isMPQPath && isBlp) {
+            if (isMpqPath && isSupported) {
                 try {
-                    console.log('[TextureEditor] Trying MPQ for:', imagePath)
-                    const mpqData = await invoke<number[]>('read_mpq_file', { path: imagePath })
+                    const mpqPath = imagePath.replace(/\//g, '\\')
+                    console.log('[TextureEditor] Trying MPQ for:', mpqPath)
+                    const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: mpqPath })
+                    if (isStale()) return
 
                     if (mpqData && mpqData.length > 0) {
-                        const mpqBuffer = new Uint8Array(mpqData).buffer
-                        const dataUrl = decodeBLPToDataUrl(mpqBuffer)
+                        const imageData = decodeTextureData(mpqData.buffer as ArrayBuffer, imagePath)
+                        const dataUrl = imageData ? imageDataToDataUrl(imageData) : null
                         if (dataUrl) {
                             setPreviewUrl(dataUrl)
                             setPreviewSource('MPQ')
@@ -226,7 +220,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                 } catch (mpqError) {
                     console.log('[TextureEditor] MPQ loading failed, trying file system:', mpqError)
                 }
-                if (!loaded) {
+                if (!loaded && !isSupported) {
                     if (texture.ReplaceableId === 1) {
                         setPreviewUrl(makeSolidDataUrl(220, 60, 60))
                         setPreviewError(null)
@@ -244,7 +238,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
             }
 
             // Strategy 2: Try local file system if MPQ didn't work
-            if (!loaded && !isMPQPath && isBlp) {
+            if (!loaded && isSupported) {
                 try {
                     // Normalize path separators
                     let normalizedPath = imagePath.replace(/\//g, '\\')
@@ -262,8 +256,10 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                     console.log('[TextureEditor] Trying file system for:', fullPath)
 
                     const buffer = await readFile(fullPath)
+                    if (isStale()) return
                     if (buffer) {
-                        const dataUrl = decodeBLPToDataUrl(buffer.buffer)
+                        const imageData = decodeTextureData(buffer.buffer, imagePath)
+                        const dataUrl = imageData ? imageDataToDataUrl(imageData) : null
                         if (dataUrl) {
                             setPreviewUrl(dataUrl)
                             setPreviewSource('本地文件')
@@ -284,7 +280,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
             }
 
             // Non-BLP texture (PNG, TGA, etc.)
-            if (!loaded && !isBlp) {
+            if (!loaded && !isSupported) {
                 let fullPath = imagePath
                 const isAbsolute = /^[a-zA-Z]:/.test(imagePath)
                 if (!isAbsolute && modelPath) {
@@ -295,6 +291,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                 setPreviewSource('本地文件')
             }
 
+            if (isStale()) return
             setIsLoadingPreview(false)
         }
         loadTexture()
