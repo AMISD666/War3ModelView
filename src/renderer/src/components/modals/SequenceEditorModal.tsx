@@ -22,6 +22,7 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
     const [localSequences, setLocalSequences] = useState<any[]>([])
     const [selectedIndex, setSelectedIndex] = useState<number>(-1)
     const listRef = useRef<HTMLDivElement>(null)
+    const initializedRef = useRef(false)
 
     // Helper to scroll to selected item
     const scrollToItem = (index: number) => {
@@ -29,6 +30,15 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
             const itemHeight = 45 // Approximate height of list item
             listRef.current.scrollTop = index * itemHeight
         }
+    }
+
+    const getNextInterval = (sequences: any[]) => {
+        const maxEnd = sequences.reduce((max, seq) => {
+            const end = Array.isArray(seq.Interval) ? seq.Interval[1] : seq.Interval?.[1]
+            return Math.max(max, typeof end === 'number' ? end : 0)
+        }, 0)
+        const start = maxEnd + 1000
+        return [start, start + 2333]
     }
 
     // Deep clone that properly handles TypedArrays (converts to plain arrays)
@@ -54,18 +64,22 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
 
     // Initialize local state and sync with currentSequence
     useEffect(() => {
-        if (visible && storeSequences) {
+        if (!visible) {
+            initializedRef.current = false
+            setLocalSequences([])
+            setSelectedIndex(-1)
+            return
+        }
+        if (visible && storeSequences && !initializedRef.current) {
             setLocalSequences(deepCloneSequences(storeSequences))
-            // Sync with currentSequence from store
+            // Sync with currentSequence from store on first open only.
             if (currentSequence >= 0 && currentSequence < storeSequences.length) {
                 setSelectedIndex(currentSequence)
                 setTimeout(() => scrollToItem(currentSequence), 0)
             } else {
                 setSelectedIndex(storeSequences.length > 0 ? 0 : -1)
             }
-        } else if (visible) {
-            setLocalSequences([])
-            setSelectedIndex(-1)
+            initializedRef.current = true
         }
     }, [visible, storeSequences, currentSequence])
 
@@ -129,9 +143,10 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
                             icon={<PlusOutlined />}
                             block
                             onClick={() => {
+                                const [start, end] = getNextInterval(localSequences)
                                 const newSequence = {
-                                    Name: '新序列',
-                                    Interval: [0, 1000],
+                                    Name: 'NewSequence',
+                                    Interval: [start, end],
                                     NonLooping: 0,
                                     Rarity: 0,
                                     MoveSpeed: 0,

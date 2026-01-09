@@ -33,19 +33,23 @@ const SequenceManager: React.FC = () => {
         setPlaying(!isEditingMode)
     }
 
+    const getNextInterval = () => {
+        const maxEnd = (sequences || []).reduce((max, seq) => {
+            const end = Array.isArray(seq.Interval) ? seq.Interval[1] : seq.Interval?.[1];
+            return Math.max(max, typeof end === 'number' ? end : 0);
+        }, 0);
+        const start = maxEnd + 1000;
+        return [start, start + 2333];
+    };
+
     const handleAdd = () => {
         setEditingIndex(null)
         form.resetFields()
-        // 计算新序列的默认区间
-        let newStart = 0
-        if (sequences && sequences.length > 0) {
-            const lastSeq = sequences[sequences.length - 1]
-            newStart = lastSeq.Interval[1] + 100
-        }
+        const [newStart, newEnd] = getNextInterval()
         form.setFieldsValue({
             Name: 'Stand',
             Start: newStart,
-            End: newStart + 1000,
+            End: newEnd,
             Rarity: 0,
             MoveSpeed: 0,
             NonLooping: false

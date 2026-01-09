@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Form, InputNumber, Checkbox, Select, ColorPicker, Button } from 'antd';
+import { Form, InputNumber, Checkbox, Select, ColorPicker, Button, Input } from 'antd';
 
 import { DraggableModal } from '../DraggableModal';
 import KeyframeEditor from '../editors/KeyframeEditor';
@@ -24,6 +24,22 @@ const PROP_TO_ANIM_KEY: Record<string, string> = {
     Length: 'LengthAnim',
     Gravity: 'GravityAnim',
     Visibility: 'VisibilityAnim'
+};
+
+const isAnimVector = (val: any): boolean => {
+    return val && typeof val === 'object' && Array.isArray(val.Keys);
+};
+
+const getStaticValue = (val: any, defaultVal: number = 0): number => {
+    if (isAnimVector(val)) {
+        const firstKey = val.Keys?.[0];
+        const vec = firstKey?.Vector ?? firstKey?.Value;
+        if (Array.isArray(vec)) {
+            return Number(vec[0] ?? defaultVal);
+        }
+        return Number(vec ?? defaultVal);
+    }
+    return Number(val ?? defaultVal);
 };
 
 const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible, nodeId, onClose }) => {
@@ -150,7 +166,14 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
                     ...defaults,
                     ...currentNode,
                     // Ensure Visibility always has a value (currentNode may have undefined)
-                    Visibility: currentNode.Visibility ?? defaults.Visibility,
+                    Visibility: getStaticValue((currentNode as any).Visibility, defaults.Visibility),
+                    EmissionRate: getStaticValue((currentNode as any).EmissionRate, defaults.EmissionRate),
+                    Speed: getStaticValue((currentNode as any).Speed, defaults.Speed),
+                    Variation: getStaticValue((currentNode as any).Variation, defaults.Variation),
+                    Latitude: getStaticValue((currentNode as any).Latitude, defaults.Latitude),
+                    Width: getStaticValue((currentNode as any).Width, defaults.Width),
+                    Length: getStaticValue((currentNode as any).Length, defaults.Length),
+                    Gravity: getStaticValue((currentNode as any).Gravity, defaults.Gravity),
                     // Override complex types
                     Seg1Color: toAntdColor(currentNode.SegmentColor?.[0]),
                     Seg1Alpha: currentNode.Alpha?.[0] ?? defaults.Seg1Alpha,
@@ -181,8 +204,12 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
 
                 // Load existing animation data
                 Object.entries(PROP_TO_ANIM_KEY).forEach(([propName, animKey]) => {
+                    const value = (currentNode as any)[propName];
+                    if (isAnimVector(value)) {
+                        newAnimDataMap[propName] = value;
+                    }
                     const animData = (currentNode as any)[animKey];
-                    if (animData) {
+                    if (isAnimVector(animData)) {
                         newAnimDataMap[propName] = animData;
                     }
                 });
@@ -200,14 +227,6 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
 
             const updatedNode: ParticleEmitter2Node = {
                 ...currentNode,
-                EmissionRate: Number(values.EmissionRate),
-                Speed: Number(values.Speed),
-                Variation: Number(values.Variation),
-                Latitude: Number(values.Latitude),
-                Width: Number(values.Width),
-                Length: Number(values.Length),
-                Gravity: Number(values.Gravity),
-
                 TextureID: Number(values.TextureID),
                 FilterMode: values.FilterMode,
                 Rows: Number(values.Rows),
@@ -241,8 +260,34 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
                 Squirt: values.Squirt,
                 Head: values.Head,
                 Tail: values.Tail,
-                Visibility: Number(values.Visibility),  // 添加可见度保存
+                Visibility: Number(values.Visibility),
             };
+
+            const dynamicProps: Array<{ prop: string }> = [
+                { prop: 'EmissionRate' },
+                { prop: 'Speed' },
+                { prop: 'Variation' },
+                { prop: 'Latitude' },
+                { prop: 'Width' },
+                { prop: 'Length' },
+                { prop: 'Gravity' },
+                { prop: 'Visibility' }
+            ];
+
+            dynamicProps.forEach(({ prop }) => {
+                const animKey = PROP_TO_ANIM_KEY[prop];
+                if (animDataMap[prop]) {
+                    (updatedNode as any)[prop] = animDataMap[prop];
+                    if (animKey) {
+                        (updatedNode as any)[animKey] = animDataMap[prop];
+                    }
+                } else {
+                    (updatedNode as any)[prop] = Number(values[prop]);
+                    if (animKey) {
+                        delete (updatedNode as any)[animKey];
+                    }
+                }
+            });
 
             // Merge Animation Data
             Object.entries(PROP_TO_ANIM_KEY).forEach(([propName, animKey]) => {
@@ -424,15 +469,49 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
         </div>
     );
 
+    const ColorField = ({ name }: { name: string }) => (
+        <Form.Item shouldUpdate noStyle>
+            {() => {
+                const rawValue = form.getFieldValue(name)
+                const value = typeof rawValue === 'string'
+                    ? rawValue
+                    : rawValue && typeof rawValue.toRgbString === 'function'
+                        ? rawValue.toRgbString()
+                        : 'rgb(255, 255, 255)'
+                return (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
+                        <Form.Item
+                            name={name}
+                            noStyle
+                            trigger="onChange"
+                            getValueFromEvent={(color: any) =>
+                                color && typeof color.toRgbString === 'function'
+                                    ? color.toRgbString()
+                                    : value
+                            }
+                        >
+                            <ColorPicker size="small" showText={false} format="rgb" />
+                        </Form.Item>
+                        <Input
+                            size="small"
+                            value={value}
+                            onChange={(e) => form.setFieldValue(name, e.target.value)}
+                            placeholder="rgb(255, 255, 255)"
+                            style={{ flex: 1, minWidth: 0 }}
+                        />
+                    </div>
+                )
+            }}
+        </Form.Item>
+    )
+
     // Segment Box
     const SegmentBox = ({ title, prefix }: { title: string, prefix: string }) => (
         <fieldset style={{ border: '1px solid #484848', padding: '10px 8px 6px', margin: 0, marginTop: 8, backgroundColor: '#2b2b2b' }}>
             <legend style={{ fontSize: 12, color: '#ccc', marginLeft: 8, padding: '0 4px', width: 'auto' }}>{title}</legend>
             <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
                 <span style={{ width: 40, color: '#ccc', fontSize: 12 }}>颜色:</span>
-                <Form.Item name={`${prefix}Color`} noStyle>
-                    <ColorPicker size="small" showText format="rgb" />
-                </Form.Item>
+                <ColorField name={`${prefix}Color`} />
             </div>
             <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
                 <span style={{ width: 40, color: '#ccc', fontSize: 12 }}>透明:</span>

@@ -419,6 +419,32 @@ function prepareModelDataForSave(modelData: any): any {
     if (data.ParticleEmitters2 && Array.isArray(data.ParticleEmitters2)) {
         // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.ParticleEmitters2.length} particle emitters`);
         data.ParticleEmitters2.forEach((emitter: any) => {
+            const isAnimVector = (val: any): boolean => {
+                return val && typeof val === 'object' && Array.isArray(val.Keys);
+            };
+            const animProps: Array<{ prop: string, animKey: string }> = [
+                { prop: 'EmissionRate', animKey: 'EmissionRateAnim' },
+                { prop: 'Speed', animKey: 'SpeedAnim' },
+                { prop: 'Variation', animKey: 'VariationAnim' },
+                { prop: 'Latitude', animKey: 'LatitudeAnim' },
+                { prop: 'Width', animKey: 'WidthAnim' },
+                { prop: 'Length', animKey: 'LengthAnim' },
+                { prop: 'Gravity', animKey: 'GravityAnim' },
+                { prop: 'Visibility', animKey: 'VisibilityAnim' },
+            ];
+
+            animProps.forEach(({ prop, animKey }) => {
+                if (!emitter[prop] && emitter[animKey]) {
+                    emitter[prop] = emitter[animKey];
+                }
+                if (isAnimVector(emitter[prop])) {
+                    emitter[prop] = fixAnimVector(emitter[prop], 1);
+                }
+                if (isAnimVector(emitter[animKey])) {
+                    emitter[animKey] = fixAnimVector(emitter[animKey], 1);
+                }
+            });
+
             // Reconstruct Flags bitmask from individual boolean properties
             let flags = emitter.Flags || 0;
             if (emitter.Unshaded === true) flags |= 32768;

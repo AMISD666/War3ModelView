@@ -266,13 +266,18 @@ async function render(
     const size = vec3.distance(min, max);
     const modelSize = Math.max(size, 80);
     const fov = Math.PI / 4;
-    const finalDistance = Math.max((modelSize / 2) / Math.tan(fov / 2) / 0.85, 50);
+    const finalDistance = Math.max((modelSize / 2) / Math.tan(fov / 2) / 0.95, 50);
 
-    // Front-facing portrait view
+    // Elevated 45-degree-ish view with slightly closer framing
+    const baseOffsetX = finalDistance * 0.2;
+    const baseOffsetY = -finalDistance * 0.8;
+    const zRotate = 55 * Math.PI / 180;
+    const rotOffsetX = baseOffsetX * Math.cos(zRotate) - baseOffsetY * Math.sin(zRotate);
+    const rotOffsetY = baseOffsetX * Math.sin(zRotate) + baseOffsetY * Math.cos(zRotate);
     const cameraPos = vec3.fromValues(
-        target[0] + finalDistance * 0.3,
-        target[1] - finalDistance,
-        target[2] + finalDistance * 0.25
+        target[0] + rotOffsetX,
+        target[1] + rotOffsetY,
+        target[2] + finalDistance * 0.8
     );
 
     const pMatrix = mat4.create();

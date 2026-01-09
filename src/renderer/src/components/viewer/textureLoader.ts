@@ -114,7 +114,9 @@ export async function loadTextureFromFile(filePath: string): Promise<ImageData |
  */
 export function getTextureCandidatePaths(modelPath: string, texturePath: string): string[] {
     const textureRelPath = normalizePath(texturePath)
-    const modelDir = normalizePath(modelPath.substring(0, modelPath.lastIndexOf('\\')))
+    const normalizedModelPath = normalizePath(modelPath)
+    const lastSlash = normalizedModelPath.lastIndexOf('\\')
+    const modelDir = lastSlash >= 0 ? normalizedModelPath.substring(0, lastSlash) : normalizedModelPath
 
     const candidates: string[] = []
 

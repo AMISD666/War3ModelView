@@ -2002,7 +2002,16 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             Textures: modelData.Textures
           })
         }
-        renderer.model.ParticleEmitters2 = modelData.ParticleEmitters2 || []
+        const nextEmitters = modelData.ParticleEmitters2 || []
+        const currentEmitters = renderer.model.ParticleEmitters2 || []
+        if (currentEmitters.length === nextEmitters.length) {
+          for (let i = 0; i < nextEmitters.length; i++) {
+            Object.assign(currentEmitters[i], nextEmitters[i])
+          }
+          renderer.model.ParticleEmitters2 = currentEmitters
+        } else {
+          renderer.model.ParticleEmitters2 = nextEmitters
+        }
         console.log('[Viewer] Synced ParticleEmitters2:', renderer.model.ParticleEmitters2.length, 'emitters')
 
         // === RIBBON EMITTERS ===

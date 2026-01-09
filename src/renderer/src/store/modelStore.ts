@@ -1207,10 +1207,20 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
     // Animation Actions Implementation
     // Animation Actions Implementation
-    setSequences: (sequences) => set((state) => {
-        const updatedModelData = state.modelData ? { ...state.modelData, Sequences: sequences } : state.modelData;
-        return { sequences, modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
-    }),
+    setSequences: (sequences) => {
+        set((state) => {
+            const updatedModelData = state.modelData ? { ...state.modelData, Sequences: sequences } : state.modelData;
+            return { sequences, modelData: updatedModelData };
+        });
+        const renderer = useRendererStore.getState().renderer;
+        if (renderer?.model) {
+            renderer.model.Sequences = sequences;
+            const currentSequence = get().currentSequence;
+            if (currentSequence >= 0 && typeof (renderer as any).setSequence === 'function') {
+                (renderer as any).setSequence(currentSequence);
+            }
+        }
+    },
     setSequence: (index) => set({ currentSequence: index, currentFrame: 0 }), // Reset frame on sequence change
     setFrame: (frame) => set({ currentFrame: frame }),
     setPlaying: (playing) => set({ isPlaying: playing }),

@@ -35,10 +35,20 @@ const SequenceEditor: React.FC<SequenceEditorProps> = () => {
         setHasChanges(true)
     }
 
+    const getNextInterval = (list: any[]) => {
+        const maxEnd = list.reduce((max, seq) => {
+            const end = Array.isArray(seq.Interval) ? seq.Interval[1] : seq.Interval?.[1]
+            return Math.max(max, typeof end === 'number' ? end : 0)
+        }, 0)
+        const start = maxEnd + 1000
+        return [start, start + 2333]
+    }
+
     const handleAddSequence = () => {
+        const [start, end] = getNextInterval(sequences)
         setSequences([...sequences, {
-            Name: '新序列',
-            Interval: [0, 1000],
+            Name: 'NewSequence',
+            Interval: [start, end],
             NonLooping: 0,
             Rarity: 0,
             MoveSpeed: 0,

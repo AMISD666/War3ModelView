@@ -106,8 +106,17 @@ export function lightweightSync(renderer: any, modelData: any): void {
     // Validate particles before syncing to prevent rendering crashes
     if (modelData.ParticleEmitters2) {
         validateAllParticleEmitters(modelData)
-        renderer.model.ParticleEmitters2 = modelData.ParticleEmitters2
-        console.log('[modelSync] Synced ParticleEmitters2:', modelData.ParticleEmitters2.length, 'emitters')
+        const nextEmitters = modelData.ParticleEmitters2
+        const currentEmitters = renderer.model.ParticleEmitters2 || []
+        if (currentEmitters.length === nextEmitters.length) {
+            for (let i = 0; i < nextEmitters.length; i++) {
+                Object.assign(currentEmitters[i], nextEmitters[i])
+            }
+            renderer.model.ParticleEmitters2 = currentEmitters
+        } else {
+            renderer.model.ParticleEmitters2 = nextEmitters
+        }
+        console.log('[modelSync] Synced ParticleEmitters2:', renderer.model.ParticleEmitters2.length, 'emitters')
         // ParticlesController.syncEmitters() is called automatically in update()
     }
 
