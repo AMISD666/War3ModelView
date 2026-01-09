@@ -429,6 +429,58 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     await loadTexture(teamGlowPath, 2)
   }
 
+  const ensureRendererSequences = (model: any) => {
+    if (model?.Sequences && model.Sequences.length > 0) {
+      return { model, usedFallback: false }
+    }
+    const fallbackSequence = {
+      Name: 'Stand',
+      Interval: new Uint32Array([0, 1000]),
+      NonLooping: 1,
+      Rarity: 0,
+      MoveSpeed: 0,
+      BoundsRadius: 0
+    }
+    return {
+      model: { ...model, Sequences: [fallbackSequence] },
+      usedFallback: true
+    }
+  }
+
+  const ensureRenderNodes = (model: any) => {
+    if (model?.Nodes && model.Nodes.length > 0) {
+      return { model, usedFallback: false, defaultNodeId: model.Nodes[0].ObjectId ?? 0 }
+    }
+    const fallbackNode = {
+      Name: 'Root',
+      ObjectId: 0,
+      Parent: -1,
+      PivotPoint: new Float32Array([0, 0, 0]),
+      Flags: 0
+    }
+    return {
+      model: { ...model, Nodes: [fallbackNode] },
+      usedFallback: true,
+      defaultNodeId: 0
+    }
+  }
+
+  const ensureGeosetGroups = (model: any, defaultNodeId: number) => {
+    if (!model?.Geosets) return
+    for (const geoset of model.Geosets) {
+      const vertexCount = Math.floor((geoset?.Vertices?.length || 0) / 3)
+      if (!geoset.Groups || geoset.Groups.length === 0) {
+        geoset.Groups = [[defaultNodeId]]
+      }
+      if (!geoset.VertexGroup || geoset.VertexGroup.length !== vertexCount) {
+        geoset.VertexGroup = new Uint16Array(vertexCount)
+      }
+      if (geoset.TotalGroupsCount === undefined || geoset.TotalGroupsCount === null) {
+        geoset.TotalGroupsCount = geoset.Groups.length
+      }
+    }
+  }
+
   // Handle view presets from prop
   useEffect(() => {
     if (!viewPreset) return
@@ -500,6 +552,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   useEffect(() => {
     // Guard: Only set sequence if renderer is fully initialized
     if (renderer && renderer.rendererData) {
+      const hasSequences = !!renderer.model?.Sequences?.length
       if (appMainMode === 'geometry') {
         // Bind Pose: Set frame to the START of the current sequence's interval
         if (renderer.rendererData.animationInfo?.Interval) {
@@ -513,8 +566,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         // Restore Animation
         // Always enforce the sequence when seeking or switching modes to prevent desync
         // (e.g. Geometry mode manipulates frame directly, so we must reset state)
-        if ((renderer as any).setSequence) {
+        if (hasSequences && animationIndex >= 0 && (renderer as any).setSequence) {
           ; (renderer as any).setSequence(animationIndex)
+        } else {
+          renderer.rendererData.frame = 0
         }
       }
     }
@@ -1760,7 +1815,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       validateAllParticleEmitters(model)
 
       const rendererStart = performance.now()
-      const newRenderer = new ModelRenderer(model)
+      const { model: rendererModelWithSequences, usedFallback } = ensureRendererSequences(model)
+      const { model: rendererModel, defaultNodeId } = ensureRenderNodes(rendererModelWithSequences)
+      ensureGeosetGroups(rendererModel, defaultNodeId)
+      const newRenderer = new ModelRenderer(rendererModel)
       newRenderer.initGL(gl)
       // NOTE: setRenderer(newRenderer) is called AFTER texture loading to avoid race condition
       newRenderer.update(0)
@@ -1782,6 +1840,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       useRendererStore.getState().setMissingTextures(missingPaths)
 
       loadTeamColorTextures(teamColor)
+
+      if (usedFallback && typeof (newRenderer as any).setSequence === 'function') {
+        ; (newRenderer as any).setSequence(0)
+      }
 
       // Set renderer AFTER textures are loaded to avoid race condition
       console.log('[Viewer] loadModel: All textures loaded, setting renderer')
@@ -1895,13 +1957,16 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
       // CRITICAL FIX: Validate and fix ParticleEmitters2 before creating renderer
       // Same validation as in loadModel - prevents production-only rendering issues
+      const { model: rendererModelWithNodes, defaultNodeId } = ensureRenderNodes(model)
+      ensureGeosetGroups(rendererModelWithNodes, defaultNodeId)
       console.log('[Viewer] Step 1: Validating particles...')
       validateAllParticleEmitters(model)
       console.log('[Viewer] Step 1: Particle validation complete')
 
       console.log('[Viewer] Step 2: Creating ModelRenderer...')
       const rendererStart = performance.now()
-      const newRenderer = new ModelRenderer(model)
+      const { model: rendererModelWithSequences, usedFallback } = ensureRendererSequences(rendererModelWithNodes)
+      const newRenderer = new ModelRenderer(rendererModelWithSequences)
       console.log('[Viewer] Step 2: ModelRenderer created')
 
       console.log('[Viewer] Step 3: Initializing WebGL...')
@@ -1948,6 +2013,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       if (typeof (newRenderer as any).setSequence === 'function' && currentAnimIndex >= 0) {
         (newRenderer as any).setSequence(currentAnimIndex)
       }
+      if (usedFallback && typeof (newRenderer as any).setSequence === 'function') {
+        ; (newRenderer as any).setSequence(0)
+      }
 
       setRenderer(newRenderer)
       console.log('[Viewer] ========== FULL RELOAD COMPLETE ==========')
@@ -1984,9 +2052,15 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         }
         // === NODES ===
         // Sync Nodes array for correct node transforms - MUST do this BEFORE ParticleEmitters2
-        if (modelData.Nodes) {
+        if (modelData.Nodes && modelData.Nodes.length > 0) {
           renderer.model.Nodes = modelData.Nodes
           // Reinitialize rendererData.nodes so new nodes are accessible
+          if ((renderer as any).modelInstance && typeof (renderer as any).modelInstance.syncNodes === 'function') {
+            (renderer as any).modelInstance.syncNodes()
+          }
+        } else if (!renderer.model.Nodes || renderer.model.Nodes.length === 0) {
+          const { model: rendererModelWithNodes } = ensureRenderNodes(renderer.model)
+          renderer.model.Nodes = rendererModelWithNodes.Nodes
           if ((renderer as any).modelInstance && typeof (renderer as any).modelInstance.syncNodes === 'function') {
             (renderer as any).modelInstance.syncNodes()
           }
@@ -2167,8 +2241,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         }
 
         // === SEQUENCES ===
-        if (modelData.Sequences) {
+        if (modelData.Sequences && modelData.Sequences.length > 0) {
           renderer.model.Sequences = modelData.Sequences
+        } else if (!renderer.model.Sequences || renderer.model.Sequences.length === 0) {
+          renderer.model.Sequences = ensureRendererSequences(renderer.model).model.Sequences
         }
 
         // === GLOBAL SEQUENCES ===
@@ -3213,7 +3289,12 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     // NOTE: Don't require animationInfo to be set - it gets set BY setSequence!
     // Requiring it creates chicken-and-egg problem where animation never starts.
     if (renderer && renderer.rendererData && typeof (renderer as any).setSequence === 'function') {
-      ; (renderer as any).setSequence(animationIndex)
+      const hasSequences = !!renderer.model?.Sequences?.length
+      if (hasSequences && animationIndex >= 0) {
+        ; (renderer as any).setSequence(animationIndex)
+      } else {
+        renderer.rendererData.frame = 0
+      }
     }
   }, [renderer, animationIndex])
 

@@ -110,6 +110,19 @@ async function render(
 
         if (!model) throw new Error('Failed to parse model');
 
+        if (!model.Sequences || model.Sequences.length === 0) {
+            model.Sequences = [{
+                Name: 'Stand',
+                Interval: new Uint32Array([0, 1000]),
+                NonLooping: 1,
+                Rarity: 0,
+                MoveSpeed: 0,
+                BoundsRadius: 0
+            }];
+        }
+
+        const defaultNodeId = ensureRenderNodes(model);
+        ensureGeosetGroups(model, defaultNodeId);
         // Robust Validator
         validateAllParticleEmitters(model);
 
@@ -341,6 +354,36 @@ function validateAllParticleEmitters(model: any): void {
             if (Array.isArray(val)) emitter[prop] = new Uint32Array(val);
         });
     });
+}
+
+function ensureRenderNodes(model: any): number {
+    if (model?.Nodes && model.Nodes.length > 0) {
+        return model.Nodes[0].ObjectId ?? 0;
+    }
+    model.Nodes = [{
+        Name: 'Root',
+        ObjectId: 0,
+        Parent: -1,
+        PivotPoint: new Float32Array([0, 0, 0]),
+        Flags: 0
+    }];
+    return 0;
+}
+
+function ensureGeosetGroups(model: any, defaultNodeId: number): void {
+    if (!model?.Geosets) return;
+    for (const geoset of model.Geosets) {
+        const vertexCount = Math.floor(((geoset?.Vertices?.length || 0) as number) / 3);
+        if (!geoset.Groups || geoset.Groups.length === 0) {
+            geoset.Groups = [[defaultNodeId]];
+        }
+        if (!geoset.VertexGroup || geoset.VertexGroup.length !== vertexCount) {
+            geoset.VertexGroup = new Uint16Array(vertexCount);
+        }
+        if (geoset.TotalGroupsCount === undefined || geoset.TotalGroupsCount === null) {
+            geoset.TotalGroupsCount = geoset.Groups.length;
+        }
+    }
 }
 
 function toArray(v: any): number[] {
