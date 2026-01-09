@@ -3,7 +3,7 @@
  * 节点管理器窗口组件
  */
 
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useLayoutEffect } from 'react';
 import { Tree, Input, Space, Button, Tooltip, message, Modal, Menu } from 'antd';
 import {
     PlusOutlined,
@@ -45,7 +45,7 @@ import { useModelStore } from '../../store/modelStore';
 import { useSelectionStore } from '../../store/selectionStore';
 import { useUIStore } from '../../store/uiStore';
 import { NodeType } from '../../types/node';
-import { buildTreeData, filterTreeNodes, getExpandedKeys } from '../../utils/treeUtils';
+import { buildTreeData, filterTreeNodes, getExpandedKeys, getAncestorKeys } from '../../utils/treeUtils';
 import { canDeleteNode } from '../../utils/nodeUtils';
 import { RenameNodeDialog } from './RenameNodeDialog';
 import ParticleEmitter2Dialog from './ParticleEmitter2Dialog';
@@ -588,6 +588,7 @@ export const NodeManagerWindow: React.FC = () => {
     const [contextMenuVisible, setContextMenuVisible] = useState(false);
     const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 });
     const [contextMenuNodeId, setContextMenuNodeId] = useState<number | null>(null);
+    const contextMenuRef = React.useRef<HTMLDivElement>(null);
 
     const handleRightClick: TreeProps['onRightClick'] = ({ event, node }) => {
         const nodeId = parseInt(node.key as string);
@@ -596,15 +597,8 @@ export const NodeManagerWindow: React.FC = () => {
         // Auto-select the node on right click
         selectNode(nodeId);
 
-        let x = event.clientX;
-        let y = event.clientY;
-
-        // Adjust menu position if it goes off-screen
-        const menuHeight = 280; // Approximate max height of context menu
-        if (y + menuHeight > window.innerHeight) {
-            y -= menuHeight;
-        }
-
+        const x = event.clientX;
+        const y = event.clientY;
         setContextMenuPosition({ x, y });
         setContextMenuVisible(true);
     };
@@ -620,6 +614,23 @@ export const NodeManagerWindow: React.FC = () => {
         if (contextMenuNodeId === null) return [];
         return getContextMenuItems(contextMenuNodeId);
     }, [contextMenuNodeId, nodes]); // Re-calculate when node or selection changes
+
+    useLayoutEffect(() => {
+        if (!contextMenuVisible || !contextMenuRef.current) return;
+        const rect = contextMenuRef.current.getBoundingClientRect();
+        const padding = 8;
+        let x = contextMenuPosition.x;
+        let y = contextMenuPosition.y;
+        if (x + rect.width > window.innerWidth - padding) {
+            x = Math.max(padding, window.innerWidth - rect.width - padding);
+        }
+        if (y + rect.height > window.innerHeight - padding) {
+            y = Math.max(padding, window.innerHeight - rect.height - padding);
+        }
+        if (x !== contextMenuPosition.x || y !== contextMenuPosition.y) {
+            setContextMenuPosition({ x, y });
+        }
+    }, [contextMenuVisible, contextMenuItems, contextMenuPosition.x, contextMenuPosition.y]);
 
     const handleNodeDoubleClick = (node: any) => {
         // Open specialized editor based on node type
@@ -650,6 +661,21 @@ export const NodeManagerWindow: React.FC = () => {
                 break;
         }
     };
+
+    useEffect(() => {
+        if (selectedNodeIds.length !== 1) return;
+        const targetId = selectedNodeIds[0];
+        const ancestorKeys = getAncestorKeys(nodes, targetId);
+        if (ancestorKeys.length > 0) {
+            setExpandedKeys(prev => Array.from(new Set([...prev, ...ancestorKeys])));
+        }
+        requestAnimationFrame(() => {
+            const nodeEl = treeWrapperRef.current?.querySelector(`[data-node-id="${targetId}"]`) as HTMLElement | null;
+            if (nodeEl) {
+                nodeEl.scrollIntoView({ block: 'center' });
+            }
+        });
+    }, [selectedNodeIds, nodes]);
 
     return (
         <div
@@ -862,6 +888,7 @@ export const NodeManagerWindow: React.FC = () => {
             {
                 contextMenuVisible && (
                     <div
+                        ref={contextMenuRef}
                         style={{
                             position: 'fixed',
                             left: contextMenuPosition.x,
@@ -870,7 +897,9 @@ export const NodeManagerWindow: React.FC = () => {
                             backgroundColor: '#1f1f1f',
                             border: '1px solid #303030',
                             borderRadius: '2px',
-                            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.5)'
+                            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.5)',
+                            maxHeight: 'calc(100vh - 16px)',
+                            overflowY: 'auto'
                         }}
                         onClick={(e) => e.stopPropagation()}
                     >
