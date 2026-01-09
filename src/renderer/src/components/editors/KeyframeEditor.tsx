@@ -316,8 +316,8 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
                 // Normalize and load existing data
                 const normalizedKeys = normalizeKeys(initialData.Keys);
                 console.log('[KeyframeEditor] Normalized Keys:', JSON.stringify(normalizedKeys))
-                setLineType(initialData.LineType || 0)
-                setGlobalSeqId(initialData.GlobalSeqId)
+                setLineType(initialData.LineType ?? 0)
+                setGlobalSeqId(initialData.GlobalSeqId ?? null)
                 setText(generateText(normalizedKeys, initialData.LineType || 0))
             } else {
                 // Default data

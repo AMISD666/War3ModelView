@@ -456,7 +456,9 @@ const LightDialog: React.FC<LightDialogProps> = ({ visible, nodeId, onClose }) =
                     initialData={currentEditingProp ? animDataMap[currentEditingProp] : null}
                     title={`编辑: ${currentEditingTitle}`}
                     vectorSize={currentVectorSize}
-                    globalSequences={modelData?.GlobalSequences?.map((g: any) => g.Duration) || []}
+                    globalSequences={(modelData?.GlobalSequences || [])
+                        .map((g: any) => (typeof g === 'number' ? g : g?.Duration))
+                        .filter((v: any) => typeof v === 'number')}
                     sequences={modelData?.Sequences || []}
                 />
             )}

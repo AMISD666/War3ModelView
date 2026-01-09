@@ -729,7 +729,9 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
                     initialData={currentEditingProp ? animDataMap[currentEditingProp] : null}
                     title={`编辑: ${currentEditingTitle}`}
                     vectorSize={1}
-                    globalSequences={modelData?.GlobalSequences?.map(g => g.Duration) || []}
+                    globalSequences={(modelData?.GlobalSequences || [])
+                        .map((g: any) => (typeof g === 'number' ? g : g?.Duration))
+                        .filter((v: any) => typeof v === 'number')}
                     sequences={modelData?.Sequences || []}
                 />
             )}
