@@ -28,6 +28,15 @@ export interface ModelState {
     nodes: ModelNode[];
     isLoading: boolean;
 
+    // Global Preview Transform (unbaked gizmo state)
+    previewTransform: {
+        translation: [number, number, number],
+        rotation: [number, number, number],
+        scale: [number, number, number]
+    };
+    setPreviewTransform: (transform: Partial<ModelState['previewTransform']>) => void;
+    resetPreviewTransform: () => void;
+
     setModelData: (data: ModelData | null, path: string | null) => void;
     setLoading: (loading: boolean) => void;
     updateNode: (node: ModelNode) => void;

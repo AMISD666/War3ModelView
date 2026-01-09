@@ -189,6 +189,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
             const isBlp = imagePath.toLowerCase().endsWith('.blp')
             const isTga = imagePath.toLowerCase().endsWith('.tga')
             const isSupported = isBlp || isTga
+            const isReplaceable = texture.ReplaceableId === 1 || texture.ReplaceableId === 2
 
             setIsLoadingPreview(true)
             setPreviewError(null)
@@ -220,7 +221,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                 } catch (mpqError) {
                     console.log('[TextureEditor] MPQ loading failed, trying file system:', mpqError)
                 }
-                if (!loaded && !isSupported) {
+                if (!loaded && (isReplaceable || !isSupported)) {
                     if (texture.ReplaceableId === 1) {
                         setPreviewUrl(makeSolidDataUrl(220, 60, 60))
                         setPreviewError(null)
@@ -238,7 +239,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
             }
 
             // Strategy 2: Try local file system if MPQ didn't work
-            if (!loaded && isSupported) {
+            if (!loaded && isSupported && !isReplaceable) {
                 try {
                     // Normalize path separators
                     let normalizedPath = imagePath.replace(/\//g, '\\')

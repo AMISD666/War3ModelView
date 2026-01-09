@@ -196,6 +196,15 @@ interface ModelState {
     hoveredGeosetId: number | null;
     selectedGeosetIndex: number | null;  // Persistent selection for sync with managers
 
+    // Global Preview Transform (unbaked gizmo state)
+    previewTransform: {
+        translation: [number, number, number],
+        rotation: [number, number, number],
+        scale: [number, number, number]
+    };
+    setPreviewTransform: (transform: Partial<ModelState['previewTransform']>) => void;
+    resetPreviewTransform: () => void;
+
     setModelData: (data: ModelData | null, path: string | null) => void;
     setLoading: (loading: boolean) => void;
     updateNode: (objectId: number, updates: Partial<ModelNode>) => void;
@@ -703,6 +712,25 @@ export const useModelStore = create<ModelState>((set, get) => ({
     forceShowAllGeosets: true,
     hoveredGeosetId: null,
     selectedGeosetIndex: null,
+
+    // Global Preview Transform
+    previewTransform: {
+        translation: [0, 0, 0],
+        rotation: [0, 0, 0],
+        scale: [1, 1, 1]
+    },
+
+    setPreviewTransform: (transform) => set(state => ({
+        previewTransform: { ...state.previewTransform, ...transform }
+    })),
+
+    resetPreviewTransform: () => set({
+        previewTransform: {
+            translation: [0, 0, 0],
+            rotation: [0, 0, 0],
+            scale: [1, 1, 1]
+        }
+    }),
 
     // Animation State Initial Values
     sequences: [],
