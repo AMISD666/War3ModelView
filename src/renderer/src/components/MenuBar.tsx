@@ -49,6 +49,7 @@ interface MenuBarProps {
     onCleanUnusedTextures: () => void
     onRepairModel: () => void
     onTransformModel: () => void
+    onAddDeathAnimation: () => void
 }
 
 const MenuBar: React.FC<MenuBarProps> = ({
@@ -98,7 +99,8 @@ const MenuBar: React.FC<MenuBarProps> = ({
     onCleanUnusedMaterials,
     onCleanUnusedTextures,
     onRepairModel,
-    onTransformModel
+    onTransformModel,
+    onAddDeathAnimation
 }) => {
     const [activeMenu, setActiveMenu] = useState<string | null>(null)
     const [settingsSubMenu, setSettingsSubMenu] = useState<string | null>(null)
@@ -519,6 +521,14 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             onClick={() => { onTransformModel(); closeMenu() }}
                         >
                             修改模型位置/旋转/大小
+                        </div>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={() => { onAddDeathAnimation(); closeMenu() }}
+                        >
+                            添加死亡动画
                         </div>
                         <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
                         <div

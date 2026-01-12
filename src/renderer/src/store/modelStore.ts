@@ -7,6 +7,8 @@ import { mat4, vec3, mat3 } from 'gl-matrix';
 import { ModelData } from '../types/model';
 import { ModelNode, NodeType } from '../types/node';
 import { useRendererStore } from './rendererStore';
+import { processDeathAnimation } from '../utils/modelUtils';
+
 
 /**
  * 重新计算 Geoset 的边界范围 (Extent)
@@ -259,9 +261,9 @@ interface ModelState {
     updateNodes: (updates: { objectId: number, data: Partial<ModelNode> }[]) => void;
 
     // Recalculate Actions
-    recalculateExtents: () => void;
     recalculateNormals: () => void;
     repairModel: () => void;
+    addDeathAnimation: () => void;
     transformModel: (ops: {
         translation?: [number, number, number],
         rotation?: [number, number, number],
@@ -1583,6 +1585,24 @@ export const useModelStore = create<ModelState>((set, get) => ({
             recalculateModelNormals(state.modelData);
             // Force update
             return { modelData: { ...state.modelData }, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
+        });
+    },
+
+    addDeathAnimation: () => {
+        set((state) => {
+            if (!state.modelData) return {};
+            const { status } = processDeathAnimation(state.modelData);
+            console.log(`[ModelStore] Death animation ${status}`);
+
+            // Extract nodes again as they might have been added (GeosetAnims)
+            const updatedNodes = extractNodesFromModel(state.modelData);
+
+            return {
+                modelData: { ...state.modelData },
+                nodes: updatedNodes,
+                sequences: [...(state.modelData.Sequences || [])],
+                rendererReloadTrigger: state.rendererReloadTrigger + 1
+            };
         });
     },
 

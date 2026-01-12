@@ -1,10 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Button, Empty, Layout, theme, Typography, Spin, message, Pagination } from 'antd';
+import { Button, Empty, Layout, theme, Typography, Spin, message, Pagination, Tooltip, Space, Divider } from 'antd';
 import {
     FolderOpenOutlined,
     ReloadOutlined,
     ClearOutlined,
-    ArrowLeftOutlined
+    ArrowLeftOutlined,
+    UserDeleteOutlined,
+    GroupOutlined,
+    AppstoreAddOutlined
 } from '@ant-design/icons';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readFile, writeFile } from '@tauri-apps/plugin-fs';
@@ -13,7 +16,7 @@ import { useSelectionStore } from '../../store/selectionStore';
 import { ThumbnailGenerator } from './ThumbnailGenerator';
 import { thumbnailService } from './ThumbnailService';
 import { ModelCard } from './ModelCard';
-import { thumbnailEventBus } from './ThumbnailEventBus';
+import { processDeathAnimation } from '../../utils/modelUtils';
 
 const { Content, Header } = Layout;
 const { Text } = Typography;
@@ -195,112 +198,6 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
     }, [selectedAnimations, modelAnimations, onSelectModel]);
 
 
-    const toFloat32Array = (value: any, size: number): Float32Array => {
-        if (value instanceof Float32Array) return value;
-        if (Array.isArray(value)) return new Float32Array(value);
-        if (value && typeof value === 'object') {
-            const arr = Object.values(value).map(Number);
-            const padded = arr.length >= size ? arr : [...arr, ...new Array(size - arr.length).fill(0)];
-            return new Float32Array(padded);
-        }
-        return new Float32Array(new Array(size).fill(0));
-    };
-
-    const isAnimVector = (value: any): boolean => {
-        return value && typeof value === 'object' && Array.isArray(value.Keys);
-    };
-
-    const getAnimValueAtFrame = (anim: any, frame: number, fallback: number): number => {
-        if (!anim?.Keys || anim.Keys.length === 0) return fallback;
-        const keys = [...anim.Keys].sort((a: any, b: any) => a.Frame - b.Frame);
-        let result = fallback;
-        for (const key of keys) {
-            if (typeof key.Frame !== 'number') continue;
-            if (key.Frame <= frame) {
-                if (Array.isArray(key.Vector)) result = Number(key.Vector[0] ?? result);
-                else if (key.Vector?.length !== undefined) result = Number(key.Vector[0] ?? result);
-                else result = Number(key.Vector ?? result);
-            } else {
-                break;
-            }
-        }
-        return result;
-    };
-
-    const buildAnimVector = (frames: number[], value: number, endValue?: number, endFrame?: number) => {
-        const map = new Map<number, number>();
-        frames.forEach((frame) => map.set(frame, value));
-        if (endFrame !== undefined && endValue !== undefined) {
-            map.set(endFrame, endValue);
-        }
-        const keys = Array.from(map.entries())
-            .sort((a, b) => a[0] - b[0])
-            .map(([frame, val]) => ({
-                Frame: frame,
-                Vector: new Float32Array([val])
-            }));
-        return {
-            LineType: 1,
-            Keys: keys
-        };
-    };
-
-    const updateAnimVector = (anim: any, baseValue: number, deathStart: number, deathEnd: number) => {
-        const map = new Map<number, number>();
-        for (const key of anim.Keys || []) {
-            if (typeof key.Frame !== 'number') continue;
-            if (key.Frame > deathStart) continue;
-            let val = baseValue;
-            if (Array.isArray(key.Vector)) val = Number(key.Vector[0] ?? baseValue);
-            else if (key.Vector?.length !== undefined) val = Number(key.Vector[0] ?? baseValue);
-            else val = Number(key.Vector ?? baseValue);
-            map.set(key.Frame, val);
-        }
-        map.set(deathStart, 0);
-        map.set(deathEnd, 0);
-        anim.LineType = 0;
-        anim.GlobalSeqId = null;
-        if ('GlobalSequenceId' in anim) delete anim.GlobalSequenceId;
-        anim.Keys = Array.from(map.entries())
-            .sort((a, b) => a[0] - b[0])
-            .map(([frame, val]) => ({
-                Frame: frame,
-                Vector: new Float32Array([val])
-            }));
-        return anim;
-    };
-
-    const collectBaseFrames = (sequences: any[]): number[] => {
-        const frames = new Set<number>([0]);
-        sequences.forEach((seq) => {
-            const interval = Array.isArray(seq.Interval) ? seq.Interval : seq.Interval?.length ? Array.from(seq.Interval) : [];
-            if (interval.length >= 2) {
-                frames.add(Number(interval[0]));
-                frames.add(Number(interval[1]));
-            }
-        });
-        return Array.from(frames).sort((a, b) => a - b);
-    };
-
-    const applyScalarAnim = (animSource: any, baseFrames: number[], baseValue: number, deathStart: number, deathEnd: number) => {
-        if (isAnimVector(animSource)) {
-            return updateAnimVector(animSource, baseValue, deathStart, deathEnd);
-        }
-        const frames = Array.from(new Set([0, ...baseFrames, deathStart, deathEnd])).sort((a, b) => a - b);
-        const anim = buildAnimVector(frames, baseValue);
-        return updateAnimVector(anim, baseValue, deathStart, deathEnd);
-    };
-
-    const applyVisibility = (animSource: any, baseFrames: number[], baseValue: number, deathStart: number, deathEnd: number) => {
-        return applyScalarAnim(animSource, baseFrames, baseValue, deathStart, deathEnd);
-    };
-
-    const getStaticEmissionRate = (node: any): number => {
-        if (typeof node.EmissionRate === 'number') return node.EmissionRate;
-        if (typeof node.EmissionRateAnim === 'number') return node.EmissionRateAnim;
-        const animValue = isAnimVector(node.EmissionRate) ? node.EmissionRate : node.EmissionRateAnim;
-        return isAnimVector(animValue) ? getAnimValueAtFrame(animValue, 0, 0) : 0;
-    };
     const applyDeathAnimationToPath = async (targetPath: string): Promise<'added' | 'updated'> => {
         const buffer = await readFile(targetPath);
         let model: any;
@@ -314,114 +211,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
             throw new Error('模型解析失败');
         }
 
-        const sequences = model.Sequences || [];
-        const deathIndex = sequences.findIndex((seq: any) => String(seq.Name || '').toLowerCase() === 'death');
-        const deathSequence = deathIndex >= 0 ? sequences[deathIndex] : null;
-        const nonDeathSequences = sequences.filter((_: any, index: number) => index != deathIndex);
-
-        const lastEnd = nonDeathSequences.reduce((max: number, seq: any) => {
-            const interval = Array.isArray(seq.Interval) ? seq.Interval : seq.Interval?.length ? Array.from(seq.Interval) : [];
-            const end = interval.length >= 2 ? Number(interval[1]) : 0;
-            return Math.max(max, end);
-        }, 0);
-
-        let deathStart = lastEnd + 1000;
-        let deathEnd = deathStart + 3000;
-
-        if (deathSequence) {
-            const interval = Array.isArray(deathSequence.Interval)
-                ? deathSequence.Interval
-                : deathSequence.Interval?.length
-                    ? Array.from(deathSequence.Interval)
-                    : [];
-            if (interval.length >= 2) {
-                deathStart = Number(interval[0]);
-                deathEnd = Number(interval[1]);
-            } else {
-                deathSequence.Interval = new Uint32Array([deathStart, deathEnd]);
-            }
-        } else {
-            const infoMin = model.Info?.MinimumExtent;
-            const infoMax = model.Info?.MaximumExtent;
-            const infoBounds = model.Info?.BoundsRadius;
-            const refSequence = nonDeathSequences[nonDeathSequences.length - 1];
-            const minimumExtent = toFloat32Array(refSequence?.MinimumExtent ?? infoMin ?? [0, 0, 0], 3);
-            const maximumExtent = toFloat32Array(refSequence?.MaximumExtent ?? infoMax ?? [0, 0, 0], 3);
-            const boundsRadius = typeof refSequence?.BoundsRadius == 'number'
-                ? refSequence.BoundsRadius
-                : (typeof infoBounds == 'number' ? infoBounds : 0);
-
-            const newDeathSequence = {
-                Name: 'Death',
-                Interval: new Uint32Array([deathStart, deathEnd]),
-                NonLooping: 1,
-                MinimumExtent: minimumExtent,
-                MaximumExtent: maximumExtent,
-                BoundsRadius: boundsRadius,
-                MoveSpeed: 0,
-                Rarity: 0
-            };
-
-            model.Sequences = [...sequences, newDeathSequence];
-        }
-
-        const baseFrames = collectBaseFrames(model.Sequences || []);
-
-        if (!model.GeosetAnims) model.GeosetAnims = [];
-        const geosetAnimMap = new Map<number, any>();
-        model.GeosetAnims.forEach((anim: any) => {
-            if (typeof anim.GeosetId == 'number') geosetAnimMap.set(anim.GeosetId, anim);
-        });
-
-        (model.Geosets || []).forEach((geoset: any, index: number) => {
-            let anim = geosetAnimMap.get(index);
-            if (!anim) {
-                anim = {
-                    GeosetId: index,
-                    Alpha: 1,
-                    Color: new Float32Array([1, 1, 1]),
-                    Flags: 0
-                };
-                model.GeosetAnims.push(anim);
-                geosetAnimMap.set(index, anim);
-            }
-
-            const currentAlpha = anim.Alpha;
-            let baseValue = 1;
-            if (typeof currentAlpha == 'number') {
-                baseValue = currentAlpha;
-            } else if (isAnimVector(currentAlpha)) {
-                baseValue = getAnimValueAtFrame(currentAlpha, lastEnd, 1);
-            }
-
-            anim.Alpha = applyVisibility(currentAlpha, baseFrames, baseValue, deathStart, deathEnd);
-        });
-
-        const updateNodeVisibility = (node: any) => {
-            const animValue = isAnimVector(node.Visibility) ? node.Visibility : node.VisibilityAnim;
-            let baseValue = 1;
-            if (typeof node.Visibility == 'number') baseValue = node.Visibility;
-            else if (typeof node.VisibilityAnim == 'number') baseValue = node.VisibilityAnim;
-            else if (isAnimVector(animValue)) baseValue = getAnimValueAtFrame(animValue, lastEnd, 1);
-
-            const anim = applyVisibility(animValue, baseFrames, baseValue, deathStart, deathEnd);
-            node.Visibility = anim;
-            node.VisibilityAnim = anim;
-        };
-
-        const updateEmissionRate = (node: any) => {
-            const animValue = isAnimVector(node.EmissionRate) ? node.EmissionRate : node.EmissionRateAnim;
-            const baseValue = getStaticEmissionRate(node);
-            const anim = applyScalarAnim(animValue, baseFrames, baseValue, deathStart, deathEnd);
-            node.EmissionRate = anim;
-            node.EmissionRateAnim = anim;
-        };
-
-        (model.ParticleEmitters2 || []).forEach(updateNodeVisibility);
-        (model.RibbonEmitters || []).forEach(updateNodeVisibility);
-        (model.ParticleEmitters || []).forEach(updateNodeVisibility);
-        (model.ParticleEmitters2 || []).forEach(updateEmissionRate);
-        (model.ParticleEmitters || []).forEach(updateEmissionRate);
+        const { status } = processDeathAnimation(model);
 
         const isMDL = targetPath.toLowerCase().endsWith('.mdl');
         if (isMDL) {
@@ -432,7 +222,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
             await writeFile(targetPath, new Uint8Array(outBuffer));
         }
 
-        return deathSequence ? 'updated' : 'added';
+        return status;
     };
 
     const handleAddDeathAnimation = async () => {
@@ -504,49 +294,58 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                 gap: 8,
                 height: 48
             }}>
-                <Button
-                    type="text"
-                    icon={<ArrowLeftOutlined style={{ color: '#fff' }} />}
-                    onClick={() => setMainMode('view')}
-                />
-                <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold', marginRight: 16 }}>批量预览</Text>
+                <Space size={8}>
+                    <Tooltip title="返回模型视图">
+                        <Button
+                            type="text"
+                            icon={<ArrowLeftOutlined style={{ color: '#fff' }} />}
+                            onClick={() => setMainMode('view')}
+                        />
+                    </Tooltip>
+                    <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold', marginRight: 8 }}>批量预览</Text>
+                </Space>
 
-                <Button
-                    type="primary"
-                    icon={<FolderOpenOutlined />}
-                    onClick={handleOpenFolder}
-                    loading={loading}
-                    size="small"
-                >
-                    导入文件夹
-                </Button>
+                <div style={{ flex: 1 }} />
 
-                <Button
-                    icon={<ReloadOutlined />}
-                    onClick={() => currentPath && scanFolder(currentPath)}
-                    loading={loading}
-                    disabled={!currentPath}
-                    size="small"
-                >
-                    刷新
-                </Button>
+                <Space size={8}>
+                    <Tooltip title="导入包含多个模型的文件夹">
+                        <Button
+                            type="primary"
+                            icon={<FolderOpenOutlined />}
+                            onClick={handleOpenFolder}
+                            loading={loading}
+                            size="small"
+                        />
+                    </Tooltip>
 
-                <Button
-                    icon={<ClearOutlined />}
-                    onClick={() => {
-                        setFiles([]);
-                        setQueue([]);
-                        setCurrentPath(null);
-                        setModelAnimations({});
-                        setSelectedAnimations({});
-                        thumbnailEventBus.clear();
-                        thumbnailService.clearAll();
-                    }}
-                    disabled={files.length === 0}
-                    size="small"
-                >
-                    清空
-                </Button>
+                    <Tooltip title="刷新当前目录">
+                        <Button
+                            icon={<ReloadOutlined />}
+                            onClick={() => currentPath && scanFolder(currentPath)}
+                            loading={loading}
+                            disabled={!currentPath}
+                            size="small"
+                        />
+                    </Tooltip>
+
+                    <Tooltip title="清空列表">
+                        <Button
+                            icon={<ClearOutlined />}
+                            danger
+                            onClick={() => {
+                                setFiles([]);
+                                setQueue([]);
+                                setCurrentPath(null);
+                                setModelAnimations({});
+                                setSelectedAnimations({});
+                                thumbnailEventBus.clear();
+                                thumbnailService.clearAll();
+                            }}
+                            disabled={files.length === 0}
+                            size="small"
+                        />
+                    </Tooltip>
+                </Space>
 
                 {currentPath && (
                     <div style={{
@@ -575,31 +374,46 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                 <div style={{
                     display: 'flex',
                     alignItems: 'center',
-                    gap: 8,
+                    gap: 12,
                     minHeight: 36,
                     marginBottom: 12,
-                    padding: '4px 0',
+                    padding: '8px 0',
                     borderBottom: '1px solid #2a2a2a'
                 }}>
-                    <Button
-                        onClick={handleAddDeathAnimation}
-                        disabled={!selectedPath && !selectedFile}
-                        loading={deathApplyLoading}
-                        size="small"
-                        type="default"
-                    >
-                        当前模型添加死亡动画
-                    </Button>
-                    <Button
-                        onClick={handleAddDeathAnimationForAll}
-                        disabled={files.length === 0}
-                        loading={deathApplyLoading}
-                        size="small"
-                        type="default"
-                    >
-                        所有模型添加死亡动画
-                    </Button>
+                    <Space split={<Divider type="vertical" style={{ borderColor: '#333' }} />} size={12}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <Tooltip title="为当前选中的模型添加 Death (死亡) 动作">
+                                <Button
+                                    icon={<AppstoreAddOutlined />}
+                                    onClick={handleAddDeathAnimation}
+                                    disabled={!selectedPath && !selectedFile}
+                                    loading={deathApplyLoading}
+                                    size="small"
+                                    type="text"
+                                    style={{ color: (selectedPath || selectedFile) ? '#1890ff' : '#444' }}
+                                />
+                            </Tooltip>
+                            <Text type="secondary" style={{ fontSize: 12 }}>单体修复</Text>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <Tooltip title="为本页查找到的所有模型批量添加 Death (死亡) 动作">
+                                <Button
+                                    icon={<GroupOutlined />}
+                                    onClick={handleAddDeathAnimationForAll}
+                                    disabled={files.length === 0}
+                                    loading={deathApplyLoading}
+                                    size="small"
+                                    type="text"
+                                    style={{ color: files.length > 0 ? '#52c41a' : '#444' }}
+                                />
+                            </Tooltip>
+                            <Text type="secondary" style={{ fontSize: 12 }}>全页批量</Text>
+                        </div>
+                    </Space>
+
                     <div style={{ flex: 1 }} />
+                    {deathApplyLoading && <Spin size="small" tip="处理中..." style={{ marginLeft: 8 }} />}
                 </div>
                 {loading ? (
                     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
@@ -675,7 +489,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                     modelAnimations={modelAnimations}
                 />
             </Content>
-            
+
 
         </Layout>
     );

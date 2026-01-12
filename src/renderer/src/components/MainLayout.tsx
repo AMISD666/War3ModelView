@@ -1938,6 +1938,10 @@ const MainLayout: React.FC = () => {
                     }
                 }}
                 onTransformModel={() => setTransformModelDialogVisible(true)}
+                onAddDeathAnimation={() => {
+                    useModelStore.getState().addDeathAnimation();
+                    showMessage('success', '成功', '已添加/更新死亡动画');
+                }}
             />
 
             {/* About Dialog */}
@@ -2194,7 +2198,7 @@ const MainLayout: React.FC = () => {
                             color: 'white',
                             zIndex: 10
                         }}>
-                            加载�?..
+                            加载中...
                         </div>
                     )}
                 </div>

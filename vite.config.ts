@@ -22,7 +22,7 @@ export default defineConfig({
 
     // Build output
     build: {
-        outDir: 'out/renderer',
+        outDir: resolve(__dirname, 'out/renderer'),
         emptyOutDir: true
     },
 

@@ -14,12 +14,9 @@
     "dev:electron": "electron-vite dev",
     "dev:vite": "vite",
     "dev": "npm run dev:vite",
-    "build": "npm run typecheck && electron-vite build",
-    "postinstall": "electron-builder install-app-deps",
-    "build:win": "npm run build && electron-builder --win --config",
-    "build:mac": "npm run build && electron-builder --mac --config",
-    "build:linux": "npm run build && electron-builder --linux --config",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "build": "vite build",
+    "postinstall": "patch-package"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "^2.0.0",
@@ -38,6 +35,7 @@
     "electron-vite": "^2.0.0",
     "eslint": "^8.56.0",
     "gl-matrix": "^3.4.4",
+    "patch-package": "^8.0.1",
     "prettier": "^3.1.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
