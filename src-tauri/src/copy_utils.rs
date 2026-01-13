@@ -10,25 +10,18 @@ use windows_sys::Win32::System::DataExchange::{
 use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 
 pub fn copy_model_with_textures(model_path: &str, temp_root: &Path) -> Result<String, String> {
-    let model_path_obj = Path::new(model_path);
-    if !model_path_obj.exists() {
-        return Err(format!("Model file not found: {:?}", model_path_obj));
+    let paths = vec![model_path.to_string()];
+    let (message, _) = copy_models_with_textures(&paths, temp_root)?;
+    Ok(message)
+}
+
+pub fn copy_models_with_textures(
+    model_paths: &[String],
+    temp_root: &Path,
+) -> Result<(String, usize), String> {
+    if model_paths.is_empty() {
+        return Err("No model paths provided".to_string());
     }
-
-    let model_dir = model_path_obj.parent().ok_or("Invalid model path")?;
-    let model_name = model_path_obj
-        .file_name()
-        .ok_or("Invalid model filename")?;
-
-    let model_data =
-        fs::read(&model_path_obj).map_err(|e| format!("Failed to read model: {}", e))?;
-
-    let texture_paths = extract_texture_paths(&model_data, model_path_obj);
-    println!(
-        "[Copy] Found {} texture paths: {:?}",
-        texture_paths.len(),
-        texture_paths
-    );
 
     fs::create_dir_all(&temp_root)
         .map_err(|e| format!("Failed to create temp dir: {}", e))?;
@@ -60,96 +53,126 @@ pub fn copy_model_with_textures(model_path: &str, temp_root: &Path) -> Result<St
         push_item(normalized.to_string_lossy().to_string());
     };
 
-    let mut found_textures = 0;
+    let mut total_textures = 0usize;
+    let mut model_names: Vec<String> = Vec::new();
 
-    let temp_model_path = temp_base.join(model_name);
-    fs::copy(&model_path_obj, &temp_model_path)
-        .map_err(|e| format!("Failed to copy model: {}", e))?;
-    push_path(&temp_model_path);
-    println!("[Copy] Copied model: {:?}", temp_model_path);
-
-    for tex_rel_path in &texture_paths {
-        let tex_filename = Path::new(tex_rel_path).file_name().unwrap_or_default();
-
-        let mut source_found: Option<PathBuf> = None;
-        let mut actual_rel_path = tex_rel_path.clone();
-
-        let mut search_bases: Vec<PathBuf> = vec![model_dir.to_path_buf()];
-        let mut current = model_dir;
-        for _ in 0..3 {
-            if let Some(parent) = current.parent() {
-                search_bases.push(parent.to_path_buf());
-                current = parent;
-            } else {
-                break;
-            }
+    for model_path in model_paths {
+        let model_path_obj = Path::new(model_path);
+        if !model_path_obj.exists() {
+            println!("[Copy] Model file not found: {:?}", model_path_obj);
+            continue;
         }
 
-        'search: for base in &search_bases {
-            for candidate in &[base.join(tex_rel_path), base.join(tex_filename)] {
-                if candidate.exists() {
-                    source_found = Some(candidate.clone());
-                    break 'search;
-                }
+        let model_dir = match model_path_obj.parent() {
+            Some(dir) => dir,
+            None => continue,
+        };
+        let model_name = match model_path_obj.file_name() {
+            Some(name) => name.to_string_lossy().to_string(),
+            None => continue,
+        };
+        model_names.push(model_name.clone());
 
-                let stem = candidate.with_extension("");
-                for ext in &["blp", "tga", "dds", "png", "BLP", "TGA", "DDS", "PNG"] {
-                    let alt = stem.with_extension(ext);
-                    if alt.exists() {
-                        source_found = Some(alt);
-                        let rel_stem = Path::new(tex_rel_path).with_extension("");
-                        actual_rel_path = rel_stem.with_extension(ext).to_string_lossy().to_string();
+        let model_data =
+            fs::read(&model_path_obj).map_err(|e| format!("Failed to read model: {}", e))?;
+        let texture_paths = extract_texture_paths(&model_data, model_path_obj);
+        println!(
+            "[Copy] Found {} texture paths: {:?}",
+            texture_paths.len(),
+            texture_paths
+        );
+
+        let temp_model_path = temp_base.join(&model_name);
+        fs::copy(&model_path_obj, &temp_model_path)
+            .map_err(|e| format!("Failed to copy model: {}", e))?;
+        push_path(&temp_model_path);
+        println!("[Copy] Copied model: {:?}", temp_model_path);
+
+        for tex_rel_path in &texture_paths {
+            let tex_filename = Path::new(tex_rel_path).file_name().unwrap_or_default();
+
+            let mut source_found: Option<PathBuf> = None;
+            let mut actual_rel_path = tex_rel_path.clone();
+
+            let mut search_bases: Vec<PathBuf> = vec![model_dir.to_path_buf()];
+            let mut current = model_dir;
+            for _ in 0..3 {
+                if let Some(parent) = current.parent() {
+                    search_bases.push(parent.to_path_buf());
+                    current = parent;
+                } else {
+                    break;
+                }
+            }
+
+            'search: for base in &search_bases {
+                for candidate in &[base.join(tex_rel_path), base.join(tex_filename)] {
+                    if candidate.exists() {
+                        source_found = Some(candidate.clone());
                         break 'search;
                     }
-                }
-            }
-        }
 
-        if let Some(source) = source_found {
-            let target_path = temp_base.join(&actual_rel_path);
-            if let Some(parent) = target_path.parent() {
-                fs::create_dir_all(parent).ok();
-            }
-
-            if fs::copy(&source, &target_path).is_ok() {
-                let rel_path = Path::new(&actual_rel_path);
-                let mut top_component: Option<PathBuf> = None;
-                for comp in rel_path.components() {
-                    if let std::path::Component::Normal(name) = comp {
-                        top_component = Some(PathBuf::from(name));
-                        break;
+                    let stem = candidate.with_extension("");
+                    for ext in &["blp", "tga", "dds", "png", "BLP", "TGA", "DDS", "PNG"] {
+                        let alt = stem.with_extension(ext);
+                        if alt.exists() {
+                            source_found = Some(alt);
+                            let rel_stem = Path::new(tex_rel_path).with_extension("");
+                            actual_rel_path =
+                                rel_stem.with_extension(ext).to_string_lossy().to_string();
+                            break 'search;
+                        }
                     }
                 }
-                if let Some(top) = top_component {
-                    let top_dir = temp_base.join(top);
-                    if top_dir != temp_base && top_dir.is_dir() {
-                        push_path(&top_dir);
+            }
+
+            if let Some(source) = source_found {
+                let target_path = temp_base.join(&actual_rel_path);
+                if let Some(parent) = target_path.parent() {
+                    fs::create_dir_all(parent).ok();
+                }
+
+                if fs::copy(&source, &target_path).is_ok() {
+                    let rel_path = Path::new(&actual_rel_path);
+                    let mut top_component: Option<PathBuf> = None;
+                    for comp in rel_path.components() {
+                        if let std::path::Component::Normal(name) = comp {
+                            top_component = Some(PathBuf::from(name));
+                            break;
+                        }
+                    }
+                    if let Some(top) = top_component {
+                        let top_dir = temp_base.join(top);
+                        if top_dir != temp_base && top_dir.is_dir() {
+                            push_path(&top_dir);
+                        } else {
+                            push_path(&target_path);
+                        }
                     } else {
                         push_path(&target_path);
                     }
-                } else {
-                    push_path(&target_path);
+                    total_textures += 1;
+                    println!("[Copy] Copied texture: {:?} -> {:?}", source, target_path);
                 }
-                found_textures += 1;
-                println!("[Copy] Copied texture: {:?} -> {:?}", source, target_path);
+            } else {
+                println!("[Copy] Texture not found: {:?}", tex_rel_path);
             }
-        } else {
-            println!("[Copy] Texture not found: {:?}", tex_rel_path);
         }
     }
 
-    set_file_list_with_preferred_drop_effect(&files_to_copy)?;
+    if files_to_copy.is_empty() {
+        return Err("No models copied".to_string());
+    }
 
+    set_file_list_with_preferred_drop_effect(&files_to_copy)?;
     println!("[Copy] Clipboard items: {}", files_to_copy.len());
 
-    let model_name_str = model_path_obj
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy();
-    Ok(format!(
-        "Copied {} ({} textures)",
-        model_name_str, found_textures
-    ))
+    let message = if model_names.len() == 1 {
+        format!("Copied {} ({} textures)", model_names[0], total_textures)
+    } else {
+        format!("Copied {} models ({} textures)", model_names.len(), total_textures)
+    };
+    Ok((message, files_to_copy.len()))
 }
 
 #[repr(C)]

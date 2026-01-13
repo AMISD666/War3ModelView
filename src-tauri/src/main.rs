@@ -150,6 +150,57 @@ fn get_cli_delete_path() -> Option<String> {
     None
 }
 
+fn get_cli_copy_paths() -> Option<Vec<String>> {
+    let args: Vec<String> = std::env::args().collect();
+    if !args.iter().any(|a| a == "--copy-model") {
+        return None;
+    }
+    let mut paths: Vec<String> = args
+        .iter()
+        .skip(1)
+        .filter(|arg| {
+            let lower = arg.to_lowercase();
+            lower.ends_with(".mdx") || lower.ends_with(".mdl")
+        })
+        .cloned()
+        .collect();
+
+    if paths.is_empty() {
+        let raw = args.iter().skip(1).cloned().collect::<Vec<_>>().join(" ");
+        let mut in_quotes = false;
+        let mut current = String::new();
+        let mut push_if_model = |s: &str, out: &mut Vec<String>| {
+            let trimmed = s.trim().trim_matches('"');
+            let lower = trimmed.to_lowercase();
+            if lower.ends_with(".mdx") || lower.ends_with(".mdl") {
+                out.push(trimmed.to_string());
+            }
+        };
+        for ch in raw.chars() {
+            if ch == '"' {
+                if in_quotes {
+                    push_if_model(&current, &mut paths);
+                    current.clear();
+                    in_quotes = false;
+                } else {
+                    in_quotes = true;
+                }
+                continue;
+            }
+            if in_quotes {
+                current.push(ch);
+            }
+        }
+        if paths.is_empty() {
+            for token in raw.split_whitespace() {
+                push_if_model(token, &mut paths);
+            }
+        }
+    }
+
+    Some(paths)
+}
+
 // ==================
 // Context Menu Commands
 // ==================
@@ -281,6 +332,10 @@ fn register_copy_context_menu() -> Result<bool, String> {
             .map_err(|e| format!("Failed to set copy display name: {}", e))?;
 
         shell_key
+            .set_value("MultiSelectModel", &"Player")
+            .map_err(|e| format!("Failed to set copy MultiSelectModel: {}", e))?;
+
+        shell_key
             .set_value("Icon", &format!("\"{}\",0", exe_path))
             .map_err(|e| format!("Failed to set copy icon: {}", e))?;
 
@@ -289,7 +344,7 @@ fn register_copy_context_menu() -> Result<bool, String> {
             .map_err(|e| format!("Failed to create copy command key: {}", e))?;
 
         command_key
-            .set_value("", &format!("\"{}\" --copy-model \"%1\"", copy_exe))
+            .set_value("", &format!("\"{}\" --copy-model \"%1\" %*", copy_exe))
             .map_err(|e| format!("Failed to set copy command: {}", e))?;
     }
 
@@ -597,7 +652,8 @@ fn main() {
         return;
     }
 
-    if let Some(copy_path) = get_cli_copy_path() {
+    let copy_paths = get_cli_copy_paths();
+    if let Some(copy_paths) = copy_paths {
         let storage_root = match app_paths::get_app_storage_root() {
             Ok(root) => root.join("temp"),
             Err(_) => {
@@ -612,7 +668,56 @@ fn main() {
             }
         };
         let log_path = log_root.join("copy_log.txt");
-        let result = copy_utils::copy_model_with_textures(&copy_path, &temp_root);
+        let queue_path = log_root.join("copy_queue.txt");
+        let lock_path = log_root.join("copy_queue.lock");
+
+        if !copy_paths.is_empty() {
+            let _ = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&queue_path)
+                .and_then(|mut f| {
+                    for path in &copy_paths {
+                        let line = format!("{}\n", path.replace('\n', " "));
+                        let _ = std::io::Write::write_all(&mut f, line.as_bytes());
+                    }
+                    Ok(())
+                });
+        }
+
+        let lock_file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path);
+
+        if lock_file.is_err() {
+            return;
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(400));
+
+        let mut queued_paths: Vec<String> = Vec::new();
+        if let Ok(content) = std::fs::read_to_string(&queue_path) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    queued_paths.push(trimmed.to_string());
+                }
+            }
+        }
+
+        let _ = std::fs::write(&queue_path, "");
+        let _ = std::fs::remove_file(&lock_path);
+
+        queued_paths.sort();
+        queued_paths.dedup();
+
+        let result = if queued_paths.is_empty() {
+            Err("No model paths provided".to_string())
+        } else {
+            copy_utils::copy_models_with_textures(&queued_paths, &temp_root)
+                .map(|(msg, _)| msg)
+        };
         let verify: Result<usize, String> = (|| {
             use clipboard_win::{formats::FileList, Clipboard, Getter};
             let _clip = Clipboard::new_attempts(10).map_err(|e| format!("{:?}", e))?;
@@ -622,15 +727,22 @@ fn main() {
                 .map_err(|e| format!("{:?}", e))?;
             Ok(items.len())
         })();
+        let arg_dump = std::env::args().collect::<Vec<_>>();
         let log_line = match &result {
             Ok(msg) => {
                 let verify_info = match verify {
                     Ok(count) => format!("clipboard_items={}", count),
                     Err(e) => format!("clipboard_verify_err={}", e),
                 };
-                format!("[CopyCLI] OK: {} | {} | path={}\n", msg, verify_info, copy_path)
+                format!(
+                    "[CopyCLI] OK: {} | {} | paths={:?} | queued={:?} | args={:?}\n",
+                    msg, verify_info, copy_paths, queued_paths, arg_dump
+                )
             }
-            Err(e) => format!("[CopyCLI] ERR: {} | path={}\n", e, copy_path),
+            Err(e) => format!(
+                "[CopyCLI] ERR: {} | paths={:?} | queued={:?} | args={:?}\n",
+                e, copy_paths, queued_paths, arg_dump
+            ),
         };
         let _ = std::fs::OpenOptions::new()
             .create(true)
