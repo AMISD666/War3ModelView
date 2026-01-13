@@ -49,7 +49,9 @@ interface MenuBarProps {
     onCleanUnusedTextures: () => void
     onRepairModel: () => void
     onTransformModel: () => void
-    onAddDeathAnimation: () => void
+    onAddDeathAnimation: () => void;
+    onRemoveLights: () => void
+    onCopyModel: () => void
 }
 
 const MenuBar: React.FC<MenuBarProps> = ({
@@ -100,7 +102,9 @@ const MenuBar: React.FC<MenuBarProps> = ({
     onCleanUnusedTextures,
     onRepairModel,
     onTransformModel,
-    onAddDeathAnimation
+    onAddDeathAnimation,
+    onRemoveLights,
+    onCopyModel
 }) => {
     const [activeMenu, setActiveMenu] = useState<string | null>(null)
     const [settingsSubMenu, setSettingsSubMenu] = useState<string | null>(null)
@@ -115,6 +119,9 @@ const MenuBar: React.FC<MenuBarProps> = ({
         }
 
         const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+                return
+            }
             if ((event.ctrlKey || event.metaKey) && !event.altKey) {
                 if (event.code === 'KeyS') {
                     event.preventDefault()
@@ -125,6 +132,10 @@ const MenuBar: React.FC<MenuBarProps> = ({
                     }
                 }
             }
+            if (event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && event.code === 'KeyC') {
+                event.preventDefault()
+                onCopyModel()
+            }
         }
 
         document.addEventListener('mousedown', handleClickOutside)
@@ -133,7 +144,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
             document.removeEventListener('mousedown', handleClickOutside)
             window.removeEventListener('keydown', handleKeyDown)
         }
-    }, [onSave, onSaveAs])
+    }, [onSave, onSaveAs, onCopyModel])
 
     const toggleMenu = (menu: string) => {
         setActiveMenu(activeMenu === menu ? null : menu)
@@ -200,7 +211,8 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             onMouseLeave={unhoverStyle}
                             onClick={() => { onOpen(); closeMenu() }}
                         >
-                            导入模型
+                            <span>导入模型</span>
+                            <span style={{ color: '#888', fontSize: '11px' }}>Ctrl+O</span>
                         </div>
                         <div
                             style={itemStyle}
@@ -208,8 +220,21 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             onMouseLeave={unhoverStyle}
                             onClick={() => { onSave(); closeMenu() }}
                         >
-                            保存模型
+                            <span>保存模型</span>
+                            <span style={{ color: '#888', fontSize: '11px' }}>Ctrl+S</span>
                         </div>
+                        
+                        
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={() => { onCopyModel(); closeMenu() }}
+                        >
+                            <span>{"\u590d\u5236\u6a21\u578b"}</span>
+                            <span style={{ color: '#888', fontSize: '11px' }}>Shift+C</span>
+                        </div>
+                        
                         <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
                         <div
                             style={itemStyle}
@@ -530,6 +555,15 @@ const MenuBar: React.FC<MenuBarProps> = ({
                         >
                             添加死亡动画
                         </div>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={() => { onRemoveLights(); closeMenu() }}
+                        >
+                            删除所有光照
+                        </div>
+                        
                         <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
                         <div
                             style={itemStyle}

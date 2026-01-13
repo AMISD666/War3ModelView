@@ -17,7 +17,8 @@ import {
     ApartmentOutlined, // Parent
     TableOutlined, // Grid Settings
     GlobalOutlined, // Global Transform
-    AimOutlined // Pivot
+    AimOutlined, // Pivot
+    FullscreenOutlined // Fit to View
 } from '@ant-design/icons';
 
 import { useSelectionStore } from '../store/selectionStore';
@@ -30,12 +31,14 @@ interface ViewerToolbarProps {
     onRecalculateNormals?: () => void
     onSplitVertices?: () => void
     onWeldVertices?: () => void
+    onFitToView?: () => void
 }
 
 export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
     onRecalculateNormals,
     onSplitVertices,
-    onWeldVertices
+    onWeldVertices,
+    onFitToView
 }) => {
     const {
         mainMode,
@@ -294,7 +297,14 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
 
             <div style={{ width: 1, backgroundColor: '#555', height: '24px', alignSelf: 'center' }} />
 
-
+            <Space>
+                <Tooltip title="适应视图 (F)">
+                    <Button
+                        icon={<FullscreenOutlined />}
+                        onClick={onFitToView}
+                    />
+                </Tooltip>
+            </Space>
         </div>
     );
 };

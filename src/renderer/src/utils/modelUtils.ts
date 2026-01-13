@@ -129,6 +129,69 @@ const getStaticEmissionRate = (node: any): number => {
  * Core logic to add death animation to a model object.
  * Returns { model, status }
  */
+/**
+ * Deeply searches for and removes all keyframes within a specific time range.
+ * Used when deleting a sequence to clean up all animation traces.
+ */
+export const pruneModelKeyframes = (model: any, start: number, end: number) => {
+    const pruneKeys = (obj: any) => {
+        if (!obj || typeof obj !== 'object') return;
+
+        // If it's an array, prune each element
+        if (Array.isArray(obj)) {
+            obj.forEach(pruneKeys);
+            return;
+        }
+
+        // If it's an animation vector (contains Keys)
+        if (isAnimVector(obj)) {
+            const originalLength = obj.Keys.length;
+            obj.Keys = obj.Keys.filter((key: any) => {
+                if (typeof key.Frame !== 'number') return true;
+                return key.Frame < start || key.Frame > end;
+            });
+            return;
+        }
+
+        // Recursively prune all properties
+        // Skip known large data arrays that cannot contain keys for performance
+        const skip = ['Vertices', 'Faces', 'Normals', 'TVertices', 'VertexGroup', 'Groups', 'PivotPoints'];
+        for (const key in obj) {
+            if (skip.includes(key)) continue;
+            pruneKeys(obj[key]);
+        }
+    };
+
+    pruneKeys(model);
+};
+
+/**
+ * Extracts all texture paths from a model and resolves them to absolute paths.
+ * @param modelPath Absolute path to the model file.
+ * @param model Parsed model object.
+ * @returns Array of absolute texture file paths.
+ */
+export const getModelTexturePaths = (modelPath: string, model: any): string[] => {
+    const textures: string[] = [];
+    const modelDir = modelPath.substring(0, modelPath.lastIndexOf('\\'));
+
+    if (model.Textures && Array.isArray(model.Textures)) {
+        for (const tex of model.Textures) {
+            // Textures can have a "Path" or "Image" property
+            const texPath = tex.Image || tex.Path;
+            if (texPath && typeof texPath === 'string' && texPath.trim() !== '') {
+                // Normalize slashes and resolve relative to model directory
+                const normalized = texPath.replace(/\//g, '\\');
+                // If it's an absolute path, use as-is; otherwise resolve relative to model dir
+                const absolutePath = normalized.includes(':') ? normalized : `${modelDir}\\${normalized}`;
+                textures.push(absolutePath);
+            }
+        }
+    }
+
+    return textures;
+};
+
 export const processDeathAnimation = (model: any) => {
     const sequences = model.Sequences || [];
     const deathIndex = sequences.findIndex((seq: any) => String(seq.Name || '').toLowerCase() === 'death');
@@ -240,4 +303,80 @@ export const processDeathAnimation = (model: any) => {
     (model.ParticleEmitters || []).forEach(updateEmissionRate);
 
     return { model, status: deathSequence ? 'updated' : 'added' };
+};
+
+/**
+ * Re-indexes all nodes in the model to ensure a continuous sequence of ObjectIds.
+ * Also updates parent references and geoset group references.
+ */
+const reindexNodes = (model: any) => {
+    const allNodes: any[] = [];
+    const nodeTypes = [
+        'Bones', 'Helpers', 'Lights', 'Attachments',
+        'ParticleEmitters', 'ParticleEmitters2', 'RibbonEmitters',
+        'EventObjects', 'CollisionShapes'
+    ];
+
+    nodeTypes.forEach(type => {
+        if (Array.isArray(model[type])) {
+            allNodes.push(...model[type]);
+        }
+    });
+
+    // Sort by current ObjectId to maintain relative order
+    allNodes.sort((a, b) => (a.ObjectId ?? 0) - (b.ObjectId ?? 0));
+
+    const idMap = new Map<number, number>();
+    allNodes.forEach((node, index) => {
+        idMap.set(node.ObjectId, index);
+        node.ObjectId = index;
+    });
+
+    // Update parent references
+    allNodes.forEach(node => {
+        if (node.Parent !== undefined && node.Parent !== -1) {
+            const newParent = idMap.get(node.Parent);
+            node.Parent = newParent !== undefined ? newParent : -1;
+        }
+    });
+
+    // Update geoset group references
+    if (Array.isArray(model.Geosets)) {
+        model.Geosets.forEach((geoset: any) => {
+            if (Array.isArray(geoset.Groups)) {
+                geoset.Groups = geoset.Groups.map((group: any) => {
+                    if (Array.isArray(group)) {
+                        return group.map((oldId: number) => idMap.get(oldId) ?? 0);
+                    }
+                    return group;
+                });
+            }
+        });
+    }
+
+    // Refresh model.Nodes array for library consistency
+    if (model.Nodes) {
+        model.Nodes = [...allNodes];
+    }
+
+    return model;
+};
+
+/**
+ * Removes all lights from a model and cleans up references.
+ */
+export const processRemoveLights = (model: any) => {
+    if (!model.Lights || model.Lights.length === 0) {
+        return { model, count: 0 };
+    }
+
+    const lightCount = model.Lights.length;
+
+    // Remove from Lights array
+    model.Lights = [];
+
+    // Re-index all remaining nodes to fill gaps
+    reindexNodes(model);
+
+    return { model, count: lightCount };
 };

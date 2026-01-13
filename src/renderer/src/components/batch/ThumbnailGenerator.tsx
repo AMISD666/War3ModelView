@@ -29,6 +29,7 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
     const selectedAnimationsRef = useRef(selectedAnimations);
     const modelAnimationsRef = useRef(modelAnimations);
     const pendingRequestsRef = useRef<Set<string>>(new Set());
+    const lastPruneTimeRef = useRef<number>(0);
 
     // Sync refs to avoid loop resets when switching animations
     useEffect(() => {
@@ -60,7 +61,7 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
 
             // 1. Process Initial Queue (Parallel Workers)
             if (queue.length > 0) {
-                const batchSize = 12; // Dispatch multiple tasks
+                const batchSize = 12; // Dispatch multiple tasks matching worker count
                 const items = queue.slice(0, batchSize);
 
                 await Promise.all(items.map(async (item) => {
@@ -117,6 +118,16 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
 
                 if (isAnimating) {
                     const itemsToAnimate = processedPaths.current.filter(p => visiblePaths.has(p));
+
+                    // PERIODIC PRUNE: Relaxed to 10 seconds to prevent thrashing
+                    if (now - lastPruneTimeRef.current > 10000) {
+                        lastPruneTimeRef.current = now;
+                        const activeSet = new Set(queue.map(q => q.fullPath));
+                        // Also keep visible ones just in case
+                        visiblePaths.forEach(p => activeSet.add(p));
+                        const { thumbnailEventBus } = await import('./ThumbnailEventBus');
+                        thumbnailEventBus.prune(activeSet);
+                    }
 
                     if (itemsToAnimate.length > 0) {
                         // GREEDY DISPATCH: Try to update ALL visible items every tick 

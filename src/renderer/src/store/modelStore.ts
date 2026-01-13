@@ -7,7 +7,7 @@ import { mat4, vec3, mat3 } from 'gl-matrix';
 import { ModelData } from '../types/model';
 import { ModelNode, NodeType } from '../types/node';
 import { useRendererStore } from './rendererStore';
-import { processDeathAnimation } from '../utils/modelUtils';
+import { processDeathAnimation, processRemoveLights } from '../utils/modelUtils';
 
 
 /**
@@ -264,6 +264,7 @@ interface ModelState {
     recalculateNormals: () => void;
     repairModel: () => void;
     addDeathAnimation: () => void;
+    removeLights: () => void;
     transformModel: (ops: {
         translation?: [number, number, number],
         rotation?: [number, number, number],
@@ -282,6 +283,7 @@ interface ModelState {
     setSelectedGeosetIndex: (index: number | null) => void;
     setHiddenGeosetIds: (ids: number[]) => void;
     resetGeosetVisibility: () => void;
+    removeSequence: (index: number, pruneKeyframes?: boolean) => void;
 }
 
 /**
@@ -777,6 +779,42 @@ export const useModelStore = create<ModelState>((set, get) => ({
             isPlaying: (correctedData as any)?.Sequences?.length > 0,
             hiddenGeosetIds: allGeosetIds,
             forceShowAllGeosets: true
+        });
+    },
+
+    removeSequence: (index, pruneKeyframes = true) => {
+        set((state) => {
+            if (!state.modelData || !state.modelData.Sequences || index < 0 || index >= state.modelData.Sequences.length) {
+                return {};
+            }
+
+            const modelData = { ...state.modelData };
+            const sequences = [...modelData.Sequences];
+            const seqToDelete = sequences[index];
+            const [start, end] = Array.isArray(seqToDelete.Interval) ? seqToDelete.Interval : seqToDelete.Interval || [0, 0];
+
+            // 1. Remove the sequence itself
+            sequences.splice(index, 1);
+            modelData.Sequences = sequences;
+
+            // 2. Prune keyframes if requested
+            if (pruneKeyframes) {
+                const { pruneModelKeyframes } = require('../utils/modelUtils');
+                pruneModelKeyframes(modelData, start, end);
+                console.log(`[ModelStore] Pruned keyframes in range ${start}-${end}`);
+            }
+
+            // Sync other state
+            let nextSequence = state.currentSequence;
+            if (state.currentSequence === index) nextSequence = -1;
+            else if (state.currentSequence > index) nextSequence = state.currentSequence - 1;
+
+            return {
+                modelData,
+                sequences,
+                currentSequence: nextSequence,
+                rendererReloadTrigger: state.rendererReloadTrigger + 1
+            };
         });
     },
 
@@ -1601,6 +1639,26 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 modelData: { ...state.modelData },
                 nodes: updatedNodes,
                 sequences: [...(state.modelData.Sequences || [])],
+                rendererReloadTrigger: state.rendererReloadTrigger + 1
+            };
+        });
+    },
+
+    removeLights: () => {
+        set((state) => {
+            if (!state.modelData) return {};
+            const { count } = processRemoveLights(state.modelData);
+            console.log(`[ModelStore] Removed ${count} lights`);
+
+            const updatedNodes = extractNodesFromModel(state.modelData);
+
+            // Rebuild model data to ensure internal arrays (Nodes, PivotPoints) are in sync
+            // and ObjectIds are reassigned if needed
+            const rebuiltModelData = updateModelDataWithNodes(state.modelData, updatedNodes, true);
+
+            return {
+                modelData: rebuiltModelData ? { ...rebuiltModelData } : state.modelData,
+                nodes: updatedNodes,
                 rendererReloadTrigger: state.rendererReloadTrigger + 1
             };
         });

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Button, Empty, Layout, theme, Typography, Spin, message, Pagination, Tooltip, Space, Divider } from 'antd';
+import { Button, Empty, Layout, theme, Typography, Spin, message, Pagination, Tooltip, Space, Divider, Radio } from 'antd';
 import {
     FolderOpenOutlined,
     ReloadOutlined,
@@ -7,16 +7,20 @@ import {
     ArrowLeftOutlined,
     UserDeleteOutlined,
     GroupOutlined,
-    AppstoreAddOutlined
+    AppstoreAddOutlined,
+    BulbOutlined,
+    EditOutlined
 } from '@ant-design/icons';
+import { BatchTexturePrefixModal, PrefixOptions } from './BatchTexturePrefixModal';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readFile, writeFile } from '@tauri-apps/plugin-fs';
 import { parseMDX, parseMDL, generateMDX, generateMDL } from 'war3-model';
 import { useSelectionStore } from '../../store/selectionStore';
 import { ThumbnailGenerator } from './ThumbnailGenerator';
 import { thumbnailService } from './ThumbnailService';
+import { thumbnailEventBus } from './ThumbnailEventBus';
 import { ModelCard } from './ModelCard';
-import { processDeathAnimation } from '../../utils/modelUtils';
+import { processDeathAnimation, processRemoveLights } from '../../utils/modelUtils';
 
 const { Content, Header } = Layout;
 const { Text } = Typography;
@@ -53,6 +57,8 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
     const [isAnimating, setAnimating] = useState(true);
     const [selectedFile, setSelectedFile] = useState<string | null>(null);
     const [deathApplyLoading, setDeathApplyLoading] = useState(false);
+    const [actionScope, setActionScope] = useState<'selected' | 'all'>('selected');
+    const [isPrefixModalVisible, setIsPrefixModalVisible] = useState(false);
 
 
     // Shared states for animations
@@ -126,13 +132,90 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
     };
 
     const handleDelete = async (file: ModelFile) => {
-        // Mock delete for now, or implement via Rust
-        message.info('删除功能暂未完全开放: ' + file.name);
-        setFiles(prev => prev.filter(f => f.fullPath !== file.fullPath));
+        // Show confirmation modal (dark theme style)
+        const confirmed = await new Promise<boolean>(resolve => {
+            import('antd').then(({ Modal }) => {
+                Modal.confirm({
+                    title: '确定删除模型文件?',
+                    content: '这也将尝试删除同名的预览图及专用贴图(如果有)',
+                    okText: '删除',
+                    okButtonProps: { danger: true },
+                    cancelText: '取消',
+                    onOk: () => resolve(true),
+                    onCancel: () => resolve(false)
+                });
+            });
+        });
+
+        if (!confirmed) return;
+
+        try {
+            // 1. Parse the model to get its textures
+            const modelData = await readFile(file.fullPath);
+            const isMDX = file.fullPath.toLowerCase().endsWith('.mdx');
+            // Note: readFile returns Uint8Array, parseMDX needs ArrayBuffer
+            const model = isMDX ? parseMDX(modelData.buffer) : parseMDL(new TextDecoder().decode(modelData));
+
+            const { getModelTexturePaths } = await import('../../utils/modelUtils');
+            const modelTextures = getModelTexturePaths(file.fullPath, model);
+
+            // 2. Build a set of all textures used by OTHER models in the list
+            const otherFiles = files.filter(f => f.fullPath !== file.fullPath);
+            const sharedTexturesSet = new Set<string>();
+
+            for (const otherFile of otherFiles) {
+                try {
+                    const otherData = await readFile(otherFile.fullPath);
+                    const isOtherMDX = otherFile.fullPath.toLowerCase().endsWith('.mdx');
+                    const otherModel = isOtherMDX ? parseMDX(otherData.buffer) : parseMDL(new TextDecoder().decode(otherData));
+                    const otherTextures = getModelTexturePaths(otherFile.fullPath, otherModel);
+                    otherTextures.forEach(t => sharedTexturesSet.add(t.toLowerCase()));
+                } catch (e) {
+                    // Skip models that fail to parse
+                }
+            }
+
+            // 3. Compute unique textures (only used by the model being deleted)
+            const uniqueTextures = modelTextures.filter(t => !sharedTexturesSet.has(t.toLowerCase()));
+
+            // 4. Delete model file and unique textures via Rust
+            const { invoke } = await import('@tauri-apps/api/core');
+            const pathsToDelete = [file.fullPath, ...uniqueTextures];
+            const results = await invoke<[string, boolean, string][]>('delete_files', { paths: pathsToDelete });
+
+            // 5. Report results
+            const deleted = results.filter(([, ok]) => ok).length;
+            const failed = results.filter(([, ok]) => !ok);
+
+            if (failed.length > 0) {
+                console.warn('Some files failed to delete:', failed);
+            }
+
+            message.success(`已删除 ${file.name}${uniqueTextures.length > 0 ? ` 及 ${uniqueTextures.length} 个贴图` : ''}`);
+
+            // 6. Remove from UI
+            setFiles(prev => prev.filter(f => f.fullPath !== file.fullPath));
+            thumbnailEventBus.prune(new Set(files.filter(f => f.fullPath !== file.fullPath).map(f => f.fullPath)));
+
+        } catch (err) {
+            console.error('Delete failed:', err);
+            message.error('删除失败: ' + String(err));
+        }
     };
 
     const handleEditTexture = (file: ModelFile) => {
         message.info('批量贴图路径修改功能即将上线');
+    };
+
+    const handleCopyModel = async (file: ModelFile) => {
+        try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            const result = await invoke<string>('copy_model_with_textures', { modelPath: file.fullPath });
+            message.success(result);
+        } catch (err) {
+            console.error('Copy failed:', err);
+            message.error('复制失败: ' + String(err));
+        }
     };
 
     const handleThumbnailReady = useCallback((fullPath: string, bitmap: ImageBitmap, animations?: string[]) => {
@@ -189,6 +272,10 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
 
     const handleSelect = useCallback((file: ModelFile) => {
         setSelectedFile(file.fullPath);
+    }, []);
+
+    const handleDoubleClick = useCallback((file: ModelFile) => {
+        setSelectedFile(file.fullPath);
         const selectedAnim = selectedAnimations[file.fullPath] || '';
         const animations = modelAnimations[file.fullPath] || [];
         const animationIndex = Math.max(0, animations.indexOf(selectedAnim));
@@ -197,6 +284,27 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
         }
     }, [selectedAnimations, modelAnimations, onSelectModel]);
 
+    // Ctrl+C keyboard shortcut to copy selected model
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            // Ignore if typing in input fields
+            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+                return;
+            }
+            if (e.ctrlKey && e.key.toLowerCase() === 'c') {
+                const selectedFullPath = selectedPath ?? selectedFile;
+                if (selectedFullPath) {
+                    const file = files.find(f => f.fullPath === selectedFullPath);
+                    if (file) {
+                        e.preventDefault();
+                        handleCopyModel(file);
+                    }
+                }
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [selectedPath, selectedFile, files]);
 
     const applyDeathAnimationToPath = async (targetPath: string): Promise<'added' | 'updated'> => {
         const buffer = await readFile(targetPath);
@@ -225,58 +333,230 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
         return status;
     };
 
-    const handleAddDeathAnimation = async () => {
-        const targetPath = selectedPath ?? selectedFile;
-        if (!targetPath) {
-            message.warning('请先选择模型文件');
-            return;
+    const applyRemoveLightsToPath = async (targetPath: string): Promise<number> => {
+        const buffer = await readFile(targetPath);
+        let model: any;
+        if (targetPath.toLowerCase().endsWith('.mdl')) {
+            const text = new TextDecoder().decode(buffer);
+            model = parseMDL(text);
+        } else {
+            model = parseMDX(buffer.buffer);
         }
-        setDeathApplyLoading(true);
-        try {
-            const result = await applyDeathAnimationToPath(targetPath);
-            thumbnailService.clearAll();
-            setQueue(prev => [...prev, { name: targetPath.split(/[/\\]/).pop() || targetPath, fullPath: targetPath }]);
-            if (result == 'added') {
-                message.success('已添加 Death 动作并更新可见度与发射速率');
-            } else {
-                message.success('已更新 Death 动作关键帧与发射速率');
+        if (!model) {
+            throw new Error('模型解析失败');
+        }
+
+        const { count } = processRemoveLights(model);
+
+        const isMDL = targetPath.toLowerCase().endsWith('.mdl');
+        if (isMDL) {
+            const content = generateMDL(model);
+            await writeFile(targetPath, new TextEncoder().encode(content));
+        } else {
+            const outBuffer = generateMDX(model);
+            await writeFile(targetPath, new Uint8Array(outBuffer));
+        }
+
+        return count;
+    };
+
+    const handleAddDeathAnimation = async () => {
+        if (actionScope === 'all') {
+            if (files.length === 0) {
+                message.warning('请先导入模型文件');
+                return;
             }
-        } catch (err) {
-            console.error('Failed to add death animation:', err);
-            message.error('添加失败: ' + String(err));
-        } finally {
-            setDeathApplyLoading(false);
+            setDeathApplyLoading(true);
+            const queueItems: { name: string; fullPath: string }[] = [];
+            let added = 0;
+            let updated = 0;
+            let failed = 0;
+            try {
+                thumbnailService.clearAll();
+                for (const file of files) {
+                    try {
+                        const result = await applyDeathAnimationToPath(file.fullPath);
+                        queueItems.push({ name: file.name, fullPath: file.fullPath });
+                        if (result == 'added') added += 1;
+                        else updated += 1;
+                    } catch (err) {
+                        failed += 1;
+                        console.error('Failed to add death animation:', file.fullPath, err);
+                    }
+                }
+
+                // Refresh current page thumbnails
+                const start = (currentPage - 1) * pageSize;
+                const pageFiles = files.slice(start, start + pageSize);
+                setQueue(pageFiles.map(f => ({ name: f.name, fullPath: f.fullPath })));
+
+                const summary = `批量处理完成: 新增 ${added}，更新 ${updated}` + (failed > 0 ? `，失败 ${failed}` : '');
+                message.success(summary);
+            } finally {
+                setDeathApplyLoading(false);
+            }
+        } else {
+            const targetPath = selectedPath ?? selectedFile;
+            if (!targetPath) {
+                message.warning('请先选择模型文件');
+                return;
+            }
+            setDeathApplyLoading(true);
+            try {
+                const result = await applyDeathAnimationToPath(targetPath);
+                thumbnailService.clearAll();
+                setQueue(prev => [...prev, { name: targetPath.split(/[/\\]/).pop() || targetPath, fullPath: targetPath }]);
+                if (result == 'added') {
+                    message.success('已添加 Death 动作并更新可见度与发射速率');
+                } else {
+                    message.success('已更新 Death 动作关键帧与发射速率');
+                }
+            } catch (err) {
+                console.error('Failed to add death animation:', err);
+                message.error('添加失败: ' + String(err));
+            } finally {
+                setDeathApplyLoading(false);
+            }
         }
     };
 
-    const handleAddDeathAnimationForAll = async () => {
-        if (files.length === 0) {
-            message.warning('请先导入模型文件');
+    const handleRemoveLights = async () => {
+        if (actionScope === 'all') {
+            if (files.length === 0) {
+                message.warning('请先导入模型文件');
+                return;
+            }
+            setDeathApplyLoading(true);
+            let totalRemoved = 0;
+            let failed = 0;
+            try {
+                thumbnailService.clearAll();
+                for (const file of files) {
+                    try {
+                        const count = await applyRemoveLightsToPath(file.fullPath);
+                        totalRemoved += count;
+                    } catch (err) {
+                        failed += 1;
+                        console.error('Failed to remove lights:', file.fullPath, err);
+                    }
+                }
+
+                // Refresh current page thumbnails
+                const start = (currentPage - 1) * pageSize;
+                const pageFiles = files.slice(start, start + pageSize);
+                setQueue(pageFiles.map(f => ({ name: f.name, fullPath: f.fullPath })));
+
+                message.success(`批量删除完成: 共删除 ${totalRemoved} 个光照节点` + (failed > 0 ? `，失败 ${failed} 个文件` : ''));
+            } finally {
+                setDeathApplyLoading(false);
+            }
+        } else {
+            const targetPath = selectedPath ?? selectedFile;
+            if (!targetPath) {
+                message.warning('请先选择模型文件');
+                return;
+            }
+            setDeathApplyLoading(true);
+            try {
+                const count = await applyRemoveLightsToPath(targetPath);
+                thumbnailService.clearAll();
+                setQueue(prev => [...prev, { name: targetPath.split(/[/\\]/).pop() || targetPath, fullPath: targetPath }]);
+                message.success(`已删除 ${count} 个光照节点`);
+            } catch (err) {
+                console.error('Failed to remove lights:', err);
+                message.error('删除失败: ' + String(err));
+            } finally {
+                setDeathApplyLoading(false);
+            }
+        }
+    };
+
+    const applyPrefixLogic = (path: string, options: PrefixOptions) => {
+        const { prefix, mode, scope, whitelist } = options;
+        const normalizedPath = path.replace(/\//g, '\\');
+        const lowerPath = normalizedPath.toLowerCase();
+
+        // 1. Whitelist check
+        if (whitelist.some(w => w && lowerPath.startsWith(w.toLowerCase()))) {
+            return normalizedPath;
+        }
+
+        // 2. Native check
+        if (scope === 'excludeNative') {
+            const nativeFolders = ['textures\\', 'replaceabletextures\\', 'units\\', 'buildings\\', 'doodads\\', 'skies\\', 'environment\\', 'terrainart\\', 'sharedtextures\\'];
+            if (nativeFolders.some(f => lowerPath.startsWith(f))) {
+                return normalizedPath;
+            }
+        }
+
+        const fileName = normalizedPath.split('\\').pop() || '';
+        const hasPrefix = normalizedPath.includes('\\');
+
+        // 3. Transformation
+        if (prefix === '') {
+            return fileName;
+        }
+
+        if (mode === 'keep' && hasPrefix) {
+            return normalizedPath;
+        }
+
+        const cleanPrefix = prefix.endsWith('\\') ? prefix : prefix + '\\';
+        return cleanPrefix + fileName;
+    };
+
+    const handlePrefixProcess = async (options: PrefixOptions) => {
+        const targets = actionScope === 'selected'
+            ? files.filter(f => f.fullPath === selectedFile || f.fullPath === (selectedPath || ''))
+            : files;
+
+        if (targets.length === 0) {
+            message.warning('没有可处理的目标模型');
             return;
         }
+
         setDeathApplyLoading(true);
-        const queueItems: { name: string; fullPath: string }[] = [];
-        let added = 0;
-        let updated = 0;
-        let failed = 0;
+        let successCount = 0;
+        let failCount = 0;
+
         try {
             thumbnailService.clearAll();
-            for (const file of files) {
+            for (const file of targets) {
                 try {
-                    const result = await applyDeathAnimationToPath(file.fullPath);
-                    queueItems.push({ name: file.name, fullPath: file.fullPath });
-                    if (result == 'added') added += 1;
-                    else updated += 1;
-                } catch (err) {
-                    failed += 1;
-                    console.error('Failed to add death animation:', file.fullPath, err);
+                    const data = await readFile(file.fullPath);
+                    const isMDX = file.fullPath.toLowerCase().endsWith('.mdx');
+                    let model = isMDX
+                        ? parseMDX(data.buffer)
+                        : parseMDL(new TextDecoder().decode(data));
+
+                    if (model.Textures && Array.isArray(model.Textures)) {
+                        model.Textures = model.Textures.map((tex: any) => {
+                            const currentPath = tex.Image || tex.Path || '';
+                            if (!currentPath) return tex;
+
+                            const newPath = applyPrefixLogic(currentPath, options);
+                            if (tex.Image !== undefined) tex.Image = newPath;
+                            if (tex.Path !== undefined) tex.Path = newPath;
+                            return tex;
+                        });
+
+                        const outData = isMDX ? generateMDX(model) : generateMDL(model);
+                        const writeData = typeof outData === 'string' ? new TextEncoder().encode(outData) : new Uint8Array(outData);
+                        await writeFile(file.fullPath, writeData);
+                        successCount++;
+                    }
+                } catch (e) {
+                    console.error(`Failed to process ${file.name}:`, e);
+                    failCount++;
                 }
             }
-            if (queueItems.length > 0) {
-                setQueue(prev => [...prev, ...queueItems]);
-            }
-            const summary = `处理完成: 新增 ${added}，更新 ${updated}` + (failed > 0 ? `，失败 ${failed}` : '');
-            message.success(summary);
+
+            // Refresh thumbnails
+            const start = (currentPage - 1) * pageSize;
+            const pageFiles = files.slice(start, start + pageSize);
+            setQueue(pageFiles.map(f => ({ name: f.name, fullPath: f.fullPath })));
+
+            message.success(`贴图前缀修改完成: 成功 ${successCount} 个` + (failCount > 0 ? `，失败 ${failCount} 个` : ''));
         } finally {
             setDeathApplyLoading(false);
         }
@@ -303,49 +583,52 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                         />
                     </Tooltip>
                     <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold', marginRight: 8 }}>批量预览</Text>
+
+                    <Space size={8} style={{ marginLeft: 16 }}>
+                        <Tooltip title="导入包含多个模型的文件夹">
+                            <Button
+                                type="primary"
+                                icon={<FolderOpenOutlined />}
+                                onClick={handleOpenFolder}
+                                loading={loading}
+                                size="small"
+                                style={{ minWidth: 40 }}
+                            />
+                        </Tooltip>
+
+                        <Tooltip title="刷新当前目录">
+                            <Button
+                                icon={<ReloadOutlined />}
+                                onClick={() => currentPath && scanFolder(currentPath)}
+                                loading={loading}
+                                disabled={!currentPath}
+                                size="small"
+                                style={{ minWidth: 40 }}
+                            />
+                        </Tooltip>
+
+                        <Tooltip title="清空列表">
+                            <Button
+                                icon={<ClearOutlined />}
+                                danger
+                                onClick={() => {
+                                    setFiles([]);
+                                    setQueue([]);
+                                    setCurrentPath(null);
+                                    setModelAnimations({});
+                                    setSelectedAnimations({});
+                                    thumbnailEventBus.clear();
+                                    thumbnailService.clearAll();
+                                }}
+                                disabled={files.length === 0}
+                                size="small"
+                                style={{ minWidth: 40 }}
+                            />
+                        </Tooltip>
+                    </Space>
                 </Space>
 
                 <div style={{ flex: 1 }} />
-
-                <Space size={8}>
-                    <Tooltip title="导入包含多个模型的文件夹">
-                        <Button
-                            type="primary"
-                            icon={<FolderOpenOutlined />}
-                            onClick={handleOpenFolder}
-                            loading={loading}
-                            size="small"
-                        />
-                    </Tooltip>
-
-                    <Tooltip title="刷新当前目录">
-                        <Button
-                            icon={<ReloadOutlined />}
-                            onClick={() => currentPath && scanFolder(currentPath)}
-                            loading={loading}
-                            disabled={!currentPath}
-                            size="small"
-                        />
-                    </Tooltip>
-
-                    <Tooltip title="清空列表">
-                        <Button
-                            icon={<ClearOutlined />}
-                            danger
-                            onClick={() => {
-                                setFiles([]);
-                                setQueue([]);
-                                setCurrentPath(null);
-                                setModelAnimations({});
-                                setSelectedAnimations({});
-                                thumbnailEventBus.clear();
-                                thumbnailService.clearAll();
-                            }}
-                            disabled={files.length === 0}
-                            size="small"
-                        />
-                    </Tooltip>
-                </Space>
 
                 {currentPath && (
                     <div style={{
@@ -380,39 +663,57 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                     padding: '8px 0',
                     borderBottom: '1px solid #2a2a2a'
                 }}>
-                    <Space split={<Divider type="vertical" style={{ borderColor: '#333' }} />} size={12}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <Tooltip title="为当前选中的模型添加 Death (死亡) 动作">
+                    <Space size={16}>
+                        <Radio.Group
+                            size="small"
+                            value={actionScope}
+                            onChange={e => setActionScope(e.target.value)}
+                            buttonStyle="solid"
+                        >
+                            <Radio.Button value="selected">当前选中</Radio.Button>
+                            <Radio.Button value="all">整组文件夹</Radio.Button>
+                        </Radio.Group>
+
+                        <Space size={8}>
+                            <Tooltip title={actionScope === 'selected' ? "为当前选中的模型添加 Death (死亡) 动作" : "为整个文件夹的所有模型添加 Death (死亡) 动作"}>
                                 <Button
                                     icon={<AppstoreAddOutlined />}
                                     onClick={handleAddDeathAnimation}
-                                    disabled={!selectedPath && !selectedFile}
+                                    disabled={actionScope === 'selected' ? (!selectedPath && !selectedFile) : files.length === 0}
                                     loading={deathApplyLoading}
                                     size="small"
-                                    type="text"
-                                    style={{ color: (selectedPath || selectedFile) ? '#1890ff' : '#444' }}
+                                    type="primary"
+                                    ghost
+                                    style={{ minWidth: 40 }}
                                 />
                             </Tooltip>
-                            <Text type="secondary" style={{ fontSize: 12 }}>单体修复</Text>
-                        </div>
-
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <Tooltip title="为本页查找到的所有模型批量添加 Death (死亡) 动作">
+                            <Tooltip title={actionScope === 'selected' ? "删除当前选中模型的所有光照节点" : "删除整个文件夹模型的所有光照节点"}>
                                 <Button
-                                    icon={<GroupOutlined />}
-                                    onClick={handleAddDeathAnimationForAll}
-                                    disabled={files.length === 0}
+                                    icon={<BulbOutlined />}
+                                    onClick={handleRemoveLights}
+                                    disabled={actionScope === 'selected' ? (!selectedPath && !selectedFile) : files.length === 0}
                                     loading={deathApplyLoading}
                                     size="small"
-                                    type="text"
-                                    style={{ color: files.length > 0 ? '#52c41a' : '#444' }}
+                                    type="primary"
+                                    danger
+                                    ghost
+                                    style={{ minWidth: 40 }}
                                 />
                             </Tooltip>
-                            <Text type="secondary" style={{ fontSize: 12 }}>全页批量</Text>
-                        </div>
+                            <Tooltip title="批量修改贴图路径前缀">
+                                <Button
+                                    icon={<EditOutlined />}
+                                    onClick={() => setIsPrefixModalVisible(true)}
+                                    disabled={actionScope === 'selected' ? (!selectedPath && !selectedFile) : files.length === 0}
+                                    size="small"
+                                    type="primary"
+                                    ghost
+                                    style={{ minWidth: 40 }}
+                                />
+                            </Tooltip>
+                        </Space>
                     </Space>
 
-                    <div style={{ flex: 1 }} />
                     {deathApplyLoading && <Spin size="small" tip="处理中..." style={{ marginLeft: 8 }} />}
                 </div>
                 {loading ? (
@@ -441,8 +742,10 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                                     isSelected={(selectedPath ?? selectedFile) === file.fullPath}
                                     onDelete={handleDelete}
                                     onEditTexture={handleEditTexture}
+                                    onCopy={handleCopyModel}
                                     onAnimationChange={handleAnimationChange}
                                     onSelect={handleSelect}
+                                    onDoubleClick={handleDoubleClick}
                                     onVisibilityChange={handleVisibilityChange}
                                 />
                             ))}
@@ -488,8 +791,13 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                     selectedAnimations={selectedAnimations}
                     modelAnimations={modelAnimations}
                 />
-            </Content>
 
+                <BatchTexturePrefixModal
+                    visible={isPrefixModalVisible}
+                    onClose={() => setIsPrefixModalVisible(false)}
+                    onProcess={handlePrefixProcess}
+                />
+            </Content>
 
         </Layout>
     );

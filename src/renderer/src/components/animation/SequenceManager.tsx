@@ -72,30 +72,30 @@ const SequenceManager: React.FC = () => {
         setIsModalVisible(true)
     }
 
+    const [pruneKeyframes, setPruneKeyframes] = useState(true)
+
     const handleDelete = (index: number, e: React.MouseEvent) => {
         e.stopPropagation()
+
         Modal.confirm({
             title: '删除确认',
-            content: `确定要删除序列 "${sequences[index].Name}" 吗？`,
+            content: `确定要删除序列 "${sequences[index].Name}" 吗？${pruneKeyframes ? ' (将同时删除该范围内的关键帧)' : ''}`,
             okText: '删除',
             cancelText: '取消',
             okButtonProps: { danger: true },
             onOk() {
-                const oldSequences = [...sequences]
-                const newSequences = [...sequences]
-                newSequences.splice(index, 1)
+                const seq = sequences[index];
+                const oldSequences = [...sequences];
 
-                // History
+                // History for Undo
                 push({
-                    name: `Delete Sequence "${sequences[index].Name}"`,
+                    name: `Delete Sequence "${seq.Name}"`,
                     undo: () => setSequences(oldSequences),
-                    redo: () => setSequences(newSequences)
-                })
+                    redo: () => removeSequence(index, pruneKeyframes)
+                });
 
-                setSequences(newSequences)
-                if (currentSequence === index) setSequence(-1)
-                else if (currentSequence > index) setSequence(currentSequence - 1)
-                message.success('序列已删除')
+                removeSequence(index, pruneKeyframes);
+                message.success(pruneKeyframes ? '序列及相关关键帧已删除' : '序列已删除');
             }
         })
     }
@@ -163,14 +163,23 @@ const SequenceManager: React.FC = () => {
                 alignItems: 'center'
             }}>
                 <span style={{ fontWeight: 'bold' }}>序列管理</span>
-                <Button
-                    type="primary"
-                    size="small"
-                    icon={<PlusOutlined />}
-                    onClick={handleAdd}
-                >
-                    添加
-                </Button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <Checkbox
+                        checked={pruneKeyframes}
+                        onChange={(e) => setPruneKeyframes(e.target.checked)}
+                        style={{ color: '#aaa', fontSize: '11px' }}
+                    >
+                        动画关键帧
+                    </Checkbox>
+                    <Button
+                        type="primary"
+                        size="small"
+                        icon={<PlusOutlined />}
+                        onClick={handleAdd}
+                    >
+                        添加
+                    </Button>
+                </div>
             </div>
 
             {/* 序列列表 */}

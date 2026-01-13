@@ -4,6 +4,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { appDirStorage } from '../utils/persistStorage';
 import { EditMode, ToolMode } from '../types/store';
 
 interface UIState {
@@ -117,6 +118,7 @@ export const useUIStore = create<UIState>()(
         }),
         {
             name: 'ui-storage', // name of the item in the storage (must be unique)
+            storage: appDirStorage,
             partialize: (state) => ({
                 showNodeManager: state.showNodeManager,
                 leftSiderCollapsed: state.leftSiderCollapsed,

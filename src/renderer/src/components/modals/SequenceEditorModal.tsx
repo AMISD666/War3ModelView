@@ -3,6 +3,7 @@ import { List, Button, Input, Checkbox, InputNumber, Card, Typography, message }
 import { DraggableModal } from '../DraggableModal';
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useModelStore } from '../../store/modelStore'
+import { pruneModelKeyframes } from '../../utils/modelUtils'
 
 const { Text } = Typography
 
@@ -21,6 +22,8 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
     } = useModelStore()
     const [localSequences, setLocalSequences] = useState<any[]>([])
     const [selectedIndex, setSelectedIndex] = useState<number>(-1)
+    const [pruneKeyframes, setPruneKeyframes] = useState(true)
+    const [deletedIntervals, setDeletedIntervals] = useState<[number, number][]>([])
     const listRef = useRef<HTMLDivElement>(null)
     const initializedRef = useRef(false)
 
@@ -68,6 +71,7 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
             initializedRef.current = false
             setLocalSequences([])
             setSelectedIndex(-1)
+            setDeletedIntervals([])
             return
         }
         if (visible && storeSequences && !initializedRef.current) {
@@ -95,8 +99,15 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
     }
 
     const handleOk = () => {
+        const { modelData } = useModelStore.getState();
+        if (pruneKeyframes && deletedIntervals.length > 0 && modelData) {
+            deletedIntervals.forEach(([start, end]) => {
+                pruneModelKeyframes(modelData, start, end);
+            });
+            console.log(`[SequenceEditorModal] Pruned ${deletedIntervals.length} animation ranges`);
+        }
         setStoreSequences(localSequences)
-        message.success('序列已保存')
+        message.success(pruneKeyframes && deletedIntervals.length > 0 ? '序列及关键帧已保存' : '序列已保存')
         onClose()
     }
 
@@ -133,6 +144,21 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
                 body: { backgroundColor: '#2d2d2d' },
                 footer: { borderTop: '1px solid #4a4a4a' }
             }}
+            footer={
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Checkbox
+                        checked={pruneKeyframes}
+                        onChange={(e) => setPruneKeyframes(e.target.checked)}
+                        style={{ color: '#aaa' }}
+                    >
+                        动画关键帧
+                    </Checkbox>
+                    <div>
+                        <Button onClick={onClose}>取消</Button>
+                        <Button type="primary" onClick={handleOk} style={{ marginLeft: 8 }}>确定</Button>
+                    </div>
+                </div>
+            }
         >
             <div style={{ display: 'flex', height: '500px', border: '1px solid #4a4a4a', backgroundColor: '#252525' }}>
                 {/* List (Left) */}
@@ -183,6 +209,10 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
                                     <DeleteOutlined
                                         onClick={(e) => {
                                             e.stopPropagation()
+                                            const seq = localSequences[index];
+                                            if (seq && seq.Interval) {
+                                                setDeletedIntervals(prev => [...prev, [seq.Interval[0], seq.Interval[1]]]);
+                                            }
                                             const newSequences = localSequences.filter((_, i) => i !== index)
                                             setLocalSequences(newSequences)
                                             if (selectedIndex === index) setSelectedIndex(-1)

@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod activation;
+mod app_paths;
+mod copy_utils;
 mod mpq_manager;
 
 use base64::Engine;
@@ -102,6 +104,29 @@ fn activate_software(license_code: String) -> Result<activation::ActivationStatu
     activation::activate_software(&license_code)
 }
 
+
+#[tauri::command]
+fn get_cli_copy_path() -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    let mut has_copy_flag = false;
+    for arg in &args {
+        if arg == "--copy-model" {
+            has_copy_flag = true;
+            break;
+        }
+    }
+    if !has_copy_flag {
+        return None;
+    }
+    for arg in args.iter().skip(1) {
+        let lower = arg.to_lowercase();
+        if lower.ends_with(".mdx") || lower.ends_with(".mdl") {
+            return Some(arg.clone());
+        }
+    }
+    None
+}
+
 // ==================
 // Context Menu Commands
 // ==================
@@ -198,6 +223,82 @@ fn check_context_menu_status() -> bool {
     hkcu.open_subkey(mdx_path).is_ok() && hkcu.open_subkey(mdl_path).is_ok()
 }
 
+#[tauri::command]
+fn register_copy_context_menu() -> Result<bool, String> {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let mut exe_path = std::env::current_exe()
+        .map_err(|e| e.to_string())?
+        .to_string_lossy()
+        .to_string();
+
+    if exe_path.starts_with("\\\\?\\") {
+        exe_path = exe_path[4..].to_string();
+    }
+
+    let copy_exe = exe_path.clone();
+
+    let extensions = ["mdx", "mdl"];
+
+    for ext in &extensions {
+        let shell_path = format!(
+            "Software\\Classes\\SystemFileAssociations\\.{}\\shell\\GGWar3ViewCopy",
+            ext
+        );
+        let command_path = format!("{}\\command", shell_path);
+
+        let (shell_key, _) = hkcu
+            .create_subkey(&shell_path)
+            .map_err(|e| format!("Failed to create copy shell key for .{}: {}", ext, e))?;
+
+        shell_key
+            .set_value(
+                "",
+                &"\u{590d}\u{5236}\u{6a21}\u{578b}(\u{542b}\u{8d34}\u{56fe})",
+            )
+            .map_err(|e| format!("Failed to set copy display name: {}", e))?;
+
+        shell_key
+            .set_value("Icon", &format!("\"{}\",0", exe_path))
+            .map_err(|e| format!("Failed to set copy icon: {}", e))?;
+
+        let (command_key, _) = hkcu
+            .create_subkey(&command_path)
+            .map_err(|e| format!("Failed to create copy command key: {}", e))?;
+
+        command_key
+            .set_value("", &format!("\"{}\" --copy-model \"%1\"", copy_exe))
+            .map_err(|e| format!("Failed to set copy command: {}", e))?;
+    }
+
+    Ok(true)
+}
+
+#[tauri::command]
+fn unregister_copy_context_menu() -> Result<bool, String> {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let extensions = ["mdx", "mdl"];
+
+    for ext in &extensions {
+        let shell_path = format!(
+            "Software\\Classes\\SystemFileAssociations\\.{}\\shell\\GGWar3ViewCopy",
+            ext
+        );
+        let _ = hkcu.delete_subkey_all(&shell_path);
+    }
+
+    Ok(true)
+}
+
+#[tauri::command]
+fn check_copy_context_menu_status() -> bool {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let mdx_path = "Software\\Classes\\SystemFileAssociations\\.mdx\\shell\\GGWar3ViewCopy";
+    let mdl_path = "Software\\Classes\\SystemFileAssociations\\.mdl\\shell\\GGWar3ViewCopy";
+
+    hkcu.open_subkey(mdx_path).is_ok() && hkcu.open_subkey(mdl_path).is_ok()
+}
+
+
 // ==================
 // Download Command (for auto-update)
 // ==================
@@ -261,8 +362,10 @@ fn launch_installer(path: String) -> Result<(), String> {
     println!("[Update] Exe name: {}", exe_name);
 
     // Create a PowerShell script that waits for the app to close, then copies the new EXE
-    let temp_dir = std::env::temp_dir();
-    let ps_path = temp_dir.join("war3modelview_update.ps1");
+    let update_dir = app_paths::get_app_storage_root()?.join("update");
+    std::fs::create_dir_all(&update_dir)
+        .map_err(|e| format!("Failed to create update dir: {}", e))?;
+    let ps_path = update_dir.join("war3modelview_update.ps1");
 
     // Convert paths for PowerShell script
     let new_exe_path = path.replace("/", "\\");
@@ -332,6 +435,9 @@ Remove-Item -Path '{new_exe}' -Force -ErrorAction SilentlyContinue
 #[tauri::command]
 fn get_cli_file_path() -> Option<String> {
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--copy-model") {
+        return None;
+    }
     // First arg is the executable, second would be the file path
     for arg in args.iter().skip(1) {
         let lower = arg.to_lowercase();
@@ -342,7 +448,80 @@ fn get_cli_file_path() -> Option<String> {
     None
 }
 
+#[tauri::command]
+fn get_app_storage_root_cmd() -> Result<String, String> {
+    let root = app_paths::get_app_storage_root()?;
+    Ok(root.to_string_lossy().to_string())
+}
+
+// ==================
+// File Deletion Command
+// ==================
+#[tauri::command]
+fn delete_files(paths: Vec<String>) -> Vec<(String, bool, String)> {
+    paths
+        .into_iter()
+        .map(|path| match std::fs::remove_file(&path) {
+            Ok(_) => (path, true, "Deleted".to_string()),
+            Err(e) => (path.clone(), false, e.to_string()),
+        })
+        .collect()
+}
+
+// ==================
+// Model Copy Command (with textures)
+// ==================
+#[tauri::command]
+fn copy_model_with_textures(model_path: String) -> Result<String, String> {
+    let temp_root = app_paths::get_app_storage_root()?.join("temp");
+    copy_utils::copy_model_with_textures(&model_path, &temp_root)
+}
+
 fn main() {
+    if let Some(copy_path) = get_cli_copy_path() {
+        let storage_root = match app_paths::get_app_storage_root() {
+            Ok(root) => root.join("temp"),
+            Err(_) => {
+                return;
+            }
+        };
+        let temp_root = storage_root;
+        let log_root = match app_paths::get_app_storage_root() {
+            Ok(root) => root,
+            Err(_) => {
+                return;
+            }
+        };
+        let log_path = log_root.join("copy_log.txt");
+        let result = copy_utils::copy_model_with_textures(&copy_path, &temp_root);
+        let verify: Result<usize, String> = (|| {
+            use clipboard_win::{formats::FileList, Clipboard, Getter};
+            let _clip = Clipboard::new_attempts(10).map_err(|e| format!("{:?}", e))?;
+            let mut items: Vec<String> = Vec::new();
+            FileList
+                .read_clipboard(&mut items)
+                .map_err(|e| format!("{:?}", e))?;
+            Ok(items.len())
+        })();
+        let log_line = match &result {
+            Ok(msg) => {
+                let verify_info = match verify {
+                    Ok(count) => format!("clipboard_items={}", count),
+                    Err(e) => format!("clipboard_verify_err={}", e),
+                };
+                format!("[CopyCLI] OK: {} | {} | path={}\n", msg, verify_info, copy_path)
+            }
+            Err(e) => format!("[CopyCLI] ERR: {} | path={}\n", e, copy_path),
+        };
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .and_then(|mut f| std::io::Write::write_all(&mut f, log_line.as_bytes()));
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        return;
+    }
+
     tauri::Builder::default()
         .manage(MpqManager::new())
         .plugin(tauri_plugin_fs::init())
@@ -367,9 +546,19 @@ fn main() {
             unregister_context_menu,
             check_context_menu_status,
             get_cli_file_path,
+            get_cli_copy_path,
+            register_copy_context_menu,
+            unregister_copy_context_menu,
+            check_copy_context_menu_status,
             // Download Command
             download_file,
-            launch_installer
+            launch_installer,
+            // File Deletion Command
+            delete_files,
+            // Storage Root
+            get_app_storage_root_cmd,
+            // Model Copy Command
+            copy_model_with_textures
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

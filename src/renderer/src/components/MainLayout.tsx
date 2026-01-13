@@ -892,8 +892,26 @@ const MainLayout: React.FC = () => {
             setZustandLoading(false);
         }
 
+        // Check for copy-model context menu
+        const checkCliCopyPath = async () => {
+            try {
+                const { invoke } = await import('@tauri-apps/api/core');
+                const copyPath = await invoke<string | null>('get_cli_copy_path');
+                if (copyPath) {
+                    const result = await invoke<string>('copy_model_with_textures', { modelPath: copyPath });
+                    showMessage('success', '??', result);
+                    return true;
+                }
+            } catch (e) {
+                console.error('[MainLayout] Failed to handle copy CLI:', e);
+            }
+            return false;
+        };
+
         // Check for file path from command line (Tauri - context menu launch)
         const checkCliFilePath = async () => {
+            const copyHandled = await checkCliCopyPath();
+            if (copyHandled) return;
             try {
                 const { invoke } = await import('@tauri-apps/api/core');
                 const cliPath = await invoke<string | null>('get_cli_file_path');
@@ -1941,6 +1959,24 @@ const MainLayout: React.FC = () => {
                 onAddDeathAnimation={() => {
                     useModelStore.getState().addDeathAnimation();
                     showMessage('success', '成功', '已添加/更新死亡动画');
+                }}
+                onRemoveLights={() => {
+                    useModelStore.getState().removeLights();
+                    showMessage('success', '成功', '已删除所有光照节点');
+                }}
+                onCopyModel={async () => {
+                    if (!modelPath) {
+                        showMessage('warning', '提示', '没有可复制的模型');
+                        return;
+                    }
+                    try {
+                        const { invoke } = await import('@tauri-apps/api/core');
+                        const result = await invoke<string>('copy_model_with_textures', { modelPath });
+                        showMessage('success', '成功', result);
+                    } catch (err) {
+                        console.error('Copy failed:', err);
+                        showMessage('error', '错误', '复制失败');
+                    }
                 }}
             />
 

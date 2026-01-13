@@ -52,6 +52,21 @@ class ThumbnailEventBus {
         return this.animations.get(fullPath);
     }
 
+    public prune(activePaths: Set<string>) {
+        this.bitmaps.forEach((bitmap, path) => {
+            if (!activePaths.has(path)) {
+                try { bitmap.close(); } catch (e) { }
+                this.bitmaps.delete(path);
+
+                const g = this.graveyard.get(path);
+                if (g) {
+                    try { g.close(); } catch (e) { }
+                    this.graveyard.delete(path);
+                }
+            }
+        });
+    }
+
     public clear() {
         this.bitmaps.forEach(b => {
             try { b.close(); } catch (e) { }

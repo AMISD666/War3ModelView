@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Button, Typography, Tooltip, Popconfirm, Select } from 'antd';
-import { DeleteOutlined, FileImageOutlined } from '@ant-design/icons';
+import { Button, Typography, Tooltip, Select } from 'antd';
+import { DeleteOutlined, FileImageOutlined, CopyOutlined } from '@ant-design/icons';
 import { AnimatedPreview } from './AnimatedPreview';
 import { thumbnailEventBus } from './ThumbnailEventBus';
 
@@ -19,8 +19,10 @@ interface ModelCardProps {
     isSelected?: boolean;
     onDelete: (file: ModelFile) => void;
     onEditTexture: (file: ModelFile) => void;
+    onCopy?: (file: ModelFile) => void;
     onAnimationChange?: (file: ModelFile, animation: string) => void;
     onSelect?: (file: ModelFile) => void;
+    onDoubleClick?: (file: ModelFile) => void;
     onVisibilityChange?: (fullPath: string, isVisible: boolean) => void;
 }
 
@@ -31,8 +33,10 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
     isSelected = false,
     onDelete,
     onEditTexture,
+    onCopy,
     onAnimationChange,
     onSelect,
+    onDoubleClick,
     onVisibilityChange
 }) => {
     const [bitmap, setBitmap] = useState<ImageBitmap | null>(thumbnailEventBus.getBitmap(file.fullPath) || null);
@@ -94,6 +98,7 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
             }}
             className="model-card-hover"
             onClick={() => onSelect?.(file)}
+            onDoubleClick={() => onDoubleClick?.(file)}
         >
             <div style={{
                 width: '100%',
@@ -121,6 +126,16 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
                     opacity: 0,
                     transition: 'opacity 0.2s'
                 }}>
+                    <Tooltip title="复制模型">
+                        <Button
+                            type="text"
+                            icon={<CopyOutlined style={{ color: '#fff' }} />}
+                            size="small"
+                            style={{ background: 'rgba(0,0,0,0.6)' }}
+                            onClick={(e) => { e.stopPropagation(); onCopy?.(file); }}
+                        />
+                    </Tooltip>
+
                     <Tooltip title="修改贴图路径">
                         <Button
                             type="text"
@@ -131,23 +146,16 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
                         />
                     </Tooltip>
 
-                    <Popconfirm
-                        title="确定删除模型文件?"
-                        description="这也将尝试删除同名的预览图(如果有)"
-                        onConfirm={(e) => { e?.stopPropagation(); onDelete(file); }}
-                        onCancel={(e) => e?.stopPropagation()}
-                        okText="删除"
-                        cancelText="取消"
-                    >
+                    <Tooltip title="删除模型">
                         <Button
                             type="text"
                             danger
                             icon={<DeleteOutlined />}
                             size="small"
                             style={{ background: 'rgba(0,0,0,0.6)' }}
-                            onClick={(e) => e.stopPropagation()}
+                            onClick={(e) => { e.stopPropagation(); onDelete(file); }}
                         />
-                    </Popconfirm>
+                    </Tooltip>
                 </div>
             </div>
 

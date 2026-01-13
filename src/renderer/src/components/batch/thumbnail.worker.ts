@@ -56,6 +56,7 @@ self.onmessage = async (e) => {
             }
         });
         renderers.clear();
+
         self.postMessage({ type: 'CLEARED' });
     }
 };
@@ -85,10 +86,11 @@ async function render(
         textureImages?: Record<string, ImageData>,
         teamColorData?: Record<number, any>,
         frame?: number,
-        sequenceIndex?: number
+        sequenceIndex?: number,
+        backgroundColor?: string
     }
 ) {
-    const { fullPath, modelBuffer, textureImages, teamColorData, frame = 0, sequenceIndex = 0 } = payload;
+    const { fullPath, modelBuffer, textureImages, teamColorData, frame = 0, sequenceIndex = 0, backgroundColor = '#333333' } = payload;
 
     await initGL();
     if (!gl) return null;
@@ -231,8 +233,9 @@ async function render(
     gl.depthMask(true);                     // Enable depth writes
     gl.stencilMask(0xFFFFFFFF);            // Enable all stencil bits
 
-    // Clear with transparent background to prevent color accumulation in Additive/Alpha modes
-    gl.clearColor(0.0, 0.0, 0.0, 0.0);
+    // Clear with user-specified background color
+    const bgRgb = hexToRgb(backgroundColor);
+    gl.clearColor(bgRgb[0], bgRgb[1], bgRgb[2], 1.0);
     gl.clearDepth(1.0);
     gl.clearStencil(0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
@@ -357,6 +360,11 @@ function validateAllParticleEmitters(model: any): void {
 }
 
 function ensureRenderNodes(model: any): number {
+    if (model?.Nodes && Array.isArray(model.Nodes)) {
+        // Safety filter: remove any undefined or null entries that might have leaked in
+        model.Nodes = model.Nodes.filter((n: any) => !!n);
+    }
+
     if (model?.Nodes && model.Nodes.length > 0) {
         return model.Nodes[0].ObjectId ?? 0;
     }
@@ -383,6 +391,21 @@ function ensureGeosetGroups(model: any, defaultNodeId: number): void {
         if (geoset.TotalGroupsCount === undefined || geoset.TotalGroupsCount === null) {
             geoset.TotalGroupsCount = geoset.Groups.length;
         }
+
+        // Validate all VertexGroup indices point to valid Groups entries
+        const maxGroupIndex = geoset.Groups.length - 1;
+        for (let i = 0; i < geoset.VertexGroup.length; i++) {
+            if (geoset.VertexGroup[i] > maxGroupIndex) {
+                geoset.VertexGroup[i] = 0; // Reset to first group
+            }
+        }
+
+        // Ensure all Groups have at least one valid entry
+        for (let i = 0; i < geoset.Groups.length; i++) {
+            if (!geoset.Groups[i] || !Array.isArray(geoset.Groups[i]) || geoset.Groups[i].length === 0) {
+                geoset.Groups[i] = [defaultNodeId];
+            }
+        }
     }
 }
 
@@ -394,4 +417,16 @@ function toArray(v: any): number[] {
         return arr;
     }
     return [];
+}
+
+function hexToRgb(hex: string): [number, number, number] {
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    if (result) {
+        return [
+            parseInt(result[1], 16) / 255,
+            parseInt(result[2], 16) / 255,
+            parseInt(result[3], 16) / 255
+        ];
+    }
+    return [0.2, 0.2, 0.2]; // Default gray
 }

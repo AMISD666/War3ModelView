@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { appDirStorage } from '../utils/persistStorage'
 
 export interface GridSettings {
     show128: boolean
@@ -83,6 +84,8 @@ interface RendererStore {
     setAutoRecalculateExtent: (enabled: boolean) => void
     autoRecalculateNormals: boolean
     setAutoRecalculateNormals: (enabled: boolean) => void
+    keepCameraOnLoad: boolean
+    setKeepCameraOnLoad: (enabled: boolean) => void
 }
 
 export const useRendererStore = create<RendererStore>()(
@@ -171,10 +174,13 @@ export const useRendererStore = create<RendererStore>()(
             autoRecalculateExtent: true,
             setAutoRecalculateExtent: (enabled) => set({ autoRecalculateExtent: enabled }),
             autoRecalculateNormals: true,
-            setAutoRecalculateNormals: (enabled) => set({ autoRecalculateNormals: enabled })
+            setAutoRecalculateNormals: (enabled) => set({ autoRecalculateNormals: enabled }),
+            keepCameraOnLoad: false,
+            setKeepCameraOnLoad: (enabled) => set({ keepCameraOnLoad: enabled })
         }),
         {
             name: 'renderer-settings-v2',
+            storage: appDirStorage,
             partialize: (state) => ({
                 gridSettings: state.gridSettings,
                 vertexSettings: state.vertexSettings,
@@ -200,7 +206,8 @@ export const useRendererStore = create<RendererStore>()(
                 selectionColor: state.selectionColor,
                 hoverColor: state.hoverColor,
                 autoRecalculateExtent: state.autoRecalculateExtent,
-                autoRecalculateNormals: state.autoRecalculateNormals
+                autoRecalculateNormals: state.autoRecalculateNormals,
+                keepCameraOnLoad: state.keepCameraOnLoad
             }),
         }
     )

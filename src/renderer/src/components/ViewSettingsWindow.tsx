@@ -72,12 +72,15 @@ export const ViewSettingsWindow: React.FC = () => {
         showVertices, setShowVertices,
         vertexSettings, setVertexSettings,
         autoRecalculateExtent, setAutoRecalculateExtent,
-        autoRecalculateNormals, setAutoRecalculateNormals
+        autoRecalculateNormals, setAutoRecalculateNormals,
+        keepCameraOnLoad, setKeepCameraOnLoad
     } = useRendererStore();
 
     // Context Menu Integration State
     const [contextMenuEnabled, setContextMenuEnabled] = useState<boolean>(false);
     const [contextMenuLoading, setContextMenuLoading] = useState<boolean>(false);
+    const [copyContextMenuEnabled, setCopyContextMenuEnabled] = useState<boolean>(false);
+    const [copyContextMenuLoading, setCopyContextMenuLoading] = useState<boolean>(false);
 
     // DNC Environment Lighting State - Default to Lordaeron Summer
     const [selectedDNCPreset, setSelectedDNCPreset] = useState<string | null>('lordaeron');
@@ -204,7 +207,9 @@ export const ViewSettingsWindow: React.FC = () => {
             try {
                 const { invoke } = await import('@tauri-apps/api/core');
                 const isRegistered = await invoke<boolean>('check_context_menu_status');
+                const isCopyRegistered = await invoke<boolean>('check_copy_context_menu_status');
                 setContextMenuEnabled(isRegistered);
+                setCopyContextMenuEnabled(isCopyRegistered);
             } catch (e) {
                 console.error('Failed to check context menu status:', e);
             }
@@ -213,6 +218,26 @@ export const ViewSettingsWindow: React.FC = () => {
             checkStatus();
         }
     }, [showSettingsPanel]);
+
+    const handleCopyContextMenuToggle = async (enable: boolean) => {
+        setCopyContextMenuLoading(true);
+        try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            if (enable) {
+                await invoke('register_copy_context_menu');
+                setCopyContextMenuEnabled(true);
+                showMessage('success', '\u64cd\u4f5c\u6210\u529f', '\u5df2\u6dfb\u52a0\u590d\u5236\u6a21\u578b\u53f3\u952e\u83dc\u5355');
+            } else {
+                await invoke('unregister_copy_context_menu');
+                setCopyContextMenuEnabled(false);
+                showMessage('success', '\u64cd\u4f5c\u6210\u529f', '\u5df2\u79fb\u9664\u590d\u5236\u6a21\u578b\u53f3\u952e\u83dc\u5355');
+            }
+        } catch (e: any) {
+            showMessage('error', '\u64cd\u4f5c\u5931\u8d25', e.toString());
+        } finally {
+            setCopyContextMenuLoading(false);
+        }
+    };
 
     const handleContextMenuToggle = async (enable: boolean) => {
         setContextMenuLoading(true);
@@ -580,25 +605,48 @@ export const ViewSettingsWindow: React.FC = () => {
 
                     <div style={{ borderTop: '1px solid #333' }} />
 
-                    {/* 程序配置 Section */}
+                    {/* ???? Section */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
-                        <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#888' }}>程序配置</span>
+                        <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#888' }}>
+                            {"\u7a0b\u5e8f\u914d\u7f6e"}
+                        </span>
                         <ToggleButton
                             checked={contextMenuEnabled}
                             onChange={() => handleContextMenuToggle(!contextMenuEnabled)}
                             style={{ width: '90px' }}
                             disabled={contextMenuLoading}
-                        >右键菜单</ToggleButton>
+                        >
+                            {"\u53f3\u952e\u83dc\u5355"}
+                        </ToggleButton>
+                        <ToggleButton
+                            checked={copyContextMenuEnabled}
+                            onChange={() => handleCopyContextMenuToggle(!copyContextMenuEnabled)}
+                            style={{ width: '140px' }}
+                            disabled={copyContextMenuLoading}
+                        >
+                            {"\u590d\u5236\u6a21\u578b\u53f3\u952e\u83dc\u5355"}
+                        </ToggleButton>
                         <ToggleButton
                             checked={autoRecalculateExtent}
                             onChange={() => setAutoRecalculateExtent(!autoRecalculateExtent)}
                             style={{ width: '110px' }}
-                        >自动点范围</ToggleButton>
+                        >
+                            {"\u81ea\u52a8\u70b9\u8303\u56f4"}
+                        </ToggleButton>
                         <ToggleButton
                             checked={autoRecalculateNormals}
                             onChange={() => setAutoRecalculateNormals(!autoRecalculateNormals)}
                             style={{ width: '90px' }}
-                        >自动法线</ToggleButton>
+                        >
+                            {"\u81ea\u52a8\u6cd5\u7ebf"}
+                        </ToggleButton>
+                        <ToggleButton
+                            checked={keepCameraOnLoad}
+                            onChange={() => setKeepCameraOnLoad(!keepCameraOnLoad)}
+                            style={{ width: '90px' }}
+                        >
+                            {"\u4fdd\u6301\u76f8\u673a"}
+                        </ToggleButton>
                     </div>
 
                     {/* DNC Environment Lighting Section */}

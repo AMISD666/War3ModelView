@@ -29,6 +29,7 @@ class ThumbnailService {
     private textureCache: Map<string, Record<string, ImageData>> = new Map();
     private workerModelCache: string[][] = []; // Per-worker LRU cache (array of paths)
     private workerCount = 12;
+    private readonly MAIN_CACHE_LIMIT = 100; // Main thread cache limit
     private teamColorData: Record<number, ImageData> = {};
     private teamColorsLoaded = false;
     private teamColorsLoading: Promise<void> | null = null;
@@ -139,7 +140,7 @@ class ThumbnailService {
     }
 
     private async ensureTeamColorsLoaded() {
-        if (this.teamColorsLoaded) return;
+        if (this.teamColorsLoaded) return; // Sync check optimization
         if (!useRendererStore.getState().mpqLoaded) return;
 
         if (this.teamColorsLoading) {
@@ -293,8 +294,28 @@ class ThumbnailService {
                 // Extract animations for initial caching
                 const animations = model.Sequences ? model.Sequences.map((s: any) => s.Name || 'Unnamed') : [];
                 modelInfo = { buffer: arrayBuffer, animations };
+
+                // LRU for main thread caches
+                if (this.modelCache.size >= this.MAIN_CACHE_LIMIT) {
+                    const oldestKey = this.modelCache.keys().next().value;
+                    if (oldestKey) {
+                        this.modelCache.delete(oldestKey);
+                        this.textureCache.delete(oldestKey);
+                    }
+                }
+
                 this.modelCache.set(fullPath, modelInfo);
                 this.textureCache.set(fullPath, textureImages);
+            } else {
+                // Refresh LRU: move to end
+                this.modelCache.delete(fullPath);
+                this.modelCache.set(fullPath, modelInfo);
+
+                const textures = this.textureCache.get(fullPath);
+                if (textures) {
+                    this.textureCache.delete(fullPath);
+                    this.textureCache.set(fullPath, textures);
+                }
             }
 
             const textureImages = this.textureCache.get(fullPath) || {};
@@ -313,7 +334,8 @@ class ThumbnailService {
                         payload: {
                             fullPath,
                             frame,
-                            sequenceIndex
+                            sequenceIndex,
+                            backgroundColor: useRendererStore.getState().backgroundColor
                         }
                     });
                 } else {
@@ -324,7 +346,8 @@ class ThumbnailService {
                         textureImages,
                         teamColorData: this.teamColorData, // Send pre-loaded team colors
                         frame,
-                        sequenceIndex
+                        sequenceIndex,
+                        backgroundColor: useRendererStore.getState().backgroundColor
                     };
 
                     worker.postMessage({

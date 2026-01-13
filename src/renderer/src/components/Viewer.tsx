@@ -218,6 +218,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       if (e.code === 'Space') {
         e.preventDefault() // 防止页面滚动
         onTogglePlay()
+      } else if (e.key.toLowerCase() === 'f') {
+        handleFitToView()
       }
     }
     window.addEventListener('keydown', handleKeyDown)
@@ -225,30 +227,24 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   }, [onTogglePlay])
 
 
+  const handleFitToView = () => {
+    // @ts-ignore
+    if (ref && ref.current && ref.current.fitToView) {
+      // @ts-ignore
+      ref.current.fitToView()
+    }
+  }
+
   useEffect(() => {
     rendererRef.current = renderer
 
     // Fit to View when renderer changes (new model loaded)
-    if (renderer && renderer.model && renderer.model.Info) {
-      const info = renderer.model.Info as any
-      if (info.Extent) {
-        const { Min, Max } = info.Extent
-        const min = vec3.fromValues(Min[0], Min[1], Min[2])
-        const max = vec3.fromValues(Max[0], Max[1], Max[2])
-
-        const center = vec3.create()
-        vec3.add(center, min, max)
-        vec3.scale(center, center, 0.5)
-
-        const diagonal = vec3.dist(min, max)
-        const distance = Math.max(diagonal * 1.2, 300)
-
-        console.log('[Viewer] Fit to View:', { center, distance })
-
-        targetCamera.current.target = center
-        targetCamera.current.distance = distance
-        targetCamera.current.theta = Math.PI / 4
-        targetCamera.current.phi = Math.PI / 3
+    const keepCamera = useRendererStore.getState().keepCameraOnLoad;
+    if (renderer && renderer.model && renderer.model.Info && !keepCamera) {
+      // @ts-ignore
+      if (ref && ref.current && ref.current.fitToView) {
+        // @ts-ignore
+        ref.current.fitToView()
       }
     }
   }, [renderer])
@@ -277,7 +273,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     }
   }
 
-  const resetCamera = () => {
+  const resetCamera = (force = false) => {
+    if (!force && useRendererStore.getState().keepCameraOnLoad) return
     vec3.set(targetCamera.current.target, 0, 0, 0)
     targetCamera.current.distance = 500
     targetCamera.current.theta = Math.PI / 4
@@ -285,8 +282,34 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     syncCameraToOrbit()
   }
 
-  // Expose camera methods to parent via ref
+  // Expose methods to parent via ref
   useImperativeHandle(ref, () => ({
+    fitToView: () => {
+      const renderer = rendererRef.current
+      if (renderer && renderer.model && renderer.model.Info) {
+        const info = renderer.model.Info as any
+        if (info.Extent) {
+          const { Min, Max } = info.Extent
+          const min = vec3.fromValues(Min[0], Min[1], Min[2])
+          const max = vec3.fromValues(Max[0], Max[1], Max[2])
+
+          const center = vec3.create()
+          vec3.add(center, min, max)
+          vec3.set(center, center[0] * 0.5, center[1] * 0.5, center[2] * 0.5)
+
+          const diagonal = vec3.dist(min, max)
+          const distance = Math.max(diagonal * 1.2, 300)
+
+          console.log('[Viewer] fitToView call:', { center, distance })
+
+          targetCamera.current.target = center
+          targetCamera.current.distance = distance
+          targetCamera.current.theta = Math.PI / 4
+          targetCamera.current.phi = Math.PI / 3
+          syncCameraToOrbit()
+        }
+      }
+    },
     getCamera: () => {
       // Read from SimpleOrbitCamera (actual camera used by render loop)
       if (cameraRef.current) {
@@ -448,6 +471,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   }
 
   const ensureRenderNodes = (model: any) => {
+    if (model?.Nodes && Array.isArray(model.Nodes)) {
+      // Safety filter: remove any undefined or null entries that might have leaked in
+      model.Nodes = model.Nodes.filter((n: any) => !!n);
+    }
+
     if (model?.Nodes && model.Nodes.length > 0) {
       return { model, usedFallback: false, defaultNodeId: model.Nodes[0].ObjectId ?? 0 }
     }
@@ -477,6 +505,21 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       }
       if (geoset.TotalGroupsCount === undefined || geoset.TotalGroupsCount === null) {
         geoset.TotalGroupsCount = geoset.Groups.length
+      }
+
+      // Validate all VertexGroup indices point to valid Groups entries
+      const maxGroupIndex = geoset.Groups.length - 1
+      for (let i = 0; i < geoset.VertexGroup.length; i++) {
+        if (geoset.VertexGroup[i] > maxGroupIndex) {
+          geoset.VertexGroup[i] = 0 // Reset to first group
+        }
+      }
+
+      // Ensure all Groups have at least one valid entry
+      for (let i = 0; i < geoset.Groups.length; i++) {
+        if (!geoset.Groups[i] || !Array.isArray(geoset.Groups[i]) || geoset.Groups[i].length === 0) {
+          geoset.Groups[i] = [defaultNodeId]
+        }
       }
     }
   }
@@ -1923,7 +1966,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         for (let i = 0; i < model.Geosets.length; i++) {
           const oldGeoset = oldGeosets[i]
           const newGeoset = model.Geosets[i]
-  
+   
           // Always copy geometry data from old geoset, overwriting anything in new geoset
           if (oldGeoset.Vertices) {
             newGeoset.Vertices = oldGeoset.Vertices
@@ -4825,6 +4868,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         onRecalculateNormals={handleRecalculateNormals}
         onSplitVertices={handleSplitVertices}
         onWeldVertices={handleWeldVertices}
+        onFitToView={handleFitToView}
       />
 
 

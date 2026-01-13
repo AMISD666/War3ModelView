@@ -9,7 +9,7 @@ import { useModelStore } from '../../store/modelStore'
 import { readFile } from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import { decodeTextureData, isMPQPath } from '../viewer/textureLoader'
+import { decodeTextureData, getTextureCandidatePaths, isMPQPath } from '../viewer/textureLoader'
 
 const { Text } = Typography
 
@@ -149,6 +149,15 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         return null
     }
 
+    const isAbsolutePath = (p: string) => /^[a-zA-Z]:/.test(p) || p.startsWith('\\\\')
+
+    const getLocalCandidates = (imagePath: string): string[] => {
+        const normalized = imagePath.replace(/\//g, '\\')
+        if (isAbsolutePath(normalized)) return [normalized]
+        if (modelPath) return getTextureCandidatePaths(modelPath, normalized)
+        return [normalized]
+    }
+
     // Load preview when selection changes
     useEffect(() => {
         const loadId = ++previewLoadIdRef.current
@@ -241,55 +250,63 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
             // Strategy 2: Try local file system if MPQ didn't work
             if (!loaded && isSupported && !isReplaceable) {
                 try {
-                    // Normalize path separators
-                    let normalizedPath = imagePath.replace(/\//g, '\\')
+                    const candidates = getLocalCandidates(imagePath)
+                    let lastError: string | null = null
 
-                    // Resolve relative path based on model location
-                    let fullPath = normalizedPath
-                    const isAbsolute = /^[a-zA-Z]:/.test(normalizedPath) || normalizedPath.startsWith('\\\\')
-
-                    if (!isAbsolute && modelPath) {
-                        const modelDir = modelPath.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
-                        fullPath = `${modelDir}/${normalizedPath.replace(/\\/g, '/')}`
-                        fullPath = fullPath.replace(/\//g, '\\')
+                    for (const candidate of candidates) {
+                        console.log('[TextureEditor] Trying file system for:', candidate)
+                        try {
+                            const buffer = await readFile(candidate)
+                            if (isStale()) return
+                            if (buffer) {
+                                const imageData = decodeTextureData(buffer.buffer, imagePath)
+                                const dataUrl = imageData ? imageDataToDataUrl(imageData) : null
+                                if (dataUrl) {
+                                    setPreviewUrl(dataUrl)
+                                    setPreviewSource('????????????')
+                                    loaded = true
+                                    console.log('[TextureEditor] Loaded from file system successfully')
+                                    break
+                                } else {
+                                    lastError = '???????????? BLP ????????????'
+                                }
+                            } else {
+                                lastError = '??????????????????'
+                            }
+                        } catch (e: any) {
+                            if (!loaded) {
+                                lastError = `????????????: ${e.message || '????????????'}`
+                            }
+                        }
                     }
 
-                    console.log('[TextureEditor] Trying file system for:', fullPath)
-
-                    const buffer = await readFile(fullPath)
-                    if (isStale()) return
-                    if (buffer) {
-                        const imageData = decodeTextureData(buffer.buffer, imagePath)
-                        const dataUrl = imageData ? imageDataToDataUrl(imageData) : null
-                        if (dataUrl) {
-                            setPreviewUrl(dataUrl)
-                            setPreviewSource('本地文件')
-                            loaded = true
-                            console.log('[TextureEditor] Loaded from file system successfully')
-                        } else {
-                            setPreviewError('无法解码 BLP 图像数据')
-                        }
-                    } else {
-                        setPreviewError('无法读取文件')
+                    if (!loaded && lastError) {
+                        setPreviewError(lastError)
                     }
                 } catch (e: any) {
                     console.error("[TextureEditor] File system load failed:", e)
                     if (!loaded) {
-                        setPreviewError(`加载失败: ${e.message || '未知错误'}`)
+                        setPreviewError(`????????????: ${e.message || '????????????'}`)
                     }
                 }
             }
 
             // Non-BLP texture (PNG, TGA, etc.)
             if (!loaded && !isSupported) {
-                let fullPath = imagePath
-                const isAbsolute = /^[a-zA-Z]:/.test(imagePath)
-                if (!isAbsolute && modelPath) {
-                    const modelDir = modelPath.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
-                    fullPath = `${modelDir}/${imagePath.replace(/\\/g, '/')}`
+                const candidates = getLocalCandidates(imagePath)
+                let fullPath = candidates[0] || imagePath
+
+                for (const candidate of candidates) {
+                    try {
+                        await readFile(candidate)
+                        fullPath = candidate
+                        break
+                    } catch {
+                        // Try next candidate
+                    }
                 }
                 setPreviewUrl(`file://${fullPath}`)
-                setPreviewSource('本地文件')
+                setPreviewSource('????????????')
             }
 
             if (isStale()) return
