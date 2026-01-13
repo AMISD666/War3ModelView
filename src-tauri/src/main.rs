@@ -2,6 +2,7 @@
 
 mod activation;
 mod app_paths;
+mod app_settings;
 mod copy_utils;
 mod delete_utils;
 mod mpq_manager;
@@ -150,6 +151,57 @@ fn get_cli_delete_path() -> Option<String> {
     None
 }
 
+fn get_cli_delete_paths() -> Option<Vec<String>> {
+    let args: Vec<String> = std::env::args().collect();
+    if !args.iter().any(|a| a == "--delete-model") {
+        return None;
+    }
+    let mut paths: Vec<String> = args
+        .iter()
+        .skip(1)
+        .filter(|arg| {
+            let lower = arg.to_lowercase();
+            lower.ends_with(".mdx") || lower.ends_with(".mdl")
+        })
+        .cloned()
+        .collect();
+
+    if paths.is_empty() {
+        let raw = args.iter().skip(1).cloned().collect::<Vec<_>>().join(" ");
+        let mut in_quotes = false;
+        let mut current = String::new();
+        let push_if_model = |s: &str, out: &mut Vec<String>| {
+            let trimmed = s.trim().trim_matches('"');
+            let lower = trimmed.to_lowercase();
+            if lower.ends_with(".mdx") || lower.ends_with(".mdl") {
+                out.push(trimmed.to_string());
+            }
+        };
+        for ch in raw.chars() {
+            if ch == '"' {
+                if in_quotes {
+                    push_if_model(&current, &mut paths);
+                    current.clear();
+                    in_quotes = false;
+                } else {
+                    in_quotes = true;
+                }
+                continue;
+            }
+            if in_quotes {
+                current.push(ch);
+            }
+        }
+        if paths.is_empty() {
+            for token in raw.split_whitespace() {
+                push_if_model(token, &mut paths);
+            }
+        }
+    }
+
+    Some(paths)
+}
+
 fn get_cli_copy_paths() -> Option<Vec<String>> {
     let args: Vec<String> = std::env::args().collect();
     if !args.iter().any(|a| a == "--copy-model") {
@@ -169,7 +221,7 @@ fn get_cli_copy_paths() -> Option<Vec<String>> {
         let raw = args.iter().skip(1).cloned().collect::<Vec<_>>().join(" ");
         let mut in_quotes = false;
         let mut current = String::new();
-        let mut push_if_model = |s: &str, out: &mut Vec<String>| {
+        let push_if_model = |s: &str, out: &mut Vec<String>| {
             let trimmed = s.trim().trim_matches('"');
             let lower = trimmed.to_lowercase();
             if lower.ends_with(".mdx") || lower.ends_with(".mdl") {
@@ -411,6 +463,10 @@ fn register_delete_context_menu() -> Result<bool, String> {
             .map_err(|e| format!("Failed to set delete display name: {}", e))?;
 
         shell_key
+            .set_value("MultiSelectModel", &"Player")
+            .map_err(|e| format!("Failed to set delete MultiSelectModel: {}", e))?;
+
+        shell_key
             .set_value("Icon", &format!("\"{}\",0", exe_path))
             .map_err(|e| format!("Failed to set delete icon: {}", e))?;
 
@@ -419,7 +475,7 @@ fn register_delete_context_menu() -> Result<bool, String> {
             .map_err(|e| format!("Failed to create delete command key: {}", e))?;
 
         command_key
-            .set_value("", &format!("\"{}\" --delete-model \"%1\"", delete_exe))
+            .set_value("", &format!("\"{}\" --delete-model \"%1\" %*", delete_exe))
             .map_err(|e| format!("Failed to set delete command: {}", e))?;
     }
 
@@ -607,6 +663,23 @@ fn get_app_storage_root_cmd() -> Result<String, String> {
     Ok(root.to_string_lossy().to_string())
 }
 
+#[tauri::command]
+fn set_mpq_paths(paths: Vec<String>) -> Result<bool, String> {
+    app_settings::update_mpq_paths(paths)?;
+    Ok(true)
+}
+
+#[tauri::command]
+fn set_copy_mpq_textures(enabled: bool) -> Result<bool, String> {
+    app_settings::set_copy_mpq_textures(enabled)?;
+    Ok(true)
+}
+
+#[tauri::command]
+fn get_copy_mpq_textures_status() -> bool {
+    app_settings::get_copy_mpq_textures()
+}
+
 // ==================
 // File Deletion Command
 // ==================
@@ -631,7 +704,8 @@ fn copy_model_with_textures(model_path: String) -> Result<String, String> {
 }
 
 fn main() {
-    if let Some(delete_path) = get_cli_delete_path() {
+    let delete_paths = get_cli_delete_paths();
+    if let Some(delete_paths) = delete_paths {
         let log_root = match app_paths::get_app_storage_root() {
             Ok(root) => root,
             Err(_) => {
@@ -639,10 +713,15 @@ fn main() {
             }
         };
         let log_path = log_root.join("delete_log.txt");
-        let result = delete_utils::delete_model_with_shared_textures(&delete_path);
+        let result = if delete_paths.is_empty() {
+            Err("No model paths provided".to_string())
+        } else {
+            delete_utils::delete_models_with_shared_textures(&delete_paths)
+        };
+        let arg_dump = std::env::args().collect::<Vec<_>>();
         let log_line = match &result {
-            Ok(msg) => format!("[DeleteCLI] OK: {} | path={}\n", msg, delete_path),
-            Err(e) => format!("[DeleteCLI] ERR: {} | path={}\n", e, delete_path),
+            Ok(msg) => format!("[DeleteCLI] OK: {} | paths={:?} | args={:?}\n", msg, delete_paths, arg_dump),
+            Err(e) => format!("[DeleteCLI] ERR: {} | paths={:?} | args={:?}\n", e, delete_paths, arg_dump),
         };
         let _ = std::fs::OpenOptions::new()
             .create(true)
@@ -671,52 +750,71 @@ fn main() {
         let queue_path = log_root.join("copy_queue.txt");
         let lock_path = log_root.join("copy_queue.lock");
 
-        if !copy_paths.is_empty() {
-            let _ = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&queue_path)
-                .and_then(|mut f| {
-                    for path in &copy_paths {
-                        let line = format!("{}\n", path.replace('\n', " "));
-                        let _ = std::io::Write::write_all(&mut f, line.as_bytes());
+        let result = if copy_paths.len() > 1 {
+            copy_utils::copy_models_with_textures(&copy_paths, &temp_root)
+                .map(|(msg, _)| msg)
+        } else {
+            if !copy_paths.is_empty() {
+                let _ = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&queue_path)
+                    .and_then(|mut f| {
+                        for path in &copy_paths {
+                            let line = format!("{}\n", path.replace('\n', " "));
+                            let _ = std::io::Write::write_all(&mut f, line.as_bytes());
+                        }
+                        Ok(())
+                    });
+            }
+
+            let lock_file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&lock_path);
+
+            if lock_file.is_err() {
+                return;
+            }
+
+            let mut queued_paths: Vec<String> = Vec::new();
+            let mut stable_waits = 0;
+            let max_waits = 4;
+            let mut last_len: Option<u64> = None;
+            while stable_waits < max_waits {
+                let len = std::fs::metadata(&queue_path).map(|m| m.len()).unwrap_or(0);
+                if let Some(prev) = last_len {
+                    if len == prev {
+                        stable_waits += 1;
+                    } else {
+                        stable_waits = 0;
                     }
-                    Ok(())
-                });
-        }
+                }
+                last_len = Some(len);
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
 
-        let lock_file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock_path);
-
-        if lock_file.is_err() {
-            return;
-        }
-
-        std::thread::sleep(std::time::Duration::from_millis(400));
-
-        let mut queued_paths: Vec<String> = Vec::new();
-        if let Ok(content) = std::fs::read_to_string(&queue_path) {
-            for line in content.lines() {
-                let trimmed = line.trim();
-                if !trimmed.is_empty() {
-                    queued_paths.push(trimmed.to_string());
+            if let Ok(content) = std::fs::read_to_string(&queue_path) {
+                for line in content.lines() {
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty() {
+                        queued_paths.push(trimmed.to_string());
+                    }
                 }
             }
-        }
 
-        let _ = std::fs::write(&queue_path, "");
-        let _ = std::fs::remove_file(&lock_path);
+            let _ = std::fs::write(&queue_path, "");
+            let _ = std::fs::remove_file(&lock_path);
 
-        queued_paths.sort();
-        queued_paths.dedup();
+            queued_paths.sort();
+            queued_paths.dedup();
 
-        let result = if queued_paths.is_empty() {
-            Err("No model paths provided".to_string())
-        } else {
-            copy_utils::copy_models_with_textures(&queued_paths, &temp_root)
-                .map(|(msg, _)| msg)
+            if queued_paths.is_empty() {
+                Err("No model paths provided".to_string())
+            } else {
+                copy_utils::copy_models_with_textures(&queued_paths, &temp_root)
+                    .map(|(msg, _)| msg)
+            }
         };
         let verify: Result<usize, String> = (|| {
             use clipboard_win::{formats::FileList, Clipboard, Getter};
@@ -735,14 +833,11 @@ fn main() {
                     Err(e) => format!("clipboard_verify_err={}", e),
                 };
                 format!(
-                    "[CopyCLI] OK: {} | {} | paths={:?} | queued={:?} | args={:?}\n",
-                    msg, verify_info, copy_paths, queued_paths, arg_dump
+                    "[CopyCLI] OK: {} | {} | paths={:?} | args={:?}\n",
+                    msg, verify_info, copy_paths, arg_dump
                 )
             }
-            Err(e) => format!(
-                "[CopyCLI] ERR: {} | paths={:?} | queued={:?} | args={:?}\n",
-                e, copy_paths, queued_paths, arg_dump
-            ),
+            Err(e) => format!("[CopyCLI] ERR: {} | paths={:?} | args={:?}\n", e, copy_paths, arg_dump),
         };
         let _ = std::fs::OpenOptions::new()
             .create(true)
@@ -792,6 +887,10 @@ fn main() {
             delete_files,
             // Storage Root
             get_app_storage_root_cmd,
+            // MPQ Settings
+            set_mpq_paths,
+            set_copy_mpq_textures,
+            get_copy_mpq_textures_status,
             // Model Copy Command
             copy_model_with_textures
         ])

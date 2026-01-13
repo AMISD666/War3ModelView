@@ -1,67 +1,94 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 pub fn delete_model_with_shared_textures(model_path: &str) -> Result<String, String> {
-    let model_path_obj = Path::new(model_path);
-    if !model_path_obj.exists() {
-        return Err(format!("Model file not found: {:?}", model_path_obj));
+    let paths = vec![model_path.to_string()];
+    delete_models_with_shared_textures(&paths)
+}
+
+pub fn delete_models_with_shared_textures(model_paths: &[String]) -> Result<String, String> {
+    if model_paths.is_empty() {
+        return Err("No model paths provided".to_string());
     }
 
-    let model_dir = model_path_obj
-        .parent()
-        .ok_or("Invalid model path")?;
-    let model_name = model_path_obj
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-
-    let model_textures = resolve_model_textures(model_path_obj)?;
-
-    let mut shared_textures: HashSet<String> = HashSet::new();
-    for entry in fs::read_dir(model_dir).map_err(|e| format!("Read dir failed: {}", e))? {
-        let entry = match entry {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        let path = entry.path();
-        if path == model_path_obj {
+    let mut by_dir: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+    for path in model_paths {
+        let path_obj = Path::new(path);
+        if !path_obj.exists() {
             continue;
         }
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-        if ext != "mdx" && ext != "mdl" {
-            continue;
+        if let Some(dir) = path_obj.parent() {
+            by_dir
+                .entry(dir.to_path_buf())
+                .or_default()
+                .push(path_obj.to_path_buf());
         }
-        if let Ok(other_textures) = resolve_model_textures(&path) {
-            for tex in other_textures {
-                shared_textures.insert(tex.to_lowercase());
+    }
+
+    if by_dir.is_empty() {
+        return Err("No models found".to_string());
+    }
+
+    let mut deleted_models = 0usize;
+    let mut deleted_textures = 0usize;
+    let mut deleted_texture_set: HashSet<String> = HashSet::new();
+
+    for (dir, selected_models) in by_dir {
+        let selected_set: HashSet<PathBuf> = selected_models.iter().cloned().collect();
+        let mut all_models: Vec<PathBuf> = Vec::new();
+
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                if ext == "mdx" || ext == "mdl" {
+                    all_models.push(path);
+                }
+            }
+        }
+
+        let mut usage: HashMap<String, usize> = HashMap::new();
+        let mut selected_textures: HashMap<PathBuf, Vec<String>> = HashMap::new();
+
+        for model_path in &all_models {
+            if let Ok(textures) = resolve_model_textures(model_path) {
+                for tex in textures.iter() {
+                    let key = tex.to_lowercase();
+                    *usage.entry(key).or_insert(0) += 1;
+                }
+                if selected_set.contains(model_path) {
+                    selected_textures.insert(model_path.clone(), textures);
+                }
+            }
+        }
+
+        for model_path in &selected_models {
+            if fs::remove_file(model_path).is_ok() {
+                deleted_models += 1;
+            }
+            if let Some(textures) = selected_textures.get(model_path) {
+                for tex in textures {
+                    let key = tex.to_lowercase();
+                    if usage.get(&key).copied().unwrap_or(0) == 1
+                        && deleted_texture_set.insert(key.clone())
+                    {
+                        if fs::remove_file(tex).is_ok() {
+                            deleted_textures += 1;
+                        }
+                    }
+                }
             }
         }
     }
 
-    let mut deleted_textures = 0usize;
-    for tex in model_textures.iter() {
-        if shared_textures.contains(&tex.to_lowercase()) {
-            continue;
-        }
-        if fs::remove_file(tex).is_ok() {
-            deleted_textures += 1;
-        }
-    }
-
-    let model_deleted = fs::remove_file(model_path_obj).is_ok();
-    if !model_deleted {
-        return Err("Failed to delete model file".to_string());
-    }
-
     Ok(format!(
-        "Deleted {} ({} textures)",
-        model_name, deleted_textures
+        "Deleted {} models ({} textures)",
+        deleted_models, deleted_textures
     ))
 }
 
@@ -145,7 +172,7 @@ fn extract_texture_paths(data: &[u8], model_path: &Path) -> Vec<String> {
                 if let Some(null_pos) = path_bytes.iter().position(|&b| b == 0) {
                     if let Ok(path_str) = std::str::from_utf8(&path_bytes[..null_pos]) {
                         let trimmed = path_str.trim();
-                        if !trimmed.is_empty() && !trimmed.starts_with("ReplaceableTextures") {
+                        if !trimmed.is_empty() {
                             paths.push(
                                 trimmed
                                     .replace("\\", "/")
@@ -165,9 +192,7 @@ fn extract_texture_paths(data: &[u8], model_path: &Path) -> Vec<String> {
                         if let Some(end) = line.rfind('"') {
                             if end > start {
                                 let path_str = &line[start + 1..end];
-                                if !path_str.is_empty()
-                                    && !path_str.starts_with("ReplaceableTextures")
-                                {
+                                if !path_str.is_empty() {
                                     paths.push(path_str.replace("\\", std::path::MAIN_SEPARATOR_STR));
                                 }
                             }

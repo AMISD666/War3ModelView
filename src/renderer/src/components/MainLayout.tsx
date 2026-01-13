@@ -924,6 +924,11 @@ const MainLayout: React.FC = () => {
                         console.log('[MainLayout] Loading MPQs before model...');
                         try {
                             const paths = JSON.parse(savedPaths);
+                            try {
+                                await invoke('set_mpq_paths', { paths });
+                            } catch (e) {
+                                console.warn('[MainLayout] Failed to sync MPQ paths:', e);
+                            }
                             const results = await Promise.allSettled(
                                 paths.map((path: string) => invoke('load_mpq', { path }))
                             );
@@ -1121,6 +1126,11 @@ const MainLayout: React.FC = () => {
             if (savedPaths) {
                 try {
                     const paths = JSON.parse(savedPaths)
+                    try {
+                        await invoke('set_mpq_paths', { paths })
+                    } catch (e) {
+                        console.warn('[MainLayout] Failed to sync MPQ paths:', e)
+                    }
                     // OPTIMIZATION: Load all MPQs in parallel
                     const results = await Promise.allSettled(
                         paths.map((path: string) => invoke('load_mpq', { path }))
@@ -1155,6 +1165,11 @@ const MainLayout: React.FC = () => {
                         if (successCount > 0) {
                             console.log(`[MainLayout] Loaded ${successCount} MPQ files in parallel`)
                             localStorage.setItem('mpq_paths', JSON.stringify(validPaths))
+                            try {
+                                await invoke('set_mpq_paths', { paths: validPaths })
+                            } catch (e) {
+                                console.warn('[MainLayout] Failed to sync MPQ paths:', e)
+                            }
                             setMpqLoaded(true)
                         }
                     }

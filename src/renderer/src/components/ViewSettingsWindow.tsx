@@ -86,6 +86,8 @@ export const ViewSettingsWindow: React.FC = () => {
     const [copyContextMenuLoading, setCopyContextMenuLoading] = useState<boolean>(false);
     const [deleteContextMenuEnabled, setDeleteContextMenuEnabled] = useState<boolean>(false);
     const [deleteContextMenuLoading, setDeleteContextMenuLoading] = useState<boolean>(false);
+    const [copyMpqEnabled, setCopyMpqEnabled] = useState<boolean>(false);
+    const [copyMpqLoading, setCopyMpqLoading] = useState<boolean>(false);
 
     // DNC Environment Lighting State - Default to Lordaeron Summer
     const [selectedDNCPreset, setSelectedDNCPreset] = useState<string | null>('lordaeron');
@@ -214,9 +216,11 @@ export const ViewSettingsWindow: React.FC = () => {
                 const isRegistered = await invoke<boolean>('check_context_menu_status');
                 const isCopyRegistered = await invoke<boolean>('check_copy_context_menu_status');
                 const isDeleteRegistered = await invoke<boolean>('check_delete_context_menu_status');
+                const copyMpqStatus = await invoke<boolean>('get_copy_mpq_textures_status');
                 setContextMenuEnabled(isRegistered);
                 setCopyContextMenuEnabled(isCopyRegistered);
                 setDeleteContextMenuEnabled(isDeleteRegistered);
+                setCopyMpqEnabled(copyMpqStatus);
             } catch (e) {
                 console.error('Failed to check context menu status:', e);
             }
@@ -263,6 +267,26 @@ export const ViewSettingsWindow: React.FC = () => {
             showMessage('error', '\u64cd\u4f5c\u5931\u8d25', e.toString());
         } finally {
             setDeleteContextMenuLoading(false);
+        }
+    };
+
+    const handleCopyMpqToggle = async (enable: boolean) => {
+        setCopyMpqLoading(true);
+        try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            await invoke('set_copy_mpq_textures', { enabled: enable });
+            setCopyMpqEnabled(enable);
+            showMessage(
+                'success',
+                '\u64cd\u4f5c\u6210\u529f',
+                enable
+                    ? '\u5df2\u5f00\u542f MPQ \u5185\u7f6e\u8d34\u56fe\u590d\u5236'
+                    : '\u5df2\u5173\u95ed MPQ \u5185\u7f6e\u8d34\u56fe\u590d\u5236'
+            );
+        } catch (e: any) {
+            showMessage('error', '\u64cd\u4f5c\u5931\u8d25', e.toString());
+        } finally {
+            setCopyMpqLoading(false);
         }
     };
 
@@ -323,6 +347,11 @@ export const ViewSettingsWindow: React.FC = () => {
 
                 // Save paths
                 localStorage.setItem('mpq_paths', JSON.stringify(paths));
+                try {
+                    await invoke('set_mpq_paths', { paths });
+                } catch (e) {
+                    console.warn('Failed to persist MPQ paths to backend:', e);
+                }
 
                 const msgId = useMessageStore.getState().addMessage({
                     type: 'loading',
@@ -660,6 +689,14 @@ export const ViewSettingsWindow: React.FC = () => {
                             disabled={deleteContextMenuLoading}
                         >
                             {"\u5220\u9664\u6a21\u578b\u53f3\u952e\u83dc\u5355"}
+                        </ToggleButton>
+                        <ToggleButton
+                            checked={copyMpqEnabled}
+                            onChange={() => handleCopyMpqToggle(!copyMpqEnabled)}
+                            style={{ width: '140px' }}
+                            disabled={copyMpqLoading}
+                        >
+                            {"\u590d\u5236MPQ\u5185\u7f6e\u8d34\u56fe"}
                         </ToggleButton>
                         <ToggleButton
                             checked={autoRecalculateExtent}

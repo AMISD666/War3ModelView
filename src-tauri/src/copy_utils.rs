@@ -1,13 +1,79 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::mem::size_of;
 use std::ptr;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use wow_mpq::Archive;
+
+use crate::app_settings;
 use windows_sys::Win32::Foundation::POINT;
+use windows_sys::Win32::Storage::FileSystem::CreateHardLinkW;
 use windows_sys::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
 };
 use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+
+struct TextureIndex {
+    by_rel: HashMap<String, PathBuf>,
+    by_name: HashMap<String, PathBuf>,
+}
+
+fn to_wide(path: &Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    path.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
+}
+
+fn try_hardlink(src: &Path, dst: &Path) -> bool {
+    if dst.exists() {
+        return true;
+    }
+    let wide_dst = to_wide(dst);
+    let wide_src = to_wide(src);
+    unsafe { CreateHardLinkW(wide_dst.as_ptr(), wide_src.as_ptr(), std::ptr::null()) != 0 }
+}
+
+fn build_texture_index(base: &Path, ext_candidates: &[&str]) -> TextureIndex {
+    let mut by_rel: HashMap<String, PathBuf> = HashMap::new();
+    let mut by_name: HashMap<String, PathBuf> = HashMap::new();
+    let mut stack: Vec<PathBuf> = vec![base.to_path_buf()];
+
+    while let Some(dir) = stack.pop() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let ext = match path.extension().and_then(|e| e.to_str()) {
+                Some(e) => e,
+                None => continue,
+            };
+            if !ext_candidates.iter().any(|c| c.eq_ignore_ascii_case(ext)) {
+                continue;
+            }
+            let rel = match path.strip_prefix(base) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let rel_key = rel.to_string_lossy().replace("/", "\\").to_lowercase();
+            by_rel.entry(rel_key).or_insert_with(|| path.clone());
+
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                let name_key = name.to_lowercase();
+                by_name.entry(name_key).or_insert_with(|| path.clone());
+            }
+        }
+    }
+
+    TextureIndex { by_rel, by_name }
+}
 
 pub fn copy_model_with_textures(model_path: &str, temp_root: &Path) -> Result<String, String> {
     let paths = vec![model_path.to_string()];
@@ -53,77 +119,197 @@ pub fn copy_models_with_textures(
         push_item(normalized.to_string_lossy().to_string());
     };
 
-    let mut total_textures = 0usize;
     let mut model_names: Vec<String> = Vec::new();
+    let mut copy_jobs: Vec<(PathBuf, PathBuf, bool)> = Vec::new();
+    let mut job_targets: HashSet<PathBuf> = HashSet::new();
+    let mut texture_targets: HashSet<PathBuf> = HashSet::new();
+    let texture_count = Arc::new(AtomicUsize::new(0));
+    let mut resolve_cache: HashMap<String, Option<(PathBuf, String)>> = HashMap::new();
+    let mut search_bases_cache: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+    let mut index_cache: HashMap<PathBuf, TextureIndex> = HashMap::new();
+    let use_index_cache = model_paths.len() > 1;
+    let ext_candidates = ["blp", "tga", "dds", "png", "BLP", "TGA", "DDS", "PNG"];
 
-    for model_path in model_paths {
-        let model_path_obj = Path::new(model_path);
-        if !model_path_obj.exists() {
-            println!("[Copy] Model file not found: {:?}", model_path_obj);
-            continue;
-        }
+    let settings = app_settings::load_settings();
+    let mut mpq_paths: Vec<String> = Vec::new();
+    if settings.copy_mpq_textures && !settings.mpq_paths.is_empty() {
+        mpq_paths = settings.mpq_paths;
+    }
+    let mut mpq_archives: Option<Vec<Archive>> = None;
 
-        let model_dir = match model_path_obj.parent() {
-            Some(dir) => dir,
-            None => continue,
-        };
-        let model_name = match model_path_obj.file_name() {
-            Some(name) => name.to_string_lossy().to_string(),
-            None => continue,
-        };
-        model_names.push(model_name.clone());
+    #[derive(Clone)]
+    struct ModelInfo {
+        path: PathBuf,
+        dir: PathBuf,
+        name: String,
+        textures: Vec<String>,
+    }
 
-        let model_data =
-            fs::read(&model_path_obj).map_err(|e| format!("Failed to read model: {}", e))?;
-        let texture_paths = extract_texture_paths(&model_data, model_path_obj);
+    let model_jobs: Vec<PathBuf> = model_paths
+        .iter()
+        .map(PathBuf::from)
+        .filter(|p| p.exists())
+        .collect();
+
+    let model_results: Arc<Mutex<Vec<ModelInfo>>> = Arc::new(Mutex::new(Vec::new()));
+    let model_queue = Arc::new(Mutex::new(model_jobs));
+
+    let parse_workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(8)
+        .max(2);
+
+    let mut parsers = Vec::new();
+    for _ in 0..parse_workers {
+        let model_queue = Arc::clone(&model_queue);
+        let model_results = Arc::clone(&model_results);
+        parsers.push(thread::spawn(move || loop {
+            let job = {
+                let mut guard = model_queue.lock().unwrap();
+                guard.pop()
+            };
+            let model_path = match job {
+                Some(p) => p,
+                None => break,
+            };
+            let model_dir = match model_path.parent() {
+                Some(dir) => dir.to_path_buf(),
+                None => continue,
+            };
+            let model_name = match model_path.file_name() {
+                Some(name) => name.to_string_lossy().to_string(),
+                None => continue,
+            };
+            let model_data = match fs::read(&model_path) {
+                Ok(data) => data,
+                Err(_) => continue,
+            };
+            let texture_paths = extract_texture_paths(&model_data, &model_path);
+            let info = ModelInfo {
+                path: model_path,
+                dir: model_dir,
+                name: model_name,
+                textures: texture_paths,
+            };
+            model_results.lock().unwrap().push(info);
+        }));
+    }
+    for worker in parsers {
+        let _ = worker.join();
+    }
+
+    let model_infos = model_results.lock().unwrap().clone();
+    for info in model_infos {
         println!(
             "[Copy] Found {} texture paths: {:?}",
-            texture_paths.len(),
-            texture_paths
+            info.textures.len(),
+            info.textures
         );
 
-        let temp_model_path = temp_base.join(&model_name);
-        fs::copy(&model_path_obj, &temp_model_path)
-            .map_err(|e| format!("Failed to copy model: {}", e))?;
+        model_names.push(info.name.clone());
+        let temp_model_path = temp_base.join(&info.name);
+        if job_targets.insert(temp_model_path.clone()) {
+            copy_jobs.push((info.path.clone(), temp_model_path.clone(), false));
+        }
         push_path(&temp_model_path);
         println!("[Copy] Copied model: {:?}", temp_model_path);
 
-        for tex_rel_path in &texture_paths {
-            let tex_filename = Path::new(tex_rel_path).file_name().unwrap_or_default();
-
+        for tex_rel_path in &info.textures {
+            let cache_key = format!(
+                "{}|{}",
+                info.dir.to_string_lossy().to_lowercase(),
+                tex_rel_path.to_lowercase()
+            );
+            let cached = resolve_cache.get(&cache_key).cloned();
             let mut source_found: Option<PathBuf> = None;
             let mut actual_rel_path = tex_rel_path.clone();
 
-            let mut search_bases: Vec<PathBuf> = vec![model_dir.to_path_buf()];
-            let mut current = model_dir;
-            for _ in 0..3 {
-                if let Some(parent) = current.parent() {
-                    search_bases.push(parent.to_path_buf());
-                    current = parent;
-                } else {
-                    break;
+            if let Some(cached) = cached {
+                if let Some((src, rel)) = cached {
+                    source_found = Some(src);
+                    actual_rel_path = rel;
                 }
-            }
+            } else {
+                let tex_filename = Path::new(tex_rel_path).file_name().unwrap_or_default();
+                let search_bases = search_bases_cache
+                    .entry(info.dir.to_path_buf())
+                    .or_insert_with(|| {
+                        let mut bases: Vec<PathBuf> = vec![info.dir.to_path_buf()];
+                        let mut current = info.dir.as_path();
+                        for _ in 0..3 {
+                            if let Some(parent) = current.parent() {
+                                bases.push(parent.to_path_buf());
+                                current = parent;
+                            } else {
+                                break;
+                            }
+                        }
+                        bases
+                    })
+                    .clone();
 
-            'search: for base in &search_bases {
-                for candidate in &[base.join(tex_rel_path), base.join(tex_filename)] {
-                    if candidate.exists() {
-                        source_found = Some(candidate.clone());
-                        break 'search;
-                    }
+                if use_index_cache {
+                    let rel_key = tex_rel_path.replace("/", "\\").to_lowercase();
+                    let name_key = tex_filename.to_string_lossy().to_lowercase();
 
-                    let stem = candidate.with_extension("");
-                    for ext in &["blp", "tga", "dds", "png", "BLP", "TGA", "DDS", "PNG"] {
-                        let alt = stem.with_extension(ext);
-                        if alt.exists() {
-                            source_found = Some(alt);
-                            let rel_stem = Path::new(tex_rel_path).with_extension("");
-                            actual_rel_path =
-                                rel_stem.with_extension(ext).to_string_lossy().to_string();
+                    'search: for base in &search_bases {
+                        let index = index_cache.entry(base.to_path_buf()).or_insert_with(|| {
+                            build_texture_index(base, &ext_candidates)
+                        });
+                        if let Some(found) = index.by_rel.get(&rel_key) {
+                            source_found = Some(found.clone());
+                            break 'search;
+                        }
+                        if let Some(found) = index.by_name.get(&name_key) {
+                            source_found = Some(found.clone());
                             break 'search;
                         }
                     }
+                } else {
+                    'search: for base in &search_bases {
+                        for candidate in &[base.join(tex_rel_path), base.join(&tex_filename)] {
+                            if candidate.exists() {
+                                source_found = Some(candidate.clone());
+                                break 'search;
+                            }
+
+                            let stem = candidate.with_extension("");
+                            for ext in &ext_candidates {
+                                let alt = stem.with_extension(ext);
+                                if alt.exists() {
+                                    source_found = Some(alt);
+                                    let rel_stem = Path::new(tex_rel_path).with_extension("");
+                                    actual_rel_path =
+                                        rel_stem.with_extension(ext).to_string_lossy().to_string();
+                                    break 'search;
+                                }
+                            }
+                        }
+                    }
                 }
+
+                if let Some(found) = source_found.as_ref() {
+                    let mut rel_buf = PathBuf::from(tex_rel_path);
+                    if let Some(found_ext) = found.extension().and_then(|e| e.to_str()) {
+                        let rel_ext = rel_buf.extension().and_then(|e| e.to_str());
+                        if rel_ext.is_none()
+                            || !rel_ext
+                                .map(|e| e.eq_ignore_ascii_case(found_ext))
+                                .unwrap_or(false)
+                        {
+                            rel_buf.set_extension(found_ext);
+                        }
+                    }
+                    actual_rel_path = rel_buf.to_string_lossy().to_string();
+                }
+
+                resolve_cache.insert(
+                    cache_key,
+                    source_found
+                        .as_ref()
+                        .map(|src| (src.clone(), actual_rel_path.clone())),
+                );
             }
 
             if let Some(source) = source_found {
@@ -132,7 +318,10 @@ pub fn copy_models_with_textures(
                     fs::create_dir_all(parent).ok();
                 }
 
-                if fs::copy(&source, &target_path).is_ok() {
+                if texture_targets.insert(target_path.clone()) {
+                    if job_targets.insert(target_path.clone()) {
+                        copy_jobs.push((source.clone(), target_path.clone(), true));
+                    }
                     let rel_path = Path::new(&actual_rel_path);
                     let mut top_component: Option<PathBuf> = None;
                     for comp in rel_path.components() {
@@ -151,11 +340,63 @@ pub fn copy_models_with_textures(
                     } else {
                         push_path(&target_path);
                     }
-                    total_textures += 1;
                     println!("[Copy] Copied texture: {:?} -> {:?}", source, target_path);
                 }
             } else {
-                println!("[Copy] Texture not found: {:?}", tex_rel_path);
+                let mut copied_from_mpq = false;
+                if !mpq_paths.is_empty() {
+                    let mpq_path = tex_rel_path.replace("/", "\\");
+                    if mpq_archives.is_none() {
+                        let mut opened: Vec<Archive> = Vec::new();
+                        for path in &mpq_paths {
+                            if let Ok(archive) = Archive::open(path) {
+                                opened.push(archive);
+                            }
+                        }
+                        mpq_archives = Some(opened);
+                    }
+                    let archives = mpq_archives.as_mut().unwrap();
+                    for archive in archives.iter_mut().rev() {
+                        if let Ok(data) = archive.read_file(&mpq_path) {
+                            if data.len() > 50 * 1024 * 1024 {
+                                continue;
+                            }
+                            let target_path = temp_base.join(&actual_rel_path);
+                            if let Some(parent) = target_path.parent() {
+                                fs::create_dir_all(parent).ok();
+                            }
+                            if texture_targets.insert(target_path.clone()) {
+                                if fs::write(&target_path, &data).is_ok() {
+                                    let rel_path = Path::new(&actual_rel_path);
+                                    let mut top_component: Option<PathBuf> = None;
+                                    for comp in rel_path.components() {
+                                        if let std::path::Component::Normal(name) = comp {
+                                            top_component = Some(PathBuf::from(name));
+                                            break;
+                                        }
+                                    }
+                                    if let Some(top) = top_component {
+                                        let top_dir = temp_base.join(top);
+                                        if top_dir != temp_base && top_dir.is_dir() {
+                                            push_path(&top_dir);
+                                        } else {
+                                            push_path(&target_path);
+                                        }
+                                    } else {
+                                        push_path(&target_path);
+                                    }
+                                    texture_count.fetch_add(1, Ordering::Relaxed);
+                                    copied_from_mpq = true;
+                                    println!("[Copy] Copied texture from MPQ: {:?}", target_path);
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+                if !copied_from_mpq {
+                    println!("[Copy] Texture not found: {:?}", tex_rel_path);
+                }
             }
         }
     }
@@ -164,9 +405,47 @@ pub fn copy_models_with_textures(
         return Err("No models copied".to_string());
     }
 
+    let worker_count = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(8)
+        .max(2);
+    let jobs = Arc::new(Mutex::new(copy_jobs));
+
+    let mut workers = Vec::new();
+    for _ in 0..worker_count {
+        let jobs = Arc::clone(&jobs);
+        let texture_count = Arc::clone(&texture_count);
+        workers.push(thread::spawn(move || loop {
+            let job = {
+                let mut guard = jobs.lock().unwrap();
+                guard.pop()
+            };
+            match job {
+                Some((src, dst, is_texture)) => {
+                    if let Some(parent) = dst.parent() {
+                        let _ = fs::create_dir_all(parent);
+                    }
+                    let linked = try_hardlink(&src, &dst);
+                    if !linked {
+                        let _ = fs::copy(&src, &dst);
+                    }
+                    if is_texture {
+                        texture_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                None => break,
+            }
+        }));
+    }
+    for worker in workers {
+        let _ = worker.join();
+    }
+
     set_file_list_with_preferred_drop_effect(&files_to_copy)?;
     println!("[Copy] Clipboard items: {}", files_to_copy.len());
 
+    let total_textures = texture_count.load(Ordering::Relaxed);
     let message = if model_names.len() == 1 {
         format!("Copied {} ({} textures)", model_names[0], total_textures)
     } else {
@@ -295,7 +574,7 @@ fn extract_texture_paths(data: &[u8], model_path: &Path) -> Vec<String> {
                 if let Some(null_pos) = path_bytes.iter().position(|&b| b == 0) {
                     if let Ok(path_str) = std::str::from_utf8(&path_bytes[..null_pos]) {
                         let trimmed = path_str.trim();
-                        if !trimmed.is_empty() && !trimmed.starts_with("ReplaceableTextures") {
+                        if !trimmed.is_empty() {
                             paths.push(
                                 trimmed
                                     .replace("\\", "/")
@@ -315,9 +594,7 @@ fn extract_texture_paths(data: &[u8], model_path: &Path) -> Vec<String> {
                         if let Some(end) = line.rfind('"') {
                             if end > start {
                                 let path_str = &line[start + 1..end];
-                                if !path_str.is_empty()
-                                    && !path_str.starts_with("ReplaceableTextures")
-                                {
+                                if !path_str.is_empty() {
                                     paths.push(path_str.replace("\\", std::path::MAIN_SEPARATOR_STR));
                                 }
                             }
