@@ -81,6 +81,8 @@ export const ViewSettingsWindow: React.FC = () => {
     const [contextMenuLoading, setContextMenuLoading] = useState<boolean>(false);
     const [copyContextMenuEnabled, setCopyContextMenuEnabled] = useState<boolean>(false);
     const [copyContextMenuLoading, setCopyContextMenuLoading] = useState<boolean>(false);
+    const [deleteContextMenuEnabled, setDeleteContextMenuEnabled] = useState<boolean>(false);
+    const [deleteContextMenuLoading, setDeleteContextMenuLoading] = useState<boolean>(false);
 
     // DNC Environment Lighting State - Default to Lordaeron Summer
     const [selectedDNCPreset, setSelectedDNCPreset] = useState<string | null>('lordaeron');
@@ -208,8 +210,10 @@ export const ViewSettingsWindow: React.FC = () => {
                 const { invoke } = await import('@tauri-apps/api/core');
                 const isRegistered = await invoke<boolean>('check_context_menu_status');
                 const isCopyRegistered = await invoke<boolean>('check_copy_context_menu_status');
+                const isDeleteRegistered = await invoke<boolean>('check_delete_context_menu_status');
                 setContextMenuEnabled(isRegistered);
                 setCopyContextMenuEnabled(isCopyRegistered);
+                setDeleteContextMenuEnabled(isDeleteRegistered);
             } catch (e) {
                 console.error('Failed to check context menu status:', e);
             }
@@ -236,6 +240,26 @@ export const ViewSettingsWindow: React.FC = () => {
             showMessage('error', '\u64cd\u4f5c\u5931\u8d25', e.toString());
         } finally {
             setCopyContextMenuLoading(false);
+        }
+    };
+
+    const handleDeleteContextMenuToggle = async (enable: boolean) => {
+        setDeleteContextMenuLoading(true);
+        try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            if (enable) {
+                await invoke('register_delete_context_menu');
+                setDeleteContextMenuEnabled(true);
+                showMessage('success', '\u64cd\u4f5c\u6210\u529f', '\u5df2\u6dfb\u52a0\u5220\u9664\u6a21\u578b\u53f3\u952e\u83dc\u5355');
+            } else {
+                await invoke('unregister_delete_context_menu');
+                setDeleteContextMenuEnabled(false);
+                showMessage('success', '\u64cd\u4f5c\u6210\u529f', '\u5df2\u79fb\u9664\u5220\u9664\u6a21\u578b\u53f3\u952e\u83dc\u5355');
+            }
+        } catch (e: any) {
+            showMessage('error', '\u64cd\u4f5c\u5931\u8d25', e.toString());
+        } finally {
+            setDeleteContextMenuLoading(false);
         }
     };
 
@@ -625,6 +649,14 @@ export const ViewSettingsWindow: React.FC = () => {
                             disabled={copyContextMenuLoading}
                         >
                             {"\u590d\u5236\u6a21\u578b\u53f3\u952e\u83dc\u5355"}
+                        </ToggleButton>
+                        <ToggleButton
+                            checked={deleteContextMenuEnabled}
+                            onChange={() => handleDeleteContextMenuToggle(!deleteContextMenuEnabled)}
+                            style={{ width: '140px' }}
+                            disabled={deleteContextMenuLoading}
+                        >
+                            {"\u5220\u9664\u6a21\u578b\u53f3\u952e\u83dc\u5355"}
                         </ToggleButton>
                         <ToggleButton
                             checked={autoRecalculateExtent}

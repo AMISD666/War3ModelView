@@ -3,6 +3,7 @@
 mod activation;
 mod app_paths;
 mod copy_utils;
+mod delete_utils;
 mod mpq_manager;
 
 use base64::Engine;
@@ -116,6 +117,28 @@ fn get_cli_copy_path() -> Option<String> {
         }
     }
     if !has_copy_flag {
+        return None;
+    }
+    for arg in args.iter().skip(1) {
+        let lower = arg.to_lowercase();
+        if lower.ends_with(".mdx") || lower.ends_with(".mdl") {
+            return Some(arg.clone());
+        }
+    }
+    None
+}
+
+#[tauri::command]
+fn get_cli_delete_path() -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    let mut has_delete_flag = false;
+    for arg in &args {
+        if arg == "--delete-model" {
+            has_delete_flag = true;
+            break;
+        }
+    }
+    if !has_delete_flag {
         return None;
     }
     for arg in args.iter().skip(1) {
@@ -298,6 +321,81 @@ fn check_copy_context_menu_status() -> bool {
     hkcu.open_subkey(mdx_path).is_ok() && hkcu.open_subkey(mdl_path).is_ok()
 }
 
+#[tauri::command]
+fn register_delete_context_menu() -> Result<bool, String> {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let mut exe_path = std::env::current_exe()
+        .map_err(|e| e.to_string())?
+        .to_string_lossy()
+        .to_string();
+
+    if exe_path.starts_with("\\\\?\\") {
+        exe_path = exe_path[4..].to_string();
+    }
+
+    let delete_exe = exe_path.clone();
+
+    let extensions = ["mdx", "mdl"];
+
+    for ext in &extensions {
+        let shell_path = format!(
+            "Software\\Classes\\SystemFileAssociations\\.{}\\shell\\GGWar3ViewDelete",
+            ext
+        );
+        let command_path = format!("{}\\command", shell_path);
+
+        let (shell_key, _) = hkcu
+            .create_subkey(&shell_path)
+            .map_err(|e| format!("Failed to create delete shell key for .{}: {}", ext, e))?;
+
+        shell_key
+            .set_value(
+                "",
+                &"\u{5220}\u{9664}\u{6a21}\u{578b}(\u{542b}\u{8d34}\u{56fe})",
+            )
+            .map_err(|e| format!("Failed to set delete display name: {}", e))?;
+
+        shell_key
+            .set_value("Icon", &format!("\"{}\",0", exe_path))
+            .map_err(|e| format!("Failed to set delete icon: {}", e))?;
+
+        let (command_key, _) = hkcu
+            .create_subkey(&command_path)
+            .map_err(|e| format!("Failed to create delete command key: {}", e))?;
+
+        command_key
+            .set_value("", &format!("\"{}\" --delete-model \"%1\"", delete_exe))
+            .map_err(|e| format!("Failed to set delete command: {}", e))?;
+    }
+
+    Ok(true)
+}
+
+#[tauri::command]
+fn unregister_delete_context_menu() -> Result<bool, String> {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let extensions = ["mdx", "mdl"];
+
+    for ext in &extensions {
+        let shell_path = format!(
+            "Software\\Classes\\SystemFileAssociations\\.{}\\shell\\GGWar3ViewDelete",
+            ext
+        );
+        let _ = hkcu.delete_subkey_all(&shell_path);
+    }
+
+    Ok(true)
+}
+
+#[tauri::command]
+fn check_delete_context_menu_status() -> bool {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let mdx_path = "Software\\Classes\\SystemFileAssociations\\.mdx\\shell\\GGWar3ViewDelete";
+    let mdl_path = "Software\\Classes\\SystemFileAssociations\\.mdl\\shell\\GGWar3ViewDelete";
+
+    hkcu.open_subkey(mdx_path).is_ok() && hkcu.open_subkey(mdl_path).is_ok()
+}
+
 
 // ==================
 // Download Command (for auto-update)
@@ -435,7 +533,7 @@ Remove-Item -Path '{new_exe}' -Force -ErrorAction SilentlyContinue
 #[tauri::command]
 fn get_cli_file_path() -> Option<String> {
     let args: Vec<String> = std::env::args().collect();
-    if args.iter().any(|a| a == "--copy-model") {
+    if args.iter().any(|a| a == "--copy-model" || a == "--delete-model") {
         return None;
     }
     // First arg is the executable, second would be the file path
@@ -478,6 +576,27 @@ fn copy_model_with_textures(model_path: String) -> Result<String, String> {
 }
 
 fn main() {
+    if let Some(delete_path) = get_cli_delete_path() {
+        let log_root = match app_paths::get_app_storage_root() {
+            Ok(root) => root,
+            Err(_) => {
+                return;
+            }
+        };
+        let log_path = log_root.join("delete_log.txt");
+        let result = delete_utils::delete_model_with_shared_textures(&delete_path);
+        let log_line = match &result {
+            Ok(msg) => format!("[DeleteCLI] OK: {} | path={}\n", msg, delete_path),
+            Err(e) => format!("[DeleteCLI] ERR: {} | path={}\n", e, delete_path),
+        };
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .and_then(|mut f| std::io::Write::write_all(&mut f, log_line.as_bytes()));
+        return;
+    }
+
     if let Some(copy_path) = get_cli_copy_path() {
         let storage_root = match app_paths::get_app_storage_root() {
             Ok(root) => root.join("temp"),
@@ -547,9 +666,13 @@ fn main() {
             check_context_menu_status,
             get_cli_file_path,
             get_cli_copy_path,
+            get_cli_delete_path,
             register_copy_context_menu,
             unregister_copy_context_menu,
             check_copy_context_menu_status,
+            register_delete_context_menu,
+            unregister_delete_context_menu,
+            check_delete_context_menu_status,
             // Download Command
             download_file,
             launch_installer,
