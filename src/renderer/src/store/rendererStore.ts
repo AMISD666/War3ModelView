@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { appDirStorage } from '../utils/persistStorage'
+import type { AppMode } from './selectionStore'
 
 export interface GridSettings {
     show128: boolean
@@ -32,8 +33,8 @@ interface RendererStore {
     setShowGridXZ: (show: boolean) => void
     showGridYZ: boolean
     setShowGridYZ: (show: boolean) => void
-    showVertices: boolean
-    setShowVertices: (show: boolean) => void
+    showVerticesByMode: Record<AppMode, boolean>
+    setShowVerticesForMode: (mode: AppMode, show: boolean) => void
     showNodes: boolean
     setShowNodes: (show: boolean) => void
     showSkeleton: boolean
@@ -125,8 +126,16 @@ export const useRendererStore = create<RendererStore>()(
             setShowGridXZ: (show) => set({ showGridXZ: show }),
             showGridYZ: false,
             setShowGridYZ: (show) => set({ showGridYZ: show }),
-            showVertices: true, // Default shown
-            setShowVertices: (show) => set({ showVertices: show }),
+            showVerticesByMode: {
+                view: true,
+                geometry: true,
+                uv: true,
+                animation: true,
+                batch: true
+            },
+            setShowVerticesForMode: (mode, show) => set((state) => ({
+                showVerticesByMode: { ...state.showVerticesByMode, [mode]: show }
+            })),
             showNodes: false,
             setShowNodes: (show) => set({ showNodes: show }),
             showSkeleton: false,
@@ -188,7 +197,7 @@ export const useRendererStore = create<RendererStore>()(
                 showGridXY: state.showGridXY,
                 showGridXZ: state.showGridXZ,
                 showGridYZ: state.showGridYZ,
-                showVertices: state.showVertices,
+                showVerticesByMode: state.showVerticesByMode,
                 showNodes: state.showNodes,
                 showSkeleton: state.showSkeleton,
                 showFPS: state.showFPS,

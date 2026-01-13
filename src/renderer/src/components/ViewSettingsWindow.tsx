@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Select, Button, Slider, ColorPicker, Modal, Input } from 'antd';
 import { DraggableModal } from './DraggableModal';
 import { useRendererStore } from '../store/rendererStore';
+import { useSelectionStore } from '../store/selectionStore';
 import { showMessage, useMessageStore } from '../store/messageStore';
 import { DatabaseOutlined, CheckCircleFilled, CloseCircleFilled, FolderOpenOutlined, SunOutlined } from '@ant-design/icons';
 import { DNC_PRESETS, getEnvironmentManager } from './viewer/EnvironmentManager';
@@ -69,12 +70,14 @@ export const ViewSettingsWindow: React.FC = () => {
         hoverColor, setHoverColor,
         teamColor, setTeamColor,
         mpqLoaded, setMpqLoaded,
-        showVertices, setShowVertices,
+        showVerticesByMode, setShowVerticesForMode,
         vertexSettings, setVertexSettings,
         autoRecalculateExtent, setAutoRecalculateExtent,
         autoRecalculateNormals, setAutoRecalculateNormals,
         keepCameraOnLoad, setKeepCameraOnLoad
     } = useRendererStore();
+    const mainMode = useSelectionStore(state => state.mainMode);
+    const showVertices = showVerticesByMode[mainMode] ?? true;
 
     // Context Menu Integration State
     const [contextMenuEnabled, setContextMenuEnabled] = useState<boolean>(false);
@@ -471,7 +474,7 @@ export const ViewSettingsWindow: React.FC = () => {
                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
                                     <ToggleButton
                                         checked={showVertices}
-                                        onChange={setShowVertices}
+                                        onChange={(v) => setShowVerticesForMode(mainMode, v)}
                                         fullWidth
                                     >
                                         显示顶点

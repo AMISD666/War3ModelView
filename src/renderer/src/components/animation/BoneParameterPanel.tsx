@@ -1,4 +1,4 @@
-import React, { useMemo, useCallback, useRef, useEffect } from 'react'
+import React, { useMemo, useCallback, useRef, useEffect, useState } from 'react'
 import { Typography, Select, message } from 'antd'
 import { quat, vec3 } from 'gl-matrix'
 import { useSelectionStore } from '../../store/selectionStore'
@@ -47,6 +47,44 @@ function eulerToQuat(euler: [number, number, number]): [number, number, number, 
         c1 * c2 * s3 + s1 * s2 * c3, // z
         c1 * c2 * c3 - s1 * s2 * s3  // w
     ]
+}
+
+/**
+ * Convert World Space delta to Local Space delta
+ * Uses the inverse of the parent's rotation matrix to transform the delta
+ */
+function worldDeltaToLocalDelta(renderer: any, nodeId: number, worldDelta: [number, number, number]): [number, number, number] {
+    if (!renderer || !renderer.rendererData || !renderer.rendererData.nodes) {
+        return worldDelta
+    }
+
+    const nodes = renderer.rendererData.nodes
+    const nodeWrapper = nodes.find((n: any) => n.node && n.node.ObjectId === nodeId)
+
+    if (!nodeWrapper || !nodeWrapper.node) return worldDelta
+
+    const parentId = nodeWrapper.node.Parent
+    if (parentId === undefined || parentId === -1) {
+        return worldDelta
+    }
+
+    const parentWrapper = nodes.find((n: any) => n.node && n.node.ObjectId === parentId)
+    if (!parentWrapper || !parentWrapper.matrix) {
+        return worldDelta
+    }
+
+    const parentMat = parentWrapper.matrix
+    const invRotation = [
+        parentMat[0], parentMat[4], parentMat[8], 0,
+        parentMat[1], parentMat[5], parentMat[9], 0,
+        parentMat[2], parentMat[6], parentMat[10], 0,
+        0, 0, 0, 1
+    ]
+
+    const localDelta = vec3.create()
+    vec3.transformMat4(localDelta, vec3.fromValues(worldDelta[0], worldDelta[1], worldDelta[2]), invRotation as any)
+
+    return [localDelta[0], localDelta[1], localDelta[2]]
 }
 
 // --- 插值函数 ---
@@ -133,6 +171,8 @@ const BoneParameterPanel: React.FC = () => {
 
     const renderer = useRendererStore(state => state.renderer)
     const { executeCommand } = useCommandManager()
+    const [translationSpace, setTranslationSpace] = useState<'world' | 'local'>('world')
+    const [worldTick, setWorldTick] = useState(0)
 
     // 选中的单个骨骼
     const selectedNode = selectedNodeIds.length === 1
@@ -175,7 +215,7 @@ const BoneParameterPanel: React.FC = () => {
     }, [modelData, nodes, selectedVertexIds])
 
     // 插值数据
-    const translation = useMemo(() => {
+    const translationLocal = useMemo(() => {
         if (!selectedNode) return [0, 0, 0]
         return interpolateTranslation(selectedNode.Translation?.Keys, currentFrame)
     }, [selectedNode, currentFrame])
@@ -191,6 +231,17 @@ const BoneParameterPanel: React.FC = () => {
     }, [selectedNode, currentFrame])
 
     const euler = useMemo(() => quatToEuler(rotation), [rotation])
+
+    const translationWorld = useMemo(() => {
+        if (!selectedNode) return [0, 0, 0]
+        const worldPos = (window as any)._selectedBoneWorldPos
+        if (worldPos && Array.isArray(worldPos) && worldPos.length === 3) {
+            return worldPos as [number, number, number]
+        }
+        return translationLocal as [number, number, number]
+    }, [selectedNode, translationLocal, worldTick])
+
+    const translationDisplay = translationSpace === 'world' ? translationWorld : translationLocal
 
     // 精确关键帧检查
     const hasExactKey = useCallback((propName: string) => {
@@ -209,9 +260,9 @@ const BoneParameterPanel: React.FC = () => {
     // 同步到输入框
     useEffect(() => {
         if (isEditingRef.current) return
-        if (transRefs.current.x) transRefs.current.x.value = (translation[0] || 0).toFixed(5)
-        if (transRefs.current.y) transRefs.current.y.value = (translation[1] || 0).toFixed(5)
-        if (transRefs.current.z) transRefs.current.z.value = (translation[2] || 0).toFixed(5)
+        if (transRefs.current.x) transRefs.current.x.value = (translationDisplay[0] || 0).toFixed(5)
+        if (transRefs.current.y) transRefs.current.y.value = (translationDisplay[1] || 0).toFixed(5)
+        if (transRefs.current.z) transRefs.current.z.value = (translationDisplay[2] || 0).toFixed(5)
 
         if (rotRefs.current.x) rotRefs.current.x.value = (euler[0] || 0).toFixed(2)
         if (rotRefs.current.y) rotRefs.current.y.value = (euler[1] || 0).toFixed(2)
@@ -220,7 +271,14 @@ const BoneParameterPanel: React.FC = () => {
         if (scaleRefs.current.x) scaleRefs.current.x.value = (scaling[0] || 0).toFixed(5)
         if (scaleRefs.current.y) scaleRefs.current.y.value = (scaling[1] || 0).toFixed(5)
         if (scaleRefs.current.z) scaleRefs.current.z.value = (scaling[2] || 0).toFixed(5)
-    }, [translation, euler, scaling])
+    }, [translationDisplay, euler, scaling])
+
+    useEffect(() => {
+        if (!renderer || selectedNodeIds.length === 0) return
+        if (translationSpace !== 'world') return
+        renderer.update(0)
+        setWorldTick((tick) => tick + 1)
+    }, [renderer, selectedNodeIds, currentFrame, translationSpace])
 
     const handleFocus = useCallback(() => { isEditingRef.current = true }, [])
 
@@ -269,7 +327,23 @@ const BoneParameterPanel: React.FC = () => {
             parseFloat(transRefs.current.y?.value || '0') || 0,
             parseFloat(transRefs.current.z?.value || '0') || 0
         ]
-        commitProp('Translation', val)
+        if (translationSpace === 'world' && selectedNode) {
+            const currentWorld = translationDisplay
+            const worldDelta: [number, number, number] = [
+                val[0] - (currentWorld[0] || 0),
+                val[1] - (currentWorld[1] || 0),
+                val[2] - (currentWorld[2] || 0)
+            ]
+            const localDelta = worldDeltaToLocalDelta(renderer, selectedNode.ObjectId, worldDelta)
+            const newLocal: [number, number, number] = [
+                translationLocal[0] + localDelta[0],
+                translationLocal[1] + localDelta[1],
+                translationLocal[2] + localDelta[2]
+            ]
+            commitProp('Translation', newLocal)
+        } else {
+            commitProp('Translation', val)
+        }
         isEditingRef.current = false
     }
 
@@ -359,7 +433,41 @@ const BoneParameterPanel: React.FC = () => {
 
             {/* 骨骼参数 */}
             <div style={{ padding: '10px', borderBottom: '1px solid #444' }}>
-                <Text strong style={{ color: '#fff', fontSize: '13px' }}>骨骼参数</Text>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Text strong style={{ color: '#fff', fontSize: '13px' }}>骨骼参数</Text>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                        <button
+                            type="button"
+                            onClick={() => setTranslationSpace('world')}
+                            style={{
+                                background: translationSpace === 'world' ? '#1890ff' : '#1f1f1f',
+                                border: '1px solid #3a3a3a',
+                                color: translationSpace === 'world' ? '#fff' : '#aaa',
+                                fontSize: 11,
+                                padding: '2px 6px',
+                                borderRadius: 4,
+                                cursor: 'pointer'
+                            }}
+                        >
+                            {"\u4e16\u754c"}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setTranslationSpace('local')}
+                            style={{
+                                background: translationSpace === 'local' ? '#1890ff' : '#1f1f1f',
+                                border: '1px solid #3a3a3a',
+                                color: translationSpace === 'local' ? '#fff' : '#aaa',
+                                fontSize: 11,
+                                padding: '2px 6px',
+                                borderRadius: 4,
+                                cursor: 'pointer'
+                            }}
+                        >
+                            {"\u76f8\u5bf9"}
+                        </button>
+                    </div>
+                </div>
 
                 <div style={{ marginTop: 10 }}>
                     {/* 骨骼名称 */}

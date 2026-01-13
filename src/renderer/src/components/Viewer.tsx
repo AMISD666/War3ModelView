@@ -132,7 +132,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const backgroundColorRef = useRef(backgroundColor)
 
   // Store-derived refs
-  const showVerticesRef = useRef(useRendererStore.getState().showVertices)
+  const showVerticesRef = useRef(
+    useRendererStore.getState().showVerticesByMode[useSelectionStore.getState().mainMode] ?? true
+  )
   const enableLightingRef = useRef(useRendererStore.getState().enableLighting)
   const vertexSettingsRef = useRef(useRendererStore.getState().vertexSettings)
 
@@ -167,7 +169,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
     // Sync store-only settings
     const state = useRendererStore.getState()
-    showVerticesRef.current = state.showVertices
+    const { mainMode } = useSelectionStore.getState()
+    showVerticesRef.current = state.showVerticesByMode[mainMode] ?? true
     vertexSettingsRef.current = state.vertexSettings
   }, [showGrid, showNodes, showSkeleton, showCollisionShapes, showCameras, showLights, showAttachments, showWireframe, isPlaying, playbackSpeed, backgroundColor,
     // Add implicit dependencies if they result in re-render, otherwise we rely on the loop checking refs.
@@ -179,14 +182,18 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   // Separate effect for store-driven updates (since they aren't props)
   useEffect(() => {
     const unsub = useRendererStore.subscribe((state) => {
-      const unsub = useRendererStore.subscribe((state) => {
-        showVerticesRef.current = state.showVertices
-        enableLightingRef.current = state.enableLighting
-        vertexSettingsRef.current = state.vertexSettings
-      })
+      const { mainMode } = useSelectionStore.getState()
+      showVerticesRef.current = state.showVerticesByMode[mainMode] ?? true
+      enableLightingRef.current = state.enableLighting
+      vertexSettingsRef.current = state.vertexSettings
     })
     return () => unsub()
   }, [])
+
+  useEffect(() => {
+    const state = useRendererStore.getState()
+    showVerticesRef.current = state.showVerticesByMode[appMainMode] ?? true
+  }, [appMainMode])
 
 
   useEffect(() => {

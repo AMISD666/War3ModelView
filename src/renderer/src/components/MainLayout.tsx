@@ -1205,8 +1205,10 @@ const MainLayout: React.FC = () => {
                 case '6': setViewPreset({ type: 'right', time: Date.now() }); break;
                 // Vertex visibility toggle
                 case 'v': {
-                    const { showVertices, setShowVertices } = useRendererStore.getState();
-                    setShowVertices(!showVertices);
+                    const { mainMode } = useSelectionStore.getState();
+                    const { showVerticesByMode, setShowVerticesForMode } = useRendererStore.getState();
+                    const current = showVerticesByMode[mainMode] ?? true;
+                    setShowVerticesForMode(mainMode, !current);
                     break;
                 }
             }
