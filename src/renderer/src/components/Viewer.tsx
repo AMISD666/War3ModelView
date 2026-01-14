@@ -23,6 +23,7 @@ import { useHistoryStore } from '../store/historyStore'
 import { ModelInfoPanel } from './info/ModelInfoPanel'
 import { ViewerToolbar } from './ViewerToolbar'
 import { ConfigProvider, theme } from 'antd'
+import { CopyOutlined } from '@ant-design/icons'
 import { commandManager } from '../utils/CommandManager'
 import { MoveVerticesCommand, VertexChange } from '../commands/MoveVerticesCommand'
 import { MoveNodesCommand, NodeChange } from '../commands/MoveNodesCommand'
@@ -117,6 +118,53 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const frameCount = useRef<number>(0)
   const renderRef = useRef<((time: number, scheduleNext?: boolean) => void) | null>(null)
   const { showModelInfo } = useUIStore()
+
+  const formatCameraValue = (value: number): string => {
+    if (!Number.isFinite(value)) return '0'
+    const formatted = value.toFixed(2)
+    return formatted.replace(/\.?0+$/, '')
+  }
+
+  const getCameraVector = (prop: any, directProp?: any): number[] => {
+    const isArrayLike = (v: any) => Array.isArray(v) || v instanceof Float32Array || ArrayBuffer.isView(v)
+    const toArray = (v: any) => v instanceof Float32Array ? Array.from(v) : v
+
+    if (directProp && isArrayLike(directProp)) return toArray(directProp)
+    if (isArrayLike(prop)) return toArray(prop)
+    if (prop && prop.Keys && prop.Keys.length > 0) {
+      const v = prop.Keys[0].Vector
+      return v ? toArray(v) : [0, 0, 0]
+    }
+    return [0, 0, 0]
+  }
+
+  const copySelectedCameraParams = () => {
+    const { nodes } = useModelStore.getState()
+    const { selectedNodeIds } = useSelectionStore.getState()
+    const cameraList = nodes.filter((n: any) => n.type === 'Camera')
+
+    if (cameraList.length === 0) return
+
+    let camera = cameraList.find((cam: any) => selectedNodeIds.includes(cam.ObjectId))
+    if (!camera) {
+      const selector = document.getElementById('camera-selector') as HTMLSelectElement | null
+      if (selector && selector.value && selector.value !== '-1') {
+        const idx = parseInt(selector.value, 10)
+        if (!Number.isNaN(idx) && cameraList[idx]) {
+          camera = cameraList[idx]
+        }
+      }
+    }
+
+    if (!camera) return
+
+    const pos = getCameraVector(camera.Translation, (camera as any).Position)
+    const target = getCameraVector(camera.TargetTranslation, (camera as any).TargetPosition)
+    const text = `${formatCameraValue(pos[0])},${formatCameraValue(pos[1])},${formatCameraValue(pos[2])}\n` +
+      `${formatCameraValue(target[0])},${formatCameraValue(target[1])},${formatCameraValue(target[2])}`
+
+    navigator.clipboard.writeText(text).catch(() => {})
+  }
 
   // Refs for props to be accessible in render loop
   const showGridRef = useRef(showGrid)
@@ -4806,6 +4854,25 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 <option key={i} value={i}>{cam.Name || `Camera ${i + 1}`}</option>
               ))}
             </select>
+            <button
+              type="button"
+              title="复制相机位置和焦点"
+              onClick={copySelectedCameraParams}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '24px',
+                height: '24px',
+                background: 'rgba(0, 0, 0, 0.7)',
+                color: '#fff',
+                border: '1px solid #555',
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}
+            >
+              <CopyOutlined style={{ fontSize: '12px' }} />
+            </button>
             <MissingTextureWarning />
           </div>
         );
