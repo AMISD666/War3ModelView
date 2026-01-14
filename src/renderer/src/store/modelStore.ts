@@ -701,6 +701,43 @@ function getDefaultNodeProperties(type: NodeType): Partial<ModelNode> {
     }
 }
 
+function normalizeGeosetAnim(anim: any): any {
+    if (!anim || typeof anim !== 'object') return anim;
+    const normalized = { ...anim };
+    if (Array.isArray(normalized.Color)) {
+        normalized.Color = new Float32Array(normalized.Color.slice(0, 3));
+    } else if (normalized.Color && typeof normalized.Color === 'object' && Array.isArray(normalized.Color.Keys)) {
+        normalized.Color = normalizeAnimVector(normalized.Color, 3, false);
+    }
+    if (normalized.Alpha && typeof normalized.Alpha === 'object' && Array.isArray(normalized.Alpha.Keys)) {
+        normalized.Alpha = normalizeAnimVector(normalized.Alpha, 1, false);
+    }
+    if (typeof normalized.UseColor === 'boolean') {
+        const flags = typeof normalized.Flags === 'number' ? normalized.Flags : 0;
+        normalized.Flags = normalized.UseColor ? (flags | 2) : (flags & ~2);
+    }
+    return normalized;
+}
+
+function normalizeAnimVector(anim: any, size: number, isInt: boolean): any {
+    const normalized = { ...anim };
+    const Type = isInt ? Int32Array : Float32Array;
+    normalized.Keys = (anim.Keys || []).map((key: any) => {
+        const next = { ...key };
+        if (key.Vector && !(key.Vector instanceof Type)) {
+            next.Vector = new Type(Array.from(key.Vector as ArrayLike<number>).slice(0, size));
+        }
+        if (key.InTan && !(key.InTan instanceof Type)) {
+            next.InTan = new Type(Array.from(key.InTan as ArrayLike<number>).slice(0, size));
+        }
+        if (key.OutTan && !(key.OutTan instanceof Type)) {
+            next.OutTan = new Type(Array.from(key.OutTan as ArrayLike<number>).slice(0, size));
+        }
+        return next;
+    });
+    return normalized;
+}
+
 export const useModelStore = create<ModelState>((set, get) => ({
     modelData: null,
     modelPath: null,
@@ -1350,7 +1387,10 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
             const newGeosetAnims = [...state.modelData.GeosetAnims];
             if (index >= 0 && index < newGeosetAnims.length) {
-                newGeosetAnims[index] = { ...newGeosetAnims[index], ...updates };
+                newGeosetAnims[index] = normalizeGeosetAnim({
+                    ...newGeosetAnims[index],
+                    ...updates
+                });
 
                 // Update modelData
                 const updatedModelData = { ...state.modelData, GeosetAnims: newGeosetAnims };
@@ -1363,7 +1403,10 @@ export const useModelStore = create<ModelState>((set, get) => ({
     setGeosetAnims: (anims: any[]) => {
         set((state) => {
             if (!state.modelData) return {};
-            const updatedModelData = { ...state.modelData, GeosetAnims: anims };
+            const updatedModelData = {
+                ...state.modelData,
+                GeosetAnims: anims.map(normalizeGeosetAnim)
+            };
             return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
         });
     },

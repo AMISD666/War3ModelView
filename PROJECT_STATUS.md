@@ -1,38 +1,106 @@
 # War3ModelView Project Status & Handoff
 
-## 1. 当前进度 (Current Progress)
+## Current Status (What works now)
+1) Copy model with textures (clipboard CF_HDROP)
+   - Backend command: `copy_model_with_textures` and CLI `--copy-model`
+   - Texture paths resolved by model TEXS or MDL Image blocks
+   - Supports local texture search by model dir + 3 parents, alt extensions
+   - Temporary folder under `war3modelview_data/temp`
+   - Clipboard uses CF_HDROP + Preferred DropEffect
+2) Windows context menu
+   - Open with GGWar3View: OK
+   - Copy model (with textures): OK, supports multi-select
+   - Delete model (with textures): OK, supports multi-select
+3) Multi-select copy/delete CLI
+   - Copy: `--copy-model "%1" %*` (registry)
+   - Delete: `--delete-model "%1" %*` (registry)
+   - MultiSelectModel=Player set for copy/delete keys
+4) Delete logic improved
+   - Batch delete uses texture usage counting to keep shared textures
+5) MPQ copy toggle
+   - Default OFF
+   - If local texture missing and toggle ON, copy from MPQ
+   - MPQ paths persisted to backend settings file
+6) UI changes
+   - File menu copy model + Shift+C
+   - Per-mode vertex visibility (V key) in view/geometry/uv/animation/batch
+   - Bone parameter panel: world/local translation toggle, default world
 
-### 已完成功能 (Completed)
-1.  **相机状态保持 (Camera State Persistence)**:
-    *   实现了 `keepCameraOnLoad` 设置，允许在切换模型时保持相机位置、角度和缩放。
-    *   在 `Viewer.tsx` 中增加了手动 "适应视图" (Fit to View) 功能及快捷键 `F`。
-    *   设置持久化存储于 `RendererStore`。
+## Recent Changes (Key Files)
+Backend (Rust):
+- `src-tauri/src/main.rs`
+  - Copy/delete CLI handling
+  - Context menu register/unregister + MultiSelectModel
+  - Settings commands: `set_mpq_paths`, `set_copy_mpq_textures`
+- `src-tauri/src/copy_utils.rs`
+  - Multi-model copy, texture search, cache
+  - Optional MPQ fallback
+  - Parallel model parsing and copy jobs
+  - Hardlink attempt added (CreateHardLinkW), falls back to copy
+- `src-tauri/src/delete_utils.rs`
+  - Batch delete with shared texture counting
+- `src-tauri/src/app_settings.rs`
+  - Persist mpq paths + copy_mpq_textures toggle
+- `src-tauri/Cargo.toml`
+  - windows-sys feature Win32_Storage_FileSystem + Win32_Security
 
-2.  **模型一键复制 (Model Copy Feature)**:
-    *   **后端 (Rust)**: 实现了 `copy_model_with_textures` 命令，使用 `clipboard-win` 库操作系统剪贴板。
-    *   **前端 (React)**: 在 `ModelCard` 中增加了复制按钮，并支持 `Ctrl+C` 快捷键。
-    *   **文件结构保持 (Folder Structure)**: 采用临时目录方案。复制时先将模型和检测到的贴图拷贝到临时文件夹（按原始相对路径排列），然后将临时文件列表整体写入剪贴板。粘贴时可保持 `war3mapimported\` 等子目录结构。
-    *   **多路径贴图搜索**: 修复了贴图找不到的问题。现在会递归搜索模型所在目录、父目录、祖父目录（最多3层），并尝试多种后缀名 (`.blp`, `.tgas`, `.png`, `.dds`)。
+Frontend (React):
+- `src/renderer/src/components/ViewSettingsWindow.tsx`
+  - Toggles: copy/delete context menus, copy MPQ textures
+- `src/renderer/src/components/MainLayout.tsx`
+  - Sync mpq paths to backend
+- `src/renderer/src/components/animation/BoneParameterPanel.tsx`
+  - World/local translation toggle
+- `src/renderer/src/components/MainLayout.tsx`
+  - V key per-mode toggle
+- `src/renderer/src/store/rendererStore.ts`
+  - showVerticesByMode + per-mode setters
+- `src/renderer/src/components/Viewer.tsx`
+  - uses showVerticesByMode
 
-### 待处理/进行中 (In Progress / Pending)
-1.  **批量贴图路径修改**: UI 按钮已就绪，但 `handleEditTexture` 逻辑尚未实现完整批量修改功能。
-2.  **从 MPQ 提取贴图**: 如果本地路径完全找不到贴图，目前的复制功能会提示 "0个贴图"。未来可以考虑自动从绑定的 MPQ 文件中提取缺失贴图。
-3.  **内存管理优化**: 批量预览模式下，WebView2 和 GPU 内存占用较高的问题仍有优化空间（已优化过一轮 LRU 缓存）。
+## Known Issues
+1) Copy performance still slow
+   - Single model copy still ~2s; 80+ models ~8-9s
+   - Hardlink should reduce cost but not confirmed in build/test yet
+2) Copy multi-select reliability
+   - Works, but relies on `%1 %*` registry and CLI parsing
+3) Virtual clipboard (delayed data)
+   - NOT implemented (user requested, then reverted)
 
-## 2. 核心架构说明 (Architecture Note)
-*   **渲染器**: 位于 `war3-model-4.0.0` 目录，是纯 WebGL 实现的渲染引擎。
-*   **前端布局**: 使用 Vite + React + Ant Design。
-*   **后端能力**: 使用 Tauri，大部分文件系统和系统交互逻辑位于 `src-tauri/src/main.rs`。
-*   **剪贴板逻辑**: 使用 `CF_HDROP` 格式，必须通过 Rust 调用 Windows API。
+## Performance Optimizations Done
+- Parallel model parsing
+- Parallel copy jobs
+- Texture resolve cache
+- Optional MPQ lazy-load
+- For single model, skip expensive directory index scan
 
-## 3. 下一步计划 (Next Steps)
-1.  **验证贴图复制**: 让用户在最新的 "3层父目录搜索" 逻辑下验证是否能成功复制 `war3mapimported` 目录下的贴图。
-2.  **实现文件夹整体导出/复制**: 当前是单模型复制。用户可能需要 "导出所有搜索到的文件"。
-3.  **完善状态栏/通知**: 目前使用 `message.success` 提示复制结果，可以增加更详细的文件列表预览。
+## Next Steps (Priority)
+1) Verify hardlink path
+   - Confirm CreateHardLinkW compiles after adding Win32_Security
+   - If hardlink works, single model copy should be near-instant
+2) Add directory index cache for multi-model
+   - (Already added, but validate real-world impact)
+3) Optional: Virtual clipboard (delayed file provider)
+   - Requires process alive until paste
+   - More complex (IDataObject/CFSTR_FILEDESCRIPTOR)
 
-## 4. 经验总结 (Lessons Learned)
-*   **Windows 剪贴板限制**: 直接通过文件路径列表写入剪贴板不会自动创建文件夹。必须实现在临时目录中构建好结构后，将临时文件路径送入剪贴板，Windows 资源管理器在粘贴时才会按目录结构放置。
-*   **贴图解析**: 魔兽3模型的贴图路径存储在 `TEXS` 块。如果是从地图导出的模型，路径通常是 `war3mapimported\xxx.blp`，而本地文件系统可能把贴图放在模型的上一级 `resource` 文件夹中。
+## Handoff Notes / Gotchas
+1) Right-click copy command must be:
+   - `"war3-model-editor.exe" --copy-model "%1" %*`
+   - MultiSelectModel=Player under:
+     - `HKCU\Software\Classes\SystemFileAssociations\.mdx\shell\GGWar3ViewCopy`
+     - `HKCU\Software\Classes\SystemFileAssociations\.mdl\shell\GGWar3ViewCopy`
+2) MPQ copy toggle lives in `app_settings.json` under app storage root
+3) If copy_log shows `paths=[]`, registry command is wrong or args parsing failed
+4) Copy temp root: `war3modelview_data/temp`
 
----
-*更新时间：2026-01-13*
+## Experience / Conclusions
+- The biggest copy cost is file I/O, not model parsing
+- Windows Explorer waits on context menu process unless separated; user rejected background start
+- Hardlink is best fast path if same disk
+- MPQ fallback should be optional, local files first
+
+## Suggested Message for Next AI (Copy/Paste)
+“Please continue from PROJECT_STATUS.md. Current blockers: copy performance is still slow (single model ~2s, multi-model ~8-9s). Hardlink path added via CreateHardLinkW but not verified. Context menu copy/delete uses MultiSelectModel=Player and command `--copy-model "%1" %*` / `--delete-model "%1" %*`. MPQ copy toggle exists in settings and backend app_settings.json. Focus on verifying hardlink effectiveness or implementing delayed clipboard if needed.”
+
+*Last update: 2026-01-13*

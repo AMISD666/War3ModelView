@@ -10,9 +10,12 @@ mod mpq_manager;
 use base64::Engine;
 use mpq_manager::MpqManager;
 use tauri::{ipc::Response, State};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use winreg::enums::*;
 use winreg::RegKey;
+
+static DEBUG_CONSOLE_ENABLED: AtomicBool = AtomicBool::new(false);
 
 #[tauri::command]
 fn detect_warcraft_path() -> Result<String, String> {
@@ -38,6 +41,7 @@ fn detect_warcraft_path() -> Result<String, String> {
 
 #[tauri::command]
 fn toggle_console(show: bool) {
+    DEBUG_CONSOLE_ENABLED.store(show, Ordering::Relaxed);
     #[cfg(windows)]
     unsafe {
         use windows_sys::Win32::System::Console::{AllocConsole, FreeConsole};
@@ -51,6 +55,9 @@ fn toggle_console(show: bool) {
 
 #[tauri::command]
 fn debug_log(message: String) {
+    if !DEBUG_CONSOLE_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
     println!("{}", message);
 }
 
@@ -703,6 +710,13 @@ fn copy_model_with_textures(model_path: String) -> Result<String, String> {
     copy_utils::copy_model_with_textures(&model_path, &temp_root)
 }
 
+fn cleanup_temp_cache() {
+    if let Ok(root) = app_paths::get_app_storage_root() {
+        let temp_root = root.join("temp");
+        copy_utils::cleanup_temp_root(&temp_root);
+    }
+}
+
 fn main() {
     let delete_paths = get_cli_delete_paths();
     if let Some(delete_paths) = delete_paths {
@@ -848,6 +862,8 @@ fn main() {
         return;
     }
 
+    cleanup_temp_cache();
+
     tauri::Builder::default()
         .manage(MpqManager::new())
         .plugin(tauri_plugin_fs::init())
@@ -894,6 +910,12 @@ fn main() {
             // Model Copy Command
             copy_model_with_textures
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|_, event| match event {
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+                cleanup_temp_cache();
+            }
+            _ => {}
+        });
 }

@@ -27,6 +27,7 @@ import { useRendererStore } from '../store/rendererStore'
 import { GlobalMessageLayer } from './GlobalMessageLayer'
 import { showMessage, showConfirm } from '../store/messageStore'
 import { checkGiteeUpdate, showChangelog as showUpdateLog } from '../services/updateService';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
 /**
  * Normalize model data before saving to ensure typed arrays are correct.
@@ -838,6 +839,7 @@ const MainLayout: React.FC = () => {
     const [showMaterialModal, setShowMaterialModal] = useState<boolean>(false)
     const [showGeosetModal, setShowGeosetModal] = useState<boolean>(false)
     const [showGlobalSeqModal, setShowGlobalSeqModal] = useState<boolean>(false)
+    const [showAbout, setShowAbout] = useState<boolean>(false)
 
 
     // Use modelData directly from store to ensure updates from NodeManager are reflected
@@ -1186,14 +1188,71 @@ const MainLayout: React.FC = () => {
         return () => clearTimeout(timer)
     }, [])
     // Manager Shortcuts
+    const handleCopyModel = useCallback(async () => {
+        if (!modelPath) {
+            showMessage('warning', '提示', '没有可复制的模型');
+            return;
+        }
+        try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            const result = await invoke<string>('copy_model_with_textures', { modelPath });
+            showMessage('success', '成功', result);
+        } catch (err) {
+            console.error('Copy failed:', err);
+            showMessage('error', '错误', '复制失败');
+        }
+    }, [modelPath]);
+
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
+            const key = e.key.toLowerCase()
+
+            if (e.altKey && key === 'f4') {
+                e.preventDefault();
+                e.stopPropagation();
+                getCurrentWindow().close();
+                return;
+            }
+
+            if (key === 'c' && e.shiftKey) {
+                e.preventDefault();
+                handleCopyModel();
+                return;
+            }
+
+            if (key === 'escape') {
+                const uiState = useUIStore.getState();
+                const rendererState = useRendererStore.getState();
+                const hasPanels = !!activeEditor
+                    || showGeosetAnimModal
+                    || showTextureModal
+                    || showTextureAnimModal
+                    || showSequenceModal
+                    || showCameraModal
+                    || showMaterialModal
+                    || showGeosetModal
+                    || showGlobalSeqModal
+                    || showAbout
+                    || rendererState.showSettingsPanel
+                    || uiState.showNodeManager
+                    || uiState.showModelInfo
+                    || uiState.showVertexEditor
+                    || uiState.showFaceEditor
+                    || uiState.showNodeDialog
+                    || uiState.showCreateNodeDialog
+                    || uiState.showTransformModelDialog;
+                if (!hasPanels) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    getCurrentWindow().close();
+                }
+                return;
+            }
+
             if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) return
 
             // Skip if Ctrl/Meta is pressed (used for copy/paste operations)
             if (e.ctrlKey || e.metaKey) return
-
-            const key = e.key.toLowerCase()
 
             switch (key) {
                 case 'n': toggleNodeManager(); break;
@@ -1230,7 +1289,21 @@ const MainLayout: React.FC = () => {
         }
         window.addEventListener('keydown', handleKeyDown)
         return () => window.removeEventListener('keydown', handleKeyDown)
-    }, [toggleNodeManager])
+    }, [
+        activeEditor,
+        handleCopyModel,
+        showAbout,
+        showCameraModal,
+        showGeosetAnimModal,
+        showGeosetModal,
+        showGeosetVisibility,
+        showGlobalSeqModal,
+        showMaterialModal,
+        showSequenceModal,
+        showTextureAnimModal,
+        showTextureModal,
+        toggleNodeManager
+    ])
 
     const handleImport = useCallback(async () => {
         try {
@@ -1733,7 +1806,6 @@ const MainLayout: React.FC = () => {
             return saved ? JSON.parse(saved) : false;
         } catch { return false; }
     })
-    const [showAbout, setShowAbout] = useState<boolean>(false)
     const [showChangelog, setShowChangelog] = useState<boolean>(false)
     const [activationStatus, setActivationStatus] = useState<{
         is_activated: boolean;
@@ -1749,6 +1821,9 @@ const MainLayout: React.FC = () => {
 
     useEffect(() => {
         localStorage.setItem('showDebugConsole', JSON.stringify(showDebugConsole))
+        import('../utils/debugConsoleState').then(({ setDebugConsoleEnabled }) => {
+            setDebugConsoleEnabled(showDebugConsole)
+        })
         import('@tauri-apps/api/core').then(({ invoke }) => {
             invoke('toggle_console', { show: showDebugConsole }).catch(e => console.error('Failed to toggle console:', e))
         })
@@ -1981,20 +2056,7 @@ const MainLayout: React.FC = () => {
                     useModelStore.getState().removeLights();
                     showMessage('success', '成功', '已删除所有光照节点');
                 }}
-                onCopyModel={async () => {
-                    if (!modelPath) {
-                        showMessage('warning', '提示', '没有可复制的模型');
-                        return;
-                    }
-                    try {
-                        const { invoke } = await import('@tauri-apps/api/core');
-                        const result = await invoke<string>('copy_model_with_textures', { modelPath });
-                        showMessage('success', '成功', result);
-                    } catch (err) {
-                        console.error('Copy failed:', err);
-                        showMessage('error', '错误', '复制失败');
-                    }
-                }}
+                onCopyModel={handleCopyModel}
             />
 
             {/* About Dialog */}

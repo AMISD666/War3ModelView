@@ -2,6 +2,7 @@
  * Utility for logging to both browser console and production CMD window
  */
 import { invoke } from '@tauri-apps/api/core'
+import { isDebugConsoleEnabled } from './debugConsoleState'
 
 /**
  * Log a message to both the browser console and the Tauri CMD window (in production)
@@ -17,6 +18,9 @@ export async function debugLog(message: string, color?: 'green' | 'red'): Promis
     }
 
     // Also send to Tauri CMD window (works in production builds)
+    if (!isDebugConsoleEnabled()) {
+        return
+    }
     let cmdMessage = message
     if (color === 'green') {
         cmdMessage = `\x1b[32m${message}\x1b[0m`

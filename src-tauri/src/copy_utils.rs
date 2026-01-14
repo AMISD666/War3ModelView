@@ -6,6 +6,7 @@ use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, SystemTime};
 use wow_mpq::Archive;
 
 use crate::app_settings;
@@ -75,6 +76,52 @@ fn build_texture_index(base: &Path, ext_candidates: &[&str]) -> TextureIndex {
     TextureIndex { by_rel, by_name }
 }
 
+pub fn cleanup_temp_root(temp_root: &Path) {
+    let max_age = Duration::from_secs(10 * 60);
+    let keep_latest = 2usize;
+    let now = SystemTime::now();
+
+    let entries = match fs::read_dir(temp_root) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    let mut candidates: Vec<(PathBuf, SystemTime)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        if !name.starts_with("war3copy_") {
+            continue;
+        }
+        let meta = match fs::metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let ts = meta.modified().or_else(|_| meta.created());
+        if let Ok(ts) = ts {
+            candidates.push((path, ts));
+        }
+    }
+
+    candidates.sort_by(|a, b| b.1.cmp(&a.1));
+    for (idx, (path, ts)) in candidates.into_iter().enumerate() {
+        if idx < keep_latest {
+            continue;
+        }
+        if let Ok(age) = now.duration_since(ts) {
+            if age > max_age {
+                let _ = fs::remove_dir_all(path);
+            }
+        }
+    }
+}
+
 pub fn copy_model_with_textures(model_path: &str, temp_root: &Path) -> Result<String, String> {
     let paths = vec![model_path.to_string()];
     let (message, _) = copy_models_with_textures(&paths, temp_root)?;
@@ -91,6 +138,7 @@ pub fn copy_models_with_textures(
 
     fs::create_dir_all(&temp_root)
         .map_err(|e| format!("Failed to create temp dir: {}", e))?;
+    cleanup_temp_root(temp_root);
     let temp_base = temp_root.join(format!("war3copy_{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&temp_base)
         .map_err(|e| format!("Failed to create temp dir: {}", e))?;

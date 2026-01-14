@@ -4,6 +4,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core'
+import { isDebugConsoleEnabled } from './debugConsoleState'
 
 // Flag to prevent infinite loops when overriding console.error
 let isLoggingToDebug = false
@@ -13,6 +14,7 @@ let isLoggingToDebug = false
  */
 export async function debugLog(message: string): Promise<void> {
     if (isLoggingToDebug) return
+    if (!isDebugConsoleEnabled()) return
 
     try {
         isLoggingToDebug = true
