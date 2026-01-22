@@ -66,9 +66,10 @@ interface NodeWrapper {
     node: {
         ObjectId: number
         Parent?: number | null
-        PivotPoint: Float32Array
+        PivotPoint?: Float32Array
+        type?: string
     }
-    matrix: Float32Array
+    matrix?: Float32Array
 }
 
 export class DebugRenderer {
@@ -233,6 +234,7 @@ export class DebugRenderer {
 
         for (const node of nodes) {
             if (!node.node.PivotPoint) continue
+            if (!node.matrix) continue
             // Skip attachment nodes - they are rendered separately as tetrahedrons
             if ((node.node as any).type === 'Attachment') continue
 
@@ -420,6 +422,8 @@ export class DebugRenderer {
 
         for (const node of attachmentNodes) {
             const pivot = node.node.PivotPoint
+
+            if (!node.matrix) continue
 
             // Transform pivot by node matrix to get world position
             vec3.transformMat4(tempVec, pivot as vec3, node.matrix)
@@ -1007,4 +1011,3 @@ export class DebugRenderer {
         gl.enable(gl.DEPTH_TEST);
     }
 }
-

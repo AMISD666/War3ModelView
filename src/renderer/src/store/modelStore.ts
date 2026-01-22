@@ -6,6 +6,7 @@ import { create } from 'zustand';
 import { mat4, vec3, mat3 } from 'gl-matrix';
 import { ModelData } from '../types/model';
 import { ModelNode, NodeType } from '../types/node';
+import { Tab, TabSnapshot } from '../types/store';
 import { useRendererStore } from './rendererStore';
 import { processDeathAnimation, processRemoveLights } from '../utils/modelUtils';
 
@@ -284,6 +285,15 @@ interface ModelState {
     setHiddenGeosetIds: (ids: number[]) => void;
     resetGeosetVisibility: () => void;
     removeSequence: (index: number, pruneKeyframes?: boolean) => void;
+
+    // Tab Management
+    tabs: Tab[];
+    activeTabId: string | null;
+    cameraStateRef: React.MutableRefObject<{ distance: number; theta: number; phi: number; target: [number, number, number] } | null> | null;
+    setCameraStateRef: (ref: React.MutableRefObject<{ distance: number; theta: number; phi: number; target: [number, number, number] } | null> | null) => void;
+    addTab: (path: string, modelData?: ModelData | null) => boolean;
+    closeTab: (tabId: string) => void;
+    setActiveTab: (tabId: string) => void;
 }
 
 /**
@@ -462,8 +472,12 @@ function updateModelDataWithNodes(
     const updated = { ...modelData };
 
     // Reconstruct Flags from boolean properties before processing
+    const modelPivotPoints = (modelData as any).PivotPoints;
     const nodesWithFlags = nodes.map(node => {
         const n = node as any;
+        const pivotPoint = node.PivotPoint
+            ?? (typeof node.ObjectId === 'number' ? modelPivotPoints?.[node.ObjectId] : undefined)
+            ?? [0, 0, 0];
         let flags = n.Flags || 0;
 
         // Clear and reset billboard/inherit flags
@@ -478,7 +492,7 @@ function updateModelDataWithNodes(
         if (n.DontInherit?.Rotation) flags |= 512;
         if (n.DontInherit?.Scaling) flags |= 1024;
 
-        return { ...node, Flags: flags };
+        return { ...node, PivotPoint: pivotPoint, Flags: flags };
     });
 
     // CRITICAL: WC3 expects nodes in a specific type order for ObjectId assignment
@@ -754,6 +768,11 @@ export const useModelStore = create<ModelState>((set, get) => ({
     hoveredGeosetId: null,
     selectedGeosetIndex: null,
 
+    // Tab Management State
+    tabs: [],
+    activeTabId: null,
+    cameraStateRef: null,
+
     // Global Preview Transform
     previewTransform: {
         translation: [0, 0, 0],
@@ -783,6 +802,9 @@ export const useModelStore = create<ModelState>((set, get) => ({
     autoKeyframe: false,
 
     setModelData: (data, path) => {
+        if (data && path) {
+            (data as any).__modelPath = path;
+        }
         const nodes = extractNodesFromModel(data);
         console.log('[ModelStore] Loaded model with', nodes.length, 'nodes');
 
@@ -808,7 +830,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
         set({
             modelData: correctedData,
-            modelPath: path,
+            modelPath: path || (data as any)?.path || (data as any)?.__modelPath || null,
             nodes: correctedNodes,
             sequences: (correctedData as any)?.Sequences || [],
             currentSequence: (correctedData as any)?.Sequences?.length > 0 ? 0 : -1,
@@ -1783,5 +1805,190 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
     resetGeosetVisibility: () => {
         set({ hiddenGeosetIds: [], forceShowAllGeosets: true, hoveredGeosetId: null, selectedGeosetIndex: null });
+    },
+
+    // Tab Management Actions
+    setCameraStateRef: (ref) => {
+        set({ cameraStateRef: ref });
+    },
+
+    addTab: (path, modelData = null) => {
+        const state = get();
+
+        // Check if tab with this path already exists - if so, switch to it instead
+        const existingTab = state.tabs.find(t => t.path === path);
+        if (existingTab) {
+            console.log('[ModelStore] Tab already exists for:', path, '- switching to it');
+            get().setActiveTab(existingTab.id);
+            return false;
+        }
+
+        const id = `tab-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const name = path.split(/[\\/]/).pop() || 'Untitled';
+
+        // If there's an active tab, save its current state to its snapshot
+        const updatedTabs = state.tabs.map(tab => {
+            if (tab.id === state.activeTabId) {
+                // Capture current camera state from ref
+                const cameraState = state.cameraStateRef?.current || null;
+                return {
+                    ...tab,
+                    snapshot: {
+                        modelData: state.modelData,
+                        modelPath: state.modelPath,
+                        nodes: state.nodes,
+                        sequences: state.sequences,
+                        currentSequence: state.currentSequence,
+                        currentFrame: state.currentFrame,
+                        hiddenGeosetIds: state.hiddenGeosetIds,
+                        cameraState
+                    }
+                };
+            }
+            return tab;
+        });
+
+        // Create new tab with empty snapshot (will be filled by setModelData)
+        const newTab: Tab = {
+            id,
+            path,
+            name,
+            snapshot: {
+                modelData: null,
+                modelPath: path,
+                nodes: [],
+                sequences: [],
+                currentSequence: -1,
+                currentFrame: 0,
+                hiddenGeosetIds: [],
+                cameraState: null
+            }
+        };
+
+        set({
+            tabs: [...updatedTabs, newTab],
+            activeTabId: id,
+            // Reset model state - will be filled by Viewer loading
+            modelData: null,
+            modelPath: path,
+            nodes: [],
+            sequences: [],
+            currentSequence: -1,
+            currentFrame: 0,
+            hiddenGeosetIds: [],
+            forceShowAllGeosets: true
+        });
+
+        console.log('[ModelStore] Added new tab:', name, 'id:', id);
+        return true;
+    },
+
+    closeTab: (tabId) => {
+        const state = get();
+        const tabIndex = state.tabs.findIndex(t => t.id === tabId);
+        if (tabIndex === -1) return;
+
+        const newTabs = state.tabs.filter(t => t.id !== tabId);
+
+        if (state.activeTabId === tabId) {
+            // Need to switch to another tab
+            if (newTabs.length === 0) {
+                // No tabs left - clear everything
+                set({
+                    tabs: [],
+                    activeTabId: null,
+                    modelData: null,
+                    modelPath: null,
+                    nodes: [],
+                    sequences: [],
+                    currentSequence: -1,
+                    currentFrame: 0,
+                    hiddenGeosetIds: [],
+                    forceShowAllGeosets: true
+                });
+            } else {
+                // Switch to adjacent tab
+                const newActiveIndex = Math.min(tabIndex, newTabs.length - 1);
+                const newActiveTab = newTabs[newActiveIndex];
+                const snapshot = newActiveTab.snapshot;
+
+                set({
+                    tabs: newTabs,
+                    activeTabId: newActiveTab.id,
+                    modelData: snapshot.modelData,
+                    modelPath: snapshot.modelPath,
+                    nodes: snapshot.nodes,
+                    sequences: snapshot.sequences,
+                    currentSequence: snapshot.currentSequence,
+                    currentFrame: snapshot.currentFrame,
+                    hiddenGeosetIds: snapshot.hiddenGeosetIds,
+                    forceShowAllGeosets: true,
+                    rendererReloadTrigger: state.rendererReloadTrigger + 1
+                });
+
+                // Restore camera if ref is available
+                if (state.cameraStateRef && snapshot.cameraState) {
+                    state.cameraStateRef.current = snapshot.cameraState;
+                }
+            }
+        } else {
+            // Just remove the tab, no state switch needed
+            set({ tabs: newTabs });
+        }
+
+        console.log('[ModelStore] Closed tab:', tabId);
+    },
+
+    setActiveTab: (tabId) => {
+        const state = get();
+        if (state.activeTabId === tabId) return;
+
+        const newActiveTab = state.tabs.find(t => t.id === tabId);
+        if (!newActiveTab) return;
+
+        // Capture current state to outgoing tab's snapshot
+        const cameraState = state.cameraStateRef?.current || null;
+        const updatedTabs = state.tabs.map(tab => {
+            if (tab.id === state.activeTabId) {
+                return {
+                    ...tab,
+                    snapshot: {
+                        modelData: state.modelData,
+                        modelPath: state.modelPath,
+                        nodes: state.nodes,
+                        sequences: state.sequences,
+                        currentSequence: state.currentSequence,
+                        currentFrame: state.currentFrame,
+                        hiddenGeosetIds: state.hiddenGeosetIds,
+                        cameraState
+                    }
+                };
+            }
+            return tab;
+        });
+
+        // Restore state from new active tab
+        const snapshot = newActiveTab.snapshot;
+
+        set({
+            tabs: updatedTabs,
+            activeTabId: tabId,
+            modelData: snapshot.modelData,
+            modelPath: snapshot.modelPath,
+            nodes: snapshot.nodes,
+            sequences: snapshot.sequences,
+            currentSequence: snapshot.currentSequence,
+            currentFrame: snapshot.currentFrame,
+            hiddenGeosetIds: snapshot.hiddenGeosetIds,
+            forceShowAllGeosets: true,
+            rendererReloadTrigger: state.rendererReloadTrigger + 1
+        });
+
+        // Restore camera
+        if (state.cameraStateRef && snapshot.cameraState) {
+            state.cameraStateRef.current = snapshot.cameraState;
+        }
+
+        console.log('[ModelStore] Switched to tab:', newActiveTab.name);
     }
 }));

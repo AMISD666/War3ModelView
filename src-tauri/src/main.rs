@@ -9,13 +9,15 @@ mod mpq_manager;
 
 use base64::Engine;
 use mpq_manager::MpqManager;
-use tauri::{ipc::Response, State};
 use std::sync::atomic::{AtomicBool, Ordering};
+use tauri::{ipc::Response, Emitter, Manager, State};
 
 use winreg::enums::*;
 use winreg::RegKey;
 
 static DEBUG_CONSOLE_ENABLED: AtomicBool = AtomicBool::new(false);
+static PENDING_FILES: once_cell::sync::Lazy<std::sync::Mutex<Vec<String>>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(Vec::new()));
 
 #[tauri::command]
 fn detect_warcraft_path() -> Result<String, String> {
@@ -112,7 +114,6 @@ fn get_activation_status() -> activation::ActivationStatus {
 fn activate_software(license_code: String) -> Result<activation::ActivationStatus, String> {
     activation::activate_software(&license_code)
 }
-
 
 #[tauri::command]
 fn get_cli_copy_path() -> Option<String> {
@@ -514,7 +515,6 @@ fn check_delete_context_menu_status() -> bool {
     hkcu.open_subkey(mdx_path).is_ok() && hkcu.open_subkey(mdl_path).is_ok()
 }
 
-
 // ==================
 // Download Command (for auto-update)
 // ==================
@@ -651,7 +651,10 @@ Remove-Item -Path '{new_exe}' -Force -ErrorAction SilentlyContinue
 #[tauri::command]
 fn get_cli_file_path() -> Option<String> {
     let args: Vec<String> = std::env::args().collect();
-    if args.iter().any(|a| a == "--copy-model" || a == "--delete-model") {
+    if args
+        .iter()
+        .any(|a| a == "--copy-model" || a == "--delete-model")
+    {
         return None;
     }
     // First arg is the executable, second would be the file path
@@ -662,6 +665,34 @@ fn get_cli_file_path() -> Option<String> {
         }
     }
     None
+}
+
+#[tauri::command]
+fn get_cli_file_paths() -> Vec<String> {
+    let args: Vec<String> = std::env::args().collect();
+    if args
+        .iter()
+        .any(|a| a == "--copy-model" || a == "--delete-model")
+    {
+        return Vec::new();
+    }
+    // Collect ALL model files from CLI args
+    args.iter()
+        .skip(1)
+        .filter(|arg| {
+            let lower = arg.to_lowercase();
+            lower.ends_with(".mdx") || lower.ends_with(".mdl")
+        })
+        .cloned()
+        .collect()
+}
+
+#[tauri::command]
+fn get_pending_open_files() -> Vec<String> {
+    let mut pending = PENDING_FILES.lock().unwrap();
+    let files = pending.clone();
+    pending.clear();
+    files
 }
 
 #[tauri::command]
@@ -734,8 +765,14 @@ fn main() {
         };
         let arg_dump = std::env::args().collect::<Vec<_>>();
         let log_line = match &result {
-            Ok(msg) => format!("[DeleteCLI] OK: {} | paths={:?} | args={:?}\n", msg, delete_paths, arg_dump),
-            Err(e) => format!("[DeleteCLI] ERR: {} | paths={:?} | args={:?}\n", e, delete_paths, arg_dump),
+            Ok(msg) => format!(
+                "[DeleteCLI] OK: {} | paths={:?} | args={:?}\n",
+                msg, delete_paths, arg_dump
+            ),
+            Err(e) => format!(
+                "[DeleteCLI] ERR: {} | paths={:?} | args={:?}\n",
+                e, delete_paths, arg_dump
+            ),
         };
         let _ = std::fs::OpenOptions::new()
             .create(true)
@@ -765,8 +802,7 @@ fn main() {
         let lock_path = log_root.join("copy_queue.lock");
 
         let result = if copy_paths.len() > 1 {
-            copy_utils::copy_models_with_textures(&copy_paths, &temp_root)
-                .map(|(msg, _)| msg)
+            copy_utils::copy_models_with_textures(&copy_paths, &temp_root).map(|(msg, _)| msg)
         } else {
             if !copy_paths.is_empty() {
                 let _ = std::fs::OpenOptions::new()
@@ -826,8 +862,7 @@ fn main() {
             if queued_paths.is_empty() {
                 Err("No model paths provided".to_string())
             } else {
-                copy_utils::copy_models_with_textures(&queued_paths, &temp_root)
-                    .map(|(msg, _)| msg)
+                copy_utils::copy_models_with_textures(&queued_paths, &temp_root).map(|(msg, _)| msg)
             }
         };
         let verify: Result<usize, String> = (|| {
@@ -851,7 +886,10 @@ fn main() {
                     msg, verify_info, copy_paths, arg_dump
                 )
             }
-            Err(e) => format!("[CopyCLI] ERR: {} | paths={:?} | args={:?}\n", e, copy_paths, arg_dump),
+            Err(e) => format!(
+                "[CopyCLI] ERR: {} | paths={:?} | args={:?}\n",
+                e, copy_paths, arg_dump
+            ),
         };
         let _ = std::fs::OpenOptions::new()
             .create(true)
@@ -871,6 +909,34 @@ fn main() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // Restore and focus main window (unminimize if needed, show if hidden)
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+            // Collect all model files from args and emit them
+            let model_paths: Vec<String> = args
+                .iter()
+                .skip(1)
+                .filter(|arg| {
+                    let lower = arg.to_lowercase();
+                    lower.ends_with(".mdx") || lower.ends_with(".mdl")
+                })
+                .cloned()
+                .collect();
+
+            if !model_paths.is_empty() {
+                // Push to pending buffer (for missed events during startup)
+                {
+                    let mut pending = PENDING_FILES.lock().unwrap();
+                    pending.extend(model_paths.clone());
+                }
+                // Emit all paths as a single event
+                let _ = app.emit("open-files", model_paths);
+            }
+        }))
         .invoke_handler(tauri::generate_handler![
             load_mpq,
             read_mpq_file,
@@ -888,6 +954,8 @@ fn main() {
             unregister_context_menu,
             check_context_menu_status,
             get_cli_file_path,
+            get_cli_file_paths,
+            get_pending_open_files,
             get_cli_copy_path,
             get_cli_delete_path,
             register_copy_context_menu,

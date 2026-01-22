@@ -1,106 +1,73 @@
 # War3ModelView Project Status & Handoff
 
 ## Current Status (What works now)
-1) Copy model with textures (clipboard CF_HDROP)
-   - Backend command: `copy_model_with_textures` and CLI `--copy-model`
-   - Texture paths resolved by model TEXS or MDL Image blocks
-   - Supports local texture search by model dir + 3 parents, alt extensions
-   - Temporary folder under `war3modelview_data/temp`
-   - Clipboard uses CF_HDROP + Preferred DropEffect
-2) Windows context menu
-   - Open with GGWar3View: OK
-   - Copy model (with textures): OK, supports multi-select
-   - Delete model (with textures): OK, supports multi-select
-3) Multi-select copy/delete CLI
-   - Copy: `--copy-model "%1" %*` (registry)
-   - Delete: `--delete-model "%1" %*` (registry)
-   - MultiSelectModel=Player set for copy/delete keys
-4) Delete logic improved
-   - Batch delete uses texture usage counting to keep shared textures
+1) **Multi-Tab Model Viewer (New)**
+   - Single-instance enforcement: subsequent launches focus the main window and open files as new tabs.
+   - Tabs handle their own state via snapshotting (`modelData`, `cameraState`, `sequences`, `nodes`, etc.).
+   - UI: A clean tab bar at the top for switching items.
+   - Shortcut: `Ctrl+W` to close the currently active tab.
+2) Copy model with textures (clipboard CF_HDROP)
+   - `copy_model_with_textures` command and CLI `--copy-model` support single/multi invocation
+   - Texture paths resolved from MDX TEXS or MDL Image blocks, scanning local folders with alt extensions
+   - Cache lives under `%LOCALAPPDATA%\War3ModelView\war3modelview_data\temp` and auto-cleanup runs at startup/exit
+3) Windows context menu
+   - GGWar3View/War3ModelView shows under `.mdx`/`.mdl`
+   - Opening multiple files (select 3, right-click, open) works in both cold-start and hot-start scenarios.
+4) Storage migration
+   - All settings saved under `%LOCALAPPDATA%\War3ModelView\war3modelview_data`
 5) MPQ copy toggle
-   - Default OFF
-   - If local texture missing and toggle ON, copy from MPQ
-   - MPQ paths persisted to backend settings file
-6) UI changes
-   - File menu copy model + Shift+C
-   - Per-mode vertex visibility (V key) in view/geometry/uv/animation/batch
-   - Bone parameter panel: world/local translation toggle, default world
+   - Pulls missing textures from MPQs when enabled.
+6) UI and keyboard shortcuts
+   - `Shift+C` copies model; `V` toggles vertex/node visibility; `Ctrl+W` closes tab.
+   - Viewer camera dropdown has a Copy button for `X,Y,Z` coordinates.
 
 ## Recent Changes (Key Files)
 Backend (Rust):
 - `src-tauri/src/main.rs`
-  - Copy/delete CLI handling
-  - Context menu register/unregister + MultiSelectModel
-  - Settings commands: `set_mpq_paths`, `set_copy_mpq_textures`
-- `src-tauri/src/copy_utils.rs`
-  - Multi-model copy, texture search, cache
-  - Optional MPQ fallback
-  - Parallel model parsing and copy jobs
-  - Hardlink attempt added (CreateHardLinkW), falls back to copy
-- `src-tauri/src/delete_utils.rs`
-  - Batch delete with shared texture counting
-- `src-tauri/src/app_settings.rs`
-  - Persist mpq paths + copy_mpq_textures toggle
-- `src-tauri/Cargo.toml`
-  - windows-sys feature Win32_Storage_FileSystem + Win32_Security
+  - Added `tauri-plugin-single-instance` with window restore logic (`unminimize`, `show`, `set_focus`).
+  - Added `PENDING_FILES` static buffer and `get_pending_open_files` to prevent event loss during startup.
+  - Added `get_cli_file_paths` (plural) to return all model files from CLI args.
+- `src-tauri/Cargo.toml`: Added `tauri-plugin-single-instance` and `once_cell`.
 
 Frontend (React):
-- `src/renderer/src/components/ViewSettingsWindow.tsx`
-  - Toggles: copy/delete context menus, copy MPQ textures
+- `src/renderer/src/store/modelStore.ts`
+  - Refactored to support `tabs: Tab[]` and snapshot swapping logic.
+  - Added duplicate detection: switching to existing tab instead of re-opening.
+- `src/renderer/src/components/TabBar.tsx`: New component for tab management.
+- `src/renderer/src/components/MainLayoutNew.tsx`: Integrated `TabBar` and `open-files` event listener.
 - `src/renderer/src/components/MainLayout.tsx`
-  - Sync mpq paths to backend
-- `src/renderer/src/components/animation/BoneParameterPanel.tsx`
-  - World/local translation toggle
-- `src/renderer/src/components/MainLayout.tsx`
-  - V key per-mode toggle
-- `src/renderer/src/store/rendererStore.ts`
-  - showVerticesByMode + per-mode setters
-- `src/renderer/src/components/Viewer.tsx`
-  - uses showVerticesByMode
+  - Removed legacy `window.location.reload()` hacks.
+  - Updated CLI handler to combine command-line args and the Rust pending buffer.
+  - Fixed React Hook violation (moved `useRef` out of `useEffect`).
 
 ## Known Issues
 1) Copy performance still slow
-   - Single model copy still ~2s; 80+ models ~8-9s
-   - Hardlink should reduce cost but not confirmed in build/test yet
-2) Copy multi-select reliability
-   - Works, but relies on `%1 %*` registry and CLI parsing
-3) Virtual clipboard (delayed data)
-   - NOT implemented (user requested, then reverted)
+   - Single-model copies ~2s; 80+ models still ~8-9s.
+   - Hardlink path is added but needs real-world verification.
+2) Polygon animation colors
+   - Parser no longer swaps RGB, but needs validation against reference models.
 
 ## Performance Optimizations Done
-- Parallel model parsing
-- Parallel copy jobs
-- Texture resolve cache
-- Optional MPQ lazy-load
-- For single model, skip expensive directory index scan
+- Multi-file processed sequentially with 100ms delay to prevent state race conditions.
+- Rust-side event buffering to ensure multi-file opens are not lost if the app is still loading.
+- Debug logging gated by console visibility to avoid IPC overhead.
 
 ## Next Steps (Priority)
-1) Verify hardlink path
-   - Confirm CreateHardLinkW compiles after adding Win32_Security
-   - If hardlink works, single model copy should be near-instant
-2) Add directory index cache for multi-model
-   - (Already added, but validate real-world impact)
-3) Optional: Virtual clipboard (delayed file provider)
-   - Requires process alive until paste
-   - More complex (IDataObject/CFSTR_FILEDESCRIPTOR)
+1) **Verify Multi-Tab Stability**: Test edge cases like closing the last tab or opening models with very long paths/names.
+2) **Verify Hardlink Path**: Test `CreateHardLinkW` on typical volumes.
+3) **Validate Geoset Animation Colors**: Compare static/dynamic color keys with other tools.
+4) **Monitor Copy Performance**: Ensure `debug_log` gating actually improves paste speed in production.
 
 ## Handoff Notes / Gotchas
-1) Right-click copy command must be:
-   - `"war3-model-editor.exe" --copy-model "%1" %*`
-   - MultiSelectModel=Player under:
-     - `HKCU\Software\Classes\SystemFileAssociations\.mdx\shell\GGWar3ViewCopy`
-     - `HKCU\Software\Classes\SystemFileAssociations\.mdl\shell\GGWar3ViewCopy`
-2) MPQ copy toggle lives in `app_settings.json` under app storage root
-3) If copy_log shows `paths=[]`, registry command is wrong or args parsing failed
-4) Copy temp root: `war3modelview_data/temp`
+1) **Single-Instance**: The Rust plugin handles the focus, but the frontend must call `get_pending_open_files` on mount to catch files that arrive while React is initializing.
+2) **Tab Snapshotting**: When adding features that have global state (e.g., new visibility toggles), ensure they are included in `TabSnapshot` so they persist during tab switches.
+3) **Ctrl+W**: Wired in `MainLayout.tsx`, uses `e.ctrlKey` to avoid conflict with the single `W` key.
 
 ## Experience / Conclusions
-- The biggest copy cost is file I/O, not model parsing
-- Windows Explorer waits on context menu process unless separated; user rejected background start
-- Hardlink is best fast path if same disk
-- MPQ fallback should be optional, local files first
+- The "Snapshot Swapping" approach allowed us to implement multi-tabs with minimal changes to the complex `Viewer` component.
+- Sequential tab loading (with `setTimeout`) is crucial for stable state updates in Zustand when multiple files arrive simultaneously.
+- Rust buffering is the only reliable way to handle multi-file context menu opens on a "cold start".
 
-## Suggested Message for Next AI (Copy/Paste)
-“Please continue from PROJECT_STATUS.md. Current blockers: copy performance is still slow (single model ~2s, multi-model ~8-9s). Hardlink path added via CreateHardLinkW but not verified. Context menu copy/delete uses MultiSelectModel=Player and command `--copy-model "%1" %*` / `--delete-model "%1" %*`. MPQ copy toggle exists in settings and backend app_settings.json. Focus on verifying hardlink effectiveness or implementing delayed clipboard if needed.”
-
-*Last update: 2026-01-13*
+## Suggested Message for Next AI
+"I have implemented the multi-tab model viewing feature and enforced a single-instance application behavior. The app now handles multi-file opens from Windows Explorer (cold and hot start) correctly using a Rust-side buffer and tab snapshotting. Please review `PROJECT_STATUS.md` for the technical details. Your primary tasks are to verify the stability of the new tab system, then move back to the priorities noted: verifying the hardlink copy path and validating geoset animation colors."
+*Last update: 2026-01-14*

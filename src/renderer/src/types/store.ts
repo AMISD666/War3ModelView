@@ -103,3 +103,29 @@ export interface UIState {
     setEditMode: (mode: EditMode) => void;
     setToolMode: (mode: ToolMode) => void;
 }
+
+// Tab State Snapshot (for saving/restoring when switching tabs)
+export interface TabSnapshot {
+    modelData: ModelData | null;
+    modelPath: string | null;
+    nodes: ModelNode[];
+    sequences: any[];
+    currentSequence: number;
+    currentFrame: number;
+    hiddenGeosetIds: number[];
+    // Camera state (captured from Viewer)
+    cameraState: {
+        distance: number;
+        theta: number;
+        phi: number;
+        target: [number, number, number];
+    } | null;
+}
+
+// Tab definition
+export interface Tab {
+    id: string;
+    path: string;
+    name: string;
+    snapshot: TabSnapshot;
+}

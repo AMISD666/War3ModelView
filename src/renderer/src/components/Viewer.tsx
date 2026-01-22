@@ -738,11 +738,17 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
   // Ref to track last reload trigger value
   const lastModelLoadTrigger = useRef(rendererReloadTrigger)
+  const lastLoadedModelPath = useRef<string | null>(null)
 
   useEffect(() => {
     // Only reload on modelPath change, NOT on modelData change.
     // Auto-reloading on modelData change causes texture corruption and animation freeze.
     if (modelPath) {
+      const didModelPathChange = modelPath !== lastLoadedModelPath.current
+      if (didModelPathChange) {
+        lastLoadedModelPath.current = modelPath
+      }
+
       // Determine if this is a triggered reload (structural change) vs a new model load
       const isTriggeredReload = rendererReloadTrigger !== lastModelLoadTrigger.current
       lastModelLoadTrigger.current = rendererReloadTrigger
@@ -755,6 +761,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           console.log('[Viewer] Loading from in-memory data for dropped file:', modelPath)
           loadModel(modelPath, storeModelData)
         }
+      } else if (didModelPathChange) {
+        // Switching tabs should reload from disk for a clean renderer state
+        loadModel(modelPath)
       } else if (isTriggeredReload) {
         // This is a triggered reload (e.g., after transformation) - use in-memory data
         const storeModelData = useModelStore.getState().modelData
@@ -2115,6 +2124,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         ; (newRenderer as any).setSequence(0)
       }
 
+      (newRenderer as any).__modelPath = path
+      (newRenderer as any).__modelPath = path
       setRenderer(newRenderer)
       console.log('[Viewer] ========== FULL RELOAD COMPLETE ==========')
       console.timeEnd('[Viewer] ReloadModel')
@@ -2138,9 +2149,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
       // Sync model data to renderer without recreating the entire renderer
       // This is the LIGHTWEIGHT SYNC approach - only updates internal data arrays
-      if (renderer && modelData) {
-        // Check for structural changes that require full reload
-        const { needsReload, reason } = checkForStructuralChanges(modelData, renderer.model)
+        if (renderer && modelData) {
+          const modelPathHint = (modelData as any)?.__modelPath || (modelData as any)?.path || ''
+          ; (renderer as any).__modelPath = modelPath || modelPathHint || (renderer as any).__modelPath || ''
+          // Check for structural changes that require full reload
+          const { needsReload, reason } = checkForStructuralChanges(modelData, renderer.model)
 
         if (needsReload) {
           console.log('[Viewer] Structural change detected:', reason, '. Triggering full reload.')
@@ -2253,8 +2266,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             Promise.all(
               newTextures.map(async (texture: any) => {
                 try {
-                  const { loadTextureForRenderer } = await import('./viewer/textureLoader')
-                  const loaded = await loadTextureForRenderer(renderer, texture.Image, modelPath || '')
+                const { loadTextureForRenderer } = await import('./viewer/textureLoader')
+                const textureModelPath = (renderer as any).__modelPath || modelPath || (modelData as any)?.__modelPath || (modelData as any)?.path || ''
+                const loaded = await loadTextureForRenderer(renderer, texture.Image, textureModelPath)
                   if (loaded) {
                     console.log('[Viewer] Loaded new texture:', texture.Image)
                   } else {

@@ -16,6 +16,8 @@ import NodeDialog from './node/NodeDialog';
 import { CreateNodeDialog } from './node/CreateNodeDialog';
 import { ViewSettingsWindow } from './ViewSettingsWindow';
 import { BatchManager } from './batch/BatchManager';
+import { TabBar } from './TabBar';
+import { listen } from '@tauri-apps/api/event';
 
 const { Content } = Layout;
 
@@ -41,7 +43,7 @@ export const MainLayoutNew: React.FC = () => {
     // Batch mode state: track selected model for preview
     const [batchSelectedPath, setBatchSelectedPath] = useState<string | null>(null);
     const [batchSelectedAnimation, setBatchSelectedAnimation] = useState<number>(0);
-    const { setModelData: setZustandModelData } = useModelStore();
+    const { setModelData: setZustandModelData, addTab, tabs } = useModelStore();
 
     // Handle model selection from BatchManager
     const handleBatchSelectModel = useCallback((path: string, animationIndex: number) => {
@@ -102,6 +104,26 @@ export const MainLayoutNew: React.FC = () => {
             document.removeEventListener('mouseup', handleMouseUp);
         };
     }, [isResizingNodeMgr, isResizingBatch]);
+
+    // Listen for open-files events from single-instance plugin (handles multiple files)
+    useEffect(() => {
+        const unlisten = listen<string[]>('open-files', async (event) => {
+            console.log('[MainLayoutNew] Received open-files event:', event.payload);
+            const paths = event.payload;
+            if (paths && paths.length > 0) {
+                // Add tabs sequentially with small delay to prevent race condition
+                for (const path of paths) {
+                    addTab(path);
+                    // Small delay between tabs to allow state to settle
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+            }
+        });
+
+        return () => {
+            unlisten.then(fn => fn());
+        };
+    }, [addTab]);
 
     const isBatchMode = mainMode === 'batch';
 
@@ -226,6 +248,11 @@ export const MainLayoutNew: React.FC = () => {
                         overflow: 'hidden',
                         backgroundColor: isBatchMode ? '#1a1a1a' : 'transparent'
                     }}>
+                        {/* Tab Bar - only show in normal mode when tabs exist */}
+                        {!isBatchMode && tabs.length > 0 && (
+                            <TabBar />
+                        )}
+
                         {isBatchMode && (
                             <div style={{
                                 padding: '10px 16px',

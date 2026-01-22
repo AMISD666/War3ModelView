@@ -815,6 +815,7 @@ const MainLayout: React.FC = () => {
     // Zustand stores
     const modelPath = useModelStore(state => state.modelPath)
     const setZustandModelData = useModelStore(state => state.setModelData)
+    const addTab = useModelStore(state => state.addTab)
     const setZustandLoading = useModelStore(state => state.setLoading)
     const showCreateNodeDialog = useUIStore(state => state.showCreateNodeDialog);
     const setCreateNodeDialogVisible = useUIStore(state => state.setCreateNodeDialogVisible);
@@ -878,23 +879,22 @@ const MainLayout: React.FC = () => {
     const [isResizingEditor, setIsResizingEditor] = useState<boolean>(false)
 
     const viewerRef = useRef<ViewerRef>(null)
-
-    // Check for pending model path after page refresh
-    useEffect(() => {
-        const pendingPath = localStorage.getItem('pending_model_path');
-        if (pendingPath) {
-            console.log('[MainLayout] Loading pending model from refresh:', pendingPath);
-            // Clear the pending path
-            localStorage.removeItem('pending_model_path');
-            // Load the model
-            setIsLoading(true);
-            setZustandLoading(true);
-            setZustandModelData(null, pendingPath);
-            setIsLoading(false);
-            setZustandLoading(false);
+    const hasCheckedCli = useRef(false);
+    const processedHotOpenPaths = useRef<Set<string>>(new Set())
+    const openModelAsTab = useCallback((filePath: string) => {
+        console.log('[MainLayout] Opening model as tab:', filePath)
+        setIsLoading(true)
+        setZustandLoading(true)
+        const added = addTab(filePath)
+        if (!added) {
+            setIsLoading(false)
+            setZustandLoading(false)
         }
+        return added
+    }, [addTab])
 
-        // Check for copy-model context menu
+    // Check for copy-model context menu
+    useEffect(() => {
         const checkCliCopyPath = async () => {
             try {
                 const { invoke } = await import('@tauri-apps/api/core');
@@ -912,15 +912,23 @@ const MainLayout: React.FC = () => {
 
         // Check for file path from command line (Tauri - context menu launch)
         const checkCliFilePath = async () => {
+            if (hasCheckedCli.current) return;
+            hasCheckedCli.current = true;
+
             const copyHandled = await checkCliCopyPath();
             if (copyHandled) return;
             try {
                 const { invoke } = await import('@tauri-apps/api/core');
-                const cliPath = await invoke<string | null>('get_cli_file_path');
-                if (cliPath) {
-                    console.log('[MainLayout] File opened from command line:', cliPath);
+                const cliPaths = await invoke<string[]>('get_cli_file_paths');
+                const pendingPaths = await invoke<string[]>('get_pending_open_files');
 
-                    // CRITICAL: Load MPQ first before loading model (for textures)
+                // Combine and unique
+                const allPaths = Array.from(new Set([...cliPaths, ...pendingPaths]));
+
+                if (allPaths.length > 0) {
+                    console.log('[MainLayout] Files opened from CLI/Pending:', allPaths);
+
+                    // ... (MPQ loading logic) ...
                     const savedPaths = localStorage.getItem('mpq_paths');
                     if (savedPaths && !mpqLoaded) {
                         console.log('[MainLayout] Loading MPQs before model...');
@@ -944,19 +952,24 @@ const MainLayout: React.FC = () => {
                         }
                     }
 
-                    // Now load the model
-                    setIsLoading(true);
-                    setZustandLoading(true);
-                    setZustandModelData(null, cliPath);
-                    setIsLoading(false);
-                    setZustandLoading(false);
+                    // Now load all models via tab system sequentially
+                    for (const cliPath of allPaths) {
+                        if (processedHotOpenPaths.current.has(cliPath)) {
+                            console.log('[MainLayout] CLI path already processed, skipping:', cliPath);
+                            continue;
+                        }
+                        processedHotOpenPaths.current.add(cliPath);
+                        openModelAsTab(cliPath);
+                        // Small delay between tabs to allow state to settle
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                    }
                 }
             } catch (e) {
-                console.error('[MainLayout] Failed to get CLI file path:', e);
+                console.error('[MainLayout] Failed to get CLI file paths:', e);
             }
         };
         checkCliFilePath();
-    }, []); // Run once on mount
+    }, [addTab, mpqLoaded, setZustandLoading]); // Dependency added for addTab and mpqLoaded
 
     // Listen for file open from Electron context menu (right-click "Open with")
     useEffect(() => {
@@ -966,25 +979,20 @@ const MainLayout: React.FC = () => {
             console.log('[MainLayout] Registering Electron file open listener');
             api.onOpenFile((filePath: string) => {
                 console.log('[MainLayout] File opened from context menu:', filePath);
-                if (filePath && (filePath.endsWith('.mdx') || filePath.endsWith('.mdl'))) {
-                    // Check if a model is already loaded - if so, save path and refresh page
-                    const currentModelPath = useModelStore.getState().modelPath;
-                    if (currentModelPath) {
-                        console.log('[MainLayout] Model already loaded, refreshing page before importing new model');
-                        localStorage.setItem('pending_model_path', filePath);
-                        window.location.reload();
-                        return;
-                    }
-
-                    setIsLoading(true);
-                    setZustandLoading(true);
-                    setZustandModelData(null, filePath);
-                    setIsLoading(false);
-                    setZustandLoading(false);
+                if (!filePath || !(filePath.endsWith('.mdx') || filePath.endsWith('.mdl'))) {
+                    return;
                 }
+
+                if (processedHotOpenPaths.current.has(filePath)) {
+                    console.log('[MainLayout] Skipping duplicate hot-open path:', filePath);
+                    return;
+                }
+
+                processedHotOpenPaths.current.add(filePath);
+                openModelAsTab(filePath);
             });
         }
-    }, [setZustandModelData, setZustandLoading]);
+    }, [openModelAsTab]);
 
     const handleAddCameraFromView = () => {
         if (viewerRef.current) {
@@ -1220,6 +1228,16 @@ const MainLayout: React.FC = () => {
                 return;
             }
 
+            // Ctrl+W to close current tab (ctrlKey ensures no conflict with single W)
+            if (key === 'w' && e.ctrlKey && !e.shiftKey && !e.altKey) {
+                e.preventDefault();
+                const { activeTabId, closeTab } = useModelStore.getState();
+                if (activeTabId) {
+                    closeTab(activeTabId);
+                }
+                return;
+            }
+
             if (key === 'escape') {
                 const uiState = useUIStore.getState();
                 const rendererState = useRendererStore.getState();
@@ -1316,31 +1334,14 @@ const MainLayout: React.FC = () => {
             })
 
             if (selected && typeof selected === 'string') {
-                // Check if a model is already loaded - if so, save path and refresh page
-                const currentModelPath = useModelStore.getState().modelPath;
-                if (currentModelPath) {
-                    console.log('[MainLayout] Model already loaded, refreshing page before importing new model');
-                    // Save the new path to localStorage for auto-load after refresh
-                    localStorage.setItem('pending_model_path', selected);
-                    // Trigger page reload
-                    window.location.reload();
-                    return;
-                }
-
-                setIsLoading(true)
-                setZustandLoading(true)
-                // Clear modelData to ensure fresh load from file
-                setZustandModelData(null, selected)
-
-                setIsLoading(false)
-                setZustandLoading(false)
+                openModelAsTab(selected)
             }
         } catch (error) {
             console.error('Failed to open file dialog:', error)
             setIsLoading(false)
             setZustandLoading(false)
         }
-    }, [setZustandModelData, setZustandLoading])
+    }, [openModelAsTab])
 
     const handleModelLoaded = useCallback((data: any) => {
         console.log('Model loaded:', data)
@@ -1416,21 +1417,7 @@ const MainLayout: React.FC = () => {
                     }
 
                     console.log('[MainLayout] File dropped (Tauri):', filePath)
-
-                    // Check if a model is already loaded - if so, save path and refresh page
-                    const currentModelPath = useModelStore.getState().modelPath
-                    if (currentModelPath) {
-                        console.log('[MainLayout] Model already loaded, refreshing page before importing new model')
-                        localStorage.setItem('pending_model_path', filePath)
-                        window.location.reload()
-                        return
-                    }
-
-                    setIsLoading(true)
-                    setZustandLoading(true)
-                    setZustandModelData(null, filePath)
-                    setIsLoading(false)
-                    setZustandLoading(false)
+                    openModelAsTab(filePath)
                 })
 
                 // Listen for drag enter
@@ -1455,7 +1442,7 @@ const MainLayout: React.FC = () => {
             unlistenEnter?.()
             unlistenLeave?.()
         }
-    }, [setZustandModelData, setZustandLoading])
+    }, [openModelAsTab])
 
 
 
