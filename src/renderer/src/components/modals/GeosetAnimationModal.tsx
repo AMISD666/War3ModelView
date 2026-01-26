@@ -20,6 +20,36 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
     const [localAnims, setLocalAnims] = useState<any[]>([])
     const [selectedIndex, setSelectedIndex] = useState<number>(-1)
     const [geosets, setGeosets] = useState<any[]>([])
+    const cloneAnimVector = (animVector: any, size: number) => {
+        if (!animVector || typeof animVector !== 'object') return animVector
+        const toArray = (val: any): number[] => {
+            if (ArrayBuffer.isView(val)) return Array.from(val as ArrayLike<number>).slice(0, size)
+            if (Array.isArray(val)) return val.slice(0, size)
+            if (typeof val === 'number') return [val]
+            if (val && typeof val === 'object') {
+                const arr = new Array(size).fill(0)
+                const keys = Object.keys(val).map(k => Number(k)).filter(k => !isNaN(k))
+                if (keys.length > 0) {
+                    for (const k of keys) {
+                        if (k >= 0 && k < size) arr[k] = Number(val[k]) || 0
+                    }
+                    return arr
+                }
+            }
+            return new Array(size).fill(0)
+        }
+        const keys = (animVector.Keys || []).map((k: any) => ({
+            Frame: typeof k.Frame === 'number' ? k.Frame : (k.Time ?? 0),
+            Vector: toArray(k.Vector),
+            InTan: toArray(k.InTan),
+            OutTan: toArray(k.OutTan)
+        }))
+        return {
+            LineType: typeof animVector.LineType === 'number' ? animVector.LineType : 0,
+            GlobalSeqId: animVector.GlobalSeqId ?? null,
+            Keys: keys
+        }
+    }
 
     // Keyframe Editor State
     const [isKeyframeEditorOpen, setIsKeyframeEditorOpen] = useState(false)
@@ -38,12 +68,12 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
                 } else if (Array.isArray(anim.Color)) {
                     cloned.Color = [...anim.Color]
                 } else if (anim.Color && typeof anim.Color === 'object') {
-                    // Might be AnimVector (animated color)
-                    cloned.Color = JSON.parse(JSON.stringify(anim.Color))
+                    // AnimVector (animated color)
+                    cloned.Color = cloneAnimVector(anim.Color, 3)
                 }
                 // Clone Alpha if it's an AnimVector
                 if (anim.Alpha && typeof anim.Alpha === 'object' && 'Keys' in anim.Alpha) {
-                    cloned.Alpha = JSON.parse(JSON.stringify(anim.Alpha))
+                    cloned.Alpha = cloneAnimVector(anim.Alpha, 1)
                 } else if (typeof anim.Alpha === 'string') {
                     cloned.Alpha = parseFloat(anim.Alpha)
                 }

@@ -24,10 +24,12 @@ import { NodeType } from '../types/node'
 import { useUIStore } from '../store/uiStore'
 import { useSelectionStore } from '../store/selectionStore'
 import { useRendererStore } from '../store/rendererStore'
+import { useHistoryStore } from '../store/historyStore'
 import { GlobalMessageLayer } from './GlobalMessageLayer'
 import { showMessage, showConfirm } from '../store/messageStore'
 import { checkGiteeUpdate, showChangelog as showUpdateLog } from '../services/updateService';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { Button, Modal } from 'antd';
 
 /**
  * Normalize model data before saving to ensure typed arrays are correct.
@@ -873,6 +875,7 @@ const MainLayout: React.FC = () => {
 
     const [isLoading, setIsLoading] = useState<boolean>(false)
     const [isDragging, setIsDragging] = useState<boolean>(false) // For drag-drop visual feedback
+    const [closeConfirmVisible, setCloseConfirmVisible] = useState<boolean>(false)
 
     // Editor Panel Resizing
     const [editorWidth, setEditorWidth] = useState<number>(400)
@@ -882,6 +885,8 @@ const MainLayout: React.FC = () => {
     const hasCheckedCli = useRef(false);
     const processedHotOpenPaths = useRef<Set<string>>(new Set())
     const isSavingRef = useRef(false); // Track if a save operation is in progress
+    const closeConfirmVisibleRef = useRef(false);
+    const bypassClosePromptRef = useRef(false);
     const openModelAsTab = useCallback((filePath: string) => {
         console.log('[MainLayout] Opening model as tab:', filePath)
         setIsLoading(true)
@@ -895,6 +900,9 @@ const MainLayout: React.FC = () => {
     }, [addTab])
 
     const hasResetStore = useRef(false);
+    useEffect(() => {
+        closeConfirmVisibleRef.current = closeConfirmVisible;
+    }, [closeConfirmVisible]);
 
     // Intercept native window close during save operations and reset state on refresh
     useEffect(() => {
@@ -929,9 +937,17 @@ const MainLayout: React.FC = () => {
         (async () => {
             const win = getCurrentWindow();
             unlisten = await win.onCloseRequested(async (event) => {
+                if (bypassClosePromptRef.current) return;
                 if (isSavingRef.current) {
                     event.preventDefault();
                     showMessage('warning', '提示', '正在保存模型，请稍候再关闭...');
+                    return;
+                }
+                const { modelData } = useModelStore.getState();
+                const { isDirty } = useHistoryStore.getState();
+                if (modelData && isDirty && !closeConfirmVisibleRef.current) {
+                    event.preventDefault();
+                    setCloseConfirmVisible(true);
                 }
             });
         })();
@@ -1502,8 +1518,8 @@ const MainLayout: React.FC = () => {
 
 
 
-    const handleSave = async () => {
-        if (!modelPath || !modelData) return
+    const handleSave = async (): Promise<boolean> => {
+        if (!modelPath || !modelData) return false
 
         try {
             isSavingRef.current = true;
@@ -1525,7 +1541,7 @@ const MainLayout: React.FC = () => {
                 const proceed = confirm(`模型验证发现以下问题:\n${errorMsg}\n${validationErrors.length > 3 ? `...还有 ${validationErrors.length - 3} 个问题` : ''}\n\n是否仍然保存?`);
                 if (!proceed) {
                     isSavingRef.current = false;
-                    return;
+                    return false;
                 }
             }
 
@@ -1565,17 +1581,20 @@ const MainLayout: React.FC = () => {
                 console.timeEnd('[MainLayout] FileWrite')
             }
 
+            useHistoryStore.getState().markSaved();
             showMessage('success', '保存成功', '模型已保存')
+            return true;
         } catch (err) {
             console.error('Failed to save file:', err)
             showMessage('error', '保存失败', '详细信息: ' + err)
+            return false;
         } finally {
             isSavingRef.current = false;
         }
     }
 
-    const handleSaveAs = async () => {
-        if (!modelData) return
+    const handleSaveAs = async (): Promise<boolean> => {
+        if (!modelData) return false
         try {
             const { save } = await import('@tauri-apps/plugin-dialog')
             const { writeFile } = await import('@tauri-apps/plugin-fs')
@@ -1611,7 +1630,7 @@ const MainLayout: React.FC = () => {
                             <div>是否仍然保存?</div>
                         </div>
                     ));
-                    if (!proceed) return;
+                    if (!proceed) return false;
                 }
 
                 // Fix FrameFlags for ParticleEmitter2
@@ -1639,15 +1658,37 @@ const MainLayout: React.FC = () => {
                     await writeFile(selected, new Uint8Array(buffer))
                 }
                 // Update store with new path if needed, but for now just alert
+                useHistoryStore.getState().markSaved();
                 showMessage('success', '另存为成功', '模型已另存为: ' + selected)
+                return true;
             }
         } catch (err) {
             console.error('Failed to save file as:', err)
             showMessage('error', '另存为失败', '详细信息: ' + err)
+            return false;
         } finally {
             isSavingRef.current = false;
         }
+        return false;
     }
+
+    const handleCloseWithSave = async () => {
+        setCloseConfirmVisible(false);
+        const ok = modelPath ? await handleSave() : await handleSaveAs();
+        if (!ok) return;
+        bypassClosePromptRef.current = true;
+        getCurrentWindow().close();
+    };
+
+    const handleCloseWithoutSave = () => {
+        setCloseConfirmVisible(false);
+        bypassClosePromptRef.current = true;
+        getCurrentWindow().close();
+    };
+
+    const handleCloseCancel = () => {
+        setCloseConfirmVisible(false);
+    };
 
     // Helper function to get model name from path or default
     const getModelBaseName = (): string => {
@@ -2405,6 +2446,18 @@ const MainLayout: React.FC = () => {
                     </div>
                 )}
             </div>
+            <Modal
+                open={closeConfirmVisible}
+                onCancel={handleCloseCancel}
+                title="未保存的修改"
+                footer={[
+                    <Button key="cancel" onClick={handleCloseCancel}>取消</Button>,
+                    <Button key="discard" onClick={handleCloseWithoutSave}>不保存</Button>,
+                    <Button key="save" type="primary" onClick={handleCloseWithSave}>保存并退出</Button>
+                ]}
+            >
+                <div>模型已修改，是否保存后再退出？</div>
+            </Modal>
             {/* Global Message Layer */}
             <GlobalMessageLayer />
         </div>

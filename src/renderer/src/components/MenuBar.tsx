@@ -3,8 +3,8 @@ import React, { useState, useRef, useEffect } from 'react'
 
 interface MenuBarProps {
     onOpen: () => void
-    onSave: () => void
-    onSaveAs: () => void
+    onSave: () => void | Promise<boolean>
+    onSaveAs: () => void | Promise<boolean>
     onExportMDL: () => void
     onExportMDX: () => void
     // onLoadMPQ removed

@@ -12,12 +12,14 @@ interface HistoryState {
     undoStack: Command[];
     redoStack: Command[];
     maxHistory: number;
+    isDirty: boolean;
 
     // Actions
     push: (cmd: Command) => void;
     undo: () => void;
     redo: () => void;
     clear: () => void;
+    markSaved: () => void;
 
     // Status
     canUndo: () => boolean;
@@ -28,6 +30,7 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
     undoStack: [],
     redoStack: [],
     maxHistory: 50,
+    isDirty: false,
 
     push: (cmd: Command) => {
         const { undoStack, maxHistory } = get();
@@ -40,7 +43,8 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
 
         set({
             undoStack: newStack,
-            redoStack: [] // Clear redo on new action
+            redoStack: [], // Clear redo on new action
+            isDirty: true
         });
 
         console.log(`[History] Pushed: ${cmd.name}`);
@@ -81,7 +85,10 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
     },
 
     clear: () => {
-        set({ undoStack: [], redoStack: [] });
+        set({ undoStack: [], redoStack: [], isDirty: false });
+    },
+    markSaved: () => {
+        set({ isDirty: false });
     },
 
     canUndo: () => get().undoStack.length > 0,

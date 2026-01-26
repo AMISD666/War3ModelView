@@ -731,22 +731,58 @@ function normalizeGeosetAnim(anim: any): any {
         const flags = typeof normalized.Flags === 'number' ? normalized.Flags : 0;
         normalized.Flags = normalized.UseColor ? (flags | 2) : (flags & ~2);
     }
+    if (typeof normalized.DropShadow === 'boolean') {
+        const flags = typeof normalized.Flags === 'number' ? normalized.Flags : 0;
+        normalized.Flags = normalized.DropShadow ? (flags | 1) : (flags & ~1);
+    }
     return normalized;
 }
 
 function normalizeAnimVector(anim: any, size: number, isInt: boolean): any {
     const normalized = { ...anim };
     const Type = isInt ? Int32Array : Float32Array;
+    const toTyped = (val: any): Int32Array | Float32Array => {
+        if (val instanceof Type) return val as Int32Array | Float32Array;
+        if (ArrayBuffer.isView(val)) {
+            return new Type(Array.from(val as ArrayLike<number>).slice(0, size)) as Int32Array | Float32Array;
+        }
+        if (Array.isArray(val)) {
+            return new Type(val.slice(0, size)) as Int32Array | Float32Array;
+        }
+        if (typeof val === 'number') {
+            return new Type([val]) as Int32Array | Float32Array;
+        }
+        if (val && typeof val === 'object') {
+            const arr = new Type(size) as Int32Array | Float32Array;
+            const keys = Object.keys(val)
+                .map(k => Number(k))
+                .filter(k => !isNaN(k));
+            if (keys.length > 0) {
+                for (const k of keys) {
+                    if (k >= 0 && k < size) {
+                        arr[k] = Number(val[k]) || 0;
+                    }
+                }
+                return arr as Int32Array | Float32Array;
+            }
+        }
+        return new Type(size) as Int32Array | Float32Array;
+    };
+
+    const lineType = typeof normalized.LineType === 'number' ? normalized.LineType : 0;
+    normalized.LineType = lineType;
+    normalized.GlobalSeqId = normalized.GlobalSeqId ?? null;
+
     normalized.Keys = (anim.Keys || []).map((key: any) => {
         const next = { ...key };
-        if (key.Vector && !(key.Vector instanceof Type)) {
-            next.Vector = new Type(Array.from(key.Vector as ArrayLike<number>).slice(0, size));
-        }
-        if (key.InTan && !(key.InTan instanceof Type)) {
-            next.InTan = new Type(Array.from(key.InTan as ArrayLike<number>).slice(0, size));
-        }
-        if (key.OutTan && !(key.OutTan instanceof Type)) {
-            next.OutTan = new Type(Array.from(key.OutTan as ArrayLike<number>).slice(0, size));
+        next.Frame = typeof key.Frame === 'number' ? key.Frame : (key.Time ?? 0);
+        next.Vector = toTyped(key.Vector ?? (size === 1 ? [0] : new Array(size).fill(0)));
+        if (lineType === 2 || lineType === 3) {
+            next.InTan = toTyped(key.InTan ?? new Array(size).fill(0));
+            next.OutTan = toTyped(key.OutTan ?? new Array(size).fill(0));
+        } else {
+            if (key.InTan !== undefined) next.InTan = toTyped(key.InTan);
+            if (key.OutTan !== undefined) next.OutTan = toTyped(key.OutTan);
         }
         return next;
     });
