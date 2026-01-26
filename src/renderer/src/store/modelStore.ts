@@ -207,6 +207,7 @@ interface ModelState {
     };
     setPreviewTransform: (transform: Partial<ModelState['previewTransform']>) => void;
     resetPreviewTransform: () => void;
+    reset: () => void;
 
     setModelData: (data: ModelData | null, path: string | null) => void;
     setLoading: (loading: boolean) => void;
@@ -1990,5 +1991,28 @@ export const useModelStore = create<ModelState>((set, get) => ({
         }
 
         console.log('[ModelStore] Switched to tab:', newActiveTab.name);
+    },
+
+    reset: () => {
+        set({
+            modelData: null,
+            modelPath: null,
+            nodes: [],
+            tabs: [],
+            activeTabId: null,
+            sequences: [],
+            currentSequence: -1,
+            currentFrame: 0,
+            hiddenGeosetIds: [],
+            forceShowAllGeosets: true,
+            hoveredGeosetId: null,
+            selectedGeosetIndex: null,
+            rendererReloadTrigger: 0,
+            previewTransform: {
+                translation: [0, 0, 0],
+                rotation: [0, 0, 0],
+                scale: [1, 1, 1]
+            }
+        });
     }
 }));

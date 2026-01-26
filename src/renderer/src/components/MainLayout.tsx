@@ -881,6 +881,7 @@ const MainLayout: React.FC = () => {
     const viewerRef = useRef<ViewerRef>(null)
     const hasCheckedCli = useRef(false);
     const processedHotOpenPaths = useRef<Set<string>>(new Set())
+    const isSavingRef = useRef(false); // Track if a save operation is in progress
     const openModelAsTab = useCallback((filePath: string) => {
         console.log('[MainLayout] Opening model as tab:', filePath)
         setIsLoading(true)
@@ -892,6 +893,53 @@ const MainLayout: React.FC = () => {
         }
         return added
     }, [addTab])
+
+    const hasResetStore = useRef(false);
+
+    // Intercept native window close during save operations and reset state on refresh
+    useEffect(() => {
+        if (hasResetStore.current) return;
+        hasResetStore.current = true;
+
+        // Full state reset on initialization (handles refresh/F5)
+        // We do this BEFORE potentially loading CLI files
+        const doReset = async () => {
+            const { useModelStore } = await import('../store/modelStore');
+            const { useBatchStore } = await import('../store/batchStore');
+            const { useSelectionStore } = await import('../store/selectionStore');
+            const { useUIStore } = await import('../store/uiStore');
+            const { useRendererStore } = await import('../store/rendererStore');
+            const { useHistoryStore } = await import('../store/historyStore');
+            const { useMessageStore } = await import('../store/messageStore');
+
+            useModelStore.getState().reset();
+            useBatchStore.getState().reset();
+            useSelectionStore.getState().reset();
+            useUIStore.getState().reset();
+            useRendererStore.getState().reset();
+            useHistoryStore.getState().clear();
+            useMessageStore.getState().clearAll();
+
+            console.log('[MainLayout] Stores reset successfully');
+        };
+
+        doReset();
+
+        let unlisten: (() => void) | undefined;
+        (async () => {
+            const win = getCurrentWindow();
+            unlisten = await win.onCloseRequested(async (event) => {
+                if (isSavingRef.current) {
+                    event.preventDefault();
+                    showMessage('warning', '提示', '正在保存模型，请稍候再关闭...');
+                }
+            });
+        })();
+        return () => {
+            unlisten?.();
+        };
+    }, []);
+
 
     // Check for copy-model context menu
     useEffect(() => {
@@ -1218,6 +1266,10 @@ const MainLayout: React.FC = () => {
             if (e.altKey && key === 'f4') {
                 e.preventDefault();
                 e.stopPropagation();
+                if (isSavingRef.current) {
+                    showMessage('warning', '提示', '正在保存模型，请稍候再关闭...');
+                    return;
+                }
                 getCurrentWindow().close();
                 return;
             }
@@ -1262,6 +1314,10 @@ const MainLayout: React.FC = () => {
                 if (!hasPanels) {
                     e.preventDefault();
                     e.stopPropagation();
+                    if (isSavingRef.current) {
+                        showMessage('warning', '提示', '正在保存模型，请稍候再关闭...');
+                        return;
+                    }
                     getCurrentWindow().close();
                 }
                 return;
@@ -1448,7 +1504,9 @@ const MainLayout: React.FC = () => {
 
     const handleSave = async () => {
         if (!modelPath || !modelData) return
+
         try {
+            isSavingRef.current = true;
             const { writeFile } = await import('@tauri-apps/plugin-fs')
 
             console.time('[MainLayout] SavePrep')
@@ -1465,7 +1523,10 @@ const MainLayout: React.FC = () => {
                 // Show first 3 errors to user
                 const errorMsg = validationErrors.slice(0, 3).join('\n');
                 const proceed = confirm(`模型验证发现以下问题:\n${errorMsg}\n${validationErrors.length > 3 ? `...还有 ${validationErrors.length - 3} 个问题` : ''}\n\n是否仍然保存?`);
-                if (!proceed) return;
+                if (!proceed) {
+                    isSavingRef.current = false;
+                    return;
+                }
             }
 
             // Fix FrameFlags for ParticleEmitter2 to prevent save corruption
@@ -1508,6 +1569,8 @@ const MainLayout: React.FC = () => {
         } catch (err) {
             console.error('Failed to save file:', err)
             showMessage('error', '保存失败', '详细信息: ' + err)
+        } finally {
+            isSavingRef.current = false;
         }
     }
 
@@ -1525,6 +1588,7 @@ const MainLayout: React.FC = () => {
             })
 
             if (selected) {
+                isSavingRef.current = true;
                 // Prepare model data with correct typed arrays
                 const preparedData = prepareModelDataForSave(modelData);
 
@@ -1580,6 +1644,8 @@ const MainLayout: React.FC = () => {
         } catch (err) {
             console.error('Failed to save file as:', err)
             showMessage('error', '另存为失败', '详细信息: ' + err)
+        } finally {
+            isSavingRef.current = false;
         }
     }
 

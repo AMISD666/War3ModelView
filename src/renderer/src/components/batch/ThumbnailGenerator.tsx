@@ -21,7 +21,7 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
     modelAnimations = {},
     visiblePaths = new Set()
 }) => {
-    const animationFrameRef = useRef<number>(0);
+    const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const mainMode = useSelectionStore(state => state.mainMode);
     const processedPaths = useRef<string[]>([]);
     const lastQueueRef = useRef<string[]>([]);
@@ -30,6 +30,12 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
     const modelAnimationsRef = useRef(modelAnimations);
     const pendingRequestsRef = useRef<Set<string>>(new Set());
     const lastPruneTimeRef = useRef<number>(0);
+    const lastSelectionTimeRef = useRef<number>(0);
+
+    // Track when selection changes to trigger aggressive throttling
+    useEffect(() => {
+        lastSelectionTimeRef.current = performance.now();
+    }, [selectedAnimations]);
 
     // Sync refs to avoid loop resets when switching animations
     useEffect(() => {
@@ -56,8 +62,10 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
     useEffect(() => {
         let active = true;
 
-        const loop = async (time: number) => {
+        const loop = async () => {
             if (!active) return;
+
+            const time = performance.now();
 
             // 1. Process Initial Queue (Parallel Workers)
             if (queue.length > 0) {
@@ -93,15 +101,23 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
                     }
                 }));
 
-                animationFrameRef.current = requestAnimationFrame(loop);
+                timerRef.current = setTimeout(loop, 0);
                 return;
             }
 
             // 2. Animation Loop for processed models
-            const now = performance.now();
-            // THROTTLE: 40ms = ~25fps for background rendering stability
-            if (now - lastRenderTimeRef.current < 40) {
-                animationFrameRef.current = requestAnimationFrame(loop);
+            const now = time;
+
+            // ADAPTIVE THROTTLING
+            // 1. Base interval: 80ms (~12fps) instead of 40ms.
+            // 2. Selection back-off: If a model was selected < 3s ago, throttle to 1000ms (1fps)
+            //    This is especially important now that we are using 12 background workers.
+            const timeSinceSelection = now - lastSelectionTimeRef.current;
+            const throttleLimit = timeSinceSelection < 3000 ? 1000 : 80;
+
+            const timeSinceLastRender = now - lastRenderTimeRef.current;
+            if (timeSinceLastRender < throttleLimit) {
+                timerRef.current = setTimeout(loop, Math.max(1, throttleLimit - timeSinceLastRender));
                 return;
             }
             lastRenderTimeRef.current = now;
@@ -112,7 +128,7 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
                 // PERFORMANCE FIX: Stop background loop if not in batch mode
                 if (currentMode !== 'batch') {
                     active = false;
-                    if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+                    if (timerRef.current) clearTimeout(timerRef.current);
                     return;
                 }
 
@@ -156,15 +172,15 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
             }
 
             if (active) {
-                animationFrameRef.current = requestAnimationFrame(loop);
+                timerRef.current = setTimeout(loop, throttleLimit);
             }
         };
 
-        animationFrameRef.current = requestAnimationFrame(loop);
+        timerRef.current = setTimeout(loop, 0);
 
         return () => {
             active = false;
-            if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+            if (timerRef.current) clearTimeout(timerRef.current);
         };
     }, [queue, onThumbnailReady, onItemProcessed, isAnimating, visiblePaths, mainMode]);
 

@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react'
 import { useModelStore } from '../store/modelStore'
 import { useSelectionStore } from '../store/selectionStore'
 import { useHistoryStore } from '../store/historyStore'
-import { WarningOutlined } from '@ant-design/icons'
+import { WarningOutlined, CopyOutlined } from '@ant-design/icons'
 import { Tooltip, Input, message } from 'antd'
 
 interface AnimationPanelProps {
@@ -144,8 +144,37 @@ const AnimationPanel: React.FC<AnimationPanelProps> = ({
             </div>
 
             {modelPath && (
-                <div style={{ fontSize: '12px', wordBreak: 'break-all', color: '#aaa', marginBottom: '10px' }}>
-                    当前模型: {modelPath.split(/[\\/]/).pop()}
+                <div style={{
+                    fontSize: '12px',
+                    wordBreak: 'break-all',
+                    color: '#aaa',
+                    marginBottom: '10px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '4px',
+                    background: '#333',
+                    padding: '4px 8px',
+                    borderRadius: '4px'
+                }}>
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        当前模型: {modelPath.split(/[\\/]/).pop()}
+                    </span>
+                    <Tooltip title="复制文件名">
+                        <CopyOutlined
+                            onClick={() => {
+                                const fileName = modelPath.split(/[\\/]/).pop() || '';
+                                navigator.clipboard.writeText(fileName);
+                                message.success('模型名称已复制');
+                            }}
+                            style={{
+                                cursor: 'pointer',
+                                color: '#4a90e2',
+                                fontSize: '14px',
+                                padding: '2px'
+                            }}
+                        />
+                    </Tooltip>
                 </div>
             )}
 

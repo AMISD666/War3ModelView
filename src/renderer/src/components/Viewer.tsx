@@ -117,6 +117,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const lastFrameTime = useRef<number>(performance.now())
   const frameCount = useRef<number>(0)
   const renderRef = useRef<((time: number, scheduleNext?: boolean) => void) | null>(null)
+  const pMatrixRef = useRef(mat4.create())
+  const mvMatrixRef = useRef(mat4.create())
+  const cameraPosRef = useRef(vec3.create())
+  const cameraUpRef = useRef(vec3.fromValues(0, 0, 1))
+  const cameraQuatRef = useRef(quat.create())
   const { showModelInfo } = useUIStore()
 
   const formatCameraValue = (value: number): string => {
@@ -163,7 +168,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     const text = `${formatCameraValue(pos[0])},${formatCameraValue(pos[1])},${formatCameraValue(pos[2])}\n` +
       `${formatCameraValue(target[0])},${formatCameraValue(target[1])},${formatCameraValue(target[2])}`
 
-    navigator.clipboard.writeText(text).catch(() => {})
+    navigator.clipboard.writeText(text).catch(() => { })
   }
 
   // Refs for props to be accessible in render loop
@@ -774,6 +779,24 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       } else {
         // Normal file open - parse from disk
         loadModel(modelPath)
+      }
+    } else {
+      // If modelPath is null, it means no models are loaded
+      if (lastLoadedModelPath.current !== null) {
+        console.log('[Viewer] No model path, clearing renderer');
+        lastLoadedModelPath.current = null;
+        if (rendererRef.current) {
+          try { rendererRef.current.destroy(); } catch (e) { }
+          setRenderer(null);
+        }
+        // Force a clear on the canvas
+        if (canvasRef.current) {
+          const gl = canvasRef.current.getContext('webgl2') || canvasRef.current.getContext('webgl');
+          if (gl) {
+            gl.clearColor(0, 0, 0, 0);
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+          }
+        }
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2125,7 +2148,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       }
 
       (newRenderer as any).__modelPath = path
-      (newRenderer as any).__modelPath = path
+        (newRenderer as any).__modelPath = path
       setRenderer(newRenderer)
       console.log('[Viewer] ========== FULL RELOAD COMPLETE ==========')
       console.timeEnd('[Viewer] ReloadModel')
@@ -2149,11 +2172,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
       // Sync model data to renderer without recreating the entire renderer
       // This is the LIGHTWEIGHT SYNC approach - only updates internal data arrays
-        if (renderer && modelData) {
-          const modelPathHint = (modelData as any)?.__modelPath || (modelData as any)?.path || ''
+      if (renderer && modelData) {
+        const modelPathHint = (modelData as any)?.__modelPath || (modelData as any)?.path || ''
           ; (renderer as any).__modelPath = modelPath || modelPathHint || (renderer as any).__modelPath || ''
-          // Check for structural changes that require full reload
-          const { needsReload, reason } = checkForStructuralChanges(modelData, renderer.model)
+        // Check for structural changes that require full reload
+        const { needsReload, reason } = checkForStructuralChanges(modelData, renderer.model)
 
         if (needsReload) {
           console.log('[Viewer] Structural change detected:', reason, '. Triggering full reload.')
@@ -2266,9 +2289,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             Promise.all(
               newTextures.map(async (texture: any) => {
                 try {
-                const { loadTextureForRenderer } = await import('./viewer/textureLoader')
-                const textureModelPath = (renderer as any).__modelPath || modelPath || (modelData as any)?.__modelPath || (modelData as any)?.path || ''
-                const loaded = await loadTextureForRenderer(renderer, texture.Image, textureModelPath)
+                  const { loadTextureForRenderer } = await import('./viewer/textureLoader')
+                  const textureModelPath = (renderer as any).__modelPath || modelPath || (modelData as any)?.__modelPath || (modelData as any)?.path || ''
+                  const loaded = await loadTextureForRenderer(renderer, texture.Image, textureModelPath)
                   if (loaded) {
                     console.log('[Viewer] Loaded new texture:', texture.Image)
                   } else {
@@ -2438,7 +2461,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
         try {
 
-          if (!gl || !canvasRef.current || !renderer) {
+          if (!gl || !canvasRef.current) {
             // Only continue polling if we should still run AND this is still the active loop
             if (runState.shouldRun && globalRenderLoopId === myLoopId) {
               animationFrameId.current = requestAnimationFrame(render)
@@ -2450,6 +2473,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           // CRITICAL: Use rendererRef.current instead of closure-captured 'renderer'
           // to always get the LATEST renderer, even if component re-renders with new renderer
           const mdlRenderer = rendererRef.current
+
+          const [r, g, b] = hexToRgb(backgroundColorRef.current)
+          gl.clearColor(r, g, b, 1.0)
+          gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+
           if (!mdlRenderer) {
             if (globalRenderLoopId === myLoopId) {
               animationFrameId.current = requestAnimationFrame(render)
@@ -2459,16 +2487,12 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           const delta = time - lastFrameTime.current
           lastFrameTime.current = time
 
-          const cameraPos = vec3.create()
-          const cameraUp = vec3.fromValues(0, 0, 1)
-          const cameraQuat = quat.create()
+          const cameraPos = cameraPosRef.current
+          const cameraUp = cameraUpRef.current
+          const cameraQuat = cameraQuatRef.current
           quat.identity(cameraQuat)
-          const pMatrix = mat4.create()
-          const mvMatrix = mat4.create()
-
-          const [r, g, b] = hexToRgb(backgroundColorRef.current)
-          gl.clearColor(r, g, b, 1.0)
-          gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+          const pMatrix = pMatrixRef.current
+          const mvMatrix = mvMatrixRef.current
 
           gl.enable(gl.DEPTH_TEST)
           gl.depthFunc(gl.LEQUAL)

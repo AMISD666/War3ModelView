@@ -81,6 +81,7 @@ interface SelectionState {
 
     // 清除所有选择
     clearAllSelections: () => void;
+    reset: () => void;
 }
 
 export const useSelectionStore = create<SelectionState>((set, get) => ({
@@ -282,6 +283,25 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
             selectedFaceIds: [],
             isPickingParent: false,
             pickedGeosetIndex: null
+        });
+    },
+
+    reset: () => {
+        set({
+            mainMode: 'view',
+            geometrySubMode: 'vertex',
+            animationSubMode: 'binding',
+            transformMode: 'translate',
+            multiMoveMode: 'relative',
+            selectionMode: 'object',
+            selectedNodeIds: [],
+            selectedVertexIds: [],
+            selectedFaceIds: [],
+            gizmoMode: 'translate',
+            isPickingParent: false,
+            pickedGeosetIndex: null,
+            isGlobalTransformMode: false,
+            globalTransformPivot: 'origin'
         });
     }
 }));

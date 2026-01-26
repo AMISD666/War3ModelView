@@ -249,7 +249,7 @@ export const MainLayoutNew: React.FC = () => {
                         backgroundColor: isBatchMode ? '#1a1a1a' : 'transparent'
                     }}>
                         {/* Tab Bar - only show in normal mode when tabs exist */}
-                        {!isBatchMode && tabs.length > 0 && (
+                        {!isBatchMode && (
                             <TabBar />
                         )}
 

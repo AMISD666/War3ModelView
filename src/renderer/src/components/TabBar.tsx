@@ -9,9 +9,10 @@ import { CloseOutlined } from '@ant-design/icons';
 export const TabBar: React.FC = () => {
     const { tabs, activeTabId, setActiveTab, closeTab } = useModelStore();
 
-    if (tabs.length === 0) {
-        return null; // No tabs, don't render anything
-    }
+    // We always render the container now to keep it persistent as requested by the user.
+    // if (tabs.length === 0) {
+    //     return null; // No tabs, don't render anything
+    // }
 
     return (
         <div style={{

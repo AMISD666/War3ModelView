@@ -9,6 +9,20 @@
 import { parseMDX, parseMDL, ModelRenderer } from 'war3-model';
 import { mat4, vec3, quat } from 'gl-matrix';
 
+const REPLACEABLE_TEXTURES: Record<number, string> = {
+    1: 'TeamColor\\TeamColor00',
+    2: 'TeamGlow\\TeamGlow00',
+    11: 'Cliff\\Cliff0',
+    21: '', // Used by cursors
+    31: 'LordaeronTree\\LordaeronSummerTree',
+    32: 'AshenvaleTree\\AshenTree',
+    33: 'BarrensTree\\BarrensTree',
+    34: 'NorthrendTree\\NorthTree',
+    35: 'Mushroom\\MushroomTree',
+    36: 'RuinsTree\\RuinsTree',
+    37: 'OutlandMushroomTree\\MushroomTree',
+}
+
 let canvas: OffscreenCanvas | null = null;
 let gl: WebGLRenderingContext | WebGL2RenderingContext | null = null;
 
@@ -111,6 +125,18 @@ async function render(
         }
 
         if (!model) throw new Error('Failed to parse model');
+
+        // Resolve Replaceable IDs in worker model representation
+        if (model.Textures) {
+            model.Textures.forEach((texture: any) => {
+                if ((!texture.Image || texture.Image === '') && texture.ReplaceableId !== 0) {
+                    const replaceablePath = REPLACEABLE_TEXTURES[texture.ReplaceableId];
+                    if (replaceablePath !== undefined) {
+                        texture.Image = `ReplaceableTextures\\${replaceablePath}.blp`;
+                    }
+                }
+            });
+        }
 
         if (!model.Sequences || model.Sequences.length === 0) {
             model.Sequences = [{

@@ -87,6 +87,7 @@ interface RendererStore {
     setAutoRecalculateNormals: (enabled: boolean) => void
     keepCameraOnLoad: boolean
     setKeepCameraOnLoad: (enabled: boolean) => void
+    reset: () => void
 }
 
 export const useRendererStore = create<RendererStore>()(
@@ -185,7 +186,14 @@ export const useRendererStore = create<RendererStore>()(
             autoRecalculateNormals: true,
             setAutoRecalculateNormals: (enabled) => set({ autoRecalculateNormals: enabled }),
             keepCameraOnLoad: false,
-            setKeepCameraOnLoad: (enabled) => set({ keepCameraOnLoad: enabled })
+            setKeepCameraOnLoad: (enabled) => set({ keepCameraOnLoad: enabled }),
+
+            reset: () => {
+                set({
+                    renderer: null,
+                    missingTextures: []
+                });
+            }
         }),
         {
             name: 'renderer-settings-v2',

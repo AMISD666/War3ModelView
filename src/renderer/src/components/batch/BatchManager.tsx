@@ -21,6 +21,7 @@ import { thumbnailService } from './ThumbnailService';
 import { thumbnailEventBus } from './ThumbnailEventBus';
 import { ModelCard } from './ModelCard';
 import { processDeathAnimation, processRemoveLights } from '../../utils/modelUtils';
+import { useBatchStore } from '../../store/batchStore';
 
 const { Content, Header } = Layout;
 const { Text } = Typography;
@@ -45,10 +46,21 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
     const { token } = theme.useToken();
     const setMainMode = useSelectionStore(state => state.setMainMode);
 
-    const [loading, setLoading] = useState(false);
-    const [files, setFiles] = useState<ModelFile[]>([]);
-    const [currentPath, setCurrentPath] = useState<string | null>(null);
-    const [queue, setQueue] = useState<{ name: string; fullPath: string }[]>([]);
+    // Optimized store usage: select specific state and actions to avoid excessive re-renders
+    const files = useBatchStore(state => state.files);
+    const setFiles = useBatchStore(state => state.setFiles);
+    const currentPath = useBatchStore(state => state.currentPath);
+    const setCurrentPath = useBatchStore(state => state.setCurrentPath);
+    const queue = useBatchStore(state => state.queue);
+    const setQueue = useBatchStore(state => state.setQueue);
+    const updateQueue = useBatchStore(state => state.updateQueue);
+    const modelAnimations = useBatchStore(state => state.modelAnimations);
+    const setModelAnimations = useBatchStore(state => state.setModelAnimations);
+    const selectedAnimations = useBatchStore(state => state.selectedAnimations);
+    const setSelectedAnimations = useBatchStore(state => state.setSelectedAnimations);
+    const loading = useBatchStore(state => state.isLoading);
+    const setLoading = useBatchStore(state => state.setLoading);
+    const batchReset = useBatchStore(state => state.reset);
 
     // UI state
     const [currentPage, setCurrentPage] = useState(1);
@@ -61,9 +73,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
     const [isPrefixModalVisible, setIsPrefixModalVisible] = useState(false);
 
 
-    // Shared states for animations
-    const [modelAnimations, setModelAnimations] = useState<Record<string, string[]>>({});
-    const [selectedAnimations, setSelectedAnimations] = useState<Record<string, string>>({});
+    // Shared states for animations moved to store
 
     const handleOpenFolder = async () => {
         try {
@@ -222,7 +232,14 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
         thumbnailEventBus.emitThumbnail(fullPath, bitmap);
 
         if (animations && animations.length > 0) {
-            setModelAnimations(prev => ({ ...prev, [fullPath]: animations }));
+            // Only update animation list if it's new or different
+            setModelAnimations(prev => {
+                if (prev[fullPath] && prev[fullPath].length === animations.length) {
+                    return prev;
+                }
+                return { ...prev, [fullPath]: animations };
+            });
+
             thumbnailEventBus.emitAnimations(fullPath, animations);
 
             // Default to the first animation if not set
@@ -231,7 +248,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                 return { ...prev, [fullPath]: animations[0] };
             });
         }
-    }, []);
+    }, [setModelAnimations, setSelectedAnimations]);
 
     const handleVisibilityChange = useCallback((fullPath: string, isVisible: boolean) => {
         setVisiblePaths(prev => {
@@ -253,13 +270,13 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
     };
 
     const handleItemProcessed = useCallback((fullPath: string) => {
-        setQueue(prev => {
+        updateQueue(prev => {
             if (prev.length > 0 && prev[0].fullPath === fullPath) {
                 return prev.slice(1);
             }
             return prev;
         });
-    }, []);
+    }, [updateQueue]);
 
     const handleAnimationChange = useCallback((file: ModelFile, animation: string) => {
         setSelectedAnimations(prev => ({ ...prev, [file.fullPath]: animation }));
@@ -268,7 +285,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
         if (onAnimationChange && animationIndex >= 0) {
             onAnimationChange(animationIndex);
         }
-    }, [modelAnimations, onAnimationChange]);
+    }, [modelAnimations, onAnimationChange, setSelectedAnimations]);
 
     const handleSelect = useCallback((file: ModelFile) => {
         setSelectedFile(file.fullPath);
@@ -405,7 +422,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
             try {
                 const result = await applyDeathAnimationToPath(targetPath);
                 thumbnailService.clearAll();
-                setQueue(prev => [...prev, { name: targetPath.split(/[/\\]/).pop() || targetPath, fullPath: targetPath }]);
+                updateQueue(prev => [...prev, { name: targetPath.split(/[/\\]/).pop() || targetPath, fullPath: targetPath }]);
                 if (result == 'added') {
                     message.success('已添加 Death 动作并更新可见度与发射速率');
                 } else {
@@ -460,7 +477,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
             try {
                 const count = await applyRemoveLightsToPath(targetPath);
                 thumbnailService.clearAll();
-                setQueue(prev => [...prev, { name: targetPath.split(/[/\\]/).pop() || targetPath, fullPath: targetPath }]);
+                updateQueue(prev => [...prev, { name: targetPath.split(/[/\\]/).pop() || targetPath, fullPath: targetPath }]);
                 message.success(`已删除 ${count} 个光照节点`);
             } catch (err) {
                 console.error('Failed to remove lights:', err);
@@ -612,11 +629,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                                 icon={<ClearOutlined />}
                                 danger
                                 onClick={() => {
-                                    setFiles([]);
-                                    setQueue([]);
-                                    setCurrentPath(null);
-                                    setModelAnimations({});
-                                    setSelectedAnimations({});
+                                    batchReset();
                                     thumbnailEventBus.clear();
                                     thumbnailService.clearAll();
                                 }}
@@ -714,11 +727,17 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                         </Space>
                     </Space>
 
-                    {deathApplyLoading && <Spin size="small" tip="处理中..." style={{ marginLeft: 8 }} />}
+                    {deathApplyLoading && (
+                        <span style={{ marginLeft: 8, display: 'inline-flex', alignItems: 'center' }}>
+                            <Spin size="small" />
+                            <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>处理中...</Text>
+                        </span>
+                    )}
                 </div>
                 {loading ? (
-                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-                        <Spin size="large" tip="正在扫描文件..." />
+                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', flexDirection: 'column' }}>
+                        <Spin size="large" />
+                        <div style={{ marginTop: 16, color: '#999' }}>正在扫描文件...</div>
                     </div>
                 ) : files.length > 0 ? (
                     <>

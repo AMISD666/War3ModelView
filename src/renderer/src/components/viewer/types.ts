@@ -42,12 +42,21 @@ export interface CameraState {
     target: Float32Array
 }
 
-// Helper: Convert hex color to RGB array
+// Helper: Convert hex color to RGB array with simple caching to avoid per-frame regex
+const hexCache: Record<string, [number, number, number]> = {};
 export function hexToRgb(hex: string): [number, number, number] {
-    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex)
-    return result
+    if (hexCache[hex]) return hexCache[hex];
+
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    const rgb: [number, number, number] = result
         ? [parseInt(result[1], 16) / 255, parseInt(result[2], 16) / 255, parseInt(result[3], 16) / 255]
-        : [0.2, 0.2, 0.2]
+        : [0.2, 0.2, 0.2];
+
+    // Simple cache - we only expect a few colors (background, vertex, selection, etc.)
+    if (Object.keys(hexCache).length < 50) {
+        hexCache[hex] = rgb;
+    }
+    return rgb;
 }
 
 // Helper: Check if value is array-like

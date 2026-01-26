@@ -16,6 +16,7 @@ use winreg::enums::*;
 use winreg::RegKey;
 
 static DEBUG_CONSOLE_ENABLED: AtomicBool = AtomicBool::new(false);
+static CLI_ARGS_CONSUMED: AtomicBool = AtomicBool::new(false);
 static PENDING_FILES: once_cell::sync::Lazy<std::sync::Mutex<Vec<String>>> =
     once_cell::sync::Lazy::new(|| std::sync::Mutex::new(Vec::new()));
 
@@ -669,6 +670,10 @@ fn get_cli_file_path() -> Option<String> {
 
 #[tauri::command]
 fn get_cli_file_paths() -> Vec<String> {
+    if CLI_ARGS_CONSUMED.swap(true, Ordering::SeqCst) {
+        return Vec::new();
+    }
+
     let args: Vec<String> = std::env::args().collect();
     if args
         .iter()

@@ -35,6 +35,7 @@
         "core:event:default",
         "core:app:allow-version",
         "core:window:allow-close",
+        "core:window:allow-destroy",
         "core:path:default",
         "process:allow-exit",
         {

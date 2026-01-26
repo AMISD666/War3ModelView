@@ -8,7 +8,7 @@
 import { parseMDX, parseMDL, decodeBLP, getBLPImageData } from 'war3-model';
 import { readFile } from '@tauri-apps/plugin-fs';
 import { invoke } from '@tauri-apps/api/core';
-import { decodeTexture, decodeTextureData } from '../viewer/textureLoader';
+import { decodeTexture, decodeTextureData, REPLACEABLE_TEXTURES } from '../viewer/textureLoader';
 import { useRendererStore } from '../../store/rendererStore';
 
 // We import the worker using Vite's ?worker suffix
@@ -240,53 +240,58 @@ class ThumbnailService {
 
                 if (!model) throw new Error('Failed to parse model for background render');
 
-                // Pre-load textures for this model (Optimized Batch Loading)
+                // Pre-load textures for this model (Optimized FS-First Batch Loading)
                 const textureImages: Record<string, ImageData> = {};
                 if (model.Textures) {
-                    const texturePaths = model.Textures
-                        .filter((t: any) => t.Image)
-                        .map((t: any) => t.Image as string);
+                    // 0. Resolve Replaceable IDs and mutate model
+                    model.Textures.forEach((texture: any) => {
+                        if ((!texture.Image || texture.Image === '') && texture.ReplaceableId !== 0) {
+                            const replaceablePath = REPLACEABLE_TEXTURES[texture.ReplaceableId];
+                            if (replaceablePath !== undefined) {
+                                texture.Image = `ReplaceableTextures\\${replaceablePath}.blp`;
+                            }
+                        }
+                    });
+
+                    const texturePaths = Array.from(new Set(model.Textures
+                        .map((t: any) => t.Image as string)
+                        .filter((path: string) => !!path)));
 
                     if (texturePaths.length > 0) {
                         try {
-                            // 1. Attempt batch MPQ read
-                            const mpqResults = await invoke<(string | null)[]>('read_mpq_files_batch', { paths: texturePaths });
+                            // 1. Attempt Local FS load in parallel first
+                            const fsResults = await Promise.all(
+                                texturePaths.map(path => decodeTexture(path, fullPath))
+                            );
 
-                            // 2. Decode MPQ results and identify missing ones for FS fallback
                             const missingPaths: string[] = [];
-                            for (let i = 0; i < texturePaths.length; i++) {
-                                const path = texturePaths[i];
-                                const b64 = mpqResults[i];
-                                if (b64) {
-                                    try {
-                                        const data = this.base64ToUint8Array(b64);
-                                        const imageData = decodeTextureData(data.buffer as ArrayBuffer, path);
-                                        if (imageData) {
-                                            textureImages[path] = imageData;
-                                        } else {
-                                            missingPaths.push(path);
-                                        }
-                                    } catch (e) { missingPaths.push(path); }
+                            fsResults.forEach(res => {
+                                if (res.imageData) {
+                                    textureImages[res.path] = res.imageData;
                                 } else {
-                                    missingPaths.push(path);
+                                    missingPaths.push(res.path);
                                 }
-                            }
+                            });
 
-                            // 3. Fallback to local File System for missing textures
-                            for (const path of missingPaths) {
-                                const result = await decodeTexture(path, fullPath);
-                                if (result.imageData) {
-                                    textureImages[path] = result.imageData;
+                            // 2. Attempt batch MPQ read for missing ones
+                            if (missingPaths.length > 0) {
+                                const mpqResults = await invoke<(string | null)[]>('read_mpq_files_batch', { paths: missingPaths });
+                                for (let i = 0; i < missingPaths.length; i++) {
+                                    const path = missingPaths[i];
+                                    const b64 = mpqResults[i];
+                                    if (b64) {
+                                        try {
+                                            const data = this.base64ToUint8Array(b64);
+                                            const imageData = decodeTextureData(data.buffer as ArrayBuffer, path);
+                                            if (imageData) {
+                                                textureImages[path] = imageData;
+                                            }
+                                        } catch (e) { }
+                                    }
                                 }
                             }
                         } catch (err) {
-                            // Global fallback if batch fails
-                            for (const path of texturePaths) {
-                                const result = await decodeTexture(path, fullPath);
-                                if (result.imageData) {
-                                    textureImages[path] = result.imageData;
-                                }
-                            }
+                            console.error('[ThumbnailService] Texture loading failed:', err);
                         }
                     }
                 }

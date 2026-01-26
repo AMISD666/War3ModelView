@@ -44,6 +44,7 @@ interface UIState {
     setEditMode: (mode: EditMode) => void;
     setToolMode: (mode: ToolMode) => void;
     setShowNodeManager: (visible: boolean) => void;
+    reset: () => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -114,6 +115,21 @@ export const useUIStore = create<UIState>()(
 
             setShowNodeManager: (visible: boolean) => {
                 set({ showNodeManager: visible });
+            },
+
+            reset: () => {
+                set({
+                    showNodeManager: false,
+                    showModelInfo: false,
+                    showVertexEditor: false,
+                    showFaceEditor: false,
+                    showNodeDialog: false,
+                    showCreateNodeDialog: false,
+                    showTransformModelDialog: false,
+                    editMode: EditMode.OBJECT,
+                    toolMode: ToolMode.SELECT,
+                    editingNodeId: null
+                });
             }
         }),
         {
