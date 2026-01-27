@@ -42,6 +42,7 @@ import { MissingTextureWarning } from './MissingTextureWarning'
 import { GeosetSeparateDialog } from './modals/GeosetSeparateDialog'
 import { LayerConfig, layerConfigToMaterialLayer } from './modals/MaterialLayerOptions'
 import { NodeType } from '../types/node'
+import { registerShortcutHandler } from '../shortcuts/manager'
 
 // Singleton loop counter to prevent runaway FPS
 let globalRenderLoopId = 0
@@ -71,7 +72,7 @@ interface ViewerProps {
   backgroundColor: string
   showFPS: boolean
   playbackSpeed: number
-  viewPreset?: { type: string, time: number } | null
+  viewPreset?: { type: string, time: number, reset?: boolean } | null
   modelData?: any
 }
 
@@ -268,25 +269,6 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     setGlobalRenderer(renderer)
   }, [renderer, setGlobalRenderer])
 
-  // 空格键播放/暂停动画快捷键
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // 忽略输入框中的按键
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
-        return
-      }
-      if (e.code === 'Space') {
-        e.preventDefault() // 防止页面滚动
-        onTogglePlay()
-      } else if (e.key.toLowerCase() === 'f') {
-        handleFitToView()
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [onTogglePlay])
-
-
   const handleFitToView = () => {
     // @ts-ignore
     if (ref && ref.current && ref.current.fitToView) {
@@ -330,6 +312,67 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       cameraRef.current.verticalAngle = targetCamera.current.phi
       vec3.copy(cameraRef.current.target, targetCamera.current.target)
       cameraRef.current.update()
+    }
+  }
+
+  const handleCameraViewToggle = () => {
+    if (inCameraView.current) {
+      if (previousCameraState.current) {
+        targetCamera.current.distance = previousCameraState.current.distance
+        targetCamera.current.theta = previousCameraState.current.theta
+        targetCamera.current.phi = previousCameraState.current.phi
+        vec3.set(
+          targetCamera.current.target,
+          previousCameraState.current.target[0],
+          previousCameraState.current.target[1],
+          previousCameraState.current.target[2]
+        )
+        previousCameraState.current = null
+      } else {
+        vec3.set(targetCamera.current.target, 0, 0, 0)
+      }
+      syncCameraToOrbit()
+      inCameraView.current = false
+      return
+    }
+
+    previousCameraState.current = {
+      distance: targetCamera.current.distance,
+      theta: targetCamera.current.theta,
+      phi: targetCamera.current.phi,
+      target: vec3.clone(targetCamera.current.target) as Float32Array
+    }
+
+    const selector = document.getElementById('camera-selector') as HTMLSelectElement
+    if (selector && selector.value !== '-1') {
+      const { nodes: storeNodes } = useModelStore.getState()
+      const cameraList = storeNodes.filter((n: any) => n.type === 'Camera')
+      const idx = parseInt(selector.value)
+      if (idx >= 0 && idx < cameraList.length) {
+        const cam = cameraList[idx] as any
+        const pos = getCameraVector(cam.Translation, cam.Position)
+        const target = getCameraVector(cam.TargetTranslation, cam.TargetPosition)
+
+        const dx = pos[0] - target[0]
+        const dy = pos[1] - target[1]
+        const dz = pos[2] - target[2]
+        let distance = Math.sqrt(dx * dx + dy * dy + dz * dz)
+        if (distance < 0.1) distance = 100
+
+        let phi = Math.acos(dz / distance)
+        if (isNaN(phi)) phi = Math.PI / 4
+        phi = Math.max(0.01, Math.min(Math.PI - 0.01, phi))
+
+        let theta = Math.atan2(dy, dx)
+        if (isNaN(theta)) theta = 0
+
+        targetCamera.current.distance = distance
+        targetCamera.current.theta = theta
+        targetCamera.current.phi = phi
+        vec3.set(targetCamera.current.target, target[0], target[1], target[2])
+        syncCameraToOrbit()
+        inCameraView.current = true
+      }
     }
   }
 
@@ -595,6 +638,12 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         console.log('[Viewer] Switching to perspective mode')
         if (cameraRef.current) {
           cameraRef.current.setPerspective()
+        }
+        if (viewPreset.reset) {
+          vec3.set(targetCamera.current.target, 0, 0, 0)
+          targetCamera.current.distance = 500
+          targetCamera.current.theta = Math.PI / 4
+          targetCamera.current.phi = Math.PI / 4
         }
         break
       case 'front':
@@ -1628,151 +1677,6 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       clearAllSelections()
     }
   }
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if input is focused, UNLESS it's a checkbox/radio/button which shouldn't block shortcuts like Undo
-      if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) {
-        const type = (document.activeElement as HTMLInputElement).type
-        const allowedTypes = ['checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'image']
-        if (!allowedTypes.includes(type)) {
-          return
-        }
-      }
-
-      switch (e.key.toLowerCase()) {
-        case 'f': // Toggle wireframe/textured render mode
-          onToggleWireframe()
-          break
-        case '0': // Camera Reset / Focus
-          vec3.set(targetCamera.current.target, 0, 0, 0)
-          targetCamera.current.distance = 500
-          targetCamera.current.theta = Math.PI / 4
-          targetCamera.current.phi = Math.PI / 4
-          syncCameraToOrbit()
-          break
-        case '1': // Front
-          targetCamera.current.theta = -Math.PI / 2
-          targetCamera.current.phi = Math.PI / 2
-          syncCameraToOrbit()
-          break
-        case '2': // Back
-          targetCamera.current.theta = Math.PI / 2
-          targetCamera.current.phi = Math.PI / 2
-          syncCameraToOrbit()
-          break
-        case '3': // Left
-          targetCamera.current.theta = 0
-          targetCamera.current.phi = Math.PI / 2
-          syncCameraToOrbit()
-          break
-        case '4': // Right
-          targetCamera.current.theta = Math.PI
-          targetCamera.current.phi = Math.PI / 2
-          syncCameraToOrbit()
-          break
-        case '5': // Top
-          targetCamera.current.phi = 0.01
-          syncCameraToOrbit()
-          break
-        case '6': // Bottom
-          targetCamera.current.phi = Math.PI - 0.01
-          syncCameraToOrbit()
-          break
-        case '`': // View selected camera (~ key) - Toggle mode
-          {
-            if (inCameraView.current) {
-              // Exit camera view: restore previous state if available, or reset to model center
-              if (previousCameraState.current) {
-                targetCamera.current.distance = previousCameraState.current.distance
-                targetCamera.current.theta = previousCameraState.current.theta
-                targetCamera.current.phi = previousCameraState.current.phi
-                vec3.set(targetCamera.current.target, previousCameraState.current.target[0], previousCameraState.current.target[1], previousCameraState.current.target[2])
-                previousCameraState.current = null
-              } else {
-                vec3.set(targetCamera.current.target, 0, 0, 0)
-              }
-              syncCameraToOrbit()
-              inCameraView.current = false
-            } else {
-              // Enter camera view
-              // First, save current state
-              previousCameraState.current = {
-                distance: targetCamera.current.distance,
-                theta: targetCamera.current.theta,
-                phi: targetCamera.current.phi,
-                target: vec3.clone(targetCamera.current.target) as Float32Array
-              }
-
-              const selector = document.getElementById('camera-selector') as HTMLSelectElement;
-              if (selector && selector.value !== '-1') {
-                const { nodes: storeNodes } = useModelStore.getState();
-                const cameraList = storeNodes.filter((n: any) => n.type === 'Camera');
-                const idx = parseInt(selector.value);
-                if (idx >= 0 && idx < cameraList.length) {
-                  const cam = cameraList[idx];
-                  const isArrayLike = (v: any) => Array.isArray(v) || v instanceof Float32Array || ArrayBuffer.isView(v);
-                  const toArray = (v: any) => v instanceof Float32Array ? Array.from(v) : v;
-                  const getPos = (prop: any, directProp?: any) => {
-                    if (directProp && isArrayLike(directProp)) return toArray(directProp);
-                    if (isArrayLike(prop)) return toArray(prop);
-                    if (prop && prop.Keys && prop.Keys.length > 0) {
-                      const v = prop.Keys[0].Vector;
-                      return v ? toArray(v) : [0, 0, 0];
-                    }
-                    return [0, 0, 0];
-                  };
-                  if (cam) {
-                    // Cast to any to access properties that might be missing in strict type defs
-                    const camAny = cam as any;
-                    const pos = getPos(camAny.Translation, camAny.Position);
-                    const target = getPos(camAny.TargetTranslation, camAny.TargetPosition);
-
-                    const dx = pos[0] - target[0];
-                    const dy = pos[1] - target[1];
-                    const dz = pos[2] - target[2];
-                    let distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-                    if (distance < 0.1) distance = 100;
-
-                    let phi = Math.acos(dz / distance);
-                    if (isNaN(phi)) phi = Math.PI / 4;
-                    phi = Math.max(0.01, Math.min(Math.PI - 0.01, phi));
-
-                    let theta = Math.atan2(dy, dx);
-                    if (isNaN(theta)) theta = 0;
-
-                    targetCamera.current.distance = distance;
-                    targetCamera.current.theta = theta;
-                    targetCamera.current.phi = phi;
-                    vec3.set(targetCamera.current.target, target[0], target[1], target[2]);
-                    syncCameraToOrbit()
-                    inCameraView.current = true
-                  }
-                }
-              }
-            }
-            break
-          }
-        case 'z':
-          if (e.ctrlKey || e.metaKey) {
-            if (e.shiftKey) {
-              commandManager.redo()
-            } else {
-              commandManager.undo()
-            }
-          }
-          break
-        case 'y':
-          if (e.ctrlKey || e.metaKey) {
-            commandManager.redo()
-          }
-          break
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [onToggleWireframe])
 
   useEffect(() => {
     if (!canvasRef.current) return
@@ -3403,29 +3307,6 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   }, [renderer, appMainMode, animationIndex])
 
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-
-      if (e.target instanceof HTMLInputElement) {
-        // 如果是 number input，绝对返回
-        if (e.target.type === 'number') {
-          return;
-        }
-      }
-
-      if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) {
-        return;
-      }
-
-      const key = e.key.toLowerCase()
-      if (key === 'w') useSelectionStore.getState().setTransformMode('translate')
-      if (key === 'e') useSelectionStore.getState().setTransformMode('rotate')
-      if (key === 'r') useSelectionStore.getState().setTransformMode('scale')
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [])
-
-  useEffect(() => {
     // Guard: Only set sequence if renderer is fully initialized with valid rendererData
     // NOTE: Don't require animationInfo to be set - it gets set BY setSequence!
     // Requiring it creates chicken-and-egg problem where animation never starts.
@@ -4726,50 +4607,85 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     const cmd = new PasteVerticesCommand(rendererRef.current, vertexCopyBuffer.current, true)
     commandManager.execute(cmd)
   }
+
   useEffect(() => {
-    const handleKeyboard = (e: KeyboardEvent) => {
-      // Only block keyboard shortcuts when focus is on text input elements
-      // Allow shortcuts when focus is on checkboxes, buttons, etc.
-      const activeEl = document.activeElement as HTMLInputElement | null
-      if (activeEl instanceof HTMLInputElement) {
-        const textInputTypes = ['text', 'password', 'email', 'search', 'tel', 'url', 'number']
-        if (textInputTypes.includes(activeEl.type)) return
-      }
-      if (document.activeElement instanceof HTMLTextAreaElement) return
-
+    const isGeometryVertexMode = () => {
       const { mainMode, geometrySubMode } = useSelectionStore.getState()
-
-      if (e.ctrlKey || e.metaKey) {
-        console.log('[Viewer] Keyboard: Ctrl+', e.key, 'mainMode:', mainMode, 'geometrySubMode:', geometrySubMode)
-
-        if (e.key === 'z') {
-          e.preventDefault()
-          console.log('[Viewer] Executing undo')
-          commandManager.undo()
-        } else if (e.key === 'y') {
-          e.preventDefault()
-          console.log('[Viewer] Executing redo')
-          commandManager.redo()
-        } else if (e.key === 'c' && mainMode === 'geometry' && geometrySubMode === 'vertex') {
-          e.preventDefault()
-          console.log('[Viewer] Executing copy')
-          handleCopyVertices()
-        } else if (e.key === 'v' && mainMode === 'geometry' && geometrySubMode === 'vertex') {
-          e.preventDefault()
-          console.log('[Viewer] Executing paste')
-          handlePasteVertices()
-        }
-      }
-
-      // Delete key
-      if (e.key === 'Delete' && mainMode === 'geometry' && geometrySubMode === 'vertex') {
-        e.preventDefault()
-        handleDeleteVertices()
-      }
+      return mainMode === 'geometry' && geometrySubMode === 'vertex'
     }
-    window.addEventListener('keydown', handleKeyboard)
-    return () => window.removeEventListener('keydown', handleKeyboard)
-  }, [])
+
+    const isNotUvMode = () => useSelectionStore.getState().mainMode !== 'uv'
+
+    const unsubscribeHandlers = [
+      registerShortcutHandler('animation.playPause', () => {
+        onTogglePlay()
+        return true
+      }),
+      registerShortcutHandler('view.fitToView', () => {
+        handleFitToView()
+        return true
+      }),
+      registerShortcutHandler('view.toggleWireframe', () => {
+        onToggleWireframe()
+        return true
+      }),
+      registerShortcutHandler('view.cameraViewToggle', () => {
+        handleCameraViewToggle()
+        return true
+      }),
+      registerShortcutHandler(
+        'transform.translate',
+        () => {
+          useSelectionStore.getState().setTransformMode('translate')
+          return true
+        },
+        { isActive: isNotUvMode }
+      ),
+      registerShortcutHandler(
+        'transform.rotate',
+        () => {
+          useSelectionStore.getState().setTransformMode('rotate')
+          return true
+        },
+        { isActive: isNotUvMode }
+      ),
+      registerShortcutHandler(
+        'transform.scale',
+        () => {
+          useSelectionStore.getState().setTransformMode('scale')
+          return true
+        },
+        { isActive: isNotUvMode }
+      ),
+      registerShortcutHandler('geometry.copyVertices', () => {
+        if (!isGeometryVertexMode()) return false
+        handleCopyVertices()
+        return true
+      }),
+      registerShortcutHandler('geometry.pasteVertices', () => {
+        if (!isGeometryVertexMode()) return false
+        handlePasteVertices()
+        return true
+      }),
+      registerShortcutHandler('geometry.deleteVertices', () => {
+        if (!isGeometryVertexMode()) return false
+        handleDeleteVertices()
+        return true
+      })
+    ]
+
+    return () => {
+      unsubscribeHandlers.forEach((unsubscribe) => unsubscribe())
+    }
+  }, [
+    handleCameraViewToggle,
+    handleCopyVertices,
+    handleDeleteVertices,
+    handleFitToView,
+    handlePasteVertices,
+    onTogglePlay,
+    onToggleWireframe
+  ])
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
@@ -4916,10 +4832,20 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             >
               <CopyOutlined style={{ fontSize: '12px' }} />
             </button>
-            <MissingTextureWarning />
           </div>
         );
       })()}
+
+      {/* Missing Texture Warning - Absolute positioned on the left as requested */}
+      <div style={{
+        position: 'absolute',
+        top: '55px',
+        left: '15px',
+        zIndex: 500,
+        pointerEvents: 'none'
+      }}>
+        <MissingTextureWarning />
+      </div>
 
       {selectionBox && (
         <div

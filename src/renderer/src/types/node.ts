@@ -15,7 +15,8 @@ export enum NodeType {
     LIGHT = 'Light',
     EVENT_OBJECT = 'EventObject',
     COLLISION_SHAPE = 'CollisionShape',
-    CAMERA = 'Camera'
+    CAMERA = 'Camera',
+    PARTICLE_EMITTER_POPCORN = 'ParticleEmitterPopcorn'
 }
 
 // 节点基础接口
@@ -199,6 +200,27 @@ export interface CameraNode extends BaseNode {
     TargetTranslation?: any; // Animation data for Target Position
 }
 
+// Particle Emitter Popcorn 节点 (Reforged)
+export interface ParticleEmitterPopcornNode extends BaseNode {
+    type: NodeType.PARTICLE_EMITTER_POPCORN;
+    LifeSpan?: number | any;
+    EmissionRate?: number | any;
+    Speed?: number | any;
+    Color?: [number, number, number] | any;
+    Alpha?: number | any;
+    ReplaceableId?: number;
+    Path?: string;
+    AnimVisibilityGuide?: string;
+
+    // Animation keys
+    LifeSpanAnim?: any;
+    EmissionRateAnim?: any;
+    SpeedAnim?: any;
+    ColorAnim?: any;
+    AlphaAnim?: any;
+    VisibilityAnim?: any;
+}
+
 // Texture Animation 节点
 
 
@@ -213,7 +235,8 @@ export type ModelNode =
     | RibbonEmitterNode
     | EventObjectNode
     | CollisionShapeNode
-    | CameraNode;
+    | CameraNode
+    | ParticleEmitterPopcornNode;
 
 // 树形节点（用于 Ant Design Tree）
 export interface TreeNode {

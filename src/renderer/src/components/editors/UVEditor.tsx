@@ -5,6 +5,8 @@ import { invoke } from '@tauri-apps/api/core'
 // @ts-ignore
 import { decodeBLP, getBLPImageData } from 'war3-model'
 import { Button, Tooltip } from 'antd'
+import { useSelectionStore } from '../../store/selectionStore'
+import { registerShortcutHandler } from '../../shortcuts/manager'
 import {
     BorderOutlined,
     LineOutlined,
@@ -844,32 +846,55 @@ const UVEditor: React.FC<UVEditorProps> = ({
     // EFFECTS
     // -------------------------------------------------------------------------
 
-    // Keyboard shortcuts
     useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            // Check if focus is on input element
-            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+        const isUvMode = () => useSelectionStore.getState().mainMode === 'uv'
 
-            if (e.ctrlKey && (e.key === 'z' || e.key === 'Z')) {
-                e.preventDefault()
-                e.stopPropagation()
-                undo()
-            } else if (e.ctrlKey && (e.key === 'y' || e.key === 'Y')) {
-                e.preventDefault()
-                e.stopPropagation()
-                redo()
-            } else if (!e.ctrlKey && !e.altKey && !e.shiftKey) {
-                if (e.key === 'w' || e.key === 'W') {
+        const unsubscribeHandlers = [
+            registerShortcutHandler(
+                'edit.undo',
+                () => {
+                    undo()
+                    return true
+                },
+                { isActive: isUvMode, priority: 10 }
+            ),
+            registerShortcutHandler(
+                'edit.redo',
+                () => {
+                    redo()
+                    return true
+                },
+                { isActive: isUvMode, priority: 10 }
+            ),
+            registerShortcutHandler(
+                'transform.translate',
+                () => {
                     setTransformMode('translate')
-                } else if (e.key === 'e' || e.key === 'E') {
+                    return true
+                },
+                { isActive: isUvMode, priority: 10 }
+            ),
+            registerShortcutHandler(
+                'transform.rotate',
+                () => {
                     setTransformMode('rotate')
-                } else if (e.key === 'r' || e.key === 'R') {
+                    return true
+                },
+                { isActive: isUvMode, priority: 10 }
+            ),
+            registerShortcutHandler(
+                'transform.scale',
+                () => {
                     setTransformMode('scale')
-                }
-            }
+                    return true
+                },
+                { isActive: isUvMode, priority: 10 }
+            )
+        ]
+
+        return () => {
+            unsubscribeHandlers.forEach((unsubscribe) => unsubscribe())
         }
-        window.addEventListener('keydown', handleKeyDown, true) // Use capture phase
-        return () => window.removeEventListener('keydown', handleKeyDown, true)
     }, [undo, redo])
 
     // Load texture

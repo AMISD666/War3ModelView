@@ -22,6 +22,7 @@ import { thumbnailEventBus } from './ThumbnailEventBus';
 import { ModelCard } from './ModelCard';
 import { processDeathAnimation, processRemoveLights } from '../../utils/modelUtils';
 import { useBatchStore } from '../../store/batchStore';
+import { registerShortcutHandler } from '../../shortcuts/manager';
 
 const { Content, Header } = Layout;
 const { Text } = Typography;
@@ -301,27 +302,24 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
         }
     }, [selectedAnimations, modelAnimations, onSelectModel]);
 
-    // Ctrl+C keyboard shortcut to copy selected model
     useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            // Ignore if typing in input fields
-            if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
-                return;
+        const unsubscribe = registerShortcutHandler(
+            'batch.copyModel',
+            () => {
+                const selectedFullPath = selectedPath ?? selectedFile
+                if (!selectedFullPath) return false
+                const file = files.find(f => f.fullPath === selectedFullPath)
+                if (!file) return false
+                handleCopyModel(file)
+                return true
+            },
+            {
+                isActive: () => useSelectionStore.getState().mainMode === 'batch',
+                priority: 5
             }
-            if (e.ctrlKey && e.key.toLowerCase() === 'c') {
-                const selectedFullPath = selectedPath ?? selectedFile;
-                if (selectedFullPath) {
-                    const file = files.find(f => f.fullPath === selectedFullPath);
-                    if (file) {
-                        e.preventDefault();
-                        handleCopyModel(file);
-                    }
-                }
-            }
-        };
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [selectedPath, selectedFile, files]);
+        )
+        return () => unsubscribe()
+    }, [selectedPath, selectedFile, files, handleCopyModel])
 
     const applyDeathAnimationToPath = async (targetPath: string): Promise<'added' | 'updated'> => {
         const buffer = await readFile(targetPath);

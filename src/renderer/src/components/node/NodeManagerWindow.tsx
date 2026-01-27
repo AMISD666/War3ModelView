@@ -178,7 +178,6 @@ export const NodeManagerWindow: React.FC = () => {
         const nodeId = parseInt(info.node.key as string);
         const isMulti = info.nativeEvent.ctrlKey || info.nativeEvent.metaKey;
 
-        suppressSelectionScrollRef.current = true;
         if (isMulti) {
             // Ctrl+Click: Toggle
             selectNode(nodeId, true);
@@ -590,7 +589,7 @@ export const NodeManagerWindow: React.FC = () => {
     const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 });
     const [contextMenuNodeId, setContextMenuNodeId] = useState<number | null>(null);
     const contextMenuRef = React.useRef<HTMLDivElement>(null);
-    const suppressSelectionScrollRef = useRef(false);
+
 
     const handleRightClick: TreeProps['onRightClick'] = ({ event, node }) => {
         const nodeId = parseInt(node.key as string);
@@ -635,7 +634,6 @@ export const NodeManagerWindow: React.FC = () => {
     }, [contextMenuVisible, contextMenuItems, contextMenuPosition.x, contextMenuPosition.y]);
 
     const handleNodeDoubleClick = (node: any) => {
-        suppressSelectionScrollRef.current = true;
         // Open specialized editor based on node type
         switch (node.type) {
             case NodeType.PARTICLE_EMITTER_2:
@@ -667,21 +665,11 @@ export const NodeManagerWindow: React.FC = () => {
 
     useEffect(() => {
         if (selectedNodeIds.length !== 1) return;
-        if (suppressSelectionScrollRef.current) {
-            suppressSelectionScrollRef.current = false;
-            return;
-        }
         const targetId = selectedNodeIds[0];
         const ancestorKeys = getAncestorKeys(nodes, targetId);
         if (ancestorKeys.length > 0) {
             setExpandedKeys(prev => Array.from(new Set([...prev, ...ancestorKeys])));
         }
-        requestAnimationFrame(() => {
-            const nodeEl = treeWrapperRef.current?.querySelector(`[data-node-id="${targetId}"]`) as HTMLElement | null;
-            if (nodeEl) {
-                nodeEl.scrollIntoView({ block: 'center' });
-            }
-        });
     }, [selectedNodeIds, nodes]);
 
     return (

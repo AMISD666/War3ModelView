@@ -165,3 +165,35 @@ export async function showChangelog() {
         showMessage('error', '获取失败', '无法获取更新日志');
     }
 }
+
+export async function checkGiteeUpdateSilent() {
+    try {
+        const currentVersion = await getVersion();
+        const response = await fetch(API_URL);
+
+        if (!response.ok) {
+            return; // Silent failure
+        }
+
+        const data = await response.json() as GiteeRelease;
+        const latestVersion = data.tag_name;
+
+        if (isNewerVersion(currentVersion, latestVersion)) {
+            const confirmed = await showConfirm(
+                '发现新版本',
+                <UpdateLogContent
+                    version={latestVersion}
+                    date={data.created_at ? data.created_at.split('T')[0] : new Date().toISOString().split('T')[0]}
+                    body={data.body || '暂无更新说明'}
+                />,
+                600 // Wider modal
+            );
+
+            if (confirmed) {
+                await downloadAndInstall(data.assets, latestVersion);
+            }
+        }
+    } catch (error) {
+        console.error('Silent update check failed:', error);
+    }
+}

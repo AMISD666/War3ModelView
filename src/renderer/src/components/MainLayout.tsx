@@ -27,7 +27,7 @@ import { useRendererStore } from '../store/rendererStore'
 import { useHistoryStore } from '../store/historyStore'
 import { GlobalMessageLayer } from './GlobalMessageLayer'
 import { showMessage, showConfirm } from '../store/messageStore'
-import { checkGiteeUpdate, showChangelog as showUpdateLog } from '../services/updateService';
+import { checkGiteeUpdate, showChangelog as showUpdateLog, checkGiteeUpdateSilent } from '../services/updateService';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Button, Modal } from 'antd';
 
@@ -418,7 +418,7 @@ function prepareModelDataForSave(modelData: any): any {
     // Fix ParticleEmitter2 Flags - convert boolean properties to bitmask
     // ParticleEmitter2Flags: Unshaded=32768, SortPrimsFarZ=65536, LineEmitter=131072,
     //                        Unfogged=262144, ModelSpace=524288, XYQuad=1048576
-    // ParticleEmitter2FramesFlags: Head=1, Tail=2  
+    // ParticleEmitter2FramesFlags: Head=1, Tail=2
     if (data.ParticleEmitters2 && Array.isArray(data.ParticleEmitters2)) {
         // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.ParticleEmitters2.length} particle emitters`);
         data.ParticleEmitters2.forEach((emitter: any) => {
@@ -436,35 +436,60 @@ function prepareModelDataForSave(modelData: any): any {
                 { prop: 'Visibility', animKey: 'VisibilityAnim' },
             ];
 
-            animProps.forEach(({ prop, animKey }) => {
-                if (!emitter[prop] && emitter[animKey]) {
-                    emitter[prop] = emitter[animKey];
-                }
-                if (isAnimVector(emitter[prop])) {
-                    emitter[prop] = fixAnimVector(emitter[prop], 1);
-                }
-                if (isAnimVector(emitter[animKey])) {
-                    emitter[animKey] = fixAnimVector(emitter[animKey], 1);
-                }
-            });
+            const fixEmitterAnimProps = (emitter: any, props: typeof animProps) => {
+                props.forEach(({ prop, animKey }) => {
+                    if (!emitter[prop] && emitter[animKey]) {
+                        emitter[prop] = emitter[animKey];
+                    }
+                    if (isAnimVector(emitter[prop])) {
+                        emitter[prop] = fixAnimVector(emitter[prop], 1);
+                    }
+                    if (isAnimVector(emitter[animKey])) {
+                        emitter[animKey] = fixAnimVector(emitter[animKey], 1);
+                    }
+                });
+            };
 
-            // Reconstruct Flags bitmask from individual boolean properties
-            let flags = emitter.Flags || 0;
-            if (emitter.Unshaded === true) flags |= 32768;
-            if (emitter.SortPrimsFarZ === true) flags |= 65536;
-            if (emitter.LineEmitter === true) flags |= 131072;
-            if (emitter.Unfogged === true) flags |= 262144;
-            if (emitter.ModelSpace === true) flags |= 524288;
-            if (emitter.XYQuad === true) flags |= 1048576;
+            fixEmitterAnimProps(emitter, animProps);
+
+            // Reconstruct Flags bitmask from individual boolean properties.
+            // Preserve existing bits if the boolean is undefined (raw parser output doesn't include booleans).
+            const particleFlagMask = 32768 | 65536 | 131072 | 262144 | 524288 | 1048576;
+            const baseFlags = typeof emitter.Flags === 'number' ? emitter.Flags : 0;
+            let flags = baseFlags & ~particleFlagMask;
+
+            const applyFlag = (prop: string, bit: number) => {
+                if (emitter[prop] === true) {
+                    flags |= bit;
+                } else if (emitter[prop] === false) {
+                    // Explicitly cleared
+                } else if (baseFlags & bit) {
+                    flags |= bit;
+                }
+            };
+
+            applyFlag('Unshaded', 32768);
+            applyFlag('SortPrimsFarZ', 65536);
+            applyFlag('LineEmitter', 131072);
+            applyFlag('Unfogged', 262144);
+            applyFlag('ModelSpace', 524288);
+            applyFlag('XYQuad', 1048576);
+
             emitter.Flags = flags;
 
             // Reconstruct FrameFlags from Head/Tail booleans
-            let frameFlags = emitter.FrameFlags || 0;
+            let frameFlags = 0;
             if (emitter.Head === true) frameFlags |= 1;
             if (emitter.Tail === true) frameFlags |= 2;
-            // Default to Head if neither is set
-            if (frameFlags === 0) frameFlags = 1;
+            if (emitter.Head === undefined && emitter.Tail === undefined) {
+                frameFlags = emitter.FrameFlags || 0;
+            }
             emitter.FrameFlags = frameFlags;
+
+            // Fix Squirt
+            if (emitter.Squirt !== undefined) {
+                emitter.Squirt = !!emitter.Squirt;
+            }
 
             // Fix SegmentColor - must be array of 3 Float32Array(3) color vectors
             if (emitter.SegmentColor) {
@@ -521,7 +546,91 @@ function prepareModelDataForSave(modelData: any): any {
                 }
             }
 
+            // Fix UV animations - must be Uint32Array(3)
+            const uvAnims = ['LifeSpanUVAnim', 'DecayUVAnim', 'TailUVAnim', 'TailDecayUVAnim'];
+            uvAnims.forEach(animName => {
+                if (emitter[animName]) {
+                    if (!(emitter[animName] instanceof Uint32Array)) {
+                        emitter[animName] = new Uint32Array(emitter[animName]);
+                    }
+                } else {
+                    emitter[animName] = new Uint32Array([0, 0, 1]); // Default start, end, repeat
+                }
+            });
+
+            // Fix Squirt
+            if (emitter.Squirt !== undefined) {
+                emitter.Squirt = !!emitter.Squirt;
+            }
+
             // console.log(`[MainLayout] ParticleEmitter2 "${emitter.Name}": Flags=${flags}, FrameFlags=${frameFlags}`);
+        });
+    }
+
+    // Fix ParticleEmitterPopcorn
+    if (data.ParticleEmitterPopcorns && Array.isArray(data.ParticleEmitterPopcorns)) {
+        data.ParticleEmitterPopcorns.forEach((emitter: any) => {
+            const isAnimVector = (val: any): boolean => {
+                return val && typeof val === 'object' && Array.isArray(val.Keys);
+            };
+            const animProps: Array<{ prop: string, animKey: string }> = [
+                { prop: 'LifeSpan', animKey: 'LifeSpanAnim' },
+                { prop: 'EmissionRate', animKey: 'EmissionRateAnim' },
+                { prop: 'Speed', animKey: 'SpeedAnim' },
+                { prop: 'Color', animKey: 'ColorAnim' },
+                { prop: 'Alpha', animKey: 'AlphaAnim' },
+                { prop: 'Visibility', animKey: 'VisibilityAnim' },
+            ];
+
+            animProps.forEach(({ prop, animKey }) => {
+                if (!emitter[prop] && emitter[animKey]) {
+                    emitter[prop] = emitter[animKey];
+                }
+                if (isAnimVector(emitter[prop])) {
+                    emitter[prop] = fixAnimVector(emitter[prop], 1);
+                }
+                if (isAnimVector(emitter[animKey])) {
+                    emitter[animKey] = fixAnimVector(emitter[animKey], 1);
+                }
+            });
+
+            // Ensure Color is Float32Array if static
+            if (emitter.Color && Array.isArray(emitter.Color)) {
+                emitter.Color = new Float32Array(emitter.Color);
+            }
+        });
+    }
+
+    // Fix RibbonEmitters
+    if (data.RibbonEmitters && Array.isArray(data.RibbonEmitters)) {
+        // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.RibbonEmitters.length} ribbon emitters`);
+        data.RibbonEmitters.forEach((emitter: any) => {
+            const isAnimVector = (val: any): boolean => {
+                return val && typeof val === 'object' && Array.isArray(val.Keys);
+            };
+            const animProps: Array<{ prop: string, animKey: string }> = [
+                { prop: 'Height', animKey: 'HeightAnim' },
+                { prop: 'Alpha', animKey: 'AlphaAnim' },
+                { prop: 'Color', animKey: 'ColorAnim' },
+                { prop: 'Visibility', animKey: 'VisibilityAnim' },
+            ];
+
+            animProps.forEach(({ prop, animKey }) => {
+                if (!emitter[prop] && emitter[animKey]) {
+                    emitter[prop] = emitter[animKey];
+                }
+                if (isAnimVector(emitter[prop])) {
+                    emitter[prop] = fixAnimVector(emitter[prop], 1);
+                }
+                if (isAnimVector(emitter[animKey])) {
+                    emitter[animKey] = fixAnimVector(emitter[animKey], 1);
+                }
+            });
+
+            // Ensure Color is Float32Array if static
+            if (emitter.Color && Array.isArray(emitter.Color)) {
+                emitter.Color = new Float32Array(emitter.Color);
+            }
         });
     }
 
@@ -575,7 +684,7 @@ function prepareModelDataForSave(modelData: any): any {
     }
 
     // Fix all node-type arrays to ensure AnimVector data is valid
-    const nodeArrayNames = ['Bones', 'Helpers', 'Attachments', 'EventObjects', 'Lights', 'RibbonEmitters', 'ParticleEmitters', 'ParticleEmitters2', 'Cameras'];
+    const nodeArrayNames = ['Bones', 'Helpers', 'Attachments', 'EventObjects', 'Lights', 'RibbonEmitters', 'ParticleEmitters', 'ParticleEmitters2', 'Cameras', 'ParticleEmitterPopcorns'];
     nodeArrayNames.forEach(arrayName => {
         if (data[arrayName] && Array.isArray(data[arrayName])) {
             data[arrayName].forEach((node: any) => fixNode(node));
@@ -713,7 +822,8 @@ function validateModelData(data: any): string[] {
         ...(data.ParticleEmitters2 || []),
         ...(data.RibbonEmitters || []),
         ...(data.EventObjects || []),
-        ...(data.CollisionShapes || [])
+        ...(data.CollisionShapes || []),
+        ...(data.ParticleEmitterPopcorns || []) // Added Popcorn emitters
     ];
 
     const objectIds = allNodeArrays.map((n: any) => n.ObjectId);
@@ -748,7 +858,7 @@ function validateModelData(data: any): string[] {
     }
 
     // 5. Check node type order (WC3 format requirement)
-    const typeOrder = ['Bone', 'Light', 'Helper', 'Attachment', 'ParticleEmitter', 'ParticleEmitter2', 'RibbonEmitter', 'EventObject', 'CollisionShape'];
+    const typeOrder = ['Bone', 'Light', 'Helper', 'Attachment', 'ParticleEmitter', 'ParticleEmitter2', 'RibbonEmitter', 'EventObject', 'CollisionShape', 'ParticleEmitterPopcorn'];
     let lastTypeIndex = -1;
     let lastObjectId = -1;
 
@@ -761,7 +871,8 @@ function validateModelData(data: any): string[] {
                             typeName === 'ParticleEmitter2' ? 'ParticleEmitters2' :
                                 typeName === 'RibbonEmitter' ? 'RibbonEmitters' :
                                     typeName === 'EventObject' ? 'EventObjects' :
-                                        'CollisionShapes';
+                                        typeName === 'CollisionShape' ? 'CollisionShapes' :
+                                            'ParticleEmitterPopcorns'; // Added Popcorn
 
         const nodes = data[arrayName] || [];
         for (const node of nodes) {
@@ -1527,7 +1638,8 @@ const MainLayout: React.FC = () => {
 
             console.time('[MainLayout] SavePrep')
             // Prepare model data with correct typed arrays
-            const preparedData = prepareModelDataForSave(modelData);
+            const normalizedData = useModelStore.getState().getModelDataForSave?.() ?? modelData;
+            const preparedData = prepareModelDataForSave(normalizedData);
 
             // Cleanup invalid geosets BEFORE validation
             cleanupInvalidGeosets(preparedData)
@@ -1545,20 +1657,6 @@ const MainLayout: React.FC = () => {
                 }
             }
 
-            // Fix FrameFlags for ParticleEmitter2 to prevent save corruption
-            if (preparedData.ParticleEmitters2) {
-                preparedData.ParticleEmitters2.forEach((emitter: any) => {
-                    if (typeof emitter.Head === 'boolean' || typeof emitter.Tail === 'boolean') {
-                        let flags = 0
-                        if (emitter.Head) flags |= 1
-                        if (emitter.Tail) flags |= 2
-                        if (flags === 0) flags = 1
-                        emitter.FrameFlags = flags
-                    } else if (emitter.FrameFlags === undefined) {
-                        emitter.FrameFlags = 1
-                    }
-                })
-            }
             console.timeEnd('[MainLayout] SavePrep')
 
             if (modelPath.toLowerCase().endsWith('.mdl')) {
@@ -1609,7 +1707,8 @@ const MainLayout: React.FC = () => {
             if (selected) {
                 isSavingRef.current = true;
                 // Prepare model data with correct typed arrays
-                const preparedData = prepareModelDataForSave(modelData);
+                const normalizedData = useModelStore.getState().getModelDataForSave?.() ?? modelData;
+                const preparedData = prepareModelDataForSave(normalizedData);
 
                 // Cleanup invalid geosets BEFORE validation
                 cleanupInvalidGeosets(preparedData)
@@ -1633,20 +1732,6 @@ const MainLayout: React.FC = () => {
                     if (!proceed) return false;
                 }
 
-                // Fix FrameFlags for ParticleEmitter2
-                if (preparedData.ParticleEmitters2) {
-                    preparedData.ParticleEmitters2.forEach((emitter: any) => {
-                        if (typeof emitter.Head === 'boolean' || typeof emitter.Tail === 'boolean') {
-                            let flags = 0
-                            if (emitter.Head) flags |= 1
-                            if (emitter.Tail) flags |= 2
-                            if (flags === 0) flags = 1
-                            emitter.FrameFlags = flags
-                        } else if (emitter.FrameFlags === undefined) {
-                            emitter.FrameFlags = 1
-                        }
-                    })
-                }
 
                 if (selected.toLowerCase().endsWith('.mdl')) {
                     cleanupInvalidGeosets(preparedData)
@@ -1723,7 +1808,8 @@ const MainLayout: React.FC = () => {
                     filePath += '.mdl'
                 }
 
-                const preparedData = prepareModelDataForSave(modelData)
+                const normalizedData = useModelStore.getState().getModelDataForSave?.() ?? modelData;
+                const preparedData = prepareModelDataForSave(normalizedData)
 
                 // Cleanup invalid geosets BEFORE validation
                 cleanupInvalidGeosets(preparedData)
@@ -1747,7 +1833,6 @@ const MainLayout: React.FC = () => {
                     if (!proceed) return;
                 }
 
-                fixParticleEmitterFlags(preparedData)
                 cleanupInvalidGeosets(preparedData)
 
                 const content = generateMDL(preparedData)
@@ -1783,7 +1868,8 @@ const MainLayout: React.FC = () => {
                     filePath += '.mdx'
                 }
 
-                const preparedData = prepareModelDataForSave(modelData)
+                const normalizedData = useModelStore.getState().getModelDataForSave?.() ?? modelData;
+                const preparedData = prepareModelDataForSave(normalizedData)
 
                 // Cleanup invalid geosets BEFORE validation
                 cleanupInvalidGeosets(preparedData)
@@ -1807,7 +1893,6 @@ const MainLayout: React.FC = () => {
                     if (!proceed) return;
                 }
 
-                fixParticleEmitterFlags(preparedData)
 
                 // Cleanup invalid geosets before export (e.g., empty geosets from split operations)
                 cleanupInvalidGeosets(preparedData)
@@ -1822,22 +1907,6 @@ const MainLayout: React.FC = () => {
         }
     }
 
-    // Helper to fix ParticleEmitter2 flags (extracted from save functions)
-    const fixParticleEmitterFlags = (preparedData: any) => {
-        if (preparedData.ParticleEmitters2) {
-            preparedData.ParticleEmitters2.forEach((emitter: any) => {
-                if (typeof emitter.Head === 'boolean' || typeof emitter.Tail === 'boolean') {
-                    let flags = 0
-                    if (emitter.Head) flags |= 1
-                    if (emitter.Tail) flags |= 2
-                    if (flags === 0) flags = 1
-                    emitter.FrameFlags = flags
-                } else if (emitter.FrameFlags === undefined) {
-                    emitter.FrameFlags = 1
-                }
-            })
-        }
-    }
 
     // Helper to remove empty/invalid geosets before export
     const cleanupInvalidGeosets = (preparedData: any) => {
@@ -1940,6 +2009,17 @@ const MainLayout: React.FC = () => {
             setActivationError(null);
         }
     }, [showAbout, fetchActivationStatus])
+
+    // Daily automatic update check
+    useEffect(() => {
+        const lastCheck = localStorage.getItem('lastUpdateCheck');
+        const today = new Date().toISOString().split('T')[0];
+
+        if (lastCheck !== today) {
+            checkGiteeUpdateSilent();
+            localStorage.setItem('lastUpdateCheck', today);
+        }
+    }, []);
 
     // Handle activation
     const handleActivate = async () => {

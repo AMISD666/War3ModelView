@@ -1,4 +1,4 @@
-# War3ModelView Project Status & Handoff
+﻿# War3ModelView Project Status & Handoff
 
 *Last update: 2026-01-27*
 
@@ -17,87 +17,49 @@
    - Save-on-close confirmation for dirty models.
    - "No animation" mode fully pauses animation (bind pose).
    - Polygon/face selection highlight uses pure-color overlay and is double-sided.
-   - Animation panel shows sequence indices; panel width reduced; index-name gap tightened.
+   - Animation panel shows sequence indices; panel width reduced.
+5) **Shortcut System**
+   - Centralized shortcut registry + manager + persistent store.
+   - Settings tab: “快捷键” with conflict handling.
+6) **Particle Emitter 2 Support (Partial)**
+   - Fixed "Head" flag persistence (written as `-1` in MDX to represent unchecked).
+   - Fixed MDL generator syntax for unchecked flags.
+   - Fixed missing texture reporting for emitters.
 
 ## Recent Changes (Key Files)
-Backend (Rust):
-- `src-tauri/src/main.rs`
-  - Single-instance handling + pending file buffer.
-  - Multi-file CLI parsing.
-- `src-tauri/Cargo.toml`: `tauri-plugin-single-instance`, `once_cell`.
-
-Frontend (React/TS):
-- `src/renderer/src/store/historyStore.ts`
-  - Dirty tracking (`isDirty`, `markSaved`).
-- `src/renderer/src/components/MainLayout.tsx`
-  - Save-on-close confirm modal.
-  - CLI + pending buffer ingestion for multi-open.
 - `src/renderer/src/store/modelStore.ts`
-  - Tab snapshot logic.
-  - PivotPoint fill on new nodes to avoid render crash.
-- `src/renderer/src/components/Viewer.tsx`
-  - Bind-pose mode when no animation selected.
-  - Selection highlight uses DebugRenderer overlay (pure color).
-- `src/renderer/src/components/DebugRenderer.ts`
-  - Force blend state + disable cull face for selection overlay.
-- `src/renderer/src/components/AnimationPanel.tsx`
-  - Sequence index display; reduced spacing.
-- `src/renderer/src/components/GeosetVisibilityPanel.tsx`
-  - Default position moved down to avoid FPS overlap.
-- `src/renderer/src/components/GeosetAnimationModal.tsx`
-  - Safer vector cloning (avoid JSON stringify for typed arrays).
+  - **Exhaustive Node Synchronization**: `updateModelDataWithNodes` now handles ALL MDX node types (including Reforged Popcorn emitters) to prevent index shifts.
+  - Fixed logic for clearing/reassigning ObjectIds to maintain hierarchy integrity.
+- `src/renderer/src/types/node.ts` & `model.ts`
+  - Added `PARTICLE_EMITTER_POPCORN` support across all interfaces.
+- `src/renderer/src/components/MainLayout.tsx`
+  - Removed redundant/conflicting flag overrides in save functions.
+  - Centralized all data preparation in `prepareModelDataForSave`.
+- `war3-model-4.0.0/mdx/generate.ts` & `mdl/generate.ts`
+  - Optimizations for "Neither" (Head & Tail unchecked) flag state.
 
-## Known Issues / Blockers (High Priority)
-1) **Multi-model hot-start / multi-open loop**
-   - Hot-start multi-open can black-screen or loop reload; errors like `Render Loop Crash: Cannot read properties of undefined (reading 'matrix')`.
-   - Drag-and-drop open should create new tab (currently still reloads/loops).
-2) **Texture load failures on tab switch**
-   - Switching tabs can cause missing local textures with MPQ-like prefixes (e.g. `Textures\\grad3.blp`), only after multi-tab usage.
-3) **Copy performance**
-   - Single model ~2s; multi-model ~8-9s.
-   - Hardlink path added via `CreateHardLinkW`, not yet verified.
-4) **Geoset animation color validation**
-   - RGB order now unchanged, but needs validation against reference tools.
-5) **Animation panel layout**
-   - Request to move duration under name is not done yet (only spacing + index added).
-6) **Node manager**
-   - Double-click slider jump + missing `useRef` error reported previously; verify current status.
-
-## Performance Optimizations Done
-- Sequential multi-file processing with small delay to avoid Zustand race conditions.
-- Rust-side pending buffer for cold-start multi-open.
-- Debug logging gated by console visibility to reduce IPC overhead.
+## Known Issues / Blockers (CRITICAL)
+1) **Particle Coordinate Misalignment (Bug 13)**
+   - **Symptom**: Modified particle emitters appear correctly only at [0,0,0]. If the model moves, particles move in the OPPOSITE direction.
+   - **Status**: Node index synchronization is fixed (no more lossy reordering), but the coordinate inheritance is likely broken.
+   - **Suspicion**: When saving, some transformation data or "DontInherit" flags might be corrupted, or the `ModelSpace` flag is interacting poorly with the reordered hierarchy.
+2) **Multi-model hot-start / multi-open loop**
+   - Hot-start multi-open can black-screen or loop reload.
+3) **Texture load failures on tab switch**
+   - Local textures with MPQ-like prefixes failing after switching tabs.
 
 ## Next Steps (Priority)
-1) **Stabilize multi-tab hot-start**
-   - Fix infinite reload loop and black screen on hot-start multi-open.
-   - Ensure drag-and-drop opens new tab, not reload.
-2) **Fix texture loading on tab switch**
-   - Audit texture cache keyed by renderer/model; MPQ-prefix local textures are failing after tab swap.
-3) **Verify hardlink path effectiveness**
-   - Confirm `CreateHardLinkW` usage actually speeds up copy and handles cross-volume fallback.
-4) **Finalize animation panel layout**
-   - Duration display below name; reduce index gap further if needed.
-5) **Re-validate geoset anim colors**
-   - Compare with mdx-m3-viewer reference to confirm save/parse correctness.
+1) **Deep Debug Particle Coordinates**
+   - Compare `SX-yumo2.mdx` (Original) vs `033.mdx` (Corrupted) binary `PRE2` chunks.
+   - Check if `PivotPoints` or `Translation` 애니메이션 keys were shifted or wiped during reordering.
+   - Investigate why translation seems "inverted" relative to model root.
+2) **Stabilize multi-tab hot-start**
+   - Fix infinite reload loop.
 
 ## Handoff Notes / Gotchas
-1) **Single-instance + pending buffer**
-   - Frontend must call `get_pending_open_files` early on mount; otherwise multi-open events are lost.
-2) **Tab snapshot coverage**
-   - Any new viewer state must be included in `TabSnapshot` to persist across tab switches.
-3) **Selection highlight**
-   - Uses DebugRenderer overlay with forced blend state; ensure it stays independent of material modes.
-
-## Experience / Conclusions
-- Snapshot swapping made multi-tabs possible without refactoring the full viewer pipeline.
-- Sequential open is required; parallel file ingestion causes state races.
-- Texture cache likely needs per-tab/renderer isolation to avoid cross-tab contamination.
-
-## Optimization Ideas
-- Introduce a dedicated renderer reset path for tab switches that currently cause texture ID mismatches.
-- Consider staged texture prefetch per tab to reduce on-switch stalls.
-- Hardlink-based copy should be the default when same volume; fallback to normal copy with progress.
+- **Node Reordering**: The application forces a specific node type order (Bones -> Lights -> ...) to satisfy some engines. This reordering MUST update all parent references and Geoset skinning indices.
+- **Popcorn Particles**: These Reforged nodes are now supported in the reordering logic but have no UI editor yet.
 
 ## Suggested Message for Next AI
-"I updated `PROJECT_STATUS.md` (2026-01-27). Current blockers: hot-start multi-open loops/black screens, tab switching causes missing local textures with MPQ-like prefixes, and hardlink copy path is unverified. Recent fixes include save-on-close prompt, bind-pose when no animation, and selection highlight as a pure-color overlay. Please read `PROJECT_STATUS.md`, then focus on stabilizing multi-tab hot-start + tab switch texture loading, and verify hardlink copy effectiveness."
+"我已更新 `PROJECT_STATUS.md`（2026-01-27）。当前最紧急的 Bug 是：模型修改粒子保存后，粒子在游戏中位移异常（仅在 0,0,0 点正常，模型移动时粒子反向移动）。我已修复了节点重新排序（Node Reordering）的同步问题（不再丢失爆米花粒子等节点），但坐标系似乎仍有问题。请先阅读 `PROJECT_STATUS.md` 中的 **Bug 13** 详情，重点排查保存过程中的 `PivotPoints`、`Translation` 动画数据以及 `ModelSpace` 标志位的处理逻辑。"
+

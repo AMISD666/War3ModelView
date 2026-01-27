@@ -17,6 +17,7 @@ import {
 import { useHistoryStore } from '../../../store/historyStore'
 import { Button, Slider, Input, InputNumber, Radio, Tooltip } from 'antd'
 import { SwapOutlined, GlobalOutlined } from '@ant-design/icons'
+import { registerShortcutHandler } from '../../../shortcuts/manager'
 
 interface TimelinePanelProps {
     isActive?: boolean
@@ -804,43 +805,35 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         }
     }, [clipboardKeyframes])
 
-    // Keyboard event handler for keyframe operations
     useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            // Only handle when timeline is active and has focus context
-            if (!isActive) return
+        if (!isActive) return
 
-            // Delete key
-            if (e.key === 'Delete' && selectedKeyframeUids.size > 0) {
-                e.preventDefault()
+        const unsubscribeHandlers = [
+            registerShortcutHandler('timeline.deleteKeyframes', () => {
+                if (selectedKeyframeUids.size === 0) return false
                 deleteSelectedKeyframes()
-                return
-            }
-
-            // Ctrl+C - Copy
-            if (e.ctrlKey && e.key === 'c' && selectedKeyframeUids.size > 0) {
-                e.preventDefault()
+                return true
+            }),
+            registerShortcutHandler('timeline.copyKeyframes', () => {
+                if (selectedKeyframeUids.size === 0) return false
                 copyKeyframes(false)
-                return
-            }
-
-            // Ctrl+X - Cut
-            if (e.ctrlKey && e.key === 'x' && selectedKeyframeUids.size > 0) {
-                e.preventDefault()
+                return true
+            }),
+            registerShortcutHandler('timeline.cutKeyframes', () => {
+                if (selectedKeyframeUids.size === 0) return false
                 copyKeyframes(true)
-                return
-            }
-
-            // Ctrl+V - Paste
-            if (e.ctrlKey && e.key === 'v' && clipboardKeyframes) {
-                e.preventDefault()
+                return true
+            }),
+            registerShortcutHandler('timeline.pasteKeyframes', () => {
+                if (!clipboardKeyframes) return false
                 pasteKeyframes()
-                return
-            }
-        }
+                return true
+            })
+        ]
 
-        window.addEventListener('keydown', handleKeyDown)
-        return () => window.removeEventListener('keydown', handleKeyDown)
+        return () => {
+            unsubscribeHandlers.forEach((unsubscribe) => unsubscribe())
+        }
     }, [isActive, selectedKeyframeUids, clipboardKeyframes, deleteSelectedKeyframes, copyKeyframes, pasteKeyframes])
 
     // --- Global Window Handlers for Robust Dragging ---

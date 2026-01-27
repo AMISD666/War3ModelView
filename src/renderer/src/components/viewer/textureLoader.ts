@@ -489,11 +489,35 @@ export async function loadAllTextures(
         }
     });
 
-    const texturePaths = Array.from(new Set(model.Textures
+    const texturePaths = new Set(model.Textures
         .map((texture: any) => texture.Image as string)
-        .filter((path: string) => !!path)));
+        .filter((path: string) => !!path));
 
-    if (texturePaths.length === 0) {
+    // SCAN EMITTERS FOR TEXTURES (v1 Particle Emitters)
+    if (model.ParticleEmitters) {
+        model.ParticleEmitters.forEach((emitter: any) => {
+            if (emitter.FileName && typeof emitter.FileName === 'string') {
+                texturePaths.add(emitter.FileName);
+            }
+        });
+    }
+
+    // SCAN EMITTERS FOR REPLACEABLE TEXTURES (v2 Particle Emitters)
+    if (model.ParticleEmitters2) {
+        model.ParticleEmitters2.forEach((emitter: any) => {
+            if (emitter.ReplaceableId > 0 && (emitter.TextureID === -1 || emitter.TextureID === undefined)) {
+                const replaceablePath = REPLACEABLE_TEXTURES[emitter.ReplaceableId];
+                if (replaceablePath !== undefined) {
+                    const fullPath = `ReplaceableTextures\\${replaceablePath}.blp`;
+                    texturePaths.add(fullPath);
+                }
+            }
+        });
+    }
+
+    const uniqueTexturePaths = Array.from(texturePaths);
+
+    if (uniqueTexturePaths.length === 0) {
         console.timeEnd('[Viewer] Texture Load (Batch)')
         return results
     }
@@ -503,11 +527,11 @@ export async function loadAllTextures(
     // Phase 1: Try local file system for ALL textures first in parallel
     console.time('[Viewer] Local FS Search')
     const localCandidatesMap = new Map<string, string[]>()
-    texturePaths.forEach(path => {
+    uniqueTexturePaths.forEach(path => {
         localCandidatesMap.set(path, getTextureCandidatePaths(modelPath, path))
     })
 
-    const fsLoadPromises = texturePaths.map(async (path) => {
+    const fsLoadPromises = uniqueTexturePaths.map(async (path) => {
         if (modelPath && !modelPath.startsWith('dropped:')) {
             const candidates = localCandidatesMap.get(path) || []
             for (const candidate of candidates) {
@@ -565,7 +589,7 @@ export async function loadAllTextures(
     }
 
     // Final Upload to WebGL SEQUENTIALLY
-    for (const path of texturePaths) {
+    for (const path of uniqueTexturePaths) {
         const decoded = decodedTextures.get(path)
         if (decoded && decoded.imageData && renderer.setTextureImageData) {
             renderer.setTextureImageData(path, [decoded.imageData])
@@ -576,13 +600,13 @@ export async function loadAllTextures(
     }
 
     // Log results
-    const textureLog = texturePaths.map(path => ({
+    const textureLog = uniqueTexturePaths.map(path => ({
         path,
         loaded: decodedTextures.has(path)
     }))
     await logTextureInfo(textureLog)
     const loadedCount = results.filter(r => r.loaded).length
-    await logTextureLoadComplete(texturePaths.length, loadedCount, performance.now() - batchStart)
+    await logTextureLoadComplete(uniqueTexturePaths.length, loadedCount, performance.now() - batchStart)
 
     console.timeEnd('[Viewer] Texture Load (Batch)')
     return results

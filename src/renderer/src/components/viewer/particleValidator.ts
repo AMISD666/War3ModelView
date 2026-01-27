@@ -27,13 +27,6 @@ export function validateParticleEmitter2(emitter: any, idx: number, textureCount
     if (emitter.ModelSpace === true) flags |= 524288
     if (emitter.XYQuad === true) flags |= 1048576
 
-    // Fix 5: Force Head flag if neither Head nor Tail is set
-    // In production, parsing might fail to set these, causing invisible/needle particles
-    if ((flags & 3) === 0) {
-        console.log(`[particleValidator] Particle ${idx} "${emitter.Name}": Missing Head/Tail flags. Forcing Head.`)
-        flags |= 1
-    }
-
     emitter.Flags = flags
 
     // Fix 3: Reconstruct FrameFlags from Head/Tail booleans

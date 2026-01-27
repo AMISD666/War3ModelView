@@ -295,6 +295,7 @@ interface ModelState {
     addTab: (path: string, modelData?: ModelData | null) => boolean;
     closeTab: (tabId: string) => void;
     setActiveTab: (tabId: string) => void;
+    getModelDataForSave: (forceReorder?: boolean) => ModelData | null;
 }
 
 /**
@@ -322,11 +323,11 @@ function extractNodesFromModel(data: ModelData | null): ModelNode[] {
                         node.BillboardedLockZ = (item.Flags & 64) !== 0;
                         node.CameraAnchored = (item.Flags & 128) !== 0;
 
-                        // Extract DontInherit flags
+                        // Extract DontInherit flags (NodeFlags: 1/2/4)
                         node.DontInherit = {
-                            Translation: (item.Flags & 256) !== 0,  // DontInheritTranslation
-                            Rotation: (item.Flags & 512) !== 0,     // DontInheritRotation
-                            Scaling: (item.Flags & 1024) !== 0      // DontInheritScaling
+                            Translation: (item.Flags & 1) !== 0,  // DontInheritTranslation
+                            Rotation: (item.Flags & 2) !== 0,     // DontInheritRotation
+                            Scaling: (item.Flags & 4) !== 0       // DontInheritScaling
                         };
                     }
 
@@ -379,8 +380,9 @@ function extractNodesFromModel(data: ModelData | null): ModelNode[] {
                 const node: any = { ...item, type: NodeType.PARTICLE_EMITTER_2 };
 
                 // Map Arrays
-                if (item.Alpha) node.SegmentAlpha = Array.from(item.Alpha);
-                if (item.ParticleScaling) node.SegmentScaling = Array.from(item.ParticleScaling);
+                // Fix: extract into ParticleEmitter2Node property names
+                if (item.Alpha) node.Alpha = Array.from(item.Alpha);
+                if (item.ParticleScaling) node.ParticleScaling = Array.from(item.ParticleScaling);
                 if (item.SegmentColor) {
                     node.SegmentColor = item.SegmentColor.map((c: any) => Array.from(c));
                 }
@@ -414,8 +416,9 @@ function extractNodesFromModel(data: ModelData | null): ModelNode[] {
                     node.Unfogged = (item.Flags & 262144) !== 0;
                     node.ModelSpace = (item.Flags & 524288) !== 0;
                     node.XYQuad = (item.Flags & 1048576) !== 0;
-                    node.Squirt = (item.Flags & 256) !== 0; // Squirt is usually 0x100 (256) in Node flags, need to verify if it's different for PE2
                 }
+                // Fix: Squirt is a separate boolean property in the library object for PE2
+                node.Squirt = !!item.Squirt;
 
                 nodes.push(node);
             });
@@ -443,15 +446,18 @@ function extractNodesFromModel(data: ModelData | null): ModelNode[] {
     });
     extract(['EventObject', 'EventObjects'], NodeType.EVENT_OBJECT);
     extract(['CollisionShape', 'CollisionShapes'], NodeType.COLLISION_SHAPE);
+    extract(['ParticleEmitterPopcorn', 'ParticleEmitterPopcorns'], NodeType.PARTICLE_EMITTER_POPCORN);
     extract(['Camera', 'Cameras'], NodeType.CAMERA);
 
-    // Fallback: Check for a generic 'Nodes' array
+    // Fallback: Check for a generic 'Nodes' array to ensure NO data loss
     if (d.Nodes && Array.isArray(d.Nodes)) {
         d.Nodes.forEach((node: any) => {
-            // Avoid duplicates if they were already added
+            // Avoid duplicates if they were already added from specific arrays
             if (!nodes.find(n => n.ObjectId === node.ObjectId)) {
                 // Try to infer type or default to Helper
-                nodes.push({ ...node, type: node.type || NodeType.HELPER } as ModelNode);
+                const type = node.type || NodeType.HELPER;
+                nodes.push({ ...node, type } as ModelNode);
+                console.log(`[ModelStore] Recovered node ID=${node.ObjectId} from Nodes array (Type=${type})`);
             }
         });
     }
@@ -479,19 +485,72 @@ function updateModelDataWithNodes(
         const pivotPoint = node.PivotPoint
             ?? (typeof node.ObjectId === 'number' ? modelPivotPoints?.[node.ObjectId] : undefined)
             ?? [0, 0, 0];
-        let flags = n.Flags || 0;
+        const baseFlags = typeof n.Flags === 'number' ? n.Flags : 0;
+        let flags = baseFlags;
 
-        // Clear and reset billboard/inherit flags
-        flags &= ~(8 | 16 | 32 | 64 | 128 | 256 | 512 | 1024);
+        // Clear and reset billboard/inherit flags (NodeFlags: 1/2/4/8/16/32/64/128)
+        flags &= ~(1 | 2 | 4 | 8 | 16 | 32 | 64 | 128);
+
+        // For ParticleEmitter2, also clear its specific flags before re-syncing
+        if (node.type === NodeType.PARTICLE_EMITTER_2) {
+            flags &= ~(32768 | 65536 | 131072 | 262144 | 524288 | 1048576);
+        }
 
         if (n.Billboarded) flags |= 8;
         if (n.BillboardedLockX) flags |= 16;
         if (n.BillboardedLockY) flags |= 32;
         if (n.BillboardedLockZ) flags |= 64;
         if (n.CameraAnchored) flags |= 128;
-        if (n.DontInherit?.Translation) flags |= 256;
-        if (n.DontInherit?.Rotation) flags |= 512;
-        if (n.DontInherit?.Scaling) flags |= 1024;
+        if (n.DontInherit?.Translation) flags |= 1;
+        if (n.DontInherit?.Rotation) flags |= 2;
+        if (n.DontInherit?.Scaling) flags |= 4;
+
+        // ParticleEmitter2 specific flags reconstruction
+        if (node.type === NodeType.PARTICLE_EMITTER_2) {
+            // Rendering Flags
+            const applyParticleFlag = (prop: string, bit: number) => {
+                if (n[prop] === true) {
+                    flags |= bit;
+                } else if (n[prop] === false) {
+                    // Explicitly cleared
+                } else if (baseFlags & bit) {
+                    flags |= bit;
+                }
+            };
+
+            applyParticleFlag('Unshaded', 32768);
+            applyParticleFlag('SortPrimsFarZ', 65536);
+            applyParticleFlag('LineEmitter', 131072);
+            applyParticleFlag('Unfogged', 262144);
+            applyParticleFlag('ModelSpace', 524288);
+            applyParticleFlag('XYQuad', 1048576);
+
+            // Reconstruct FrameFlags from Head/Tail booleans
+            let frameFlags = 0;
+            if (n.Head) frameFlags |= 1;
+            if (n.Tail) frameFlags |= 2;
+
+            // Format arrays for war3-model library
+            const formattedNode = { ...node, Flags: flags, FrameFlags: frameFlags } as any;
+
+            if (n.SegmentColor) {
+                formattedNode.SegmentColor = n.SegmentColor.map((c: any) => new Float32Array(c));
+            }
+            if (n.Alpha) {
+                formattedNode.Alpha = new Uint8Array(n.Alpha);
+            }
+            if (n.ParticleScaling) {
+                formattedNode.ParticleScaling = new Float32Array(n.ParticleScaling);
+            }
+
+            // UV Animations
+            if (n.LifeSpanUVAnim) formattedNode.LifeSpanUVAnim = new Uint32Array(n.LifeSpanUVAnim);
+            if (n.DecayUVAnim) formattedNode.DecayUVAnim = new Uint32Array(n.DecayUVAnim);
+            if (n.TailUVAnim) formattedNode.TailUVAnim = new Uint32Array(n.TailUVAnim);
+            if (n.TailDecayUVAnim) formattedNode.TailDecayUVAnim = new Uint32Array(n.TailDecayUVAnim);
+
+            return { ...formattedNode, PivotPoint: pivotPoint };
+        }
 
         return { ...node, PivotPoint: pivotPoint, Flags: flags };
     });
@@ -517,6 +576,15 @@ function updateModelDataWithNodes(
         const ribbonEmitters = nodesWithFlags.filter(n => n.type === NodeType.RIBBON_EMITTER);
         const eventObjects = nodesWithFlags.filter(n => n.type === NodeType.EVENT_OBJECT);
         const collisionShapes = nodesWithFlags.filter(n => n.type === NodeType.COLLISION_SHAPE);
+        const popcornEmitters = nodesWithFlags.filter(n => n.type === NodeType.PARTICLE_EMITTER_POPCORN);
+
+        // Safety: catch any nodes that might have been missed by type filtering
+        const processedSet = new Set([
+            ...bones, ...lights, ...helpers, ...attachments,
+            ...particleEmitters, ...particleEmitters2, ...popcornEmitters,
+            ...ribbonEmitters, ...eventObjects, ...collisionShapes
+        ]);
+        const remaining = nodesWithFlags.filter(n => n.type !== NodeType.CAMERA && !processedSet.has(n));
 
         // Concatenate in WC3 order (excluding Camera)
         orderedNodes = [
@@ -526,9 +594,11 @@ function updateModelDataWithNodes(
             ...attachments,
             ...particleEmitters,
             ...particleEmitters2,
+            ...popcornEmitters,
             ...ribbonEmitters,
             ...eventObjects,
-            ...collisionShapes
+            ...collisionShapes,
+            ...remaining
         ];
 
         // Build old→new ObjectId mapping and reassign ObjectIds
@@ -572,6 +642,7 @@ function updateModelDataWithNodes(
     updated.RibbonEmitters = orderedNodes.filter(n => n.type === NodeType.RIBBON_EMITTER);
     updated.EventObjects = orderedNodes.filter(n => n.type === NodeType.EVENT_OBJECT);
     updated.CollisionShapes = orderedNodes.filter(n => n.type === NodeType.COLLISION_SHAPE);
+    (updated as any).ParticleEmitterPopcorns = orderedNodes.filter(n => n.type === NodeType.PARTICLE_EMITTER_POPCORN);
     updated.Cameras = cameras; // Camera nodes don't have ObjectId
 
     // Set the master Nodes array (sorted by new ObjectId)
@@ -624,6 +695,50 @@ function updateModelDataWithNodes(
     }
 
     return updated;
+}
+
+function needsReorderForSave(data: any): boolean {
+    if (!data) return false;
+
+    const allNodeArrays = [
+        ...(data.Bones || []),
+        ...(data.Lights || []),
+        ...(data.Helpers || []),
+        ...(data.Attachments || []),
+        ...(data.ParticleEmitters || []),
+        ...(data.ParticleEmitters2 || []),
+        ...(data.RibbonEmitters || []),
+        ...(data.EventObjects || []),
+        ...(data.CollisionShapes || []),
+        ...(data.ParticleEmitterPopcorns || [])
+    ];
+
+    if (allNodeArrays.length === 0) return false;
+
+    const ids = allNodeArrays.map((n: any) => n?.ObjectId).filter((id: any) => typeof id === 'number');
+    if (ids.length !== allNodeArrays.length) return true;
+
+    const unique = new Set(ids);
+    if (unique.size !== ids.length) return true;
+
+    const sorted = [...unique].sort((a, b) => a - b);
+    for (let i = 0; i < sorted.length; i++) {
+        if (sorted[i] !== i) return true;
+    }
+
+    const validIds = new Set(sorted);
+    validIds.add(-1);
+    for (const node of allNodeArrays) {
+        if (node.Parent !== undefined && node.Parent !== null && !validIds.has(node.Parent)) {
+            return true;
+        }
+    }
+
+    const expectedPivotCount = sorted.length > 0 ? sorted[sorted.length - 1] + 1 : 0;
+    const actualPivotCount = data.PivotPoints?.length || 0;
+    if (actualPivotCount !== expectedPivotCount) return true;
+
+    return false;
 }
 
 function getDefaultNodeProperties(type: NodeType): Partial<ModelNode> {
@@ -876,6 +991,20 @@ export const useModelStore = create<ModelState>((set, get) => ({
             hiddenGeosetIds: allGeosetIds,
             forceShowAllGeosets: true
         });
+    },
+
+    getModelDataForSave: (forceReorder = false) => {
+        const state = get();
+        if (!state.modelData) return null;
+
+        const base = updateModelDataWithNodes(state.modelData, state.nodes as any[], false);
+        if (!base) return null;
+
+        if (forceReorder || needsReorderForSave(base)) {
+            return updateModelDataWithNodes(state.modelData, state.nodes as any[], true);
+        }
+
+        return base;
     },
 
     removeSequence: (index, pruneKeyframes = true) => {

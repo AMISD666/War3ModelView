@@ -101,6 +101,7 @@ export interface ModelData {
     RibbonEmitters?: ModelNode[];
     EventObjects?: ModelNode[];
     CollisionShapes?: ModelNode[];
+    ParticleEmitterPopcorns?: ModelNode[];
     Cameras?: ModelNode[];
     PivotPoints?: [number, number, number][];
     _updateCounter?: number;
@@ -125,6 +126,7 @@ export interface ModelStats {
         ribbonEmitters: number;
         eventObjects: number;
         collisionShapes: number;
+        particleEmitterPopcorns: number;
         cameras: number;
     };
 }

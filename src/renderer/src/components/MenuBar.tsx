@@ -118,33 +118,11 @@ const MenuBar: React.FC<MenuBarProps> = ({
             }
         }
 
-        const handleKeyDown = (event: KeyboardEvent) => {
-            if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
-                return
-            }
-            if ((event.ctrlKey || event.metaKey) && !event.altKey) {
-                if (event.code === 'KeyS') {
-                    event.preventDefault()
-                    if (event.shiftKey) {
-                        onSaveAs()
-                    } else {
-                        onSave()
-                    }
-                }
-            }
-            if (event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && event.code === 'KeyC') {
-                event.preventDefault()
-                onCopyModel()
-            }
-        }
-
         document.addEventListener('mousedown', handleClickOutside)
-        window.addEventListener('keydown', handleKeyDown)
         return () => {
             document.removeEventListener('mousedown', handleClickOutside)
-            window.removeEventListener('keydown', handleKeyDown)
         }
-    }, [onSave, onSaveAs, onCopyModel])
+    }, [])
 
     const toggleMenu = (menu: string) => {
         setActiveMenu(activeMenu === menu ? null : menu)
