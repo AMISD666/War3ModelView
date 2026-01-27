@@ -2346,7 +2346,7 @@ const MainLayout: React.FC = () => {
             <div style={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative' }}>
                 {/* Left Panel - Animation Panel (hidden in UV mode) */}
                 {mainMode !== 'uv' && mainMode !== 'animation' && (
-                    <div style={{ width: '280px', display: 'flex', flexDirection: 'column', borderRight: '1px solid #333' }}>
+                    <div style={{ width: '230px', display: 'flex', flexDirection: 'column', borderRight: '1px solid #333' }}>
                         <AnimationPanel
                             onImport={handleImport}
                         />

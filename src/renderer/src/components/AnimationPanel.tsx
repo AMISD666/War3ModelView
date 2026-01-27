@@ -212,7 +212,7 @@ const AnimationPanel: React.FC<AnimationPanelProps> = ({
                                     borderBottom: '1px solid #444',
                                     display: 'flex',
                                     alignItems: 'center',
-                                    gap: '6px'
+                                    gap: '2px'
                                 }}
                             >
                                 {!isValid && (
@@ -220,6 +220,9 @@ const AnimationPanel: React.FC<AnimationPanelProps> = ({
                                         <WarningOutlined style={{ color: '#ff4d4f', fontSize: '14px' }} />
                                     </Tooltip>
                                 )}
+                                <span style={{ fontSize: '11px', color: currentSequence === index ? '#ddd' : '#888', minWidth: 20, textAlign: 'left' }}>
+                                    {index + 1}.
+                                </span>
                                 {isEditing ? (
                                     <Input
                                         ref={inputRef}

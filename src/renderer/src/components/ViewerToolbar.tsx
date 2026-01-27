@@ -121,7 +121,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
     return (
         <div style={{
             position: 'absolute',
-            top: '20px',
+            top: 10,
             left: '50%',
             transform: 'translateX(-50%)',
             backgroundColor: 'rgba(40, 40, 40, 0.9)',

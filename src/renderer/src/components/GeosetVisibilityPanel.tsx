@@ -31,7 +31,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
     // Wait, I should add imports at the top. But let's check if I can reach line 1.
     // I'll do a separate chunk for imports.
 
-    const [position, setPosition] = useState({ x: 20, y: 80 });
+    const [position, setPosition] = useState({ x: 20, y: 140 });
     const [size, setSize] = useState({ width: 220, height: 350 });
     const [isDragging, setIsDragging] = useState(false);
     const [isResizing, setIsResizing] = useState<'right' | 'bottom' | 'corner' | null>(null);

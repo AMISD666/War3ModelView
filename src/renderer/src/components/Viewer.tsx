@@ -741,8 +741,6 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     }
   }, [])
 
-  // Ref to track last reload trigger value
-  const lastModelLoadTrigger = useRef(rendererReloadTrigger)
   const lastLoadedModelPath = useRef<string | null>(null)
 
   useEffect(() => {
@@ -753,10 +751,6 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       if (didModelPathChange) {
         lastLoadedModelPath.current = modelPath
       }
-
-      // Determine if this is a triggered reload (structural change) vs a new model load
-      const isTriggeredReload = rendererReloadTrigger !== lastModelLoadTrigger.current
-      lastModelLoadTrigger.current = rendererReloadTrigger
 
       // Check if this is a dropped file (has in-memory data)
       if (modelPath.startsWith('dropped:')) {
@@ -769,13 +763,6 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       } else if (didModelPathChange) {
         // Switching tabs should reload from disk for a clean renderer state
         loadModel(modelPath)
-      } else if (isTriggeredReload) {
-        // This is a triggered reload (e.g., after transformation) - use in-memory data
-        const storeModelData = useModelStore.getState().modelData
-        if (storeModelData) {
-          console.log('[Viewer] Triggered reload: Loading from in-memory data after transformation')
-          loadModel(modelPath, storeModelData)
-        }
       } else {
         // Normal file open - parse from disk
         loadModel(modelPath)
@@ -800,7 +787,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modelPath, rendererReloadTrigger])
+  }, [modelPath])
 
   const updateProgress = (currentFrame: number, totalDuration: number) => {
     const now = performance.now()
@@ -2533,7 +2520,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           const previewTransform = previewTransformRef.current
           const baseMvMatrix = isGlobalTransformMode ? mat4.clone(mvMatrix) : null
           const globalPivot = globalTransformPivot === 'modelCenter' ? getModelCenter() : [0, 0, 0]
-          const isBindPoseMode = currentMainMode === 'geometry' || (currentMainMode === 'animation' && (currentAnimationSubMode === 'binding' || animationIndex === -1))
+          const isBindPoseMode =
+            animationIndex === -1 ||
+            currentMainMode === 'geometry' ||
+            (currentMainMode === 'animation' && currentAnimationSubMode === 'binding')
 
           // Debug logs commented out to reduce console noise
           // if (time - lastFpsTime.current > 1000) {
@@ -2910,35 +2900,34 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                   gl.enable(gl.DEPTH_TEST)
                 }
               } else {
-                // Non-wireframe mode: use additive blend for smooth highlight overlay
-                // This preserves the underlying texture's shading detail
-                // Save current GL state
-                const prevBlend = gl.isEnabled(gl.BLEND)
-                const prevBlendSrc = gl.getParameter(gl.BLEND_SRC_RGB)
-                const prevBlendDst = gl.getParameter(gl.BLEND_DST_RGB)
-                const prevDepthMask = gl.getParameter(gl.DEPTH_WRITEMASK)
-                const prevDepthTest = gl.isEnabled(gl.DEPTH_TEST)
-                const prevCullFace = gl.isEnabled(gl.CULL_FACE)
-
-                // Enable additive blending for smooth overlay effect
-                gl.enable(gl.BLEND)
-                gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA) // Standard alpha blend
-                gl.depthMask(false) // Don't write to depth buffer
-                gl.disable(gl.CULL_FACE)
-
-                if (typeof (mdlRenderer as any).renderGeosetHighlight === 'function') {
-                  // Stronger red tint with high alpha for better visibility
-                  (mdlRenderer as any).renderGeosetHighlight(hoveredGeosetId, [1, 0.2, 0.15], 0.9, mvMatrix, pMatrix)
-                }
-
-                // Restore GL state
-                if (prevCullFace) gl.enable(gl.CULL_FACE)
-                gl.depthMask(prevDepthMask)
-                if (prevDepthTest) gl.enable(gl.DEPTH_TEST)
-                if (prevBlend) {
-                  gl.blendFunc(prevBlendSrc, prevBlendDst)
-                } else {
-                  gl.disable(gl.BLEND)
+                // Non-wireframe mode: render a pure-color overlay (no material influence)
+                const geoset = mdlRenderer.model.Geosets[hoveredGeosetId]
+                if (geoset && geoset.Faces && geoset.Vertices) {
+                  const { hoverColor } = useRendererStore.getState()
+                  const hoverColorRgb = hexToRgb(hoverColor)
+                  const positions: number[] = []
+                  const faces = geoset.Faces
+                  const verts = geoset.Vertices
+                  for (let i = 0; i < faces.length; i += 3) {
+                    const i1 = faces[i] * 3
+                    const i2 = faces[i + 1] * 3
+                    const i3 = faces[i + 2] * 3
+                    positions.push(
+                      verts[i1], verts[i1 + 1], verts[i1 + 2],
+                      verts[i2], verts[i2 + 1], verts[i2 + 2],
+                      verts[i3], verts[i3 + 1], verts[i3 + 2]
+                    )
+                  }
+                  gl.disable(gl.DEPTH_TEST)
+                  debugRenderer.current.renderTriangles(
+                    gl as WebGLRenderingContext,
+                    mvMatrix,
+                    pMatrix,
+                    positions,
+                    [hoverColorRgb[0], hoverColorRgb[1], hoverColorRgb[2], 1],
+                    false
+                  )
+                  gl.enable(gl.DEPTH_TEST)
                 }
               }
             }
@@ -3227,6 +3216,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
           if (currentMainMode === 'geometry' && geometrySubMode === 'face') {
             if (selectedFaceIds.length > 0) {
+              const { selectionColor } = useRendererStore.getState()
+              const selectionColorRgb = hexToRgb(selectionColor)
               const selectedPositions: number[] = []
               for (const sel of selectedFaceIds) {
                 const geoset = mdlRenderer.model.Geosets[sel.geosetIndex]
@@ -3244,7 +3235,14 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 }
               }
               gl.disable(gl.DEPTH_TEST)
-              debugRenderer.current.renderTriangles(gl as WebGLRenderingContext, mvMatrix, pMatrix, selectedPositions, [1, 0, 0, 0.7])
+              debugRenderer.current.renderTriangles(
+                gl as WebGLRenderingContext,
+                mvMatrix,
+                pMatrix,
+                selectedPositions,
+                [selectionColorRgb[0], selectionColorRgb[1], selectionColorRgb[2], 1],
+                false
+              )
 
               const linePositions: number[] = []
               for (let i = 0; i < selectedPositions.length; i += 9) {
@@ -3255,7 +3253,14 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 linePositions.push(selectedPositions[i + 6], selectedPositions[i + 7], selectedPositions[i + 8])
                 linePositions.push(selectedPositions[i], selectedPositions[i + 1], selectedPositions[i + 2])
               }
-              debugRenderer.current.renderLines(gl as WebGLRenderingContext, mvMatrix, pMatrix, linePositions, [1, 0, 0, 1])
+              debugRenderer.current.renderLines(
+                gl as WebGLRenderingContext,
+                mvMatrix,
+                pMatrix,
+                linePositions,
+                [selectionColorRgb[0], selectionColorRgb[1], selectionColorRgb[2], 1],
+                false
+              )
               gl.enable(gl.DEPTH_TEST)
             }
           }

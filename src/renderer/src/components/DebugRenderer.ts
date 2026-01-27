@@ -458,11 +458,12 @@ export class DebugRenderer {
         positions: number[] | Float32Array,
         color: number[],
         size: number = 5.0,
-        enableDepth: boolean = false
+        enableDepth: boolean = false,
+        enableBlend: boolean = true
     ) {
         // Use a small depth bias when depth is enabled to prevent Z-fighting with surface
         // Note: depthBias is handled internally by draw() when enableDepth is true
-        this.draw(gl, mvMatrix, pMatrix, positions, color, gl.POINTS, size, enableDepth)
+        this.draw(gl, mvMatrix, pMatrix, positions, color, gl.POINTS, size, enableDepth, enableBlend)
     }
 
     renderTriangles(
@@ -470,9 +471,10 @@ export class DebugRenderer {
         mvMatrix: mat4,
         pMatrix: mat4,
         positions: number[] | Float32Array,
-        color: number[]
+        color: number[],
+        enableBlend: boolean = true
     ) {
-        this.draw(gl, mvMatrix, pMatrix, positions, color, gl.TRIANGLES, 1.0)
+        this.draw(gl, mvMatrix, pMatrix, positions, color, gl.TRIANGLES, 1.0, false, enableBlend)
     }
 
     renderFaces(
@@ -490,9 +492,10 @@ export class DebugRenderer {
         mvMatrix: mat4,
         pMatrix: mat4,
         positions: number[] | Float32Array,
-        color: number[]
+        color: number[],
+        enableBlend: boolean = true
     ) {
-        this.draw(gl, mvMatrix, pMatrix, positions, color, gl.LINES, 1.0)
+        this.draw(gl, mvMatrix, pMatrix, positions, color, gl.LINES, 1.0, false, enableBlend)
     }
 
     renderWireframeBox(
@@ -640,7 +643,8 @@ export class DebugRenderer {
         color: number[],
         mode: number,
         pointSize: number,
-        enableDepth: boolean = false // Default to false (penetrate) to match previous behavior
+        enableDepth: boolean = false, // Default to false (penetrate) to match previous behavior
+        enableBlend: boolean = true
     ) {
         if (!this.program || !this.buffer || positions.length === 0) return
 
@@ -659,6 +663,17 @@ export class DebugRenderer {
         gl.uniform1f(this.uPointSize, pointSize)
         gl.uniform1f(this.uDepthBias, 0.0) // Set default bias to 0 to avoid garbage values
 
+        // Save GL state to avoid inheriting material blend modes
+        const prevBlend = gl.isEnabled(gl.BLEND)
+        const prevBlendSrcRGB = gl.getParameter(gl.BLEND_SRC_RGB)
+        const prevBlendDstRGB = gl.getParameter(gl.BLEND_DST_RGB)
+        const prevBlendSrcAlpha = gl.getParameter(gl.BLEND_SRC_ALPHA)
+        const prevBlendDstAlpha = gl.getParameter(gl.BLEND_DST_ALPHA)
+        const prevBlendEqRGB = gl.getParameter(gl.BLEND_EQUATION_RGB)
+        const prevBlendEqAlpha = gl.getParameter(gl.BLEND_EQUATION_ALPHA)
+        const prevDepthTest = gl.isEnabled(gl.DEPTH_TEST)
+        const prevCullFace = gl.isEnabled(gl.CULL_FACE)
+
         // Configure depth test based on parameter
         if (enableDepth) {
             gl.enable(gl.DEPTH_TEST)
@@ -666,14 +681,38 @@ export class DebugRenderer {
             gl.disable(gl.DEPTH_TEST)
         }
 
-        gl.enable(gl.BLEND)
-        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+        // Force double-sided overlay for selection/highlight
+        gl.disable(gl.CULL_FACE)
+
+        if (enableBlend) {
+            // Force a stable blend mode for selection/debug overlays
+            gl.enable(gl.BLEND)
+            gl.blendEquationSeparate(gl.FUNC_ADD, gl.FUNC_ADD)
+            gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
+        } else {
+            gl.disable(gl.BLEND)
+        }
 
         gl.drawArrays(mode, 0, positions.length / 3)
 
         // Restore state
-        gl.disable(gl.BLEND)
-        gl.enable(gl.DEPTH_TEST)
+        gl.blendEquationSeparate(prevBlendEqRGB, prevBlendEqAlpha)
+        gl.blendFuncSeparate(prevBlendSrcRGB, prevBlendDstRGB, prevBlendSrcAlpha, prevBlendDstAlpha)
+        if (prevBlend) {
+            gl.enable(gl.BLEND)
+        } else {
+            gl.disable(gl.BLEND)
+        }
+        if (prevCullFace) {
+            gl.enable(gl.CULL_FACE)
+        } else {
+            gl.disable(gl.CULL_FACE)
+        }
+        if (prevDepthTest) {
+            gl.enable(gl.DEPTH_TEST)
+        } else {
+            gl.disable(gl.DEPTH_TEST)
+        }
     }
     /**
      * Render a visual representation of a light
