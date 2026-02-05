@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react'
+import React, { useRef, useEffect, useState, useCallback, useMemo, useLayoutEffect } from 'react'
 import { useModelStore } from '../../../store/modelStore'
 import { useSelectionStore } from '../../../store/selectionStore'
 import { useRendererStore } from '../../../store/rendererStore'
@@ -15,7 +15,7 @@ import {
     EyeInvisibleOutlined
 } from '@ant-design/icons'
 import { useHistoryStore } from '../../../store/historyStore'
-import { Button, Slider, Input, InputNumber, Radio, Tooltip } from 'antd'
+import { Button, Slider, Input, InputNumber, Radio, Tooltip, Menu, Modal } from 'antd'
 import { SwapOutlined, GlobalOutlined } from '@ant-design/icons'
 import { registerShortcutHandler } from '../../../shortcuts/manager'
 
@@ -34,6 +34,8 @@ const LANE_HEIGHT = 14
 const OFFSET_TRANSLATION = 12
 const OFFSET_ROTATION = 26
 const OFFSET_SCALING = 40
+const CONTEXT_MENU_WIDTH = 170
+const CONTEXT_MENU_HEIGHT = 160
 
 const cloneNodesForKeyframes = (input: any[]) => {
     if (typeof structuredClone === 'function') {
@@ -76,6 +78,7 @@ let globalTimelineLoopId = 0
 const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null)
     const containerRef = useRef<HTMLDivElement>(null)
+    const contextMenuRef = useRef<HTMLDivElement>(null)
     const rafRef = useRef<number | null>(null)
     const containerSizeRef = useRef<{ width: number; height: number }>({ width: 400, height: 180 })
 
@@ -117,6 +120,12 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     const [selectedKeyframeUids, setSelectedKeyframeUids] = useState<Set<string>>(new Set())
     const [selectionRect, setSelectionRect] = useState<{ startX: number, startY: number, endX: number, endY: number } | null>(null)
     const [hoveredSequenceIndex, setHoveredSequenceIndex] = useState<number | null>(null)
+    const [contextMenu, setContextMenu] = useState<{ visible: boolean, x: number, y: number, selectionCount: number }>({ visible: false, x: 0, y: 0, selectionCount: 0 })
+    const [scalePasteOpen, setScalePasteOpen] = useState(false)
+    const [scalePasteMode, setScalePasteMode] = useState<'ratio' | 'range'>('ratio')
+    const [scalePastePercent, setScalePastePercent] = useState<number>(100)
+    const [scalePasteStart, setScalePasteStart] = useState<number | null>(null)
+    const [scalePasteEnd, setScalePasteEnd] = useState<number | null>(null)
 
     // Clipboard State for Keyframes
     const [clipboardKeyframes, setClipboardKeyframes] = useState<{
@@ -181,6 +190,8 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     useEffect(() => { transformModeRef.current = transformMode }, [transformMode])
     useEffect(() => { isDraggingRef.current = isDragging }, [isDragging])
     useEffect(() => { dragKeyframeOffsetRef.current = dragKeyframeOffset }, [dragKeyframeOffset])
+
+    
 
     // Cache active keyframes
     useEffect(() => {
@@ -518,20 +529,25 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             const dragOffset = dragKeyframeOffsetRef.current
             const drawX = isSelected && dragOffset !== 0 ? kx + dragOffset * pxPerMs : kx
 
-            ctx.fillStyle = isSelected ? '#ffcc00' : kf.color
-
-            ctx.beginPath()
-            ctx.moveTo(drawX, laneY - KEYFRAME_SIZE)
-            ctx.lineTo(drawX + KEYFRAME_SIZE, laneY)
-            ctx.lineTo(drawX, laneY + KEYFRAME_SIZE)
-            ctx.lineTo(drawX - KEYFRAME_SIZE, laneY)
-            ctx.fill()
+            const lineTop = laneY - KEYFRAME_SIZE
+            const lineBottom = laneY + KEYFRAME_SIZE
+            const lineColor = isSelected ? '#ffcc00' : kf.color
 
             if (isSelected) {
                 ctx.strokeStyle = '#fff'
-                ctx.lineWidth = 1
+                ctx.lineWidth = 4
+                ctx.beginPath()
+                ctx.moveTo(drawX, lineTop)
+                ctx.lineTo(drawX, lineBottom)
                 ctx.stroke()
             }
+
+            ctx.strokeStyle = lineColor
+            ctx.lineWidth = 2
+            ctx.beginPath()
+            ctx.moveTo(drawX, lineTop)
+            ctx.lineTo(drawX, lineBottom)
+            ctx.stroke()
         })
 
         // Draw Selection Rect
@@ -708,6 +724,43 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         return result
     }, [selectedKeyframeUids])
 
+    const effectiveClipboard = useMemo(() => {
+        if (clipboardKeyframes && clipboardKeyframes.keyframes.length > 0) {
+            return { source: 'clipboard' as const, data: clipboardKeyframes }
+        }
+        const selectedData = getSelectedKeyframeData()
+        if (selectedData.length === 0) return null
+        const baseFrame = Math.min(...selectedData.map(kf => kf.frame))
+        return {
+            source: 'selection' as const,
+            data: {
+                keyframes: selectedData.map(kf => ({
+                    nodeId: kf.nodeId,
+                    type: kf.type,
+                    frame: kf.frame,
+                    value: kf.value,
+                    inTan: kf.inTan,
+                    outTan: kf.outTan
+                })),
+                isCut: false,
+                baseFrame
+            }
+        }
+    }, [clipboardKeyframes, getSelectedKeyframeData])
+
+    const clipboardInfo = useMemo(() => {
+        if (!effectiveClipboard || effectiveClipboard.data.keyframes.length === 0) return null
+        const frames = effectiveClipboard.data.keyframes.map(kf => kf.frame)
+        const start = Math.min(...frames)
+        const end = Math.max(...frames)
+        return {
+            count: effectiveClipboard.data.keyframes.length,
+            start,
+            end,
+            span: end - start
+        }
+    }, [effectiveClipboard])
+
     // Delete selected keyframes
     const deleteSelectedKeyframes = useCallback(() => {
         if (selectedKeyframeUids.size === 0) return
@@ -784,17 +837,18 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
     // Paste keyframes at current frame position
     const pasteKeyframes = useCallback(() => {
-        if (!clipboardKeyframes || clipboardKeyframes.keyframes.length === 0) return
+        if (!effectiveClipboard) return
+        const source = effectiveClipboard.data
 
         const currentFrame = frameRef.current
-        const offset = currentFrame - clipboardKeyframes.baseFrame
+        const offset = currentFrame - source.baseFrame
 
         const nodes = useModelStore.getState().nodes
         const oldNodes = cloneNodesForKeyframes(nodes)
         const nodesCopy = cloneNodesForKeyframes(nodes)
         const replaceNodes = useModelStore.getState().replaceNodes
 
-        clipboardKeyframes.keyframes.forEach(kf => {
+        source.keyframes.forEach(kf => {
             const node = nodesCopy.find((n: any) => n.ObjectId === kf.nodeId)
             if (!node) return
 
@@ -829,7 +883,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
         // Push to history
         useHistoryStore.getState().push({
-            name: `粘贴 ${clipboardKeyframes.keyframes.length} 个关键帧`,
+            name: `粘贴 ${source.keyframes.length} 个关键帧`,
             undo: () => replaceNodes(oldNodes as any),
             redo: () => replaceNodes(nodesCopy)
         })
@@ -837,10 +891,125 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         replaceNodes(nodesCopy)
 
         // Clear clipboard if it was a cut operation
-        if (clipboardKeyframes.isCut) {
+        if (effectiveClipboard.source === 'clipboard' && source.isCut) {
             setClipboardKeyframes(null)
         }
-    }, [clipboardKeyframes])
+    }, [effectiveClipboard])
+
+    const pasteKeyframesScaled = useCallback((mode: 'ratio' | 'range') => {
+        if (!effectiveClipboard) return
+        if (!clipboardInfo) return
+
+        const source = effectiveClipboard.data
+        const sourceStart = clipboardInfo.start
+        const sourceSpan = clipboardInfo.span
+        const currentFrame = Math.round(frameRef.current)
+
+        let targetStart = currentFrame
+        let scale = 1
+
+        if (mode === 'ratio') {
+            scale = (scalePastePercent || 0) / 100
+            if (scale <= 0) return
+        } else {
+            if (scalePasteStart === null || scalePasteEnd === null) return
+            if (sourceSpan === 0) return
+            if (scalePasteEnd <= scalePasteStart) return
+            targetStart = scalePasteStart
+            scale = (scalePasteEnd - scalePasteStart) / sourceSpan
+        }
+
+        const nodes = useModelStore.getState().nodes
+        const oldNodes = cloneNodesForKeyframes(nodes)
+        const nodesCopy = cloneNodesForKeyframes(nodes)
+        const replaceNodes = useModelStore.getState().replaceNodes
+
+        source.keyframes.forEach(kf => {
+            const node = nodesCopy.find((n: any) => n.ObjectId === kf.nodeId)
+            if (!node) return
+
+            const targetFrame = Math.round(targetStart + (kf.frame - sourceStart) * scale)
+
+            if (!node[kf.type]) {
+                node[kf.type] = {
+                    Keys: [],
+                    LineType: 1,
+                    GlobalSeqId: -1
+                }
+            }
+
+            const existingIdx = node[kf.type].Keys.findIndex((k: any) => k.Frame === targetFrame)
+            const newKey: any = {
+                Frame: targetFrame,
+                Vector: Array.isArray(kf.value) ? [...kf.value] : kf.value
+            }
+            if (kf.inTan) newKey.InTan = [...kf.inTan]
+            if (kf.outTan) newKey.OutTan = [...kf.outTan]
+
+            if (existingIdx >= 0) {
+                node[kf.type].Keys[existingIdx] = newKey
+            } else {
+                node[kf.type].Keys.push(newKey)
+                node[kf.type].Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+            }
+        })
+
+        useHistoryStore.getState().push({
+            name: `缩放粘贴 ${source.keyframes.length} 个关键帧`,
+            undo: () => replaceNodes(oldNodes as any),
+            redo: () => replaceNodes(nodesCopy)
+        })
+
+        replaceNodes(nodesCopy)
+
+        if (effectiveClipboard.source === 'clipboard' && source.isCut) {
+            setClipboardKeyframes(null)
+        }
+    }, [effectiveClipboard, clipboardInfo, scalePastePercent, scalePasteStart, scalePasteEnd])
+
+    const openScalePasteDialog = useCallback(() => {
+        if (!clipboardInfo) return
+        const currentFrame = Math.round(frameRef.current)
+        const span = Math.max(1, clipboardInfo.span)
+        setScalePasteMode('ratio')
+        setScalePastePercent(100)
+        setScalePasteStart(currentFrame)
+        setScalePasteEnd(currentFrame + span)
+        setScalePasteOpen(true)
+    }, [clipboardInfo])
+
+    const closeContextMenu = useCallback(() => {
+        setContextMenu(prev => ({ ...prev, visible: false }))
+    }, [])
+
+    useEffect(() => {
+        if (!contextMenu.visible) return
+        const handleGlobalClick = (e: MouseEvent) => {
+            const menu = contextMenuRef.current
+            if (menu && menu.contains(e.target as Node)) return
+            setContextMenu(prev => ({ ...prev, visible: false }))
+        }
+        window.addEventListener('mousedown', handleGlobalClick)
+        return () => window.removeEventListener('mousedown', handleGlobalClick)
+    }, [contextMenu.visible])
+
+    useLayoutEffect(() => {
+        if (!contextMenu.visible) return
+        const container = containerRef.current
+        const menu = contextMenuRef.current
+        if (!container || !menu) return
+        const containerRect = container.getBoundingClientRect()
+        const menuRect = menu.getBoundingClientRect()
+        let x = contextMenu.x
+        let y = contextMenu.y
+        const maxX = Math.max(0, containerRect.width - menuRect.width)
+        const maxY = Math.max(0, containerRect.height - menuRect.height)
+        if (x > maxX) x = maxX
+        if (y > maxY) y = maxY
+        if (x !== contextMenu.x || y !== contextMenu.y) {
+            setContextMenu(prev => ({ ...prev, x, y }))
+        }
+    }, [contextMenu.visible, contextMenu.x, contextMenu.y])
 
     useEffect(() => {
         if (!isActive) return
@@ -862,7 +1031,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 return true
             }),
             registerShortcutHandler('timeline.pasteKeyframes', () => {
-                if (!clipboardKeyframes) return false
+                if (!effectiveClipboard) return false
                 pasteKeyframes()
                 return true
             })
@@ -871,7 +1040,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         return () => {
             unsubscribeHandlers.forEach((unsubscribe) => unsubscribe())
         }
-    }, [isActive, selectedKeyframeUids, clipboardKeyframes, deleteSelectedKeyframes, copyKeyframes, pasteKeyframes])
+    }, [isActive, selectedKeyframeUids, effectiveClipboard, deleteSelectedKeyframes, copyKeyframes, pasteKeyframes])
 
     // --- Global Window Handlers for Robust Dragging ---
 
@@ -1152,23 +1321,16 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const mouseX = e.clientX - rect.left
         const mouseY = e.clientY - rect.top
 
-        window.addEventListener('mousemove', handleGlobalMouseMove)
-        window.addEventListener('mouseup', handleGlobalMouseUp)
+        if (contextMenu.visible) {
+            closeContextMenu()
+        }
 
         if (e.button === 2) {
-            interactionRef.current = {
-                mode: 'pan',
-                startX: e.clientX,
-                startY: e.clientY,
-                lastMouseX: e.clientX,
-                initialScrollX: scrollXRef.current,
-                dragSequenceIndex: -1,
-                initialInterval: [0, 0],
-                dragKeyframeStartFrame: 0,
-                dragKeyframeData: []
-            }
             return
         }
+
+        window.addEventListener('mousemove', handleGlobalMouseMove)
+        window.addEventListener('mouseup', handleGlobalMouseUp)
 
         // 1. Check for Sequence Handles (Hit Test at Bottom)
         const handleHit = getSequenceHandleAtPos(e.clientX, e.clientY)
@@ -1247,7 +1409,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 setSelectionRect({ startX: mouseX, startY: mouseY, endX: mouseX, endY: mouseY })
             }
         }
-    }, [handleGlobalMouseMove, handleGlobalMouseUp, setPlaying, selectedKeyframeUids, getSelectedKeyframeData])
+    }, [handleGlobalMouseMove, handleGlobalMouseUp, setPlaying, selectedKeyframeUids, getSelectedKeyframeData, contextMenu.visible, closeContextMenu])
 
     useEffect(() => {
         return () => {
@@ -1258,6 +1420,9 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
 
     const handleWheel = (e: React.WheelEvent) => {
+        if (contextMenu.visible) {
+            closeContextMenu()
+        }
         const zoomSpeed = 0.001
         const delta = -e.deltaY
         const factor = 1 + delta * zoomSpeed
@@ -1351,8 +1516,132 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         }
     }
 
+    const handleContextMenu = useCallback((e: React.MouseEvent) => {
+        e.preventDefault()
+        const container = containerRef.current
+        if (!container) return
+
+        const clickedKf = getKeyframeAtPos(e.clientX, e.clientY)
+        if (clickedKf && !selectedKeyframeUidsRef.current.has(clickedKf.uid)) {
+            const next = new Set([clickedKf.uid])
+            selectedKeyframeUidsRef.current = next
+            setSelectedKeyframeUids(next)
+        }
+
+        const rect = container.getBoundingClientRect()
+        let x = e.clientX - rect.left
+        let y = e.clientY - rect.top
+        x = Math.max(0, Math.min(x, rect.width - CONTEXT_MENU_WIDTH))
+        y = Math.max(0, Math.min(y, rect.height - CONTEXT_MENU_HEIGHT))
+
+        const selectionCount = selectedKeyframeUidsRef.current.size
+        setContextMenu({ visible: true, x, y, selectionCount })
+    }, [getKeyframeAtPos])
+
     return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: '#1e1e1e', userSelect: 'none' }} onContextMenu={(e) => e.preventDefault()}>
+            <style dangerouslySetInnerHTML={{
+                __html: `
+                .timeline-context-menu.ant-menu {
+                    background: #2a2a2a;
+                    border: none;
+                }
+                .timeline-context-menu .ant-menu-item {
+                    height: 28px;
+                    line-height: 28px;
+                    padding: 0 12px;
+                    margin: 0;
+                    color: #fff;
+                    font-size: 12px;
+                }
+                .timeline-context-menu .ant-menu-item:hover,
+                .timeline-context-menu .ant-menu-item-active {
+                    background: #1f4f8f;
+                    color: #fff;
+                }
+                .timeline-context-menu .ant-menu-item-disabled {
+                    color: #666;
+                }
+                .timeline-context-menu .ant-menu-item-divider {
+                    margin: 4px 0;
+                    border-color: #333;
+                }
+            `}} />
+            <Modal
+                title="缩放粘贴关键帧"
+                open={scalePasteOpen}
+                onCancel={() => setScalePasteOpen(false)}
+                onOk={() => {
+                    pasteKeyframesScaled(scalePasteMode)
+                    setScalePasteOpen(false)
+                }}
+                okButtonProps={{
+                    disabled: scalePasteMode === 'ratio'
+                        ? !clipboardInfo || scalePastePercent <= 0
+                        : !clipboardInfo || clipboardInfo.span === 0 || scalePasteStart === null || scalePasteEnd === null || scalePasteEnd <= scalePasteStart
+                }}
+                okText="粘贴"
+                cancelText="取消"
+                width={420}
+                styles={{
+                    content: { backgroundColor: '#1e1e1e', color: '#ccc' },
+                    header: { backgroundColor: '#1e1e1e', color: '#ccc', borderBottom: '1px solid #333' },
+                    body: { padding: '16px 20px' }
+                }}
+            >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <Radio.Group
+                        value={scalePasteMode}
+                        onChange={(e) => setScalePasteMode(e.target.value)}
+                        style={{ color: '#ccc' }}
+                    >
+                        <Radio value="ratio" style={{ color: '#ccc' }}>按比例缩放</Radio>
+                        <Radio value="range" style={{ color: '#ccc' }}>按首尾帧范围缩放</Radio>
+                    </Radio.Group>
+
+                    {scalePasteMode === 'ratio' && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ color: '#aaa', minWidth: 90 }}>缩放比例:</span>
+                            <InputNumber
+                                min={1}
+                                max={1000}
+                                value={scalePastePercent}
+                                onChange={(v) => setScalePastePercent((v ?? 100) as number)}
+                                style={{ width: 120 }}
+                            />
+                            <span style={{ color: '#888' }}>%</span>
+                        </div>
+                    )}
+
+                    {scalePasteMode === 'range' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <span style={{ color: '#aaa', minWidth: 90 }}>开始帧:</span>
+                                <InputNumber
+                                    min={0}
+                                    value={scalePasteStart ?? undefined}
+                                    onChange={(v) => setScalePasteStart(v === null ? null : (v as number))}
+                                    style={{ width: 140 }}
+                                />
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <span style={{ color: '#aaa', minWidth: 90 }}>结束帧:</span>
+                                <InputNumber
+                                    min={0}
+                                    value={scalePasteEnd ?? undefined}
+                                    onChange={(v) => setScalePasteEnd(v === null ? null : (v as number))}
+                                    style={{ width: 140 }}
+                                />
+                            </div>
+                            {clipboardInfo && (
+                                <div style={{ color: '#777', fontSize: 12 }}>
+                                    源范围: {clipboardInfo.start} - {clipboardInfo.end} ({clipboardInfo.span} 帧)
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            </Modal>
             {/* Toolbar */}
             <div style={{ height: '36px', borderBottom: '1px solid #333', display: 'flex', alignItems: 'center', padding: '0 10px', justifyContent: 'center', position: 'relative' }}>
                 <div style={{ position: 'absolute', left: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1517,12 +1806,70 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             </div>
 
             {/* Canvas Container */}
-            <div ref={containerRef} style={{ flex: 1, position: 'relative', overflow: 'hidden' }} onWheel={handleWheel}>
+            <div ref={containerRef} style={{ flex: 1, position: 'relative', overflow: 'hidden' }} onWheel={handleWheel} onContextMenu={handleContextMenu}>
                 <canvas
                     ref={canvasRef}
                     style={{ width: '100%', height: '100%', display: 'block', cursor: isDragging ? 'grabbing' : 'default' }}
                     onMouseDown={handleMouseDown}
                 />
+                {contextMenu.visible && (
+                    <div
+                        ref={contextMenuRef}
+                        style={{
+                            position: 'absolute',
+                            left: contextMenu.x,
+                            top: contextMenu.y,
+                            zIndex: 1000,
+                            backgroundColor: '#2a2a2a',
+                            border: '1px solid #3a3a3a',
+                            borderRadius: 4,
+                            boxShadow: '0 6px 16px rgba(0,0,0,0.45)'
+                        }}
+                    >
+                        <Menu
+                            selectable={false}
+                            className="timeline-context-menu"
+                            style={{ backgroundColor: 'transparent', border: 'none' }}
+                        >
+                            <Menu.Item
+                                key="copy"
+                                disabled={contextMenu.selectionCount === 0}
+                                onClick={() => { copyKeyframes(false); closeContextMenu() }}
+                            >
+                                复制
+                            </Menu.Item>
+                            <Menu.Item
+                                key="cut"
+                                disabled={contextMenu.selectionCount === 0}
+                                onClick={() => { copyKeyframes(true); closeContextMenu() }}
+                            >
+                                剪切
+                            </Menu.Item>
+                            <Menu.Item
+                                key="paste"
+                                disabled={!effectiveClipboard || effectiveClipboard.data.keyframes.length === 0}
+                                onClick={() => { pasteKeyframes(); closeContextMenu() }}
+                            >
+                                粘贴
+                            </Menu.Item>
+                            <Menu.Item
+                                key="scalePaste"
+                                disabled={!effectiveClipboard || effectiveClipboard.data.keyframes.length <= 2}
+                                onClick={() => { openScalePasteDialog(); closeContextMenu() }}
+                            >
+                                缩放粘贴
+                            </Menu.Item>
+                            <Menu.Divider style={{ borderColor: '#333' }} />
+                            <Menu.Item
+                                key="delete"
+                                disabled={contextMenu.selectionCount === 0}
+                                onClick={() => { deleteSelectedKeyframes(); closeContextMenu() }}
+                            >
+                                删除
+                            </Menu.Item>
+                        </Menu>
+                    </div>
+                )}
             </div>
         </div>
     )

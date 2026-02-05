@@ -23,6 +23,8 @@ const REPLACEABLE_TEXTURES: Record<number, string> = {
     37: 'OutlandMushroomTree\\MushroomTree',
 }
 
+const THUMBNAIL_SIZE = 128;
+
 let canvas: OffscreenCanvas | null = null;
 let gl: WebGLRenderingContext | WebGL2RenderingContext | null = null;
 
@@ -78,7 +80,7 @@ self.onmessage = async (e) => {
 async function initGL() {
     if (gl) return;
 
-    canvas = new OffscreenCanvas(256, 256);
+    canvas = new OffscreenCanvas(THUMBNAIL_SIZE, THUMBNAIL_SIZE);
     const attrs = {
         alpha: true,
         premultipliedAlpha: true,
@@ -129,6 +131,9 @@ async function render(
         // Resolve Replaceable IDs in worker model representation
         if (model.Textures) {
             model.Textures.forEach((texture: any) => {
+                if (!texture.Image && texture.Path) {
+                    texture.Image = texture.Path;
+                }
                 if ((!texture.Image || texture.Image === '') && texture.ReplaceableId !== 0) {
                     const replaceablePath = REPLACEABLE_TEXTURES[texture.ReplaceableId];
                     if (replaceablePath !== undefined) {
@@ -267,7 +272,7 @@ async function render(
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
 
     // Set viewport
-    gl.viewport(0, 0, 256, 256);
+    gl.viewport(0, 0, THUMBNAIL_SIZE, THUMBNAIL_SIZE);
 
     // Standard render state
     gl.enable(gl.DEPTH_TEST);

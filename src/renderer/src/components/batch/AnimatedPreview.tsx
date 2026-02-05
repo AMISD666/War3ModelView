@@ -15,8 +15,8 @@ interface AnimatedPreviewProps {
  */
 export const AnimatedPreview: React.FC<AnimatedPreviewProps> = React.memo(({
     bitmap,
-    width = 256,
-    height = 256,
+    width = 128,
+    height = 128,
     isSelected = false
 }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);

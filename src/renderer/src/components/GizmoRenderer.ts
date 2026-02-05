@@ -259,14 +259,10 @@ export class GizmoRenderer {
         // Simplified ray-cylinder intersection (treating lines as cylinders/capsules)
         // For now, we use a distance check to the line segments
 
-        const threshold = 3.0 // World unit threshold - reduced for more precise selection
-
-        // Scale threshold by 'scale' parameter (which is visual size) 
-        // This works for both Perspective (scale ~ dist) and Orthographic (scale ~ orthoSize)
-        // distance-based check is incorrect for Orthographic where camera is far away
-        const hitThreshold = threshold * scale * 2.5
-
         const axisLen = this.axisLength * scale
+        // Keep hit size proportional to axis length so screen-space size stays consistent
+        const lineHitThreshold = axisLen * 0.06
+        const ringHitThreshold = axisLen * 0.05
 
         if (mode === 'translate' || mode === 'scale') {
             const xEnd = vec3.create(); vec3.add(xEnd, center, [axisLen, 0, 0])
@@ -278,7 +274,7 @@ export class GizmoRenderer {
             const distZ = this.distToSegment(cameraPos, rayDir, center, zEnd)
 
             // Find closest hit
-            let minDist = hitThreshold
+            let minDist = lineHitThreshold
             let hitAxis: GizmoAxis = null
 
             if (distX < minDist) { minDist = distX; hitAxis = 'x' }
@@ -330,7 +326,7 @@ export class GizmoRenderer {
             // Z-Axis Ring (XY Plane)
             const distZ = this.distToRing(cameraPos, rayDir, center, [0, 0, 1], r)
 
-            let minDist = hitThreshold
+            let minDist = ringHitThreshold
             let hitAxis: GizmoAxis = null
 
             if (distX < minDist) { minDist = distX; hitAxis = 'x' }

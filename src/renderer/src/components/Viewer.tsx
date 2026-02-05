@@ -509,6 +509,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     initialKeys: Map<number, any>, // NodeId -> { Rotation: [], Scaling: [] }
     initialValues: Map<number, { rotation: Float32Array, scaling: Float32Array }> // NodeId -> { rotation, scaling } (snapshot at drag start)
   } | null>(null)
+  const needsRendererUpdateRef = useRef(false)
   const previewTransformRef = useRef({
     translation: [0, 0, 0] as [number, number, number],
     rotation: [0, 0, 0] as [number, number, number],
@@ -595,6 +596,12 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     }
 
     if (model?.Nodes && model.Nodes.length > 0) {
+      if (!model.PivotPoints) {
+        model.PivotPoints = model.Nodes.map((n: any) => {
+          const p = n?.PivotPoint ?? [0, 0, 0]
+          return p instanceof Float32Array ? p : new Float32Array(p)
+        })
+      }
       return { model, usedFallback: false, defaultNodeId: model.Nodes[0].ObjectId ?? 0 }
     }
     const fallbackNode = {
@@ -1070,7 +1077,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
                 // DEBUG: Log initial state
                 console.log('[DEBUG MouseDown] NodeId:', nodeId)
-                console.log('[DEBUG MouseDown] PivotPoint:', [...nodeWrapper.node.PivotPoint])
+                const pivot = getOrCreateNodePivot(nodeWrapper)
+                console.log('[DEBUG MouseDown] PivotPoint:', pivot ? [...pivot] : 'N/A')
                 console.log('[DEBUG MouseDown] Matrix (translation part):',
                   nodeWrapper.matrix ? [nodeWrapper.matrix[12], nodeWrapper.matrix[13], nodeWrapper.matrix[14]] : 'N/A')
                 console.log('[DEBUG MouseDown] InitialVals.translation:', initialVals.translation || '[0,0,0]')
@@ -1088,8 +1096,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         if (renderer && renderer.rendererData && renderer.rendererData.nodes) {
           selectedNodeIds.forEach(nodeId => {
             const nodeWrapper = renderer.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
-            if (nodeWrapper && nodeWrapper.node.PivotPoint) {
-              initialNodePositions.current.set(nodeId, [nodeWrapper.node.PivotPoint[0], nodeWrapper.node.PivotPoint[1], nodeWrapper.node.PivotPoint[2]])
+            const pivot = nodeWrapper ? getOrCreateNodePivot(nodeWrapper) : null
+            if (nodeWrapper && pivot) {
+              initialNodePositions.current.set(nodeId, [pivot[0], pivot[1], pivot[2]])
             }
           })
           console.log('[Viewer] Captured node positions:', initialNodePositions.current.size)
@@ -1243,7 +1252,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       console.log('[Viewer] Box bounds:', { boxLeft, boxRight, boxTop, boxBottom })
 
       rendererRef.current.rendererData.nodes.forEach((nodeWrapper: any) => {
-        const pivot = nodeWrapper.node.PivotPoint
+        const pivot = getOrCreateNodePivot(nodeWrapper)
+        if (!pivot) return
         const worldPos = vec3.create()
         vec3.transformMat4(worldPos, pivot, nodeWrapper.matrix)
 
@@ -1530,8 +1540,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
       if (rendererRef.current.rendererData && rendererRef.current.rendererData.nodes) {
         rendererRef.current.rendererData.nodes.forEach((nodeWrapper: any) => {
-          // Check Pivot Point
-          const pivot = nodeWrapper.node.PivotPoint
+          const pivot = getOrCreateNodePivot(nodeWrapper)
           if (!pivot) return // 跳过没有 PivotPoint 的节点
           // Apply current transformation
           const worldPos = vec3.create()
@@ -2476,6 +2485,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
           if (isPlayingRef.current && !isBindPoseMode) {
             mdlRenderer.update(delta * playbackSpeedRef.current)
+            needsRendererUpdateRef.current = false
 
             // Sync frame to store for Timeline (Animation Mode only)
             // PERFORMANCE: Throttle to 200ms to avoid excessive React re-renders
@@ -2496,10 +2506,12 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             // 使用 ref 替代 window 全局变量，避免污染和潜在冲突
             const lastFrame = frameCacheRef.current
 
-            if (gizmoDragging || currentFrame !== lastFrame) {
+            const needsUpdate = needsRendererUpdateRef.current
+            if (gizmoDragging || needsUpdate || currentFrame !== lastFrame) {
               // Update with delta=0 to refresh bone matrices without advancing animation
               mdlRenderer.update(0)
               frameCacheRef.current = currentFrame
+              needsRendererUpdateRef.current = false
             }
 
             // CRITICAL FIX: Sync frame to store even when paused
@@ -2796,7 +2808,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                     pMatrix,
                     attachmentPositions,
                     1.5, // Scale down further
-                    [1.0, 1.0, 0.0, 1.0], // Yellow
+                    (() => {
+                      const attachmentHex = useRendererStore.getState().nodeColors?.Attachment || '#ffff00'
+                      const [r, g, b] = hexToRgb(attachmentHex)
+                      return [r, g, b, 1]
+                    })(),
                     false // Disable depth test so points are always visible
                   );
                 }
@@ -2947,6 +2963,28 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 }
               }
 
+              const nodeTypeColors = (() => {
+                const colors = useRendererStore.getState().nodeColors
+                if (!colors) return undefined
+                const toRgba = (hex: string): number[] => {
+                  const [r, g, b] = hexToRgb(hex)
+                  return [r, g, b, 1]
+                }
+                return {
+                  Bone: toRgba(colors.Bone),
+                  Helper: toRgba(colors.Helper),
+                  Attachment: toRgba(colors.Attachment),
+                  ParticleEmitter: toRgba(colors.ParticleEmitter),
+                  ParticleEmitter2: toRgba(colors.ParticleEmitter2),
+                  RibbonEmitter: toRgba(colors.RibbonEmitter),
+                  Light: toRgba(colors.Light),
+                  EventObject: toRgba(colors.EventObject),
+                  CollisionShape: toRgba(colors.CollisionShape),
+                  Camera: toRgba(colors.Camera),
+                  ParticleEmitterPopcorn: toRgba(colors.ParticleEmitterPopcorn)
+                }
+              })()
+
               debugRenderer.current.renderNodes(
                 gl as WebGLRenderingContext,
                 mvMatrix,
@@ -2954,7 +2992,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 mdlRenderer.rendererData.nodes as any,
                 selectedNodeIds,
                 parentOfSelected,
-                childrenOfSelected
+                childrenOfSelected,
+                nodeTypeColors
               )
 
               // Render attachment nodes as yellow tetrahedrons
@@ -2963,7 +3002,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 mvMatrix,
                 pMatrix,
                 mdlRenderer.rendererData.nodes as any,
-                selectedNodeIds
+                selectedNodeIds,
+                nodeTypeColors
               )
             }
 
@@ -3357,6 +3397,27 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       ]
     }
     return [0, 0, 0]
+  }
+
+  const getOrCreateNodePivot = (nodeWrapper: any): Float32Array | number[] | null => {
+    if (!nodeWrapper?.node || typeof nodeWrapper.node.ObjectId !== 'number') return null
+    let pivot = nodeWrapper.node.PivotPoint as any
+    const model = rendererRef.current?.model
+    if (model && !model.PivotPoints) {
+      model.PivotPoints = []
+    }
+    const pivots = model?.PivotPoints
+    if (!pivot && pivots) {
+      pivot = pivots[nodeWrapper.node.ObjectId]
+    }
+    if (!pivot && pivots) {
+      pivot = new Float32Array([0, 0, 0])
+      pivots[nodeWrapper.node.ObjectId] = pivot
+    }
+    if (pivot && !nodeWrapper.node.PivotPoint) {
+      nodeWrapper.node.PivotPoint = pivot
+    }
+    return pivot ?? null
   }
 
   const handleMouseMove = (e: any) => {
@@ -3783,7 +3844,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         if (effectiveNodeIds.length > 0 && rendererRef.current && rendererRef.current.rendererData.nodes) {
           effectiveNodeIds.forEach(nodeId => {
             const nodeWrapper = rendererRef.current!.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
-            if (nodeWrapper && nodeWrapper.node.PivotPoint) {
+            const pivot = nodeWrapper ? getOrCreateNodePivot(nodeWrapper) : null
+            if (nodeWrapper && pivot) {
               let localMoveVec = vec3.fromValues(vecs.moveVec[0], vecs.moveVec[1], vecs.moveVec[2])
 
               // For keyframe mode: Transform world-space delta to bone's local space
@@ -3818,9 +3880,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
               // binding 模式：修改 PivotPoint（静态绑定位置）
               if (subMode === 'binding') {
-                nodeWrapper.node.PivotPoint[0] += localMoveVec[0]
-                nodeWrapper.node.PivotPoint[1] += localMoveVec[1]
-                nodeWrapper.node.PivotPoint[2] += localMoveVec[2]
+                pivot[0] += localMoveVec[0]
+                pivot[1] += localMoveVec[1]
+                pivot[2] += localMoveVec[2]
               }
               // keyframe 模式：累积 delta 并注入临时 Translation 关键帧用于实时预览
               else if (subMode === 'keyframe') {
@@ -3946,9 +4008,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             }
           })
 
-          // Force renderer update for both binding and keyframe modes
+          // Defer renderer update to the render loop to avoid blocking mousemove
           if (subMode === 'binding' || subMode === 'keyframe') {
-            rendererRef.current!.update(0)
+            needsRendererUpdateRef.current = true
           }
         }
       } else if ((transformMode === 'rotate' || transformMode === 'scale') && mainMode === 'geometry') {
@@ -4118,7 +4180,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           if (nodeWrapper) {
             const matrix = nodeWrapper.matrix
             let pivot = [0, 0, 0]
-            if (nodeWrapper.node && nodeWrapper.node.PivotPoint) pivot = nodeWrapper.node.PivotPoint
+            const resolvedPivot = getOrCreateNodePivot(nodeWrapper)
+            if (resolvedPivot) pivot = resolvedPivot
             const x = matrix[0] * pivot[0] + matrix[4] * pivot[1] + matrix[8] * pivot[2] + matrix[12]
             const y = matrix[1] * pivot[0] + matrix[5] * pivot[1] + matrix[9] * pivot[2] + matrix[13]
             const z = matrix[2] * pivot[0] + matrix[6] * pivot[1] + matrix[10] * pivot[2] + matrix[14]
@@ -4203,9 +4266,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           })
         }
 
-        // CRITICAL: Force renderer to recalculate bone matrices with new keyframe values
-        // This makes the mesh update in real-time while dragging
-        rendererRef.current!.update(0)
+        // Defer renderer update to the render loop to keep drag responsive
+        needsRendererUpdateRef.current = true
       }
       return
     }
@@ -4521,8 +4583,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
             initialNodePositions.current.forEach((oldPos, nodeId) => {
               const nodeWrapper = rendererRef.current!.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
-              if (nodeWrapper && nodeWrapper.node.PivotPoint) {
-                const newPos: [number, number, number] = [nodeWrapper.node.PivotPoint[0], nodeWrapper.node.PivotPoint[1], nodeWrapper.node.PivotPoint[2]]
+              if (nodeWrapper) {
+                const pivot = getOrCreateNodePivot(nodeWrapper)
+                if (!pivot) return
+                const newPos: [number, number, number] = [pivot[0], pivot[1], pivot[2]]
 
                 if (oldPos[0] !== newPos[0] || oldPos[1] !== newPos[1] || oldPos[2] !== newPos[2]) {
                   changes.push({

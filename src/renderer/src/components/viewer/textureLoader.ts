@@ -7,7 +7,7 @@
 import { decodeBLP, getBLPImageData } from 'war3-model'
 import { readFile } from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'
-import { logTextureInfo, logTextureLoadComplete } from '../../utils/debugLogger'
+import { debugLog, logTextureInfo, logTextureLoadComplete } from '../../utils/debugLogger'
 
 export interface TextureLoadResult {
     path: string
@@ -467,6 +467,13 @@ export async function loadAllTextures(
     console.time('[Viewer] Texture Load (Batch)')
     const batchStart = performance.now()
     const results: TextureLoadResult[] = []
+    const perf = {
+        total: 0,
+        fs: { hits: 0, misses: 0, searchMs: 0, readMs: 0, decodeMs: 0 },
+        mpq: { hits: 0, misses: 0, batchMs: 0, base64Ms: 0, decodeMs: 0 },
+        uploadMs: 0
+    }
+    const perTextureMs = new Map<string, number>()
 
     if (!model.Textures) {
         console.timeEnd('[Viewer] Texture Load (Batch)')
@@ -510,6 +517,7 @@ export async function loadAllTextures(
     }
 
     const uniqueTexturePaths = Array.from(texturePaths);
+    perf.total = uniqueTexturePaths.length
 
     if (uniqueTexturePaths.length === 0) {
         console.timeEnd('[Viewer] Texture Load (Batch)')
@@ -526,15 +534,23 @@ export async function loadAllTextures(
     })
 
     const fsLoadPromises = uniqueTexturePaths.map(async (path) => {
+        const searchStart = performance.now()
+        let readMs = 0
+        let decodeMs = 0
         if (modelPath && !modelPath.startsWith('dropped:')) {
             const candidates = localCandidatesMap.get(path) || []
             for (const candidate of candidates) {
+                const readStart = performance.now()
                 const buffer = await readFile(candidate).catch(() => null)
+                readMs += performance.now() - readStart
                 if (buffer) {
                     try {
+                        const decodeStart = performance.now()
                         const imageData = decodeTextureData(buffer.buffer, path)
+                        decodeMs += performance.now() - decodeStart
                         if (imageData) {
-                            return { path, imageData }
+                            const searchMs = performance.now() - searchStart
+                            return { path, imageData, stats: { searchMs, readMs, decodeMs, hit: true } }
                         }
                     } catch (e) {
                         // Decode failed or TGA logic (omitted here for simplicity, fallback to general decodeTexture if needed)
@@ -542,13 +558,22 @@ export async function loadAllTextures(
                 }
             }
         }
-        return { path, imageData: null }
+        const searchMs = performance.now() - searchStart
+        return { path, imageData: null, stats: { searchMs, readMs, decodeMs, hit: false } }
     })
 
     const fsResults = await Promise.all(fsLoadPromises)
     const missingPaths: string[] = []
 
     fsResults.forEach(res => {
+        if (res.stats) {
+            perf.fs.searchMs += res.stats.searchMs
+            perf.fs.readMs += res.stats.readMs
+            perf.fs.decodeMs += res.stats.decodeMs
+            if (res.stats.hit) perf.fs.hits += 1
+            else perf.fs.misses += 1
+            perTextureMs.set(res.path, res.stats.searchMs)
+        }
         if (res.imageData) {
             decodedTextures.set(res.path, { path: res.path, imageData: res.imageData })
         } else {
@@ -561,18 +586,27 @@ export async function loadAllTextures(
     if (missingPaths.length > 0) {
         console.time('[Viewer] Batch MPQ load')
         try {
+            const mpqStart = performance.now()
             const batchResults = await invoke<(string | null)[]>('read_mpq_files_batch', { paths: missingPaths })
+            perf.mpq.batchMs += performance.now() - mpqStart
             for (let i = 0; i < missingPaths.length; i++) {
                 const path = missingPaths[i]
                 const b64Data = batchResults[i]
                 if (b64Data) {
                     try {
+                        const b64Start = performance.now()
                         const data = base64ToUint8Array(b64Data)
+                        perf.mpq.base64Ms += performance.now() - b64Start
+                        const decodeStart = performance.now()
                         const imageData = decodeTextureData(data.buffer as ArrayBuffer, path)
+                        perf.mpq.decodeMs += performance.now() - decodeStart
                         if (imageData) {
                             decodedTextures.set(path, { path, imageData })
+                            perf.mpq.hits += 1
                         }
                     } catch (e) { }
+                } else {
+                    perf.mpq.misses += 1
                 }
             }
         } catch (e) {
@@ -585,7 +619,9 @@ export async function loadAllTextures(
     for (const path of uniqueTexturePaths) {
         const decoded = decodedTextures.get(path)
         if (decoded && decoded.imageData && renderer.setTextureImageData) {
+            const uploadStart = performance.now()
             renderer.setTextureImageData(path, [decoded.imageData])
+            perf.uploadMs += performance.now() - uploadStart
             results.push({ path, loaded: true })
         } else {
             results.push({ path, loaded: false, error: 'Not found in FS or MPQ' })
@@ -595,11 +631,27 @@ export async function loadAllTextures(
     // Log results
     const textureLog = uniqueTexturePaths.map(path => ({
         path,
-        loaded: decodedTextures.has(path)
+        loaded: decodedTextures.has(path),
+        time: perTextureMs.get(path)
     }))
     await logTextureInfo(textureLog)
     const loadedCount = results.filter(r => r.loaded).length
     await logTextureLoadComplete(uniqueTexturePaths.length, loadedCount, performance.now() - batchStart)
+
+    try {
+        await debugLog(
+            `   贴图统计: 总数=${perf.total}, FS命中=${perf.fs.hits}, MPQ命中=${perf.mpq.hits}, 失败=${results.length - loadedCount}`
+        )
+        await debugLog(
+            `   FS耗时: 搜索=${perf.fs.searchMs.toFixed(1)}ms, 读=${perf.fs.readMs.toFixed(1)}ms, 解码=${perf.fs.decodeMs.toFixed(1)}ms`
+        )
+        await debugLog(
+            `   MPQ耗时: 批量=${perf.mpq.batchMs.toFixed(1)}ms, base64=${perf.mpq.base64Ms.toFixed(1)}ms, 解码=${perf.mpq.decodeMs.toFixed(1)}ms`
+        )
+        await debugLog(
+            `   上传耗时: ${perf.uploadMs.toFixed(1)}ms`
+        )
+    } catch { }
 
     console.timeEnd('[Viewer] Texture Load (Batch)')
     return results

@@ -59,7 +59,7 @@ const { Search } = Input;
 
 export const NodeManagerWindow: React.FC = () => {
     const { nodes, modelData, deleteNode, reparentNodes, setClipboardNode, pasteNode, renameNode, clipboardNode, addNode } = useModelStore();
-    const { selectedNodeIds, selectNode, clearNodeSelection } = useSelectionStore();
+    const { selectedNodeIds, selectNode, clearNodeSelection, mainMode } = useSelectionStore();
     const { setNodeDialogVisible, setCreateNodeDialogVisible } = useUIStore();
 
     const [searchText, setSearchText] = useState('');
@@ -671,6 +671,21 @@ export const NodeManagerWindow: React.FC = () => {
             setExpandedKeys(prev => Array.from(new Set([...prev, ...ancestorKeys])));
         }
     }, [selectedNodeIds, nodes]);
+
+    useEffect(() => {
+        if (mainMode !== 'animation') return;
+        if (selectedNodeIds.length === 0) return;
+        const targetId = selectedNodeIds[0];
+        const wrapper = treeWrapperRef.current;
+        if (!wrapper) return;
+        const timer = window.setTimeout(() => {
+            const el = wrapper.querySelector(`[data-node-id="${targetId}"]`) as HTMLElement | null;
+            if (el) {
+                el.scrollIntoView({ block: 'center', inline: 'nearest' });
+            }
+        }, 0);
+        return () => window.clearTimeout(timer);
+    }, [selectedNodeIds, mainMode, filteredTreeData, expandedKeys]);
 
     return (
         <div

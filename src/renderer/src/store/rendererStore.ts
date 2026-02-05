@@ -17,6 +17,20 @@ export interface VertexSettings {
     size: number
 }
 
+export interface NodeColorSettings {
+    Bone: string
+    Helper: string
+    Attachment: string
+    ParticleEmitter: string
+    ParticleEmitter2: string
+    RibbonEmitter: string
+    Light: string
+    EventObject: string
+    CollisionShape: string
+    Camera: string
+    ParticleEmitterPopcorn: string
+}
+
 interface RendererStore {
     renderer: any | null
     setRenderer: (renderer: any | null) => void
@@ -71,6 +85,8 @@ interface RendererStore {
     setSelectionColor: (color: string) => void
     hoverColor: string
     setHoverColor: (color: string) => void
+    nodeColors: NodeColorSettings
+    setNodeColors: (colors: Partial<NodeColorSettings>) => void
 
     // System State
     mpqLoaded: boolean
@@ -172,6 +188,22 @@ export const useRendererStore = create<RendererStore>()(
             setSelectionColor: (color) => set({ selectionColor: color }),
             hoverColor: '#ffff00',
             setHoverColor: (color) => set({ hoverColor: color }),
+            nodeColors: {
+                Bone: '#00ff00',
+                Helper: '#3399ff',
+                Attachment: '#ffff00',
+                ParticleEmitter: '#ff9933',
+                ParticleEmitter2: '#ff66cc',
+                RibbonEmitter: '#b080ff',
+                Light: '#ffff66',
+                EventObject: '#9999ff',
+                CollisionShape: '#66ffcc',
+                Camera: '#66ccff',
+                ParticleEmitterPopcorn: '#ffcc66'
+            },
+            setNodeColors: (colors) => set((state) => ({
+                nodeColors: { ...state.nodeColors, ...colors }
+            })),
 
             mpqLoaded: false,
             setMpqLoaded: (loaded) => set({ mpqLoaded: loaded }),
@@ -222,6 +254,7 @@ export const useRendererStore = create<RendererStore>()(
                 wireframeColor: state.wireframeColor,
                 selectionColor: state.selectionColor,
                 hoverColor: state.hoverColor,
+                nodeColors: state.nodeColors,
                 autoRecalculateExtent: state.autoRecalculateExtent,
                 autoRecalculateNormals: state.autoRecalculateNormals,
                 keepCameraOnLoad: state.keepCameraOnLoad

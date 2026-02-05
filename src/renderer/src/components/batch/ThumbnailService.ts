@@ -128,6 +128,60 @@ class ThumbnailService {
         }
     }
 
+    private collectTextureIdsFromAnimVector(value: any, ids: Set<number>) {
+        if (value === undefined || value === null) return;
+        if (typeof value === 'number') {
+            if (value >= 0) ids.add(value);
+            return;
+        }
+        if (value.Keys) {
+            for (const key of value.Keys) {
+                const v0 = key?.Vector?.[0];
+                if (typeof v0 === 'number' && v0 >= 0) {
+                    ids.add(v0);
+                }
+            }
+        }
+    }
+
+    private getUsedTextureIds(model: any): Set<number> {
+        const usedIds = new Set<number>();
+
+        if (model.Materials) {
+            for (const material of model.Materials) {
+                if (material.Layers) {
+                    for (const layer of material.Layers) {
+                        this.collectTextureIdsFromAnimVector(layer.TextureID, usedIds);
+                        this.collectTextureIdsFromAnimVector(layer.NormalTextureID, usedIds);
+                        this.collectTextureIdsFromAnimVector(layer.ORMTextureID, usedIds);
+                        this.collectTextureIdsFromAnimVector(layer.EmissiveTextureID, usedIds);
+                        this.collectTextureIdsFromAnimVector(layer.TeamColorTextureID, usedIds);
+                        this.collectTextureIdsFromAnimVector(layer.ReflectionsTextureID, usedIds);
+                    }
+                }
+            }
+        }
+
+        if (model.ParticleEmitters2) {
+            for (const emitter of model.ParticleEmitters2) {
+                if (typeof emitter.TextureID === 'number' && emitter.TextureID >= 0) {
+                    usedIds.add(emitter.TextureID);
+                }
+            }
+        }
+
+        if (model.Textures) {
+            for (let i = 0; i < model.Textures.length; i++) {
+                const tex = model.Textures[i];
+                if (tex?.ReplaceableId && tex.ReplaceableId > 0) {
+                    usedIds.add(i);
+                }
+            }
+        }
+
+        return usedIds;
+    }
+
     private createSolidImageData(r: number, g: number, b: number, a: number = 255, size: number = 64): ImageData {
         const data = new Uint8ClampedArray(size * size * 4);
         for (let i = 0; i < data.length; i += 4) {
@@ -245,6 +299,9 @@ class ThumbnailService {
                 if (model.Textures) {
                     // 0. Resolve Replaceable IDs and mutate model
                     model.Textures.forEach((texture: any) => {
+                        if (!texture.Image && texture.Path) {
+                            texture.Image = texture.Path;
+                        }
                         if ((!texture.Image || texture.Image === '') && texture.ReplaceableId !== 0) {
                             const replaceablePath = REPLACEABLE_TEXTURES[texture.ReplaceableId];
                             if (replaceablePath !== undefined) {
@@ -253,9 +310,34 @@ class ThumbnailService {
                         }
                     });
 
-                    const texturePaths = Array.from(new Set(model.Textures
-                        .map((t: any) => t.Image as string)
-                        .filter((path: string) => !!path)));
+                    const usedIds = this.getUsedTextureIds(model);
+                    let textureEntries = model.Textures
+                        .map((t: any, idx: number) => ({ idx, path: (t.Image || t.Path) as string }))
+                        .filter((t: any) => !!t.path);
+
+                    if (usedIds.size > 0) {
+                        const filtered = textureEntries.filter(t => usedIds.has(t.idx));
+                        if (filtered.length > 0) {
+                            textureEntries = filtered;
+                        }
+                    }
+
+                    const MAX_BATCH_TEXTURES = 48;
+                    if (textureEntries.length > MAX_BATCH_TEXTURES) {
+                        console.warn(`[ThumbnailService] Texture count ${textureEntries.length} exceeds limit ${MAX_BATCH_TEXTURES}, trimming for faster batch render: ${fullPath}`);
+                        textureEntries = textureEntries.slice(0, MAX_BATCH_TEXTURES);
+                    }
+
+                    const texturePaths = Array.from(new Set(textureEntries.map(t => t.path)));
+
+                    // v1 particle emitters use FileName (not TextureID)
+                    if (model.ParticleEmitters) {
+                        model.ParticleEmitters.forEach((emitter: any) => {
+                            if (emitter.FileName && typeof emitter.FileName === 'string') {
+                                texturePaths.push(emitter.FileName);
+                            }
+                        });
+                    }
 
                     if (texturePaths.length > 0) {
                         try {

@@ -69,6 +69,7 @@ export const ViewSettingsWindow: React.FC = () => {
         wireframeColor, setWireframeColor,
         selectionColor, setSelectionColor,
         hoverColor, setHoverColor,
+        nodeColors, setNodeColors,
         teamColor, setTeamColor,
         mpqLoaded, setMpqLoaded,
         showVerticesByMode, setShowVerticesForMode,
@@ -603,6 +604,45 @@ export const ViewSettingsWindow: React.FC = () => {
                                             />
                                         </div>
                                     </div>
+                                </div>
+                            </div>
+
+                            <div style={{ borderTop: '1px solid #333' }} />
+
+                            {/* Node Color Settings Section */}
+                            <div>
+                                <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#888', marginBottom: '12px' }}>
+                                    鑺傜偣棰滆壊
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(140px, 1fr))', gap: '10px 16px' }}>
+                                    {[
+                                        { key: 'Bone', label: '楠ㄦ灦' },
+                                        { key: 'Helper', label: '甯姪浣?' },
+                                        { key: 'Attachment', label: '闄勪欢' },
+                                        { key: 'ParticleEmitter', label: '绮掑瓙1' },
+                                        { key: 'ParticleEmitter2', label: '绮掑瓙2' },
+                                        { key: 'RibbonEmitter', label: '甯︾姸' },
+                                        { key: 'Light', label: '鐏厜' },
+                                        { key: 'EventObject', label: '浜嬩欢' },
+                                        { key: 'CollisionShape', label: '纰版挒' },
+                                        { key: 'Camera', label: '鐩告満' },
+                                        { key: 'ParticleEmitterPopcorn', label: 'Popcorn' }
+                                    ].map((item) => (
+                                        <div key={item.key} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            <span style={{ color: '#aaa', fontSize: '12px', width: '60px' }}>{item.label}</span>
+                                            <div style={{ position: 'relative', width: '36px', height: '22px', borderRadius: '4px', overflow: 'hidden', border: '1px solid #444' }}>
+                                                <input
+                                                    type="color"
+                                                    value={(nodeColors as any)?.[item.key] || '#ffffff'}
+                                                    onChange={(e) => setNodeColors({ [item.key]: e.target.value } as any)}
+                                                    style={{
+                                                        position: 'absolute', top: -5, left: -5, width: '50px', height: '40px',
+                                                        padding: 0, margin: 0, border: 'none', cursor: 'pointer'
+                                                    }}
+                                                />
+                                            </div>
+                                        </div>
+                                    ))}
                                 </div>
                             </div>
 

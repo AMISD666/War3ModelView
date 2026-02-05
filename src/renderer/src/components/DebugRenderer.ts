@@ -178,7 +178,8 @@ export class DebugRenderer {
         nodes: NodeWrapper[],
         selectedNodeIds: number[] = [],
         parentOfSelected: number | null = null,
-        childrenOfSelected: number[] = []
+        childrenOfSelected: number[] = [],
+        typeColors?: Record<string, number[]>
     ) {
         if (!this.cubeProgram || !this.cubeVertBuffer || !this.cubeNormBuffer) return
 
@@ -238,7 +239,21 @@ export class DebugRenderer {
             // Skip attachment nodes - they are rendered separately as tetrahedrons
             if ((node.node as any).type === 'Attachment') continue
 
-            // Determine color based on selection state
+            // Determine color based on selection state and node type
+            const fallbackColors: Record<string, number[]> = {
+                Bone: [0.0, 1.0, 0.4, 1],
+                Helper: [0.2, 0.6, 1.0, 1],
+                Attachment: [1.0, 1.0, 0.0, 1],
+                ParticleEmitter: [1.0, 0.6, 0.2, 1],
+                ParticleEmitter2: [1.0, 0.4, 0.8, 1],
+                RibbonEmitter: [0.7, 0.5, 1.0, 1],
+                Light: [1.0, 1.0, 0.4, 1],
+                EventObject: [0.6, 0.6, 1.0, 1],
+                CollisionShape: [0.5, 1.0, 0.8, 1],
+                Camera: [0.5, 0.9, 1.0, 1],
+                ParticleEmitterPopcorn: [1.0, 0.8, 0.4, 1]
+            }
+
             let color: number[]
             if (selectedNodeIds.includes(node.node.ObjectId)) {
                 color = [1.0, 0.3, 0.3, 1] // Bright red - selected
@@ -247,7 +262,8 @@ export class DebugRenderer {
             } else if (childrenOfSelected.includes(node.node.ObjectId)) {
                 color = [1.0, 1.0, 0.3, 1] // Bright yellow - children
             } else {
-                color = [0.4, 1.0, 0.4, 1] // Bright green - default
+                const colorMap = typeColors || fallbackColors
+                color = colorMap[(node.node as any).type || ''] || [0.4, 1.0, 0.4, 1]
             }
 
             // Transform cube vertices by node matrix
@@ -376,7 +392,8 @@ export class DebugRenderer {
         mvMatrix: mat4,
         pMatrix: mat4,
         nodes: NodeWrapper[],
-        selectedNodeIds: number[] = []
+        selectedNodeIds: number[] = [],
+        typeColors?: Record<string, number[]>
     ) {
         if (!this.cubeProgram) return
 
@@ -436,9 +453,10 @@ export class DebugRenderer {
             mat4.multiply(nodeMVMatrix, mvMatrix, modelMatrix)
             mat3.normalFromMat4(normalMatrix, nodeMVMatrix)
 
-            // Determine color: red if selected, yellow otherwise
+            const fallback = typeColors?.Attachment || [1.0, 1.0, 0.0, 1.0]
+            // Determine color: red if selected, otherwise use attachment color
             const isSelected = selectedNodeIds.includes(node.node.ObjectId)
-            const color = isSelected ? [1.0, 0.3, 0.3, 1.0] : [1.0, 1.0, 0.0, 1.0]
+            const color = isSelected ? [1.0, 0.3, 0.3, 1.0] : fallback
 
             gl.uniformMatrix4fv(this.cubeUMVMatrix, false, nodeMVMatrix)
             gl.uniformMatrix4fv(this.cubeUPMatrix, false, pMatrix)
