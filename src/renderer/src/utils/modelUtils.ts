@@ -258,7 +258,6 @@ export const processDeathAnimation = (model: any) => {
             anim = {
                 GeosetId: index,
                 Alpha: 1,
-                Color: new Float32Array([1, 1, 1]),
                 Flags: 0
             };
             model.GeosetAnims.push(anim);

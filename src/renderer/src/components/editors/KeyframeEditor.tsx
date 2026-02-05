@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react'
-import { Input, Select, Row, Col, InputNumber, Button } from 'antd'
+﻿import React, { useState, useEffect, useMemo } from 'react'
+import { Input, Select, Row, Col, InputNumber, Button, ColorPicker } from 'antd'
 import { DraggableModal } from '../DraggableModal'
 import { useModelStore } from '../../store/modelStore'
 import { useHistoryStore } from '../../store/historyStore'
@@ -33,6 +33,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
     const [text, setText] = useState('')
     const [lineType, setLineType] = useState(0)
     const [globalSeqId, setGlobalSeqId] = useState<number | null>(null)
+    const [textScrollTop, setTextScrollTop] = useState(0)
 
     // Batch Generation State
     const [batchValue, setBatchValue] = useState<number>(1)
@@ -50,6 +51,13 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
 
     // Check if editing TextureID
     const isTextureIDField = fieldName === 'TextureID' || title.includes('TextureID')
+    const isColorField = vectorSize === 3 && (
+        fieldName.toLowerCase().includes('color') ||
+        title.includes('颜色') ||
+        title.includes('Color') ||
+        title.includes('環境色') ||
+        title.includes('环境色')
+    )
 
     // Helper to format a single vector/scalar value
     const formatValue = (val: number | number[] | Float32Array | undefined | null): string => {
@@ -138,6 +146,136 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
             }
         }
         return keys.sort((a, b) => a.Frame - b.Frame)
+    }
+
+    const parsedKeys = useMemo(() => {
+        return parseText(text)
+    }, [text, vectorSize])
+
+    const clamp01 = (value: number) => Math.min(1, Math.max(0, value))
+    const toHex = (r: number, g: number, b: number) => {
+        const toPart = (n: number) => Math.round(clamp01(n) * 255).toString(16).padStart(2, '0')
+        return `#${toPart(r)}${toPart(g)}${toPart(b)}`
+    }
+
+    const updateColorForFrame = (frame: number, color: { r: number; g: number; b: number }) => {
+        const keys = parseText(text)
+        const updated = keys.map((key) => {
+            if (key.Frame !== frame) return key
+            return {
+                ...key,
+                Vector: [
+                    clamp01(color.r / 255),
+                    clamp01(color.g / 255),
+                    clamp01(color.b / 255)
+                ]
+            }
+        })
+        setText(generateText(updated, lineType))
+    }
+
+    const lineHeight = 24
+    const textPaddingTop = 8
+    const textPaddingLeft = 28
+
+    const colorMarkers = useMemo(() => {
+        if (!isColorField) return [] as Array<{ frame: number; lineIndex: number; hex: string }>
+        const lines = text.split('\n')
+        const keyMap = new Map<number, any>()
+        parsedKeys.forEach((k) => keyMap.set(k.Frame, k))
+
+        const markers: Array<{ frame: number; lineIndex: number; hex: string }> = []
+        for (let i = 0; i < lines.length; i += 1) {
+            const trimmed = lines[i].trim()
+            const match = trimmed.match(/^(-?\d+)\s*:/)
+            if (!match) continue
+            const frame = parseInt(match[1], 10)
+            if (isNaN(frame)) continue
+            const key = keyMap.get(frame)
+            if (!key) continue
+            const vec = Array.isArray(key.Vector) ? key.Vector : [0, 0, 0]
+            const r = vec[0] ?? 0
+            const g = vec[1] ?? 0
+            const b = vec[2] ?? 0
+            markers.push({
+                frame,
+                lineIndex: i,
+                hex: toHex(r, g, b)
+            })
+        }
+        return markers
+    }, [isColorField, parsedKeys, text])
+
+    const getDefaultVector = () => {
+        let defVector: number[] = new Array(vectorSize).fill(0)
+        if (vectorSize === 4) {
+            defVector = [0, 0, 0, 1]
+        } else if (vectorSize === 3) {
+            if (isColorField || title.includes('Color') || title.includes('颜色') || title.includes('环境色') || title.includes('環境色')) {
+                defVector = [1, 1, 1]
+            } else if (title.includes('Scale') || title.includes('Scaling') || title.includes('缩放')) {
+                defVector = [1, 1, 1]
+            }
+        } else if (vectorSize === 1) {
+            if (title.includes('Alpha') || title.includes('Visibility') || title.includes('透明') || title.includes('Opac')) {
+                defVector = [1]
+            }
+        }
+        return defVector
+    }
+
+    const applyDefaultValuesForEmptyFrames = (value: string) => {
+        if (!isColorField) return value
+        const defValue = formatValue(getDefaultVector())
+        let changed = false
+        const lines = value.split('\n').map((line) => {
+            const trimmed = line.trim()
+            if (!trimmed) return line
+            if (trimmed.startsWith('InTan:') || trimmed.startsWith('OutTan:')) return line
+            const frameOnly = trimmed.match(/^(-?\d+)\s*$/)
+            const frameColon = trimmed.match(/^(-?\d+)\s*:\s*$/)
+            const frame = frameOnly?.[1] ?? frameColon?.[1]
+            if (!frame) return line
+            changed = true
+            const prefix = line.match(/^\s*/)?.[0] ?? ''
+            return `${prefix}${frame}: ${defValue}`
+        })
+        return changed ? lines.join('\n') : value
+    }
+
+    const handleTextKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if (!isColorField) return
+        if (e.key !== 'Enter') return
+        const target = e.currentTarget
+        const value = target.value
+        const selStart = target.selectionStart ?? 0
+        const selEnd = target.selectionEnd ?? selStart
+        if (selStart !== selEnd) return
+
+        const lineStart = value.lastIndexOf('\n', selStart - 1) + 1
+        let lineEnd = value.indexOf('\n', selStart)
+        if (lineEnd === -1) lineEnd = value.length
+        const line = value.slice(lineStart, lineEnd)
+        const trimmed = line.trim()
+        if (!trimmed || trimmed.startsWith('InTan:') || trimmed.startsWith('OutTan:')) return
+
+        const match = trimmed.match(/^(-?\d+)\s*:?$/)
+        if (!match) return
+        const frame = match[1]
+        const prefix = line.match(/^\s*/)?.[0] ?? ''
+        const defValue = formatValue(getDefaultVector())
+        const updatedLine = `${prefix}${frame}: ${defValue}`
+        const newValue = value.slice(0, lineStart) + updatedLine + value.slice(lineEnd)
+        const insertPos = lineStart + updatedLine.length
+        const withNewline = newValue.slice(0, insertPos) + '\n' + newValue.slice(insertPos)
+
+        setText(withNewline)
+        e.preventDefault()
+        requestAnimationFrame(() => {
+            const newCaret = insertPos + 1
+            target.selectionStart = newCaret
+            target.selectionEnd = newCaret
+        })
     }
 
     // Handle Interpolation Type Change
@@ -323,24 +461,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
                 // Default data
                 setLineType(0)
                 setGlobalSeqId(null)
-
-                // Smart defaults
-                let defVector: number[] = new Array(vectorSize).fill(0)
-
-                if (vectorSize === 4) {
-                    // Rotation quaternion identity
-                    defVector = [0, 0, 0, 1]
-                } else if (vectorSize === 3) {
-                    // Scale defaults to 1s
-                    if (title.includes('Scale') || title.includes('Scaling') || title.includes('缩放')) {
-                        defVector = [1, 1, 1]
-                    }
-                } else if (vectorSize === 1) {
-                    // Alpha/Visibility defaults to 1
-                    if (title.includes('Alpha') || title.includes('Visibility') || title.includes('透明') || title.includes('Opac')) {
-                        defVector = [1]
-                    }
-                }
+                const defVector = getDefaultVector()
 
                 const defaultKey = {
                     Frame: 0,
@@ -415,17 +536,59 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
             wrapClassName="dark-theme-modal"
         >
             <div style={{ display: 'flex', flexDirection: 'column', height: 400 }}>
-                <TextArea
-                    value={text}
-                    onChange={(e) => setText(e.target.value)}
-                    style={{
-                        flex: 1,
-                        whiteSpace: 'pre',
-                        backgroundColor: '#252525',
-                        color: '#e8e8e8',
-                        borderColor: '#4a4a4a'
-                    }}
-                />
+                <div style={{ position: 'relative', flex: 1 }}>
+                    <TextArea
+                        value={text}
+                        rows={12}
+                        onChange={(e) => setText(applyDefaultValuesForEmptyFrames(e.target.value))}
+                        onKeyDown={handleTextKeyDown}
+                        onScroll={(e) => setTextScrollTop((e.target as HTMLTextAreaElement).scrollTop)}
+                        style={{
+                            flex: 1,
+                            height: '100%',
+                            minHeight: 220,
+                            whiteSpace: 'pre',
+                            backgroundColor: '#252525',
+                            color: '#e8e8e8',
+                            borderColor: '#4a4a4a',
+                            lineHeight: `${lineHeight}px`,
+                            paddingTop: textPaddingTop,
+                            paddingLeft: textPaddingLeft,
+                            fontFamily: 'Consolas, Menlo, monospace'
+                        }}
+                    />
+
+                    {isColorField && colorMarkers.length > 0 && (
+                        <div
+                            style={{
+                                position: 'absolute',
+                                left: 8,
+                                top: textPaddingTop - textScrollTop,
+                                pointerEvents: 'none'
+                            }}
+                        >
+                            {colorMarkers.map((marker) => (
+                                <div
+                                    key={`${marker.frame}-${marker.lineIndex}`}
+                                    style={{
+                                        position: 'absolute',
+                                        top: marker.lineIndex * lineHeight,
+                                        left: 0,
+                                        pointerEvents: 'auto'
+                                    }}
+                                >
+                                    <ColorPicker
+                                        value={marker.hex}
+                                        size="small"
+                                        showText={false}
+                                        style={{ transform: 'scale(0.6)', transformOrigin: 'left center' }}
+                                        onChange={(color) => updateColorForFrame(marker.frame, color.toRgb())}
+                                    />
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
 
                 <div style={{ marginTop: 16, borderTop: '1px solid #4a4a4a', paddingTop: 16 }}>
                     <Row gutter={16}>
@@ -570,3 +733,4 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = ({
 }
 
 export default KeyframeEditor
+

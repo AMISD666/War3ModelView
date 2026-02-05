@@ -23,14 +23,21 @@ interface GiteeRelease {
 }
 
 // Version comparison: returns > 0 if v1 > v2
+function parseVersionParts(version: string): number[] {
+    const cleaned = version.replace(/^v/i, '');
+    const matches = cleaned.match(/\d+/g);
+    if (!matches || matches.length === 0) return [0];
+    return matches.map((part) => Number.parseInt(part, 10));
+}
+
 function compareVersions(v1: string, v2: string): number {
-    const p1 = v1.replace(/^v/, '').split('.').map(Number);
-    const p2 = v2.replace(/^v/, '').split('.').map(Number);
+    const p1 = parseVersionParts(v1);
+    const p2 = parseVersionParts(v2);
     const len = Math.max(p1.length, p2.length);
 
     for (let i = 0; i < len; i++) {
-        const n1 = p1[i] || 0;
-        const n2 = p2[i] || 0;
+        const n1 = p1[i] ?? 0;
+        const n2 = p2[i] ?? 0;
         if (n1 > n2) return 1;
         if (n1 < n2) return -1;
     }
@@ -101,7 +108,7 @@ export async function checkGiteeUpdate() {
         }
 
         const data = await response.json() as GiteeRelease;
-        const latestVersion = data.tag_name;
+        const latestVersion = data.tag_name || (data as any).name || '';
 
         useMessageStore.getState().removeMessage(loadingId);
 
@@ -124,7 +131,7 @@ export async function checkGiteeUpdate() {
             await showConfirm(
                 `已是最新版本 (${currentVersion})`,
                 <UpdateLogContent
-                    version={data.tag_name}
+                    version={latestVersion}
                     date={data.created_at ? data.created_at.split('T')[0] : new Date().toISOString().split('T')[0]}
                     body={data.body || '暂无更新说明'}
                 />,
@@ -153,7 +160,7 @@ export async function showChangelog() {
         await showConfirm(
             '更新日志 (Update Log)',
             <UpdateLogContent
-                version={data.tag_name}
+                version={data.tag_name || (data as any).name || ''}
                 date={data.created_at ? data.created_at.split('T')[0] : ''}
                 body={data.body || '暂无更新说明'}
             />,
@@ -176,7 +183,7 @@ export async function checkGiteeUpdateSilent() {
         }
 
         const data = await response.json() as GiteeRelease;
-        const latestVersion = data.tag_name;
+        const latestVersion = data.tag_name || (data as any).name || '';
 
         if (isNewerVersion(currentVersion, latestVersion)) {
             const confirmed = await showConfirm(

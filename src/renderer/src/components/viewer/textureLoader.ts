@@ -110,13 +110,7 @@ export async function loadTextureFromMPQ(texturePath: string): Promise<ImageData
 export async function loadTextureFromFile(filePath: string): Promise<ImageData | null> {
     try {
         const texBuffer = await readFile(filePath)
-        const blp = decodeBLP(texBuffer.buffer)
-        const mipLevel0 = getBLPImageData(blp, 0)
-        return new ImageData(
-            new Uint8ClampedArray(mipLevel0.data),
-            mipLevel0.width,
-            mipLevel0.height
-        )
+        return decodeTextureData(texBuffer.buffer, filePath)
     } catch (e) {
         // File loading failed
     }
@@ -537,12 +531,11 @@ export async function loadAllTextures(
             for (const candidate of candidates) {
                 const buffer = await readFile(candidate).catch(() => null)
                 if (buffer) {
-                    const isTga = path.toLowerCase().endsWith('.tga')
                     try {
-                        const blp = decodeBLP(buffer.buffer)
-                        const mip0 = getBLPImageData(blp, 0)
-                        const imageData = new ImageData(new Uint8ClampedArray(mip0.data), mip0.width, mip0.height)
-                        return { path, imageData }
+                        const imageData = decodeTextureData(buffer.buffer, path)
+                        if (imageData) {
+                            return { path, imageData }
+                        }
                     } catch (e) {
                         // Decode failed or TGA logic (omitted here for simplicity, fallback to general decodeTexture if needed)
                     }

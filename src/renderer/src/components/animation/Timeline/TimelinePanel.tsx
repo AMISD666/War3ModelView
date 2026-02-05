@@ -35,6 +35,41 @@ const OFFSET_TRANSLATION = 12
 const OFFSET_ROTATION = 26
 const OFFSET_SCALING = 40
 
+const cloneNodesForKeyframes = (input: any[]) => {
+    if (typeof structuredClone === 'function') {
+        return structuredClone(input)
+    }
+    const toArray = (v: any, size: number) => {
+        if (!v) return v
+        if (Array.isArray(v)) return [...v]
+        if (ArrayBuffer.isView(v)) return Array.from(v as any)
+        if (typeof v === 'object') {
+            const out = new Array(size)
+            for (let i = 0; i < size; i++) {
+                out[i] = v[i] ?? 0
+            }
+            return out
+        }
+        return v
+    }
+    const cloneTrack = (track: any, size: number) => {
+        if (!track) return track
+        const keys = Array.isArray(track.Keys) ? track.Keys.map((k: any) => ({
+            ...k,
+            Vector: toArray(k.Vector, size),
+            InTan: toArray(k.InTan, size),
+            OutTan: toArray(k.OutTan, size)
+        })) : track.Keys
+        return { ...track, Keys: keys }
+    }
+    return input.map((n: any) => ({
+        ...n,
+        Translation: cloneTrack(n.Translation, 3),
+        Rotation: cloneTrack(n.Rotation, 4),
+        Scaling: cloneTrack(n.Scaling, 3)
+    }))
+}
+
 // Singleton loop counter for TimelinePanel (MUST be at module scope, not inside component)
 let globalTimelineLoopId = 0
 
@@ -681,7 +716,9 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         if (keyframeData.length === 0) return
 
         const nodes = useModelStore.getState().nodes
-        const nodesCopy = JSON.parse(JSON.stringify(nodes))
+        const oldNodes = cloneNodesForKeyframes(nodes)
+        const nodesCopy = cloneNodesForKeyframes(nodes)
+        const replaceNodes = useModelStore.getState().replaceNodes
 
         // Group by nodeId and type for efficient deletion
         const grouped = new Map<string, { nodeId: number, type: string, frames: number[] }>()
@@ -707,14 +744,13 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         })
 
         // Push to history
-        const oldNodes = nodes
         useHistoryStore.getState().push({
             name: `删除 ${keyframeData.length} 个关键帧`,
-            undo: () => useModelStore.setState({ nodes: oldNodes as any }),
-            redo: () => useModelStore.setState({ nodes: nodesCopy })
+            undo: () => replaceNodes(oldNodes as any),
+            redo: () => replaceNodes(nodesCopy)
         })
 
-        useModelStore.setState({ nodes: nodesCopy })
+        replaceNodes(nodesCopy)
         setSelectedKeyframeUids(new Set())
     }, [selectedKeyframeUids, getSelectedKeyframeData])
 
@@ -754,7 +790,9 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const offset = currentFrame - clipboardKeyframes.baseFrame
 
         const nodes = useModelStore.getState().nodes
-        const nodesCopy = JSON.parse(JSON.stringify(nodes))
+        const oldNodes = cloneNodesForKeyframes(nodes)
+        const nodesCopy = cloneNodesForKeyframes(nodes)
+        const replaceNodes = useModelStore.getState().replaceNodes
 
         clipboardKeyframes.keyframes.forEach(kf => {
             const node = nodesCopy.find((n: any) => n.ObjectId === kf.nodeId)
@@ -790,14 +828,13 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         })
 
         // Push to history
-        const oldNodes = nodes
         useHistoryStore.getState().push({
             name: `粘贴 ${clipboardKeyframes.keyframes.length} 个关键帧`,
-            undo: () => useModelStore.setState({ nodes: oldNodes as any }),
-            redo: () => useModelStore.setState({ nodes: nodesCopy })
+            undo: () => replaceNodes(oldNodes as any),
+            redo: () => replaceNodes(nodesCopy)
         })
 
-        useModelStore.setState({ nodes: nodesCopy })
+        replaceNodes(nodesCopy)
 
         // Clear clipboard if it was a cut operation
         if (clipboardKeyframes.isCut) {
@@ -1017,7 +1054,9 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             // Only process if there was actual movement
             if (frameOffset !== 0 && interactionRef.current.dragKeyframeData.length > 0) {
                 const nodes = useModelStore.getState().nodes
-                const nodesCopy = JSON.parse(JSON.stringify(nodes))
+                const oldNodes = cloneNodesForKeyframes(nodes)
+                const nodesCopy = cloneNodesForKeyframes(nodes)
+                const replaceNodes = useModelStore.getState().replaceNodes
 
                 // Apply frame offset to all dragged keyframes
                 interactionRef.current.dragKeyframeData.forEach(kfData => {
@@ -1025,7 +1064,10 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                     if (!node || !node[kfData.type]?.Keys) return
 
                     // Find and update the keyframe
-                    const keyIdx = node[kfData.type].Keys.findIndex((k: any) => k.Frame === kfData.originalFrame)
+                    let keyIdx = kfData.keyIndex
+                    if (keyIdx < 0 || keyIdx >= node[kfData.type].Keys.length) {
+                        keyIdx = node[kfData.type].Keys.findIndex((k: any) => k.Frame === kfData.originalFrame)
+                    }
                     if (keyIdx >= 0) {
                         node[kfData.type].Keys[keyIdx].Frame = kfData.originalFrame + frameOffset
                     }
@@ -1040,14 +1082,13 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 })
 
                 // Push to history
-                const oldNodes = nodes
                 useHistoryStore.getState().push({
                     name: `移动 ${interactionRef.current.dragKeyframeData.length} 个关键帧`,
-                    undo: () => useModelStore.setState({ nodes: oldNodes as any }),
-                    redo: () => useModelStore.setState({ nodes: nodesCopy })
+                    undo: () => replaceNodes(oldNodes as any),
+                    redo: () => replaceNodes(nodesCopy)
                 })
 
-                useModelStore.setState({ nodes: nodesCopy })
+                replaceNodes(nodesCopy)
 
                 // Clear selection as UIDs have changed
                 setSelectedKeyframeUids(new Set())

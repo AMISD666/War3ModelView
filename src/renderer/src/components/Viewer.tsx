@@ -385,6 +385,21 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     syncCameraToOrbit()
   }
 
+  const getGizmoScale = () => {
+    let scale = 1.0
+    if (cameraRef.current) {
+      if (cameraRef.current.projectionMode === 'orthographic') {
+        // orthoSize 增大 = 视角缩小 → Gizmo 放大
+        scale = cameraRef.current.orthoSize / 400
+      } else {
+        // distance 增大 = 视角缩小 → Gizmo 放大
+        scale = cameraRef.current.distance / 600
+      }
+    }
+    scale *= 2
+    return Math.max(0.1, Math.min(10, scale))
+  }
+
   // Expose methods to parent via ref
   useImperativeHandle(ref, () => ({
     fitToView: () => {
@@ -1875,9 +1890,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     }
   }
 
-  const reloadRendererWithData = async (model: any, path: string) => {
+  const reloadRendererWithData = async (model: any, modelPath: string) => {
     console.log('[Viewer] ========== FULL RELOAD START ==========')
-    console.log('[Viewer] reloadRendererWithData called with path:', path)
+    const safeModelPath = typeof modelPath === 'string' ? modelPath : ''
+    console.log('[Viewer] reloadRendererWithData called with path:', safeModelPath)
     console.log('[Viewer] Model data summary:', {
       Geosets: model.Geosets?.length || 0,
       Textures: model.Textures?.length || 0,
@@ -2005,7 +2021,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
       // Load textures using concurrent loader
       console.log('[Viewer] Step 6: Loading textures...')
-      const textureResults = await loadAllTextures(model, newRenderer, path)
+      const textureResults = await loadAllTextures(model, newRenderer, safeModelPath)
       console.log('[Viewer] Step 6: Textures loaded')
 
       // Keep missing texture warning in sync after a full reload
@@ -2038,8 +2054,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         ; (newRenderer as any).setSequence(0)
       }
 
-      (newRenderer as any).__modelPath = path
-        (newRenderer as any).__modelPath = path
+      (newRenderer as any).__modelPath = safeModelPath
       setRenderer(newRenderer)
       console.log('[Viewer] ========== FULL RELOAD COMPLETE ==========')
       console.timeEnd('[Viewer] ReloadModel')
@@ -2067,6 +2082,13 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         const modelPathHint = (modelData as any)?.__modelPath || (modelData as any)?.path || ''
           ; (renderer as any).__modelPath = modelPath || modelPathHint || (renderer as any).__modelPath || ''
         // Check for structural changes that require full reload
+        if ((modelData as any).__forceFullReload) {
+          delete (modelData as any).__forceFullReload
+          console.log('[Viewer] Forced full reload due to geometry transform')
+          reloadRendererWithData(modelData, modelPath || '')
+          lastReloadTrigger.current = rendererReloadTrigger
+          return
+        }
         const { needsReload, reason } = checkForStructuralChanges(modelData, renderer.model)
 
         if (needsReload) {
@@ -2227,10 +2249,17 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             const rendererGeoset = renderer.model.Geosets[i]
 
             // Sync MaterialID changes
-            if (geoset?.MaterialID !== undefined && rendererGeoset.MaterialID !== geoset.MaterialID) {
-              console.log(`[Viewer] Syncing Geoset[${i}] MaterialID: ${rendererGeoset.MaterialID} -> ${geoset.MaterialID}`)
-              rendererGeoset.MaterialID = geoset.MaterialID
-              geosetMaterialChanged = true
+            if (geoset?.MaterialID !== undefined) {
+              const materialCount = modelData.Materials?.length || 0
+              const rawMatId = typeof geoset.MaterialID === 'number' ? geoset.MaterialID : Number(geoset.MaterialID)
+              const safeMatId = Number.isFinite(rawMatId)
+                ? Math.min(Math.max(0, Math.floor(rawMatId)), materialCount > 0 ? materialCount - 1 : 0)
+                : 0
+              if (rendererGeoset.MaterialID !== safeMatId) {
+                console.log(`[Viewer] Syncing Geoset[${i}] MaterialID: ${rendererGeoset.MaterialID} -> ${safeMatId}`)
+                rendererGeoset.MaterialID = safeMatId
+                geosetMaterialChanged = true
+              }
             }
 
             // Sync SelectionGroup changes
@@ -3243,19 +3272,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             if (showGizmo && count > 0) {
               vec3.scale(center, center, 1.0 / count)
 
-              // Dynamic Gizmo Scale - 保持屏幕大小恒定
-              // 视角缩小（distance增大）时Gizmo放大，视角放大（distance减小）时Gizmo缩小
-              let gizmoScale = 1.0
-              if (cameraRef.current) {
-                if (cameraRef.current.projectionMode === 'orthographic') {
-                  // orthoSize 增大 = 视角缩小 → Gizmo 放大
-                  gizmoScale = cameraRef.current.orthoSize / 400
-                } else {
-                  // distance 增大 = 视角缩小 → Gizmo 放大
-                  gizmoScale = cameraRef.current.distance / 600
-                }
-              }
-              gizmoScale = Math.max(0.1, Math.min(10, gizmoScale))
+              const gizmoScale = getGizmoScale()
 
               gizmoRenderer.current.render(gl as WebGLRenderingContext, mvMatrix, pMatrix, center, transformMode as any, gizmoState.current.activeAxis, gizmoScale)
             }
@@ -3439,14 +3456,153 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       vec3.cross(vecs.camUp, vecs.right, vecs.forward)
       vec3.normalize(vecs.camUp, vecs.camUp)
 
-      // Simplified movement speed - more consistent with mouse movement
-      const moveScale = distance * 0.002
+      const canvas = canvasRef.current
+      const hasCanvas = !!canvas && canvas.width > 0 && canvas.height > 0
+      const viewSize =
+        cameraRef.current?.projectionMode === 'orthographic'
+          ? cameraRef.current.orthoSize
+          : distance
+      const aspect = hasCanvas ? canvas!.width / canvas!.height : 1
+      const moveScaleX = hasCanvas ? (viewSize * aspect * 2) / canvas!.width : distance * 0.005
+      const moveScaleY = hasCanvas ? (viewSize * 2) / canvas!.height : distance * 0.005
 
-
-      // Standard Camera-Plane Delta (Legacy for single axis)
+      // Standard Camera-Plane Delta (screen-to-world)
       vec3.zero(vecs.worldMoveDelta)
-      vec3.scaleAndAdd(vecs.worldMoveDelta, vecs.worldMoveDelta, vecs.right, deltaX * moveScale)
-      vec3.scaleAndAdd(vecs.worldMoveDelta, vecs.worldMoveDelta, vecs.camUp, -deltaY * moveScale)
+      vec3.scaleAndAdd(vecs.worldMoveDelta, vecs.worldMoveDelta, vecs.right, deltaX * moveScaleX)
+      vec3.scaleAndAdd(vecs.worldMoveDelta, vecs.worldMoveDelta, vecs.camUp, -deltaY * moveScaleY)
+
+      const getViewMatrices = () => {
+        if (!hasCanvas) return null
+        const pMatrix = mat4.create()
+        const mvMatrix = mat4.create()
+        if (cameraRef.current) {
+          cameraRef.current.getMatrix(mvMatrix, pMatrix)
+        } else {
+          const { distance, theta, phi, target } = targetCamera.current
+          const cx = distance * Math.sin(phi) * Math.cos(theta)
+          const cy = distance * Math.sin(phi) * Math.sin(theta)
+          const cz = distance * Math.cos(phi)
+          const cameraPos = vec3.fromValues(cx, cy, cz)
+          vec3.add(cameraPos, cameraPos, target)
+          mat4.perspective(pMatrix, Math.PI / 4, canvas!.width / canvas!.height, 1, 5000)
+          const cameraUp = vec3.fromValues(0, 0, 1)
+          mat4.lookAt(mvMatrix, cameraPos, target, cameraUp)
+        }
+        return { mvMatrix, pMatrix }
+      }
+
+      const viewMatrices = getViewMatrices()
+
+      const projectToScreen = (point: vec3) => {
+        if (!viewMatrices || !hasCanvas) return null
+        const v4 = vec4.fromValues(point[0], point[1], point[2], 1.0)
+        const clip = vec4.create()
+        vec4.transformMat4(clip, v4, viewMatrices.mvMatrix)
+        vec4.transformMat4(clip, clip, viewMatrices.pMatrix)
+        if (clip[3] === 0) return null
+        const ndcX = clip[0] / clip[3]
+        const ndcY = clip[1] / clip[3]
+        const screenX = (ndcX * 0.5 + 0.5) * canvas!.width
+        const screenY = (1 - (ndcY * 0.5 + 0.5)) * canvas!.height
+        return [screenX, screenY] as [number, number]
+      }
+
+      const getRay = (sx: number, sy: number) => {
+        if (!viewMatrices || !hasCanvas) return null
+        const ndcX = (sx / canvas!.width) * 2 - 1
+        const ndcY = -((sy / canvas!.height) * 2 - 1)
+        const invProj = mat4.create(); mat4.invert(invProj, viewMatrices.pMatrix)
+        const invView = mat4.create(); mat4.invert(invView, viewMatrices.mvMatrix)
+        const rayClipNear = vec4.fromValues(ndcX, ndcY, -1.0, 1.0)
+        const rayClipFar = vec4.fromValues(ndcX, ndcY, 1.0, 1.0)
+        const rayEyeNear = vec4.create(); vec4.transformMat4(rayEyeNear, rayClipNear, invProj)
+        const rayEyeFar = vec4.create(); vec4.transformMat4(rayEyeFar, rayClipFar, invProj)
+        if (rayEyeNear[3] !== 0) vec4.scale(rayEyeNear, rayEyeNear, 1.0 / rayEyeNear[3])
+        if (rayEyeFar[3] !== 0) vec4.scale(rayEyeFar, rayEyeFar, 1.0 / rayEyeFar[3])
+        const rayWorldNear = vec4.create(); vec4.transformMat4(rayWorldNear, rayEyeNear, invView)
+        const rayWorldFar = vec4.create(); vec4.transformMat4(rayWorldFar, rayEyeFar, invView)
+        const origin = vec3.fromValues(rayWorldNear[0], rayWorldNear[1], rayWorldNear[2])
+        const target = vec3.fromValues(rayWorldFar[0], rayWorldFar[1], rayWorldFar[2])
+        const dir = vec3.create(); vec3.subtract(dir, target, origin); vec3.normalize(dir, dir)
+        return { origin, dir }
+      }
+
+      let singleAxisWorldDelta: vec3 | null = null
+      const isSingleAxis = axis === 'x' || axis === 'y' || axis === 'z'
+      if (isSingleAxis && gizmoCount > 0) {
+        const axisDir = vec3.fromValues(axis === 'x' ? 1 : 0, axis === 'y' ? 1 : 0, axis === 'z' ? 1 : 0)
+        const axisDotView = vec3.dot(axisDir, vecs.forward)
+
+        let axisScreenSign = 0
+        if (viewMatrices && hasCanvas) {
+          const centerScreen = projectToScreen(gizmoCenter)
+          const axisEnd = vec3.create(); vec3.add(axisEnd, gizmoCenter, axisDir)
+          const endScreen = projectToScreen(axisEnd)
+          if (centerScreen && endScreen) {
+            const dirX = endScreen[0] - centerScreen[0]
+            const dirY = endScreen[1] - centerScreen[1]
+            const len = Math.hypot(dirX, dirY)
+            if (len > 0.001) {
+              const dot = dirX * deltaX + dirY * deltaY
+              axisScreenSign = dot >= 0 ? 1 : -1
+            }
+          }
+        }
+
+        if (Math.abs(axisDotView) > 0.95) {
+          const axisSign = axisDotView < 0 ? 1 : -1
+          let axisDelta = -deltaY * moveScaleY * axisSign
+          if (axisScreenSign !== 0) axisDelta = axisScreenSign * Math.abs(axisDelta)
+          singleAxisWorldDelta = vec3.create()
+          vec3.scale(singleAxisWorldDelta, axisDir, axisDelta)
+        } else {
+          const rayCurr = getRay(e.clientX, e.clientY)
+          const rayPrev = getRay(e.clientX - deltaX, e.clientY - deltaY)
+          if (rayCurr && rayPrev) {
+            const candidates: vec3[] = []
+            const n1 = vec3.create(); vec3.cross(n1, axisDir, vecs.forward)
+            if (vec3.length(n1) > 0.0001) candidates.push(n1)
+            const n2 = vec3.create(); vec3.cross(n2, axisDir, vecs.camUp)
+            if (vec3.length(n2) > 0.0001) candidates.push(n2)
+            const n3 = vec3.create(); vec3.cross(n3, axisDir, vecs.right)
+            if (vec3.length(n3) > 0.0001) candidates.push(n3)
+
+            let bestNormal: vec3 | null = null
+            let bestDenom = 0
+            for (const n of candidates) {
+              vec3.normalize(n, n)
+              const denomCurr = Math.abs(vec3.dot(rayCurr.dir, n))
+              const denomPrev = Math.abs(vec3.dot(rayPrev.dir, n))
+              const denom = Math.min(denomCurr, denomPrev)
+              if (denom > bestDenom) {
+                bestDenom = denom
+                bestNormal = n
+              }
+            }
+
+            if (bestNormal && bestDenom > 0.0001) {
+              const diffCurr = vec3.create()
+              vec3.sub(diffCurr, gizmoCenter, rayCurr.origin)
+              const tCurr = vec3.dot(diffCurr, bestNormal) / vec3.dot(rayCurr.dir, bestNormal)
+              const hitCurr = vec3.create()
+              vec3.scaleAndAdd(hitCurr, rayCurr.origin, rayCurr.dir, tCurr)
+
+              const diffPrev = vec3.create()
+              vec3.sub(diffPrev, gizmoCenter, rayPrev.origin)
+              const tPrev = vec3.dot(diffPrev, bestNormal) / vec3.dot(rayPrev.dir, bestNormal)
+              const hitPrev = vec3.create()
+              vec3.scaleAndAdd(hitPrev, rayPrev.origin, rayPrev.dir, tPrev)
+
+              const delta = vec3.create()
+              vec3.sub(delta, hitCurr, hitPrev)
+              let axisDelta = vec3.dot(delta, axisDir)
+              if (axisScreenSign !== 0) axisDelta = axisScreenSign * Math.abs(axisDelta)
+              singleAxisWorldDelta = vec3.create()
+              vec3.scale(singleAxisWorldDelta, axisDir, axisDelta)
+            }
+          }
+        }
+      }
 
       // Precise Ray-Plane Delta (For Dual Axis)
       if (['xy', 'xz', 'yz'].includes(axis) && gizmoCount > 0) {
@@ -3455,42 +3611,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         else if (axis === 'xz') vec3.set(planeNormal, 0, 1, 0)
         else if (axis === 'yz') vec3.set(planeNormal, 1, 0, 0)
 
-        const getRay = (sx: number, sy: number) => {
-          const pMatrix = mat4.create()
-          const mvMatrix = mat4.create()
-          if (cameraRef.current) {
-            cameraRef.current.getMatrix(mvMatrix, pMatrix)
-          } else {
-            const { distance, theta, phi, target } = targetCamera.current
-            const cx = distance * Math.sin(phi) * Math.cos(theta)
-            const cy = distance * Math.sin(phi) * Math.sin(theta)
-            const cz = distance * Math.cos(phi)
-            const cameraPos = vec3.fromValues(cx, cy, cz)
-            vec3.add(cameraPos, cameraPos, target)
-            mat4.perspective(pMatrix, Math.PI / 4, canvasRef.current!.width / canvasRef.current!.height, 1, 5000)
-            const cameraUp = vec3.fromValues(0, 0, 1)
-            mat4.lookAt(mvMatrix, cameraPos, target, cameraUp)
-          }
-          const ndcX = (sx / canvasRef.current!.width) * 2 - 1
-          const ndcY = -((sy / canvasRef.current!.height) * 2 - 1)
-          const invProj = mat4.create(); mat4.invert(invProj, pMatrix)
-          const invView = mat4.create(); mat4.invert(invView, mvMatrix)
-          const rayClipNear = vec4.fromValues(ndcX, ndcY, -1.0, 1.0)
-          const rayClipFar = vec4.fromValues(ndcX, ndcY, 1.0, 1.0)
-          const rayEyeNear = vec4.create(); vec4.transformMat4(rayEyeNear, rayClipNear, invProj)
-          const rayEyeFar = vec4.create(); vec4.transformMat4(rayEyeFar, rayClipFar, invProj)
-          if (rayEyeNear[3] !== 0) vec4.scale(rayEyeNear, rayEyeNear, 1.0 / rayEyeNear[3])
-          if (rayEyeFar[3] !== 0) vec4.scale(rayEyeFar, rayEyeFar, 1.0 / rayEyeFar[3])
-          const rayWorldNear = vec4.create(); vec4.transformMat4(rayWorldNear, rayEyeNear, invView)
-          const rayWorldFar = vec4.create(); vec4.transformMat4(rayWorldFar, rayEyeFar, invView)
-          const origin = vec3.fromValues(rayWorldNear[0], rayWorldNear[1], rayWorldNear[2])
-          const target = vec3.fromValues(rayWorldFar[0], rayWorldFar[1], rayWorldFar[2])
-          const dir = vec3.create(); vec3.subtract(dir, target, origin); vec3.normalize(dir, dir)
-          return { origin, dir }
-        }
-
         const rayCurr = getRay(e.clientX, e.clientY)
         const rayPrev = getRay(e.clientX - deltaX, e.clientY - deltaY)
+        if (!rayCurr || !rayPrev) return
 
         const denomCurr = vec3.dot(rayCurr.dir, planeNormal)
         const denomPrev = vec3.dot(rayPrev.dir, planeNormal)
@@ -3520,8 +3643,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
         if (transformMode === 'translate') {
           vec3.zero(vecs.moveVec)
-          if (axis === 'x') vecs.moveVec[0] = -vecs.worldMoveDelta[0]
-          else if (axis === 'y') vecs.moveVec[1] = -vecs.worldMoveDelta[1]
+          if (singleAxisWorldDelta) {
+            vec3.copy(vecs.moveVec, singleAxisWorldDelta)
+          } else if (axis === 'x') vecs.moveVec[0] = -vecs.worldMoveDelta[0]
+          else if (axis === 'y') vecs.moveVec[1] = vecs.worldMoveDelta[1]
           else if (axis === 'z') vecs.moveVec[2] = vecs.worldMoveDelta[2]
           else if (axis === 'xy') { vecs.moveVec[0] = vecs.worldMoveDelta[0]; vecs.moveVec[1] = vecs.worldMoveDelta[1]; }
           else if (axis === 'xz') { vecs.moveVec[0] = vecs.worldMoveDelta[0]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
@@ -3572,8 +3697,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         vec3.zero(vecs.moveVec)
 
         // Single Axis: Use Legacy Projected Delta (inverted for some reason in legacy code, keeping behavior for now)
-        if (axis === 'x') vecs.moveVec[0] = -vecs.worldMoveDelta[0]
-        else if (axis === 'y') vecs.moveVec[1] = -vecs.worldMoveDelta[1]
+        if (singleAxisWorldDelta) {
+          vec3.copy(vecs.moveVec, singleAxisWorldDelta)
+        } else if (axis === 'x') vecs.moveVec[0] = -vecs.worldMoveDelta[0]
+        else if (axis === 'y') vecs.moveVec[1] = vecs.worldMoveDelta[1]
         else if (axis === 'z') vecs.moveVec[2] = vecs.worldMoveDelta[2]
         // Dual Axis: Use Precise Ray-Plane Delta Directly (No inversion needed)
         else if (axis === 'xy') { vecs.moveVec[0] = vecs.worldMoveDelta[0]; vecs.moveVec[1] = vecs.worldMoveDelta[1]; }
@@ -3629,16 +3756,32 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
         // Animation mode: negate X, Y only; Z stays positive
         // Animation mode: negate X, Y only; Z stays positive (Legacy Logic for Single Axis)
-        if (axis === 'x') vecs.moveVec[0] = -vecs.worldMoveDelta[0]
-        else if (axis === 'y') vecs.moveVec[1] = -vecs.worldMoveDelta[1]
+        if (singleAxisWorldDelta) {
+          vec3.copy(vecs.moveVec, singleAxisWorldDelta)
+        } else if (axis === 'x') vecs.moveVec[0] = -vecs.worldMoveDelta[0]
+        else if (axis === 'y') vecs.moveVec[1] = vecs.worldMoveDelta[1]
         else if (axis === 'z') vecs.moveVec[2] = vecs.worldMoveDelta[2]
         // Dual Axis: Use Precise Ray-Plane Delta Directly
         else if (axis === 'xy') { vecs.moveVec[0] = vecs.worldMoveDelta[0]; vecs.moveVec[1] = vecs.worldMoveDelta[1]; }
         else if (axis === 'xz') { vecs.moveVec[0] = vecs.worldMoveDelta[0]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
         else if (axis === 'yz') { vecs.moveVec[1] = vecs.worldMoveDelta[1]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
 
-        if (selectedNodeIds.length > 0 && rendererRef.current && rendererRef.current.rendererData.nodes) {
-          selectedNodeIds.forEach(nodeId => {
+        const selectedSet = new Set(selectedNodeIds)
+        const nodeMap = new Map(nodes.map((n: any) => [n.ObjectId, n]))
+        const hasSelectedAncestor = (nodeId: number) => {
+          let parentId = nodeMap.get(nodeId)?.Parent
+          while (parentId !== undefined && parentId !== null && parentId >= 0) {
+            if (selectedSet.has(parentId)) return true
+            parentId = nodeMap.get(parentId)?.Parent
+          }
+          return false
+        }
+        const effectiveNodeIds = subMode === 'keyframe'
+          ? selectedNodeIds.filter((id) => !hasSelectedAncestor(id))
+          : selectedNodeIds
+
+        if (effectiveNodeIds.length > 0 && rendererRef.current && rendererRef.current.rendererData.nodes) {
+          effectiveNodeIds.forEach(nodeId => {
             const nodeWrapper = rendererRef.current!.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
             if (nodeWrapper && nodeWrapper.node.PivotPoint) {
               let localMoveVec = vec3.fromValues(vecs.moveVec[0], vecs.moveVec[1], vecs.moveVec[2])
@@ -4131,19 +4274,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       const center = gizmoCenter
       const count = gizmoCount
       if (gizmoCount > 0 && transformMode) {
-        // Dynamic Gizmo Scale - 保持屏幕大小恒定
-        // 视角缩小（distance增大）时Gizmo放大，视角放大（distance减小）时Gizmo缩小
-        let gizmoScale = 1.0
-        if (cameraRef.current) {
-          if (cameraRef.current.projectionMode === 'orthographic') {
-            // orthoSize 增大 = 视角缩小 → Gizmo 放大
-            gizmoScale = cameraRef.current.orthoSize / 400
-          } else {
-            // distance 增大 = 视角缩小 → Gizmo 放大
-            gizmoScale = cameraRef.current.distance / 600
-          }
-        }
-        gizmoScale = Math.max(0.1, Math.min(10, gizmoScale))
+        const gizmoScale = getGizmoScale()
 
         if (canvasRef.current) {
           const rect = canvasRef.current.getBoundingClientRect()

@@ -84,7 +84,7 @@ const normalizeKey = (e: KeyboardEvent): string | null => {
     }
     if (code.startsWith('Numpad')) {
         const tail = code.slice('Numpad'.length)
-        if (tail.length === 1) return `Num${tail}`
+        if (/^\d$/.test(tail)) return tail
         const map: Record<string, string> = {
             Add: 'Num+',
             Subtract: 'Num-',

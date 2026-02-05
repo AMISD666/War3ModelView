@@ -27,6 +27,7 @@ import { useRendererStore } from '../store/rendererStore'
 import { useHistoryStore } from '../store/historyStore'
 import { GlobalMessageLayer } from './GlobalMessageLayer'
 import { showMessage, showConfirm } from '../store/messageStore'
+import { registerShortcutHandler } from '../shortcuts/manager'
 import { checkGiteeUpdate, showChangelog as showUpdateLog, checkGiteeUpdateSilent } from '../services/updateService';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Button, Modal } from 'antd';
@@ -79,6 +80,32 @@ function prepareModelDataForSave(modelData: any): any {
             return objectToTypedArray(arr, Uint32Array);
         }
         return new Uint32Array([0, 0]);
+    };
+
+    const normalizeInterval = (interval: any): Uint32Array => {
+        let start = 0;
+        let end = 0;
+        if (interval instanceof Uint32Array || ArrayBuffer.isView(interval)) {
+            start = Number((interval as ArrayLike<number>)[0]);
+            end = Number((interval as ArrayLike<number>)[1]);
+        } else if (Array.isArray(interval)) {
+            start = Number(interval[0]);
+            end = Number(interval[1]);
+        } else if (interval && typeof interval === 'object') {
+            const values = Object.values(interval).map(Number);
+            start = Number(values[0]);
+            end = Number(values[1]);
+        }
+        if (!Number.isFinite(start)) start = 0;
+        if (!Number.isFinite(end)) end = 0;
+        start = Math.max(0, Math.floor(start));
+        end = Math.max(0, Math.floor(end));
+        if (start > end) {
+            const temp = start;
+            start = end;
+            end = temp;
+        }
+        return new Uint32Array([start, end]);
     };
 
     const toFloat32Array = (arr: any, size: number = 3): Float32Array => {
@@ -136,11 +163,117 @@ function prepareModelDataForSave(modelData: any): any {
         return new Uint8Array(0);
     };
 
+    // Clamp numeric values to [0,255] to avoid Uint8 wraparound on save
+    const toUint8ClampedArray = (arr: any): Uint8Array => {
+        if (arr instanceof Uint8Array) return arr;
+        let values: number[] = [];
+        if (ArrayBuffer.isView(arr)) {
+            values = Array.from(arr as ArrayLike<number>);
+        } else if (Array.isArray(arr)) {
+            values = arr;
+        } else if (arr && typeof arr === 'object') {
+            values = Object.values(arr).map(Number);
+        }
+        const result = new Uint8Array(values.length);
+        for (let i = 0; i < values.length; i++) {
+            const num = Number(values[i]);
+            if (!Number.isFinite(num) || num < 0) {
+                result[i] = 0;
+            } else if (num > 255) {
+                result[i] = 255;
+            } else {
+                result[i] = num;
+            }
+        }
+        return result;
+    };
+
+    const toTypedVector = (
+        value: any,
+        vectorSize: number,
+        isInt: boolean,
+        defaultVec?: number[] | ArrayLike<number>
+    ): Int32Array | Float32Array => {
+        const Type = isInt ? Int32Array : Float32Array;
+        const result = new Type(vectorSize);
+        if (defaultVec) {
+            const defArr = ArrayBuffer.isView(defaultVec) ? Array.from(defaultVec as ArrayLike<number>) : Array.from(defaultVec as number[]);
+            for (let i = 0; i < vectorSize; i++) {
+                const num = Number(defArr[i]);
+                if (Number.isFinite(num)) {
+                    result[i] = num;
+                }
+            }
+        }
+
+        if (value === undefined || value === null) {
+            return result;
+        }
+
+        const assignValue = (index: number, val: any) => {
+            const num = Number(val);
+            if (Number.isFinite(num) && index >= 0 && index < vectorSize) {
+                result[index] = num;
+            }
+        };
+
+        if (typeof value === 'number') {
+            assignValue(0, value);
+            return result;
+        }
+
+        if (value instanceof Type || ArrayBuffer.isView(value)) {
+            const arr = Array.from(value as ArrayLike<number>);
+            for (let i = 0; i < Math.min(vectorSize, arr.length); i++) {
+                assignValue(i, arr[i]);
+            }
+            return result;
+        }
+
+        if (Array.isArray(value)) {
+            for (let i = 0; i < Math.min(vectorSize, value.length); i++) {
+                assignValue(i, value[i]);
+            }
+            return result;
+        }
+
+        if (typeof value === 'object') {
+            const numericKeys = Object.keys(value)
+                .map(k => Number(k))
+                .filter(k => Number.isFinite(k));
+            if (numericKeys.length > 0) {
+                numericKeys.forEach(k => assignValue(k, value[k]));
+            } else {
+                const arr = Object.values(value) as any[];
+                for (let i = 0; i < Math.min(vectorSize, arr.length); i++) {
+                    assignValue(i, arr[i]);
+                }
+            }
+        }
+
+        return result;
+    };
+
     // Fix AnimVector to ensure Keys is a real array and Vectors are typed arrays
-    const fixAnimVector = (animVec: any, vectorSize: number = 3, isInt: boolean = false): any => {
+    const fixAnimVector = (
+        animVec: any,
+        vectorSize: number = 3,
+        isInt: boolean = false,
+        defaultVec?: number[] | ArrayLike<number>,
+        globalSeqCount?: number
+    ): any => {
         if (!animVec) return null;
         // If it's not an object, return null
         if (typeof animVec !== 'object') return null;
+        const lineTypeMap: Record<string, number> = {
+            DontInterp: 0,
+            Linear: 1,
+            Hermite: 2,
+            Bezier: 3
+        };
+        if (typeof animVec.LineType === 'string' && animVec.LineType in lineTypeMap) {
+            animVec.LineType = lineTypeMap[animVec.LineType];
+        }
         // If Keys is not a proper array, convert or return null
         if (animVec.Keys) {
             if (!Array.isArray(animVec.Keys)) {
@@ -153,18 +286,22 @@ function prepareModelDataForSave(modelData: any): any {
             }
             // Fix each Key's Vector, InTan, OutTan to be typed arrays
             animVec.Keys.forEach((key: any) => {
-                if (key.Vector && !(key.Vector instanceof Float32Array) && !(key.Vector instanceof Int32Array)) {
-                    // Convert object-like {0: v} to typed array
-                    const values = Array.isArray(key.Vector) ? key.Vector : Object.values(key.Vector).map(Number);
-                    key.Vector = isInt ? new Int32Array(values) : new Float32Array(values);
-                }
-                if (key.InTan && !(key.InTan instanceof Float32Array) && !(key.InTan instanceof Int32Array)) {
-                    const values = Array.isArray(key.InTan) ? key.InTan : Object.values(key.InTan).map(Number);
-                    key.InTan = isInt ? new Int32Array(values) : new Float32Array(values);
-                }
-                if (key.OutTan && !(key.OutTan instanceof Float32Array) && !(key.OutTan instanceof Int32Array)) {
-                    const values = Array.isArray(key.OutTan) ? key.OutTan : Object.values(key.OutTan).map(Number);
-                    key.OutTan = isInt ? new Int32Array(values) : new Float32Array(values);
+                const frame = Number(key.Frame ?? key.Time ?? 0);
+                key.Frame = Number.isFinite(frame) && frame >= 0 ? Math.floor(frame) : 0;
+
+                key.Vector = toTypedVector(key.Vector, vectorSize, isInt, defaultVec);
+
+                const needsTangents = animVec.LineType === 2 || animVec.LineType === 3;
+                if (needsTangents) {
+                    key.InTan = toTypedVector(key.InTan, vectorSize, isInt);
+                    key.OutTan = toTypedVector(key.OutTan, vectorSize, isInt);
+                } else {
+                    if (key.InTan && !(key.InTan instanceof Float32Array) && !(key.InTan instanceof Int32Array)) {
+                        key.InTan = toTypedVector(key.InTan, vectorSize, isInt);
+                    }
+                    if (key.OutTan && !(key.OutTan instanceof Float32Array) && !(key.OutTan instanceof Int32Array)) {
+                        key.OutTan = toTypedVector(key.OutTan, vectorSize, isInt);
+                    }
                 }
             });
         } else {
@@ -172,29 +309,59 @@ function prepareModelDataForSave(modelData: any): any {
             animVec.Keys = [];
         }
         // Ensure LineType is valid
-        if (animVec.LineType === undefined) {
+        if (animVec.LineType === undefined || animVec.LineType === null || ![0, 1, 2, 3].includes(animVec.LineType)) {
             animVec.LineType = 1; // Default to Linear
+        }
+        if (animVec.GlobalSeqId === undefined) {
+            animVec.GlobalSeqId = null;
+        } else if (typeof animVec.GlobalSeqId !== 'number' || !Number.isFinite(animVec.GlobalSeqId)) {
+            animVec.GlobalSeqId = null;
+        }
+        if (typeof globalSeqCount === 'number' && globalSeqCount > 0 && typeof animVec.GlobalSeqId === 'number') {
+            if (animVec.GlobalSeqId < 0 || animVec.GlobalSeqId >= globalSeqCount) {
+                animVec.GlobalSeqId = null;
+            }
         }
         return animVec;
     };
 
+    // Ensure any value becomes a valid AnimVector (or null)
+    const ensureAnimVector = (
+        value: any,
+        vectorSize: number = 3,
+        isInt: boolean = false,
+        defaultVec?: number[] | ArrayLike<number>,
+        globalSeqCount?: number
+    ): any => {
+        if (!value) return null;
+        if (value && typeof value === 'object' && Array.isArray(value.Keys)) {
+            return fixAnimVector(value, vectorSize, isInt, defaultVec, globalSeqCount);
+        }
+        const vec = toTypedVector(value, vectorSize, isInt, defaultVec);
+        return {
+            LineType: 1,
+            GlobalSeqId: null,
+            Keys: [{ Frame: 0, Vector: vec }]
+        };
+    };
+
     // Fix Node's animation properties (Translation, Rotation, Scaling)
-    const fixNode = (node: any): void => {
+    const fixNode = (node: any, globalSeqCount?: number): void => {
         if (!node) return;
         if (node.Translation) {
-            node.Translation = fixAnimVector(node.Translation);
+            node.Translation = ensureAnimVector(node.Translation, 3, false, [0, 0, 0], globalSeqCount);
             if (!node.Translation || !node.Translation.Keys || node.Translation.Keys.length === 0) {
                 node.Translation = null;
             }
         }
         if (node.Rotation) {
-            node.Rotation = fixAnimVector(node.Rotation);
+            node.Rotation = ensureAnimVector(node.Rotation, 4, false, [0, 0, 0, 1], globalSeqCount);
             if (!node.Rotation || !node.Rotation.Keys || node.Rotation.Keys.length === 0) {
                 node.Rotation = null;
             }
         }
         if (node.Scaling) {
-            node.Scaling = fixAnimVector(node.Scaling);
+            node.Scaling = ensureAnimVector(node.Scaling, 3, false, [1, 1, 1], globalSeqCount);
             if (!node.Scaling || !node.Scaling.Keys || node.Scaling.Keys.length === 0) {
                 node.Scaling = null;
             }
@@ -215,15 +382,28 @@ function prepareModelDataForSave(modelData: any): any {
             const intervalValues = seq.Interval ? `[${seq.Interval[0]}, ${seq.Interval[1]}]` : 'N/A';
             // console.log(`[MainLayout] Sequence ${index} "${seq.Name}" Interval (${intervalType}): ${intervalValues}`);
 
-            if (seq.Interval && !(seq.Interval instanceof Uint32Array)) {
-                seq.Interval = toUint32Array(seq.Interval);
-                // console.log(`[MainLayout] -> Converted to Uint32Array: [${seq.Interval[0]}, ${seq.Interval[1]}]`);
-            }
+            seq.Interval = normalizeInterval(seq.Interval);
             if (seq.MinimumExtent && !(seq.MinimumExtent instanceof Float32Array)) {
                 seq.MinimumExtent = toFloat32Array(seq.MinimumExtent);
             }
             if (seq.MaximumExtent && !(seq.MaximumExtent instanceof Float32Array)) {
                 seq.MaximumExtent = toFloat32Array(seq.MaximumExtent);
+            }
+            if (!seq.MinimumExtent) seq.MinimumExtent = new Float32Array(3);
+            if (!seq.MaximumExtent) seq.MaximumExtent = new Float32Array(3);
+            if (seq.BoundsRadius === undefined || seq.BoundsRadius === null) {
+                seq.BoundsRadius = 0;
+            }
+            if (seq.MoveSpeed === undefined || seq.MoveSpeed === null) {
+                seq.MoveSpeed = 0;
+            }
+            if (seq.Rarity === undefined || seq.Rarity === null) {
+                seq.Rarity = 0;
+            }
+            if (seq.NonLooping === undefined || seq.NonLooping === null) {
+                seq.NonLooping = false;
+            } else {
+                seq.NonLooping = !!seq.NonLooping;
             }
         });
     }
@@ -236,6 +416,70 @@ function prepareModelDataForSave(modelData: any): any {
         if (data.Info.MaximumExtent && !(data.Info.MaximumExtent instanceof Float32Array)) {
             data.Info.MaximumExtent = toFloat32Array(data.Info.MaximumExtent);
         }
+        if (!data.Info.MinimumExtent) data.Info.MinimumExtent = new Float32Array(3);
+        if (!data.Info.MaximumExtent) data.Info.MaximumExtent = new Float32Array(3);
+        if (data.Info.BoundsRadius === undefined || data.Info.BoundsRadius === null) {
+            data.Info.BoundsRadius = 0;
+        }
+        if (data.Info.BlendTime === undefined || data.Info.BlendTime === null) {
+            data.Info.BlendTime = 0;
+        }
+        if (!data.Info.Name) {
+            data.Info.Name = '';
+        }
+    }
+
+    // Fix GlobalSequences
+    if (data.GlobalSequences && Array.isArray(data.GlobalSequences)) {
+        data.GlobalSequences = data.GlobalSequences.map((value: any) => {
+            const num = Number(value);
+            return Number.isFinite(num) && num >= 0 ? Math.floor(num) : 0;
+        });
+    }
+    const globalSeqCount = data.GlobalSequences?.length || 0;
+
+    // Fix Textures
+    if (data.Textures && Array.isArray(data.Textures)) {
+        data.Textures.forEach((texture: any) => {
+            if (texture.ReplaceableId === undefined || texture.ReplaceableId === null) {
+                texture.ReplaceableId = 0;
+            }
+            if (typeof texture.ReplaceableId === 'number' && texture.ReplaceableId < 0) {
+                texture.ReplaceableId = 0;
+            }
+            const normalizeTexturePath = (value: any): string => {
+                if (typeof value === 'string') return value;
+                if (Array.isArray(value)) return value.join('');
+                if (value && typeof value === 'object') {
+                    return Object.values(value).join('');
+                }
+                return '';
+            };
+            const rawImage = texture.Image ?? texture.Path ?? '';
+            const normalizedImage = normalizeTexturePath(rawImage).replace(/\//g, '\\');
+            texture.Image = normalizedImage;
+            if (!texture.Path) {
+                texture.Path = normalizedImage;
+            }
+            if (texture.Flags === undefined || texture.Flags === null) {
+                texture.Flags = 0;
+            }
+
+            const baseFlags = typeof texture.Flags === 'number' ? texture.Flags : 0;
+            let flags = baseFlags & ~(1 | 2);
+            const applyFlag = (prop: string, bit: number) => {
+                if (texture[prop] === true) {
+                    flags |= bit;
+                } else if (texture[prop] === false) {
+                    // Explicitly cleared
+                } else if (baseFlags & bit) {
+                    flags |= bit;
+                }
+            };
+            applyFlag('WrapWidth', 1);
+            applyFlag('WrapHeight', 2);
+            texture.Flags = flags;
+        });
     }
 
     // Fix Geoset data
@@ -253,7 +497,7 @@ function prepareModelDataForSave(modelData: any): any {
                 geoset.Faces = toUint16Array(geoset.Faces);
             }
             if (geoset.VertexGroup && !(geoset.VertexGroup instanceof Uint8Array)) {
-                geoset.VertexGroup = toUint8Array(geoset.VertexGroup);
+                geoset.VertexGroup = toUint8ClampedArray(geoset.VertexGroup);
             }
             if (geoset.MinimumExtent && !(geoset.MinimumExtent instanceof Float32Array)) {
                 geoset.MinimumExtent = toFloat32Array(geoset.MinimumExtent);
@@ -291,6 +535,108 @@ function prepareModelDataForSave(modelData: any): any {
                     }
                 });
             }
+
+            // Sanity checks for array lengths (prevent corrupt exports)
+            const vertexCount = geoset.Vertices ? Math.floor(geoset.Vertices.length / 3) : 0;
+            if (geoset.Vertices && geoset.Vertices.length % 3 !== 0) {
+                geoset.Vertices = geoset.Vertices.subarray(0, vertexCount * 3);
+            }
+            if (geoset.Normals) {
+                const expected = vertexCount * 3;
+                if (geoset.Normals.length !== expected) {
+                    const fixed = new Float32Array(expected);
+                    fixed.set(geoset.Normals.subarray(0, expected));
+                    geoset.Normals = fixed;
+                }
+            }
+            if (geoset.VertexGroup) {
+                if (geoset.VertexGroup.length !== vertexCount) {
+                    const fixed = new Uint8Array(vertexCount);
+                    fixed.set(geoset.VertexGroup.subarray(0, vertexCount));
+                    geoset.VertexGroup = fixed;
+                }
+            }
+            if (geoset.Faces) {
+                const faceCount = Math.floor(geoset.Faces.length / 3);
+                if (geoset.Faces.length % 3 !== 0) {
+                    geoset.Faces = geoset.Faces.subarray(0, faceCount * 3);
+                }
+                for (let i = 0; i < geoset.Faces.length; i++) {
+                    if (geoset.Faces[i] >= vertexCount || geoset.Faces[i] < 0) {
+                        geoset.Faces[i] = 0;
+                    }
+                }
+            }
+            if (geoset.TVertices && Array.isArray(geoset.TVertices)) {
+                geoset.TVertices = geoset.TVertices.map((tv: any) => {
+                    const typed = tv instanceof Float32Array ? tv : toDynamicFloat32Array(tv);
+                    const expected = vertexCount * 2;
+                    if (typed.length === expected) return typed;
+                    const fixed = new Float32Array(expected);
+                    fixed.set(typed.subarray(0, expected));
+                    return fixed;
+                });
+            }
+            if (geoset.Tangents && geoset.Tangents.length % 4 !== 0) {
+                const tangentCount = Math.floor(geoset.Tangents.length / 4);
+                geoset.Tangents = geoset.Tangents.subarray(0, tangentCount * 4);
+            }
+        });
+    }
+
+    // Fix GeosetAnims
+    if (data.GeosetAnims && Array.isArray(data.GeosetAnims)) {
+        const geosetCount = data.Geosets?.length || 0;
+        data.GeosetAnims.forEach((anim: any) => {
+            if (typeof anim.Flags !== 'number') {
+                anim.Flags = 0;
+            }
+            if (anim.GeosetId === undefined || anim.GeosetId === null) {
+                anim.GeosetId = null;
+            } else if (typeof anim.GeosetId !== 'number' || anim.GeosetId < 0 || anim.GeosetId >= geosetCount) {
+                anim.GeosetId = geosetCount > 0 ? 0 : null;
+            }
+            if (anim.Color instanceof Float32Array) {
+                // Keep static color
+            } else if (anim.Color && Array.isArray(anim.Color)) {
+                anim.Color = new Float32Array(anim.Color.slice(0, 3));
+            } else if (anim.Color && typeof anim.Color === 'object') {
+                if (Array.isArray((anim.Color as any).Keys)) {
+                    anim.Color = ensureAnimVector(anim.Color, 3, false, [1, 1, 1], globalSeqCount) ?? new Float32Array([1, 1, 1]);
+                } else {
+                    anim.Color = toFloat32Array(anim.Color, 3);
+                }
+            }
+            if (anim.Alpha && typeof anim.Alpha === 'object') {
+                anim.Alpha = ensureAnimVector(anim.Alpha, 1, false, undefined, globalSeqCount) ?? anim.Alpha;
+            }
+            if (typeof anim.Alpha === 'number') {
+                if (anim.Alpha < 0) anim.Alpha = 0;
+                if (anim.Alpha > 1) anim.Alpha = 1;
+            }
+            if (typeof anim.UseColor === 'boolean') {
+                const flags = typeof anim.Flags === 'number' ? anim.Flags : 0;
+                anim.Flags = anim.UseColor ? (flags | 2) : (flags & ~2);
+            }
+            if (typeof anim.DropShadow === 'boolean') {
+                const flags = typeof anim.Flags === 'number' ? anim.Flags : 0;
+                anim.Flags = anim.DropShadow ? (flags | 1) : (flags & ~1);
+            }
+        });
+    }
+
+    // Fix TextureAnims (TVertexAnim)
+    if (data.TextureAnims && Array.isArray(data.TextureAnims)) {
+        data.TextureAnims.forEach((anim: any) => {
+            if (anim.Translation) {
+                anim.Translation = ensureAnimVector(anim.Translation, 3, false, [0, 0, 0], globalSeqCount);
+            }
+            if (anim.Rotation) {
+                anim.Rotation = ensureAnimVector(anim.Rotation, 4, false, [0, 0, 0, 1], globalSeqCount);
+            }
+            if (anim.Scaling) {
+                anim.Scaling = ensureAnimVector(anim.Scaling, 3, false, [1, 1, 1], globalSeqCount);
+            }
         });
     }
 
@@ -319,6 +665,9 @@ function prepareModelDataForSave(modelData: any): any {
     if (data.Lights && Array.isArray(data.Lights)) {
         // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Lights.length} lights`);
         data.Lights.forEach((light: any) => {
+            const isAnimVector = (val: any): boolean => {
+                return val && typeof val === 'object' && Array.isArray(val.Keys);
+            };
             // FIRST: Map our naming convention to war3-model naming convention
             // This must happen BEFORE we process/default the war3-model properties!
 
@@ -342,10 +691,11 @@ function prepareModelDataForSave(modelData: any): any {
                 if (Array.isArray(light.Color)) {
                     light.Color = new Float32Array(light.Color);
                 } else if (typeof light.Color === 'object' && !(light.Color instanceof Float32Array)) {
-                    // It might be an AnimVector - validate it has Keys
-                    if (!light.Color.Keys || !Array.isArray(light.Color.Keys)) {
+                    if (isAnimVector(light.Color)) {
+                        light.Color = fixAnimVector(light.Color, 3, false, [1, 1, 1], globalSeqCount);
+                    } else {
                         // Invalid AnimVector, convert to static color
-                        light.Color = new Float32Array([1, 1, 1]);
+                        light.Color = toFloat32Array(light.Color, 3);
                     }
                 }
             } else {
@@ -357,8 +707,10 @@ function prepareModelDataForSave(modelData: any): any {
                 if (Array.isArray(light.AmbColor)) {
                     light.AmbColor = new Float32Array(light.AmbColor);
                 } else if (typeof light.AmbColor === 'object' && !(light.AmbColor instanceof Float32Array)) {
-                    if (!light.AmbColor.Keys || !Array.isArray(light.AmbColor.Keys)) {
-                        light.AmbColor = new Float32Array([1, 1, 1]);
+                    if (isAnimVector(light.AmbColor)) {
+                        light.AmbColor = fixAnimVector(light.AmbColor, 3, false, [1, 1, 1], globalSeqCount);
+                    } else {
+                        light.AmbColor = toFloat32Array(light.AmbColor, 3);
                     }
                 }
             } else {
@@ -369,28 +721,45 @@ function prepareModelDataForSave(modelData: any): any {
             if (light.AmbIntensity === undefined) {
                 light.AmbIntensity = 0;
             }
+            if (light.Intensity === undefined) {
+                light.Intensity = 1;
+            }
+            if (light.AttenuationStart === undefined || light.AttenuationStart === null) {
+                light.AttenuationStart = 80;
+            }
+            if (light.AttenuationEnd === undefined || light.AttenuationEnd === null) {
+                light.AttenuationEnd = 200;
+            }
 
             // Ensure static numeric properties exist as numbers (not AnimVector if they're simple values)
             if (light.Intensity !== undefined && typeof light.Intensity === 'object' && light.Intensity !== null) {
-                if (!light.Intensity.Keys || !Array.isArray(light.Intensity.Keys)) {
+                if (isAnimVector(light.Intensity)) {
+                    light.Intensity = fixAnimVector(light.Intensity, 1, false, undefined, globalSeqCount);
+                } else {
                     light.Intensity = 1; // Default to 1 if malformed
                 }
             }
 
             if (light.AmbIntensity !== undefined && typeof light.AmbIntensity === 'object' && light.AmbIntensity !== null) {
-                if (!light.AmbIntensity.Keys || !Array.isArray(light.AmbIntensity.Keys)) {
+                if (isAnimVector(light.AmbIntensity)) {
+                    light.AmbIntensity = fixAnimVector(light.AmbIntensity, 1, false, undefined, globalSeqCount);
+                } else {
                     light.AmbIntensity = 0; // Default ambient intensity
                 }
             }
 
             if (light.AttenuationStart !== undefined && typeof light.AttenuationStart === 'object' && light.AttenuationStart !== null) {
-                if (!light.AttenuationStart.Keys || !Array.isArray(light.AttenuationStart.Keys)) {
+                if (isAnimVector(light.AttenuationStart)) {
+                    light.AttenuationStart = fixAnimVector(light.AttenuationStart, 1, true, undefined, globalSeqCount);
+                } else {
                     light.AttenuationStart = 80;
                 }
             }
 
             if (light.AttenuationEnd !== undefined && typeof light.AttenuationEnd === 'object' && light.AttenuationEnd !== null) {
-                if (!light.AttenuationEnd.Keys || !Array.isArray(light.AttenuationEnd.Keys)) {
+                if (isAnimVector(light.AttenuationEnd)) {
+                    light.AttenuationEnd = fixAnimVector(light.AttenuationEnd, 1, true, undefined, globalSeqCount);
+                } else {
                     light.AttenuationEnd = 200;
                 }
             }
@@ -402,7 +771,9 @@ function prepareModelDataForSave(modelData: any): any {
                     // Static visibility - just remove it (defaults to visible)
                     delete light.Visibility;
                 } else if (typeof light.Visibility === 'object' && light.Visibility !== null) {
-                    if (!light.Visibility.Keys || !Array.isArray(light.Visibility.Keys)) {
+                    if (isAnimVector(light.Visibility)) {
+                        light.Visibility = fixAnimVector(light.Visibility, 1, false, undefined, globalSeqCount);
+                    } else {
                         // Malformed AnimVector - remove it
                         delete light.Visibility;
                     }
@@ -442,10 +813,10 @@ function prepareModelDataForSave(modelData: any): any {
                         emitter[prop] = emitter[animKey];
                     }
                     if (isAnimVector(emitter[prop])) {
-                        emitter[prop] = fixAnimVector(emitter[prop], 1);
+                        emitter[prop] = fixAnimVector(emitter[prop], 1, false, undefined, globalSeqCount);
                     }
                     if (isAnimVector(emitter[animKey])) {
-                        emitter[animKey] = fixAnimVector(emitter[animKey], 1);
+                        emitter[animKey] = fixAnimVector(emitter[animKey], 1, false, undefined, globalSeqCount);
                     }
                 });
             };
@@ -587,10 +958,10 @@ function prepareModelDataForSave(modelData: any): any {
                     emitter[prop] = emitter[animKey];
                 }
                 if (isAnimVector(emitter[prop])) {
-                    emitter[prop] = fixAnimVector(emitter[prop], 1);
+                    emitter[prop] = fixAnimVector(emitter[prop], 1, false, undefined, globalSeqCount);
                 }
                 if (isAnimVector(emitter[animKey])) {
-                    emitter[animKey] = fixAnimVector(emitter[animKey], 1);
+                    emitter[animKey] = fixAnimVector(emitter[animKey], 1, false, undefined, globalSeqCount);
                 }
             });
 
@@ -620,10 +991,10 @@ function prepareModelDataForSave(modelData: any): any {
                     emitter[prop] = emitter[animKey];
                 }
                 if (isAnimVector(emitter[prop])) {
-                    emitter[prop] = fixAnimVector(emitter[prop], 1);
+                    emitter[prop] = fixAnimVector(emitter[prop], 1, false, undefined, globalSeqCount);
                 }
                 if (isAnimVector(emitter[animKey])) {
-                    emitter[animKey] = fixAnimVector(emitter[animKey], 1);
+                    emitter[animKey] = fixAnimVector(emitter[animKey], 1, false, undefined, globalSeqCount);
                 }
             });
 
@@ -638,6 +1009,15 @@ function prepareModelDataForSave(modelData: any): any {
     if (data.Cameras && Array.isArray(data.Cameras)) {
         // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Cameras.length} cameras`);
         data.Cameras.forEach((camera: any) => {
+            if (camera.FieldOfView === undefined || camera.FieldOfView === null) {
+                camera.FieldOfView = 0.7853; // ~45 deg
+            }
+            if (camera.NearClip === undefined || camera.NearClip === null) {
+                camera.NearClip = 16;
+            }
+            if (camera.FarClip === undefined || camera.FarClip === null) {
+                camera.FarClip = 5000;
+            }
             if (camera.Position) {
                 camera.Position = toFloat32Array(camera.Position, 3);
             } else {
@@ -650,6 +1030,15 @@ function prepareModelDataForSave(modelData: any): any {
             }
             if (camera.Target !== undefined && !(camera.Target instanceof Float32Array)) {
                 camera.Target = toFloat32Array(camera.Target, 3);
+            }
+            if (camera.Translation) {
+                camera.Translation = ensureAnimVector(camera.Translation, 3, false, [0, 0, 0], globalSeqCount);
+            }
+            if (camera.TargetTranslation) {
+                camera.TargetTranslation = ensureAnimVector(camera.TargetTranslation, 3, false, [0, 0, 0], globalSeqCount);
+            }
+            if (camera.Rotation) {
+                camera.Rotation = ensureAnimVector(camera.Rotation, 1, false, [0], globalSeqCount);
             }
         });
     }
@@ -679,15 +1068,15 @@ function prepareModelDataForSave(modelData: any): any {
             } else {
                 shape.Vertices = new Float32Array(vertexCount);
             }
-            fixNode(shape); // CollisionShapes are also Nodes
+            fixNode(shape, globalSeqCount); // CollisionShapes are also Nodes
         });
     }
 
     // Fix all node-type arrays to ensure AnimVector data is valid
-    const nodeArrayNames = ['Bones', 'Helpers', 'Attachments', 'EventObjects', 'Lights', 'RibbonEmitters', 'ParticleEmitters', 'ParticleEmitters2', 'Cameras', 'ParticleEmitterPopcorns'];
+    const nodeArrayNames = ['Bones', 'Helpers', 'Attachments', 'EventObjects', 'Lights', 'RibbonEmitters', 'ParticleEmitters', 'ParticleEmitters2', 'ParticleEmitterPopcorns'];
     nodeArrayNames.forEach(arrayName => {
         if (data[arrayName] && Array.isArray(data[arrayName])) {
-            data[arrayName].forEach((node: any) => fixNode(node));
+            data[arrayName].forEach((node: any) => fixNode(node, globalSeqCount));
         }
     });
 
@@ -704,7 +1093,7 @@ function prepareModelDataForSave(modelData: any): any {
             }
             // Visibility is an AnimVector - fix or remove if invalid
             if (attachment.Visibility) {
-                attachment.Visibility = fixAnimVector(attachment.Visibility, 1);
+                attachment.Visibility = fixAnimVector(attachment.Visibility, 1, false, undefined, globalSeqCount);
                 if (!attachment.Visibility || !attachment.Visibility.Keys || attachment.Visibility.Keys.length === 0) {
                     delete attachment.Visibility;
                 }
@@ -715,21 +1104,73 @@ function prepareModelDataForSave(modelData: any): any {
     // Fix Geosets - ensure TotalGroupsCount is consistent with Groups array
     if (data.Geosets && Array.isArray(data.Geosets)) {
         // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Geosets.length} geosets`);
+        const materialCount = data.Materials?.length || 0;
         data.Geosets.forEach((geoset: any, index: number) => {
-            // Recalculate TotalGroupsCount from Groups array
+            const vertexCount = geoset.Vertices ? Math.floor(geoset.Vertices.length / 3) : 0;
+
+            // Normalize Groups to number[][]
             if (geoset.Groups && Array.isArray(geoset.Groups)) {
-                const totalCount = geoset.Groups.reduce((sum: number, group: any) => {
-                    return sum + (Array.isArray(group) ? group.length : 0);
-                }, 0);
-                if (geoset.TotalGroupsCount !== totalCount) {
-                    console.log(`[MainLayout] Geoset ${index}: Updating TotalGroupsCount from ${geoset.TotalGroupsCount} to ${totalCount}`);
-                    geoset.TotalGroupsCount = totalCount;
+                geoset.Groups = geoset.Groups.map((group: any) => {
+                    const matrices = Array.isArray(group)
+                        ? group
+                        : Array.isArray(group?.matrices)
+                            ? group.matrices
+                            : [];
+                    return matrices.map((value: any) => {
+                        const num = Number(value);
+                        if (!Number.isFinite(num) || num < 0) return 0;
+                        return Math.floor(num);
+                    });
+                });
+            } else if (!geoset.Groups) {
+                geoset.Groups = [];
+            }
+
+            if (geoset.Groups.length === 0 && vertexCount > 0) {
+                geoset.Groups = [[0]];
+            }
+
+            // Recalculate TotalGroupsCount from Groups array
+            const totalCount = geoset.Groups.reduce((sum: number, group: any) => {
+                return sum + (Array.isArray(group) ? group.length : 0);
+            }, 0);
+            if (geoset.TotalGroupsCount !== totalCount) {
+                console.log(`[MainLayout] Geoset ${index}: Updating TotalGroupsCount from ${geoset.TotalGroupsCount} to ${totalCount}`);
+                geoset.TotalGroupsCount = totalCount;
+            }
+
+            // Ensure VertexGroup exists and is Uint8Array (MDX uses uint8)
+            if (!geoset.VertexGroup) {
+                geoset.VertexGroup = new Uint8Array(vertexCount);
+            } else if (!(geoset.VertexGroup instanceof Uint8Array)) {
+                geoset.VertexGroup = toUint8ClampedArray(geoset.VertexGroup);
+            }
+            if (geoset.VertexGroup.length !== vertexCount) {
+                const fixed = new Uint8Array(vertexCount);
+                fixed.set(geoset.VertexGroup.subarray(0, vertexCount));
+                geoset.VertexGroup = fixed;
+            }
+
+            const maxGroupIndex = geoset.Groups.length - 1;
+            if (maxGroupIndex >= 0) {
+                for (let i = 0; i < geoset.VertexGroup.length; i++) {
+                    if (geoset.VertexGroup[i] > maxGroupIndex) {
+                        geoset.VertexGroup[i] = 0;
+                    }
                 }
             }
-            // Ensure VertexGroup is Uint16Array (supports > 255 groups)
-            if (geoset.VertexGroup && !(geoset.VertexGroup instanceof Uint16Array)) {
-                geoset.VertexGroup = toUint16Array(geoset.VertexGroup);
+
+            // MaterialID bounds
+            if (typeof geoset.MaterialID !== 'number' || geoset.MaterialID < 0 || (materialCount > 0 && geoset.MaterialID >= materialCount)) {
+                geoset.MaterialID = 0;
             }
+            if (geoset.SelectionGroup === undefined || geoset.SelectionGroup === null) {
+                geoset.SelectionGroup = 0;
+            }
+            if (geoset.Unselectable === undefined) {
+                geoset.Unselectable = false;
+            }
+
             // Ensure Faces is Uint16Array
             if (geoset.Faces && !(geoset.Faces instanceof Uint16Array)) {
                 geoset.Faces = toUint16Array(geoset.Faces);
@@ -745,37 +1186,108 @@ function prepareModelDataForSave(modelData: any): any {
             if (material.PriorityPlane === undefined) material.PriorityPlane = 0;
             if (material.RenderMode === undefined) material.RenderMode = 0;
 
+            // Rebuild RenderMode from boolean flags when provided
+            const renderMask = 1 | 16 | 32;
+            const baseRenderMode = typeof material.RenderMode === 'number' ? material.RenderMode : 0;
+            let renderMode = baseRenderMode & ~renderMask;
+            const applyRenderFlag = (value: any, bit: number) => {
+                if (value === true) {
+                    renderMode |= bit;
+                } else if (value === false) {
+                    // Explicitly cleared
+                } else if (baseRenderMode & bit) {
+                    renderMode |= bit;
+                }
+            };
+            applyRenderFlag(material.ConstantColor, 1);
+            const sortPrims = material.SortPrimsFarZ ?? material.SortPrimitivesFarZ;
+            applyRenderFlag(sortPrims, 16);
+            applyRenderFlag(material.FullResolution, 32);
+            material.RenderMode = renderMode;
+
             if (material.Layers && Array.isArray(material.Layers)) {
                 material.Layers.forEach((layer: any, layerIndex: number) => {
                     // FilterMode - required, default to 0 (None)
-                    if (layer.FilterMode === undefined || layer.FilterMode === null) {
-                        layer.FilterMode = 0;
+                    let filterModeValue: any = layer.FilterMode;
+                    if (filterModeValue === undefined && layer.filterMode !== undefined) {
+                        filterModeValue = layer.filterMode;
                     }
+                    if (filterModeValue && typeof filterModeValue === 'object' && 'value' in filterModeValue) {
+                        filterModeValue = (filterModeValue as any).value;
+                    }
+                    if (filterModeValue === undefined || filterModeValue === null) {
+                        filterModeValue = 0;
+                    }
+                    if (typeof filterModeValue === 'string') {
+                        const normalized = filterModeValue.replace(/\s+/g, '').toLowerCase();
+                        const map: Record<string, number> = {
+                            none: 0,
+                            transparent: 1,
+                            blend: 2,
+                            additive: 3,
+                            addalpha: 4,
+                            modulate: 5,
+                            modulate2x: 6
+                        };
+                        if (/^\d+$/.test(normalized)) {
+                            filterModeValue = Number.parseInt(normalized, 10);
+                        } else {
+                            filterModeValue = map[normalized] ?? 0;
+                        }
+                    }
+                    if (typeof filterModeValue !== 'number' || !Number.isFinite(filterModeValue)) {
+                        filterModeValue = 0;
+                    }
+                    layer.FilterMode = Math.max(0, Math.min(6, Math.floor(filterModeValue)));
 
                     // Shading - required, default to 0
-                    // Rebuild from boolean flags if they exist
-                    if (layer.Shading === undefined) {
-                        let shading = 0;
-                        if (layer.Unshaded) shading |= 1;
-                        if (layer.SphereEnvMap) shading |= 2;
-                        if (layer.TwoSided) shading |= 16;
-                        if (layer.Unfogged) shading |= 32;
-                        if (layer.NoDepthTest) shading |= 64;
-                        if (layer.NoDepthSet) shading |= 128;
-                        layer.Shading = shading;
-                    }
+                    const shadingMask = 1 | 2 | 16 | 32 | 64 | 128;
+                    const baseShading = typeof layer.Shading === 'number' ? layer.Shading : 0;
+                    let shading = baseShading & ~shadingMask;
+                    const applyShadingFlag = (value: any, bit: number) => {
+                        if (value === true) {
+                            shading |= bit;
+                        } else if (value === false) {
+                            // Explicitly cleared
+                        } else if (baseShading & bit) {
+                            shading |= bit;
+                        }
+                    };
+                    applyShadingFlag(layer.Unshaded, 1);
+                    const sphereEnv = layer.SphereEnvMap ?? layer.SphereEnvironmentMap;
+                    applyShadingFlag(sphereEnv, 2);
+                    applyShadingFlag(layer.TwoSided, 16);
+                    applyShadingFlag(layer.Unfogged, 32);
+                    applyShadingFlag(layer.NoDepthTest, 64);
+                    applyShadingFlag(layer.NoDepthSet, 128);
+                    layer.Shading = shading;
 
                     // TextureID - can be number or AnimVector, default to 0
                     if (layer.TextureID === undefined || layer.TextureID === null) {
                         layer.TextureID = 0;
                     } else if (typeof layer.TextureID === 'object') {
                         // Fix AnimVector Key Vectors to be Int32Array
-                        layer.TextureID = fixAnimVector(layer.TextureID, 1, true);
+                        layer.TextureID = ensureAnimVector(layer.TextureID, 1, true, undefined, globalSeqCount) ?? layer.TextureID;
+                    }
+                    if (typeof layer.TextureID === 'number') {
+                        const texCount = data.Textures?.length || 0;
+                        if (texCount > 0 && (layer.TextureID < 0 || layer.TextureID >= texCount)) {
+                            layer.TextureID = 0;
+                        }
                     }
 
                     // TVertexAnimId - can be null or number, convert undefined to null
+                    if (layer.TVertexAnimId === undefined && layer.TextureAnimationId !== undefined) {
+                        layer.TVertexAnimId = layer.TextureAnimationId;
+                    }
                     if (layer.TVertexAnimId === undefined) {
                         layer.TVertexAnimId = null;
+                    }
+                    if (typeof layer.TVertexAnimId === 'number') {
+                        const tvAnimCount = data.TextureAnims?.length || 0;
+                        if (layer.TVertexAnimId < 0 || (tvAnimCount > 0 && layer.TVertexAnimId >= tvAnimCount)) {
+                            layer.TVertexAnimId = null;
+                        }
                     }
 
                     // CoordId - required, default to 0
@@ -788,8 +1300,57 @@ function prepareModelDataForSave(modelData: any): any {
                         layer.Alpha = 1;
                     } else if (typeof layer.Alpha === 'object') {
                         // Fix AnimVector Key Vectors to be Float32Array
-                        layer.Alpha = fixAnimVector(layer.Alpha, 1, false);
+                        layer.Alpha = ensureAnimVector(layer.Alpha, 1, false, undefined, globalSeqCount) ?? layer.Alpha;
+                    } else if (typeof layer.Alpha === 'number') {
+                        if (layer.Alpha < 0) layer.Alpha = 0;
+                        if (layer.Alpha > 1) layer.Alpha = 1;
                     }
+
+                    // Optional HD/extended layer properties
+                    if (layer.EmissiveGain !== undefined && layer.EmissiveGain !== null) {
+                        if (typeof layer.EmissiveGain === 'object') {
+                            layer.EmissiveGain = ensureAnimVector(layer.EmissiveGain, 1, false, undefined, globalSeqCount) ?? layer.EmissiveGain;
+                        }
+                    }
+                    if (layer.FresnelColor !== undefined && layer.FresnelColor !== null) {
+                        if (layer.FresnelColor instanceof Float32Array) {
+                            // ok
+                        } else if (layer.FresnelColor && typeof layer.FresnelColor === 'object' && Array.isArray(layer.FresnelColor.Keys)) {
+                            layer.FresnelColor = fixAnimVector(layer.FresnelColor, 3, false, [1, 1, 1], globalSeqCount);
+                        } else {
+                            layer.FresnelColor = toFloat32Array(layer.FresnelColor, 3);
+                        }
+                    }
+                    if (layer.FresnelOpacity !== undefined && layer.FresnelOpacity !== null) {
+                        if (typeof layer.FresnelOpacity === 'object') {
+                            layer.FresnelOpacity = ensureAnimVector(layer.FresnelOpacity, 1, false, undefined, globalSeqCount) ?? layer.FresnelOpacity;
+                        }
+                    }
+                    if (layer.FresnelTeamColor !== undefined && layer.FresnelTeamColor !== null) {
+                        if (typeof layer.FresnelTeamColor === 'object') {
+                            layer.FresnelTeamColor = ensureAnimVector(layer.FresnelTeamColor, 1, false, undefined, globalSeqCount) ?? layer.FresnelTeamColor;
+                        }
+                    }
+
+                    const extraTextureIds = [
+                        'NormalTextureID',
+                        'ORMTextureID',
+                        'EmissiveTextureID',
+                        'TeamColorTextureID',
+                        'ReflectionsTextureID'
+                    ];
+                    extraTextureIds.forEach((key) => {
+                        if (layer[key] === undefined || layer[key] === null) return;
+                        if (typeof layer[key] === 'object') {
+                            layer[key] = ensureAnimVector(layer[key], 1, true, undefined, globalSeqCount) ?? layer[key];
+                        }
+                        if (typeof layer[key] === 'number') {
+                            const texCount = data.Textures?.length || 0;
+                            if (texCount > 0 && (layer[key] < 0 || layer[key] >= texCount)) {
+                                layer[key] = 0;
+                            }
+                        }
+                    });
 
                     // console.log(`[MainLayout] Material[${matIndex}].Layer[${layerIndex}]: FilterMode=${layer.FilterMode}, Shading=${layer.Shading}, TextureID=${typeof layer.TextureID === 'number' ? layer.TextureID : 'AnimVector'}, TVertexAnimId=${layer.TVertexAnimId}, CoordId=${layer.CoordId}, Alpha=${typeof layer.Alpha === 'number' ? layer.Alpha : 'AnimVector'}`);
                 });
@@ -903,6 +1464,33 @@ function validateModelData(data: any): string[] {
             if (!geoset.Faces || geoset.Faces.length === 0) {
                 errors.push(`Geoset ${i} has no faces`);
             }
+            const vertexCount = geoset.Vertices ? Math.floor(geoset.Vertices.length / 3) : 0;
+            if (geoset.Vertices && geoset.Vertices.length % 3 !== 0) {
+                errors.push(`Geoset ${i} vertex buffer length is not divisible by 3`);
+            }
+            if (geoset.Faces && geoset.Faces.length % 3 !== 0) {
+                errors.push(`Geoset ${i} face index count is not divisible by 3`);
+            }
+            if (geoset.VertexGroup && geoset.VertexGroup.length !== vertexCount) {
+                errors.push(`Geoset ${i} VertexGroup length mismatch (expected ${vertexCount}, found ${geoset.VertexGroup.length})`);
+            }
+            if (geoset.Groups && geoset.VertexGroup) {
+                const maxGroupIndex = geoset.Groups.length - 1;
+                if (maxGroupIndex >= 0) {
+                    for (let v = 0; v < geoset.VertexGroup.length; v++) {
+                        if (geoset.VertexGroup[v] > maxGroupIndex) {
+                            errors.push(`Geoset ${i} VertexGroup index out of range at vertex ${v}`);
+                            break;
+                        }
+                    }
+                }
+            }
+            if (typeof geoset.MaterialID === 'number') {
+                const materialCount = data.Materials?.length || 0;
+                if (materialCount > 0 && (geoset.MaterialID < 0 || geoset.MaterialID >= materialCount)) {
+                    errors.push(`Geoset ${i} MaterialID out of range`);
+                }
+            }
             // Check bone references in Groups
             if (geoset.Groups) {
                 for (let g = 0; g < geoset.Groups.length; g++) {
@@ -917,6 +1505,34 @@ function validateModelData(data: any): string[] {
                 }
             }
         }
+    }
+
+    // 8. Check texture paths
+    if (data.Textures && Array.isArray(data.Textures)) {
+        for (let i = 0; i < data.Textures.length; i++) {
+            const tex = data.Textures[i];
+            const image = typeof tex?.Image === 'string' ? tex.Image : '';
+            if (!image || image.trim() === '') {
+                errors.push(`Texture ${i} has empty Image path (Image="${tex?.Image ?? ''}", Path="${tex?.Path ?? ''}")`);
+            }
+        }
+    }
+
+    // 9. Check Sequences integrity
+    if (data.Sequences && Array.isArray(data.Sequences)) {
+        data.Sequences.forEach((seq: any, index: number) => {
+            if (!seq.Interval || seq.Interval.length !== 2) {
+                errors.push(`Sequence ${index} "${seq.Name || ''}" has invalid Interval`);
+                return;
+            }
+            const start = Number(seq.Interval[0]);
+            const end = Number(seq.Interval[1]);
+            if (!Number.isFinite(start) || !Number.isFinite(end)) {
+                errors.push(`Sequence ${index} "${seq.Name || ''}" Interval has non-numeric values`);
+            } else if (start > end) {
+                errors.push(`Sequence ${index} "${seq.Name || ''}" Interval start > end`);
+            }
+        });
     }
 
     return errors;
@@ -998,6 +1614,22 @@ const MainLayout: React.FC = () => {
     const isSavingRef = useRef(false); // Track if a save operation is in progress
     const closeConfirmVisibleRef = useRef(false);
     const bypassClosePromptRef = useRef(false);
+    const panelStateRef = useRef({
+        activeEditor: null as string | null,
+        showGeosetAnimModal: false,
+        showTextureModal: false,
+        showTextureAnimModal: false,
+        showSequenceModal: false,
+        showCameraModal: false,
+        showMaterialModal: false,
+        showGeosetModal: false,
+        showGlobalSeqModal: false,
+        showAbout: false
+    })
+    const handleImportRef = useRef<(() => void) | (() => Promise<void>)>(() => { })
+    const handleSaveRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false))
+    const handleSaveAsRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false))
+    const handleCopyModelRef = useRef<() => void>(() => { })
     const openModelAsTab = useCallback((filePath: string) => {
         console.log('[MainLayout] Opening model as tab:', filePath)
         setIsLoading(true)
@@ -1014,6 +1646,32 @@ const MainLayout: React.FC = () => {
     useEffect(() => {
         closeConfirmVisibleRef.current = closeConfirmVisible;
     }, [closeConfirmVisible]);
+
+    useEffect(() => {
+        panelStateRef.current = {
+            activeEditor,
+            showGeosetAnimModal,
+            showTextureModal,
+            showTextureAnimModal,
+            showSequenceModal,
+            showCameraModal,
+            showMaterialModal,
+            showGeosetModal,
+            showGlobalSeqModal,
+            showAbout
+        }
+    }, [
+        activeEditor,
+        showGeosetAnimModal,
+        showTextureModal,
+        showTextureAnimModal,
+        showSequenceModal,
+        showCameraModal,
+        showMaterialModal,
+        showGeosetModal,
+        showGlobalSeqModal,
+        showAbout
+    ])
 
     // Intercept native window close during save operations and reset state on refresh
     useEffect(() => {
@@ -1385,126 +2043,7 @@ const MainLayout: React.FC = () => {
             showMessage('error', '错误', '复制失败');
         }
     }, [modelPath]);
-
-    useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            const key = e.key.toLowerCase()
-
-            if (e.altKey && key === 'f4') {
-                e.preventDefault();
-                e.stopPropagation();
-                if (isSavingRef.current) {
-                    showMessage('warning', '提示', '正在保存模型，请稍候再关闭...');
-                    return;
-                }
-                getCurrentWindow().close();
-                return;
-            }
-
-            if (key === 'c' && e.shiftKey) {
-                e.preventDefault();
-                handleCopyModel();
-                return;
-            }
-
-            // Ctrl+W to close current tab (ctrlKey ensures no conflict with single W)
-            if (key === 'w' && e.ctrlKey && !e.shiftKey && !e.altKey) {
-                e.preventDefault();
-                const { activeTabId, closeTab } = useModelStore.getState();
-                if (activeTabId) {
-                    closeTab(activeTabId);
-                }
-                return;
-            }
-
-            if (key === 'escape') {
-                const uiState = useUIStore.getState();
-                const rendererState = useRendererStore.getState();
-                const hasPanels = !!activeEditor
-                    || showGeosetAnimModal
-                    || showTextureModal
-                    || showTextureAnimModal
-                    || showSequenceModal
-                    || showCameraModal
-                    || showMaterialModal
-                    || showGeosetModal
-                    || showGlobalSeqModal
-                    || showAbout
-                    || rendererState.showSettingsPanel
-                    || uiState.showNodeManager
-                    || uiState.showModelInfo
-                    || uiState.showVertexEditor
-                    || uiState.showFaceEditor
-                    || uiState.showNodeDialog
-                    || uiState.showCreateNodeDialog
-                    || uiState.showTransformModelDialog;
-                if (!hasPanels) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (isSavingRef.current) {
-                        showMessage('warning', '提示', '正在保存模型，请稍候再关闭...');
-                        return;
-                    }
-                    getCurrentWindow().close();
-                }
-                return;
-            }
-
-            if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) return
-
-            // Skip if Ctrl/Meta is pressed (used for copy/paste operations)
-            if (e.ctrlKey || e.metaKey) return
-
-            switch (key) {
-                case 'n': toggleNodeManager(); break;
-                case 'c': setShowCameraModal(prev => !prev); break;
-                case 'g': setShowGeosetModal(prev => !prev); break;
-                case 'u': setShowGeosetAnimModal(prev => !prev); break;
-                case 't': setShowTextureModal(prev => !prev); break;
-                case 'x': setShowTextureAnimModal(prev => !prev); break;
-                case 'm': setShowMaterialModal(prev => !prev); break;
-                case 's': setShowSequenceModal(prev => !prev); break;
-                case 'l': setShowGlobalSeqModal(prev => !prev); break;
-                // Mode Switching Shortcuts
-                case 'f1': e.preventDefault(); useSelectionStore.getState().setMainMode('view'); break;
-                case 'f2': e.preventDefault(); useSelectionStore.getState().setMainMode('geometry'); break;
-                case 'f3': e.preventDefault(); useSelectionStore.getState().setMainMode('uv'); break;
-                case 'f4': e.preventDefault(); useSelectionStore.getState().setMainMode('animation'); break;
-                // View Preset Shortcuts (0=perspective, 1-6=orthographic)
-                case '0': setViewPreset({ type: 'perspective', time: Date.now() }); break;
-                case '1': setViewPreset({ type: 'top', time: Date.now() }); break;
-                case '2': setViewPreset({ type: 'bottom', time: Date.now() }); break;
-                case '3': setViewPreset({ type: 'front', time: Date.now() }); break;
-                case '4': setViewPreset({ type: 'back', time: Date.now() }); break;
-                case '5': setViewPreset({ type: 'left', time: Date.now() }); break;
-                case '6': setViewPreset({ type: 'right', time: Date.now() }); break;
-                // Vertex visibility toggle
-                case 'v': {
-                    const { mainMode } = useSelectionStore.getState();
-                    const { showVerticesByMode, setShowVerticesForMode } = useRendererStore.getState();
-                    const current = showVerticesByMode[mainMode] ?? true;
-                    setShowVerticesForMode(mainMode, !current);
-                    break;
-                }
-            }
-        }
-        window.addEventListener('keydown', handleKeyDown)
-        return () => window.removeEventListener('keydown', handleKeyDown)
-    }, [
-        activeEditor,
-        handleCopyModel,
-        showAbout,
-        showCameraModal,
-        showGeosetAnimModal,
-        showGeosetModal,
-        showGeosetVisibility,
-        showGlobalSeqModal,
-        showMaterialModal,
-        showSequenceModal,
-        showTextureAnimModal,
-        showTextureModal,
-        toggleNodeManager
-    ])
+    handleCopyModelRef.current = handleCopyModel;
 
     const handleImport = useCallback(async () => {
         try {
@@ -1525,6 +2064,7 @@ const MainLayout: React.FC = () => {
             setZustandLoading(false)
         }
     }, [openModelAsTab])
+    handleImportRef.current = handleImport;
 
     const handleModelLoaded = useCallback((data: any) => {
         console.log('Model loaded:', data)
@@ -1553,8 +2093,10 @@ const MainLayout: React.FC = () => {
                 // Only reset sequence if it's a new model or we aren't playing anything valid
                 // This prevents resetting to 0 when deleting particles on same model
                 if (!isSameModel || useModelStore.getState().currentSequence === -1) {
-                    console.log('[MainLayout] Auto-playing first animation (New Model or Reset)')
-                    useModelStore.getState().setSequence(0)
+                    const preferredSequence = useModelStore.getState().currentSequence
+                    const nextSequence = preferredSequence >= 0 ? preferredSequence : 0
+                    console.log('[MainLayout] Auto-playing preferred animation:', nextSequence)
+                    useModelStore.getState().setSequence(nextSequence)
                     useModelStore.getState().setPlaying(true)
                 } else {
                     console.log('[MainLayout] Preserving existing animation sequence:', useModelStore.getState().currentSequence)
@@ -1690,6 +2232,7 @@ const MainLayout: React.FC = () => {
             isSavingRef.current = false;
         }
     }
+    handleSaveRef.current = handleSave;
 
     const handleSaveAs = async (): Promise<boolean> => {
         if (!modelData) return false
@@ -1756,6 +2299,178 @@ const MainLayout: React.FC = () => {
         }
         return false;
     }
+    handleSaveAsRef.current = handleSaveAs;
+
+    useEffect(() => {
+        const requestClose = () => {
+            if (isSavingRef.current) {
+                showMessage('warning', '提示', '正在保存模型，请稍候再关闭...');
+                return true;
+            }
+            getCurrentWindow().close();
+            return true;
+        };
+
+        const requestCloseIfNoPanels = () => {
+            const uiState = useUIStore.getState();
+            const rendererState = useRendererStore.getState();
+            const panelState = panelStateRef.current;
+            const hasPanels = !!panelState.activeEditor
+                || panelState.showGeosetAnimModal
+                || panelState.showTextureModal
+                || panelState.showTextureAnimModal
+                || panelState.showSequenceModal
+                || panelState.showCameraModal
+                || panelState.showMaterialModal
+                || panelState.showGeosetModal
+                || panelState.showGlobalSeqModal
+                || panelState.showAbout
+                || rendererState.showSettingsPanel
+                || rendererState.showGeosetVisibility
+                || uiState.showNodeManager
+                || uiState.showModelInfo
+                || uiState.showVertexEditor
+                || uiState.showFaceEditor
+                || uiState.showNodeDialog
+                || uiState.showCreateNodeDialog
+                || uiState.showTransformModelDialog;
+
+            if (hasPanels) return false;
+            return requestClose();
+        };
+
+        const unsubscribeHandlers = [
+            registerShortcutHandler('file.open', () => {
+                handleImportRef.current();
+                return true;
+            }),
+            registerShortcutHandler('file.save', () => {
+                const { modelPath: currentModelPath } = useModelStore.getState();
+                if (!currentModelPath) {
+                    handleSaveAsRef.current();
+                } else {
+                    handleSaveRef.current();
+                }
+                return true;
+            }),
+            registerShortcutHandler('file.saveAs', () => {
+                handleSaveAsRef.current();
+                return true;
+            }),
+            registerShortcutHandler('file.copyModel', () => {
+                handleCopyModelRef.current();
+                return true;
+            }),
+            registerShortcutHandler('window.closeTab', () => {
+                const { activeTabId, closeTab } = useModelStore.getState();
+                if (activeTabId) {
+                    closeTab(activeTabId);
+                }
+                return true;
+            }),
+            registerShortcutHandler('window.closeApp', () => requestClose()),
+            registerShortcutHandler('window.closeAppEsc', () => requestCloseIfNoPanels()),
+            registerShortcutHandler('mode.view', () => {
+                useSelectionStore.getState().setMainMode('view');
+                return true;
+            }),
+            registerShortcutHandler('mode.geometry', () => {
+                useSelectionStore.getState().setMainMode('geometry');
+                return true;
+            }),
+            registerShortcutHandler('mode.uv', () => {
+                useSelectionStore.getState().setMainMode('uv');
+                return true;
+            }),
+            registerShortcutHandler('mode.animation', () => {
+                useSelectionStore.getState().setMainMode('animation');
+                return true;
+            }),
+            registerShortcutHandler('editor.nodeManager', () => {
+                toggleNodeManager();
+                return true;
+            }),
+            registerShortcutHandler('editor.cameraManager', () => {
+                setShowCameraModal(prev => !prev);
+                return true;
+            }),
+            registerShortcutHandler('editor.geosetManager', () => {
+                setShowGeosetModal(prev => !prev);
+                return true;
+            }),
+            registerShortcutHandler('editor.geosetAnimManager', () => {
+                setShowGeosetAnimModal(prev => !prev);
+                return true;
+            }),
+            registerShortcutHandler('editor.textureManager', () => {
+                setShowTextureModal(prev => !prev);
+                return true;
+            }),
+            registerShortcutHandler('editor.textureAnimManager', () => {
+                setShowTextureAnimModal(prev => !prev);
+                return true;
+            }),
+            registerShortcutHandler('editor.materialManager', () => {
+                setShowMaterialModal(prev => !prev);
+                return true;
+            }),
+            registerShortcutHandler('editor.sequenceManager', () => {
+                setShowSequenceModal(prev => !prev);
+                return true;
+            }),
+            registerShortcutHandler('editor.globalSequenceManager', () => {
+                setShowGlobalSeqModal(prev => !prev);
+                return true;
+            }),
+            registerShortcutHandler('view.perspective', () => {
+                setViewPreset({ type: 'perspective', time: Date.now() });
+                return true;
+            }),
+            registerShortcutHandler('view.top', () => {
+                setViewPreset({ type: 'top', time: Date.now() });
+                return true;
+            }),
+            registerShortcutHandler('view.bottom', () => {
+                setViewPreset({ type: 'bottom', time: Date.now() });
+                return true;
+            }),
+            registerShortcutHandler('view.front', () => {
+                setViewPreset({ type: 'front', time: Date.now() });
+                return true;
+            }),
+            registerShortcutHandler('view.back', () => {
+                setViewPreset({ type: 'back', time: Date.now() });
+                return true;
+            }),
+            registerShortcutHandler('view.left', () => {
+                setViewPreset({ type: 'left', time: Date.now() });
+                return true;
+            }),
+            registerShortcutHandler('view.right', () => {
+                setViewPreset({ type: 'right', time: Date.now() });
+                return true;
+            }),
+            registerShortcutHandler('view.toggleVertices', () => {
+                const { mainMode } = useSelectionStore.getState();
+                const { showVerticesByMode, setShowVerticesForMode } = useRendererStore.getState();
+                const current = showVerticesByMode[mainMode] ?? true;
+                setShowVerticesForMode(mainMode, !current);
+                return true;
+            }),
+            registerShortcutHandler('edit.undo', () => {
+                useHistoryStore.getState().undo();
+                return true;
+            }),
+            registerShortcutHandler('edit.redo', () => {
+                useHistoryStore.getState().redo();
+                return true;
+            })
+        ];
+
+        return () => {
+            unsubscribeHandlers.forEach((unsubscribe) => unsubscribe());
+        };
+    }, []);
 
     const handleCloseWithSave = async () => {
         setCloseConfirmVisible(false);
@@ -1943,7 +2658,7 @@ const MainLayout: React.FC = () => {
             }
             // VertexGroup is required
             if (!geoset.VertexGroup) {
-                geoset.VertexGroup = new Array(geoset.Vertices.length / 3).fill(0)
+                geoset.VertexGroup = new Uint8Array(geoset.Vertices.length / 3)
                 console.log(`[MainLayout] Fixed Geoset ${index}: Added missing VertexGroup`)
             }
             // Groups is required
@@ -2012,13 +2727,9 @@ const MainLayout: React.FC = () => {
 
     // Daily automatic update check
     useEffect(() => {
-        const lastCheck = localStorage.getItem('lastUpdateCheck');
         const today = new Date().toISOString().split('T')[0];
-
-        if (lastCheck !== today) {
-            checkGiteeUpdateSilent();
-            localStorage.setItem('lastUpdateCheck', today);
-        }
+        checkGiteeUpdateSilent();
+        localStorage.setItem('lastUpdateCheck', today);
     }, []);
 
     // Handle activation

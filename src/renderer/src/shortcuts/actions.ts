@@ -184,49 +184,49 @@ export const shortcutActions: ShortcutAction[] = [
         label: '透视视图',
         category: '视图',
         contexts: ['global', 'viewer'],
-        defaultBindings: ['0']
+        defaultBindings: ['0', 'Num0']
     },
     {
         id: 'view.top',
         label: '顶视图',
         category: '视图',
         contexts: ['global', 'viewer'],
-        defaultBindings: ['1']
+        defaultBindings: ['1', 'Num1']
     },
     {
         id: 'view.bottom',
         label: '底视图',
         category: '视图',
         contexts: ['global', 'viewer'],
-        defaultBindings: ['2']
+        defaultBindings: ['2', 'Num2']
     },
     {
         id: 'view.front',
         label: '前视图',
         category: '视图',
         contexts: ['global', 'viewer'],
-        defaultBindings: ['3']
+        defaultBindings: ['3', 'Num3']
     },
     {
         id: 'view.back',
         label: '后视图',
         category: '视图',
         contexts: ['global', 'viewer'],
-        defaultBindings: ['4']
+        defaultBindings: ['4', 'Num4']
     },
     {
         id: 'view.left',
         label: '左视图',
         category: '视图',
         contexts: ['global', 'viewer'],
-        defaultBindings: ['5']
+        defaultBindings: ['5', 'Num5']
     },
     {
         id: 'view.right',
         label: '右视图',
         category: '视图',
         contexts: ['global', 'viewer'],
-        defaultBindings: ['6']
+        defaultBindings: ['6', 'Num6']
     },
     {
         id: 'view.fitToView',

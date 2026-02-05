@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Model State Management using Zustand
  */
 
@@ -9,6 +9,16 @@ import { ModelNode, NodeType } from '../types/node';
 import { Tab, TabSnapshot } from '../types/store';
 import { useRendererStore } from './rendererStore';
 import { processDeathAnimation, processRemoveLights } from '../utils/modelUtils';
+
+const pickDefaultSequenceIndex = (sequences: any[]) => {
+    if (!Array.isArray(sequences) || sequences.length === 0) return -1;
+    const standRegex = /stand/i;
+    const standIndex = sequences.findIndex((seq) => {
+        const name = (seq?.Name ?? seq?.name ?? '').toString();
+        return standRegex.test(name);
+    });
+    return standIndex >= 0 ? standIndex : 0;
+};
 
 
 /**
@@ -261,6 +271,7 @@ interface ModelState {
     updateGeosetAnim: (index: number, updates: any) => void;
     setGeosetAnims: (anims: any[]) => void;
     updateNodes: (updates: { objectId: number, data: Partial<ModelNode> }[]) => void;
+    replaceNodes: (nodes: ModelNode[], options?: { triggerReload?: boolean }) => void;
 
     // Recalculate Actions
     recalculateNormals: () => void;
@@ -526,9 +537,18 @@ function updateModelDataWithNodes(
             applyParticleFlag('XYQuad', 1048576);
 
             // Reconstruct FrameFlags from Head/Tail booleans
-            let frameFlags = 0;
-            if (n.Head) frameFlags |= 1;
-            if (n.Tail) frameFlags |= 2;
+            const baseFrameFlags = typeof n.FrameFlags === 'number' ? n.FrameFlags : 0;
+            let frameFlags = baseFrameFlags;
+            if (n.Head === true) {
+                frameFlags |= 1;
+            } else if (n.Head === false) {
+                frameFlags &= ~1;
+            }
+            if (n.Tail === true) {
+                frameFlags |= 2;
+            } else if (n.Tail === false) {
+                frameFlags &= ~2;
+            }
 
             // Format arrays for war3-model library
             const formattedNode = { ...node, Flags: flags, FrameFlags: frameFlags } as any;
@@ -980,14 +1000,18 @@ export const useModelStore = create<ModelState>((set, get) => ({
         // Extract nodes again from corrected data to get updated ObjectIds
         const correctedNodes = extractNodesFromModel(correctedData);
 
+        const sequences = (correctedData as any)?.Sequences || [];
+        const defaultSequenceIndex = pickDefaultSequenceIndex(sequences);
+        const hasSequences = sequences.length > 0;
+
         set({
             modelData: correctedData,
             modelPath: path || (data as any)?.path || (data as any)?.__modelPath || null,
             nodes: correctedNodes,
-            sequences: (correctedData as any)?.Sequences || [],
-            currentSequence: (correctedData as any)?.Sequences?.length > 0 ? 0 : -1,
+            sequences,
+            currentSequence: hasSequences ? defaultSequenceIndex : -1,
             currentFrame: 0,
-            isPlaying: (correctedData as any)?.Sequences?.length > 0,
+            isPlaying: hasSequences,
             hiddenGeosetIds: allGeosetIds,
             forceShowAllGeosets: true
         });
@@ -1613,9 +1637,25 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
             if (!hasChanges) return {};
 
-            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[]);
+            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[], false);
+            const correctedNodes = extractNodesFromModel(updatedModelData);
             console.log('[ModelStore] Batch updated', updates.length, 'nodes');
-            return { nodes: updatedNodes as ModelNode[], modelData: updatedModelData };
+            return { nodes: correctedNodes as ModelNode[], modelData: updatedModelData };
+        });
+    },
+
+    replaceNodes: (nodes, options) => {
+        set((state) => {
+            if (!state.modelData) return {};
+            const updatedModelData = updateModelDataWithNodes(state.modelData, nodes as any[], false);
+            if (!updatedModelData) return {};
+            const correctedNodes = extractNodesFromModel(updatedModelData);
+            const triggerReload = options?.triggerReload !== false;
+            return {
+                nodes: correctedNodes as ModelNode[],
+                modelData: updatedModelData,
+                rendererReloadTrigger: state.rendererReloadTrigger + (triggerReload ? 1 : 0)
+            };
         });
     },
 
@@ -1629,6 +1669,9 @@ export const useModelStore = create<ModelState>((set, get) => ({
             }
 
             const modelData = state.modelData;
+            // Force full renderer rebuild because geoset vertices are mutated in-place.
+            // Lightweight sync does not update vertex buffers.
+            (modelData as any).__forceFullReload = true;
 
             // 1. Construct Transformation Matrices
             // matrix: Full transformation (TRS) for absolute positions
@@ -2181,3 +2224,4 @@ export const useModelStore = create<ModelState>((set, get) => ({
         });
     }
 }));
+

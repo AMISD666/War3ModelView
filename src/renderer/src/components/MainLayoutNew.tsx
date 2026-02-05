@@ -18,6 +18,7 @@ import { ViewSettingsWindow } from './ViewSettingsWindow';
 import { BatchManager } from './batch/BatchManager';
 import { TabBar } from './TabBar';
 import { listen } from '@tauri-apps/api/event';
+import { handleGlobalShortcutKeyDown } from '../shortcuts/manager';
 
 const { Content } = Layout;
 
@@ -124,6 +125,15 @@ export const MainLayoutNew: React.FC = () => {
             unlisten.then(fn => fn());
         };
     }, [addTab]);
+
+    // Global shortcut dispatch (unified shortcut manager)
+    useEffect(() => {
+        const onKeyDown = (event: KeyboardEvent) => {
+            handleGlobalShortcutKeyDown(event);
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, []);
 
     const isBatchMode = mainMode === 'batch';
 

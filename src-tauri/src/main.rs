@@ -635,14 +635,18 @@ Remove-Item -Path '{new_exe}' -Force -ErrorAction SilentlyContinue
     fs::write(&ps_path, &file_content)
         .map_err(|e| format!("Failed to write PowerShell script: {}", e))?;
 
-    // Launch PowerShell with -Command to read the script file content
-    let ps_command = format!(
-        "Set-ExecutionPolicy Bypass -Scope Process -Force; & '{}'",
-        ps_path.to_string_lossy().replace("'", "''")
-    );
+    // Launch PowerShell explicitly (not hidden) to reduce AV false positives.
+    // Use -File to avoid inline command strings.
+    let ps_path_str = ps_path.to_string_lossy().to_string();
 
     Command::new("powershell")
-        .args(&["-WindowStyle", "Hidden", "-Command", &ps_command])
+        .args(&[
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            ps_path_str.as_str(),
+        ])
         .spawn()
         .map_err(|e| format!("Failed to launch update script: {}\nPath: {:?}", e, ps_path))?;
 

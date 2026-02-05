@@ -80,6 +80,8 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const [localMaterials, setLocalMaterials] = useState<any[]>([])
     const [selectedMaterialIndex, setSelectedMaterialIndex] = useState<number>(-1)
     const [selectedLayerIndex, setSelectedLayerIndex] = useState<number>(-1)
+    const [dragLayerIndex, setDragLayerIndex] = useState<number | null>(null)
+    const [dragOverLayerIndex, setDragOverLayerIndex] = useState<number | null>(null)
 
     // Keyframe Editor State
     const [isKeyframeEditorOpen, setIsKeyframeEditorOpen] = useState(false)
@@ -88,6 +90,12 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 
     const isInitialized = React.useRef(false)
     const materialListRef = React.useRef<HTMLDivElement>(null)
+    const layerListRef = React.useRef<HTMLDivElement>(null)
+    const dragOverLayerIndexRef = React.useRef<number | null>(null)
+
+    useEffect(() => {
+        dragOverLayerIndexRef.current = dragOverLayerIndex
+    }, [dragOverLayerIndex])
 
     // Initialize local state
     useEffect(() => {
@@ -169,6 +177,80 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         newLayers[layerIndex] = { ...newLayers[layerIndex], ...updates }
         newMaterials[matIndex].Layers = newLayers
         setLocalMaterials(newMaterials)
+    }
+
+    const moveLayer = (fromIndex: number, toIndex: number) => {
+        if (selectedMaterialIndex < 0) return
+        const material = localMaterials[selectedMaterialIndex]
+        const layers = [...(material?.Layers || [])]
+        if (fromIndex < 0 || toIndex < 0 || fromIndex >= layers.length || toIndex >= layers.length) return
+        if (fromIndex === toIndex) return
+
+        const [moved] = layers.splice(fromIndex, 1)
+        layers.splice(toIndex, 0, moved)
+
+        const newMaterials = [...localMaterials]
+        newMaterials[selectedMaterialIndex] = { ...material, Layers: layers }
+        setLocalMaterials(newMaterials)
+
+        if (selectedLayerIndex === fromIndex) {
+            setSelectedLayerIndex(toIndex)
+        } else if (selectedLayerIndex > fromIndex && selectedLayerIndex <= toIndex) {
+            setSelectedLayerIndex(selectedLayerIndex - 1)
+        } else if (selectedLayerIndex < fromIndex && selectedLayerIndex >= toIndex) {
+            setSelectedLayerIndex(selectedLayerIndex + 1)
+        }
+    }
+
+    const handleLayerMouseDown = (e: React.MouseEvent, index: number) => {
+        if (e.button !== 0) return
+        if (selectedMaterialIndex < 0) return
+        e.preventDefault()
+
+        const startX = e.clientX
+        const startY = e.clientY
+        let dragStarted = false
+
+        const handleMouseMove = (moveEvent: MouseEvent) => {
+            const deltaX = Math.abs(moveEvent.clientX - startX)
+            const deltaY = Math.abs(moveEvent.clientY - startY)
+
+            if (!dragStarted && (deltaX > 4 || deltaY > 4)) {
+                dragStarted = true
+                setDragLayerIndex(index)
+                setDragOverLayerIndex(index)
+            }
+
+            if (dragStarted) {
+                const elementUnderMouse = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY) as HTMLElement | null
+                const layerItem = elementUnderMouse?.closest('[data-layer-index]') as HTMLElement | null
+                if (layerItem) {
+                    const targetIndex = parseInt(layerItem.dataset.layerIndex || '', 10)
+                    if (!isNaN(targetIndex)) {
+                        setDragOverLayerIndex(targetIndex)
+                    }
+                } else {
+                    setDragOverLayerIndex(null)
+                }
+            }
+        }
+
+        const handleMouseUp = () => {
+            document.removeEventListener('mousemove', handleMouseMove)
+            document.removeEventListener('mouseup', handleMouseUp)
+
+            if (dragStarted) {
+                const targetIndex = dragOverLayerIndexRef.current
+                if (targetIndex !== null) {
+                    moveLayer(index, targetIndex)
+                }
+            }
+            setDragLayerIndex(null)
+            setDragOverLayerIndex(null)
+        }
+
+        document.addEventListener('mousemove', handleMouseMove)
+        document.addEventListener('mouseup', handleMouseUp)
     }
 
     // Material Actions
@@ -406,19 +488,25 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                                 style={{ backgroundColor: '#5a9cff', borderColor: '#5a9cff' }}
                             />
                         </div>
-                        <div style={{ overflowY: 'auto', flex: 1 }}>
+                        <div ref={layerListRef} style={{ overflowY: 'auto', flex: 1 }}>
                             {selectedMaterial ? (
                                 <List
                                     dataSource={selectedMaterial.Layers || []}
                                     renderItem={(_item: any, index: number) => (
                                         <List.Item
                                             onClick={() => setSelectedLayerIndex(index)}
+                                            data-layer-index={index}
+                                            onMouseDown={(e) => handleLayerMouseDown(e, index)}
                                             style={{
                                                 cursor: 'pointer',
                                                 padding: '4px 12px',
                                                 backgroundColor: selectedLayerIndex === index ? '#5a9cff' : 'transparent',
                                                 color: selectedLayerIndex === index ? '#fff' : '#b0b0b0',
-                                                borderBottom: '1px solid #3a3a3a'
+                                                borderBottom: '1px solid #3a3a3a',
+                                                opacity: dragLayerIndex === index ? 0.6 : 1,
+                                                outline: dragOverLayerIndex === index && dragLayerIndex !== null && dragLayerIndex !== index ? '1px dashed #5a9cff' : 'none',
+                                                cursor: dragLayerIndex === index ? 'grabbing' : 'grab',
+                                                userSelect: 'none'
                                             }}
                                             className="hover:bg-[#454545]"
                                         >

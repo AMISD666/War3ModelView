@@ -170,7 +170,15 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose 
                                         <Select
                                             style={{ width: '100%' }}
                                             value={selectedGeoset.MaterialID}
-                                            onChange={(v) => updateLocalGeoset(selectedIndex, { MaterialID: v })}
+                                            onChange={(v) => {
+                                                const materialCount = (modelData as any)?.Materials?.length || 0
+                                                const raw = typeof v === 'number' ? v : Number(v)
+                                                const safe = Number.isFinite(raw) ? Math.floor(raw) : 0
+                                                const clamped = materialCount > 0
+                                                    ? Math.min(Math.max(0, safe), materialCount - 1)
+                                                    : 0
+                                                updateLocalGeoset(selectedIndex, { MaterialID: clamped })
+                                            }}
                                             popupClassName="dark-theme-select-dropdown"
                                             options={(modelData as any)?.Materials?.map((_m: any, i: number) => ({
                                                 value: i,
