@@ -87,7 +87,8 @@ export class GizmoRenderer {
         center: vec3,
         mode: GizmoMode,
         highlightAxis: GizmoAxis,
-        scale: number = 1.0
+        scale: number = 1.0,
+        basis?: { x: vec3, y: vec3, z: vec3 }
     ) {
         if (!this.program || !this.buffer || !this.colorBuffer) return
 
@@ -138,19 +139,22 @@ export class GizmoRenderer {
         const blue = highlightAxis === 'z' ? [1, 1, 0] : [0, 0, 1]
 
         const axisLen = this.axisLength * scale
+        const axisX = basis?.x ?? vec3.fromValues(1, 0, 0)
+        const axisY = basis?.y ?? vec3.fromValues(0, 1, 0)
+        const axisZ = basis?.z ?? vec3.fromValues(0, 0, 1)
 
         if (mode === 'translate') {
-            const xEnd = vec3.create(); vec3.add(xEnd, center, [axisLen, 0, 0])
-            const yEnd = vec3.create(); vec3.add(yEnd, center, [0, axisLen, 0])
-            const zEnd = vec3.create(); vec3.add(zEnd, center, [0, 0, axisLen])
+            const xEnd = vec3.create(); vec3.scaleAndAdd(xEnd, center, axisX, axisLen)
+            const yEnd = vec3.create(); vec3.scaleAndAdd(yEnd, center, axisY, axisLen)
+            const zEnd = vec3.create(); vec3.scaleAndAdd(zEnd, center, axisZ, axisLen)
 
             addLine(center, xEnd, red)
             addLine(center, yEnd, green)
             addLine(center, zEnd, blue)
         } else if (mode === 'scale') {
-            const xEnd = vec3.create(); vec3.add(xEnd, center, [axisLen, 0, 0])
-            const yEnd = vec3.create(); vec3.add(yEnd, center, [0, axisLen, 0])
-            const zEnd = vec3.create(); vec3.add(zEnd, center, [0, 0, axisLen])
+            const xEnd = vec3.create(); vec3.scaleAndAdd(xEnd, center, axisX, axisLen)
+            const yEnd = vec3.create(); vec3.scaleAndAdd(yEnd, center, axisY, axisLen)
+            const zEnd = vec3.create(); vec3.scaleAndAdd(zEnd, center, axisZ, axisLen)
 
             addLine(center, xEnd, red)
             addLine(center, yEnd, green)
@@ -168,8 +172,14 @@ export class GizmoRenderer {
             for (let i = 0; i < segments; i++) {
                 const theta1 = (i / segments) * Math.PI * 2
                 const theta2 = ((i + 1) / segments) * Math.PI * 2
-                const p1 = vec3.fromValues(center[0], center[1] + Math.cos(theta1) * r, center[2] + Math.sin(theta1) * r)
-                const p2 = vec3.fromValues(center[0], center[1] + Math.cos(theta2) * r, center[2] + Math.sin(theta2) * r)
+                const p1 = vec3.create()
+                vec3.scaleAndAdd(p1, p1, axisY, Math.cos(theta1) * r)
+                vec3.scaleAndAdd(p1, p1, axisZ, Math.sin(theta1) * r)
+                vec3.add(p1, p1, center)
+                const p2 = vec3.create()
+                vec3.scaleAndAdd(p2, p2, axisY, Math.cos(theta2) * r)
+                vec3.scaleAndAdd(p2, p2, axisZ, Math.sin(theta2) * r)
+                vec3.add(p2, p2, center)
                 addLine(p1, p2, red)
             }
 
@@ -177,8 +187,14 @@ export class GizmoRenderer {
             for (let i = 0; i < segments; i++) {
                 const theta1 = (i / segments) * Math.PI * 2
                 const theta2 = ((i + 1) / segments) * Math.PI * 2
-                const p1 = vec3.fromValues(center[0] + Math.cos(theta1) * r, center[1], center[2] + Math.sin(theta1) * r)
-                const p2 = vec3.fromValues(center[0] + Math.cos(theta2) * r, center[1], center[2] + Math.sin(theta2) * r)
+                const p1 = vec3.create()
+                vec3.scaleAndAdd(p1, p1, axisX, Math.cos(theta1) * r)
+                vec3.scaleAndAdd(p1, p1, axisZ, Math.sin(theta1) * r)
+                vec3.add(p1, p1, center)
+                const p2 = vec3.create()
+                vec3.scaleAndAdd(p2, p2, axisX, Math.cos(theta2) * r)
+                vec3.scaleAndAdd(p2, p2, axisZ, Math.sin(theta2) * r)
+                vec3.add(p2, p2, center)
                 addLine(p1, p2, green)
             }
 
@@ -186,8 +202,14 @@ export class GizmoRenderer {
             for (let i = 0; i < segments; i++) {
                 const theta1 = (i / segments) * Math.PI * 2
                 const theta2 = ((i + 1) / segments) * Math.PI * 2
-                const p1 = vec3.fromValues(center[0] + Math.cos(theta1) * r, center[1] + Math.sin(theta1) * r, center[2])
-                const p2 = vec3.fromValues(center[0] + Math.cos(theta2) * r, center[1] + Math.sin(theta2) * r, center[2])
+                const p1 = vec3.create()
+                vec3.scaleAndAdd(p1, p1, axisX, Math.cos(theta1) * r)
+                vec3.scaleAndAdd(p1, p1, axisY, Math.sin(theta1) * r)
+                vec3.add(p1, p1, center)
+                const p2 = vec3.create()
+                vec3.scaleAndAdd(p2, p2, axisX, Math.cos(theta2) * r)
+                vec3.scaleAndAdd(p2, p2, axisY, Math.sin(theta2) * r)
+                vec3.add(p2, p2, center)
                 addLine(p1, p2, blue)
             }
         }
@@ -199,10 +221,22 @@ export class GizmoRenderer {
         // XY Plane (Blue)
         if (mode === 'translate' || mode === 'scale') {
             const color = highlightAxis === 'xy' ? [1, 1, 0] : [0, 0, 1]
-            const p1 = vec3.create(); vec3.add(p1, center, [planeOffset, planeOffset, 0])
-            const p2 = vec3.create(); vec3.add(p2, center, [planeOffset + planeSize, planeOffset, 0])
-            const p3 = vec3.create(); vec3.add(p3, center, [planeOffset + planeSize, planeOffset + planeSize, 0])
-            const p4 = vec3.create(); vec3.add(p4, center, [planeOffset, planeOffset + planeSize, 0])
+            const p1 = vec3.create()
+            vec3.scaleAndAdd(p1, p1, axisX, planeOffset)
+            vec3.scaleAndAdd(p1, p1, axisY, planeOffset)
+            vec3.add(p1, p1, center)
+            const p2 = vec3.create()
+            vec3.scaleAndAdd(p2, p2, axisX, planeOffset + planeSize)
+            vec3.scaleAndAdd(p2, p2, axisY, planeOffset)
+            vec3.add(p2, p2, center)
+            const p3 = vec3.create()
+            vec3.scaleAndAdd(p3, p3, axisX, planeOffset + planeSize)
+            vec3.scaleAndAdd(p3, p3, axisY, planeOffset + planeSize)
+            vec3.add(p3, p3, center)
+            const p4 = vec3.create()
+            vec3.scaleAndAdd(p4, p4, axisX, planeOffset)
+            vec3.scaleAndAdd(p4, p4, axisY, planeOffset + planeSize)
+            vec3.add(p4, p4, center)
             if (mode === 'translate') {
                 addLine(p1, p2, color)
                 addLine(p2, p3, color)
@@ -216,10 +250,22 @@ export class GizmoRenderer {
         // XZ Plane (Green)
         if (mode === 'translate' || mode === 'scale') {
             const color = highlightAxis === 'xz' ? [1, 1, 0] : [0, 1, 0]
-            const p1 = vec3.create(); vec3.add(p1, center, [planeOffset, 0, planeOffset])
-            const p2 = vec3.create(); vec3.add(p2, center, [planeOffset + planeSize, 0, planeOffset])
-            const p3 = vec3.create(); vec3.add(p3, center, [planeOffset + planeSize, 0, planeOffset + planeSize])
-            const p4 = vec3.create(); vec3.add(p4, center, [planeOffset, 0, planeOffset + planeSize])
+            const p1 = vec3.create()
+            vec3.scaleAndAdd(p1, p1, axisX, planeOffset)
+            vec3.scaleAndAdd(p1, p1, axisZ, planeOffset)
+            vec3.add(p1, p1, center)
+            const p2 = vec3.create()
+            vec3.scaleAndAdd(p2, p2, axisX, planeOffset + planeSize)
+            vec3.scaleAndAdd(p2, p2, axisZ, planeOffset)
+            vec3.add(p2, p2, center)
+            const p3 = vec3.create()
+            vec3.scaleAndAdd(p3, p3, axisX, planeOffset + planeSize)
+            vec3.scaleAndAdd(p3, p3, axisZ, planeOffset + planeSize)
+            vec3.add(p3, p3, center)
+            const p4 = vec3.create()
+            vec3.scaleAndAdd(p4, p4, axisX, planeOffset)
+            vec3.scaleAndAdd(p4, p4, axisZ, planeOffset + planeSize)
+            vec3.add(p4, p4, center)
             if (mode === 'translate') {
                 addLine(p1, p2, color)
                 addLine(p2, p3, color)
@@ -233,10 +279,22 @@ export class GizmoRenderer {
         // YZ Plane (Red)
         if (mode === 'translate' || mode === 'scale') {
             const color = highlightAxis === 'yz' ? [1, 1, 0] : [1, 0, 0]
-            const p1 = vec3.create(); vec3.add(p1, center, [0, planeOffset, planeOffset])
-            const p2 = vec3.create(); vec3.add(p2, center, [0, planeOffset + planeSize, planeOffset])
-            const p3 = vec3.create(); vec3.add(p3, center, [0, planeOffset + planeSize, planeOffset + planeSize])
-            const p4 = vec3.create(); vec3.add(p4, center, [0, planeOffset, planeOffset + planeSize])
+            const p1 = vec3.create()
+            vec3.scaleAndAdd(p1, p1, axisY, planeOffset)
+            vec3.scaleAndAdd(p1, p1, axisZ, planeOffset)
+            vec3.add(p1, p1, center)
+            const p2 = vec3.create()
+            vec3.scaleAndAdd(p2, p2, axisY, planeOffset + planeSize)
+            vec3.scaleAndAdd(p2, p2, axisZ, planeOffset)
+            vec3.add(p2, p2, center)
+            const p3 = vec3.create()
+            vec3.scaleAndAdd(p3, p3, axisY, planeOffset + planeSize)
+            vec3.scaleAndAdd(p3, p3, axisZ, planeOffset + planeSize)
+            vec3.add(p3, p3, center)
+            const p4 = vec3.create()
+            vec3.scaleAndAdd(p4, p4, axisY, planeOffset)
+            vec3.scaleAndAdd(p4, p4, axisZ, planeOffset + planeSize)
+            vec3.add(p4, p4, center)
             if (mode === 'translate') {
                 addLine(p1, p2, color)
                 addLine(p2, p3, color)
@@ -277,12 +335,16 @@ export class GizmoRenderer {
         rayDir: vec3,
         center: vec3,
         mode: GizmoMode,
-        scale: number = 1.0
+        scale: number = 1.0,
+        basis?: { x: vec3, y: vec3, z: vec3 }
     ): GizmoAxis {
         // Simplified ray-cylinder intersection (treating lines as cylinders/capsules)
         // For now, we use a distance check to the line segments
 
         const axisLen = this.axisLength * scale
+        const axisX = basis?.x ?? vec3.fromValues(1, 0, 0)
+        const axisY = basis?.y ?? vec3.fromValues(0, 1, 0)
+        const axisZ = basis?.z ?? vec3.fromValues(0, 0, 1)
         // Keep hit size proportional to axis length so screen-space size stays consistent
         const lineHitThreshold = axisLen * 0.1
         const ringHitThreshold = axisLen * 0.08
@@ -295,9 +357,9 @@ export class GizmoRenderer {
                     return 'center'
                 }
             }
-            const xEnd = vec3.create(); vec3.add(xEnd, center, [axisLen, 0, 0])
-            const yEnd = vec3.create(); vec3.add(yEnd, center, [0, axisLen, 0])
-            const zEnd = vec3.create(); vec3.add(zEnd, center, [0, 0, axisLen])
+            const xEnd = vec3.create(); vec3.scaleAndAdd(xEnd, center, axisX, axisLen)
+            const yEnd = vec3.create(); vec3.scaleAndAdd(yEnd, center, axisY, axisLen)
+            const zEnd = vec3.create(); vec3.scaleAndAdd(zEnd, center, axisZ, axisLen)
 
             const distX = this.distToSegment(cameraPos, rayDir, center, xEnd)
             const distY = this.distToSegment(cameraPos, rayDir, center, yEnd)
@@ -321,38 +383,38 @@ export class GizmoRenderer {
 
             if (mode === 'translate') {
                 distXY = this.distToQuad(cameraPos, rayDir,
-                    vec3.fromValues(center[0] + planeOffset, center[1] + planeOffset, center[2]),
-                    vec3.fromValues(center[0] + planeOffset + planeSize, center[1] + planeOffset, center[2]),
-                    vec3.fromValues(center[0] + planeOffset + planeSize, center[1] + planeOffset + planeSize, center[2]),
-                    vec3.fromValues(center[0] + planeOffset, center[1] + planeOffset + planeSize, center[2])
+                    vec3.add(vec3.create(), center, vec3.add(vec3.create(), vec3.scale(vec3.create(), axisX, planeOffset), vec3.scale(vec3.create(), axisY, planeOffset))),
+                    vec3.add(vec3.create(), center, vec3.add(vec3.create(), vec3.scale(vec3.create(), axisX, planeOffset + planeSize), vec3.scale(vec3.create(), axisY, planeOffset))),
+                    vec3.add(vec3.create(), center, vec3.add(vec3.create(), vec3.scale(vec3.create(), axisX, planeOffset + planeSize), vec3.scale(vec3.create(), axisY, planeOffset + planeSize))),
+                    vec3.add(vec3.create(), center, vec3.add(vec3.create(), vec3.scale(vec3.create(), axisX, planeOffset), vec3.scale(vec3.create(), axisY, planeOffset + planeSize)))
                 )
                 distXZ = this.distToQuad(cameraPos, rayDir,
-                    vec3.fromValues(center[0] + planeOffset, center[1], center[2] + planeOffset),
-                    vec3.fromValues(center[0] + planeOffset + planeSize, center[1], center[2] + planeOffset),
-                    vec3.fromValues(center[0] + planeOffset + planeSize, center[1], center[2] + planeOffset + planeSize),
-                    vec3.fromValues(center[0] + planeOffset, center[1], center[2] + planeOffset + planeSize)
+                    vec3.add(vec3.create(), center, vec3.add(vec3.create(), vec3.scale(vec3.create(), axisX, planeOffset), vec3.scale(vec3.create(), axisZ, planeOffset))),
+                    vec3.add(vec3.create(), center, vec3.add(vec3.create(), vec3.scale(vec3.create(), axisX, planeOffset + planeSize), vec3.scale(vec3.create(), axisZ, planeOffset))),
+                    vec3.add(vec3.create(), center, vec3.add(vec3.create(), vec3.scale(vec3.create(), axisX, planeOffset + planeSize), vec3.scale(vec3.create(), axisZ, planeOffset + planeSize))),
+                    vec3.add(vec3.create(), center, vec3.add(vec3.create(), vec3.scale(vec3.create(), axisX, planeOffset), vec3.scale(vec3.create(), axisZ, planeOffset + planeSize)))
                 )
                 distYZ = this.distToQuad(cameraPos, rayDir,
-                    vec3.fromValues(center[0], center[1] + planeOffset, center[2] + planeOffset),
-                    vec3.fromValues(center[0], center[1] + planeOffset + planeSize, center[2] + planeOffset),
-                    vec3.fromValues(center[0], center[1] + planeOffset + planeSize, center[2] + planeOffset + planeSize),
-                    vec3.fromValues(center[0], center[1] + planeOffset, center[2] + planeOffset + planeSize)
+                    vec3.add(vec3.create(), center, vec3.add(vec3.create(), vec3.scale(vec3.create(), axisY, planeOffset), vec3.scale(vec3.create(), axisZ, planeOffset))),
+                    vec3.add(vec3.create(), center, vec3.add(vec3.create(), vec3.scale(vec3.create(), axisY, planeOffset + planeSize), vec3.scale(vec3.create(), axisZ, planeOffset))),
+                    vec3.add(vec3.create(), center, vec3.add(vec3.create(), vec3.scale(vec3.create(), axisY, planeOffset + planeSize), vec3.scale(vec3.create(), axisZ, planeOffset + planeSize))),
+                    vec3.add(vec3.create(), center, vec3.add(vec3.create(), vec3.scale(vec3.create(), axisY, planeOffset), vec3.scale(vec3.create(), axisZ, planeOffset + planeSize)))
                 )
             } else {
                 distXY = this.distToTriangle(cameraPos, rayDir,
-                    vec3.fromValues(center[0] + planeOffset, center[1] + planeOffset, center[2]),
-                    vec3.fromValues(center[0] + planeOffset + planeSize, center[1] + planeOffset, center[2]),
-                    vec3.fromValues(center[0] + planeOffset, center[1] + planeOffset + planeSize, center[2])
+                    vec3.add(vec3.create(), center, vec3.add(vec3.create(), vec3.scale(vec3.create(), axisX, planeOffset), vec3.scale(vec3.create(), axisY, planeOffset))),
+                    vec3.add(vec3.create(), center, vec3.add(vec3.create(), vec3.scale(vec3.create(), axisX, planeOffset + planeSize), vec3.scale(vec3.create(), axisY, planeOffset))),
+                    vec3.add(vec3.create(), center, vec3.add(vec3.create(), vec3.scale(vec3.create(), axisX, planeOffset), vec3.scale(vec3.create(), axisY, planeOffset + planeSize)))
                 )
                 distXZ = this.distToTriangle(cameraPos, rayDir,
-                    vec3.fromValues(center[0] + planeOffset, center[1], center[2] + planeOffset),
-                    vec3.fromValues(center[0] + planeOffset + planeSize, center[1], center[2] + planeOffset),
-                    vec3.fromValues(center[0] + planeOffset, center[1], center[2] + planeOffset + planeSize)
+                    vec3.add(vec3.create(), center, vec3.add(vec3.create(), vec3.scale(vec3.create(), axisX, planeOffset), vec3.scale(vec3.create(), axisZ, planeOffset))),
+                    vec3.add(vec3.create(), center, vec3.add(vec3.create(), vec3.scale(vec3.create(), axisX, planeOffset + planeSize), vec3.scale(vec3.create(), axisZ, planeOffset))),
+                    vec3.add(vec3.create(), center, vec3.add(vec3.create(), vec3.scale(vec3.create(), axisX, planeOffset), vec3.scale(vec3.create(), axisZ, planeOffset + planeSize)))
                 )
                 distYZ = this.distToTriangle(cameraPos, rayDir,
-                    vec3.fromValues(center[0], center[1] + planeOffset, center[2] + planeOffset),
-                    vec3.fromValues(center[0], center[1] + planeOffset + planeSize, center[2] + planeOffset),
-                    vec3.fromValues(center[0], center[1] + planeOffset, center[2] + planeOffset + planeSize)
+                    vec3.add(vec3.create(), center, vec3.add(vec3.create(), vec3.scale(vec3.create(), axisY, planeOffset), vec3.scale(vec3.create(), axisZ, planeOffset))),
+                    vec3.add(vec3.create(), center, vec3.add(vec3.create(), vec3.scale(vec3.create(), axisY, planeOffset + planeSize), vec3.scale(vec3.create(), axisZ, planeOffset))),
+                    vec3.add(vec3.create(), center, vec3.add(vec3.create(), vec3.scale(vec3.create(), axisY, planeOffset), vec3.scale(vec3.create(), axisZ, planeOffset + planeSize)))
                 )
             }
 
@@ -367,11 +429,11 @@ export class GizmoRenderer {
             const r = axisLen
 
             // X-Axis Ring (YZ Plane)
-            const distX = this.distToRing(cameraPos, rayDir, center, [1, 0, 0], r)
+            const distX = this.distToRing(cameraPos, rayDir, center, axisX, r)
             // Y-Axis Ring (XZ Plane)
-            const distY = this.distToRing(cameraPos, rayDir, center, [0, 1, 0], r)
+            const distY = this.distToRing(cameraPos, rayDir, center, axisY, r)
             // Z-Axis Ring (XY Plane)
-            const distZ = this.distToRing(cameraPos, rayDir, center, [0, 0, 1], r)
+            const distZ = this.distToRing(cameraPos, rayDir, center, axisZ, r)
 
             let minDist = ringHitThreshold
             let hitAxis: GizmoAxis = null

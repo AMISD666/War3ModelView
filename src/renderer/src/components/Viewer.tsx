@@ -558,6 +558,46 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const formatHudVec3 = (vec: [number, number, number], digits: number) => {
     return `${formatHudNumber(vec[0], digits)}, ${formatHudNumber(vec[1], digits)}, ${formatHudNumber(vec[2], digits)}`
   }
+  const getCameraBasis = () => {
+    const { theta, phi } = targetCamera.current
+    const forward = vec3.fromValues(Math.sin(phi) * Math.cos(theta), Math.sin(phi) * Math.sin(theta), Math.cos(phi))
+    const up = vec3.fromValues(0, 0, 1)
+    const right = vec3.create()
+    vec3.cross(right, forward, up)
+    vec3.normalize(right, right)
+    const camUp = vec3.create()
+    vec3.cross(camUp, right, forward)
+    vec3.normalize(camUp, camUp)
+    return { right, up: camUp, forward }
+  }
+  const getGizmoBasis = (orientation: 'world' | 'camera') => {
+    if (orientation === 'camera') {
+      const cam = getCameraBasis()
+      return { x: cam.right, y: cam.up, z: cam.forward }
+    }
+    return {
+      x: vec3.fromValues(1, 0, 0),
+      y: vec3.fromValues(0, 1, 0),
+      z: vec3.fromValues(0, 0, 1)
+    }
+  }
+  const quatToEulerDeg = (q: quat): [number, number, number] => {
+    const x = q[0], y = q[1], z = q[2], w = q[3]
+    const sinr_cosp = 2 * (w * x + y * z)
+    const cosr_cosp = 1 - 2 * (x * x + y * y)
+    const roll = Math.atan2(sinr_cosp, cosr_cosp)
+
+    const sinp = 2 * (w * y - z * x)
+    let pitch: number
+    if (Math.abs(sinp) >= 1) pitch = Math.sign(sinp) * Math.PI / 2
+    else pitch = Math.asin(sinp)
+
+    const siny_cosp = 2 * (w * z + x * y)
+    const cosy_cosp = 1 - 2 * (y * y + z * z)
+    const yaw = Math.atan2(siny_cosp, cosy_cosp)
+
+    return [roll * 180 / Math.PI, pitch * 180 / Math.PI, yaw * 180 / Math.PI]
+  }
   const buildHudText = (mode: 'translate' | 'rotate' | 'scale') => {
     const hud = gizmoHudRef.current
     if (mode === 'translate') {
@@ -3403,8 +3443,19 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               vec3.scale(center, center, 1.0 / count)
 
               const gizmoScale = getGizmoScale()
+              const gizmoOrientation = useRendererStore.getState().gizmoOrientation
+              const gizmoBasis = getGizmoBasis(gizmoOrientation)
 
-              gizmoRenderer.current.render(gl as WebGLRenderingContext, mvMatrix, pMatrix, center, transformMode as any, gizmoState.current.activeAxis, gizmoScale)
+              gizmoRenderer.current.render(
+                gl as WebGLRenderingContext,
+                mvMatrix,
+                pMatrix,
+                center,
+                transformMode as any,
+                gizmoState.current.activeAxis,
+                gizmoScale,
+                gizmoBasis
+              )
             }
           }
 
@@ -3631,6 +3682,13 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       vec3.normalize(vecs.right, vecs.right)
       vec3.cross(vecs.camUp, vecs.right, vecs.forward)
       vec3.normalize(vecs.camUp, vecs.camUp)
+      const gizmoOrientation = useRendererStore.getState().gizmoOrientation
+      const axisBasis = gizmoOrientation === 'camera'
+        ? { x: vecs.right, y: vecs.camUp, z: vecs.forward }
+        : { x: vec3.fromValues(1, 0, 0), y: vec3.fromValues(0, 1, 0), z: vec3.fromValues(0, 0, 1) }
+      const axisX = axisBasis.x
+      const axisY = axisBasis.y
+      const axisZ = axisBasis.z
 
       const canvas = canvasRef.current
       const hasCanvas = !!canvas && canvas.width > 0 && canvas.height > 0
@@ -3706,7 +3764,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       let singleAxisWorldDelta: vec3 | null = null
       const isSingleAxis = axis === 'x' || axis === 'y' || axis === 'z'
       if (isSingleAxis && gizmoCount > 0) {
-        const axisDir = vec3.fromValues(axis === 'x' ? 1 : 0, axis === 'y' ? 1 : 0, axis === 'z' ? 1 : 0)
+        const axisDir = axis === 'x' ? axisX : axis === 'y' ? axisY : axisZ
         const axisDotView = vec3.dot(axisDir, vecs.forward)
 
         let axisScreenSign = 0
@@ -3783,9 +3841,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       // Precise Ray-Plane Delta (For Dual Axis)
       if (['xy', 'xz', 'yz'].includes(axis) && gizmoCount > 0) {
         const planeNormal = vec3.create()
-        if (axis === 'xy') vec3.set(planeNormal, 0, 0, 1)
-        else if (axis === 'xz') vec3.set(planeNormal, 0, 1, 0)
-        else if (axis === 'yz') vec3.set(planeNormal, 1, 0, 0)
+        if (axis === 'xy') vec3.copy(planeNormal, axisZ)
+        else if (axis === 'xz') vec3.copy(planeNormal, axisY)
+        else if (axis === 'yz') vec3.copy(planeNormal, axisX)
 
         const rayCurr = getRay(e.clientX, e.clientY)
         const rayPrev = getRay(e.clientX - deltaX, e.clientY - deltaY)
@@ -3836,6 +3894,55 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         snap.rotationApplied[idx] = snapped
         return delta
       }
+      const buildMoveVec = (axisKey: GizmoAxis) => {
+        vec3.zero(vecs.moveVec)
+        if (singleAxisWorldDelta) {
+          vec3.copy(vecs.moveVec, singleAxisWorldDelta)
+          return vecs.moveVec
+        }
+        if (axisKey === 'x') {
+          const d = vec3.dot(vecs.worldMoveDelta, axisX)
+          vec3.scale(vecs.moveVec, axisX, -d)
+        } else if (axisKey === 'y') {
+          const d = vec3.dot(vecs.worldMoveDelta, axisY)
+          vec3.scale(vecs.moveVec, axisY, d)
+        } else if (axisKey === 'z') {
+          const d = vec3.dot(vecs.worldMoveDelta, axisZ)
+          vec3.scale(vecs.moveVec, axisZ, d)
+        } else if (axisKey === 'xy') {
+          const dx = vec3.dot(vecs.worldMoveDelta, axisX)
+          const dy = vec3.dot(vecs.worldMoveDelta, axisY)
+          vec3.scale(vecs.moveVec, axisX, dx)
+          vec3.scaleAndAdd(vecs.moveVec, vecs.moveVec, axisY, dy)
+        } else if (axisKey === 'xz') {
+          const dx = vec3.dot(vecs.worldMoveDelta, axisX)
+          const dz = vec3.dot(vecs.worldMoveDelta, axisZ)
+          vec3.scale(vecs.moveVec, axisX, dx)
+          vec3.scaleAndAdd(vecs.moveVec, vecs.moveVec, axisZ, dz)
+        } else if (axisKey === 'yz') {
+          const dy = vec3.dot(vecs.worldMoveDelta, axisY)
+          const dz = vec3.dot(vecs.worldMoveDelta, axisZ)
+          vec3.scale(vecs.moveVec, axisY, dy)
+          vec3.scaleAndAdd(vecs.moveVec, vecs.moveVec, axisZ, dz)
+        }
+        return vecs.moveVec
+      }
+      const applyScaleInBasis = (v: Float32Array, i: number, scaleVec: vec3, center: vec3) => {
+        const p = vec3.fromValues(v[i] - center[0], v[i + 1] - center[1], v[i + 2] - center[2])
+        const lx = vec3.dot(p, axisX)
+        const ly = vec3.dot(p, axisY)
+        const lz = vec3.dot(p, axisZ)
+        const sx = lx * scaleVec[0]
+        const sy = ly * scaleVec[1]
+        const sz = lz * scaleVec[2]
+        const scaled = vec3.create()
+        vec3.scale(scaled, axisX, sx)
+        vec3.scaleAndAdd(scaled, scaled, axisY, sy)
+        vec3.scaleAndAdd(scaled, scaled, axisZ, sz)
+        v[i] = center[0] + scaled[0]
+        v[i + 1] = center[1] + scaled[1]
+        v[i + 2] = center[2] + scaled[2]
+      }
       const applyHudTranslate = (moveVec: vec3) => {
         const hud = gizmoHudRef.current
         hud.translation[0] += moveVec[0]
@@ -3861,15 +3968,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         const previewTransform = previewTransformRef.current
 
         if (transformMode === 'translate') {
-          vec3.zero(vecs.moveVec)
-          if (singleAxisWorldDelta) {
-            vec3.copy(vecs.moveVec, singleAxisWorldDelta)
-          } else if (axis === 'x') vecs.moveVec[0] = -vecs.worldMoveDelta[0]
-          else if (axis === 'y') vecs.moveVec[1] = vecs.worldMoveDelta[1]
-          else if (axis === 'z') vecs.moveVec[2] = vecs.worldMoveDelta[2]
-          else if (axis === 'xy') { vecs.moveVec[0] = vecs.worldMoveDelta[0]; vecs.moveVec[1] = vecs.worldMoveDelta[1]; }
-          else if (axis === 'xz') { vecs.moveVec[0] = vecs.worldMoveDelta[0]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
-          else if (axis === 'yz') { vecs.moveVec[1] = vecs.worldMoveDelta[1]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
+          buildMoveVec(axis)
 
           applyTranslateSnap(vecs.moveVec)
           applyHudTranslate(vecs.moveVec)
@@ -3890,13 +3989,16 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
           if (axis === 'x' || axis === 'y' || axis === 'z') {
             applyHudRotate(axis, angle)
-          }
-          if (angle !== 0) {
-            const currentRot = [...previewTransform.rotation]
-            if (axis === 'x') currentRot[0] += angle
-            else if (axis === 'y') currentRot[1] += angle
-            else if (axis === 'z') currentRot[2] += angle
-            previewTransform.rotation = currentRot as [number, number, number]
+            if (angle !== 0) {
+              const axisVec = axis === 'x' ? axisX : axis === 'y' ? axisY : axisZ
+              const deltaQuat = quat.create()
+              quat.setAxisAngle(deltaQuat, axisVec, angle * Math.PI / 180)
+              const currentQuat = quat.create()
+              quat.fromEuler(currentQuat, previewTransform.rotation[0], previewTransform.rotation[1], previewTransform.rotation[2])
+              // World-space rotation: delta * current
+              quat.multiply(currentQuat, deltaQuat, currentQuat)
+              previewTransform.rotation = quatToEulerDeg(currentQuat)
+            }
           }
         } else if (transformMode === 'scale') {
           const scaleFactor = 1 + (deltaX - deltaY) * 0.005
@@ -3937,18 +4039,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       }
 
       if (transformMode === 'translate' && mainMode === 'geometry') {
-        vec3.zero(vecs.moveVec)
-
-        // Single Axis: Use Legacy Projected Delta (inverted for some reason in legacy code, keeping behavior for now)
-        if (singleAxisWorldDelta) {
-          vec3.copy(vecs.moveVec, singleAxisWorldDelta)
-        } else if (axis === 'x') vecs.moveVec[0] = -vecs.worldMoveDelta[0]
-        else if (axis === 'y') vecs.moveVec[1] = vecs.worldMoveDelta[1]
-        else if (axis === 'z') vecs.moveVec[2] = vecs.worldMoveDelta[2]
-        // Dual Axis: Use Precise Ray-Plane Delta Directly (No inversion needed)
-        else if (axis === 'xy') { vecs.moveVec[0] = vecs.worldMoveDelta[0]; vecs.moveVec[1] = vecs.worldMoveDelta[1]; }
-        else if (axis === 'xz') { vecs.moveVec[0] = vecs.worldMoveDelta[0]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
-        else if (axis === 'yz') { vecs.moveVec[1] = vecs.worldMoveDelta[1]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
+        buildMoveVec(axis)
 
         applyTranslateSnap(vecs.moveVec)
         applyHudTranslate(vecs.moveVec)
@@ -3997,19 +4088,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       } else if (transformMode === 'translate' && mainMode === 'animation' && (subMode === 'binding' || subMode === 'keyframe')) {
         const { selectedNodeIds } = useSelectionStore.getState()
         const { autoKeyframe: _autoKeyframe, currentFrame, nodes, updateNode: _updateNode } = useModelStore.getState()
-        vec3.zero(vecs.moveVec)
-
-        // Animation mode: negate X, Y only; Z stays positive
-        // Animation mode: negate X, Y only; Z stays positive (Legacy Logic for Single Axis)
-        if (singleAxisWorldDelta) {
-          vec3.copy(vecs.moveVec, singleAxisWorldDelta)
-        } else if (axis === 'x') vecs.moveVec[0] = -vecs.worldMoveDelta[0]
-        else if (axis === 'y') vecs.moveVec[1] = vecs.worldMoveDelta[1]
-        else if (axis === 'z') vecs.moveVec[2] = vecs.worldMoveDelta[2]
-        // Dual Axis: Use Precise Ray-Plane Delta Directly
-        else if (axis === 'xy') { vecs.moveVec[0] = vecs.worldMoveDelta[0]; vecs.moveVec[1] = vecs.worldMoveDelta[1]; }
-        else if (axis === 'xz') { vecs.moveVec[0] = vecs.worldMoveDelta[0]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
-        else if (axis === 'yz') { vecs.moveVec[1] = vecs.worldMoveDelta[1]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
+        buildMoveVec(axis)
 
         applyTranslateSnap(vecs.moveVec)
         applyHudTranslate(vecs.moveVec)
@@ -4265,13 +4344,13 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
             if (axis === 'x') {
               angle = -deltaY * 0.01 // Negated to fix rotation direction
-              vec3.set(rotAxis, 1, 0, 0)
+              vec3.copy(rotAxis, axisX)
             } else if (axis === 'y') {
               angle = -deltaX * 0.01
-              vec3.set(rotAxis, 0, 1, 0)
+              vec3.copy(rotAxis, axisY)
             } else if (axis === 'z') {
               angle = deltaX * 0.01
-              vec3.set(rotAxis, 0, 0, 1)
+              vec3.copy(rotAxis, axisZ)
             }
 
             if (angle !== 0 && (axis === 'x' || axis === 'y' || axis === 'z')) {
@@ -4311,13 +4390,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             applyHudScale(scaleVec)
             if (scaleVec[0] !== 1 || scaleVec[1] !== 1 || scaleVec[2] !== 1) {
               applyToSelection((v, i) => {
-                const p = vec3.fromValues(v[i], v[i + 1], v[i + 2])
-                vec3.sub(p, p, center) // To local
-                vec3.mul(p, p, scaleVec) // Scale
-                vec3.add(p, p, center) // To world
-                v[i] = p[0]
-                v[i + 1] = p[1]
-                v[i + 2] = p[2]
+                applyScaleInBasis(v, i, scaleVec, center)
               })
             }
           }
@@ -4390,9 +4463,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         if (transformMode === 'rotate') {
           let angle = 0
           const rotAxis = vec3.create()
-          if (axis === 'x') { angle = -deltaY * 0.01; vec3.set(rotAxis, 1, 0, 0) }
-          else if (axis === 'y') { angle = -deltaX * 0.01; vec3.set(rotAxis, 0, 1, 0) }
-          else if (axis === 'z') { angle = deltaX * 0.01; vec3.set(rotAxis, 0, 0, 1) }
+          if (axis === 'x') { angle = -deltaY * 0.01; vec3.copy(rotAxis, axisX) }
+          else if (axis === 'y') { angle = -deltaX * 0.01; vec3.copy(rotAxis, axisY) }
+          else if (axis === 'z') { angle = deltaX * 0.01; vec3.copy(rotAxis, axisZ) }
 
           if (angle !== 0 && (axis === 'x' || axis === 'y' || axis === 'z')) {
             const snappedDeg = applyRotateSnapDeg(axis, angle * 180 / Math.PI)
@@ -4649,7 +4722,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           const rayDir = vec3.create(); vec3.subtract(rayDir, rayTarget, rayOrigin); vec3.normalize(rayDir, rayDir)
 
           // Pass rayOrigin as cameraPos to raycast (it serves as the ray start point)
-          const hit = gizmoRenderer.current.raycast(rayOrigin, rayDir, center, transformMode as any, gizmoScale)
+          const gizmoOrientation = useRendererStore.getState().gizmoOrientation
+          const gizmoBasis = getGizmoBasis(gizmoOrientation)
+          const hit = gizmoRenderer.current.raycast(rayOrigin, rayDir, center, transformMode as any, gizmoScale, gizmoBasis)
           gizmoState.current.activeAxis = hit
         }
       }

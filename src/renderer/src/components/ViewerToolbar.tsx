@@ -17,6 +17,7 @@ import {
     ApartmentOutlined, // Parent
     TableOutlined, // Grid Settings
     GlobalOutlined, // Global Transform
+    CameraOutlined, // Gizmo Facing
     AimOutlined, // Pivot
     FullscreenOutlined // Fit to View
 } from '@ant-design/icons';
@@ -68,7 +69,9 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         snapRotateEnabled,
         setSnapRotateEnabled,
         snapRotateStep,
-        setSnapRotateStep
+        setSnapRotateStep,
+        gizmoOrientation,
+        setGizmoOrientation
     } = useRendererStore(state => state);
     const { executeCommand } = useCommandManager();
     const snapButtonSize = 32
@@ -310,6 +313,24 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                         </Tooltip>
                     </>
                 )}
+            </Space>
+
+            <div style={{ width: 1, backgroundColor: '#555', height: '24px', alignSelf: 'center' }} />
+            <Space size={4}>
+                <Tooltip title={'\u4e16\u754c\u5750\u6807\u671d\u5411'}>
+                    <Button
+                        type={gizmoOrientation === 'world' ? 'primary' : 'default'}
+                        icon={<GlobalOutlined />}
+                        onClick={() => setGizmoOrientation('world')}
+                    />
+                </Tooltip>
+                <Tooltip title={'\u6444\u50cf\u673a\u671d\u5411'}>
+                    <Button
+                        type={gizmoOrientation === 'camera' ? 'primary' : 'default'}
+                        icon={<CameraOutlined />}
+                        onClick={() => setGizmoOrientation('camera')}
+                    />
+                </Tooltip>
             </Space>
 
             <div style={{ width: 1, backgroundColor: '#555', height: '24px', alignSelf: 'center' }} />
