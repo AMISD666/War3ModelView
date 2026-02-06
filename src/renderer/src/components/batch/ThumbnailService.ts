@@ -258,7 +258,8 @@ class ThumbnailService {
     public async renderFrame(
         fullPath: string,
         frame: number = 0,
-        sequenceIndex: number = 0
+        sequenceIndex: number = 0,
+        freeze: boolean = false
     ): Promise<RenderResult> {
         await this.ensureTeamColorsLoaded();
         const workerIndex = this.getAvailableWorkerIndex();
@@ -422,6 +423,7 @@ class ThumbnailService {
                             fullPath,
                             frame,
                             sequenceIndex,
+                            freeze,
                             backgroundColor: useRendererStore.getState().backgroundColor
                         }
                     });
@@ -434,6 +436,7 @@ class ThumbnailService {
                         teamColorData: this.teamColorData, // Send pre-loaded team colors
                         frame,
                         sequenceIndex,
+                        freeze,
                         backgroundColor: useRendererStore.getState().backgroundColor
                     };
 

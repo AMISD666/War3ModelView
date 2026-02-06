@@ -6,11 +6,14 @@ mod app_settings;
 mod copy_utils;
 mod delete_utils;
 mod mpq_manager;
+mod texture_decode;
 
 use base64::Engine;
 use mpq_manager::MpqManager;
+use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{ipc::Response, Emitter, Manager, State};
+use texture_decode::{get_texture_candidate_paths, normalize_path};
 
 use winreg::enums::*;
 use winreg::RegKey;
@@ -86,6 +89,31 @@ fn read_mpq_files_batch(paths: Vec<String>, state: State<'_, MpqManager>) -> Vec
         .collect()
 }
 
+#[derive(Serialize)]
+struct MpqProbeResult {
+    input: String,
+    normalized: String,
+    candidates: Vec<String>,
+    archive_count: usize,
+    archive_paths: Vec<String>,
+    found: bool,
+    size: Option<usize>,
+}
+
+#[tauri::command]
+fn debug_mpq_probe(path: String, state: State<'_, MpqManager>) -> Result<MpqProbeResult, String> {
+    let (normalized, candidates, size, archive_count) = state.probe_file(&path);
+    Ok(MpqProbeResult {
+        input: path,
+        normalized,
+        candidates,
+        archive_count,
+        archive_paths: state.archive_paths(),
+        found: size.is_some(),
+        size,
+    })
+}
+
 #[tauri::command]
 fn read_local_files_batch(paths: Vec<String>) -> Vec<Option<String>> {
     paths
@@ -96,6 +124,51 @@ fn read_local_files_batch(paths: Vec<String>) -> Vec<Option<String>> {
                 .map(|data| base64::engine::general_purpose::STANDARD.encode(data))
         })
         .collect()
+}
+
+#[tauri::command]
+fn load_textures_batch_bin(
+    model_path: String,
+    texture_paths: Vec<String>,
+    state: State<'_, MpqManager>,
+) -> Result<Response, String> {
+    let mut payload: Vec<u8> = Vec::new();
+    payload.extend_from_slice(&(texture_paths.len() as u32).to_le_bytes());
+
+    let normalized_model_path = normalize_path(&model_path);
+    let skip_fs = normalized_model_path.starts_with("dropped:") || normalized_model_path.is_empty();
+
+    for texture_path in texture_paths {
+        let normalized_texture_path = normalize_path(&texture_path);
+        let mut data: Option<Vec<u8>> = None;
+
+        if !skip_fs {
+            let candidates = get_texture_candidate_paths(&normalized_model_path, &normalized_texture_path);
+            for candidate in candidates {
+                if let Ok(bytes) = std::fs::read(&candidate) {
+                    if bytes.len() <= 50 * 1024 * 1024 {
+                        data = Some(bytes);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if data.is_none() {
+            data = state.read_file(&normalized_texture_path);
+        }
+
+        if let Some(bytes) = data {
+            payload.push(1u8);
+            payload.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            payload.extend_from_slice(&bytes);
+        } else {
+            payload.push(0u8);
+            payload.extend_from_slice(&0u32.to_le_bytes());
+        }
+    }
+
+    Ok(Response::new(payload))
 }
 
 // ==================
@@ -950,7 +1023,9 @@ fn main() {
             load_mpq,
             read_mpq_file,
             read_mpq_files_batch,
+            debug_mpq_probe,
             read_local_files_batch,
+            load_textures_batch_bin,
             detect_warcraft_path,
             toggle_console,
             debug_log,

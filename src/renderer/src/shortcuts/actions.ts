@@ -18,7 +18,7 @@ export const shortcutActions: ShortcutAction[] = [
         label: '打开模型',
         category: '文件',
         contexts: ['global'],
-        defaultBindings: ['Ctrl+O', 'Meta+O'],
+        defaultBindings: ['Ctrl+O'],
         allowInInputs: true,
         preventDefault: true
     },
@@ -27,7 +27,7 @@ export const shortcutActions: ShortcutAction[] = [
         label: '保存模型',
         category: '文件',
         contexts: ['global'],
-        defaultBindings: ['Ctrl+S', 'Meta+S'],
+        defaultBindings: ['Ctrl+S'],
         allowInInputs: true,
         preventDefault: true
     },
@@ -36,7 +36,7 @@ export const shortcutActions: ShortcutAction[] = [
         label: '另存为',
         category: '文件',
         contexts: ['global'],
-        defaultBindings: ['Ctrl+Shift+S', 'Meta+Shift+S'],
+        defaultBindings: ['Ctrl+Shift+S'],
         allowInInputs: true,
         preventDefault: true
     },
@@ -56,7 +56,7 @@ export const shortcutActions: ShortcutAction[] = [
         label: '关闭当前标签',
         category: '窗口',
         contexts: ['global'],
-        defaultBindings: ['Ctrl+W', 'Meta+W'],
+        defaultBindings: ['Ctrl+W'],
         allowInInputs: true,
         preventDefault: true
     },
@@ -233,7 +233,7 @@ export const shortcutActions: ShortcutAction[] = [
         label: '适配视图',
         category: '视图',
         contexts: ['viewer'],
-        defaultBindings: ['F'],
+        defaultBindings: ['Shift+F'],
         preventDefault: true
     },
     {
@@ -241,7 +241,7 @@ export const shortcutActions: ShortcutAction[] = [
         label: '切换线框/纹理',
         category: '视图',
         contexts: ['viewer'],
-        defaultBindings: ['Shift+F'],
+        defaultBindings: ['F'],
         preventDefault: true
     },
     {
@@ -268,6 +268,22 @@ export const shortcutActions: ShortcutAction[] = [
         defaultBindings: ['Space'],
         preventDefault: true
     },
+    {
+        id: 'animation.selectParentNode',
+        label: '选取父节点',
+        category: '动画',
+        contexts: ['animation'],
+        defaultBindings: ['O'],
+        preventDefault: true
+    },
+    {
+        id: 'animation.selectChildNode',
+        label: '选取子节点',
+        category: '动画',
+        contexts: ['animation'],
+        defaultBindings: ['P'],
+        preventDefault: true
+    },
 
     // Edit
     {
@@ -275,7 +291,7 @@ export const shortcutActions: ShortcutAction[] = [
         label: '撤销',
         category: '编辑',
         contexts: ['global'],
-        defaultBindings: ['Ctrl+Z', 'Meta+Z'],
+        defaultBindings: ['Ctrl+Z'],
         preventDefault: true
     },
     {
@@ -283,7 +299,7 @@ export const shortcutActions: ShortcutAction[] = [
         label: '重做',
         category: '编辑',
         contexts: ['global'],
-        defaultBindings: ['Ctrl+Y', 'Ctrl+Shift+Z', 'Meta+Shift+Z'],
+        defaultBindings: ['Ctrl+Y', 'Ctrl+Shift+Z'],
         preventDefault: true
     },
 
@@ -316,7 +332,7 @@ export const shortcutActions: ShortcutAction[] = [
         label: '复制顶点',
         category: '几何',
         contexts: ['geometry'],
-        defaultBindings: ['Ctrl+C', 'Meta+C'],
+        defaultBindings: ['Ctrl+C'],
         preventDefault: true
     },
     {
@@ -324,7 +340,7 @@ export const shortcutActions: ShortcutAction[] = [
         label: '粘贴顶点',
         category: '几何',
         contexts: ['geometry'],
-        defaultBindings: ['Ctrl+V', 'Meta+V'],
+        defaultBindings: ['Ctrl+V'],
         preventDefault: true
     },
     {
@@ -342,7 +358,7 @@ export const shortcutActions: ShortcutAction[] = [
         label: '复制关键帧',
         category: '时间轴',
         contexts: ['animation'],
-        defaultBindings: ['Ctrl+C', 'Meta+C'],
+        defaultBindings: ['Ctrl+C'],
         preventDefault: true
     },
     {
@@ -350,7 +366,7 @@ export const shortcutActions: ShortcutAction[] = [
         label: '剪切关键帧',
         category: '时间轴',
         contexts: ['animation'],
-        defaultBindings: ['Ctrl+X', 'Meta+X'],
+        defaultBindings: ['Ctrl+X'],
         preventDefault: true
     },
     {
@@ -358,7 +374,7 @@ export const shortcutActions: ShortcutAction[] = [
         label: '粘贴关键帧',
         category: '时间轴',
         contexts: ['animation'],
-        defaultBindings: ['Ctrl+V', 'Meta+V'],
+        defaultBindings: ['Ctrl+V'],
         preventDefault: true
     },
     {
@@ -376,7 +392,7 @@ export const shortcutActions: ShortcutAction[] = [
         label: '复制批处理模型',
         category: '批量',
         contexts: ['batch'],
-        defaultBindings: ['Ctrl+C', 'Meta+C'],
+        defaultBindings: ['Ctrl+C'],
         preventDefault: true
     }
 ]

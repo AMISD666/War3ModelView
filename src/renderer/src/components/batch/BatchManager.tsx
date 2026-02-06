@@ -67,7 +67,8 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
     const [currentPage, setCurrentPage] = useState(1);
     const [pageSize, setPageSize] = useState(12);
     const [visiblePaths, setVisiblePaths] = useState<Set<string>>(new Set());
-    const [isAnimating, setAnimating] = useState(true);
+    const [fastMode, setFastMode] = useState(false);
+    const fastModeLocked = loading || files.length > 0;
     const [selectedFile, setSelectedFile] = useState<string | null>(null);
     const [deathApplyLoading, setDeathApplyLoading] = useState(false);
     const [actionScope, setActionScope] = useState<'selected' | 'all'>('selected');
@@ -268,6 +269,11 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
         const start = (page - 1) * size;
         const pageFiles = files.slice(start, start + size);
         setQueue(pageFiles.map(f => ({ name: f.name, fullPath: f.fullPath })));
+    };
+
+    const handleFastModeChange = (checked: boolean) => {
+        if (fastModeLocked) return;
+        setFastMode(checked);
     };
 
     const handleItemProcessed = useCallback((fullPath: string) => {
@@ -636,6 +642,21 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                                 style={{ minWidth: 40 }}
                             />
                         </Tooltip>
+
+                        <Tooltip title={fastModeLocked ? '\u6e05\u7a7a\u5217\u8868\u540e\u53ef\u5207\u6362' : '\u9759\u6001\u6a21\u5f0f\uff1a\u53ea\u6e32\u67d3\u9759\u6001\u7f29\u7565\u56fe\uff0c\u4e0d\u64ad\u653e\u52a8\u4f5c'}>
+                            <Button
+                                size="small"
+                                type={fastMode ? 'primary' : 'default'}
+                                onClick={() => handleFastModeChange(!fastMode)}
+                                disabled={fastModeLocked}
+                                style={fastMode
+                                    ? { fontWeight: 600 }
+                                    : { background: '#2b2b2b', borderColor: '#3a3a3a', color: '#bfbfbf' }
+                                }
+                            >
+                                {fastMode ? '\u9759\u6001\u6a21\u5f0f' : '\u52a8\u4f5c\u6a21\u5f0f'}
+                            </Button>
+                        </Tooltip>
                     </Space>
                 </Space>
 
@@ -742,13 +763,15 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                         <div style={{
                             display: 'grid',
                             gridTemplateColumns: 'repeat(4, 1fr)',
+                            gridTemplateRows: 'repeat(3, minmax(0, 1fr))',
+                            gridAutoRows: 'minmax(0, 1fr)',
                             gap: 12,
-                            overflowY: 'auto',
+                            overflow: 'hidden',
                             flex: 1,
+                            minHeight: 0,
                             paddingRight: 8,
-                            alignItems: 'start',
-                            alignContent: 'start',
-                            marginBottom: 16
+                            alignItems: 'stretch',
+                            alignContent: 'stretch'
                         }}>
                             {files.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((file) => (
                                 <ModelCard
@@ -756,6 +779,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                                     file={file}
                                     initialAnimations={modelAnimations[file.fullPath]}
                                     initialSelectedAnimation={selectedAnimations[file.fullPath]}
+                                    showAnimationSelect={!fastMode}
                                     isSelected={(selectedPath ?? selectedFile) === file.fullPath}
                                     onDelete={handleDelete}
                                     onEditTexture={handleEditTexture}
@@ -804,7 +828,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                     onThumbnailReady={handleThumbnailReady}
                     onItemProcessed={handleItemProcessed}
                     visiblePaths={visiblePaths}
-                    isAnimating={isAnimating}
+                    isAnimating={!fastMode}
                     selectedAnimations={selectedAnimations}
                     modelAnimations={modelAnimations}
                 />

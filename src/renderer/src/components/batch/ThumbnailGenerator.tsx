@@ -82,9 +82,10 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
                             animName = animList[0];
                         }
 
-                        const animIndex = animName ? Math.max(0, animList.indexOf(animName)) : 0;
+                        const animIndex = isAnimating && animName ? Math.max(0, animList.indexOf(animName)) : 0;
+                        const frameTime = isAnimating ? performance.now() : 0;
 
-                        const result = await thumbnailService.renderFrame(item.fullPath, performance.now(), animIndex);
+                        const result = await thumbnailService.renderFrame(item.fullPath, frameTime, animIndex, !isAnimating);
 
                         if (result && result.status === 'success' && result.bitmap) {
                             onThumbnailReady(item.fullPath, result.bitmap, result.animations);
@@ -158,7 +159,7 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
                             pendingRequestsRef.current.add(targetPath);
 
                             // CORRECTED ARGUMENTS: (path, frame, sequenceIndex)
-                            thumbnailService.renderFrame(targetPath, now, animIndex).then(res => {
+                            thumbnailService.renderFrame(targetPath, now, animIndex, false).then(res => {
                                 pendingRequestsRef.current.delete(targetPath);
                                 if (res.status === 'success' && res.bitmap) {
                                     onThumbnailReady(targetPath, res.bitmap, res.animations);

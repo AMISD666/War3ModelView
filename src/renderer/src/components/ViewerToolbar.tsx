@@ -271,31 +271,33 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                 )}
             </Space>
 
-            <div style={{ width: 1, backgroundColor: '#555', height: '24px', alignSelf: 'center' }} />
-
-            <Space>
-                <Tooltip title="全局变换模式 (锁定在原点，对整个模型生效)">
-                    <Button
-                        type={isGlobalTransformMode ? 'primary' : 'default'}
-                        icon={<GlobalOutlined />}
-                        onClick={() => setIsGlobalTransformMode(!isGlobalTransformMode)}
-                        style={isGlobalTransformMode ? { backgroundColor: '#52c41a', borderColor: '#52c41a' } : undefined}
-                    >
-                        全局变换
-                    </Button>
-                </Tooltip>
-                <Tooltip title="全局枢轴：原点 / 模型中心">
-                    <Button
-                        type={globalTransformPivot === 'modelCenter' ? 'primary' : 'default'}
-                        icon={<AimOutlined />}
-                        onClick={() => setGlobalTransformPivot(globalTransformPivot === 'modelCenter' ? 'origin' : 'modelCenter')}
-                    >
-                        中心枢轴
-                    </Button>
-                </Tooltip>
-            </Space>
-
-            <div style={{ width: 1, backgroundColor: '#555', height: '24px', alignSelf: 'center' }} />
+            {mainMode === 'view' && (
+                <>
+                    <div style={{ width: 1, backgroundColor: '#555', height: '24px', alignSelf: 'center' }} />
+                    <Space>
+                        <Tooltip title="全局变换模式 (锁定在原点，对整个模型生效)">
+                            <Button
+                                type={isGlobalTransformMode ? 'primary' : 'default'}
+                                icon={<GlobalOutlined />}
+                                onClick={() => setIsGlobalTransformMode(!isGlobalTransformMode)}
+                                style={isGlobalTransformMode ? { backgroundColor: '#52c41a', borderColor: '#52c41a' } : undefined}
+                            >
+                                全局变换
+                            </Button>
+                        </Tooltip>
+                        <Tooltip title="全局枢轴：原点 / 模型中心">
+                            <Button
+                                type={globalTransformPivot === 'modelCenter' ? 'primary' : 'default'}
+                                icon={<AimOutlined />}
+                                onClick={() => setGlobalTransformPivot(globalTransformPivot === 'modelCenter' ? 'origin' : 'modelCenter')}
+                            >
+                                中心枢轴
+                            </Button>
+                        </Tooltip>
+                    </Space>
+                    <div style={{ width: 1, backgroundColor: '#555', height: '24px', alignSelf: 'center' }} />
+                </>
+            )}
 
             <Space>
                 <Tooltip title="适应视图 (F)">

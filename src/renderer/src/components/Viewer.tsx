@@ -110,6 +110,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
   const appMainMode = useSelectionStore((state) => state.mainMode)
   const rendererReloadTrigger = useModelStore((state) => state.rendererReloadTrigger)
+  const mpqLoaded = useRendererStore((state) => state.mpqLoaded)
   // Note: animationSubMode removed as unused. Re-add if needed:
   // const animationSubMode = useSelectionStore((state) => state.animationSubMode)
   const animationFrameId = useRef<number | null>(null)
@@ -396,8 +397,12 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         scale = cameraRef.current.distance / 600
       }
     }
-    scale *= 2
-    return Math.max(0.1, Math.min(10, scale))
+    // Clamp base scale first to keep camera auto-scaling stable
+    scale = Math.max(0.5, Math.min(50, scale * 10))
+    const gizmoSize = useRendererStore.getState().gizmoSize || 1
+    scale *= gizmoSize
+    // Final clamp after user multiplier
+    return Math.max(0.1, Math.min(200, scale))
   }
 
   // Expose methods to parent via ref
@@ -509,6 +514,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     initialKeys: Map<number, any>, // NodeId -> { Rotation: [], Scaling: [] }
     initialValues: Map<number, { rotation: Float32Array, scaling: Float32Array }> // NodeId -> { rotation, scaling } (snapshot at drag start)
   } | null>(null)
+  const keyframeTransformDirty = useRef(false)
   const needsRendererUpdateRef = useRef(false)
   const previewTransformRef = useRef({
     translation: [0, 0, 0] as [number, number, number],
@@ -531,6 +537,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
   // Context menu state for vertex operations
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number } | null>(null)
+  const [nodeContextMenu, setNodeContextMenu] = useState<{ x: number, y: number, nodeId: number } | null>(null)
 
   const loadTeamColorTextures = async (colorIndex: number) => {
     if (!renderer) return
@@ -570,6 +577,36 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     await loadTexture(teamColorPath, 1)
     await loadTexture(teamGlowPath, 2)
   }
+
+  const mpqLoadedRef = useRef(mpqLoaded)
+  useEffect(() => {
+    const run = async () => {
+      if (!renderer) return
+      const sourceModel = renderer.model || modelData
+      if (!sourceModel) return
+      const activePath = modelPath || (modelData as any)?.path || ''
+
+      try {
+        const textureResults = await loadAllTextures(sourceModel, renderer, activePath)
+        const missingPaths = textureResults
+          .filter(r => {
+            if (!r.loaded) return true
+            const ext = r.path.split('.').pop()?.toLowerCase()
+            return ext !== 'blp' && ext !== 'tga'
+          })
+          .map(r => r.path)
+        useRendererStore.getState().setMissingTextures(missingPaths)
+        await loadTeamColorTextures(teamColor)
+      } catch (e) {
+        console.warn('[Viewer] Reload textures after MPQ load failed:', e)
+      }
+    }
+
+    if (mpqLoaded && !mpqLoadedRef.current) {
+      run()
+    }
+    mpqLoadedRef.current = mpqLoaded
+  }, [mpqLoaded, renderer, modelData, modelPath, teamColor])
 
   const ensureRendererSequences = (model: any) => {
     if (model?.Sequences && model.Sequences.length > 0) {
@@ -977,6 +1014,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             initialKeys: new Map(),
             initialValues: new Map()
           }
+          keyframeTransformDirty.current = false
             // Reset debug log flags
             ; (window as any)._baseTransLogOnce = false
             ; (window as any)._keyframeDragDelta = {}
@@ -2993,7 +3031,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 selectedNodeIds,
                 parentOfSelected,
                 childrenOfSelected,
-                nodeTypeColors
+                nodeTypeColors,
+                currentMainMode === 'animation' && currentAnimationSubMode === 'keyframe'
               )
 
               // Render attachment nodes as yellow tetrahedrons
@@ -3746,6 +3785,12 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           } else if (axis === 'xy') {
             currentScale[0] *= scaleFactor
             currentScale[1] *= scaleFactor
+          } else if (axis === 'xz') {
+            currentScale[0] *= scaleFactor
+            currentScale[2] *= scaleFactor
+          } else if (axis === 'yz') {
+            currentScale[1] *= scaleFactor
+            currentScale[2] *= scaleFactor
           }
 
           previewTransform.scale = currentScale as [number, number, number]
@@ -4147,6 +4192,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             initialKeys: new Map(),
             initialValues: new Map()
           }
+          keyframeTransformDirty.current = false
 
           selectedNodeIds.forEach(nodeId => {
             // 1. Snapshot original KEYS from STORE (source of truth)
@@ -4199,6 +4245,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           else if (axis === 'z') { angle = deltaX * 0.01; vec3.set(rotAxis, 0, 0, 1) }
 
           if (angle !== 0) {
+            keyframeTransformDirty.current = true
             const deltaQuat = quat.create()
             quat.setAxisAngle(deltaQuat, rotAxis, angle)
 
@@ -4215,16 +4262,37 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 // INJECT into Renderer Model for PREVIEW
                 const rendererNode = rendererRef.current!.model.Nodes.find((n: any) => n.ObjectId === nodeId)
                 if (rendererNode) {
-                  if (!rendererNode.Rotation) rendererNode.Rotation = { Keys: [], InterpolationType: 1 }
-                  const keys = rendererNode.Rotation.Keys
                   const frame = Math.round(currentFrame)
-                  let key = keys.find((k: any) => Math.abs(k.Frame - frame) < 0.1)
-                  if (!key) {
-                    key = { Frame: frame, Vector: [0, 0, 0, 1] }
-                    keys.push(key)
-                    keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                  if (!rendererNode.Rotation || !rendererNode.Rotation.Keys?.length) {
+                    const storeNode = nodes.find((n: any) => n.ObjectId === nodeId)
+                    const storeKeys = storeNode?.Rotation?.Keys || []
+                    const copiedKeys = storeKeys
+                      .filter((k: any) => !k._isPreviewKey)
+                      .map((k: any) => ({
+                        Frame: k.Frame,
+                        Vector: Array.isArray(k.Vector) ? [...k.Vector] : Array.from(k.Vector || [0, 0, 0, 1]),
+                        InTan: k.InTan ? (Array.isArray(k.InTan) ? [...k.InTan] : Array.from(k.InTan)) : undefined,
+                        OutTan: k.OutTan ? (Array.isArray(k.OutTan) ? [...k.OutTan] : Array.from(k.OutTan)) : undefined
+                      }))
+                    rendererNode.Rotation = {
+                      Keys: copiedKeys,
+                      InterpolationType: storeNode?.Rotation?.InterpolationType || 1
+                    }
                   }
-                  key.Vector = [newRot[0], newRot[1], newRot[2], newRot[3]]
+
+                  const keys = rendererNode.Rotation.Keys || []
+                  const previewIndex = keys.findIndex((k: any) => k._isPreviewKey)
+                  if (previewIndex >= 0) {
+                    keys[previewIndex].Vector = [newRot[0], newRot[1], newRot[2], newRot[3]]
+                    keys[previewIndex].Frame = frame
+                  } else {
+                    keys.push({
+                      Frame: frame,
+                      Vector: [newRot[0], newRot[1], newRot[2], newRot[3]],
+                      _isPreviewKey: true
+                    })
+                  }
+                  keys.sort((a: any, b: any) => a.Frame - b.Frame)
                 }
               }
             })
@@ -4237,6 +4305,12 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           else if (axis === 'z') scaleVec[2] = scaleFactor
           else if (axis === 'center') vec3.set(scaleVec, scaleFactor, scaleFactor, scaleFactor)
           else if (axis === 'xy') { scaleVec[0] = scaleFactor; scaleVec[1] = scaleFactor; }
+          else if (axis === 'xz') { scaleVec[0] = scaleFactor; scaleVec[2] = scaleFactor; }
+          else if (axis === 'yz') { scaleVec[1] = scaleFactor; scaleVec[2] = scaleFactor; }
+
+          if (scaleFactor !== 1) {
+            keyframeTransformDirty.current = true
+          }
 
           selectedNodeIds.forEach(nodeId => {
             const currentVal = keyframeDragData.current?.initialValues.get(nodeId)
@@ -4247,20 +4321,42 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
               // Update current value
               vec3.copy(currentVal.scaling as any, newScale)
+              keyframeTransformDirty.current = true
 
               // INJECT into Renderer Model for PREVIEW
               const rendererNode = rendererRef.current!.model.Nodes.find((n: any) => n.ObjectId === nodeId)
               if (rendererNode) {
-                if (!rendererNode.Scaling) rendererNode.Scaling = { Keys: [], InterpolationType: 1 }
-                const keys = rendererNode.Scaling.Keys
                 const frame = Math.round(currentFrame)
-                let key = keys.find((k: any) => Math.abs(k.Frame - frame) < 0.1)
-                if (!key) {
-                  key = { Frame: frame, Vector: [1, 1, 1] }
-                  keys.push(key)
-                  keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                if (!rendererNode.Scaling || !rendererNode.Scaling.Keys?.length) {
+                  const storeNode = nodes.find((n: any) => n.ObjectId === nodeId)
+                  const storeKeys = storeNode?.Scaling?.Keys || []
+                  const copiedKeys = storeKeys
+                    .filter((k: any) => !k._isPreviewKey)
+                    .map((k: any) => ({
+                      Frame: k.Frame,
+                      Vector: Array.isArray(k.Vector) ? [...k.Vector] : Array.from(k.Vector || [1, 1, 1]),
+                      InTan: k.InTan ? (Array.isArray(k.InTan) ? [...k.InTan] : Array.from(k.InTan)) : undefined,
+                      OutTan: k.OutTan ? (Array.isArray(k.OutTan) ? [...k.OutTan] : Array.from(k.OutTan)) : undefined
+                    }))
+                  rendererNode.Scaling = {
+                    Keys: copiedKeys,
+                    InterpolationType: storeNode?.Scaling?.InterpolationType || 1
+                  }
                 }
-                key.Vector = [newScale[0], newScale[1], newScale[2]]
+
+                const keys = rendererNode.Scaling.Keys || []
+                const previewIndex = keys.findIndex((k: any) => k._isPreviewKey)
+                if (previewIndex >= 0) {
+                  keys[previewIndex].Vector = [newScale[0], newScale[1], newScale[2]]
+                  keys[previewIndex].Frame = frame
+                } else {
+                  keys.push({
+                    Frame: frame,
+                    Vector: [newScale[0], newScale[1], newScale[2]],
+                    _isPreviewKey: true
+                  })
+                }
+                keys.sort((a: any, b: any) => a.Frame - b.Frame)
               }
             }
           })
@@ -4616,11 +4712,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             initialNodePositions.current.clear()
           }
         } else if (mainMode === 'animation' && animationSubMode === 'keyframe') {
+          const { selectedNodeIds } = useSelectionStore.getState()
           // 1. Translation (using DragDelta)
           const dragDelta = (window as any)._keyframeDragDelta
           if (dragDelta) {
             const { autoKeyframe, currentFrame, nodes } = useModelStore.getState()
-            const { selectedNodeIds } = useSelectionStore.getState()
 
             // FIRST: Clean up preview keyframes from renderer model
             if (rendererRef.current && rendererRef.current.model && rendererRef.current.model.Nodes) {
@@ -4724,11 +4820,110 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             ; (window as any)._keyframeDragDelta = null
           }
 
-          // NOTE: Rotation/Scale keyframe commit is handled separately by the Rotate/Scale gizmo
-          // This block was incorrectly running on Translation drag, overwriting keyframes with initial values
-          // The correct Rotation/Scale commit happens in the rotation/scale handleMouseMove + handleMouseUp flow
+          // Clean up preview keys for Rotation/Scaling
+          if (rendererRef.current && rendererRef.current.model && rendererRef.current.model.Nodes) {
+            selectedNodeIds.forEach(nodeId => {
+              const rendererNode = rendererRef.current!.model.Nodes.find((n: any) => n.ObjectId === nodeId)
+              if (rendererNode?.Rotation?.Keys) {
+                rendererNode.Rotation.Keys = rendererNode.Rotation.Keys.filter((k: any) => !k._isPreviewKey)
+              }
+              if (rendererNode?.Scaling?.Keys) {
+                rendererNode.Scaling.Keys = rendererNode.Scaling.Keys.filter((k: any) => !k._isPreviewKey)
+              }
+            })
+          }
 
-          // Clear keyframeDragData after Translation commit
+          // Rotation/Scale Keyframe Commit (after gizmo drag)
+          const { transformMode } = useSelectionStore.getState()
+          if ((transformMode === 'rotate' || transformMode === 'scale') && keyframeDragData.current) {
+            const { autoKeyframe, currentFrame, nodes } = useModelStore.getState()
+            if (autoKeyframe) {
+              const frame = Math.round(currentFrame)
+              const changes: KeyframeChange[] = []
+
+              const isSameVec = (a: number[] | null, b: number[] | null, eps = 1e-4) => {
+                if (!a || !b || a.length !== b.length) return false
+                for (let i = 0; i < a.length; i++) {
+                  if (Math.abs(a[i] - b[i]) > eps) return false
+                }
+                return true
+              }
+
+              const interpolateValue = (keys: any[] | undefined, frameVal: number, defaultVal: number[]) => {
+                if (!keys || keys.length === 0) return defaultVal
+                const sortedKeys = [...keys].sort((a: any, b: any) => a.Frame - b.Frame)
+                const toArray = (v: any, fallback: number[]) => {
+                  if (!v) return fallback
+                  const arr = Array.isArray(v) ? [...v] : Array.from(v) as number[]
+                  return arr.length > 0 ? arr : fallback
+                }
+                if (frameVal <= sortedKeys[0].Frame) return toArray(sortedKeys[0].Vector, defaultVal)
+                if (frameVal >= sortedKeys[sortedKeys.length - 1].Frame) return toArray(sortedKeys[sortedKeys.length - 1].Vector, defaultVal)
+                for (let i = 0; i < sortedKeys.length - 1; i++) {
+                  if (frameVal >= sortedKeys[i].Frame && frameVal <= sortedKeys[i + 1].Frame) {
+                    const t = (frameVal - sortedKeys[i].Frame) / (sortedKeys[i + 1].Frame - sortedKeys[i].Frame)
+                    const from = toArray(sortedKeys[i].Vector, defaultVal)
+                    const to = toArray(sortedKeys[i + 1].Vector, defaultVal)
+                    return from.map((v, idx) => v + (to[idx] - v) * t)
+                  }
+                }
+                return defaultVal
+              }
+
+              const { selectedNodeIds } = useSelectionStore.getState()
+              selectedNodeIds.forEach(nodeId => {
+                const storeNode = nodes.find((n: any) => n.ObjectId === nodeId)
+                if (!storeNode) return
+
+                if (transformMode === 'rotate') {
+                  const currentVal = keyframeDragData.current?.initialValues.get(nodeId)
+                  if (!currentVal) return
+                  const newValue = Array.from(currentVal.rotation as any) as number[]
+                  const existingKey = storeNode.Rotation?.Keys?.find((k: any) => Math.abs(k.Frame - frame) < 0.1)
+                  const oldValue = existingKey?.Vector ? (Array.isArray(existingKey.Vector) ? [...existingKey.Vector] : Array.from(existingKey.Vector)) : null
+                  const baseValue = existingKey?.Vector
+                    ? (Array.isArray(existingKey.Vector) ? [...existingKey.Vector] : Array.from(existingKey.Vector))
+                    : interpolateValue(storeNode.Rotation?.Keys, frame, [0, 0, 0, 1])
+                  if (!oldValue && isSameVec(newValue, baseValue)) return
+                  if (oldValue && isSameVec(newValue, oldValue)) return
+                  changes.push({
+                    nodeId,
+                    propertyName: 'Rotation',
+                    frame,
+                    oldValue,
+                    newValue
+                  })
+                } else if (transformMode === 'scale') {
+                  const currentVal = keyframeDragData.current?.initialValues.get(nodeId)
+                  if (!currentVal) return
+                  const newValue = Array.from(currentVal.scaling as any) as number[]
+                  const existingKey = storeNode.Scaling?.Keys?.find((k: any) => Math.abs(k.Frame - frame) < 0.1)
+                  const oldValue = existingKey?.Vector ? (Array.isArray(existingKey.Vector) ? [...existingKey.Vector] : Array.from(existingKey.Vector)) : null
+                  const baseValue = existingKey?.Vector
+                    ? (Array.isArray(existingKey.Vector) ? [...existingKey.Vector] : Array.from(existingKey.Vector))
+                    : interpolateValue(storeNode.Scaling?.Keys, frame, [1, 1, 1])
+                  if (!oldValue && isSameVec(newValue, baseValue)) return
+                  if (oldValue && isSameVec(newValue, oldValue)) return
+                  changes.push({
+                    nodeId,
+                    propertyName: 'Scaling',
+                    frame,
+                    oldValue,
+                    newValue
+                  })
+                }
+              })
+
+              if (changes.length > 0) {
+                const cmd = new UpdateKeyframeCommand(rendererRef.current, changes)
+                commandManager.execute(cmd)
+                console.log('[Viewer] Committed Rotation/Scaling Keyframe changes via command', changes.length)
+              }
+            }
+          }
+
+          keyframeTransformDirty.current = false
+          // Clear keyframeDragData after keyframe commit
           keyframeDragData.current = null
         }
       }
@@ -4803,6 +4998,68 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     commandManager.execute(cmd)
   }
 
+  const getPrimarySelectedNode = () => {
+    const { selectedNodeIds } = useSelectionStore.getState()
+    if (selectedNodeIds.length === 0) return null
+    return storeNodes.find((n) => n.ObjectId === selectedNodeIds[0]) ?? null
+  }
+
+  const selectParentNode = (): boolean => {
+    const { mainMode, selectNode } = useSelectionStore.getState()
+    if (mainMode !== 'animation') return false
+    const node = getPrimarySelectedNode()
+    if (!node || node.Parent === undefined || node.Parent === null || node.Parent < 0) return false
+    selectNode(node.Parent)
+    return true
+  }
+
+  const selectChildNode = (): boolean => {
+    const { mainMode, selectNode } = useSelectionStore.getState()
+    if (mainMode !== 'animation') return false
+    const node = getPrimarySelectedNode()
+    if (!node) return false
+    const children = storeNodes.filter((n) => n.Parent === node.ObjectId)
+    if (children.length === 0) return false
+    children.sort((a, b) => a.ObjectId - b.ObjectId)
+    selectNode(children[0].ObjectId)
+    return true
+  }
+
+  const selectAllChildren = (): boolean => {
+    const { mainMode, selectNodes } = useSelectionStore.getState()
+    if (mainMode !== 'animation') return false
+    const node = getPrimarySelectedNode()
+    if (!node) return false
+    const collected: number[] = []
+    const queue: number[] = [node.ObjectId]
+    while (queue.length > 0) {
+      const parentId = queue.shift() as number
+      const children = storeNodes.filter((n) => n.Parent === parentId)
+      for (const child of children) {
+        collected.push(child.ObjectId)
+        queue.push(child.ObjectId)
+      }
+    }
+    if (collected.length === 0) return false
+    selectNodes(collected)
+    return true
+  }
+
+  const editSelectedNode = (): boolean => {
+    const node = getPrimarySelectedNode()
+    if (!node) return false
+    useUIStore.getState().setNodeDialogVisible(true, node.ObjectId)
+    return true
+  }
+
+  const deleteSelectedNode = (): boolean => {
+    const node = getPrimarySelectedNode()
+    if (!node) return false
+    useModelStore.getState().deleteNode(node.ObjectId)
+    useSelectionStore.getState().clearNodeSelection()
+    return true
+  }
+
   useEffect(() => {
     const isGeometryVertexMode = () => {
       const { mainMode, geometrySubMode } = useSelectionStore.getState()
@@ -4823,6 +5080,12 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       registerShortcutHandler('view.toggleWireframe', () => {
         onToggleWireframe()
         return true
+      }),
+      registerShortcutHandler('animation.selectParentNode', () => {
+        return selectParentNode()
+      }),
+      registerShortcutHandler('animation.selectChildNode', () => {
+        return selectChildNode()
       }),
       registerShortcutHandler('view.cameraViewToggle', () => {
         handleCameraViewToggle()
@@ -4879,7 +5142,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     handleFitToView,
     handlePasteVertices,
     onTogglePlay,
-    onToggleWireframe
+    onToggleWireframe,
+    selectChildNode,
+    selectParentNode
   ])
 
   return (
@@ -4892,11 +5157,26 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         onMouseUp={handleMouseUp}
         onContextMenu={(e) => {
           e.preventDefault()
+          if (!e.altKey) {
+            setContextMenu(null)
+            setNodeContextMenu(null)
+            return
+          }
           const { mainMode, geometrySubMode, selectedVertexIds } = useSelectionStore.getState()
           // Show context menu in vertex mode when vertices are selected AND Alt is pressed
           if (mainMode === 'geometry' && geometrySubMode === 'vertex' && selectedVertexIds.length > 0 && e.altKey) {
+            setNodeContextMenu(null)
             setContextMenu({ x: e.clientX, y: e.clientY })
+            return
           }
+          const node = getPrimarySelectedNode()
+          if (mainMode === 'animation' && node?.type === NodeType.BONE) {
+            setContextMenu(null)
+            setNodeContextMenu({ x: e.clientX, y: e.clientY, nodeId: node.ObjectId })
+            return
+          }
+          setContextMenu(null)
+          setNodeContextMenu(null)
         }}
         onWheel={handleWheel}
       />
@@ -5184,8 +5464,105 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         </div>
       )}
 
+      {/* Context Menu for Bone Operations */}
+      {nodeContextMenu && (() => {
+        const node = storeNodes.find((n) => n.ObjectId === nodeContextMenu.nodeId) ?? null
+        const hasParent = !!node && node.Parent !== undefined && node.Parent !== null && node.Parent >= 0
+        const children = node ? storeNodes.filter((n) => n.Parent === node.ObjectId) : []
+        const hasChild = children.length > 0
+        const menuItemStyle = (enabled: boolean) => ({
+          padding: '6px 12px',
+          cursor: enabled ? 'pointer' : 'not-allowed',
+          color: enabled ? 'white' : '#666',
+          fontSize: '13px'
+        })
+        return (
+          <div
+            style={{
+              position: 'fixed',
+              left: nodeContextMenu.x,
+              top: nodeContextMenu.y,
+              backgroundColor: '#2b2b2b',
+              border: '1px solid #555',
+              borderRadius: '4px',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+              zIndex: 2000,
+              minWidth: '140px',
+              padding: '4px 0'
+            }}
+            onClick={() => setNodeContextMenu(null)}
+          >
+            <div
+              style={menuItemStyle(!!node)}
+              onMouseEnter={(e) => {
+                if (node) (e.target as HTMLDivElement).style.backgroundColor = '#177ddc'
+              }}
+              onMouseLeave={(e) => (e.target as HTMLDivElement).style.backgroundColor = 'transparent'}
+              onClick={() => {
+                if (node) editSelectedNode()
+                setNodeContextMenu(null)
+              }}
+            >
+              编辑节点
+            </div>
+            <div
+              style={menuItemStyle(hasParent)}
+              onMouseEnter={(e) => {
+                if (hasParent) (e.target as HTMLDivElement).style.backgroundColor = '#177ddc'
+              }}
+              onMouseLeave={(e) => (e.target as HTMLDivElement).style.backgroundColor = 'transparent'}
+              onClick={() => {
+                if (hasParent) selectParentNode()
+                setNodeContextMenu(null)
+              }}
+            >
+              选取父节点
+            </div>
+            <div
+              style={menuItemStyle(hasChild)}
+              onMouseEnter={(e) => {
+                if (hasChild) (e.target as HTMLDivElement).style.backgroundColor = '#177ddc'
+              }}
+              onMouseLeave={(e) => (e.target as HTMLDivElement).style.backgroundColor = 'transparent'}
+              onClick={() => {
+                if (hasChild) selectChildNode()
+                setNodeContextMenu(null)
+              }}
+            >
+              选取子节点
+            </div>
+            <div
+              style={menuItemStyle(hasChild)}
+              onMouseEnter={(e) => {
+                if (hasChild) (e.target as HTMLDivElement).style.backgroundColor = '#177ddc'
+              }}
+              onMouseLeave={(e) => (e.target as HTMLDivElement).style.backgroundColor = 'transparent'}
+              onClick={() => {
+                if (hasChild) selectAllChildren()
+                setNodeContextMenu(null)
+              }}
+            >
+              选取所有子节点
+            </div>
+            <div
+              style={menuItemStyle(!!node)}
+              onMouseEnter={(e) => {
+                if (node) (e.target as HTMLDivElement).style.backgroundColor = '#177ddc'
+              }}
+              onMouseLeave={(e) => (e.target as HTMLDivElement).style.backgroundColor = 'transparent'}
+              onClick={() => {
+                if (node) deleteSelectedNode()
+                setNodeContextMenu(null)
+              }}
+            >
+              删除节点
+            </div>
+          </div>
+        )
+      })()}
+
       {/* Click outside to close context menu */}
-      {contextMenu && (
+      {(contextMenu || nodeContextMenu) && (
         <div
           style={{
             position: 'fixed',
@@ -5195,10 +5572,14 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             bottom: 0,
             zIndex: 1999,
           }}
-          onClick={() => setContextMenu(null)}
+          onClick={() => {
+            setContextMenu(null)
+            setNodeContextMenu(null)
+          }}
           onContextMenu={(e) => {
             e.preventDefault()
             setContextMenu(null)
+            setNodeContextMenu(null)
           }}
         />
       )}

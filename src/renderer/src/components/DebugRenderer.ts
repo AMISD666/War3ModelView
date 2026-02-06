@@ -179,7 +179,8 @@ export class DebugRenderer {
         selectedNodeIds: number[] = [],
         parentOfSelected: number | null = null,
         childrenOfSelected: number[] = [],
-        typeColors?: Record<string, number[]>
+        typeColors?: Record<string, number[]>,
+        ignoreScale: boolean = false
     ) {
         if (!this.cubeProgram || !this.cubeVertBuffer || !this.cubeNormBuffer) return
 
@@ -232,6 +233,32 @@ export class DebugRenderer {
         const tempVec = vec3.create()
         const tempNormal = vec3.create()
         const normalMatrix = mat3.create()
+        const noScaleMatrix = mat4.create()
+
+        const getNoScaleMatrix = (src: Float32Array | mat4) => {
+            mat4.copy(noScaleMatrix, src as mat4)
+            const x0 = noScaleMatrix[0], x1 = noScaleMatrix[1], x2 = noScaleMatrix[2]
+            const y0 = noScaleMatrix[4], y1 = noScaleMatrix[5], y2 = noScaleMatrix[6]
+            const z0 = noScaleMatrix[8], z1 = noScaleMatrix[9], z2 = noScaleMatrix[10]
+
+            let lx = Math.hypot(x0, x1, x2)
+            let ly = Math.hypot(y0, y1, y2)
+            let lz = Math.hypot(z0, z1, z2)
+            if (lx === 0) lx = 1
+            if (ly === 0) ly = 1
+            if (lz === 0) lz = 1
+
+            noScaleMatrix[0] = x0 / lx
+            noScaleMatrix[1] = x1 / lx
+            noScaleMatrix[2] = x2 / lx
+            noScaleMatrix[4] = y0 / ly
+            noScaleMatrix[5] = y1 / ly
+            noScaleMatrix[6] = y2 / ly
+            noScaleMatrix[8] = z0 / lz
+            noScaleMatrix[9] = z1 / lz
+            noScaleMatrix[10] = z2 / lz
+            return noScaleMatrix
+        }
 
         for (const node of nodes) {
             if (!node.node.PivotPoint) continue
@@ -266,6 +293,8 @@ export class DebugRenderer {
                 color = colorMap[(node.node as any).type || ''] || [0.4, 1.0, 0.4, 1]
             }
 
+            const nodeMatrix = ignoreScale ? getNoScaleMatrix(node.matrix) : node.matrix
+
             // Transform cube vertices by node matrix
             // Cube vertices need to be offset by PivotPoint first (like original point rendering)
             const pivot = node.node.PivotPoint
@@ -277,12 +306,12 @@ export class DebugRenderer {
                     baseCubeVerts[i + 1] + pivot[1],
                     baseCubeVerts[i + 2] + pivot[2]
                 )
-                vec3.transformMat4(tempVec, tempVec, node.matrix)
+                vec3.transformMat4(tempVec, tempVec, nodeMatrix)
                 transformedVerts.push(tempVec[0], tempVec[1], tempVec[2])
             }
 
             // Calculate normal matrix from node matrix
-            mat3.normalFromMat4(normalMatrix, node.matrix)
+            mat3.normalFromMat4(normalMatrix, nodeMatrix)
 
             // Transform normals
             const transformedNormals: number[] = []
@@ -327,7 +356,7 @@ export class DebugRenderer {
                         outlineCubeVerts[i + 1] + pivot[1],
                         outlineCubeVerts[i + 2] + pivot[2]
                     )
-                    vec3.transformMat4(tempVec, tempVec, node.matrix)
+                    vec3.transformMat4(tempVec, tempVec, nodeMatrix)
                     outlineTransformed.push(tempVec[0], tempVec[1], tempVec[2])
                 }
                 // 使用简单着色器程序渲染（不受光照影响）

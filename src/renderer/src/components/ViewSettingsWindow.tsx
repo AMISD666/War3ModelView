@@ -71,7 +71,9 @@ export const ViewSettingsWindow: React.FC = () => {
         hoverColor, setHoverColor,
         nodeColors, setNodeColors,
         teamColor, setTeamColor,
+        gizmoSize, setGizmoSize,
         mpqLoaded, setMpqLoaded,
+        missingTextures,
         showVerticesByMode, setShowVerticesForMode,
         vertexSettings, setVertexSettings,
         autoRecalculateExtent, setAutoRecalculateExtent,
@@ -387,6 +389,39 @@ export const ViewSettingsWindow: React.FC = () => {
         }
     };
 
+    const handleDebugMissingTexture = async () => {
+        if (!missingTextures || missingTextures.length === 0) {
+            showMessage('info', '提示', '没有缺失贴图可测试');
+            return;
+        }
+
+        const target = missingTextures[0];
+        try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            const result = await invoke<{
+                input: string;
+                normalized: string;
+                candidates: string[];
+                archive_count: number;
+                archive_paths: string[];
+                found: boolean;
+                size: number | null;
+            }>('debug_mpq_probe', { path: target });
+
+            console.log('[MPQ Debug] Probe result:', result);
+            showMessage(
+                result.found ? 'success' : 'warning',
+                'MPQ 调试',
+                result.found
+                    ? `已命中: ${result.normalized} (${result.size ?? 0} bytes)`
+                    : `未命中: ${result.normalized} (已加载 ${result.archive_count} 个 MPQ)`
+            );
+        } catch (e: any) {
+            console.error('[MPQ Debug] Probe failed:', e);
+            showMessage('error', 'MPQ 调试失败', e.toString());
+        }
+    };
+
     return (
         <>
             <DraggableModal
@@ -521,6 +556,31 @@ export const ViewSettingsWindow: React.FC = () => {
                                             </ToggleButton>
                                         </div>
                                     </div>
+
+                                    {/* Gizmo Settings */}
+                                    <div style={{ marginTop: '20px', borderTop: '1px solid #333', paddingTop: '16px' }}>
+                                        <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#888', marginBottom: '12px' }}>
+                                            Gizmo 设置
+                                        </div>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: '#aaa', fontSize: '12px' }}>
+                                                <span>Gizmo 轴大小</span>
+                                                <span>{gizmoSize.toFixed(1)}x</span>
+                                            </div>
+                                            <Slider
+                                                min={0.1}
+                                                max={1}
+                                                step={0.1}
+                                                value={gizmoSize}
+                                                onChange={(v) => setGizmoSize(v as number)}
+                                                tooltip={{ formatter: (v) => `${v}x` }}
+                                                styles={{
+                                                    track: { backgroundColor: '#1677ff' },
+                                                    rail: { backgroundColor: '#4a4a4a' }
+                                                }}
+                                            />
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
 
@@ -609,34 +669,32 @@ export const ViewSettingsWindow: React.FC = () => {
 
                             <div style={{ borderTop: '1px solid #333' }} />
 
-                            {/* Node Color Settings Section */}
+                                                        {/* Node Color Settings Section */}
                             <div>
                                 <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#888', marginBottom: '12px' }}>
-                                    鑺傜偣棰滆壊
+                                    节点颜色设置
                                 </div>
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(140px, 1fr))', gap: '10px 16px' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(120px, 1fr))', gap: '6px 10px' }}>
                                     {[
-                                        { key: 'Bone', label: '楠ㄦ灦' },
-                                        { key: 'Helper', label: '甯姪浣?' },
-                                        { key: 'Attachment', label: '闄勪欢' },
-                                        { key: 'ParticleEmitter', label: '绮掑瓙1' },
-                                        { key: 'ParticleEmitter2', label: '绮掑瓙2' },
-                                        { key: 'RibbonEmitter', label: '甯︾姸' },
-                                        { key: 'Light', label: '鐏厜' },
-                                        { key: 'EventObject', label: '浜嬩欢' },
-                                        { key: 'CollisionShape', label: '纰版挒' },
-                                        { key: 'Camera', label: '鐩告満' },
-                                        { key: 'ParticleEmitterPopcorn', label: 'Popcorn' }
+                                        { key: 'Bone', label: '骨骼' },
+                                        { key: 'Helper', label: '辅助' },
+                                        { key: 'Attachment', label: '附件' },
+                                        { key: 'ParticleEmitter', label: '粒子发射器' },
+                                        { key: 'ParticleEmitter2', label: '粒子发射器2' },
+                                        { key: 'RibbonEmitter', label: '飘带发射器' },
+                                        { key: 'Light', label: '光源' },
+                                        { key: 'EventObject', label: '事件对象' },
+                                        { key: 'CollisionShape', label: '碰撞体' }
                                     ].map((item) => (
                                         <div key={item.key} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                            <span style={{ color: '#aaa', fontSize: '12px', width: '60px' }}>{item.label}</span>
-                                            <div style={{ position: 'relative', width: '36px', height: '22px', borderRadius: '4px', overflow: 'hidden', border: '1px solid #444' }}>
+                                            <span style={{ color: '#aaa', fontSize: '11px', width: '52px' }}>{item.label}</span>
+                                            <div style={{ position: 'relative', width: '30px', height: '18px', borderRadius: '4px', overflow: 'hidden', border: '1px solid #444' }}>
                                                 <input
                                                     type="color"
                                                     value={(nodeColors as any)?.[item.key] || '#ffffff'}
                                                     onChange={(e) => setNodeColors({ [item.key]: e.target.value } as any)}
                                                     style={{
-                                                        position: 'absolute', top: -5, left: -5, width: '50px', height: '40px',
+                                                        position: 'absolute', top: -6, left: -6, width: '48px', height: '36px',
                                                         padding: 0, margin: 0, border: 'none', cursor: 'pointer'
                                                     }}
                                                 />
@@ -879,6 +937,14 @@ export const ViewSettingsWindow: React.FC = () => {
                                     <span style={{ fontSize: '12px', color: '#555' }}>
                                         * 加载 MPQ 以显示正确贴图与粒子
                                     </span>
+                                    <Button
+                                        onClick={handleDebugMissingTexture}
+                                        size="middle"
+                                        disabled={!missingTextures || missingTextures.length === 0}
+                                        style={{ borderRadius: '6px' }}
+                                    >
+                                        测试缺失
+                                    </Button>
                                     <Button
                                         onClick={handleLoadMPQ}
                                         type="primary"

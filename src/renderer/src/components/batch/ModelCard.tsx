@@ -17,6 +17,7 @@ interface ModelCardProps {
     initialAnimations?: string[];
     initialSelectedAnimation?: string;
     isSelected?: boolean;
+    showAnimationSelect?: boolean;
     onDelete: (file: ModelFile) => void;
     onEditTexture: (file: ModelFile) => void;
     onCopy?: (file: ModelFile) => void;
@@ -31,6 +32,7 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
     initialAnimations = [],
     initialSelectedAnimation,
     isSelected = false,
+    showAnimationSelect = true,
     onDelete,
     onEditTexture,
     onCopy,
@@ -86,30 +88,30 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
             style={{
                 position: 'relative',
                 background: '#1a1a1a',
-                border: isSelected ? '2px solid #1677ff' : '1px solid #333',
+                border: '2px solid',
+                borderColor: isSelected ? '#1677ff' : '#333',
                 borderRadius: 8,
                 padding: 4,
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 4,
                 transition: 'all 0.2s',
-                height: 'fit-content',
+                height: '100%',
+                minHeight: 0,
+                boxSizing: 'border-box',
                 cursor: 'pointer',
+                overflow: 'hidden'
             }}
             className="model-card-hover"
             onClick={() => onSelect?.(file)}
             onDoubleClick={() => onDoubleClick?.(file)}
         >
             <div style={{
-                width: '100%',
-                aspectRatio: '1',
+                position: 'absolute',
+                inset: 4,
                 background: '#000',
                 borderRadius: 4,
+                overflow: 'hidden',
                 display: 'flex',
                 justifyContent: 'center',
-                alignItems: 'center',
-                overflow: 'hidden',
-                position: 'relative'
+                alignItems: 'center'
             }}>
                 <AnimatedPreview
                     bitmap={bitmap}
@@ -126,7 +128,7 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
                     opacity: 0,
                     transition: 'opacity 0.2s'
                 }}>
-                    <Tooltip title="复制模型">
+                    <Tooltip title="????">
                         <Button
                             type="text"
                             icon={<CopyOutlined style={{ color: '#fff' }} />}
@@ -136,7 +138,7 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
                         />
                     </Tooltip>
 
-                    <Tooltip title="修改贴图路径">
+                    <Tooltip title="??????">
                         <Button
                             type="text"
                             icon={<FileImageOutlined style={{ color: '#fff' }} />}
@@ -146,7 +148,7 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
                         />
                     </Tooltip>
 
-                    <Tooltip title="删除模型">
+                    <Tooltip title="????">
                         <Button
                             type="text"
                             danger
@@ -159,34 +161,47 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
                 </div>
             </div>
 
-            <Text
-                ellipsis={{ tooltip: file.name }}
-                style={{
-                    textAlign: 'center',
-                    fontSize: 11,
-                    width: '100%',
-                    color: '#ccc',
-                    padding: '0 2px'
-                }}
-            >
-                {file.name}
-            </Text>
-
-            {/* Animation Dropdown */}
-            {animations.length > 0 && (
-                <Select
-                    size="small"
-                    placeholder="选择动画"
-                    value={selectedAnimation}
-                    onChange={(value) => {
-                        setSelectedAnimation(value);
-                        onAnimationChange?.(file, value);
+            <div style={{
+                position: 'absolute',
+                left: 8,
+                right: 8,
+                bottom: 8,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6
+            }}>
+                <Text
+                    ellipsis={{ tooltip: file.name }}
+                    style={{
+                        textAlign: 'center',
+                        fontSize: 11,
+                        width: '100%',
+                        color: '#e6e6e6',
+                        padding: '2px 6px',
+                        background: 'rgba(0,0,0,0.55)',
+                        borderRadius: 4,
+                        lineHeight: 1.2
                     }}
-                    style={{ width: '100%' }}
-                    options={animations.map(anim => ({ label: anim, value: anim }))}
-                    onClick={(e) => e.stopPropagation()}
-                />
-            )}
+                >
+                    {file.name}
+                </Text>
+
+                {/* Animation Dropdown */}
+                {showAnimationSelect && animations.length > 0 && (
+                    <Select
+                        size="small"
+                        placeholder="????"
+                        value={selectedAnimation}
+                        onChange={(value) => {
+                            setSelectedAnimation(value);
+                            onAnimationChange?.(file, value);
+                        }}
+                        style={{ width: '100%' }}
+                        options={animations.map(anim => ({ label: anim, value: anim }))}
+                        onClick={(e) => e.stopPropagation()}
+                    />
+                )}
+            </div>
 
             <style>{`
                 .model-card-hover:hover {

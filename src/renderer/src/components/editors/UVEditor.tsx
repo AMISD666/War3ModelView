@@ -42,7 +42,7 @@ interface UVSelection {
 type UVSubMode = 'vertex' | 'edge' | 'face' | 'group'
 type UVTransformMode = 'select' | 'translate' | 'rotate' | 'scale'
 
-const MAX_HISTORY = 10
+const MAX_HISTORY = 20
 
 const UVEditor: React.FC<UVEditorProps> = ({
     modelPath,
@@ -73,7 +73,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
     const [isDragging, setIsDragging] = useState(false)
     const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null)
 
-    // History for Undo/Redo (max 10 steps)
+    // History for Undo/Redo (max 20 steps)
     const [history, setHistory] = useState<{ geosetIndex: number; tVertices: Float32Array }[][]>([])
     const [historyIndex, setHistoryIndex] = useState(-1)
 

@@ -132,6 +132,11 @@ const miniButtonStyle: React.CSSProperties = {
 
 // --- Grouping Logic ---
 
+const customGroupActions = new Set([
+    'animation.selectParentNode',
+    'animation.selectChildNode'
+])
+
 const getGroupTitleMap = (category: string): string => {
     switch (category) {
         case '文件':
@@ -195,7 +200,9 @@ export const ShortcutSettingsPanel: React.FC = () => {
         groupTitles.forEach(t => groups.set(t, []))
 
         for (const action of shortcutActions) {
-            const title = getGroupTitleMap(action.category)
+            const title = customGroupActions.has(action.id)
+                ? '通用快捷键'
+                : getGroupTitleMap(action.category)
             if (!groups.has(title)) groups.set(title, [])
             groups.get(title)!.push(action)
         }

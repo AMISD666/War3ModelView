@@ -29,7 +29,7 @@ interface HistoryState {
 export const useHistoryStore = create<HistoryState>((set, get) => ({
     undoStack: [],
     redoStack: [],
-    maxHistory: 50,
+    maxHistory: 20,
     isDirty: false,
 
     push: (cmd: Command) => {

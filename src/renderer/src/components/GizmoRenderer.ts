@@ -38,7 +38,7 @@ export class GizmoRenderer {
     private colorBuffer: WebGLBuffer | null = null
 
     // Gizmo Geometry Data - Fixed size (no adaptive scaling)
-    private axisLength = 10.0
+    private axisLength = 50.0
 
 
     init(gl: WebGLRenderingContext | WebGL2RenderingContext) {
@@ -106,6 +106,31 @@ export class GizmoRenderer {
             colors.push(...color)
             colors.push(...color)
         }
+        const addCube = (c: vec3, halfSize: number, color: number[]) => {
+            const x0 = c[0] - halfSize, x1 = c[0] + halfSize
+            const y0 = c[1] - halfSize, y1 = c[1] + halfSize
+            const z0 = c[2] - halfSize, z1 = c[2] + halfSize
+            // Bottom square
+            addLine(vec3.fromValues(x0, y0, z0), vec3.fromValues(x1, y0, z0), color)
+            addLine(vec3.fromValues(x1, y0, z0), vec3.fromValues(x1, y1, z0), color)
+            addLine(vec3.fromValues(x1, y1, z0), vec3.fromValues(x0, y1, z0), color)
+            addLine(vec3.fromValues(x0, y1, z0), vec3.fromValues(x0, y0, z0), color)
+            // Top square
+            addLine(vec3.fromValues(x0, y0, z1), vec3.fromValues(x1, y0, z1), color)
+            addLine(vec3.fromValues(x1, y0, z1), vec3.fromValues(x1, y1, z1), color)
+            addLine(vec3.fromValues(x1, y1, z1), vec3.fromValues(x0, y1, z1), color)
+            addLine(vec3.fromValues(x0, y1, z1), vec3.fromValues(x0, y0, z1), color)
+            // Vertical edges
+            addLine(vec3.fromValues(x0, y0, z0), vec3.fromValues(x0, y0, z1), color)
+            addLine(vec3.fromValues(x1, y0, z0), vec3.fromValues(x1, y0, z1), color)
+            addLine(vec3.fromValues(x1, y1, z0), vec3.fromValues(x1, y1, z1), color)
+            addLine(vec3.fromValues(x0, y1, z0), vec3.fromValues(x0, y1, z1), color)
+        }
+        const addTriangle = (p1: vec3, p2: vec3, p3: vec3, color: number[]) => {
+            addLine(p1, p2, color)
+            addLine(p2, p3, color)
+            addLine(p3, p1, color)
+        }
 
         // Colors
         const red = highlightAxis === 'x' ? [1, 1, 0] : [1, 0, 0]
@@ -131,13 +156,9 @@ export class GizmoRenderer {
             addLine(center, yEnd, green)
             addLine(center, zEnd, blue)
 
-            // Add scale tips (small triangles/lines connecting axes?)
-            // For now, just lines is fine, maybe add a small cross at the end?
-            // Let's add a small perpendicular line at the end to denote scale
-            const s = 5.0 * scale
-            addLine(xEnd, [xEnd[0], xEnd[1] + s, xEnd[2]], red)
-            addLine(yEnd, [yEnd[0] + s, yEnd[1], yEnd[2]], green)
-            addLine(zEnd, [zEnd[0], zEnd[1], zEnd[2] + s], blue)
+            const centerColor = highlightAxis === 'center' ? [1, 1, 0] : [0.9, 0.9, 0.9]
+            const centerSize = axisLen * 0.064
+            addCube(center, centerSize, centerColor)
         } else if (mode === 'rotate') {
             // Draw circles
             const segments = 32
@@ -171,57 +192,59 @@ export class GizmoRenderer {
             }
         }
 
-        // Planar Handles (Squares)
-        const planeSize = axisLen * 0.3
+        // Planar Handles (Triangles)
+        const planeSize = axisLen * 0.35
         const planeOffset = axisLen * 0.1 // Slight offset from origin
 
         // XY Plane (Blue)
         if (mode === 'translate' || mode === 'scale') {
+            const color = highlightAxis === 'xy' ? [1, 1, 0] : [0, 0, 1]
             const p1 = vec3.create(); vec3.add(p1, center, [planeOffset, planeOffset, 0])
             const p2 = vec3.create(); vec3.add(p2, center, [planeOffset + planeSize, planeOffset, 0])
             const p3 = vec3.create(); vec3.add(p3, center, [planeOffset + planeSize, planeOffset + planeSize, 0])
             const p4 = vec3.create(); vec3.add(p4, center, [planeOffset, planeOffset + planeSize, 0])
-
-            const color = highlightAxis === 'xy' ? [1, 1, 0] : [0, 0, 1]
-            addLine(p1, p2, color)
-            addLine(p2, p3, color)
-            addLine(p3, p4, color)
-            addLine(p4, p1, color)
-            // Diagonals for fill effect
-            addLine(p1, p3, color)
-            addLine(p2, p4, color)
+            if (mode === 'translate') {
+                addLine(p1, p2, color)
+                addLine(p2, p3, color)
+                addLine(p3, p4, color)
+                addLine(p4, p1, color)
+            } else {
+                addTriangle(p1, p2, p4, color)
+            }
         }
 
         // XZ Plane (Green)
         if (mode === 'translate' || mode === 'scale') {
+            const color = highlightAxis === 'xz' ? [1, 1, 0] : [0, 1, 0]
             const p1 = vec3.create(); vec3.add(p1, center, [planeOffset, 0, planeOffset])
             const p2 = vec3.create(); vec3.add(p2, center, [planeOffset + planeSize, 0, planeOffset])
             const p3 = vec3.create(); vec3.add(p3, center, [planeOffset + planeSize, 0, planeOffset + planeSize])
             const p4 = vec3.create(); vec3.add(p4, center, [planeOffset, 0, planeOffset + planeSize])
-
-            const color = highlightAxis === 'xz' ? [1, 1, 0] : [0, 1, 0]
-            addLine(p1, p2, color)
-            addLine(p2, p3, color)
-            addLine(p3, p4, color)
-            addLine(p4, p1, color)
-            addLine(p1, p3, color)
-            addLine(p2, p4, color)
+            if (mode === 'translate') {
+                addLine(p1, p2, color)
+                addLine(p2, p3, color)
+                addLine(p3, p4, color)
+                addLine(p4, p1, color)
+            } else {
+                addTriangle(p1, p2, p4, color)
+            }
         }
 
         // YZ Plane (Red)
         if (mode === 'translate' || mode === 'scale') {
+            const color = highlightAxis === 'yz' ? [1, 1, 0] : [1, 0, 0]
             const p1 = vec3.create(); vec3.add(p1, center, [0, planeOffset, planeOffset])
             const p2 = vec3.create(); vec3.add(p2, center, [0, planeOffset + planeSize, planeOffset])
             const p3 = vec3.create(); vec3.add(p3, center, [0, planeOffset + planeSize, planeOffset + planeSize])
             const p4 = vec3.create(); vec3.add(p4, center, [0, planeOffset, planeOffset + planeSize])
-
-            const color = highlightAxis === 'yz' ? [1, 1, 0] : [1, 0, 0]
-            addLine(p1, p2, color)
-            addLine(p2, p3, color)
-            addLine(p3, p4, color)
-            addLine(p4, p1, color)
-            addLine(p1, p3, color)
-            addLine(p2, p4, color)
+            if (mode === 'translate') {
+                addLine(p1, p2, color)
+                addLine(p2, p3, color)
+                addLine(p3, p4, color)
+                addLine(p4, p1, color)
+            } else {
+                addTriangle(p1, p2, p4, color)
+            }
         }
 
         // Upload Data
@@ -261,10 +284,17 @@ export class GizmoRenderer {
 
         const axisLen = this.axisLength * scale
         // Keep hit size proportional to axis length so screen-space size stays consistent
-        const lineHitThreshold = axisLen * 0.06
-        const ringHitThreshold = axisLen * 0.05
+        const lineHitThreshold = axisLen * 0.1
+        const ringHitThreshold = axisLen * 0.08
 
         if (mode === 'translate' || mode === 'scale') {
+            if (mode === 'scale') {
+                const centerHitThreshold = axisLen * 0.18
+                const distCenter = this.distToPoint(cameraPos, rayDir, center)
+                if (distCenter < centerHitThreshold) {
+                    return 'center'
+                }
+            }
             const xEnd = vec3.create(); vec3.add(xEnd, center, [axisLen, 0, 0])
             const yEnd = vec3.create(); vec3.add(yEnd, center, [0, axisLen, 0])
             const zEnd = vec3.create(); vec3.add(zEnd, center, [0, 0, axisLen])
@@ -282,32 +312,49 @@ export class GizmoRenderer {
             if (distZ < minDist) { minDist = distZ; hitAxis = 'z' }
 
             // Planar Checks
-            const planeSize = axisLen * 0.3
+            const planeSize = axisLen * 0.35
             const planeOffset = axisLen * 0.1
 
-            // XY Plane
-            const distXY = this.distToQuad(cameraPos, rayDir,
-                vec3.fromValues(center[0] + planeOffset, center[1] + planeOffset, center[2]),
-                vec3.fromValues(center[0] + planeOffset + planeSize, center[1] + planeOffset, center[2]),
-                vec3.fromValues(center[0] + planeOffset + planeSize, center[1] + planeOffset + planeSize, center[2]),
-                vec3.fromValues(center[0] + planeOffset, center[1] + planeOffset + planeSize, center[2])
-            )
+            let distXY = Infinity
+            let distXZ = Infinity
+            let distYZ = Infinity
 
-            // XZ Plane
-            const distXZ = this.distToQuad(cameraPos, rayDir,
-                vec3.fromValues(center[0] + planeOffset, center[1], center[2] + planeOffset),
-                vec3.fromValues(center[0] + planeOffset + planeSize, center[1], center[2] + planeOffset),
-                vec3.fromValues(center[0] + planeOffset + planeSize, center[1], center[2] + planeOffset + planeSize),
-                vec3.fromValues(center[0] + planeOffset, center[1], center[2] + planeOffset + planeSize)
-            )
-
-            // YZ Plane
-            const distYZ = this.distToQuad(cameraPos, rayDir,
-                vec3.fromValues(center[0], center[1] + planeOffset, center[2] + planeOffset),
-                vec3.fromValues(center[0], center[1] + planeOffset + planeSize, center[2] + planeOffset),
-                vec3.fromValues(center[0], center[1] + planeOffset + planeSize, center[2] + planeOffset + planeSize),
-                vec3.fromValues(center[0], center[1] + planeOffset, center[2] + planeOffset + planeSize)
-            )
+            if (mode === 'translate') {
+                distXY = this.distToQuad(cameraPos, rayDir,
+                    vec3.fromValues(center[0] + planeOffset, center[1] + planeOffset, center[2]),
+                    vec3.fromValues(center[0] + planeOffset + planeSize, center[1] + planeOffset, center[2]),
+                    vec3.fromValues(center[0] + planeOffset + planeSize, center[1] + planeOffset + planeSize, center[2]),
+                    vec3.fromValues(center[0] + planeOffset, center[1] + planeOffset + planeSize, center[2])
+                )
+                distXZ = this.distToQuad(cameraPos, rayDir,
+                    vec3.fromValues(center[0] + planeOffset, center[1], center[2] + planeOffset),
+                    vec3.fromValues(center[0] + planeOffset + planeSize, center[1], center[2] + planeOffset),
+                    vec3.fromValues(center[0] + planeOffset + planeSize, center[1], center[2] + planeOffset + planeSize),
+                    vec3.fromValues(center[0] + planeOffset, center[1], center[2] + planeOffset + planeSize)
+                )
+                distYZ = this.distToQuad(cameraPos, rayDir,
+                    vec3.fromValues(center[0], center[1] + planeOffset, center[2] + planeOffset),
+                    vec3.fromValues(center[0], center[1] + planeOffset + planeSize, center[2] + planeOffset),
+                    vec3.fromValues(center[0], center[1] + planeOffset + planeSize, center[2] + planeOffset + planeSize),
+                    vec3.fromValues(center[0], center[1] + planeOffset, center[2] + planeOffset + planeSize)
+                )
+            } else {
+                distXY = this.distToTriangle(cameraPos, rayDir,
+                    vec3.fromValues(center[0] + planeOffset, center[1] + planeOffset, center[2]),
+                    vec3.fromValues(center[0] + planeOffset + planeSize, center[1] + planeOffset, center[2]),
+                    vec3.fromValues(center[0] + planeOffset, center[1] + planeOffset + planeSize, center[2])
+                )
+                distXZ = this.distToTriangle(cameraPos, rayDir,
+                    vec3.fromValues(center[0] + planeOffset, center[1], center[2] + planeOffset),
+                    vec3.fromValues(center[0] + planeOffset + planeSize, center[1], center[2] + planeOffset),
+                    vec3.fromValues(center[0] + planeOffset, center[1], center[2] + planeOffset + planeSize)
+                )
+                distYZ = this.distToTriangle(cameraPos, rayDir,
+                    vec3.fromValues(center[0], center[1] + planeOffset, center[2] + planeOffset),
+                    vec3.fromValues(center[0], center[1] + planeOffset + planeSize, center[2] + planeOffset),
+                    vec3.fromValues(center[0], center[1] + planeOffset, center[2] + planeOffset + planeSize)
+                )
+            }
 
             if (distXY < minDist) { minDist = distXY; hitAxis = 'xy' }
             if (distXZ < minDist) { minDist = distXZ; hitAxis = 'xz' }
@@ -355,6 +402,16 @@ export class GizmoRenderer {
 
         // 3. Return distance to the circle edge (abs(dist - radius))
         return Math.abs(dist - radius)
+    }
+
+    private distToPoint(rayOrigin: vec3, rayDir: vec3, point: vec3): number {
+        const toPoint = vec3.create()
+        vec3.sub(toPoint, point, rayOrigin)
+        const t = vec3.dot(toPoint, rayDir)
+        if (t < 0) return Infinity
+        const closest = vec3.create()
+        vec3.scaleAndAdd(closest, rayOrigin, rayDir, t)
+        return vec3.distance(point, closest)
     }
 
     // Distance between a ray (origin, dir) and a line segment (p1, p2)
@@ -468,5 +525,28 @@ export class GizmoRenderer {
         }
 
         return Infinity
+    }
+
+    private distToTriangle(rayOrigin: vec3, rayDir: vec3, p1: vec3, p2: vec3, p3: vec3): number {
+        // Moller–Trumbore ray/triangle intersection
+        const edge1 = vec3.create(); vec3.sub(edge1, p2, p1)
+        const edge2 = vec3.create(); vec3.sub(edge2, p3, p1)
+        const h = vec3.create(); vec3.cross(h, rayDir, edge2)
+        const a = vec3.dot(edge1, h)
+        if (Math.abs(a) < 0.000001) return Infinity
+
+        const f = 1.0 / a
+        const s = vec3.create(); vec3.sub(s, rayOrigin, p1)
+        const u = f * vec3.dot(s, h)
+        if (u < 0.0 || u > 1.0) return Infinity
+
+        const q = vec3.create(); vec3.cross(q, s, edge1)
+        const v = f * vec3.dot(rayDir, q)
+        if (v < 0.0 || u + v > 1.0) return Infinity
+
+        const t = f * vec3.dot(edge2, q)
+        if (t < 0) return Infinity
+
+        return 0.0
     }
 }

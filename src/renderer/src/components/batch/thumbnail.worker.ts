@@ -33,6 +33,7 @@ interface RendererCacheItem {
     model: any;
     lastSequence: number;
     lastTime: number;
+    staticFrameTime?: number;
     aabb?: { min: any, max: any };
     textureImages?: Record<string, ImageData>;
     teamColorData?: Record<number, any>;
@@ -103,10 +104,11 @@ async function render(
         teamColorData?: Record<number, any>,
         frame?: number,
         sequenceIndex?: number,
+        freeze?: boolean,
         backgroundColor?: string
     }
 ) {
-    const { fullPath, modelBuffer, textureImages, teamColorData, frame = 0, sequenceIndex = 0, backgroundColor = '#333333' } = payload;
+    const { fullPath, modelBuffer, textureImages, teamColorData, frame = 0, sequenceIndex = 0, freeze = false, backgroundColor = '#333333' } = payload;
 
     await initGL();
     if (!gl) return null;
@@ -244,7 +246,7 @@ async function render(
             renderer,
             model,
             lastSequence: -1,
-            lastTime: frame || performance.now(), // Use the passed frame timestamp to synchronize with generator
+            lastTime: (frame !== undefined ? frame : performance.now()),
             aabb: { min, max },
             textureImages,
             teamColorData
@@ -290,6 +292,7 @@ async function render(
                 // CRITICAL: Update with 0 delta to refresh visibility and buffers for the new sequence
                 if (renderer.update) renderer.update(0);
                 cacheItem.lastSequence = seqIdx;
+                cacheItem.staticFrameTime = undefined;
             } catch (e) {
                 console.warn(`[Worker] Failed to set sequence ${seqIdx}:`, e);
             }
@@ -297,11 +300,27 @@ async function render(
     }
 
     // Calculate proper delta time for smooth animation
-    const now = frame || performance.now();
-    // Delta stabilization: If lastTime is too far back or 0, reset to 16ms
-    const rawDelta = now - cacheItem.lastTime;
-    const delta = (cacheItem.lastTime > 0 && rawDelta > 0) ? Math.min(rawDelta, 100) : 16;
-    cacheItem.lastTime = now;
+    let delta = 0;
+    if (!freeze) {
+        const now = (frame !== undefined ? frame : performance.now());
+        // Delta stabilization: If lastTime is too far back or 0, reset to 16ms
+        const rawDelta = now - cacheItem.lastTime;
+        delta = (cacheItem.lastTime > 0 && rawDelta > 0) ? Math.min(rawDelta, 100) : 16;
+        cacheItem.lastTime = now;
+    } else if (model.Sequences && model.Sequences.length > 0) {
+        const seqIdx = Math.max(0, Math.min(sequenceIndex, model.Sequences.length - 1));
+        const seq = model.Sequences[seqIdx];
+        const interval = seq?.Interval;
+        const start = interval && interval.length >= 2 ? interval[0] : 0;
+        const end = interval && interval.length >= 2 ? interval[1] : (start + 1000);
+        const target = start + Math.max(0, Math.floor((end - start) * 0.5));
+
+        if (cacheItem.staticFrameTime !== target) {
+            delta = Math.max(0, target - start);
+            cacheItem.staticFrameTime = target;
+            cacheItem.lastTime = target;
+        }
+    }
 
     // --- USE CACHED AABB ---
     const { min, max } = cacheItem.aabb || { min: vec3.fromValues(-50, -50, -50), max: vec3.fromValues(50, 50, 50) };

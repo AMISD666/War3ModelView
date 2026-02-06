@@ -62,7 +62,7 @@ export const AnimatedPreview: React.FC<AnimatedPreviewProps> = React.memo(({
                 style={{
                     width: '100%',
                     height: '100%',
-                    objectFit: 'contain',
+                    objectFit: 'fill',
                     border: isSelected ? '2px solid #1677ff' : 'none',
                     boxSizing: 'border-box'
                 }}

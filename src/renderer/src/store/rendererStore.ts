@@ -73,6 +73,8 @@ interface RendererStore {
     setRenderMode: (mode: 'textured' | 'wireframe') => void
     teamColor: number
     setTeamColor: (color: number) => void
+    gizmoSize: number
+    setGizmoSize: (size: number) => void
 
     // Color Settings
     backgroundColor: string
@@ -144,7 +146,7 @@ export const useRendererStore = create<RendererStore>()(
             showGridYZ: false,
             setShowGridYZ: (show) => set({ showGridYZ: show }),
             showVerticesByMode: {
-                view: true,
+                view: false,
                 geometry: true,
                 uv: true,
                 animation: true,
@@ -176,6 +178,8 @@ export const useRendererStore = create<RendererStore>()(
             setRenderMode: (mode) => set({ renderMode: mode }),
             teamColor: 0, // Player 1 (Red)
             setTeamColor: (color) => set({ teamColor: color }),
+            gizmoSize: 0.5,
+            setGizmoSize: (size) => set({ gizmoSize: size }),
 
             // Color Settings
             backgroundColor: '#333333',
@@ -249,6 +253,7 @@ export const useRendererStore = create<RendererStore>()(
                 enableLighting: state.enableLighting,
                 renderMode: state.renderMode,
                 teamColor: state.teamColor,
+                gizmoSize: state.gizmoSize,
                 backgroundColor: state.backgroundColor,
                 vertexColor: state.vertexColor,
                 wireframeColor: state.wireframeColor,

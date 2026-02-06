@@ -154,7 +154,7 @@ export const GeosetMergeDialog: React.FC<GeosetMergeDialogProps> = ({
                         buffer = fileData.buffer;
                     } catch {
                         try {
-                            const mpqResult: number[] = await invoke('read_mpq_file', { filePath: texturePath });
+                            const mpqResult: number[] = await invoke('read_mpq_file', { path: texturePath.replace(/\//g, '\\') });
                             buffer = new Uint8Array(mpqResult).buffer;
                         } catch {
                             buffer = null;

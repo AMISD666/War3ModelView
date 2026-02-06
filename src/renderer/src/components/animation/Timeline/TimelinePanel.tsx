@@ -26,11 +26,12 @@ interface TimelinePanelProps {
 // Constants
 const RULER_HEIGHT = 28
 // Track visual settings
-const KEYFRAME_SIZE = 5
+const KEYFRAME_SIZE = 8
 const SNAP_THRESHOLD_X = 50 // px, distance in X to snap (Large range)
 const CLICK_MOVE_THRESHOLD = 5 // px, max movement to count as click
 
 const LANE_HEIGHT = 14
+const LANE_PADDING = 10
 const OFFSET_TRANSLATION = 12
 const OFFSET_ROTATION = 26
 const OFFSET_SCALING = 40
@@ -121,6 +122,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     const [selectionRect, setSelectionRect] = useState<{ startX: number, startY: number, endX: number, endY: number } | null>(null)
     const [hoveredSequenceIndex, setHoveredSequenceIndex] = useState<number | null>(null)
     const [contextMenu, setContextMenu] = useState<{ visible: boolean, x: number, y: number, selectionCount: number }>({ visible: false, x: 0, y: 0, selectionCount: 0 })
+    const blockContextMenuRef = useRef(false)
     const [scalePasteOpen, setScalePasteOpen] = useState(false)
     const [scalePasteMode, setScalePasteMode] = useState<'ratio' | 'range'>('ratio')
     const [scalePastePercent, setScalePastePercent] = useState<number>(100)
@@ -384,6 +386,19 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
         // Sequence Track Bg (Bottom)
         const seqTrackY = height - SEQUENCE_HEIGHT
+        const trackTop = RULER_HEIGHT + LANE_PADDING
+        const trackBottom = seqTrackY - LANE_PADDING
+        const fallbackGap = OFFSET_ROTATION - OFFSET_TRANSLATION
+        const laneGap = trackBottom > trackTop ? (trackBottom - trackTop) / 2 : Math.max(1, fallbackGap)
+        const laneYMap: Record<string, number> = {
+            Translation: trackBottom > trackTop ? trackTop : RULER_HEIGHT + OFFSET_TRANSLATION,
+            Rotation: trackBottom > trackTop ? trackTop + laneGap : RULER_HEIGHT + OFFSET_ROTATION,
+            Scaling: trackBottom > trackTop ? trackTop + laneGap * 2 : RULER_HEIGHT + OFFSET_SCALING
+        }
+        const effectiveKeyframeSize = Math.min(
+            KEYFRAME_SIZE,
+            Math.max(3, Math.floor(laneGap / 2) - 2)
+        )
         ctx.fillStyle = '#202020'
         ctx.fillRect(0, seqTrackY, width, SEQUENCE_HEIGHT)
         ctx.strokeStyle = '#333'
@@ -518,10 +533,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
             if (!isVisible) return
 
-            let laneY = RULER_HEIGHT + 20
-            if (kf.type === 'Translation') laneY = RULER_HEIGHT + OFFSET_TRANSLATION
-            else if (kf.type === 'Rotation') laneY = RULER_HEIGHT + OFFSET_ROTATION
-            else if (kf.type === 'Scaling') laneY = RULER_HEIGHT + OFFSET_SCALING
+            const laneY = laneYMap[kf.type] ?? (RULER_HEIGHT + OFFSET_TRANSLATION)
 
             const isSelected = selectedUids.has(kf.uid)
 
@@ -529,13 +541,13 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             const dragOffset = dragKeyframeOffsetRef.current
             const drawX = isSelected && dragOffset !== 0 ? kx + dragOffset * pxPerMs : kx
 
-            const lineTop = laneY - KEYFRAME_SIZE
-            const lineBottom = laneY + KEYFRAME_SIZE
+            const lineTop = laneY - effectiveKeyframeSize
+            const lineBottom = laneY + effectiveKeyframeSize
             const lineColor = isSelected ? '#ffcc00' : kf.color
 
             if (isSelected) {
                 ctx.strokeStyle = '#fff'
-                ctx.lineWidth = 4
+                ctx.lineWidth = 3
                 ctx.beginPath()
                 ctx.moveTo(drawX, lineTop)
                 ctx.lineTo(drawX, lineBottom)
@@ -543,7 +555,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             }
 
             ctx.strokeStyle = lineColor
-            ctx.lineWidth = 2
+            ctx.lineWidth = 1
             ctx.beginPath()
             ctx.moveTo(drawX, lineTop)
             ctx.lineTo(drawX, lineBottom)
@@ -1067,6 +1079,9 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
         if (mode === 'pan') {
             const dx = e.clientX - lastMouseX
+            if (Math.abs(e.clientX - interactionRef.current.startX) > 2) {
+                blockContextMenuRef.current = true
+            }
             const scrollDelta = dx / pixelsPerMsRef.current
             setScrollX(prev => Math.max(0, prev - scrollDelta))
             interactionRef.current.lastMouseX = e.clientX
@@ -1158,7 +1173,15 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             return
         }
 
-        if (mode === 'scrub') {
+        if (mode === 'pan') {
+            setIsDragging(false)
+            setSelectionRect(null)
+            interactionRef.current.mode = 'none'
+            setTimeout(() => {
+                blockContextMenuRef.current = false
+            }, 0)
+            return
+        } else if (mode === 'scrub') {
             setIsDragging(false)
             confirmScrub()
         } else if (mode === 'dragSequenceStart' || mode === 'dragSequenceEnd') {
@@ -1326,6 +1349,21 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         }
 
         if (e.button === 2) {
+            blockContextMenuRef.current = false
+            interactionRef.current = {
+                mode: 'pan',
+                startX: e.clientX,
+                startY: e.clientY,
+                lastMouseX: e.clientX,
+                initialScrollX: scrollXRef.current,
+                dragSequenceIndex: -1,
+                initialInterval: [0, 0],
+                dragKeyframeStartFrame: 0,
+                dragKeyframeData: []
+            }
+            setIsDragging(true)
+            window.addEventListener('mousemove', handleGlobalMouseMove)
+            window.addEventListener('mouseup', handleGlobalMouseUp)
             return
         }
 
@@ -1518,6 +1556,9 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
     const handleContextMenu = useCallback((e: React.MouseEvent) => {
         e.preventDefault()
+        if (blockContextMenuRef.current) {
+            return
+        }
         const container = containerRef.current
         if (!container) return
 
@@ -1526,6 +1567,10 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             const next = new Set([clickedKf.uid])
             selectedKeyframeUidsRef.current = next
             setSelectedKeyframeUids(next)
+        }
+
+        if (selectedKeyframeUidsRef.current.size === 0) {
+            return
         }
 
         const rect = container.getBoundingClientRect()

@@ -1,65 +1,63 @@
-﻿# War3ModelView Project Status & Handoff
+﻿# War3ModelView 项目状态与交接
 
-*Last update: 2026-01-27*
+*最后更新: 2026-02-06*
 
-## Current Status (What works now)
-1) **Multi-Tab Model Viewer**
-   - Single-instance enforcement with Rust-side pending buffer for cold-start multi-open.
-   - Tabs snapshot most model state and swap on tab switch.
-   - `Ctrl+W` closes current tab.
-2) **Copy model with textures (clipboard CF_HDROP)**
-   - `copy_model_with_textures` + CLI `--copy-model` support multi-invoke.
-   - Texture resolution scans MDX TEXS / MDL Image with alt extensions.
-   - Cache under `%LOCALAPPDATA%\War3ModelView\war3modelview_data\temp`; cleanup on start/exit.
-3) **Storage path**
-   - Settings/data now under `%LOCALAPPDATA%\War3ModelView\war3modelview_data`.
-4) **UI/UX fixes**
-   - Save-on-close confirmation for dirty models.
-   - "No animation" mode fully pauses animation (bind pose).
-   - Polygon/face selection highlight uses pure-color overlay and is double-sided.
-   - Animation panel shows sequence indices; panel width reduced.
-5) **Shortcut System**
-   - Centralized shortcut registry + manager + persistent store.
-   - Settings tab: “快捷键” with conflict handling.
-6) **Particle Emitter 2 Support (Partial)**
-   - Fixed "Head" flag persistence (written as `-1` in MDX to represent unchecked).
-   - Fixed MDL generator syntax for unchecked flags.
-   - Fixed missing texture reporting for emitters.
+## 当前进度 / 已完成
+1) **多标签模型查看器**
+   - 单实例 + 冷启动多文件接管。
+   - 标签切换保存大部分模型状态。
+2) **统一快捷键系统与设置面板**
+   - 全局快捷键注册与持久化配置。
+   - 设置面板已支持快捷键管理与视图参数配置。
+3) **Gizmo 相关改进**
+   - 轴体尺寸与命中范围整体放大（基于相机自适应 + 用户倍率）。
+   - 平移模式双轴为正方形；缩放模式双轴为三角形。
+   - 缩放模式三轴中心方块可调（已单独缩小）。
+4) **动画关键帧编辑增强（已实现，待复核）**
+   - 关键帧拖动采用 `UpdateKeyframeCommand` 写入，支持撤销/重做。
+   - 旋转/缩放预览使用 `_isPreviewKey`，松开鼠标后清理。
+5) **视图设置新增**
+   - 增加“Gizmo 轴大小”滑块：范围 0.1-1，默认 0.5。
 
-## Recent Changes (Key Files)
-- `src/renderer/src/store/modelStore.ts`
-  - **Exhaustive Node Synchronization**: `updateModelDataWithNodes` now handles ALL MDX node types (including Reforged Popcorn emitters) to prevent index shifts.
-  - Fixed logic for clearing/reassigning ObjectIds to maintain hierarchy integrity.
-- `src/renderer/src/types/node.ts` & `model.ts`
-  - Added `PARTICLE_EMITTER_POPCORN` support across all interfaces.
-- `src/renderer/src/components/MainLayout.tsx`
-  - Removed redundant/conflicting flag overrides in save functions.
-  - Centralized all data preparation in `prepareModelDataForSave`.
-- `war3-model-4.0.0/mdx/generate.ts` & `mdl/generate.ts`
-  - Optimizations for "Neither" (Head & Tail unchecked) flag state.
+## 最近改动（关键文件）
+- `src/renderer/src/components/GizmoRenderer.ts`
+  - Gizmo 轴体放大、命中范围加大。
+  - 平移模式双轴改为正方形；缩放模式保持三角形。
+  - 缩放中心方块尺寸单独缩小。
+  - 增加三角形射线检测 `distToTriangle`。
+- `src/renderer/src/components/Viewer.tsx`
+  - `getGizmoScale()` 先做相机缩放，再乘用户倍率，避免滑块失效。
+  - 旋转/缩放预览使用 `_isPreviewKey` 并在 mouseUp 清理。
+  - 关键帧旋转/缩放提交使用 `UpdateKeyframeCommand`。
+- `src/renderer/src/store/rendererStore.ts`
+  - 新增 `gizmoSize` 设置并持久化，默认 0.5。
+- `src/renderer/src/components/ViewSettingsWindow.tsx`
+  - 新增 Gizmo 轴大小滑块（0.1-1）。
 
-## Known Issues / Blockers (CRITICAL)
-1) **Particle Coordinate Misalignment (Bug 13)**
-   - **Symptom**: Modified particle emitters appear correctly only at [0,0,0]. If the model moves, particles move in the OPPOSITE direction.
-   - **Status**: Node index synchronization is fixed (no more lossy reordering), but the coordinate inheritance is likely broken.
-   - **Suspicion**: When saving, some transformation data or "DontInherit" flags might be corrupted, or the `ModelSpace` flag is interacting poorly with the reordered hierarchy.
-2) **Multi-model hot-start / multi-open loop**
-   - Hot-start multi-open can black-screen or loop reload.
-3) **Texture load failures on tab switch**
-   - Local textures with MPQ-like prefixes failing after switching tabs.
+## 当前问题 / 已知阻塞
+1) **MPQ 贴图无法加载（当前最紧急）**
+   - 现象：MPQ 内贴图完全无法解析或读取。
+   - 需要确认：MPQ 路径是否正确持久化；Rust 端 `load_mpq`、`set_mpq_paths` 是否仍被调用；贴图查找逻辑是否走到 MPQ 分支。
+2) **关键帧缩放提交与撤销仍需复测**
+   - 已实现提交与预览清理，但需要实际操作验证时间轴是否显示新缩放关键帧、撤销是否有效。
+3) **Gizmo 尺寸调节需复测**
+   - 已修复滑块无效问题，但需确认用户端是否生效、缩放体验是否符合预期。
 
-## Next Steps (Priority)
-1) **Deep Debug Particle Coordinates**
-   - Compare `SX-yumo2.mdx` (Original) vs `033.mdx` (Corrupted) binary `PRE2` chunks.
-   - Check if `PivotPoints` or `Translation` 애니메이션 keys were shifted or wiped during reordering.
-   - Investigate why translation seems "inverted" relative to model root.
-2) **Stabilize multi-tab hot-start**
-   - Fix infinite reload loop.
+## 下一步计划（优先级）
+1) **修复 MPQ 贴图加载**
+   - 在 Rust 端增加日志：MPQ 是否加载成功、贴图路径匹配是否命中。
+   - 检查 `mpq_paths` 持久化与读取流程。
+   - 检查贴图加载流程是否被 FS 分支提前返回导致 MPQ 分支未执行。
+2) **验证关键帧缩放与撤销**
+   - 关键帧模式拖动缩放后是否新增 Scaling 关键帧。
+   - Undo/Redo 是否生效；时间轴是否显示正确。
+3) **验证 Gizmo 尺寸滑块**
+   - 调整到 0.1/0.5/1 是否明显变化；命中范围是否随之缩放。
 
-## Handoff Notes / Gotchas
-- **Node Reordering**: The application forces a specific node type order (Bones -> Lights -> ...) to satisfy some engines. This reordering MUST update all parent references and Geoset skinning indices.
-- **Popcorn Particles**: These Reforged nodes are now supported in the reordering logic but have no UI editor yet.
+## 经验 / 结论 / 优化方向
+- **Gizmo 尺寸无效问题**：之前 clamp 在用户倍率前导致滑块失效；已修复为先 clamp 相机缩放后再乘用户倍率。
+- **关键帧预览污染**：用 `_isPreviewKey` 可避免实时预览改写 Store 中真实关键帧。
+- **优化建议**：为 MPQ 加入“调试统计面板”或日志开关，定位路径匹配与解码耗时。
 
-## Suggested Message for Next AI
-"我已更新 `PROJECT_STATUS.md`（2026-01-27）。当前最紧急的 Bug 是：模型修改粒子保存后，粒子在游戏中位移异常（仅在 0,0,0 点正常，模型移动时粒子反向移动）。我已修复了节点重新排序（Node Reordering）的同步问题（不再丢失爆米花粒子等节点），但坐标系似乎仍有问题。请先阅读 `PROJECT_STATUS.md` 中的 **Bug 13** 详情，重点排查保存过程中的 `PivotPoints`、`Translation` 动画数据以及 `ModelSpace` 标志位的处理逻辑。"
-
+## 给下一个 AI 的交接话术（可直接使用）
+“请先阅读项目根目录的 `PROJECT_STATUS.md`（已更新到 2026-02-06）。当前最紧急问题是 **MPQ 贴图无法加载**，需要排查 Rust 端 MPQ 读取与 JS 端贴图查找流程。Gizmo 尺寸与关键帧缩放相关逻辑已改动，需复测：关键帧缩放是否会新增 Scaling 关键帧、撤销是否有效、设置面板中的 Gizmo 尺寸滑块是否生效。关键文件：`GizmoRenderer.ts`、`Viewer.tsx`、`rendererStore.ts`、`ViewSettingsWindow.tsx`。”
