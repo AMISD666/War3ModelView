@@ -971,7 +971,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
     isPlaying: true,
     playbackSpeed: 1.0,
     isLooping: true,
-    autoKeyframe: false,
+    autoKeyframe: true,
 
     setModelData: (data, path) => {
         if (data && path) {
@@ -1515,7 +1515,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
     setPlaying: (playing) => set({ isPlaying: playing }),
     setPlaybackSpeed: (speed) => set({ playbackSpeed: speed }),
     setLooping: (looping) => set({ isLooping: looping }),
-    setAutoKeyframe: (enabled) => set({ autoKeyframe: enabled }),
+    setAutoKeyframe: () => set({ autoKeyframe: true }),
     setTextures: (textures) => set((state) => {
         const updatedModelData = state.modelData ? { ...state.modelData, Textures: textures } : state.modelData;
         return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };

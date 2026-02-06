@@ -9,7 +9,7 @@ import { useModelStore } from '../../store/modelStore'
 import { readFile } from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import { decodeTextureData, getTextureCandidatePaths, isMPQPath } from '../viewer/textureLoader'
+import { decodeTextureData, getTextureCandidatePaths, isMPQPath, normalizePath } from '../viewer/textureLoader'
 
 const { Text } = Typography
 
@@ -149,10 +149,41 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         return null
     }
 
+    const toUint8Array = (payload: any): Uint8Array | null => {
+        if (!payload) return null
+        if (payload instanceof Uint8Array) return payload
+        if (payload instanceof ArrayBuffer) return new Uint8Array(payload)
+        if (ArrayBuffer.isView(payload)) {
+            return new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength)
+        }
+        if (Array.isArray(payload)) {
+            return new Uint8Array(payload)
+        }
+        if (typeof payload === 'string') {
+            try {
+                const binary = atob(payload)
+                const bytes = new Uint8Array(binary.length)
+                for (let i = 0; i < binary.length; i++) {
+                    bytes[i] = binary.charCodeAt(i)
+                }
+                return bytes
+            } catch {
+                return null
+            }
+        }
+        return null
+    }
+
+    const toArrayBuffer = (payload: any): ArrayBuffer | null => {
+        const bytes = toUint8Array(payload)
+        if (!bytes) return null
+        return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+    }
+
     const isAbsolutePath = (p: string) => /^[a-zA-Z]:/.test(p) || p.startsWith('\\\\')
 
     const getLocalCandidates = (imagePath: string): string[] => {
-        const normalized = imagePath.replace(/\//g, '\\')
+        const normalized = normalizePath(imagePath)
         if (isAbsolutePath(normalized)) return [normalized]
         if (modelPath) return getTextureCandidatePaths(modelPath, normalized)
         return [normalized]
@@ -188,13 +219,14 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                     setPreviewSource(null)
                 } else {
                     setPreviewUrl(null)
-                    setPreviewError('No Path')
+                    setPreviewError('无法加载贴图')
                     setPreviewSource(null)
                 }
                 return
             }
 
             const imagePath = texture.Image
+            const normalizedImagePath = normalizePath(imagePath)
             const isBlp = imagePath.toLowerCase().endsWith('.blp')
             const isTga = imagePath.toLowerCase().endsWith('.tga')
             const isSupported = isBlp || isTga
@@ -208,17 +240,18 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
             let loaded = false
 
             // Strategy 1: Try MPQ first for standard Warcraft 3 paths
-            const isMpqPath = isMPQPath(imagePath)
+            const isMpqPath = isMPQPath(normalizedImagePath)
 
             if (isMpqPath && isSupported) {
                 try {
-                    const mpqPath = imagePath.replace(/\//g, '\\')
+                    const mpqPath = normalizedImagePath
                     console.log('[TextureEditor] Trying MPQ for:', mpqPath)
                     const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: mpqPath })
                     if (isStale()) return
 
-                    if (mpqData && mpqData.length > 0) {
-                        const imageData = decodeTextureData(mpqData.buffer as ArrayBuffer, imagePath)
+                    const mpqBuffer = toArrayBuffer(mpqData)
+                    if (mpqBuffer && mpqBuffer.byteLength > 0) {
+                        const imageData = decodeTextureData(mpqBuffer, imagePath)
                         const dataUrl = imageData ? imageDataToDataUrl(imageData) : null
                         if (dataUrl) {
                             setPreviewUrl(dataUrl)
@@ -240,7 +273,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                         setPreviewError(null)
                         setPreviewSource('Replaceable')
                     } else {
-                        setPreviewError('MPQ 未找到')
+                        setPreviewError('无法加载贴图：MPQ 未找到')
                     }
                     setIsLoadingPreview(false)
                     return
@@ -263,19 +296,19 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                 const dataUrl = imageData ? imageDataToDataUrl(imageData) : null
                                 if (dataUrl) {
                                     setPreviewUrl(dataUrl)
-                                    setPreviewSource('????????????')
+                                    setPreviewSource('文件')
                                     loaded = true
                                     console.log('[TextureEditor] Loaded from file system successfully')
                                     break
                                 } else {
-                                    lastError = '???????????? BLP ????????????'
+                                    lastError = '无法加载贴图：BLP 解码失败'
                                 }
                             } else {
-                                lastError = '??????????????????'
+                                lastError = '无法加载贴图：读取失败'
                             }
                         } catch (e: any) {
                             if (!loaded) {
-                                lastError = `????????????: ${e.message || '????????????'}`
+                                lastError = `无法加载贴图：${e.message || '读取失败'}`
                             }
                         }
                     }
@@ -286,7 +319,30 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                 } catch (e: any) {
                     console.error("[TextureEditor] File system load failed:", e)
                     if (!loaded) {
-                        setPreviewError(`????????????: ${e.message || '????????????'}`)
+                        setPreviewError(`无法加载贴图：${e.message || '读取失败'}`)
+                    }
+                }
+            }
+
+            // Strategy 3: MPQ fallback even for non-standard paths
+            if (!loaded && isSupported && !isReplaceable) {
+                try {
+                    const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: normalizedImagePath })
+                    if (isStale()) return
+
+                    const mpqBuffer = toArrayBuffer(mpqData)
+                    if (mpqBuffer && mpqBuffer.byteLength > 0) {
+                        const imageData = decodeTextureData(mpqBuffer, imagePath)
+                        const dataUrl = imageData ? imageDataToDataUrl(imageData) : null
+                        if (dataUrl) {
+                            setPreviewUrl(dataUrl)
+                            setPreviewSource('MPQ')
+                            loaded = true
+                        }
+                    }
+                } catch (e: any) {
+                    if (!loaded) {
+                        setPreviewError(`无法加载贴图：MPQ 读取失败`)
                     }
                 }
             }
@@ -306,7 +362,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                     }
                 }
                 setPreviewUrl(`file://${fullPath}`)
-                setPreviewSource('????????????')
+                setPreviewSource('文件')
             }
 
             if (isStale()) return
@@ -503,7 +559,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                 <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
                                     <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px' }}>
                                         <span style={{ marginRight: '8px', opacity: 0.7 }}>{index}:</span>
-                                        {item.Image || getReplaceableLabel(item.ReplaceableId) || 'No Path'}
+                                        {item.Image || getReplaceableLabel(item.ReplaceableId) || '无法加载贴图'}
                                     </div>
                                     <DeleteOutlined
                                         onClick={(e) => {

@@ -25,21 +25,37 @@ const ToggleButton: React.FC<{
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                padding: '0 12px',      // Horizontal padding
-                height: '32px',         // Fixed Height
-                width: fullWidth ? '100%' : '110px', // Fixed Width (approx 5 chars) or full
-                borderRadius: '6px',
-                backgroundColor: checked ? '#1677ff' : '#3a3a3a',
+                padding: '0 8px',
+                height: '28px',         // Compact height
+                width: fullWidth ? '100%' : 'auto',
+                minWidth: fullWidth ? 'unset' : '88px',
+                borderRadius: '4px',
+                backgroundColor: checked ? '#1677ff' : '#2b2b2b',
                 color: checked ? '#fff' : '#aaa',
                 cursor: disabled ? 'not-allowed' : 'pointer',
                 userSelect: 'none',
-                transition: 'all 0.2s',
-                opacity: disabled ? 0.5 : 1,
-                fontSize: '13px',
+                transition: 'all 0.15s ease-in-out',
+                opacity: disabled ? 0.4 : 1,
+                fontSize: '12px',
                 fontWeight: checked ? 500 : 400,
-                border: checked ? '1px solid #1677ff' : '1px solid #4a4a4a',
+                border: checked ? '1px solid #1677ff' : '1px solid #3a3a3a',
                 whiteSpace: 'nowrap',
+                boxShadow: checked ? '0 2px 8px rgba(22, 119, 255, 0.3)' : 'none',
                 ...style
+            }}
+            onMouseEnter={(e) => {
+                if (!disabled && !checked) {
+                    e.currentTarget.style.backgroundColor = '#3a3a3a';
+                    e.currentTarget.style.borderColor = '#4a4a4a';
+                    e.currentTarget.style.color = '#ccc';
+                }
+            }}
+            onMouseLeave={(e) => {
+                if (!disabled && !checked) {
+                    e.currentTarget.style.backgroundColor = '#2b2b2b';
+                    e.currentTarget.style.borderColor = '#3a3a3a';
+                    e.currentTarget.style.color = '#aaa';
+                }
             }}
         >
             {children}
@@ -158,8 +174,6 @@ export const ViewSettingsWindow: React.FC = () => {
         getEnvironmentManager().setAmbientColorRGB(rgb.r, rgb.g, rgb.b);
     };
 
-
-
     // Preset modal state
     const [presetModalOpen, setPresetModalOpen] = useState(false);
     const [newPresetName, setNewPresetName] = useState('');
@@ -241,14 +255,14 @@ export const ViewSettingsWindow: React.FC = () => {
             if (enable) {
                 await invoke('register_copy_context_menu');
                 setCopyContextMenuEnabled(true);
-                showMessage('success', '\u64cd\u4f5c\u6210\u529f', '\u5df2\u6dfb\u52a0\u590d\u5236\u6a21\u578b\u53f3\u952e\u83dc\u5355');
+                showMessage('success', '操作成功', '已添加复制模型右键菜单');
             } else {
                 await invoke('unregister_copy_context_menu');
                 setCopyContextMenuEnabled(false);
-                showMessage('success', '\u64cd\u4f5c\u6210\u529f', '\u5df2\u79fb\u9664\u590d\u5236\u6a21\u578b\u53f3\u952e\u83dc\u5355');
+                showMessage('success', '操作成功', '已移除复制模型右键菜单');
             }
         } catch (e: any) {
-            showMessage('error', '\u64cd\u4f5c\u5931\u8d25', e.toString());
+            showMessage('error', '操作失败', e.toString());
         } finally {
             setCopyContextMenuLoading(false);
         }
@@ -261,14 +275,14 @@ export const ViewSettingsWindow: React.FC = () => {
             if (enable) {
                 await invoke('register_delete_context_menu');
                 setDeleteContextMenuEnabled(true);
-                showMessage('success', '\u64cd\u4f5c\u6210\u529f', '\u5df2\u6dfb\u52a0\u5220\u9664\u6a21\u578b\u53f3\u952e\u83dc\u5355');
+                showMessage('success', '操作成功', '已添加删除模型右键菜单');
             } else {
                 await invoke('unregister_delete_context_menu');
                 setDeleteContextMenuEnabled(false);
-                showMessage('success', '\u64cd\u4f5c\u6210\u529f', '\u5df2\u79fb\u9664\u5220\u9664\u6a21\u578b\u53f3\u952e\u83dc\u5355');
+                showMessage('success', '操作成功', '已移除删除模型右键菜单');
             }
         } catch (e: any) {
-            showMessage('error', '\u64cd\u4f5c\u5931\u8d25', e.toString());
+            showMessage('error', '操作失败', e.toString());
         } finally {
             setDeleteContextMenuLoading(false);
         }
@@ -282,13 +296,13 @@ export const ViewSettingsWindow: React.FC = () => {
             setCopyMpqEnabled(enable);
             showMessage(
                 'success',
-                '\u64cd\u4f5c\u6210\u529f',
+                '操作成功',
                 enable
-                    ? '\u5df2\u5f00\u542f MPQ \u5185\u7f6e\u8d34\u56fe\u590d\u5236'
-                    : '\u5df2\u5173\u95ed MPQ \u5185\u7f6e\u8d34\u56fe\u590d\u5236'
+                    ? '已开启 MPQ 内置贴图复制'
+                    : '已关闭 MPQ 内置贴图复制'
             );
         } catch (e: any) {
-            showMessage('error', '\u64cd\u4f5c\u5931\u8d25', e.toString());
+            showMessage('error', '操作失败', e.toString());
         } finally {
             setCopyMpqLoading(false);
         }
@@ -318,9 +332,8 @@ export const ViewSettingsWindow: React.FC = () => {
     const GRID_SIZES = [512, 1024, 2048, 4096, 50000];
     const currentSizeIndex = (() => {
         const size = gridSettings.gridSize || 2048;
-        // Find closest if exact match not found (resilience)
         const idx = GRID_SIZES.findIndex(s => s >= size);
-        return idx !== -1 ? idx : 2; // Default to 2048 (index 2)
+        return idx !== -1 ? idx : 2;
     })();
 
     const sliderMarks: Record<number, { style: React.CSSProperties; label: React.ReactNode }> = {};
@@ -348,8 +361,6 @@ export const ViewSettingsWindow: React.FC = () => {
 
             if (selected) {
                 const paths = Array.isArray(selected) ? selected : [selected];
-
-                // Save paths
                 localStorage.setItem('mpq_paths', JSON.stringify(paths));
                 try {
                     await invoke('set_mpq_paths', { paths });
@@ -364,7 +375,6 @@ export const ViewSettingsWindow: React.FC = () => {
                 });
 
                 let count = 0;
-
                 for (const path of paths) {
                     if (path) {
                         try {
@@ -377,7 +387,6 @@ export const ViewSettingsWindow: React.FC = () => {
                 }
 
                 useMessageStore.getState().removeMessage(msgId);
-
                 if (count > 0) {
                     setMpqLoaded(true);
                     showMessage('success', '操作成功', `成功加载 ${count} 个 MPQ 文件`);
@@ -394,7 +403,6 @@ export const ViewSettingsWindow: React.FC = () => {
             showMessage('info', '提示', '没有缺失贴图可测试');
             return;
         }
-
         const target = missingTextures[0];
         try {
             const { invoke } = await import('@tauri-apps/api/core');
@@ -429,274 +437,234 @@ export const ViewSettingsWindow: React.FC = () => {
                 open={showSettingsPanel}
                 onCancel={() => setShowSettingsPanel(false)}
                 onOk={() => setShowSettingsPanel(false)}
-                width={1100}
+                width={1080}
                 footer={null}
                 maskClosable={false}
                 mask={false}
                 wrapClassName="dark-theme-modal"
                 styles={{
-                    content: { backgroundColor: '#1f1f1f', border: '1px solid #444', color: '#eee' },
-                    header: { backgroundColor: '#2b2b2b', borderBottom: '1px solid #333', color: '#eee', padding: '12px 16px' },
-                    body: { backgroundColor: '#1f1f1f', padding: '20px' },
+                    content: { backgroundColor: '#141414', border: '1px solid #333', color: '#eee', borderRadius: '8px' },
+                    header: { backgroundColor: '#1d1d1d', borderBottom: '1px solid #333', color: '#eee', padding: '10px 16px', borderRadius: '8px 8px 0 0' },
+                    body: { backgroundColor: '#141414', padding: '12px 16px' },
                 }}
             >
-                <Tabs defaultActiveKey="general" tabBarStyle={{ marginBottom: 16 }}>
-                    <Tabs.TabPane tab="常规" key="general">
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-
-                            {/* Top Section: Display & Grid */}
-                            <div style={{ display: 'flex', gap: '32px' }}>
-
-                                {/* Display Elements - 4 Columns x 5 Rows */}
-                                <div style={{ flex: 1 }}>
-                                    <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#888', marginBottom: '12px' }}>
-                                        显示元素
+                <style>{`
+                    .settings-card {
+                        background: rgba(255, 255, 255, 0.03);
+                        border: 1px solid rgba(255, 255, 255, 0.08);
+                        border-radius: 8px;
+                        padding: 12px;
+                        box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+                        height: 100%;
+                    }
+                    .settings-section-title {
+                        font-size: 12px;
+                        font-weight: 600;
+                        color: #1677ff;
+                        margin-bottom: 12px;
+                        display: flex;
+                        align-items: center;
+                        gap: 8px;
+                        text-transform: uppercase;
+                        letter-spacing: 0.5px;
+                    }
+                    .settings-row {
+                        display: flex;
+                        align-items: center;
+                        gap: 12px;
+                        margin-bottom: 8px;
+                    }
+                    .settings-label {
+                        color: #aaa;
+                        font-size: 12px;
+                        width: 70px;
+                        flex-shrink: 0;
+                    }
+                `}</style>
+                <Tabs defaultActiveKey="general" size="small" tabBarStyle={{ marginBottom: 12 }}>
+                    <Tabs.TabPane tab="常规设置" key="general">
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
+                            {/* Column 1: Display & View */}
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                <div className="settings-card">
+                                    <div className="settings-section-title">
+                                        <DatabaseOutlined /> 显示控制
                                     </div>
-                                    <div style={{
-                                        display: 'grid',
-                                        gridTemplateColumns: 'repeat(4, 90px)',
-                                        gap: '10px'
-                                    }}>
-                                        <ToggleButton checked={showGridXY} onChange={setShowGridXY} style={{ width: '90px' }}>XY网格</ToggleButton>
-                                        <ToggleButton checked={showGridXZ} onChange={setShowGridXZ} style={{ width: '90px' }}>XZ网格</ToggleButton>
-                                        <ToggleButton checked={showGridYZ} onChange={setShowGridYZ} style={{ width: '90px' }}>YZ网格</ToggleButton>
-                                        <ToggleButton checked={showNodes} onChange={setShowNodes} style={{ width: '90px' }}>节点</ToggleButton>
-                                        <ToggleButton checked={showSkeleton} onChange={setShowSkeleton} style={{ width: '90px' }}>骨架</ToggleButton>
-                                        <ToggleButton checked={showFPS} onChange={setShowFPS} style={{ width: '90px' }}>FPS</ToggleButton>
-                                        <ToggleButton checked={showGeosetVisibility} onChange={setShowGeosetVisibility} style={{ width: '90px' }}>多边形工具</ToggleButton>
-                                        <ToggleButton checked={showCollisionShapes} onChange={setShowCollisionShapes} style={{ width: '90px' }}>碰撞形状</ToggleButton>
-                                        <ToggleButton checked={showCameras} onChange={setShowCameras} style={{ width: '90px' }}>相机对象</ToggleButton>
-                                        <ToggleButton checked={showLights} onChange={setShowLights} style={{ width: '90px' }}>灯光对象</ToggleButton>
-                                        <ToggleButton checked={showAttachments} onChange={setShowAttachments} style={{ width: '90px' }}>附件点</ToggleButton>
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }}>
+                                        <ToggleButton checked={showGridXY} onChange={setShowGridXY} fullWidth>XY 网格</ToggleButton>
+                                        <ToggleButton checked={showGridXZ} onChange={setShowGridXZ} fullWidth>XZ 网格</ToggleButton>
+                                        <ToggleButton checked={showGridYZ} onChange={setShowGridYZ} fullWidth>YZ 网格</ToggleButton>
+                                        <ToggleButton checked={showNodes} onChange={setShowNodes} fullWidth>骨骼节点</ToggleButton>
+                                        <ToggleButton checked={showSkeleton} onChange={setShowSkeleton} fullWidth>渲染骨架</ToggleButton>
+                                        <ToggleButton checked={showFPS} onChange={setShowFPS} fullWidth>显示 FPS</ToggleButton>
+                                        <ToggleButton checked={showGeosetVisibility} onChange={setShowGeosetVisibility} fullWidth>多边形工具</ToggleButton>
+                                        <ToggleButton checked={showCollisionShapes} onChange={setShowCollisionShapes} fullWidth>碰撞模型</ToggleButton>
+                                        <ToggleButton checked={showCameras} onChange={setShowCameras} fullWidth>相机位置</ToggleButton>
+                                        <ToggleButton checked={showLights} onChange={setShowLights} fullWidth>灯光对象</ToggleButton>
+                                        <ToggleButton checked={showAttachments} onChange={setShowAttachments} fullWidth>模型附件</ToggleButton>
                                     </div>
                                 </div>
 
-                                {/* Grid Details - Unified Colors */}
-                                <div style={{ width: '260px', borderLeft: '1px solid #333', paddingLeft: '24px' }}>
-                                    <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#888', marginBottom: '12px' }}>
-                                        网格细节
+                                <div className="settings-card">
+                                    <div className="settings-section-title">
+                                        <SunOutlined /> 细节与交互
                                     </div>
-                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
-                                        <ToggleButton
-                                            checked={gridSettings.show128}
-                                            onChange={v => setGridSettings({ show128: v })}
-                                            disabled={!(showGridXY || showGridXZ || showGridYZ)}
-                                            fullWidth
-                                        >
-                                            128 (白)
-                                        </ToggleButton>
-                                        <ToggleButton
-                                            checked={gridSettings.show512}
-                                            onChange={v => setGridSettings({ show512: v })}
-                                            disabled={!(showGridXY || showGridXZ || showGridYZ)}
-                                            fullWidth
-                                        // Removed custom yellow colors
-                                        >
-                                            512 (黄)
-                                        </ToggleButton>
-                                        <ToggleButton
-                                            checked={gridSettings.show1024}
-                                            onChange={v => setGridSettings({ show1024: v })}
-                                            disabled={!(showGridXY || showGridXZ || showGridYZ)}
-                                            fullWidth
-                                        // Removed custom red colors
-                                        >
-                                            1024 (红)
-                                        </ToggleButton>
-                                        <ToggleButton
-                                            checked={gridSettings.enableDepth}
-                                            onChange={v => setGridSettings({ enableDepth: v })}
-                                            disabled={!(showGridXY || showGridXZ || showGridYZ)}
-                                            fullWidth
-                                        >
-                                            网格深度
-                                        </ToggleButton>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }}>
+                                            <ToggleButton checked={showVertices} onChange={(v) => setShowVerticesForMode(mainMode, v)} fullWidth>显示顶点</ToggleButton>
+                                            <ToggleButton checked={vertexSettings.enableDepth} onChange={v => setVertexSettings({ enableDepth: v })} fullWidth>顶点深度</ToggleButton>
+                                        </div>
 
-                                        {/* Compact Grid Size Slider */}
-                                        <div style={{ gridColumn: '1 / -1', marginTop: '8px' }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#666', marginBottom: '0px' }}>
-                                                <span>范围: {(gridSettings.gridSize || 2048) >= 50000 ? '无限' : gridSettings.gridSize}</span>
-                                            </div>
-                                            <Slider
-                                                min={0}
-                                                max={GRID_SIZES.length - 1}
-                                                step={null}
-                                                marks={sliderMarks as any}
-                                                value={currentSizeIndex}
-                                                onChange={(v) => setGridSettings({ gridSize: GRID_SIZES[v] })}
-                                                disabled={!(showGridXY || showGridXZ || showGridYZ)}
-                                                tooltip={{ formatter: (v) => (typeof v === 'number' && GRID_SIZES[v] >= 50000) ? '无限' : GRID_SIZES[v as number] }}
-                                                styles={{
-                                                    track: { backgroundColor: '#1677ff' },
-                                                    rail: { backgroundColor: '#4a4a4a' }
-                                                }}
-                                            />
-                                        </div>
-                                    </div>
-
-                                    {/* Vertex Details */}
-                                    <div style={{ marginTop: '20px', borderTop: '1px solid #333', paddingTop: '16px' }}>
-                                        <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#888', marginBottom: '12px' }}>
-                                            顶点细节
-                                        </div>
-                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
-                                            <ToggleButton
-                                                checked={showVertices}
-                                                onChange={(v) => setShowVerticesForMode(mainMode, v)}
-                                                fullWidth
-                                            >
-                                                显示顶点
-                                            </ToggleButton>
-                                            <ToggleButton
-                                                checked={vertexSettings.enableDepth}
-                                                onChange={v => setVertexSettings({ enableDepth: v })}
-                                                fullWidth
-                                            >
-                                                顶点深度
-                                            </ToggleButton>
-                                        </div>
-                                    </div>
-
-                                    {/* Gizmo Settings */}
-                                    <div style={{ marginTop: '20px', borderTop: '1px solid #333', paddingTop: '16px' }}>
-                                        <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#888', marginBottom: '12px' }}>
-                                            Gizmo 设置
-                                        </div>
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: '#aaa', fontSize: '12px' }}>
-                                                <span>Gizmo 轴大小</span>
+                                        <div style={{ padding: '0 4px' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', color: '#888', fontSize: '11px', marginBottom: '4px' }}>
+                                                <span>Gizmo 缩放</span>
                                                 <span>{gizmoSize.toFixed(1)}x</span>
                                             </div>
                                             <Slider
-                                                min={0.1}
-                                                max={1}
-                                                step={0.1}
-                                                value={gizmoSize}
+                                                min={0.1} max={1} step={0.1} value={gizmoSize}
                                                 onChange={(v) => setGizmoSize(v as number)}
-                                                tooltip={{ formatter: (v) => `${v}x` }}
-                                                styles={{
-                                                    track: { backgroundColor: '#1677ff' },
-                                                    rail: { backgroundColor: '#4a4a4a' }
-                                                }}
+                                                styles={{ track: { backgroundColor: '#1677ff' }, rail: { backgroundColor: '#333' } }}
                                             />
                                         </div>
                                     </div>
                                 </div>
                             </div>
 
-
-
-                            <div style={{ borderTop: '1px solid #333' }} />
-
-                            {/* Color Settings Section */}
-                            <div>
-                                <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#888', marginBottom: '12px' }}>
-                                    颜色配置
+                            {/* Column 2: Grid & System Config */}
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                <div className="settings-card">
+                                    <div className="settings-section-title">
+                                        <DatabaseOutlined /> 网格参数
+                                    </div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px', marginBottom: '16px' }}>
+                                        <ToggleButton checked={gridSettings.show128} onChange={v => setGridSettings({ show128: v })} fullWidth>128 间距</ToggleButton>
+                                        <ToggleButton checked={gridSettings.show512} onChange={v => setGridSettings({ show512: v })} fullWidth>512 间距</ToggleButton>
+                                        <ToggleButton checked={gridSettings.show1024} onChange={v => setGridSettings({ show1024: v })} fullWidth>1024 间距</ToggleButton>
+                                        <ToggleButton checked={gridSettings.enableDepth} onChange={v => setGridSettings({ enableDepth: v })} fullWidth>网格深度</ToggleButton>
+                                    </div>
+                                    <div style={{ padding: '0 4px' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', color: '#888', fontSize: '11px', marginBottom: '16px' }}>
+                                            <span>网格范围: {(gridSettings.gridSize || 2048) >= 50000 ? '无限' : gridSettings.gridSize}</span>
+                                        </div>
+                                        <Slider
+                                            min={0} max={GRID_SIZES.length - 1} step={null}
+                                            marks={sliderMarks as any} value={currentSizeIndex}
+                                            onChange={(v) => setGridSettings({ gridSize: GRID_SIZES[v] })}
+                                            styles={{ track: { backgroundColor: '#1677ff' }, rail: { backgroundColor: '#333' } }}
+                                        />
+                                    </div>
                                 </div>
-                                <div style={{ display: 'flex', gap: '24px', alignItems: 'center', flexWrap: 'wrap' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                        <span style={{ color: '#aaa', fontSize: '13px', width: '70px' }}>背景颜色</span>
-                                        <div style={{ position: 'relative', width: '36px', height: '22px', borderRadius: '4px', overflow: 'hidden', border: '1px solid #444' }}>
-                                            <input
-                                                type="color"
-                                                value={backgroundColor}
-                                                onChange={(e) => setBackgroundColor(e.target.value)}
-                                                style={{
-                                                    position: 'absolute', top: -5, left: -5, width: '50px', height: '40px',
-                                                    padding: 0, margin: 0, border: 'none', cursor: 'pointer'
-                                                }}
-                                            />
-                                        </div>
+
+                                <div className="settings-card">
+                                    <div className="settings-section-title">
+                                        <SunOutlined /> 程序自动化
                                     </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                        <span style={{ color: '#aaa', fontSize: '13px', width: '70px' }}>顶点颜色</span>
-                                        <div style={{ position: 'relative', width: '36px', height: '22px', borderRadius: '4px', overflow: 'hidden', border: '1px solid #444' }}>
-                                            <input
-                                                type="color"
-                                                value={vertexColor}
-                                                onChange={(e) => setVertexColor(e.target.value)}
-                                                style={{
-                                                    position: 'absolute', top: -5, left: -5, width: '50px', height: '40px',
-                                                    padding: 0, margin: 0, border: 'none', cursor: 'pointer'
-                                                }}
-                                            />
-                                        </div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }}>
+                                        <ToggleButton checked={autoRecalculateExtent} onChange={() => setAutoRecalculateExtent(!autoRecalculateExtent)} fullWidth>自动计算范围</ToggleButton>
+                                        <ToggleButton checked={autoRecalculateNormals} onChange={() => setAutoRecalculateNormals(!autoRecalculateNormals)} fullWidth>自动重算法线</ToggleButton>
+                                        <ToggleButton checked={keepCameraOnLoad} onChange={() => setKeepCameraOnLoad(!keepCameraOnLoad)} fullWidth>保持相机位置</ToggleButton>
+                                        <ToggleButton checked={renderMode === 'wireframe'} onChange={() => setRenderMode(renderMode === 'textured' ? 'wireframe' : 'textured')} fullWidth>
+                                            {renderMode === 'wireframe' ? '线框' : '纹理'}
+                                        </ToggleButton>
+                                        <ToggleButton checked={enableLighting} onChange={setEnableLighting} fullWidth>
+                                            环境光照: {enableLighting ? '开' : '关'}
+                                        </ToggleButton>
                                     </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                        <span style={{ color: '#aaa', fontSize: '13px', width: '70px' }}>线框颜色</span>
-                                        <div style={{ position: 'relative', width: '36px', height: '22px', borderRadius: '4px', overflow: 'hidden', border: '1px solid #444' }}>
-                                            <input
-                                                type="color"
-                                                value={wireframeColor}
-                                                onChange={(e) => setWireframeColor(e.target.value)}
-                                                style={{
-                                                    position: 'absolute', top: -5, left: -5, width: '50px', height: '40px',
-                                                    padding: 0, margin: 0, border: 'none', cursor: 'pointer'
-                                                }}
-                                            />
-                                        </div>
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                        <span style={{ color: '#aaa', fontSize: '13px', width: '70px' }}>选中高亮</span>
-                                        <div style={{ position: 'relative', width: '36px', height: '22px', borderRadius: '4px', overflow: 'hidden', border: '1px solid #444' }}>
-                                            <input
-                                                type="color"
-                                                value={selectionColor}
-                                                onChange={(e) => setSelectionColor(e.target.value)}
-                                                style={{
-                                                    position: 'absolute', top: -5, left: -5, width: '50px', height: '40px',
-                                                    padding: 0, margin: 0, border: 'none', cursor: 'pointer'
-                                                }}
-                                            />
-                                        </div>
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                        <span style={{ color: '#aaa', fontSize: '13px', width: '70px' }}>悬停高亮</span>
-                                        <div style={{ position: 'relative', width: '36px', height: '22px', borderRadius: '4px', overflow: 'hidden', border: '1px solid #444' }}>
-                                            <input
-                                                type="color"
-                                                value={hoverColor}
-                                                onChange={(e) => setHoverColor(e.target.value)}
-                                                style={{
-                                                    position: 'absolute', top: -5, left: -5, width: '50px', height: '40px',
-                                                    padding: 0, margin: 0, border: 'none', cursor: 'pointer'
-                                                }}
-                                            />
-                                        </div>
+                                    <div style={{ marginTop: '12px' }}>
+                                        <Select
+                                            value={teamColor} onChange={setTeamColor} size="small" style={{ width: '100%' }}
+                                            options={Array.from({ length: 13 }).map((_, i) => ({
+                                                value: i, label: `队伍颜色: 玩家 ${i + 1}`
+                                            }))}
+                                        />
                                     </div>
                                 </div>
                             </div>
 
-                            <div style={{ borderTop: '1px solid #333' }} />
+                            {/* Column 3: Lighting & MPQ */}
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                                <div className="settings-card" style={{ padding: '10px' }}>
+                                    <div className="settings-section-title">
+                                        <SunOutlined /> 环境照明
+                                    </div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                        <div className="settings-row">
+                                            <Select
+                                                value={selectedDNCPreset || 'lordaeron'}
+                                                onChange={handleDNCChange}
+                                                loading={dncLoading}
+                                                size="small"
+                                                style={{ flex: 1 }}
+                                                options={Object.entries(allPresets).map(([key, preset]) => ({ value: key, label: preset.name }))}
+                                            />
+                                            <div style={{ display: 'flex', gap: '4px' }}>
+                                                <Button size="small" onClick={handleNewPreset} ghost style={{ fontSize: '11px' }}>新建</Button>
+                                                <Button size="small" type="primary" onClick={handleSaveCurrentPreset} style={{ fontSize: '11px' }}>保存</Button>
+                                            </div>
+                                        </div>
 
-                                                        {/* Node Color Settings Section */}
-                            <div>
-                                <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#888', marginBottom: '12px' }}>
-                                    节点颜色设置
+                                        <div className="settings-row">
+                                            <span className="settings-label">光照强度</span>
+                                            <Slider min={0} max={3} step={0.1} value={lightIntensity} onChange={handleLightIntensityChange} style={{ flex: 1, margin: '0 8px' }} />
+                                            <ColorPicker value={lightColor} onChange={handleLightColorChange} size="small" />
+                                        </div>
+
+                                        <div className="settings-row">
+                                            <span className="settings-label">环境强度</span>
+                                            <Slider min={0} max={3} step={0.1} value={ambientIntensity} onChange={handleAmbientIntensityChange} style={{ flex: 1, margin: '0 8px' }} />
+                                            <ColorPicker value={ambientColor} onChange={handleAmbientColorChange} size="small" />
+                                        </div>
+                                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                            <Button size="small" danger onClick={handleDeletePreset} style={{ fontSize: '11px' }}>删除预设</Button>
+                                        </div>
+                                    </div>
                                 </div>
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(120px, 1fr))', gap: '6px 10px' }}>
+
+                                <div className="settings-card">
+                                    <div className="settings-section-title">
+                                        <DatabaseOutlined /> 游戏资源与菜单
+                                    </div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: mpqLoaded ? '#52c41a' : '#888' }}>
+                                                {mpqLoaded ? <CheckCircleFilled /> : <CloseCircleFilled />}
+                                                <span>MPQ: {mpqLoaded ? '已准备' : '未加载'}</span>
+                                            </div>
+                                            <div style={{ display: 'flex', gap: '4px' }}>
+                                                <Button size="small" onClick={handleDebugMissingTexture} disabled={!missingTextures?.length}>测试</Button>
+                                                <Button size="small" type="primary" onClick={handleLoadMPQ}>加载</Button>
+                                            </div>
+                                        </div>
+                                        <div style={{ borderTop: '1px solid rgba(255,255,255,0.05)', margin: '4px 0' }} />
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
+                                            <ToggleButton checked={contextMenuEnabled} onChange={() => handleContextMenuToggle(!contextMenuEnabled)} disabled={contextMenuLoading} fullWidth>主右键菜单</ToggleButton>
+                                            <ToggleButton checked={copyMpqEnabled} onChange={() => handleCopyMpqToggle(!copyMpqEnabled)} disabled={copyMpqLoading} fullWidth>复制 MPQ 贴图</ToggleButton>
+                                            <ToggleButton checked={copyContextMenuEnabled} onChange={() => handleCopyContextMenuToggle(!copyContextMenuEnabled)} disabled={copyContextMenuLoading} fullWidth>复制模型右键</ToggleButton>
+                                            <ToggleButton checked={deleteContextMenuEnabled} onChange={() => handleDeleteContextMenuToggle(!deleteContextMenuEnabled)} disabled={deleteContextMenuLoading} fullWidth>删除模型右键</ToggleButton>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Bottom Section: Colors */}
+                        <div style={{ marginTop: '16px', display: 'grid', gridTemplateColumns: '300px 1fr', gap: '16px' }}>
+                            <div className="settings-card">
+                                <div className="settings-section-title">基础颜色</div>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px 12px' }}>
                                     {[
-                                        { key: 'Bone', label: '骨骼' },
-                                        { key: 'Helper', label: '辅助' },
-                                        { key: 'Attachment', label: '附件' },
-                                        { key: 'ParticleEmitter', label: '粒子发射器' },
-                                        { key: 'ParticleEmitter2', label: '粒子发射器2' },
-                                        { key: 'RibbonEmitter', label: '飘带发射器' },
-                                        { key: 'Light', label: '光源' },
-                                        { key: 'EventObject', label: '事件对象' },
-                                        { key: 'CollisionShape', label: '碰撞体' }
-                                    ].map((item) => (
-                                        <div key={item.key} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                            <span style={{ color: '#aaa', fontSize: '11px', width: '52px' }}>{item.label}</span>
-                                            <div style={{ position: 'relative', width: '30px', height: '18px', borderRadius: '4px', overflow: 'hidden', border: '1px solid #444' }}>
+                                        { key: 'background', label: '背景', value: backgroundColor, setter: setBackgroundColor },
+                                        { key: 'vertex', label: '顶点', value: vertexColor, setter: setVertexColor },
+                                        { key: 'wireframe', label: '线框', value: wireframeColor, setter: setWireframeColor },
+                                        { key: 'selection', label: '选中', value: selectionColor, setter: setSelectionColor },
+                                        { key: 'hover', label: '悬停', value: hoverColor, setter: setHoverColor }
+                                    ].map(item => (
+                                        <div key={item.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                            <span style={{ fontSize: '11px', color: '#888' }}>{item.label}</span>
+                                            <div style={{ width: '40px', height: '20px', borderRadius: '4px', overflow: 'hidden', border: '1px solid #444', position: 'relative' }}>
                                                 <input
-                                                    type="color"
-                                                    value={(nodeColors as any)?.[item.key] || '#ffffff'}
-                                                    onChange={(e) => setNodeColors({ [item.key]: e.target.value } as any)}
-                                                    style={{
-                                                        position: 'absolute', top: -6, left: -6, width: '48px', height: '36px',
-                                                        padding: 0, margin: 0, border: 'none', cursor: 'pointer'
-                                                    }}
+                                                    type="color" value={item.value} onChange={(e) => item.setter(e.target.value)}
+                                                    style={{ position: 'absolute', top: -5, left: -5, width: '50px', height: '40px', border: 'none', cursor: 'pointer' }}
                                                 />
                                             </div>
                                         </div>
@@ -704,262 +672,34 @@ export const ViewSettingsWindow: React.FC = () => {
                                 </div>
                             </div>
 
-                            <div style={{ borderTop: '1px solid #333' }} />
-
-                            {/* Render Settings */}
-                            <div>
-                                <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#888', marginBottom: '12px' }}>
-                                    渲染配置
-                                </div>
-                                <div style={{ display: 'flex', gap: '32px', alignItems: 'center', flexWrap: 'wrap' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                        <span style={{ color: '#aaa', fontSize: '13px' }}>渲染模式</span>
-                                        <div style={{ display: 'flex', gap: '8px' }}>
-                                            <ToggleButton
-                                                checked={renderMode === 'textured'}
-                                                onChange={() => setRenderMode('textured')}
-                                                style={{ width: '80px' }}
-                                            >
-                                                纹理
-                                            </ToggleButton>
-                                            <ToggleButton
-                                                checked={renderMode === 'wireframe'}
-                                                onChange={() => setRenderMode('wireframe')}
-                                                style={{ width: '80px' }}
-                                            >
-                                                线框
-                                            </ToggleButton>
+                            <div className="settings-card">
+                                <div className="settings-section-title">节点分类颜色</div>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '8px 16px' }}>
+                                    {[
+                                        { key: 'Bone', label: '骨骼' }, { key: 'Helper', label: '辅助' }, { key: 'Attachment', label: '附件' },
+                                        { key: 'ParticleEmitter', label: '粒子1' }, { key: 'ParticleEmitter2', label: '粒子2' },
+                                        { key: 'RibbonEmitter', label: '飘带' }, { key: 'Light', label: '光源' }, { key: 'EventObject', label: '事件' },
+                                        { key: 'CollisionShape', label: '碰撞' }
+                                    ].map(item => (
+                                        <div key={item.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                            <span style={{ fontSize: '11px', color: '#888' }}>{item.label}</span>
+                                            <div style={{ width: '32px', height: '18px', borderRadius: '3px', overflow: 'hidden', border: '1px solid #444', position: 'relative' }}>
+                                                <input
+                                                    type="color" value={(nodeColors as any)?.[item.key] || '#ffffff'}
+                                                    onChange={(e) => setNodeColors({ [item.key]: e.target.value } as any)}
+                                                    style={{ position: 'absolute', top: -6, left: -6, width: '48px', height: '36px', border: 'none', cursor: 'pointer' }}
+                                                />
+                                            </div>
                                         </div>
-                                    </div>
-
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                        <span style={{ color: '#aaa', fontSize: '13px' }}>光照</span>
-                                        <ToggleButton
-                                            checked={enableLighting}
-                                            onChange={setEnableLighting}
-                                            style={{ width: '80px' }}
-                                        >
-                                            {enableLighting ? '开启' : '关闭'}
-                                        </ToggleButton>
-                                    </div>
-
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                        <span style={{ color: '#aaa', fontSize: '13px' }}>队伍颜色</span>
-                                        <Select
-                                            value={teamColor}
-                                            onChange={setTeamColor}
-                                            size="middle"
-                                            style={{ width: '140px' }}
-                                            popupMatchSelectWidth={false}
-                                            options={Array.from({ length: 13 }).map((_, i) => ({
-                                                value: i,
-                                                label: `玩家 ${i + 1} (${['红', '蓝', '青', '紫', '黄', '橙', '绿', '粉', '灰', '浅蓝', '暗绿', '棕', '栗'][i] || '未知'})`
-                                            }))}
-                                        />
-                                    </div>
+                                    ))}
                                 </div>
                             </div>
-
-                            <div style={{ borderTop: '1px solid #333' }} />
-
-                            {/* ???? Section */}
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
-                                <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#888' }}>
-                                    {"\u7a0b\u5e8f\u914d\u7f6e"}
-                                </span>
-                                <ToggleButton
-                                    checked={contextMenuEnabled}
-                                    onChange={() => handleContextMenuToggle(!contextMenuEnabled)}
-                                    style={{ width: '90px' }}
-                                    disabled={contextMenuLoading}
-                                >
-                                    {"\u53f3\u952e\u83dc\u5355"}
-                                </ToggleButton>
-                                <ToggleButton
-                                    checked={copyContextMenuEnabled}
-                                    onChange={() => handleCopyContextMenuToggle(!copyContextMenuEnabled)}
-                                    style={{ width: '140px' }}
-                                    disabled={copyContextMenuLoading}
-                                >
-                                    {"\u590d\u5236\u6a21\u578b\u53f3\u952e\u83dc\u5355"}
-                                </ToggleButton>
-                                <ToggleButton
-                                    checked={deleteContextMenuEnabled}
-                                    onChange={() => handleDeleteContextMenuToggle(!deleteContextMenuEnabled)}
-                                    style={{ width: '140px' }}
-                                    disabled={deleteContextMenuLoading}
-                                >
-                                    {"\u5220\u9664\u6a21\u578b\u53f3\u952e\u83dc\u5355"}
-                                </ToggleButton>
-                                <ToggleButton
-                                    checked={copyMpqEnabled}
-                                    onChange={() => handleCopyMpqToggle(!copyMpqEnabled)}
-                                    style={{ width: '140px' }}
-                                    disabled={copyMpqLoading}
-                                >
-                                    {"\u590d\u5236MPQ\u5185\u7f6e\u8d34\u56fe"}
-                                </ToggleButton>
-                                <ToggleButton
-                                    checked={autoRecalculateExtent}
-                                    onChange={() => setAutoRecalculateExtent(!autoRecalculateExtent)}
-                                    style={{ width: '110px' }}
-                                >
-                                    {"\u81ea\u52a8\u70b9\u8303\u56f4"}
-                                </ToggleButton>
-                                <ToggleButton
-                                    checked={autoRecalculateNormals}
-                                    onChange={() => setAutoRecalculateNormals(!autoRecalculateNormals)}
-                                    style={{ width: '90px' }}
-                                >
-                                    {"\u81ea\u52a8\u6cd5\u7ebf"}
-                                </ToggleButton>
-                                <ToggleButton
-                                    checked={keepCameraOnLoad}
-                                    onChange={() => setKeepCameraOnLoad(!keepCameraOnLoad)}
-                                    style={{ width: '90px' }}
-                                >
-                                    {"\u4fdd\u6301\u76f8\u673a"}
-                                </ToggleButton>
-                            </div>
-
-                            {/* DNC Environment Lighting Section */}
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', padding: '16px', backgroundColor: '#262626', borderRadius: '8px', border: '1px solid #333' }}>
-                                {/* Title Row */}
-                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                        <SunOutlined style={{ color: '#faad14' }} />
-                                        <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#ccc' }}>环境光照</span>
-                                    </div>
-                                </div>
-
-                                {/* Controls Container */}
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                    {/* Row 1: Preset Selection & Actions */}
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                        <span style={{ fontSize: '12px', color: '#888', width: '60px' }}>方案预设</span>
-                                        <Select
-                                            value={selectedDNCPreset || 'lordaeron'}
-                                            onChange={handleDNCChange}
-                                            loading={dncLoading}
-                                            style={{ flex: 1 }}
-                                            size="small"
-                                            options={
-                                                Object.entries(allPresets).map(([key, preset]) => ({
-                                                    value: key,
-                                                    label: preset.name
-                                                }))
-                                            }
-                                        />
-                                        <div style={{ display: 'flex', gap: '4px' }}>
-                                            <Button size="small" onClick={handleNewPreset} style={{ fontSize: '11px', padding: '0 8px' }}>新建</Button>
-                                            <Button size="small" onClick={handleDeletePreset} style={{ fontSize: '11px', padding: '0 8px' }}>删除</Button>
-                                            <Button size="small" type="primary" onClick={handleSaveCurrentPreset} style={{ fontSize: '11px', padding: '0 8px' }}>保存</Button>
-                                        </div>
-                                    </div>
-
-                                    {/* Row 2: Light Intensity & Color */}
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                        <span style={{ fontSize: '12px', color: '#888', width: '60px' }}>光照强度</span>
-                                        <Slider
-                                            min={0}
-                                            max={3}
-                                            step={0.1}
-                                            value={lightIntensity}
-                                            onChange={handleLightIntensityChange}
-                                            style={{ flex: 1 }}
-                                        />
-                                        <span style={{ fontSize: '11px', color: '#666', width: '24px', textAlign: 'right' }}>{lightIntensity.toFixed(1)}</span>
-                                        <div style={{ width: '1px', height: '16px', backgroundColor: '#444', margin: '0 8px' }} />
-                                        <ColorPicker
-                                            value={lightColor}
-                                            onChange={handleLightColorChange}
-                                            size="small"
-                                            showText={false}
-                                        />
-                                    </div>
-
-                                    {/* Row 3: Ambient Intensity & Color */}
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                        <span style={{ fontSize: '12px', color: '#888', width: '60px' }}>环境强度</span>
-                                        <Slider
-                                            min={0}
-                                            max={3}
-                                            step={0.1}
-                                            value={ambientIntensity}
-                                            onChange={handleAmbientIntensityChange}
-                                            style={{ flex: 1 }}
-                                        />
-                                        <span style={{ fontSize: '11px', color: '#666', width: '24px', textAlign: 'right' }}>{ambientIntensity.toFixed(1)}</span>
-                                        <div style={{ width: '1px', height: '16px', backgroundColor: '#444', margin: '0 8px' }} />
-                                        <ColorPicker
-                                            value={ambientColor}
-                                            onChange={handleAmbientColorChange}
-                                            size="small"
-                                            showText={false}
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div style={{ borderTop: '1px solid #333' }} />
-
-                            {/* System / MPQ Section */}
-                            <div style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'space-between',
-                                backgroundColor: '#262626',
-                                padding: '12px 16px',
-                                borderRadius: '8px',
-                                border: '1px solid #333'
-                            }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                                    <DatabaseOutlined style={{ fontSize: '18px', color: '#1677ff' }} />
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                        <span style={{ color: '#eee', fontWeight: 500 }}>游戏资源 (MPQ)</span>
-                                        <div style={{
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            gap: '6px',
-                                            fontSize: '12px',
-                                            backgroundColor: mpqLoaded ? '#1e3a1e' : '#3a3a3a',
-                                            padding: '2px 8px',
-                                            borderRadius: '4px',
-                                            color: mpqLoaded ? '#73d13d' : '#888'
-                                        }}>
-                                            {mpqLoaded ? <CheckCircleFilled /> : <CloseCircleFilled />}
-                                            {mpqLoaded ? '已加载' : '未加载'}
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                                    <span style={{ fontSize: '12px', color: '#555' }}>
-                                        * 加载 MPQ 以显示正确贴图与粒子
-                                    </span>
-                                    <Button
-                                        onClick={handleDebugMissingTexture}
-                                        size="middle"
-                                        disabled={!missingTextures || missingTextures.length === 0}
-                                        style={{ borderRadius: '6px' }}
-                                    >
-                                        测试缺失
-                                    </Button>
-                                    <Button
-                                        onClick={handleLoadMPQ}
-                                        type="primary"
-                                        size="middle"
-                                        style={{ borderRadius: '6px' }}
-                                    >
-                                        加载
-                                    </Button>
-                                </div>
-                            </div>
-
                         </div>
                     </Tabs.TabPane>
-                    <Tabs.TabPane tab="快捷键" key="shortcuts">
-                        <ShortcutSettingsPanel />
+                    <Tabs.TabPane tab="快捷键映射" key="shortcuts">
+                        <div style={{ height: '580px' }}>
+                            <ShortcutSettingsPanel />
+                        </div>
                     </Tabs.TabPane>
                 </Tabs>
             </DraggableModal>

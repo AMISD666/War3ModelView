@@ -18,6 +18,10 @@
    - 旋转/缩放预览使用 `_isPreviewKey`，松开鼠标后清理。
 5) **视图设置新增**
    - 增加“Gizmo 轴大小”滑块：范围 0.1-1，默认 0.5。
+6) **视图设置界面优化**
+   - 采用三列卡片布局，极大提升空间利用率。
+   - 优化 ToggleButton 样式，更紧凑且具有磨砂质感。
+   - 整合节点颜色、照明预设、MPQ 资源等模块。
 
 ## 最近改动（关键文件）
 - `src/renderer/src/components/GizmoRenderer.ts`
@@ -33,6 +37,7 @@
   - 新增 `gizmoSize` 设置并持久化，默认 0.5。
 - `src/renderer/src/components/ViewSettingsWindow.tsx`
   - 新增 Gizmo 轴大小滑块（0.1-1）。
+  - **重构整体布局**：采用高效的三列卡片式设计。
 
 ## 当前问题 / 已知阻塞
 1) **MPQ 贴图无法加载（当前最紧急）**

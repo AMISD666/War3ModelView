@@ -17,7 +17,7 @@ export interface TextureLoadResult {
 /**
  * Normalize path separators to backslashes
  */
-function normalizePath(p: string): string {
+export function normalizePath(p: string): string {
     if (!p) return ''
     let out = p.replace(/\0/g, '').trim()
     out = out.replace(/\//g, '\\')

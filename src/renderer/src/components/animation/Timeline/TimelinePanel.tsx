@@ -18,6 +18,8 @@ import { useHistoryStore } from '../../../store/historyStore'
 import { Button, Slider, Input, InputNumber, Radio, Tooltip, Menu, Modal } from 'antd'
 import { SwapOutlined, GlobalOutlined } from '@ant-design/icons'
 import { registerShortcutHandler } from '../../../shortcuts/manager'
+import { UpdateKeyframeCommand, KeyframeChange } from '../../../commands/UpdateKeyframeCommand'
+import { commandManager } from '../../../utils/CommandManager'
 
 interface TimelinePanelProps {
     isActive?: boolean
@@ -89,13 +91,11 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         currentSequence,
         isPlaying,
         playbackSpeed,
-        autoKeyframe,
         modelData,
         nodes: modelNodes,
         setPlaying,
         setPlaybackSpeed,
         setFrame,
-        setAutoKeyframe
     } = useModelStore()
 
     const { selectedNodeIds, transformMode, multiMoveMode, setMultiMoveMode } = useSelectionStore()
@@ -703,6 +703,83 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     }, [setFrame])
 
     // ================== KEYFRAME OPERATIONS ==================
+    const insertKeyframesForSelectedNodes = useCallback(() => {
+        const { mainMode, animationSubMode, selectedNodeIds } = useSelectionStore.getState()
+        if (mainMode !== 'animation' || animationSubMode !== 'keyframe') return false
+        if (selectedNodeIds.length === 0) return false
+
+        const { currentFrame, nodes } = useModelStore.getState()
+        const renderer = useRendererStore.getState().renderer
+        const frame = Math.round(currentFrame)
+
+        const toArray = (v: any, fallback: number[]) => {
+            if (!v) return fallback
+            if (typeof v.length === 'number' && v.length === 0) return fallback
+            const arr = Array.isArray(v) ? [...v] : Array.from(v) as number[]
+            return arr.length > 0 ? arr : fallback
+        }
+
+        const interpolateValue = (keys: any[] | undefined, frameVal: number, defaultVal: number[]) => {
+            if (!keys || keys.length === 0) return defaultVal
+            const filteredKeys = keys.filter((k: any) => !k?._isPreviewKey)
+            if (filteredKeys.length === 0) return defaultVal
+            const sortedKeys = [...filteredKeys].sort((a: any, b: any) => a.Frame - b.Frame)
+            if (frameVal <= sortedKeys[0].Frame) return toArray(sortedKeys[0].Vector, defaultVal)
+            if (frameVal >= sortedKeys[sortedKeys.length - 1].Frame) return toArray(sortedKeys[sortedKeys.length - 1].Vector, defaultVal)
+            for (let i = 0; i < sortedKeys.length - 1; i++) {
+                if (frameVal >= sortedKeys[i].Frame && frameVal <= sortedKeys[i + 1].Frame) {
+                    const t = (frameVal - sortedKeys[i].Frame) / (sortedKeys[i + 1].Frame - sortedKeys[i].Frame)
+                    const from = toArray(sortedKeys[i].Vector, defaultVal)
+                    const to = toArray(sortedKeys[i + 1].Vector, defaultVal)
+                    return from.map((v, idx) => v + (to[idx] - v) * t)
+                }
+            }
+            return defaultVal
+        }
+
+        const isSameVec = (a: number[] | null, b: number[] | null, eps = 1e-4) => {
+            if (!a || !b || a.length !== b.length) return false
+            for (let i = 0; i < a.length; i++) {
+                if (Math.abs(a[i] - b[i]) > eps) return false
+            }
+            return true
+        }
+
+        const changes: KeyframeChange[] = []
+
+        const addChange = (node: any, propertyName: 'Translation' | 'Rotation' | 'Scaling', defaultVal: number[]) => {
+            const prop = node[propertyName]
+            const keys = prop?.Keys
+            const existingKey = Array.isArray(keys)
+                ? keys.find((k: any) => Math.abs(k.Frame - frame) < 0.1)
+                : undefined
+            const oldValue = existingKey?.Vector ? toArray(existingKey.Vector, defaultVal) : null
+            const newValue = existingKey?.Vector
+                ? toArray(existingKey.Vector, defaultVal)
+                : interpolateValue(keys, frame, defaultVal)
+            if (oldValue && isSameVec(oldValue, newValue)) return
+            changes.push({
+                nodeId: node.ObjectId,
+                propertyName,
+                frame,
+                oldValue,
+                newValue
+            })
+        }
+
+        selectedNodeIds.forEach((nodeId) => {
+            const node = nodes.find((n: any) => n.ObjectId === nodeId)
+            if (!node) return
+            addChange(node, 'Translation', [0, 0, 0])
+            addChange(node, 'Rotation', [0, 0, 0, 1])
+            addChange(node, 'Scaling', [1, 1, 1])
+        })
+
+        if (changes.length === 0) return false
+        const cmd = new UpdateKeyframeCommand(renderer, changes)
+        commandManager.execute(cmd)
+        return true
+    }, [])
 
     // Helper: Get keyframe data for selected UIDs
     const getSelectedKeyframeData = useCallback(() => {
@@ -1046,13 +1123,16 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 if (!effectiveClipboard) return false
                 pasteKeyframes()
                 return true
+            }),
+            registerShortcutHandler('timeline.quickKeyframe', () => {
+                return insertKeyframesForSelectedNodes()
             })
         ]
 
         return () => {
             unsubscribeHandlers.forEach((unsubscribe) => unsubscribe())
         }
-    }, [isActive, selectedKeyframeUids, effectiveClipboard, deleteSelectedKeyframes, copyKeyframes, pasteKeyframes])
+    }, [isActive, selectedKeyframeUids, effectiveClipboard, deleteSelectedKeyframes, copyKeyframes, pasteKeyframes, insertKeyframesForSelectedNodes])
 
     // --- Global Window Handlers for Robust Dragging ---
 
@@ -1781,23 +1861,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                     <Button type="text" icon={<FastForwardOutlined />} onClick={handleNextFrame} style={{ color: '#eee' }} />
                     <Button type="text" icon={<StepForwardOutlined />} onClick={handleGoToEnd} style={{ color: '#eee' }} />
 
-                    {/* Auto Keyframe Toggle (Moved to Right of Playback) */}
-                    <Button
-                        type="text"
-                        onClick={() => setAutoKeyframe(!autoKeyframe)}
-                        title="自动记录关键帧"
-                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', marginLeft: 8 }}
-                    >
-                        <div style={{
-                            width: 12,
-                            height: 12,
-                            borderRadius: '50%',
-                            backgroundColor: autoKeyframe ? '#ff4d4f' : '#555',
-                            border: '1px solid #777'
-                        }} />
-                    </Button>
-
-                    {/* Show All Keyframes Toggle (Moved to Right of Auto Key) */}
+                                        {/* Show All Keyframes Toggle (Moved to Right of Auto Key) */}
                     <Button
                         type="text"
                         icon={showAllKeyframes ? <EyeOutlined style={{ color: '#1890ff' }} /> : <EyeInvisibleOutlined />}

@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react'
 import { Input, Checkbox, InputNumber, Button } from 'antd'
-import { decodeBLP, getBLPImageData } from 'war3-model'
 import { readFile } from '@tauri-apps/plugin-fs'
+import { invoke } from '@tauri-apps/api/core'
+import { decodeTextureData, normalizePath } from '../../viewer/textureLoader'
 
 interface TextureDetailProps {
     texture: any
@@ -13,6 +14,49 @@ interface TextureDetailProps {
 const TextureDetail: React.FC<TextureDetailProps> = ({ texture, modelPath, onUpdate, onClose }) => {
     const [previewUrl, setPreviewUrl] = useState<string | null>(null)
 
+    const imageDataToDataUrl = (imageData: ImageData): string | null => {
+        const canvas = document.createElement('canvas')
+        canvas.width = imageData.width
+        canvas.height = imageData.height
+        const ctx = canvas.getContext('2d')
+        if (ctx) {
+            ctx.putImageData(imageData, 0, 0)
+            return canvas.toDataURL()
+        }
+        return null
+    }
+
+    const toUint8Array = (payload: any): Uint8Array | null => {
+        if (!payload) return null
+        if (payload instanceof Uint8Array) return payload
+        if (payload instanceof ArrayBuffer) return new Uint8Array(payload)
+        if (ArrayBuffer.isView(payload)) {
+            return new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength)
+        }
+        if (Array.isArray(payload)) {
+            return new Uint8Array(payload)
+        }
+        if (typeof payload === 'string') {
+            try {
+                const binary = atob(payload)
+                const bytes = new Uint8Array(binary.length)
+                for (let i = 0; i < binary.length; i++) {
+                    bytes[i] = binary.charCodeAt(i)
+                }
+                return bytes
+            } catch {
+                return null
+            }
+        }
+        return null
+    }
+
+    const toArrayBuffer = (payload: any): ArrayBuffer | null => {
+        const bytes = toUint8Array(payload)
+        if (!bytes) return null
+        return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+    }
+
     useEffect(() => {
         const loadTexture = async () => {
             if (!texture.Image) {
@@ -20,56 +64,50 @@ const TextureDetail: React.FC<TextureDetailProps> = ({ texture, modelPath, onUpd
                 return
             }
 
-            const isBlp = texture.Image.toLowerCase().endsWith('.blp')
+            const imagePath = texture.Image
+            const isBlp = imagePath.toLowerCase().endsWith('.blp')
+            const isTga = imagePath.toLowerCase().endsWith('.tga')
+            const isSupported = isBlp || isTga
 
-            if (isBlp) {
+            if (isSupported) {
                 try {
-                    let fullPath = texture.Image
+                    let fullPath = imagePath
                     // Resolve relative path if modelPath is available
                     if (modelPath && !fullPath.match(/^[a-zA-Z]:/) && !fullPath.startsWith('/')) {
                         const modelDir = modelPath.substring(0, modelPath.lastIndexOf('\\'))
                         fullPath = `${modelDir}\\${fullPath}`
                     }
 
-                    console.log('[TextureDetail] Loading BLP from:', fullPath)
-
-                    // Read file using Tauri fs plugin
                     const buffer = await readFile(fullPath)
-                    console.log('[TextureDetail] File read, size:', buffer.byteLength)
-
                     if (buffer) {
-                        // Decode BLP
-                        const blp = decodeBLP(buffer.buffer)
-                        console.log('[TextureDetail] BLP decoded:', blp.width, 'x', blp.height)
-                        const imageData = getBLPImageData(blp, 0) // 0 for mipLevel 0
-
-                        if (imageData) {
-                            // Draw to canvas to get Data URL
-                            const canvas = document.createElement('canvas')
-                            canvas.width = imageData.width
-                            canvas.height = imageData.height
-                            const ctx = canvas.getContext('2d')
-                            if (ctx) {
-                                // Create actual ImageData to avoid type mismatches
-                                const realImageData = new ImageData(
-                                    new Uint8ClampedArray(imageData.data),
-                                    imageData.width,
-                                    imageData.height
-                                )
-                                ctx.putImageData(realImageData, 0, 0)
-                                const dataUrl = canvas.toDataURL()
-                                console.log('[TextureDetail] Canvas created, data URL length:', dataUrl.length)
-                                setPreviewUrl(dataUrl)
-                            }
+                        const imageData = decodeTextureData(buffer.buffer, imagePath)
+                        const dataUrl = imageData ? imageDataToDataUrl(imageData) : null
+                        if (dataUrl) {
+                            setPreviewUrl(dataUrl)
+                            return
                         }
                     }
                 } catch (e) {
-                    console.error("[TextureDetail] Failed to load BLP:", e)
-                    setPreviewUrl(null)
+                    // fall through to MPQ
                 }
+                try {
+                    const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: normalizePath(imagePath) })
+                    const mpqBuffer = toArrayBuffer(mpqData)
+                    if (mpqBuffer && mpqBuffer.byteLength > 0) {
+                        const imageData = decodeTextureData(mpqBuffer, imagePath)
+                        const dataUrl = imageData ? imageDataToDataUrl(imageData) : null
+                        if (dataUrl) {
+                            setPreviewUrl(dataUrl)
+                            return
+                        }
+                    }
+                } catch (e) {
+                    // ignore MPQ failure
+                }
+                setPreviewUrl(null)
             } else {
                 // Try standard image loading
-                setPreviewUrl(`file://${texture.Image}`)
+                setPreviewUrl(`file://${imagePath}`)
             }
         }
 
@@ -106,13 +144,13 @@ const TextureDetail: React.FC<TextureDetailProps> = ({ texture, modelPath, onUpd
                         onError={(e) => {
                             // Fallback if loading fails even with previewUrl
                             const img = e.target as HTMLImageElement;
-                            img.alt = 'Image Not Found'
+                            img.alt = '\u56fe\u7247\u672a\u627e\u5230'
                             img.style.display = 'none'
                         }}
                     />
                 ) : (
                     <div style={{ textAlign: 'center', color: '#666' }}>
-                        <div>No Image</div>
+                        <div>{'\u65e0\u6cd5\u52a0\u8f7d\u8d34\u56fe'}</div>
                         <div style={{ fontSize: 12 }}>{texture.Image}</div>
                     </div>
                 )}

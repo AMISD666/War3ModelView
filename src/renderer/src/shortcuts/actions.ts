@@ -385,6 +385,14 @@ export const shortcutActions: ShortcutAction[] = [
         defaultBindings: ['Delete'],
         preventDefault: true
     },
+    {
+        id: 'timeline.quickKeyframe',
+        label: '\u5feb\u901fK\u5e27\uff08\u4f4d\u79fb/\u65cb\u8f6c/\u7f29\u653e\uff09',
+        category: '\u65f6\u95f4\u8f74',
+        contexts: ['animation'],
+        defaultBindings: ['K'],
+        preventDefault: true
+    },
 
     // Batch
     {
