@@ -697,15 +697,15 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
                         <div style={{ border: '1px solid #484848', padding: '6px 8px', flex: 1, backgroundColor: '#2b2b2b', marginTop: 8, position: 'relative' }}>
                             <div style={{ fontWeight: 'bold', marginBottom: 4, paddingBottom: 4, borderBottom: '1px solid #444', color: '#ccc', fontSize: 12 }}>标记</div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                                <Form.Item name="Unshaded" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>无阴影</Checkbox></Form.Item>
-                                <Form.Item name="Unfogged" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>无雾化</Checkbox></Form.Item>
-                                <Form.Item name="SortPrimsFarZ" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>透明度</Checkbox></Form.Item>
-                                <Form.Item name="LineEmitter" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>线发射器</Checkbox></Form.Item>
-                                <Form.Item name="ModelSpace" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>模型空间</Checkbox></Form.Item>
-                                <Form.Item name="XYQuad" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>XY 象限</Checkbox></Form.Item>
-                                <Form.Item name="Squirt" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>喷射</Checkbox></Form.Item>
-                                <Form.Item name="Head" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>头部</Checkbox></Form.Item>
-                                <Form.Item name="Tail" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>尾部</Checkbox></Form.Item>
+                                <Form.Item name="Unshaded" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{'\u65e0\u9634\u5f71'}</Checkbox></Form.Item>
+                                <Form.Item name="Unfogged" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{'\u65e0\u96fe\u5316'}</Checkbox></Form.Item>
+                                <Form.Item name="LineEmitter" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{'\u7ebf\u53d1\u5c04\u5668'}</Checkbox></Form.Item>
+                                <Form.Item name="SortPrimsFarZ" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{'\u6cbfZ\u8f74\u8fdc\u5411\u6392\u5217\u539f\u59cb\u51e0\u4f55\u4f53'}</Checkbox></Form.Item>
+                                <Form.Item name="ModelSpace" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{'\u6a21\u578b\u7a7a\u95f4'}</Checkbox></Form.Item>
+                                <Form.Item name="XYQuad" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{'XY \u8c61\u9650'}</Checkbox></Form.Item>
+                                <Form.Item name="Squirt" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{'\u55b7\u5c04'}</Checkbox></Form.Item>
+                                <Form.Item name="Head" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{'\u5934\u90e8'}</Checkbox></Form.Item>
+                                <Form.Item name="Tail" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{'\u5c3e\u90e8'}</Checkbox></Form.Item>
                             </div>
 
                             {/* Buttons inside Flags Box (Bottom) */}

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Button, Tooltip, Space, message } from 'antd';
+import { Button, Tooltip, Space, message, InputNumber } from 'antd';
 import {
     GatewayOutlined, // Vertex/Point
     AppstoreOutlined, // Face
@@ -58,8 +58,49 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         setGlobalTransformPivot
     } = useSelectionStore();
     const { modelData: _modelData } = useModelStore();
-    const { renderer, setShowSettingsPanel } = useRendererStore(state => state);
+    const {
+        renderer,
+        setShowSettingsPanel,
+        snapTranslateEnabled,
+        setSnapTranslateEnabled,
+        snapTranslateStep,
+        setSnapTranslateStep,
+        snapRotateEnabled,
+        setSnapRotateEnabled,
+        snapRotateStep,
+        setSnapRotateStep
+    } = useRendererStore(state => state);
     const { executeCommand } = useCommandManager();
+    const snapButtonSize = 32
+    const snapButtonStyle: React.CSSProperties = {
+        width: snapButtonSize,
+        height: snapButtonSize,
+        padding: 0,
+        lineHeight: `${snapButtonSize}px`,
+        textAlign: 'center'
+    }
+    const snapInputStyle: React.CSSProperties = {
+        width: snapButtonSize,
+        minWidth: snapButtonSize,
+        height: 18,
+        fontSize: 10,
+        padding: 0,
+        lineHeight: '18px'
+    }
+    const snapStackStyle: React.CSSProperties = {
+        position: 'relative',
+        width: snapButtonSize,
+        height: snapButtonSize,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center'
+    }
+    const snapInputFloatingStyle: React.CSSProperties = {
+        ...snapInputStyle,
+        position: 'absolute',
+        top: snapButtonSize + 2,
+        left: 0
+    }
 
     const handleBind = () => {
         if (!renderer || selectedNodeIds.length !== 1) {
@@ -269,6 +310,52 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                         </Tooltip>
                     </>
                 )}
+            </Space>
+
+            <div style={{ width: 1, backgroundColor: '#555', height: '24px', alignSelf: 'center' }} />
+            <Space size={10}>
+                <div style={snapStackStyle}>
+                    <Tooltip title={'\u8ddd\u79bb\u6355\u6349'}>
+                        <Button
+                            type={snapTranslateEnabled ? 'primary' : 'default'}
+                            onClick={() => setSnapTranslateEnabled(!snapTranslateEnabled)}
+                            style={snapButtonStyle}
+                        >{'\u8ddd'}</Button>
+                    </Tooltip>
+                    <InputNumber
+                        size="small"
+                        min={0.001}
+                        step={0.1}
+                        value={snapTranslateStep}
+                        controls={false}
+                        onChange={(value) => {
+                            const next = typeof value === 'number' && value > 0 ? value : 0.001
+                            setSnapTranslateStep(next)
+                        }}
+                        style={snapInputFloatingStyle}
+                    />
+                </div>
+                <div style={snapStackStyle}>
+                    <Tooltip title={'\u89d2\u5ea6\u6355\u6349'}>
+                        <Button
+                            type={snapRotateEnabled ? 'primary' : 'default'}
+                            onClick={() => setSnapRotateEnabled(!snapRotateEnabled)}
+                            style={snapButtonStyle}
+                        >{'\u89d2'}</Button>
+                    </Tooltip>
+                    <InputNumber
+                        size="small"
+                        min={1}
+                        step={1}
+                        value={snapRotateStep}
+                        controls={false}
+                        onChange={(value) => {
+                            const next = typeof value === 'number' && value > 0 ? value : 1
+                            setSnapRotateStep(next)
+                        }}
+                        style={snapInputFloatingStyle}
+                    />
+                </div>
             </Space>
 
             {mainMode === 'view' && (

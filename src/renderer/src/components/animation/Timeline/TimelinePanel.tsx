@@ -138,6 +138,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
     // Drag Keyframe Preview State
     const [dragKeyframeOffset, setDragKeyframeOffset] = useState<number>(0)
+    const [dragKeyframeScale, setDragKeyframeScale] = useState<number | null>(null)
 
     // Refs for RAF
     const frameRef = useRef(0)
@@ -152,6 +153,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     const showAllKeyframesRef = useRef(showAllKeyframes)
     const transformModeRef = useRef(transformMode)
     const dragKeyframeOffsetRef = useRef(0)
+    const dragKeyframeScaleRef = useRef<number | null>(null)
 
     // Interaction Refs
     const interactionRef = useRef({
@@ -163,7 +165,10 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         dragSequenceIndex: -1,
         initialInterval: [0, 0],
         dragKeyframeStartFrame: 0,
-        dragKeyframeData: [] as { nodeId: number, type: string, originalFrame: number, keyIndex: number }[]
+        dragKeyframeData: [] as { nodeId: number, type: string, originalFrame: number, keyIndex: number }[],
+        dragKeyframeMinFrame: 0,
+        dragKeyframeMaxFrame: 0,
+        dragKeyframeScaleAnchorFrame: 0
     })
 
     // Derived Global Info
@@ -192,6 +197,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     useEffect(() => { transformModeRef.current = transformMode }, [transformMode])
     useEffect(() => { isDraggingRef.current = isDragging }, [isDragging])
     useEffect(() => { dragKeyframeOffsetRef.current = dragKeyframeOffset }, [dragKeyframeOffset])
+    useEffect(() => { dragKeyframeScaleRef.current = dragKeyframeScale }, [dragKeyframeScale])
 
     
 
@@ -517,9 +523,12 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         }
 
         // Draw Keyframes (Track Area with Lanes)
+        const dragOffset = dragKeyframeOffsetRef.current
+        const dragScale = dragKeyframeScaleRef.current
+        const dragAnchor = interactionRef.current.dragKeyframeScaleAnchorFrame
+
         activeKeyframes.forEach(kf => {
-            const kx = (kf.frame - scroll) * pxPerMs
-            if (kx < -10 || kx > width + 10) return
+            let drawFrame = kf.frame
 
             // Filter logic
             let isVisible = false
@@ -537,9 +546,15 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
             const isSelected = selectedUids.has(kf.uid)
 
-            // Apply drag offset to selected keyframes for real-time preview
-            const dragOffset = dragKeyframeOffsetRef.current
-            const drawX = isSelected && dragOffset !== 0 ? kx + dragOffset * pxPerMs : kx
+            // Apply drag offset or scale to selected keyframes for real-time preview
+            if (isSelected && dragScale !== null) {
+                drawFrame = Math.round(dragAnchor + (kf.frame - dragAnchor) * dragScale)
+            } else if (isSelected && dragOffset !== 0) {
+                drawFrame = kf.frame + dragOffset
+            }
+
+            const drawX = (drawFrame - scroll) * pxPerMs
+            if (drawX < -10 || drawX > width + 10) return
 
             const lineTop = laneY - effectiveKeyframeSize
             const lineBottom = laneY + effectiveKeyframeSize
@@ -1223,12 +1238,27 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             const currentFrame = mouseToFrame(e.clientX)
             const startFrame = interactionRef.current.dragKeyframeStartFrame
             const frameOffset = Math.round(currentFrame - startFrame)
+            const isScale = e.altKey && interactionRef.current.dragKeyframeData.length > 0
 
             // Update lastMouseX for tracking
             interactionRef.current.lastMouseX = e.clientX
 
             // Update state for real-time visual feedback in draw
-            setDragKeyframeOffset(frameOffset)
+            if (isScale) {
+                const anchor = interactionRef.current.dragKeyframeScaleAnchorFrame
+                const denom = startFrame - anchor
+                let scale = 1
+                if (Math.abs(denom) > 1e-4) {
+                    scale = (currentFrame - anchor) / denom
+                }
+                if (!Number.isFinite(scale)) scale = 1
+                scale = Math.max(0.05, scale)
+                setDragKeyframeScale(scale)
+                if (dragKeyframeOffsetRef.current !== 0) setDragKeyframeOffset(0)
+            } else {
+                if (dragKeyframeScaleRef.current !== null) setDragKeyframeScale(null)
+                setDragKeyframeOffset(frameOffset)
+            }
         } else if (mode === 'boxSelect') {
             setSelectionRect(prev => ({
                 startX: interactionRef.current.startX,
@@ -1322,9 +1352,51 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             const currentFrame = mouseToFrame(e.clientX)
             const startFrame = interactionRef.current.dragKeyframeStartFrame
             const frameOffset = Math.round(currentFrame - startFrame)
+            const dragScale = dragKeyframeScaleRef.current
+            const scaleAnchor = interactionRef.current.dragKeyframeScaleAnchorFrame
 
             // Only process if there was actual movement
-            if (frameOffset !== 0 && interactionRef.current.dragKeyframeData.length > 0) {
+            if (dragScale !== null && interactionRef.current.dragKeyframeData.length > 0 && Math.abs(dragScale - 1) > 1e-4) {
+                const nodes = useModelStore.getState().nodes
+                const oldNodes = cloneNodesForKeyframes(nodes)
+                const nodesCopy = cloneNodesForKeyframes(nodes)
+                const replaceNodes = useModelStore.getState().replaceNodes
+
+                // Apply scaling to all dragged keyframes
+                interactionRef.current.dragKeyframeData.forEach(kfData => {
+                    const node = nodesCopy.find((n: any) => n.ObjectId === kfData.nodeId)
+                    if (!node || !node[kfData.type]?.Keys) return
+
+                    // Find and update the keyframe
+                    let keyIdx = kfData.keyIndex
+                    if (keyIdx < 0 || keyIdx >= node[kfData.type].Keys.length) {
+                        keyIdx = node[kfData.type].Keys.findIndex((k: any) => k.Frame === kfData.originalFrame)
+                    }
+                    if (keyIdx >= 0) {
+                        node[kfData.type].Keys[keyIdx].Frame = Math.round(scaleAnchor + (kfData.originalFrame - scaleAnchor) * dragScale)
+                    }
+                })
+
+                // Sort keys by frame after scaling
+                interactionRef.current.dragKeyframeData.forEach(kfData => {
+                    const node = nodesCopy.find((n: any) => n.ObjectId === kfData.nodeId)
+                    if (node && node[kfData.type]?.Keys) {
+                        node[kfData.type].Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                    }
+                })
+
+                // Push to history
+                useHistoryStore.getState().push({
+                    name: `\u7f29\u653e ${interactionRef.current.dragKeyframeData.length} \u4e2a\u5173\u952e\u5e27`,
+                    undo: () => replaceNodes(oldNodes as any),
+                    redo: () => replaceNodes(nodesCopy)
+                })
+
+                replaceNodes(nodesCopy)
+
+                // Clear selection as UIDs have changed
+                setSelectedKeyframeUids(new Set())
+            } else if (dragScale === null && frameOffset !== 0 && interactionRef.current.dragKeyframeData.length > 0) {
                 const nodes = useModelStore.getState().nodes
                 const oldNodes = cloneNodesForKeyframes(nodes)
                 const nodesCopy = cloneNodesForKeyframes(nodes)
@@ -1368,6 +1440,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
             // Reset drag offset preview
             setDragKeyframeOffset(0)
+            setDragKeyframeScale(null)
         } else if (mode === 'boxSelect') {
             const rect = canvas.getBoundingClientRect()
             const mouseX = e.clientX - rect.left
@@ -1439,7 +1512,10 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 dragSequenceIndex: -1,
                 initialInterval: [0, 0],
                 dragKeyframeStartFrame: 0,
-                dragKeyframeData: []
+                dragKeyframeData: [],
+                dragKeyframeMinFrame: 0,
+                dragKeyframeMaxFrame: 0,
+                dragKeyframeScaleAnchorFrame: 0
             }
             setIsDragging(true)
             window.addEventListener('mousemove', handleGlobalMouseMove)
@@ -1463,7 +1539,10 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 dragSequenceIndex: handleHit.index,
                 initialInterval: [...seq.Interval],
                 dragKeyframeStartFrame: 0,
-                dragKeyframeData: []
+                dragKeyframeData: [],
+                dragKeyframeMinFrame: 0,
+                dragKeyframeMaxFrame: 0,
+                dragKeyframeScaleAnchorFrame: 0
             }
             setIsDragging(true)
             setDragTargetSequenceIndex(handleHit.index)
@@ -1481,7 +1560,10 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 dragSequenceIndex: -1,
                 initialInterval: [0, 0],
                 dragKeyframeStartFrame: 0,
-                dragKeyframeData: []
+                dragKeyframeData: [],
+                dragKeyframeMinFrame: 0,
+                dragKeyframeMaxFrame: 0,
+                dragKeyframeScaleAnchorFrame: 0
             }
             setIsDragging(true)
             setPlaying(false)
@@ -1498,6 +1580,15 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                     originalFrame: kf.frame,
                     keyIndex: kf.keyIndex
                 }))
+                const dragFrames = dragData.length > 0 ? dragData.map(kf => kf.originalFrame) : [clickedKf.frame]
+                const minFrame = Math.min(...dragFrames)
+                const maxFrame = Math.max(...dragFrames)
+                let anchorFrame = minFrame
+                if (maxFrame !== minFrame) {
+                    const distToMin = Math.abs(clickedKf.frame - minFrame)
+                    const distToMax = Math.abs(maxFrame - clickedKf.frame)
+                    anchorFrame = distToMin >= distToMax ? minFrame : maxFrame
+                }
 
                 interactionRef.current = {
                     mode: 'pendingDragKeyframes',
@@ -1508,7 +1599,10 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                     dragSequenceIndex: -1,
                     initialInterval: [0, 0],
                     dragKeyframeStartFrame: clickedKf.frame,
-                    dragKeyframeData: dragData
+                    dragKeyframeData: dragData,
+                    dragKeyframeMinFrame: minFrame,
+                    dragKeyframeMaxFrame: maxFrame,
+                    dragKeyframeScaleAnchorFrame: anchorFrame
                 }
                 // 注意：这里不设置 setIsDragging(true)，等待超过阈值后再设置
             } else {
@@ -1522,7 +1616,10 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                     dragSequenceIndex: -1,
                     initialInterval: [0, 0],
                     dragKeyframeStartFrame: 0,
-                    dragKeyframeData: []
+                    dragKeyframeData: [],
+                    dragKeyframeMinFrame: 0,
+                    dragKeyframeMaxFrame: 0,
+                    dragKeyframeScaleAnchorFrame: 0
                 }
                 setSelectionRect({ startX: mouseX, startY: mouseY, endX: mouseX, endY: mouseY })
             }
@@ -1793,19 +1890,26 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                         />
                     </div>
 
-                    {/* Drag Offset Display (only during drag) */}
-                    {dragKeyframeOffset !== 0 && (() => {
+                    {/* Drag Offset / Scale Display (only during drag) */}
+                    {dragKeyframeScale !== null && (() => (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 8, backgroundColor: 'rgba(250, 173, 20, 0.18)', padding: '2px 8px', borderRadius: 4 }}>
+                            <span style={{ color: '#faad14', fontSize: '12px', fontWeight: 'bold' }}>
+                                {'\u7f29\u653e:'} x{dragKeyframeScale.toFixed(2)}
+                            </span>
+                        </div>
+                    ))()}
+                    {dragKeyframeScale === null && dragKeyframeOffset !== 0 && (() => {
                         // Calculate target frame from first selected keyframe
                         const firstSelectedKf = activeKeyframesRef.current.find(kf => selectedKeyframeUids.has(kf.uid))
                         const targetFrame = firstSelectedKf ? firstSelectedKf.frame + dragKeyframeOffset : null
                         return (
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 8, backgroundColor: 'rgba(24, 144, 255, 0.2)', padding: '2px 8px', borderRadius: 4 }}>
                                 <span style={{ color: '#1890ff', fontSize: '12px', fontWeight: 'bold' }}>
-                                    偏移: {dragKeyframeOffset > 0 ? '+' : ''}{dragKeyframeOffset}帧
+                                    ???: {dragKeyframeOffset > 0 ? '+' : ''}{dragKeyframeOffset}??
                                 </span>
                                 {targetFrame !== null && (
                                     <span style={{ color: '#52c41a', fontSize: '12px', fontWeight: 'bold' }}>
-                                        → 帧 {targetFrame}
+                                        ????{targetFrame}
                                     </span>
                                 )}
                             </div>

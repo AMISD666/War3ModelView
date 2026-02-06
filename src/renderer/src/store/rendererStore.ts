@@ -75,6 +75,14 @@ interface RendererStore {
     setTeamColor: (color: number) => void
     gizmoSize: number
     setGizmoSize: (size: number) => void
+    snapTranslateEnabled: boolean
+    setSnapTranslateEnabled: (enabled: boolean) => void
+    snapTranslateStep: number
+    setSnapTranslateStep: (step: number) => void
+    snapRotateEnabled: boolean
+    setSnapRotateEnabled: (enabled: boolean) => void
+    snapRotateStep: number
+    setSnapRotateStep: (step: number) => void
 
     // Color Settings
     backgroundColor: string
@@ -180,6 +188,14 @@ export const useRendererStore = create<RendererStore>()(
             setTeamColor: (color) => set({ teamColor: color }),
             gizmoSize: 0.5,
             setGizmoSize: (size) => set({ gizmoSize: size }),
+            snapTranslateEnabled: false,
+            setSnapTranslateEnabled: (enabled) => set({ snapTranslateEnabled: enabled }),
+            snapTranslateStep: 1,
+            setSnapTranslateStep: (step) => set({ snapTranslateStep: step }),
+            snapRotateEnabled: false,
+            setSnapRotateEnabled: (enabled) => set({ snapRotateEnabled: enabled }),
+            snapRotateStep: 5,
+            setSnapRotateStep: (step) => set({ snapRotateStep: step }),
 
             // Color Settings
             backgroundColor: '#333333',
@@ -254,6 +270,10 @@ export const useRendererStore = create<RendererStore>()(
                 renderMode: state.renderMode,
                 teamColor: state.teamColor,
                 gizmoSize: state.gizmoSize,
+                snapTranslateEnabled: state.snapTranslateEnabled,
+                snapTranslateStep: state.snapTranslateStep,
+                snapRotateEnabled: state.snapRotateEnabled,
+                snapRotateStep: state.snapRotateStep,
                 backgroundColor: state.backgroundColor,
                 vertexColor: state.vertexColor,
                 wireframeColor: state.wireframeColor,

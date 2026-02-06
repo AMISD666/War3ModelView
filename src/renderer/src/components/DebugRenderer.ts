@@ -184,7 +184,7 @@ export class DebugRenderer {
     ) {
         if (!this.cubeProgram || !this.cubeVertBuffer || !this.cubeNormBuffer) return
 
-        const cubeSize = 1.2 // Half-size of cube
+        const cubeSize = 2.4 // Half-size of cube (2x default)
         const s = cubeSize
 
         // Cube faces (6 faces, 2 triangles each = 36 vertices)

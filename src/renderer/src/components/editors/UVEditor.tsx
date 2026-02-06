@@ -4,8 +4,9 @@ import { readFile } from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'
 // @ts-ignore
 import { decodeBLP, getBLPImageData } from 'war3-model'
-import { Button, Tooltip } from 'antd'
+import { Button, Tooltip, InputNumber } from 'antd'
 import { useSelectionStore } from '../../store/selectionStore'
+import { useRendererStore } from '../../store/rendererStore'
 import { registerShortcutHandler } from '../../shortcuts/manager'
 import {
     BorderOutlined,
@@ -72,6 +73,12 @@ const UVEditor: React.FC<UVEditorProps> = ({
     // Dragging state for transforms
     const [isDragging, setIsDragging] = useState(false)
     const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null)
+    const snapDragRef = useRef({
+        translationDelta: [0, 0] as [number, number],
+        translationApplied: [0, 0] as [number, number],
+        rotationDelta: 0, // degrees
+        rotationApplied: 0 // degrees
+    })
 
     // History for Undo/Redo (max 20 steps)
     const [history, setHistory] = useState<{ geosetIndex: number; tVertices: Float32Array }[][]>([])
@@ -87,6 +94,16 @@ const UVEditor: React.FC<UVEditorProps> = ({
     // Model store
     const modelData = useModelStore(state => state.modelData)
     const updateGeoset = useModelStore(state => state.updateGeoset)
+    const {
+        snapTranslateEnabled,
+        setSnapTranslateEnabled,
+        snapTranslateStep,
+        setSnapTranslateStep,
+        snapRotateEnabled,
+        setSnapRotateEnabled,
+        snapRotateStep,
+        setSnapRotateStep
+    } = useRendererStore(state => state)
 
     // -------------------------------------------------------------------------
     // HELPERS
@@ -246,6 +263,20 @@ const UVEditor: React.FC<UVEditorProps> = ({
         const size = Math.min(canvas.width, canvas.height) * 0.8 * zoom
         const du = dx / size
         const dv = dy / size
+        let snapDu = du
+        let snapDv = dv
+
+        if (snapTranslateEnabled && snapTranslateStep > 0) {
+            const snap = snapDragRef.current
+            snap.translationDelta[0] += du
+            snap.translationDelta[1] += dv
+            const snappedU = Math.round(snap.translationDelta[0] / snapTranslateStep) * snapTranslateStep
+            const snappedV = Math.round(snap.translationDelta[1] / snapTranslateStep) * snapTranslateStep
+            snapDu = snappedU - snap.translationApplied[0]
+            snapDv = snappedV - snap.translationApplied[1]
+            snap.translationApplied[0] = snappedU
+            snap.translationApplied[1] = snappedV
+        }
 
         selectedUVs.forEach(sel => {
             const geoset = modelData.Geosets![sel.geosetIndex]
@@ -254,8 +285,8 @@ const UVEditor: React.FC<UVEditorProps> = ({
             sel.indices.forEach(i => {
                 const currentU = uvs[i * 2] as number
                 const currentV = uvs[i * 2 + 1] as number
-                uvs[i * 2] = currentU + du
-                uvs[i * 2 + 1] = currentV + dv
+                uvs[i * 2] = currentU + snapDu
+                uvs[i * 2 + 1] = currentV + snapDv
             })
         })
 
@@ -309,7 +340,16 @@ const UVEditor: React.FC<UVEditorProps> = ({
         if (!canvas) return
 
         // Rotation angle based on mouse movement (negative for correct direction)
-        const angle = -(dx - dy) * 0.01 // Radians
+        let angle = -(dx - dy) * 0.01 // Radians
+        if (snapRotateEnabled && snapRotateStep > 0) {
+            const snap = snapDragRef.current
+            const angleDeg = angle * 180 / Math.PI
+            snap.rotationDelta += angleDeg
+            const snapped = Math.round(snap.rotationDelta / snapRotateStep) * snapRotateStep
+            const deltaDeg = snapped - snap.rotationApplied
+            snap.rotationApplied = snapped
+            angle = deltaDeg * Math.PI / 180
+        }
 
         selectedUVs.forEach(sel => {
             const geoset = modelData.Geosets![sel.geosetIndex]
@@ -608,6 +648,12 @@ const UVEditor: React.FC<UVEditorProps> = ({
                         if (dist >= 30 && dist <= 50) {
                             setActiveAxis('xy')
                             addToHistory()
+                            snapDragRef.current = {
+                                translationDelta: [0, 0],
+                                translationApplied: [0, 0],
+                                rotationDelta: 0,
+                                rotationApplied: 0
+                            }
                             setIsDragging(true)
                             setDragStart({ x: e.clientX, y: e.clientY })
                             return
@@ -617,6 +663,12 @@ const UVEditor: React.FC<UVEditorProps> = ({
                         if (x >= cp.x + 8 && x <= cp.x + 8 + xySize && y >= cp.y - 8 - xySize && y <= cp.y - 8) {
                             setActiveAxis('xy')
                             addToHistory()
+                            snapDragRef.current = {
+                                translationDelta: [0, 0],
+                                translationApplied: [0, 0],
+                                rotationDelta: 0,
+                                rotationApplied: 0
+                            }
                             setIsDragging(true)
                             setDragStart({ x: e.clientX, y: e.clientY })
                             return
@@ -625,6 +677,12 @@ const UVEditor: React.FC<UVEditorProps> = ({
                         if (y >= cp.y - 8 && y <= cp.y + 8 && x >= cp.x && x <= cp.x + axisLength) {
                             setActiveAxis('x')
                             addToHistory()
+                            snapDragRef.current = {
+                                translationDelta: [0, 0],
+                                translationApplied: [0, 0],
+                                rotationDelta: 0,
+                                rotationApplied: 0
+                            }
                             setIsDragging(true)
                             setDragStart({ x: e.clientX, y: e.clientY })
                             return
@@ -633,6 +691,12 @@ const UVEditor: React.FC<UVEditorProps> = ({
                         if (x >= cp.x - 8 && x <= cp.x + 8 && y >= cp.y - axisLength && y <= cp.y) {
                             setActiveAxis('y')
                             addToHistory()
+                            snapDragRef.current = {
+                                translationDelta: [0, 0],
+                                translationApplied: [0, 0],
+                                rotationDelta: 0,
+                                rotationApplied: 0
+                            }
                             setIsDragging(true)
                             setDragStart({ x: e.clientX, y: e.clientY })
                             return
@@ -836,6 +900,12 @@ const UVEditor: React.FC<UVEditorProps> = ({
         setIsPanning(false)
         setIsSelecting(false)
         setIsDragging(false)
+        snapDragRef.current = {
+            translationDelta: [0, 0],
+            translationApplied: [0, 0],
+            rotationDelta: 0,
+            rotationApplied: 0
+        }
         setActiveAxis(null)
         setSelectionStart(null)
         setSelectionEnd(null)
@@ -1037,6 +1107,36 @@ const UVEditor: React.FC<UVEditorProps> = ({
         borderColor: '#444',
         color: '#666'
     }
+    const snapButtonSize = 28
+    const snapButtonStyle: React.CSSProperties = {
+        width: snapButtonSize,
+        height: snapButtonSize,
+        padding: 0,
+        lineHeight: `${snapButtonSize}px`,
+        textAlign: 'center'
+    }
+    const snapInputStyle: React.CSSProperties = {
+        width: snapButtonSize,
+        minWidth: snapButtonSize,
+        height: 16,
+        fontSize: 9,
+        padding: 0,
+        lineHeight: '16px'
+    }
+    const snapStackStyle: React.CSSProperties = {
+        position: 'relative',
+        width: snapButtonSize,
+        height: snapButtonSize,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center'
+    }
+    const snapInputFloatingStyle: React.CSSProperties = {
+        ...snapInputStyle,
+        position: 'absolute',
+        top: snapButtonSize + 2,
+        left: 0
+    }
 
     return (
         <div
@@ -1068,19 +1168,48 @@ const UVEditor: React.FC<UVEditorProps> = ({
 
                 <div style={{ width: '1px', backgroundColor: '#555', margin: '0 4px' }} />
 
-                {/* Transform modes */}
-                <Tooltip title="框选">
-                    <Button size="small" icon={<SelectOutlined />} style={transformMode === 'select' ? btnActiveStyle : btnStyle} onClick={() => setTransformMode('select')} />
-                </Tooltip>
-                <Tooltip title="移动 (W)">
-                    <Button size="small" icon={<DragOutlined />} style={transformMode === 'translate' ? btnActiveStyle : btnStyle} onClick={() => setTransformMode('translate')} />
-                </Tooltip>
-                <Tooltip title="旋转 (E)">
-                    <Button size="small" icon={<RotateLeftOutlined />} style={transformMode === 'rotate' ? btnActiveStyle : btnStyle} onClick={() => setTransformMode('rotate')} />
-                </Tooltip>
-                <Tooltip title="缩放 (R)">
-                    <Button size="small" icon={<ColumnWidthOutlined />} style={transformMode === 'scale' ? btnActiveStyle : btnStyle} onClick={() => setTransformMode('scale')} />
-                </Tooltip>
+                <div style={snapStackStyle}>
+                    <Tooltip title={'\u8ddd\u79bb\u6355\u6349'}>
+                        <Button
+                            size="small"
+                            style={{ ...(snapTranslateEnabled ? btnActiveStyle : btnStyle), ...snapButtonStyle }}
+                            onClick={() => setSnapTranslateEnabled(!snapTranslateEnabled)}
+                        >{'\u8ddd'}</Button>
+                    </Tooltip>
+                    <InputNumber
+                        size="small"
+                        min={0.001}
+                        step={0.1}
+                        value={snapTranslateStep}
+                        controls={false}
+                        onChange={(value) => {
+                            const next = typeof value === 'number' && value > 0 ? value : 0.001
+                            setSnapTranslateStep(next)
+                        }}
+                        style={snapInputFloatingStyle}
+                    />
+                </div>
+                <div style={snapStackStyle}>
+                    <Tooltip title={'\u89d2\u5ea6\u6355\u6349'}>
+                        <Button
+                            size="small"
+                            style={{ ...(snapRotateEnabled ? btnActiveStyle : btnStyle), ...snapButtonStyle }}
+                            onClick={() => setSnapRotateEnabled(!snapRotateEnabled)}
+                        >{'\u89d2'}</Button>
+                    </Tooltip>
+                    <InputNumber
+                        size="small"
+                        min={1}
+                        step={1}
+                        value={snapRotateStep}
+                        controls={false}
+                        onChange={(value) => {
+                            const next = typeof value === 'number' && value > 0 ? value : 1
+                            setSnapRotateStep(next)
+                        }}
+                        style={snapInputFloatingStyle}
+                    />
+                </div>
 
                 <div style={{ width: '1px', backgroundColor: '#555', margin: '0 4px' }} />
 

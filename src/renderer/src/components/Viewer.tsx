@@ -521,6 +521,17 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     rotation: [0, 0, 0] as [number, number, number],
     scale: [1, 1, 1] as [number, number, number]
   })
+  const gizmoHudRef = useRef({
+    translation: [0, 0, 0] as [number, number, number],
+    rotation: [0, 0, 0] as [number, number, number], // degrees
+    scale: [1, 1, 1] as [number, number, number]
+  })
+  const snapDragRef = useRef({
+    translationDelta: [0, 0, 0] as [number, number, number],
+    translationApplied: [0, 0, 0] as [number, number, number],
+    rotationDelta: [0, 0, 0] as [number, number, number], // degrees
+    rotationApplied: [0, 0, 0] as [number, number, number] // degrees
+  })
 
   // Pre-allocated vectors for handleMouseMove to avoid GC pressure
   const mouseMoveVecs = useRef({
@@ -534,10 +545,43 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
   // Box selection overlay state
   const [selectionBox, setSelectionBox] = useState<{ x: number, y: number, width: number, height: number } | null>(null)
+  const [gizmoHud, setGizmoHud] = useState<{ x: number, y: number, text: string } | null>(null)
 
   // Context menu state for vertex operations
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number } | null>(null)
-  const [nodeContextMenu, setNodeContextMenu] = useState<{ x: number, y: number, nodeId: number } | null>(null)
+  const [nodeContextMenu, setNodeContextMenu] = useState<{ x: number, y: number, nodeId: number | null } | null>(null)
+  const poseClipboardRef = useRef<{ frame: number, nodes: { nodeId: number, translation: number[], rotation: number[], scaling: number[] }[] } | null>(null)
+  const formatHudNumber = (value: number, digits: number) => {
+    const fixed = value.toFixed(digits)
+    return fixed.replace(/\.?0+$/, '')
+  }
+  const formatHudVec3 = (vec: [number, number, number], digits: number) => {
+    return `${formatHudNumber(vec[0], digits)}, ${formatHudNumber(vec[1], digits)}, ${formatHudNumber(vec[2], digits)}`
+  }
+  const buildHudText = (mode: 'translate' | 'rotate' | 'scale') => {
+    const hud = gizmoHudRef.current
+    if (mode === 'translate') {
+      return `\u79fb\u52a8 \u0394: (${formatHudVec3(hud.translation, 3)})`
+    }
+    if (mode === 'rotate') {
+      return `\u65cb\u8f6c \u0394: (${formatHudVec3(hud.rotation, 1)})\u00b0`
+    }
+    return `\u7f29\u653e \u0394: (${formatHudVec3(hud.scale, 3)})`
+  }
+  const updateHudPosition = (e: { clientX: number, clientY: number }, mode: 'translate' | 'rotate' | 'scale') => {
+    setGizmoHud({
+      x: e.clientX + 12,
+      y: e.clientY + 12,
+      text: buildHudText(mode)
+    })
+  }
+  const resetGizmoHud = () => {
+    gizmoHudRef.current = {
+      translation: [0, 0, 0],
+      rotation: [0, 0, 0],
+      scale: [1, 1, 1]
+    }
+  }
 
   const loadTeamColorTextures = async (colorIndex: number) => {
     if (!renderer) return
@@ -945,10 +989,18 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       if (cameraRef.current) cameraRef.current.enabled = false
       gizmoState.current.isDragging = true
       gizmoState.current.isShiftDuplicate = e.shiftKey // Track if this is a shift-duplicate operation
+      snapDragRef.current.translationDelta = [0, 0, 0]
+      snapDragRef.current.translationApplied = [0, 0, 0]
+      snapDragRef.current.rotationDelta = [0, 0, 0]
+      snapDragRef.current.rotationApplied = [0, 0, 0]
+      resetGizmoHud()
       mouseState.current.lastMouseX = e.clientX
       mouseState.current.lastMouseY = e.clientY
 
-      const { selectedVertexIds, selectedFaceIds, geometrySubMode, animationSubMode: subMode2 } = useSelectionStore.getState()
+      const { selectedVertexIds, selectedFaceIds, geometrySubMode, animationSubMode: subMode2, transformMode } = useSelectionStore.getState()
+      if (transformMode === 'translate' || transformMode === 'rotate' || transformMode === 'scale') {
+        updateHudPosition(e, transformMode)
+      }
 
       // Shift+Drag = Duplicate then move
       if (e.shiftKey && (geometrySubMode === 'vertex' || geometrySubMode === 'face') && rendererRef.current) {
@@ -2768,9 +2820,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             if (isGlobalTransformMode) {
               const previewMatrix = mat4.create()
               const rotQuat = quat.create()
-              // Convert degrees to radians for preview rotation
-              const radRot = previewTransform.rotation.map(d => d * Math.PI / 180) as [number, number, number]
-              quat.fromEuler(rotQuat, radRot[0], radRot[1], radRot[2])
+              // quat.fromEuler expects degrees
+              quat.fromEuler(rotQuat, previewTransform.rotation[0], previewTransform.rotation[1], previewTransform.rotation[2])
               const rotScale = mat4.create()
               mat4.fromRotationTranslationScale(rotScale, rotQuat, [0, 0, 0], previewTransform.scale)
               mat4.translate(previewMatrix, previewMatrix, previewTransform.translation)
@@ -3438,6 +3489,31 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     return [0, 0, 0]
   }
 
+  const toNumberArray = (v: any, fallback: number[]): number[] => {
+    if (!v) return fallback
+    if (typeof v.length === 'number' && v.length === 0) return fallback
+    const arr = Array.isArray(v) ? [...v] : Array.from(v) as number[]
+    return arr.length > 0 ? arr : fallback
+  }
+
+  const interpolateValueAtFrame = (keys: any[] | undefined, frame: number, defaultVal: number[]): number[] => {
+    if (!keys || keys.length === 0) return defaultVal
+    const filtered = keys.filter((k: any) => !k?._isPreviewKey)
+    if (filtered.length === 0) return defaultVal
+    const sorted = [...filtered].sort((a: any, b: any) => a.Frame - b.Frame)
+    if (frame <= sorted[0].Frame) return toNumberArray(sorted[0].Vector, defaultVal)
+    if (frame >= sorted[sorted.length - 1].Frame) return toNumberArray(sorted[sorted.length - 1].Vector, defaultVal)
+    for (let i = 0; i < sorted.length - 1; i++) {
+      if (frame >= sorted[i].Frame && frame <= sorted[i + 1].Frame) {
+        const t = (frame - sorted[i].Frame) / (sorted[i + 1].Frame - sorted[i].Frame)
+        const from = toNumberArray(sorted[i].Vector, defaultVal)
+        const to = toNumberArray(sorted[i + 1].Vector, defaultVal)
+        return from.map((v, idx) => v + (to[idx] - v) * t)
+      }
+    }
+    return defaultVal
+  }
+
   const getOrCreateNodePivot = (nodeWrapper: any): Float32Array | number[] | null => {
     if (!nodeWrapper?.node || typeof nodeWrapper.node.ObjectId !== 'number') return null
     let pivot = nodeWrapper.node.PivotPoint as any
@@ -3738,6 +3814,49 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         }
       }
 
+      const { snapTranslateEnabled, snapTranslateStep, snapRotateEnabled, snapRotateStep } = useRendererStore.getState()
+      const applyTranslateSnap = (moveVec: vec3) => {
+        if (!snapTranslateEnabled || snapTranslateStep <= 0) return
+        const snap = snapDragRef.current
+        for (let i = 0; i < 3; i++) {
+          snap.translationDelta[i] += moveVec[i]
+          const snapped = Math.round(snap.translationDelta[i] / snapTranslateStep) * snapTranslateStep
+          const delta = snapped - snap.translationApplied[i]
+          moveVec[i] = delta
+          snap.translationApplied[i] = snapped
+        }
+      }
+      const applyRotateSnapDeg = (axisKey: 'x' | 'y' | 'z', angleDeg: number) => {
+        if (!snapRotateEnabled || snapRotateStep <= 0) return angleDeg
+        const snap = snapDragRef.current
+        const idx = axisKey === 'x' ? 0 : axisKey === 'y' ? 1 : 2
+        snap.rotationDelta[idx] += angleDeg
+        const snapped = Math.round(snap.rotationDelta[idx] / snapRotateStep) * snapRotateStep
+        const delta = snapped - snap.rotationApplied[idx]
+        snap.rotationApplied[idx] = snapped
+        return delta
+      }
+      const applyHudTranslate = (moveVec: vec3) => {
+        const hud = gizmoHudRef.current
+        hud.translation[0] += moveVec[0]
+        hud.translation[1] += moveVec[1]
+        hud.translation[2] += moveVec[2]
+        updateHudPosition(e, 'translate')
+      }
+      const applyHudRotate = (axisKey: 'x' | 'y' | 'z', angleDeg: number) => {
+        const hud = gizmoHudRef.current
+        const idx = axisKey === 'x' ? 0 : axisKey === 'y' ? 1 : 2
+        hud.rotation[idx] += angleDeg
+        updateHudPosition(e, 'rotate')
+      }
+      const applyHudScale = (scaleVec: vec3) => {
+        const hud = gizmoHudRef.current
+        hud.scale[0] *= scaleVec[0]
+        hud.scale[1] *= scaleVec[1]
+        hud.scale[2] *= scaleVec[2]
+        updateHudPosition(e, 'scale')
+      }
+
       if (isGlobalTransformMode) {
         const previewTransform = previewTransformRef.current
 
@@ -3752,6 +3871,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           else if (axis === 'xz') { vecs.moveVec[0] = vecs.worldMoveDelta[0]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
           else if (axis === 'yz') { vecs.moveVec[1] = vecs.worldMoveDelta[1]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
 
+          applyTranslateSnap(vecs.moveVec)
+          applyHudTranslate(vecs.moveVec)
           previewTransform.translation = [
             previewTransform.translation[0] + vecs.moveVec[0],
             previewTransform.translation[1] + vecs.moveVec[1],
@@ -3759,11 +3880,17 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           ]
         } else if (transformMode === 'rotate') {
           let angle = 0
-          const rotationSpeed = 1.2
-          if (axis === 'x') angle = deltaY * rotationSpeed
+          const rotationSpeed = 2.0
+          if (axis === 'x') angle = -deltaY * rotationSpeed
           else if (axis === 'y') angle = -deltaX * rotationSpeed
           else if (axis === 'z') angle = deltaX * rotationSpeed
+          if (angle !== 0 && (axis === 'x' || axis === 'y' || axis === 'z')) {
+            angle = applyRotateSnapDeg(axis, angle)
+          }
 
+          if (axis === 'x' || axis === 'y' || axis === 'z') {
+            applyHudRotate(axis, angle)
+          }
           if (angle !== 0) {
             const currentRot = [...previewTransform.rotation]
             if (axis === 'x') currentRot[0] += angle
@@ -3774,6 +3901,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         } else if (transformMode === 'scale') {
           const scaleFactor = 1 + (deltaX - deltaY) * 0.005
           const currentScale = [...previewTransform.scale]
+          const scaleVec = vec3.fromValues(1, 1, 1)
 
           if (axis === 'x') currentScale[0] *= scaleFactor
           else if (axis === 'y') currentScale[1] *= scaleFactor
@@ -3794,6 +3922,15 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           }
 
           previewTransform.scale = currentScale as [number, number, number]
+          if (axis === 'x') scaleVec[0] = scaleFactor
+          else if (axis === 'y') scaleVec[1] = scaleFactor
+          else if (axis === 'z') scaleVec[2] = scaleFactor
+          else if (axis === 'center') vec3.set(scaleVec, scaleFactor, scaleFactor, scaleFactor)
+          else if (axis === 'xy') { scaleVec[0] = scaleFactor; scaleVec[1] = scaleFactor }
+          else if (axis === 'xz') { scaleVec[0] = scaleFactor; scaleVec[2] = scaleFactor }
+          else if (axis === 'yz') { scaleVec[1] = scaleFactor; scaleVec[2] = scaleFactor }
+
+          applyHudScale(scaleVec)
         }
 
         return
@@ -3813,6 +3950,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         else if (axis === 'xz') { vecs.moveVec[0] = vecs.worldMoveDelta[0]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
         else if (axis === 'yz') { vecs.moveVec[1] = vecs.worldMoveDelta[1]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
 
+        applyTranslateSnap(vecs.moveVec)
+        applyHudTranslate(vecs.moveVec)
         const { selectedVertexIds, selectedFaceIds, geometrySubMode } = useSelectionStore.getState()
         const affectedGeosets = new Set<number>()
 
@@ -3872,6 +4011,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         else if (axis === 'xz') { vecs.moveVec[0] = vecs.worldMoveDelta[0]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
         else if (axis === 'yz') { vecs.moveVec[1] = vecs.worldMoveDelta[1]; vecs.moveVec[2] = vecs.worldMoveDelta[2]; }
 
+        applyTranslateSnap(vecs.moveVec)
+        applyHudTranslate(vecs.moveVec)
         const selectedSet = new Set(selectedNodeIds)
         const nodeMap = new Map(nodes.map((n: any) => [n.ObjectId, n]))
         const hasSelectedAncestor = (nodeId: number) => {
@@ -4133,6 +4274,14 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               vec3.set(rotAxis, 0, 0, 1)
             }
 
+            if (angle !== 0 && (axis === 'x' || axis === 'y' || axis === 'z')) {
+              const snappedDeg = applyRotateSnapDeg(axis, angle * 180 / Math.PI)
+              angle = snappedDeg * Math.PI / 180
+            }
+
+            if (axis === 'x' || axis === 'y' || axis === 'z') {
+              applyHudRotate(axis, angle * 180 / Math.PI)
+            }
             if (angle !== 0) {
               const rotMat = mat4.create()
               mat4.fromRotation(rotMat, angle, rotAxis)
@@ -4159,6 +4308,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             else if (axis === 'yz') { scaleVec[1] = scaleFactor; scaleVec[2] = scaleFactor }
             else if (axis === 'center') { vec3.set(scaleVec, scaleFactor, scaleFactor, scaleFactor) }
 
+            applyHudScale(scaleVec)
             if (scaleVec[0] !== 1 || scaleVec[1] !== 1 || scaleVec[2] !== 1) {
               applyToSelection((v, i) => {
                 const p = vec3.fromValues(v[i], v[i + 1], v[i + 2])
@@ -4244,6 +4394,14 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           else if (axis === 'y') { angle = -deltaX * 0.01; vec3.set(rotAxis, 0, 1, 0) }
           else if (axis === 'z') { angle = deltaX * 0.01; vec3.set(rotAxis, 0, 0, 1) }
 
+          if (angle !== 0 && (axis === 'x' || axis === 'y' || axis === 'z')) {
+            const snappedDeg = applyRotateSnapDeg(axis, angle * 180 / Math.PI)
+            angle = snappedDeg * Math.PI / 180
+          }
+
+          if (axis === 'x' || axis === 'y' || axis === 'z') {
+            applyHudRotate(axis, angle * 180 / Math.PI)
+          }
           if (angle !== 0) {
             keyframeTransformDirty.current = true
             const deltaQuat = quat.create()
@@ -4308,6 +4466,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           else if (axis === 'xz') { scaleVec[0] = scaleFactor; scaleVec[2] = scaleFactor; }
           else if (axis === 'yz') { scaleVec[1] = scaleFactor; scaleVec[2] = scaleFactor; }
 
+          applyHudScale(scaleVec)
           if (scaleFactor !== 1) {
             keyframeTransformDirty.current = true
           }
@@ -4593,6 +4752,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     if (wasGizmoDragging) {
       gizmoState.current.isDragging = false
       gizmoState.current.activeAxis = null
+      setGizmoHud(null)
 
       if (rendererRef.current) {
         const { mainMode, animationSubMode, isGlobalTransformMode, globalTransformPivot } = useSelectionStore.getState()
@@ -4624,6 +4784,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             scale: [1, 1, 1]
           }
         }
+        snapDragRef.current.translationDelta = [0, 0, 0]
+        snapDragRef.current.translationApplied = [0, 0, 0]
+        snapDragRef.current.rotationDelta = [0, 0, 0]
+        snapDragRef.current.rotationApplied = [0, 0, 0]
 
         if (mainMode === 'geometry') {
           if (initialVertexPositions.current.size > 0) {
@@ -5060,6 +5224,62 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     return true
   }
 
+  const copyPoseAtCurrentFrame = (): boolean => {
+    const { nodes, currentFrame } = useModelStore.getState()
+    if (!nodes || nodes.length === 0) return false
+    const frame = Math.round(currentFrame)
+    const poseNodes = nodes.map((n: any) => ({
+      nodeId: n.ObjectId,
+      translation: interpolateValueAtFrame(n.Translation?.Keys, frame, [0, 0, 0]),
+      rotation: interpolateValueAtFrame(n.Rotation?.Keys, frame, [0, 0, 0, 1]),
+      scaling: interpolateValueAtFrame(n.Scaling?.Keys, frame, [1, 1, 1])
+    }))
+    poseClipboardRef.current = { frame, nodes: poseNodes }
+    return true
+  }
+
+  const pastePoseAtCurrentFrame = (): boolean => {
+    const clipboard = poseClipboardRef.current
+    if (!clipboard) return false
+    const { nodes, currentFrame } = useModelStore.getState()
+    if (!nodes || nodes.length === 0) return false
+    const frame = Math.round(currentFrame)
+    const nodeMap = new Map(nodes.map((n: any) => [n.ObjectId, n]))
+    const changes: KeyframeChange[] = []
+
+    const pushChange = (
+      nodeId: number,
+      propertyName: 'Translation' | 'Rotation' | 'Scaling',
+      value: number[],
+      defaultVal: number[]
+    ) => {
+      const node = nodeMap.get(nodeId)
+      if (!node) return
+      const prop = node[propertyName]
+      const existingKey = prop?.Keys?.find((k: any) => Math.abs(k.Frame - frame) < 0.1)
+      const oldValue = existingKey?.Vector ? toNumberArray(existingKey.Vector, defaultVal) : null
+      const newValue = toNumberArray(value, defaultVal)
+      changes.push({
+        nodeId,
+        propertyName,
+        frame,
+        oldValue,
+        newValue
+      })
+    }
+
+    clipboard.nodes.forEach((n) => {
+      pushChange(n.nodeId, 'Translation', n.translation, [0, 0, 0])
+      pushChange(n.nodeId, 'Rotation', n.rotation, [0, 0, 0, 1])
+      pushChange(n.nodeId, 'Scaling', n.scaling, [1, 1, 1])
+    })
+
+    if (changes.length === 0) return false
+    const cmd = new UpdateKeyframeCommand(rendererRef.current, changes)
+    commandManager.execute(cmd)
+    return true
+  }
+
   useEffect(() => {
     const isGeometryVertexMode = () => {
       const { mainMode, geometrySubMode } = useSelectionStore.getState()
@@ -5169,10 +5389,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             setContextMenu({ x: e.clientX, y: e.clientY })
             return
           }
-          const node = getPrimarySelectedNode()
-          if (mainMode === 'animation' && node?.type === NodeType.BONE) {
+          if (mainMode === 'animation') {
+            const node = getPrimarySelectedNode()
+            const nodeId = node?.type === NodeType.BONE ? node.ObjectId : null
             setContextMenu(null)
-            setNodeContextMenu({ x: e.clientX, y: e.clientY, nodeId: node.ObjectId })
+            setNodeContextMenu({ x: e.clientX, y: e.clientY, nodeId })
             return
           }
           setContextMenu(null)
@@ -5337,6 +5558,26 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           }}
         />
       )}
+      {gizmoHud && (
+        <div
+          style={{
+            position: 'fixed',
+            left: gizmoHud.x,
+            top: gizmoHud.y,
+            backgroundColor: 'rgba(0, 0, 0, 0.7)',
+            color: '#fff',
+            padding: '2px 6px',
+            borderRadius: '4px',
+            fontSize: '11px',
+            fontFamily: 'monospace',
+            pointerEvents: 'none',
+            whiteSpace: 'nowrap',
+            zIndex: 1500
+          }}
+        >
+          {gizmoHud.text}
+        </div>
+      )}
 
       {showModelInfo && (
         <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
@@ -5466,16 +5707,26 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
       {/* Context Menu for Bone Operations */}
       {nodeContextMenu && (() => {
-        const node = storeNodes.find((n) => n.ObjectId === nodeContextMenu.nodeId) ?? null
-        const hasParent = !!node && node.Parent !== undefined && node.Parent !== null && node.Parent >= 0
+        const node = nodeContextMenu.nodeId !== null
+          ? storeNodes.find((n) => n.ObjectId === nodeContextMenu.nodeId) ?? null
+          : null
+        const hasNode = !!node
+        const hasParent = hasNode && node.Parent !== undefined && node.Parent !== null && node.Parent >= 0
         const children = node ? storeNodes.filter((n) => n.Parent === node.ObjectId) : []
         const hasChild = children.length > 0
+        const canCopyPose = storeNodes.length > 0
+        const canPastePose = !!poseClipboardRef.current
         const menuItemStyle = (enabled: boolean) => ({
           padding: '6px 12px',
           cursor: enabled ? 'pointer' : 'not-allowed',
           color: enabled ? 'white' : '#666',
           fontSize: '13px'
         })
+        const dividerStyle: React.CSSProperties = {
+          height: 1,
+          backgroundColor: '#444',
+          margin: '4px 0'
+        }
         return (
           <div
             style={{
@@ -5493,13 +5744,40 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             onClick={() => setNodeContextMenu(null)}
           >
             <div
-              style={menuItemStyle(!!node)}
+              style={menuItemStyle(canCopyPose)}
               onMouseEnter={(e) => {
-                if (node) (e.target as HTMLDivElement).style.backgroundColor = '#177ddc'
+                if (canCopyPose) (e.target as HTMLDivElement).style.backgroundColor = '#177ddc'
               }}
               onMouseLeave={(e) => (e.target as HTMLDivElement).style.backgroundColor = 'transparent'}
               onClick={() => {
-                if (node) editSelectedNode()
+                if (canCopyPose) copyPoseAtCurrentFrame()
+                setNodeContextMenu(null)
+              }}
+            >
+              {'\u590d\u5236\u59ff\u6001'}
+            </div>
+            <div
+              style={menuItemStyle(canPastePose)}
+              onMouseEnter={(e) => {
+                if (canPastePose) (e.target as HTMLDivElement).style.backgroundColor = '#177ddc'
+              }}
+              onMouseLeave={(e) => (e.target as HTMLDivElement).style.backgroundColor = 'transparent'}
+              onClick={() => {
+                if (canPastePose) pastePoseAtCurrentFrame()
+                setNodeContextMenu(null)
+              }}
+            >
+              {'\u7c98\u8d34\u59ff\u6001'}
+            </div>
+            <div style={dividerStyle} />
+            <div
+              style={menuItemStyle(hasNode)}
+              onMouseEnter={(e) => {
+                if (hasNode) (e.target as HTMLDivElement).style.backgroundColor = '#177ddc'
+              }}
+              onMouseLeave={(e) => (e.target as HTMLDivElement).style.backgroundColor = 'transparent'}
+              onClick={() => {
+                if (hasNode) editSelectedNode()
                 setNodeContextMenu(null)
               }}
             >
@@ -5545,13 +5823,13 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               选取所有子节点
             </div>
             <div
-              style={menuItemStyle(!!node)}
+              style={menuItemStyle(hasNode)}
               onMouseEnter={(e) => {
-                if (node) (e.target as HTMLDivElement).style.backgroundColor = '#177ddc'
+                if (hasNode) (e.target as HTMLDivElement).style.backgroundColor = '#177ddc'
               }}
               onMouseLeave={(e) => (e.target as HTMLDivElement).style.backgroundColor = 'transparent'}
               onClick={() => {
-                if (node) deleteSelectedNode()
+                if (hasNode) deleteSelectedNode()
                 setNodeContextMenu(null)
               }}
             >
