@@ -126,8 +126,27 @@ export const dispatchShortcutEvent = (event: KeyboardEvent): boolean => {
     return false
 }
 
+const blurActiveElementIfSafe = (event: KeyboardEvent): void => {
+    // If focus is left on a button/menu item, some components may start swallowing key events,
+    // making shortcuts feel "stuck". Blurring restores reliable global shortcut handling.
+    if (event.key === 'Tab') return
+
+    const el = document.activeElement
+    if (!el || el === document.body) return
+
+    // Never steal focus from text inputs / editable areas.
+    if (isTextInputActive()) return
+    if (el instanceof HTMLSelectElement) return
+
+    // Only blur focusable HTMLElements.
+    if (el instanceof HTMLElement) {
+        el.blur()
+    }
+}
+
 export const handleGlobalShortcutKeyDown = (event: KeyboardEvent): void => {
-    dispatchShortcutEvent(event)
+    const handled = dispatchShortcutEvent(event)
+    if (handled) blurActiveElementIfSafe(event)
 }
 
 export const getShortcutAction = (actionId: string): ShortcutAction | undefined => {

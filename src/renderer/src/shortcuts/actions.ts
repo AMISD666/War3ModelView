@@ -85,7 +85,7 @@ export const shortcutActions: ShortcutAction[] = [
         label: '查看模式',
         category: '模式',
         contexts: ['global'],
-        defaultBindings: ['F1'],
+        defaultBindings: ['1'],
         preventDefault: true
     },
     {
@@ -93,7 +93,7 @@ export const shortcutActions: ShortcutAction[] = [
         label: '顶点模式',
         category: '模式',
         contexts: ['global'],
-        defaultBindings: ['F2'],
+        defaultBindings: ['2'],
         preventDefault: true
     },
     {
@@ -101,7 +101,7 @@ export const shortcutActions: ShortcutAction[] = [
         label: 'UV 模式',
         category: '模式',
         contexts: ['global'],
-        defaultBindings: ['F3'],
+        defaultBindings: ['3'],
         preventDefault: true
     },
     {
@@ -109,7 +109,7 @@ export const shortcutActions: ShortcutAction[] = [
         label: '动画模式',
         category: '模式',
         contexts: ['global'],
-        defaultBindings: ['F4'],
+        defaultBindings: ['4'],
         preventDefault: true
     },
 
@@ -168,7 +168,8 @@ export const shortcutActions: ShortcutAction[] = [
         label: '模型动作管理器',
         category: '编辑器',
         contexts: ['global'],
-        defaultBindings: ['S']
+        // Avoid conflict with animation.selectChildNode (S) while in animation mode.
+        defaultBindings: ['Shift+S']
     },
     {
         id: 'editor.globalSequenceManager',
@@ -187,53 +188,60 @@ export const shortcutActions: ShortcutAction[] = [
         defaultBindings: ['0', 'Num0']
     },
     {
+        id: 'view.orthographic',
+        label: '正交视图',
+        category: '视图',
+        contexts: ['global', 'viewer'],
+        defaultBindings: ['O']
+    },
+    {
         id: 'view.top',
         label: '顶视图',
         category: '视图',
         contexts: ['global', 'viewer'],
-        defaultBindings: ['1', 'Num1']
+        defaultBindings: ['F3']
     },
     {
         id: 'view.bottom',
         label: '底视图',
         category: '视图',
         contexts: ['global', 'viewer'],
-        defaultBindings: ['2', 'Num2']
+        defaultBindings: ['F4']
     },
     {
         id: 'view.front',
         label: '前视图',
         category: '视图',
         contexts: ['global', 'viewer'],
-        defaultBindings: ['3', 'Num3']
+        defaultBindings: ['F1']
     },
     {
         id: 'view.back',
         label: '后视图',
         category: '视图',
         contexts: ['global', 'viewer'],
-        defaultBindings: ['4', 'Num4']
+        defaultBindings: ['F2']
     },
     {
         id: 'view.left',
         label: '左视图',
         category: '视图',
         contexts: ['global', 'viewer'],
-        defaultBindings: ['5', 'Num5']
+        defaultBindings: ['F5']
     },
     {
         id: 'view.right',
         label: '右视图',
         category: '视图',
         contexts: ['global', 'viewer'],
-        defaultBindings: ['6', 'Num6']
+        defaultBindings: ['F6']
     },
     {
         id: 'view.fitToView',
         label: '适配视图',
         category: '视图',
         contexts: ['viewer'],
-        defaultBindings: ['Shift+F'],
+        defaultBindings: ['Z'],
         preventDefault: true
     },
     {
@@ -273,7 +281,7 @@ export const shortcutActions: ShortcutAction[] = [
         label: '选取父节点',
         category: '动画',
         contexts: ['animation'],
-        defaultBindings: ['O'],
+        defaultBindings: ['A'],
         preventDefault: true
     },
     {
@@ -281,7 +289,7 @@ export const shortcutActions: ShortcutAction[] = [
         label: '选取子节点',
         category: '动画',
         contexts: ['animation'],
-        defaultBindings: ['P'],
+        defaultBindings: ['S'],
         preventDefault: true
     },
 

@@ -10,7 +10,8 @@ export default defineConfig({
     resolve: {
         alias: {
             '@renderer': resolve(__dirname, 'src/renderer/src'),
-            'war3-model': resolve(__dirname, '../war3-model-4.0.0/index.ts')
+            // Vendored copy so we can evolve the renderer (WebGPU integration) without depending on an external sibling folder.
+            'war3-model': resolve(__dirname, 'vendor/war3-model/index.ts')
         }
     },
 

@@ -2426,6 +2426,10 @@ const MainLayout: React.FC = () => {
                 setViewPreset({ type: 'perspective', time: Date.now() });
                 return true;
             }),
+            registerShortcutHandler('view.orthographic', () => {
+                setViewPreset({ type: 'orthographic', time: Date.now() });
+                return true;
+            }),
             registerShortcutHandler('view.top', () => {
                 setViewPreset({ type: 'top', time: Date.now() });
                 return true;
@@ -2452,9 +2456,25 @@ const MainLayout: React.FC = () => {
             }),
             registerShortcutHandler('view.toggleVertices', () => {
                 const { mainMode } = useSelectionStore.getState();
-                const { showVerticesByMode, setShowVerticesForMode } = useRendererStore.getState();
-                const current = showVerticesByMode[mainMode] ?? true;
-                setShowVerticesForMode(mainMode, !current);
+                const { animationSubMode } = useSelectionStore.getState();
+                const {
+                    showVerticesByMode,
+                    setShowVerticesForMode,
+                    showVerticesInAnimationBinding,
+                    showVerticesInAnimationKeyframe,
+                    setShowVerticesForAnimationSubMode
+                } = useRendererStore.getState() as any;
+
+                if (mainMode === 'animation') {
+                    const current =
+                        animationSubMode === 'binding'
+                            ? (showVerticesInAnimationBinding ?? true)
+                            : (showVerticesInAnimationKeyframe ?? false);
+                    setShowVerticesForAnimationSubMode(animationSubMode, !current);
+                } else {
+                    const current = showVerticesByMode[mainMode] ?? true;
+                    setShowVerticesForMode(mainMode, !current);
+                }
                 return true;
             }),
             registerShortcutHandler('edit.undo', () => {

@@ -4,7 +4,7 @@
         "src/renderer/src/**/*",
         "src/preload/*.d.ts",
         "src/env.d.ts",
-        "../war3-model-4.0.0/dist/war3-model.d.ts"
+        "vendor/war3-model/dist/war3-model.d.ts"
     ],
     "compilerOptions": {
         "composite": true,
@@ -21,7 +21,7 @@
                 "src/renderer/src/*"
             ],
             "war3-model": [
-                "../war3-model-4.0.0/dist/war3-model.d.ts"
+                "vendor/war3-model/dist/war3-model.d.ts"
             ]
         }
     }

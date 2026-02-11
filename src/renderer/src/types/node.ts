@@ -90,13 +90,19 @@ export interface LightNode extends BaseNode {
 // Particle Emitter 节点
 export interface ParticleEmitterNode extends BaseNode {
     type: NodeType.PARTICLE_EMITTER;
+    // Prefer war3-model naming for compatibility with renderer/writer:
+    // Path, LifeSpan, InitVelocity.
+    Path?: string;
     EmissionRate?: number;
     LifeSpan?: number;
-    InitialVelocity?: number;
+    InitVelocity?: number;
     Gravity?: number;
     Longitude?: number;
     Latitude?: number;
+
+    // Back-compat aliases that might exist in UI state.
     FileName?: string;
+    InitialVelocity?: number;
 }
 
 // Particle Emitter 2 节点

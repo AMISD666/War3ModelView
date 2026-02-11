@@ -3,7 +3,7 @@
  */
 
 import { ModelNode, TreeNode } from '../types/node';
-import { getNodeIcon } from './nodeUtils';
+import { getNodeIcon, getVirtualRootIcon } from './nodeUtils';
 
 /**
  * 将扁平的节点数组转换为树形结构
@@ -56,9 +56,9 @@ export function buildTreeData(nodes: ModelNode[]): TreeNode[] {
     const virtualRootNode: TreeNode = {
         key: '-1',
         value: -1,
-        title: '🌐 模型根节点',
+        title: '模型根节点',
         type: undefined as any,  // 虚拟节点没有类型
-        icon: null,
+        icon: getVirtualRootIcon(),
         children: rootNodes,
         data: { ObjectId: -1, Name: '模型根节点', Parent: undefined } as any,
         isVirtualRoot: true  // 标记为虚拟根节点

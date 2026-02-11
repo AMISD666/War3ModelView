@@ -27,6 +27,8 @@ import { useModelStore } from '../store/modelStore';
 import { useRendererStore } from '../store/rendererStore';
 import { useCommandManager } from '../utils/CommandManager';
 import { BindVerticesCommand } from '../commands/BindVerticesCommand';
+import { NodeType } from '../types/node';
+import { getNodeIcon } from '../utils/nodeUtils';
 
 interface ViewerToolbarProps {
     onRecalculateNormals?: () => void
@@ -58,7 +60,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         globalTransformPivot,
         setGlobalTransformPivot
     } = useSelectionStore();
-    const { modelData: _modelData } = useModelStore();
+    const { modelData: _modelData, sequences, currentSequence, setFrame } = useModelStore();
     const {
         renderer,
         setShowSettingsPanel,
@@ -128,6 +130,65 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         const cmd = new BindVerticesCommand(renderer, targets, boneId, 'bind')
         executeCommand(cmd)
         message.success(`已绑定 ${selectedVertexIds.length} 个顶点到骨骼 ${boneId}`)
+    }
+
+    const handleCreateBone = () => {
+        const { addNode } = useModelStore.getState()
+        const { selectedVertexIds } = useSelectionStore.getState()
+
+        let pivot: [number, number, number] = [0, 0, 0]
+        if (renderer && selectedVertexIds.length > 0) {
+            try {
+                let sx = 0, sy = 0, sz = 0
+                let count = 0
+                for (const v of selectedVertexIds) {
+                    const geoset = (renderer as any).model?.Geosets?.[v.geosetIndex]
+                    const verts = geoset?.Vertices
+                    const base = v.index * 3
+                    if (!verts || base + 2 >= verts.length) continue
+                    sx += Number(verts[base]) || 0
+                    sy += Number(verts[base + 1]) || 0
+                    sz += Number(verts[base + 2]) || 0
+                    count++
+                }
+                if (count > 0) {
+                    pivot = [sx / count, sy / count, sz / count]
+                }
+            } catch (e) {
+                // Fall back to origin if renderer data isn't ready.
+                pivot = [0, 0, 0]
+            }
+        }
+
+        const uniqueName = `New Bone ${Date.now()}`
+        addNode({ type: NodeType.BONE, Name: uniqueName, Parent: -1, PivotPoint: pivot })
+
+        // Select the newly created bone if we can find it after reordering.
+        const created = useModelStore.getState().nodes.find((n: any) => n.type === NodeType.BONE && n.Name === uniqueName)
+        if (created) {
+            useSelectionStore.getState().selectNode(created.ObjectId, false)
+        }
+
+        message.success(selectedVertexIds.length > 0 ? '已在顶点中心创建骨骼' : '已在原点创建骨骼')
+    }
+
+    const resetTimelineToCurrentSequenceStart = () => {
+        // Prefer the selected sequence interval; fall back to renderer animationInfo; then 0.
+        const seq = sequences?.[currentSequence]
+        const seqStart =
+            (seq && (seq as any).Interval && typeof (seq as any).Interval[0] === 'number')
+                ? (seq as any).Interval[0]
+                : (renderer && (renderer as any).rendererData?.animationInfo?.Interval && typeof (renderer as any).rendererData.animationInfo.Interval[0] === 'number')
+                    ? (renderer as any).rendererData.animationInfo.Interval[0]
+                    : 0
+
+        setFrame(seqStart)
+        if (renderer && (renderer as any).rendererData) {
+            ; (renderer as any).rendererData.frame = seqStart
+            if (typeof (renderer as any).update === 'function') {
+                ; (renderer as any).update(0)
+            }
+        }
     }
 
     const handleUnbind = () => {
@@ -251,7 +312,13 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                             <Button
                                 type={animationSubMode === 'keyframe' ? 'primary' : 'default'}
                                 icon={<VideoCameraOutlined />}
-                                onClick={() => setAnimationSubMode('keyframe')}
+                                onClick={() => {
+                                    const wasKeyframe = animationSubMode === 'keyframe'
+                                    setAnimationSubMode('keyframe')
+                                    if (!wasKeyframe) {
+                                        resetTimelineToCurrentSequenceStart()
+                                    }
+                                }}
                             >
                                 关键帧模式
                             </Button>
@@ -262,6 +329,12 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                     {animationSubMode === 'binding' && (
                         <>
                             <Space>
+                                <Tooltip title="创建骨骼 (无顶点: 原点 / 有顶点: 顶点中心)">
+                                    <Button
+                                        icon={getNodeIcon(NodeType.BONE)}
+                                        onClick={handleCreateBone}
+                                    />
+                                </Tooltip>
                                 <Tooltip title="绑定选中的顶点到选中的骨骼">
                                     <Button icon={<LinkOutlined />} onClick={handleBind} />
                                 </Tooltip>
@@ -408,7 +481,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
             )}
 
             <Space>
-                <Tooltip title="适应视图 (F)">
+                <Tooltip title="适应视图 (Z)">
                     <Button
                         icon={<FullscreenOutlined />}
                         onClick={onFitToView}

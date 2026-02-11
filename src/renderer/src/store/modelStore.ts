@@ -10,6 +10,15 @@ import { Tab, TabSnapshot } from '../types/store';
 import { useRendererStore } from './rendererStore';
 import { processDeathAnimation, processRemoveLights } from '../utils/modelUtils';
 
+type ClipboardPayload = {
+    node: ModelNode;
+    sourceModelPath: string | null;
+    // Sparse maps: oldIndex -> resource object from the source model.
+    textures?: Record<number, any>;
+    materials?: Record<number, any>;
+    textureAnims?: Record<number, any>;
+};
+
 const pickDefaultSequenceIndex = (sequences: any[]) => {
     if (!Array.isArray(sequences) || sequences.length === 0) return -1;
     const standRegex = /stand/i;
@@ -193,12 +202,86 @@ function recalculateModelNormals(modelData: any): void {
     console.log('[ModelStore] Recalculated normals for', modelData.Geosets.length, 'geosets');
 }
 
+function deepClone<T>(value: T): T {
+    const sc = (globalThis as any).structuredClone;
+    if (typeof sc === 'function') return sc(value);
+    return JSON.parse(JSON.stringify(value));
+}
+
+function collectTextureIdsFromAnimVector(value: any, ids: Set<number>): void {
+    if (value === undefined || value === null) return;
+    if (typeof value === 'number') {
+        if (value >= 0) ids.add(value);
+        return;
+    }
+    if (value && typeof value === 'object' && Array.isArray(value.Keys)) {
+        for (const key of value.Keys) {
+            const v = key?.Vector;
+            const id = ArrayBuffer.isView(v) ? v[0] : (Array.isArray(v) ? v[0] : undefined);
+            if (typeof id === 'number' && id >= 0) ids.add(id);
+        }
+    }
+}
+
+function remapTextureRef(value: any, oldToNew: Map<number, number>): any {
+    if (value === undefined || value === null) return value;
+    if (typeof value === 'number') {
+        return oldToNew.has(value) ? oldToNew.get(value)! : value;
+    }
+    if (value && typeof value === 'object' && Array.isArray(value.Keys)) {
+        for (const key of value.Keys) {
+            const vec = key?.Vector;
+            const oldId = ArrayBuffer.isView(vec) ? vec[0] : (Array.isArray(vec) ? vec[0] : undefined);
+            if (typeof oldId === 'number' && oldToNew.has(oldId)) {
+                const newId = oldToNew.get(oldId)!;
+                if (ArrayBuffer.isView(vec)) {
+                    vec[0] = newId;
+                } else if (Array.isArray(vec)) {
+                    vec[0] = newId;
+                }
+            }
+        }
+        return value;
+    }
+    return value;
+}
+
+function findExistingTextureIndex(textures: any[], tex: any): number {
+    if (!Array.isArray(textures)) return -1;
+    const image = tex?.Image ?? tex?.image;
+    const replaceableId = tex?.ReplaceableId ?? tex?.replaceableId;
+    const wrapW = tex?.WrapWidth ?? tex?.wrapWidth;
+    const wrapH = tex?.WrapHeight ?? tex?.wrapHeight;
+    const flags = tex?.Flags ?? tex?.flags;
+
+    for (let i = 0; i < textures.length; i++) {
+        const t = textures[i];
+        if (!t) continue;
+        const tImage = t?.Image ?? t?.image;
+        const tReplaceableId = t?.ReplaceableId ?? t?.replaceableId;
+        const tWrapW = t?.WrapWidth ?? t?.wrapWidth;
+        const tWrapH = t?.WrapHeight ?? t?.wrapHeight;
+        const tFlags = t?.Flags ?? t?.flags;
+        if (
+            tImage === image &&
+            tReplaceableId === replaceableId &&
+            tWrapW === wrapW &&
+            tWrapH === wrapH &&
+            tFlags === flags
+        ) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 interface ModelState {
     modelData: ModelData | null;
     modelPath: string | null;
     nodes: ModelNode[];
     isLoading: boolean;
     clipboardNode: ModelNode | null;
+    clipboardPayload: ClipboardPayload | null;
 
     // Renderer reload trigger - increment to force Viewer to reload
     rendererReloadTrigger: number;
@@ -763,6 +846,35 @@ function needsReorderForSave(data: any): boolean {
 
 function getDefaultNodeProperties(type: NodeType): Partial<ModelNode> {
     switch (type) {
+        case NodeType.PARTICLE_EMITTER:
+            return {
+                // war3-model expects these property names for ParticleEmitter (type 1)
+                Flags: 0,
+                Path: '',
+                FileName: '',
+                EmissionRate: 10,
+                LifeSpan: 1,
+                InitVelocity: 0,
+                Gravity: 0,
+                Longitude: 0,
+                Latitude: 0,
+                Visibility: 1
+            } as any;
+        case NodeType.RIBBON_EMITTER:
+            return {
+                HeightAbove: 10,
+                HeightBelow: 10,
+                Alpha: 1,
+                Color: [1, 1, 1],
+                LifeSpan: 1,
+                TextureSlot: 0,
+                EmissionRate: 10,
+                Rows: 1,
+                Columns: 1,
+                MaterialID: 0,
+                Gravity: 0,
+                Visibility: 1
+            };
         case NodeType.PARTICLE_EMITTER_2:
             return {
                 FilterMode: 0, // 0=Blend, 1=Additive, 2=Modulate, 3=Modulate2x, 4=AlphaKey
@@ -930,6 +1042,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
     nodes: [],
     isLoading: false,
     clipboardNode: null,
+    clipboardPayload: null,
 
     // Renderer reload trigger
     rendererReloadTrigger: 0,
@@ -1222,28 +1335,211 @@ export const useModelStore = create<ModelState>((set, get) => ({
     },
 
     setClipboardNode: (node) => {
-        set({ clipboardNode: node });
+        set((state) => {
+            if (!node) {
+                return { clipboardNode: null, clipboardPayload: null };
+            }
+
+            const payload: ClipboardPayload = {
+                node,
+                sourceModelPath: state.modelPath ?? null,
+            };
+
+            const md: any = state.modelData;
+            if (!md) {
+                return { clipboardNode: node, clipboardPayload: payload };
+            }
+
+            const textures: Record<number, any> = {};
+            const materials: Record<number, any> = {};
+            const textureAnims: Record<number, any> = {};
+
+            const addTexture = (texId: any) => {
+                if (typeof texId !== 'number' || texId < 0) return;
+                if (textures[texId] !== undefined) return;
+                const tex = md.Textures?.[texId];
+                if (tex) textures[texId] = tex;
+            };
+
+            const addTextureAnim = (animId: any) => {
+                if (typeof animId !== 'number' || animId < 0) return;
+                if (textureAnims[animId] !== undefined) return;
+                const anim = md.TextureAnims?.[animId];
+                if (anim) textureAnims[animId] = anim;
+            };
+
+            if (node.type === NodeType.PARTICLE_EMITTER_2) {
+                const texId = (node as any).TextureID;
+                addTexture(texId);
+            } else if (node.type === NodeType.RIBBON_EMITTER) {
+                const matId = (node as any).MaterialID;
+                if (typeof matId === 'number' && matId >= 0 && md.Materials?.[matId]) {
+                    materials[matId] = md.Materials[matId];
+
+                    const usedTexIds = new Set<number>();
+                    const layerTexKeys = [
+                        'TextureID',
+                        'NormalTextureID',
+                        'ORMTextureID',
+                        'EmissiveTextureID',
+                        'TeamColorTextureID',
+                        'ReflectionsTextureID',
+                    ];
+
+                    const mat = md.Materials[matId];
+                    const layers = mat?.Layers ?? mat?.layers;
+                    if (Array.isArray(layers)) {
+                        for (const layer of layers) {
+                            for (const k of layerTexKeys) {
+                                collectTextureIdsFromAnimVector(layer?.[k], usedTexIds);
+                            }
+                            // Texture animation id field name varies; normalize to copy whichever exists.
+                            addTextureAnim(layer?.TVertexAnimId ?? layer?.TextureAnimationId ?? layer?.TextureAnimId);
+                        }
+                    }
+
+                    usedTexIds.forEach((id) => addTexture(id));
+                }
+            }
+
+            if (Object.keys(textures).length > 0) payload.textures = textures;
+            if (Object.keys(materials).length > 0) payload.materials = materials;
+            if (Object.keys(textureAnims).length > 0) payload.textureAnims = textureAnims;
+
+            return { clipboardNode: node, clipboardPayload: payload };
+        });
     },
 
     pasteNode: (parentId) => {
         set((state) => {
             if (!state.clipboardNode) return {};
+            if (!state.modelData) return {};
+
+            let modelDataForPaste: ModelData | null = state.modelData;
+            let clipboardNodeForPaste: ModelNode = state.clipboardNode;
+
+            const payload = state.clipboardPayload;
+            const isCrossModelPaste =
+                !!payload &&
+                (payload.sourceModelPath ?? null) !== (state.modelPath ?? null) &&
+                !!modelDataForPaste;
+
+            if (isCrossModelPaste && payload && modelDataForPaste) {
+                const md: any = modelDataForPaste;
+
+                const targetTextures: any[] = Array.isArray(md.Textures) ? [...md.Textures] : [];
+                const targetMaterials: any[] = Array.isArray(md.Materials) ? [...md.Materials] : [];
+                const targetTextureAnims: any[] = Array.isArray(md.TextureAnims) ? [...md.TextureAnims] : [];
+
+                const texOldToNew = new Map<number, number>();
+                const tvOldToNew = new Map<number, number>();
+                const matOldToNew = new Map<number, number>();
+
+                // 1) TextureAnims (so materials can reference them)
+                if (payload.textureAnims) {
+                    const ids = Object.keys(payload.textureAnims).map(n => Number(n)).filter(n => Number.isFinite(n)).sort((a, b) => a - b);
+                    for (const oldId of ids) {
+                        if (tvOldToNew.has(oldId)) continue;
+                        const anim = payload.textureAnims[oldId];
+                        const newId = targetTextureAnims.length;
+                        targetTextureAnims.push(deepClone(anim));
+                        tvOldToNew.set(oldId, newId);
+                    }
+                }
+
+                // 2) Textures
+                if (payload.textures) {
+                    const ids = Object.keys(payload.textures).map(n => Number(n)).filter(n => Number.isFinite(n)).sort((a, b) => a - b);
+                    for (const oldId of ids) {
+                        if (texOldToNew.has(oldId)) continue;
+                        const tex = payload.textures[oldId];
+                        const existing = findExistingTextureIndex(targetTextures, tex);
+                        if (existing >= 0) {
+                            texOldToNew.set(oldId, existing);
+                        } else {
+                            const newId = targetTextures.length;
+                            targetTextures.push(deepClone(tex));
+                            texOldToNew.set(oldId, newId);
+                        }
+                    }
+                }
+
+                // 3) Materials (remap their layer TextureID + TVertexAnimId)
+                if (payload.materials) {
+                    const ids = Object.keys(payload.materials).map(n => Number(n)).filter(n => Number.isFinite(n)).sort((a, b) => a - b);
+                    for (const oldId of ids) {
+                        if (matOldToNew.has(oldId)) continue;
+                        const mat = deepClone(payload.materials[oldId]);
+                        const layers = mat?.Layers ?? mat?.layers;
+                        if (Array.isArray(layers)) {
+                            for (const layer of layers) {
+                                // Remap texture refs (may be AnimVector in HD)
+                                const keys = [
+                                    'TextureID',
+                                    'NormalTextureID',
+                                    'ORMTextureID',
+                                    'EmissiveTextureID',
+                                    'TeamColorTextureID',
+                                    'ReflectionsTextureID',
+                                ];
+                                for (const k of keys) {
+                                    if (layer?.[k] !== undefined) {
+                                        layer[k] = remapTextureRef(layer[k], texOldToNew);
+                                    }
+                                }
+
+                                // Remap texture animation id
+                                const oldTv = layer?.TVertexAnimId ?? layer?.TextureAnimationId ?? layer?.TextureAnimId;
+                                if (typeof oldTv === 'number' && tvOldToNew.has(oldTv)) {
+                                    layer.TVertexAnimId = tvOldToNew.get(oldTv)!;
+                                }
+                            }
+                        }
+
+                        const newId = targetMaterials.length;
+                        targetMaterials.push(mat);
+                        matOldToNew.set(oldId, newId);
+                    }
+                }
+
+                // 4) Remap node references
+                const remappedNode: any = { ...clipboardNodeForPaste };
+                if (remappedNode.type === NodeType.PARTICLE_EMITTER_2) {
+                    const oldTex = remappedNode.TextureID;
+                    if (typeof oldTex === 'number' && texOldToNew.has(oldTex)) {
+                        remappedNode.TextureID = texOldToNew.get(oldTex)!;
+                    }
+                } else if (remappedNode.type === NodeType.RIBBON_EMITTER) {
+                    const oldMat = remappedNode.MaterialID;
+                    if (typeof oldMat === 'number' && matOldToNew.has(oldMat)) {
+                        remappedNode.MaterialID = matOldToNew.get(oldMat)!;
+                    }
+                }
+
+                modelDataForPaste = {
+                    ...(md as any),
+                    Textures: targetTextures,
+                    Materials: targetMaterials,
+                    TextureAnims: targetTextureAnims,
+                } as any;
+                clipboardNodeForPaste = remappedNode as ModelNode;
+            }
 
             // Temporary ObjectId (will be corrected by updateModelDataWithNodes)
             const maxObjectId = state.nodes.reduce((max, n) => Math.max(max, n.ObjectId), -1);
             const tempObjectId = maxObjectId + 1;
 
             const newNode: ModelNode = {
-                ...state.clipboardNode,
+                ...clipboardNodeForPaste,
                 ObjectId: tempObjectId,
                 Parent: parentId,
-                Name: `${state.clipboardNode.Name}_Copy`,
-                PivotPoint: state.clipboardNode.PivotPoint || [0, 0, 0],
+                Name: `${clipboardNodeForPaste.Name}_Copy`,
+                PivotPoint: clipboardNodeForPaste.PivotPoint || [0, 0, 0],
             };
 
             const updatedNodes = [...state.nodes, newNode];
             // PASTING is adding: Must reorder
-            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[], true);
+            const updatedModelData = updateModelDataWithNodes(modelDataForPaste, updatedNodes as any[], true);
 
             // CRITICAL: Extract corrected nodes with reassigned ObjectIds
             const correctedNodes = extractNodesFromModel(updatedModelData);
@@ -1510,7 +1806,11 @@ export const useModelStore = create<ModelState>((set, get) => ({
             }
         }
     },
-    setSequence: (index) => set({ currentSequence: index, currentFrame: 0 }), // Reset frame on sequence change
+    setSequence: (index) => set((state) => {
+        const seq = state.sequences?.[index] as any
+        const start = (seq && seq.Interval && typeof seq.Interval[0] === 'number') ? seq.Interval[0] : 0
+        return { currentSequence: index, currentFrame: start }
+    }), // Reset frame to the selected sequence start
     setFrame: (frame) => set({ currentFrame: frame }),
     setPlaying: (playing) => set({ isPlaying: playing }),
     setPlaybackSpeed: (speed) => set({ playbackSpeed: speed }),

@@ -423,6 +423,15 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             <span>透视</span>
                             <span style={{ color: '#888', fontSize: '11px' }}>0</span>
                         </div>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={() => { onSetViewPreset('orthographic'); closeMenu() }}
+                        >
+                            <span>正交</span>
+                            <span style={{ color: '#888', fontSize: '11px' }}>O</span>
+                        </div>
                         <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
                         <div
                             style={itemStyle}

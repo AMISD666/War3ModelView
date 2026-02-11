@@ -194,7 +194,6 @@ export class AxisIndicator {
 
         // Extract rotation from view matrix (remove translation)
         const rotationMatrix = mat4.clone(viewMatrix)
-        // Zero out translation components
         rotationMatrix[12] = 0
         rotationMatrix[13] = 0
         rotationMatrix[14] = 0
@@ -205,7 +204,6 @@ export class AxisIndicator {
 
         // Move camera back slightly and shift down to verify visually
         const mvMatrix = mat4.create()
-        // Shift Y down by 0.6 units to lower the axis origin in the viewport
         mat4.translate(mvMatrix, mvMatrix, [0, -0.6, -3])
         mat4.multiply(mvMatrix, mvMatrix, rotationMatrix)
 
@@ -238,16 +236,12 @@ export class AxisIndicator {
         gl.disableVertexAttribArray(colorLoc)
 
         // Calculate label screen positions
-        // Offset labels slightly beyond arrow tips
         const labelOffset = this.AXIS_LENGTH + 0.3
         const xTip = vec3.fromValues(labelOffset, 0, 0)
         const yTip = vec3.fromValues(0, labelOffset, 0)
         const zTip = vec3.fromValues(0, 0, labelOffset)
 
-        // Convert indicator viewport coordinates to canvas coordinates
-        // Indicator is at bottom-left, need to add vpY and flip for canvas (top-left origin)
         const toCanvasY = (vpScreenY: number) => canvasHeight - vpScreenY
-
         const xScreen = this.projectToScreen(xTip, mvMatrix, pMatrix, vpX, vpY, indicatorSize, indicatorSize)
         const yScreen = this.projectToScreen(yTip, mvMatrix, pMatrix, vpX, vpY, indicatorSize, indicatorSize)
         const zScreen = this.projectToScreen(zTip, mvMatrix, pMatrix, vpX, vpY, indicatorSize, indicatorSize)

@@ -40,6 +40,8 @@ const OFFSET_SCALING = 40
 const CONTEXT_MENU_WIDTH = 170
 const CONTEXT_MENU_HEIGHT = 160
 
+const makeKeyframeUid = (nodeId: number, type: string, frame: number) => `${nodeId}-${type}-${frame}`
+
 const cloneNodesForKeyframes = (input: any[]) => {
     if (typeof structuredClone === 'function') {
         return structuredClone(input)
@@ -100,10 +102,18 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
     const { selectedNodeIds, transformMode, multiMoveMode, setMultiMoveMode } = useSelectionStore()
 
+    // Derived Global Info
+    const allSequencesMax = useMemo(() => {
+        if (!sequences || sequences.length === 0) return 1000
+        return sequences.reduce((max, s) => Math.max(max, s?.Interval?.[1] ?? 0), 0)
+    }, [sequences])
+
+    const isAllSequences = currentSequence < 0
+
     // Derived Animation Info
     const sequence = currentSequence >= 0 && sequences ? sequences[currentSequence] : null
-    const seqStart = sequence?.Interval?.[0] ?? 0
-    const seqEnd = sequence?.Interval?.[1] ?? 1000
+    const seqStart = isAllSequences ? 0 : (sequence?.Interval?.[0] ?? 0)
+    const seqEnd = isAllSequences ? allSequencesMax : (sequence?.Interval?.[1] ?? 1000)
 
     // State (Visual)
     const [pixelsPerMs, setPixelsPerMs] = useState(0.1)
@@ -171,25 +181,20 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         dragKeyframeScaleAnchorFrame: 0
     })
 
-    // Derived Global Info
-    const allSequencesMax = useMemo(() => {
-        if (!sequences || sequences.length === 0) return 1000
-        return sequences.reduce((max, s) => Math.max(max, s?.Interval?.[1] ?? 0), 0)
-    }, [sequences])
-
     // Sync Refs
     useEffect(() => { pixelsPerMsRef.current = pixelsPerMs }, [pixelsPerMs])
     useEffect(() => { scrollXRef.current = scrollX }, [scrollX])
     useEffect(() => {
-        // If showing all, use 0-Max. Else use current sequence.
-        if (showAllKeyframes) {
+        // If showing all sequences (currentSequence=-1) OR showing all keyframe types, use 0-Max.
+        // Otherwise use the selected sequence's interval.
+        if (isAllSequences || showAllKeyframes) {
             seqStartRef.current = 0
             seqEndRef.current = allSequencesMax
         } else {
             seqStartRef.current = seqStart
             seqEndRef.current = seqEnd
         }
-    }, [seqStart, seqEnd, showAllKeyframes, allSequencesMax])
+    }, [seqStart, seqEnd, showAllKeyframes, allSequencesMax, isAllSequences])
 
     useEffect(() => { selectedKeyframeUidsRef.current = selectedKeyframeUids }, [selectedKeyframeUids])
     useEffect(() => { selectionRectRef.current = selectionRect }, [selectionRect])
@@ -216,12 +221,13 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
             const addKeys = (propData: any, type: string, color: string) => {
                 if (propData && Array.isArray(propData.Keys)) {
-                    propData.Keys.forEach((k: any, idx: number) => {
+                    propData.Keys.forEach((k: any, _idx: number) => {
                         keyframes.push({
                             frame: k.Frame,
                             nodeId,
                             type,
-                            uid: `${nodeId} -${type} -${idx} `,
+                            // Use frame-based UID so selection survives key sorting/reordering.
+                            uid: makeKeyframeUid(nodeId, type, k.Frame),
                             color
                         })
                     })
@@ -236,40 +242,57 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         activeKeyframesRef.current = keyframes
     }, [modelData, selectedNodeIds, modelNodes])
 
-    // Auto-fit sequence change
-    const lastSequenceIndexRef = useRef(currentSequence)
-    useEffect(() => {
-        // Only auto-fit if the SEQUENCE INDEX changed
-        // We do NOT want to auto-fit if we are just updating the start/end of the SAME sequence (dragging)
+    const didInitialAutoFitRef = useRef(false)
 
-        const indexChanged = lastSequenceIndexRef.current !== currentSequence
-        lastSequenceIndexRef.current = currentSequence
+    const fitToCurrentSequenceInterval = useCallback(() => {
+        const container = containerRef.current
+        if (!container) return false
 
-        if (!containerRef.current) return
+        const containerWidth = container.clientWidth
+        // When the panel is hidden via display:none, width is 0. Don't lock in a bad zoom.
+        if (!Number.isFinite(containerWidth) || containerWidth < 20) return false
 
-        // If dragging, absolutely do not resize view
-        if (isDraggingRef.current) return
-
-        // If only data changed but not index, we probably still don't want to re-fit aggressively
-        if (!indexChanged) return
-
-        let start = 0
-        let end = 1000
-        if (sequence && sequence.Interval) {
-            start = sequence.Interval[0] ?? 0
-            end = sequence.Interval[1] ?? 1000
-        }
-
+        const useFullRange = isAllSequences || showAllKeyframes
+        const start = useFullRange ? 0 : (sequence?.Interval?.[0] ?? 0)
+        const end = useFullRange ? allSequencesMax : (sequence?.Interval?.[1] ?? 1000)
         const duration = end - start
-        const containerWidth = containerRef.current.clientWidth || 400
         const paddedDuration = Math.max(100, duration * 1.2)
         const newPixelsPerMs = containerWidth / paddedDuration
 
-        // Apply
         setPixelsPerMs(Math.max(0.01, Math.min(2, newPixelsPerMs)))
         setScrollX(Math.max(0, start - duration * 0.1))
+        return true
+    }, [sequence, isAllSequences, showAllKeyframes, allSequencesMax])
 
-    }, [currentSequence, allSequencesMax, sequence]) // Removed showAllKeyframes from dep and logic
+    // Reset the one-time auto-fit when leaving keyframe mode, so re-entering matches the selected sequence.
+    useEffect(() => {
+        if (!isActive) {
+            didInitialAutoFitRef.current = false
+        }
+    }, [isActive])
+
+    // Initial entry into keyframe timeline: fit once to the selected sequence interval (e.g. "Stand").
+    useLayoutEffect(() => {
+        if (!isActive) return
+        if (isDraggingRef.current) return
+        if (didInitialAutoFitRef.current) return
+        if (fitToCurrentSequenceInterval()) {
+            didInitialAutoFitRef.current = true
+        }
+    }, [isActive, currentSequence, fitToCurrentSequenceInterval])
+
+    // Auto-fit when the SEQUENCE INDEX changes (but not while dragging).
+    const lastSequenceIndexRef = useRef(currentSequence)
+    useEffect(() => {
+        const indexChanged = lastSequenceIndexRef.current !== currentSequence
+        lastSequenceIndexRef.current = currentSequence
+
+        if (!isActive) return
+        if (!indexChanged) return
+        if (isDraggingRef.current) return
+
+        fitToCurrentSequenceInterval()
+    }, [currentSequence, isActive, fitToCurrentSequenceInterval])
 
     // Resize Observer
     useEffect(() => {
@@ -702,6 +725,13 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     const updateFrame = (targetFrame: number) => {
         const clamped = Math.max(seqStartRef.current, Math.min(seqEndRef.current, Math.round(targetFrame)))
         frameRef.current = clamped
+
+        // Keep store frame in sync while scrubbing. In paused keyframe mode, Viewer uses
+        // store.currentFrame as source of truth and will overwrite renderer.frame each RAF.
+        const modelState = useModelStore.getState()
+        if (Math.abs((modelState.currentFrame ?? 0) - clamped) > 0.1) {
+            modelState.setFrame(clamped)
+        }
 
         const renderer = useRendererStore.getState().renderer
         if (renderer && renderer.rendererData) {
@@ -1394,8 +1424,13 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
                 replaceNodes(nodesCopy)
 
-                // Clear selection as UIDs have changed
-                setSelectedKeyframeUids(new Set())
+                // Keep selection on the transformed keyframes.
+                const next = new Set<string>()
+                interactionRef.current.dragKeyframeData.forEach((kfData) => {
+                    const newFrame = Math.round(scaleAnchor + (kfData.originalFrame - scaleAnchor) * dragScale)
+                    next.add(makeKeyframeUid(kfData.nodeId, kfData.type, newFrame))
+                })
+                setSelectedKeyframeUids(next)
             } else if (dragScale === null && frameOffset !== 0 && interactionRef.current.dragKeyframeData.length > 0) {
                 const nodes = useModelStore.getState().nodes
                 const oldNodes = cloneNodesForKeyframes(nodes)
@@ -1434,8 +1469,13 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
                 replaceNodes(nodesCopy)
 
-                // Clear selection as UIDs have changed
-                setSelectedKeyframeUids(new Set())
+                // Keep selection on the moved keyframes.
+                const next = new Set<string>()
+                interactionRef.current.dragKeyframeData.forEach((kfData) => {
+                    const newFrame = kfData.originalFrame + frameOffset
+                    next.add(makeKeyframeUid(kfData.nodeId, kfData.type, newFrame))
+                })
+                setSelectedKeyframeUids(next)
             }
 
             // Reset drag offset preview

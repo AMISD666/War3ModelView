@@ -10,35 +10,11 @@ import {
     EditOutlined,
     DeleteOutlined,
     SearchOutlined,
-    DeploymentUnitOutlined,
-    BuildOutlined,
     BulbOutlined,
     FireOutlined,
     SoundOutlined,
-    BlockOutlined,
-    PaperClipOutlined
+    BlockOutlined
 } from '@ant-design/icons';
-
-// ... (imports)
-
-// Helper to get icon by node type
-const getNodeIcon = (type: NodeType) => {
-    switch (type) {
-        case NodeType.BONE: return <DeploymentUnitOutlined />;
-        case NodeType.HELPER: return <BuildOutlined />;
-        case NodeType.LIGHT: return <BulbOutlined />;
-        case NodeType.PARTICLE_EMITTER:
-        case NodeType.PARTICLE_EMITTER_2:
-        case NodeType.RIBBON_EMITTER: return <FireOutlined />;
-        case NodeType.EVENT_OBJECT: return <SoundOutlined />;
-        case NodeType.COLLISION_SHAPE: return <BlockOutlined />;
-        case NodeType.ATTACHMENT: return <PaperClipOutlined />;
-        default: return <DeploymentUnitOutlined />;
-    }
-};
-
-// ... (inside component)
-
 
 import type { TreeProps, MenuProps } from 'antd';
 import { useModelStore } from '../../store/modelStore';
@@ -46,8 +22,9 @@ import { useSelectionStore } from '../../store/selectionStore';
 import { useUIStore } from '../../store/uiStore';
 import { NodeType } from '../../types/node';
 import { buildTreeData, filterTreeNodes, getExpandedKeys, getAncestorKeys } from '../../utils/treeUtils';
-import { canDeleteNode } from '../../utils/nodeUtils';
+import { canDeleteNode, getNodeIcon, getNodeTypeName, isNodeManagerType } from '../../utils/nodeUtils';
 import { RenameNodeDialog } from './RenameNodeDialog';
+import ParticleEmitterDialog from './ParticleEmitterDialog';
 import ParticleEmitter2Dialog from './ParticleEmitter2Dialog';
 import CollisionShapeDialog from './CollisionShapeDialog';
 import LightDialog from './LightDialog';
@@ -93,6 +70,7 @@ export const NodeManagerWindow: React.FC = () => {
     const [renameVisible, setRenameVisible] = useState(false);
     const [renamingNodeId, setRenamingNodeId] = useState<number | null>(null);
     const [renamingNodeName, setRenamingNodeName] = useState('');
+    const [peDialogVisible, setPeDialogVisible] = useState(false);
     const [pe2DialogVisible, setPe2DialogVisible] = useState(false);
     const [collisionDialogVisible, setCollisionDialogVisible] = useState(false);
     const [lightDialogVisible, setLightDialogVisible] = useState(false);
@@ -126,8 +104,9 @@ export const NodeManagerWindow: React.FC = () => {
     // Note: Mouse-based drag-drop is handled entirely in onMouseDown closures
     // No need for global listeners since each drag operation has its own handlers
 
-    // 构建树形数据
-    const treeData = useMemo(() => buildTreeData(nodes), [nodes]);
+    // 构建树形数据（只显示节点管理器关心的节点类型）
+    const nodeManagerNodes = useMemo(() => nodes.filter(n => isNodeManagerType(n.type)), [nodes]);
+    const treeData = useMemo(() => buildTreeData(nodeManagerNodes), [nodeManagerNodes]);
 
     // 过滤树节点
     const filteredTreeData = useMemo(() => {
@@ -137,7 +116,7 @@ export const NodeManagerWindow: React.FC = () => {
 
     // Auto-expand all nodes when model is loaded
     useEffect(() => {
-        if (nodes.length > 0 && expandedKeys.length === 0) {
+        if (nodeManagerNodes.length > 0 && expandedKeys.length === 0) {
             const allKeys: string[] = [];
             const collectKeys = (data: any[]) => {
                 data.forEach(node => {
@@ -150,7 +129,7 @@ export const NodeManagerWindow: React.FC = () => {
             collectKeys(treeData);
             setExpandedKeys(allKeys);
         }
-    }, [nodes.length, treeData]);
+    }, [nodeManagerNodes.length, treeData]);
 
     // 搜索时自动展开
     useEffect(() => {
@@ -158,7 +137,7 @@ export const NodeManagerWindow: React.FC = () => {
             const keys = getExpandedKeys(treeData, searchText);
             setExpandedKeys(keys);
             setAutoExpandParent(true);
-        } else if (nodes.length > 0) {
+        } else if (nodeManagerNodes.length > 0) {
             const allKeys: string[] = [];
             const collectKeys = (data: any[]) => {
                 data.forEach(node => {
@@ -171,7 +150,7 @@ export const NodeManagerWindow: React.FC = () => {
             collectKeys(treeData);
             setExpandedKeys(allKeys);
         }
-    }, [searchText, treeData, nodes.length]);
+    }, [searchText, treeData, nodeManagerNodes.length]);
 
     const handleSelect: TreeProps['onSelect'] = (_selectedKeys, info) => {
         // Strictly control selection logic
@@ -257,6 +236,13 @@ export const NodeManagerWindow: React.FC = () => {
     // Note: Native Tree drag-drop is disabled due to environment issues.
     // Manual drag-drop is implemented in titleRender instead.
 
+    const nodeMenuLabel = (type: NodeType, text: string) => (
+        <span className="node-manager-menuitem-label">
+            <span className="node-manager-menuitem-icon">{getNodeIcon(type)}</span>
+            <span className="node-manager-menuitem-text">{text}</span>
+        </span>
+    );
+
     const getContextMenuItems = (nodeId: number): MenuProps['items'] => {
         // Special handling for virtual root node (-1)
         if (nodeId === -1) {
@@ -265,10 +251,11 @@ export const NodeManagerWindow: React.FC = () => {
                     key: 'add_child',
                     label: '新建子节点',
                     icon: <PlusOutlined />,
+                    popupClassName: 'node-manager-context-submenu',
                     children: [
                         {
                             key: 'add_bone',
-                            label: '骨骼 (Bone)',
+                            label: nodeMenuLabel(NodeType.BONE, '骨骼 (Bone)'),
                             onClick: () => {
                                 addNode({ type: NodeType.BONE, Name: 'New Bone', Parent: -1 });
                                 message.success('已在根节点下创建骨骼');
@@ -276,7 +263,7 @@ export const NodeManagerWindow: React.FC = () => {
                         },
                         {
                             key: 'add_helper',
-                            label: '辅助器 (Helper)',
+                            label: nodeMenuLabel(NodeType.HELPER, '辅助器 (Helper)'),
                             onClick: () => {
                                 addNode({ type: NodeType.HELPER, Name: 'New Helper', Parent: -1 });
                                 message.success('已在根节点下创建辅助器');
@@ -284,26 +271,57 @@ export const NodeManagerWindow: React.FC = () => {
                         },
                         {
                             key: 'add_attachment',
-                            label: '挂接点 (Attachment)',
+                            label: nodeMenuLabel(NodeType.ATTACHMENT, '挂接点 (Attachment)'),
                             onClick: () => {
                                 addNode({ type: NodeType.ATTACHMENT, Name: 'New Attachment', Parent: -1 });
                                 message.success('已在根节点下创建挂接点');
                             }
+                        },                        {
+                            key: 'add_particle1',
+                            label: nodeMenuLabel(NodeType.PARTICLE_EMITTER, '粒子发射器1'),
+                            onClick: () => {
+                                addNode({ type: NodeType.PARTICLE_EMITTER, Name: 'New Particle', Parent: -1 });
+                                message.success('已创建粒子发射器1');
+                            }
                         },
                         {
-                            key: 'add_particle',
-                            label: '粒子发射器2 (ParticleEmitter2)',
+                            key: 'add_particle2',
+                            label: nodeMenuLabel(NodeType.PARTICLE_EMITTER_2, '粒子发射器2 (ParticleEmitter2)'),
                             onClick: () => {
                                 addNode({ type: NodeType.PARTICLE_EMITTER_2, Name: 'New Particle', Parent: -1 });
                                 message.success('已在根节点下创建粒子发射器');
                             }
                         },
                         {
+                            key: 'add_ribbon',
+                            label: nodeMenuLabel(NodeType.RIBBON_EMITTER, getNodeTypeName(NodeType.RIBBON_EMITTER)),
+                            onClick: () => {
+                                addNode({ type: NodeType.RIBBON_EMITTER, Name: 'New Ribbon', Parent: -1 });
+                                message.success('已创建丝带发射器节点');
+                            }
+                        },
+                        {
                             key: 'add_light',
-                            label: '灯光 (Light)',
+                            label: nodeMenuLabel(NodeType.LIGHT, '灯光 (Light)'),
                             onClick: () => {
                                 addNode({ type: NodeType.LIGHT, Name: 'New Light', Parent: -1 });
                                 message.success('已在根节点下创建灯光');
+                            }
+                        },
+                        {
+                            key: 'add_event',
+                            label: nodeMenuLabel(NodeType.EVENT_OBJECT, getNodeTypeName(NodeType.EVENT_OBJECT)),
+                            onClick: () => {
+                                addNode({ type: NodeType.EVENT_OBJECT, Name: 'New Event', Parent: -1 });
+                                message.success('已创建事件对象节点');
+                            }
+                        },
+                        {
+                            key: 'add_collision',
+                            label: nodeMenuLabel(NodeType.COLLISION_SHAPE, getNodeTypeName(NodeType.COLLISION_SHAPE)),
+                            onClick: () => {
+                                addNode({ type: NodeType.COLLISION_SHAPE, Name: 'New Collision', Parent: -1 });
+                                message.success('已创建碰撞形状节点');
                             }
                         }
                     ]
@@ -337,6 +355,8 @@ export const NodeManagerWindow: React.FC = () => {
         const node = nodes.find(n => n.ObjectId === nodeId);
         if (!node) return [];
 
+        const deleteCheck = canDeleteNode(nodeId, nodes, modelData?.Geosets);
+
         const items: MenuProps['items'] = [
             {
                 key: 'edit',
@@ -364,10 +384,10 @@ export const NodeManagerWindow: React.FC = () => {
             });
         } else if (node.type === NodeType.PARTICLE_EMITTER) {
             items.push({
-                key: 'edit_particle_disabled',
-                label: '编辑粒子系统 (暂不支持)',
+                key: 'edit_particle_1',
+                label: '编辑粒子系统',
                 icon: <FireOutlined />,
-                disabled: true
+                onClick: () => setPeDialogVisible(true)
             });
         } else if (node.type === NodeType.COLLISION_SHAPE) {
             items.push({
@@ -481,17 +501,16 @@ export const NodeManagerWindow: React.FC = () => {
                 key: 'create',
                 label: '添加节点',
                 icon: <PlusOutlined />,
+                popupClassName: 'node-manager-context-submenu',
                 children: [
                     {
                         key: 'create_dialog',
                         label: '打开创建对话框...',
                         onClick: () => setCreateNodeDialogVisible(true)
                     },
-                    { type: 'divider' },
                     {
                         key: 'create_bone',
-                        label: '骨骼 (Bone)',
-                        icon: <DeploymentUnitOutlined />,
+                        label: nodeMenuLabel(NodeType.BONE, '骨骼 (Bone)'),
                         onClick: () => {
                             addNode({ type: NodeType.BONE, Name: 'New Bone', Parent: nodeId });
                             message.success('已创建骨骼节点');
@@ -499,8 +518,7 @@ export const NodeManagerWindow: React.FC = () => {
                     },
                     {
                         key: 'create_helper',
-                        label: '辅助体 (Helper)',
-                        icon: <BuildOutlined />,
+                        label: nodeMenuLabel(NodeType.HELPER, '辅助体 (Helper)'),
                         onClick: () => {
                             addNode({ type: NodeType.HELPER, Name: 'New Helper', Parent: nodeId });
                             message.success('已创建辅助体节点');
@@ -508,18 +526,23 @@ export const NodeManagerWindow: React.FC = () => {
                     },
                     {
                         key: 'create_attachment',
-                        label: '附件点 (Attachment)',
-                        icon: <PaperClipOutlined />,
+                        label: nodeMenuLabel(NodeType.ATTACHMENT, '附件点 (Attachment)'),
                         onClick: () => {
                             addNode({ type: NodeType.ATTACHMENT, Name: 'New Attachment', Parent: nodeId });
                             message.success('已创建附件点节点');
                         }
                     },
-                    { type: 'divider' },
+                    {
+                        key: 'create_particle1',
+                        label: nodeMenuLabel(NodeType.PARTICLE_EMITTER, '粒子发射器1'),
+                        onClick: () => {
+                            addNode({ type: NodeType.PARTICLE_EMITTER, Name: 'New Particle', Parent: nodeId });
+                            message.success('已创建粒子发射器1');
+                        }
+                    },
                     {
                         key: 'create_particle2',
-                        label: '粒子发射器2 (ParticleEmitter2)',
-                        icon: <FireOutlined />,
+                        label: nodeMenuLabel(NodeType.PARTICLE_EMITTER_2, '粒子发射器2 (ParticleEmitter2)'),
                         onClick: () => {
                             addNode({ type: NodeType.PARTICLE_EMITTER_2, Name: 'New Particle', Parent: nodeId });
                             message.success('已创建粒子发射器2节点');
@@ -527,18 +550,15 @@ export const NodeManagerWindow: React.FC = () => {
                     },
                     {
                         key: 'create_ribbon',
-                        label: '丝带发射器 (RibbonEmitter)',
-                        icon: <FireOutlined style={{ color: '#1890ff' }} />,
+                        label: nodeMenuLabel(NodeType.RIBBON_EMITTER, '丝带发射器 (RibbonEmitter)'),
                         onClick: () => {
                             addNode({ type: NodeType.RIBBON_EMITTER, Name: 'New Ribbon', Parent: nodeId });
                             message.success('已创建丝带发射器节点');
                         }
                     },
-                    { type: 'divider' },
                     {
                         key: 'create_light',
-                        label: '灯光 (Light)',
-                        icon: <BulbOutlined />,
+                        label: nodeMenuLabel(NodeType.LIGHT, '灯光 (Light)'),
                         onClick: () => {
                             addNode({ type: NodeType.LIGHT, Name: 'New Light', Parent: nodeId });
                             message.success('已创建灯光节点');
@@ -546,8 +566,7 @@ export const NodeManagerWindow: React.FC = () => {
                     },
                     {
                         key: 'create_event',
-                        label: '事件对象 (EventObject)',
-                        icon: <SoundOutlined />,
+                        label: nodeMenuLabel(NodeType.EVENT_OBJECT, '事件对象 (EventObject)'),
                         onClick: () => {
                             addNode({ type: NodeType.EVENT_OBJECT, Name: 'New Event', Parent: nodeId });
                             message.success('已创建事件对象节点');
@@ -555,8 +574,7 @@ export const NodeManagerWindow: React.FC = () => {
                     },
                     {
                         key: 'create_collision',
-                        label: '碰撞形状 (CollisionShape)',
-                        icon: <BlockOutlined />,
+                        label: nodeMenuLabel(NodeType.COLLISION_SHAPE, '碰撞形状 (CollisionShape)'),
                         onClick: () => {
                             addNode({ type: NodeType.COLLISION_SHAPE, Name: 'New Collision', Parent: nodeId });
                             message.success('已创建碰撞形状节点');
@@ -577,6 +595,7 @@ export const NodeManagerWindow: React.FC = () => {
                 key: 'delete',
                 label: '删除节点',
                 danger: true,
+                disabled: !deleteCheck.canDelete,
                 onClick: () => handleDelete(nodeId)
             }
         );
@@ -592,6 +611,7 @@ export const NodeManagerWindow: React.FC = () => {
 
 
     const handleRightClick: TreeProps['onRightClick'] = ({ event, node }) => {
+        event.preventDefault();
         const nodeId = parseInt(node.key as string);
         setContextMenuNodeId(nodeId);
 
@@ -611,10 +631,7 @@ export const NodeManagerWindow: React.FC = () => {
         return () => document.removeEventListener('click', handleClick);
     }, []);
 
-    const contextMenuItems = useMemo(() => {
-        if (contextMenuNodeId === null) return [];
-        return getContextMenuItems(contextMenuNodeId);
-    }, [contextMenuNodeId, nodes]); // Re-calculate when node or selection changes
+    const contextMenuItems = contextMenuNodeId === null ? [] : getContextMenuItems(contextMenuNodeId);
 
     useLayoutEffect(() => {
         if (!contextMenuVisible || !contextMenuRef.current) return;
@@ -636,6 +653,10 @@ export const NodeManagerWindow: React.FC = () => {
     const handleNodeDoubleClick = (node: any) => {
         // Open specialized editor based on node type
         switch (node.type) {
+            case NodeType.PARTICLE_EMITTER:
+                selectNode(node.ObjectId);
+                setPeDialogVisible(true);
+                break;
             case NodeType.PARTICLE_EMITTER_2:
                 selectNode(node.ObjectId);
                 setPe2DialogVisible(true);
@@ -734,6 +755,14 @@ export const NodeManagerWindow: React.FC = () => {
                     backgroundColor: '#1e1e1e',
                     padding: '4px'
                 }}
+                onContextMenu={(e) => {
+                    e.preventDefault();
+                    const target = e.target as HTMLElement | null;
+                    if (target && target.closest('.ant-tree-treenode')) return;
+                    setContextMenuNodeId(-1);
+                    setContextMenuPosition({ x: e.clientX, y: e.clientY });
+                    setContextMenuVisible(true);
+                }}
             >
                 {treeData.length > 0 ? (
                     <Tree
@@ -760,6 +789,7 @@ export const NodeManagerWindow: React.FC = () => {
                             return (
                                 <div
                                     data-node-id={nodeId}
+                                    className="node-manager-row"
                                     onMouseDown={(e) => {
                                         // Only start drag on left button
                                         if (e.button !== 0) return;
@@ -855,7 +885,8 @@ export const NodeManagerWindow: React.FC = () => {
                                         alignItems: 'center',
                                         width: '100%',
                                         minWidth: 0,
-                                        padding: '2px 4px',
+                                        padding: 0,
+                                        height: 18,
                                         cursor: isVirtualRoot ? 'default' : (isDragging && draggedNodeId === nodeId ? 'grabbing' : 'grab'),
                                         borderRadius: '2px',
                                         backgroundColor: isDropTarget ? 'rgba(24, 144, 255, 0.3)' : (isVirtualRoot ? 'rgba(80, 80, 80, 0.3)' : 'transparent'),
@@ -865,9 +896,6 @@ export const NodeManagerWindow: React.FC = () => {
                                         userSelect: 'none'
                                     }}
                                 >
-                                    <span style={{ marginRight: 8, color: isVirtualRoot ? '#1890ff' : '#aaa' }}>
-                                        {isVirtualRoot ? '🌐' : getNodeIcon(nodeData.type)}
-                                    </span>
                                     <span style={{
                                         flex: 1,
                                         overflow: 'hidden',
@@ -881,7 +909,7 @@ export const NodeManagerWindow: React.FC = () => {
                                     </span>
                                     {/* Don't show ObjectId for virtual root */}
                                     {!isVirtualRoot && (
-                                        <span style={{ color: '#666', fontSize: '10px', marginLeft: '8px' }}>
+                                        <span style={{ color: '#666', fontSize: '10px', marginLeft: '6px' }}>
                                             {nodeData.data.ObjectId ?? ''}
                                         </span>
                                     )}
@@ -899,6 +927,7 @@ export const NodeManagerWindow: React.FC = () => {
                 contextMenuVisible && (
                     <div
                         ref={contextMenuRef}
+                        className="node-manager-context-menu-popover"
                         style={{
                             position: 'fixed',
                             left: contextMenuPosition.x,
@@ -914,12 +943,13 @@ export const NodeManagerWindow: React.FC = () => {
                         onClick={(e) => e.stopPropagation()}
                     >
                         <Menu
+                            className="node-manager-context-menu"
                             items={contextMenuItems}
                             mode="vertical"
                             theme="dark"
                             selectable={false}
                             onClick={() => setContextMenuVisible(false)}
-                            style={{ border: 'none', width: 160 }}
+                            style={{ border: 'none' }}
                         />
                     </div>
                 )
@@ -937,6 +967,12 @@ export const NodeManagerWindow: React.FC = () => {
                     }
                 }}
                 onCancel={() => setRenameVisible(false)}
+            />
+
+            <ParticleEmitterDialog
+                visible={peDialogVisible}
+                nodeId={selectedNodeIds.length > 0 ? selectedNodeIds[0] : null}
+                onClose={() => setPeDialogVisible(false)}
             />
 
             <ParticleEmitter2Dialog

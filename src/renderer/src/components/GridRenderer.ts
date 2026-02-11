@@ -186,4 +186,3 @@ export class GridRenderer {
         return shader
     }
 }
-

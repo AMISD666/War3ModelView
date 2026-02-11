@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { Select, Button, Slider, ColorPicker, Modal, Input, Tabs } from 'antd';
 import { DraggableModal } from './DraggableModal';
 import { useRendererStore } from '../store/rendererStore';
@@ -91,13 +91,18 @@ export const ViewSettingsWindow: React.FC = () => {
         mpqLoaded, setMpqLoaded,
         missingTextures,
         showVerticesByMode, setShowVerticesForMode,
+        showVerticesInAnimationBinding, showVerticesInAnimationKeyframe, setShowVerticesForAnimationSubMode,
         vertexSettings, setVertexSettings,
         autoRecalculateExtent, setAutoRecalculateExtent,
         autoRecalculateNormals, setAutoRecalculateNormals,
         keepCameraOnLoad, setKeepCameraOnLoad
     } = useRendererStore();
     const mainMode = useSelectionStore(state => state.mainMode);
-    const showVertices = showVerticesByMode[mainMode] ?? true;
+    const animationSubMode = useSelectionStore(state => state.animationSubMode);
+    const showVertices =
+        mainMode === 'animation'
+            ? (animationSubMode === 'binding' ? showVerticesInAnimationBinding : showVerticesInAnimationKeyframe)
+            : (showVerticesByMode[mainMode] ?? true);
 
     // Context Menu Integration State
     const [contextMenuEnabled, setContextMenuEnabled] = useState<boolean>(false);
@@ -511,7 +516,19 @@ export const ViewSettingsWindow: React.FC = () => {
                                     </div>
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }}>
-                                            <ToggleButton checked={showVertices} onChange={(v) => setShowVerticesForMode(mainMode, v)} fullWidth>显示顶点</ToggleButton>
+                                            <ToggleButton
+                                                checked={showVertices}
+                                                onChange={(v) => {
+                                                    if (mainMode === 'animation') {
+                                                        setShowVerticesForAnimationSubMode(animationSubMode as any, v)
+                                                    } else {
+                                                        setShowVerticesForMode(mainMode, v)
+                                                    }
+                                                }}
+                                                fullWidth
+                                            >
+                                                显示顶点
+                                            </ToggleButton>
                                             <ToggleButton checked={vertexSettings.enableDepth} onChange={v => setVertexSettings({ enableDepth: v })} fullWidth>顶点深度</ToggleButton>
                                         </div>
 
@@ -748,3 +765,4 @@ export const ViewSettingsWindow: React.FC = () => {
         </>
     );
 };
+

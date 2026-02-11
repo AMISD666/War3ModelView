@@ -3,6 +3,8 @@ import { persist } from 'zustand/middleware'
 import { appDirStorage } from '../utils/persistStorage'
 import type { AppMode } from './selectionStore'
 
+type AnimationSubMode = 'binding' | 'keyframe'
+
 export interface GridSettings {
     show128: boolean
     show512: boolean
@@ -49,6 +51,11 @@ interface RendererStore {
     setShowGridYZ: (show: boolean) => void
     showVerticesByMode: Record<AppMode, boolean>
     setShowVerticesForMode: (mode: AppMode, show: boolean) => void
+    // Animation sub-modes need independent vertex-visibility control:
+    // binding: default ON (helps binding workflow), keyframe: default OFF (clean view).
+    showVerticesInAnimationBinding: boolean
+    showVerticesInAnimationKeyframe: boolean
+    setShowVerticesForAnimationSubMode: (subMode: AnimationSubMode, show: boolean) => void
     showNodes: boolean
     setShowNodes: (show: boolean) => void
     showSkeleton: boolean
@@ -165,6 +172,14 @@ export const useRendererStore = create<RendererStore>()(
             setShowVerticesForMode: (mode, show) => set((state) => ({
                 showVerticesByMode: { ...state.showVerticesByMode, [mode]: show }
             })),
+            showVerticesInAnimationBinding: true,
+            showVerticesInAnimationKeyframe: false,
+            setShowVerticesForAnimationSubMode: (subMode, show) => set((state) => ({
+                showVerticesInAnimationBinding:
+                    subMode === 'binding' ? show : state.showVerticesInAnimationBinding,
+                showVerticesInAnimationKeyframe:
+                    subMode === 'keyframe' ? show : state.showVerticesInAnimationKeyframe
+            })),
             showNodes: false,
             setShowNodes: (show) => set({ showNodes: show }),
             showSkeleton: false,
@@ -262,6 +277,8 @@ export const useRendererStore = create<RendererStore>()(
                 showGridXZ: state.showGridXZ,
                 showGridYZ: state.showGridYZ,
                 showVerticesByMode: state.showVerticesByMode,
+                showVerticesInAnimationBinding: state.showVerticesInAnimationBinding,
+                showVerticesInAnimationKeyframe: state.showVerticesInAnimationKeyframe,
                 showNodes: state.showNodes,
                 showSkeleton: state.showSkeleton,
                 showFPS: state.showFPS,

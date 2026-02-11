@@ -12,6 +12,20 @@ body,
     color: #e0e0e0;
 }
 
+/* Prevent AntD buttons from showing the default bright-blue focus ring.
+   This also avoids focus getting "stuck" on buttons after using keyboard shortcuts. */
+.ant-btn:focus,
+.ant-btn:focus-visible,
+.ant-btn-default:focus,
+.ant-btn-default:focus-visible,
+.ant-btn-primary:focus,
+.ant-btn-primary:focus-visible,
+.ant-btn-text:focus,
+.ant-btn-text:focus-visible {
+    outline: none !important;
+    box-shadow: none !important;
+}
+
 /* Custom Scrollbar for WebKit (Chrome/Electron) */
 ::-webkit-scrollbar {
     width: 8px;
@@ -34,10 +48,12 @@ body,
 /* Node Manager Tree Styling */
 .node-manager-tree {
     color: #e0e0e0;
+    /* If icons look slightly high/low, tweak this value. */
+    --node-manager-icon-nudge-y: 5px;
 }
 
 .node-manager-tree .ant-tree-treenode {
-    padding: 2px 0;
+    padding: 1px 0;
     -webkit-user-drag: element;
     user-select: none;
 }
@@ -47,9 +63,17 @@ body,
     align-items: center;
     width: 100%;
     min-width: 0;
-    padding: 2px 4px;
+    padding: 1px 2px;
     border-radius: 2px;
     transition: background-color 0.2s;
+    min-height: 18px;
+    line-height: 18px;
+}
+
+.node-manager-tree .ant-tree-title > .node-manager-row {
+    /* Align custom titleRender content with Ant's icon column */
+    height: 18px;
+    align-items: center;
 }
 
 .node-manager-tree .ant-tree-node-content-wrapper:hover {
@@ -65,7 +89,30 @@ body,
 .node-manager-tree .ant-tree-iconEle {
     display: inline-flex;
     align-items: center;
-    margin-right: 4px;
+    margin-right: 2px;
+    width: 16px;
+    justify-content: center;
+    height: 18px;
+    line-height: 18px;
+    vertical-align: middle;
+    flex: 0 0 16px;
+}
+
+.node-manager-tree .ant-tree-iconEle .ant-tree-icon__customize,
+.node-manager-tree .ant-tree-iconEle > span,
+.node-manager-tree .ant-tree-iconEle > i {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 18px;
+    line-height: 0;
+}
+
+.node-manager-tree .ant-tree-iconEle img,
+.node-manager-tree .ant-tree-iconEle .anticon {
+    display: block;
+    transform: translateY(var(--node-manager-icon-nudge-y));
 }
 
 .node-manager-tree .ant-tree-title {
@@ -73,6 +120,8 @@ body,
     align-items: center;
     width: 100%;
     min-width: 0;
+    font-size: 12px;
+    line-height: 18px;
 }
 
 .node-manager-tree .ant-tree-switcher {
@@ -82,7 +131,148 @@ body,
 }
 
 .node-manager-tree .ant-tree-indent-unit {
+    width: 12px;
+}
+
+/* Node Manager Context Menu - compact spacing */
+.node-manager-context-menu {
+    font-size: 12px;
+    /* Keep labels on one line without truncation. */
+    min-width: 200px;
+    width: max-content !important;
+}
+
+.node-manager-context-menu.ant-menu {
+    width: max-content !important;
+    padding: 6px 0 !important;
+}
+
+/* Submenu popup is rendered in a portal; scope styling via popupClassName */
+.node-manager-context-submenu .ant-menu {
+    font-size: 12px;
+    min-width: 200px;
+    width: max-content !important;
+    padding: 6px 0 !important;
+}
+
+.node-manager-context-menu .ant-menu-item,
+.node-manager-context-menu .ant-menu-submenu-title {
+    display: flex !important;
+    align-items: center;
+    gap: 9px;
+    height: 23px !important;
+    min-height: 23px !important;
+    line-height: 23px !important;
+    padding: 0 11px !important;
+    padding-block: 0 !important;
+    margin: 0 !important;
+    margin-block: 0 !important;
+}
+
+.node-manager-context-submenu .ant-menu-item,
+.node-manager-context-submenu .ant-menu-submenu-title {
+    display: flex !important;
+    align-items: center;
+    gap: 9px;
+    height: 23px !important;
+    min-height: 23px !important;
+    line-height: 23px !important;
+    padding: 0 11px !important;
+    padding-block: 0 !important;
+    margin: 0 !important;
+    margin-block: 0 !important;
+}
+
+.node-manager-context-menu .ant-menu-item-divider {
+    margin: 6px 0 !important;
+}
+
+.node-manager-context-submenu .ant-menu-item-divider {
+    margin: 6px 0 !important;
+}
+
+.node-manager-context-menu .ant-menu-title-content {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+}
+
+.node-manager-context-submenu .ant-menu-title-content {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+}
+
+.node-manager-context-menu .ant-menu-item-icon {
+    min-width: 16px;
+    margin-inline-end: 0; /* gap is handled by flex now */
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 16px;
+    height: 23px;
+    /* Prevent baseline/line-height quirks from nudging custom <img> icons upward */
+    line-height: 0 !important;
+    align-self: center;
+}
+
+.node-manager-context-submenu .ant-menu-item-icon {
+    min-width: 16px;
+    margin-inline-end: 0;
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 16px;
+    height: 23px;
+    line-height: 0 !important;
+    align-self: center;
+}
+
+.node-manager-context-menu .ant-menu-item-icon img,
+.node-manager-context-menu .ant-menu-item-icon .anticon {
+    display: block;
+    /* Small nudge to match text visual center */
+    transform: translateY(1px);
+}
+
+.node-manager-context-submenu .ant-menu-item-icon img,
+.node-manager-context-submenu .ant-menu-item-icon .anticon {
+    display: block;
+    transform: translateY(1px);
+}
+
+.node-manager-context-menu .ant-menu-submenu-arrow {
+    inset-inline-end: 8px;
+}
+
+.node-manager-context-submenu .ant-menu-submenu-arrow {
+    inset-inline-end: 8px;
+}
+
+/* Custom label for create-node items: icon + text in one row */
+.node-manager-menuitem-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.node-manager-menuitem-icon {
     width: 16px;
+    height: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 16px;
+}
+
+.node-manager-menuitem-icon img,
+.node-manager-menuitem-icon .anticon {
+    display: block;
+    transform: translateY(1px);
+}
+
+.node-manager-menuitem-text {
+    white-space: nowrap;
 }
 
 /* Ensure global drag isn't disabled for draggable elements */
@@ -343,4 +533,87 @@ body,
 .non-blocking-modal-wrap button,
 .non-blocking-modal-wrap .ant-btn {
     pointer-events: auto !important;
+}
+
+/* ParticleEmitter1 dialog - keep app theme, only adjust layout */
+.floating-panel.pe1-dialog .floating-panel-content {
+    padding: 10px !important;
+}
+
+.pe1-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 10px;
+    align-items: start;
+}
+
+.pe1-group {
+    border: 1px solid #484848;
+    padding: 6px 10px 8px;
+    background: #2b2b2b;
+    min-height: 110px;
+    margin: 0;
+}
+
+.pe1-group legend {
+    padding: 0 6px;
+    font-size: 12px;
+    color: #ccc;
+    background: #1f1f1f;
+    margin: 0;
+    line-height: 14px;
+}
+
+.pe1-dyn-row {
+    margin-bottom: 4px;
+}
+
+.pe1-kf-btn {
+    width: 100%;
+    height: 28px;
+    border-radius: 0 !important;
+    margin-bottom: 4px;
+    background-color: #444 !important;
+    border-color: #555 !important;
+    color: #fff !important;
+}
+
+.pe1-number {
+    width: 100% !important;
+    border-radius: 0 !important;
+}
+
+.pe1-number .ant-input-number-input {
+    background-color: #333 !important;
+    color: #fff !important;
+}
+
+.pe1-text {
+    border-radius: 0 !important;
+}
+
+.floating-panel.pe1-dialog .ant-input-number.pe1-number {
+    background-color: #333 !important;
+    border-color: #444 !important;
+}
+
+.floating-panel.pe1-dialog input.ant-input.pe1-text,
+.floating-panel.pe1-dialog textarea.ant-input.pe1-text {
+    background-color: #333 !important;
+    border-color: #444 !important;
+    color: #fff !important;
+}
+
+.pe1-other {
+    grid-column: 2 / span 2;
+    min-height: 120px;
+}
+
+.pe1-other-label {
+    font-size: 12px;
+    margin: 2px 0 4px;
+}
+
+.pe1-other-checks {
+    margin-top: 4px;
 }

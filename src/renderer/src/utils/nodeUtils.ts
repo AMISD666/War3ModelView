@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Node Utility Functions
  */
 
@@ -10,34 +10,109 @@ import { NodeType } from '../types/node';
  * 获取节点类型对应的图标
  */
 export function getNodeIcon(type: NodeType): React.ReactNode {
-    // 不使用JSX，使用 createElement 避免解析器问题
-    const iconStyle = (color: string) => ({ fontSize: 14, color });
+    return React.createElement(NodeTypeIcon, { type });
+}
 
-    const Icon = ApartmentOutlined;
+export function getVirtualRootIcon(): React.ReactNode {
+    return React.createElement(NodeIconImage, {
+        alt: 'root',
+        src: iconUrl('root.svg'),
+        fallbackColor: '#1890ff',
+    });
+}
 
+export function isNodeManagerType(type: NodeType): boolean {
     switch (type) {
-        case NodeType.BONE:
-            return React.createElement(Icon, { style: iconStyle('#52c41a') });
-        case NodeType.HELPER:
-            return React.createElement(Icon, { style: iconStyle('#1890ff') });
         case NodeType.ATTACHMENT:
-            return React.createElement(Icon, { style: iconStyle('#faad14') });
+        case NodeType.BONE:
+        case NodeType.COLLISION_SHAPE:
+        case NodeType.EVENT_OBJECT:
+        case NodeType.HELPER:
         case NodeType.LIGHT:
-            return React.createElement(Icon, { style: iconStyle('#ffec3d') });
         case NodeType.PARTICLE_EMITTER:
         case NodeType.PARTICLE_EMITTER_2:
-            return React.createElement(Icon, { style: iconStyle('#f759ab') });
         case NodeType.RIBBON_EMITTER:
-            return React.createElement(Icon, { style: iconStyle('#9254de') });
-        case NodeType.EVENT_OBJECT:
-            return React.createElement(Icon, { style: iconStyle('#ff4d4f') });
-        case NodeType.COLLISION_SHAPE:
-            return React.createElement(Icon, { style: iconStyle('#722ed1') });
-        case NodeType.CAMERA:
-            return React.createElement(Icon, { style: iconStyle('#13c2c2') });
+            return true;
         default:
-            return React.createElement(Icon, { style: { fontSize: 14 } });
+            return false;
     }
+}
+
+const NODE_ICON_SIZE = 14;
+
+function iconUrl(file: string): string {
+    // Vite: respects BASE_URL (e.g. when packaged under a sub-path).
+    const baseUrl = (import.meta as any).env?.BASE_URL ?? '/';
+    const prefix = typeof baseUrl === 'string' && baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
+    return `${prefix}node-icons/${file}`;
+}
+
+function fallbackColorForType(type: NodeType): string {
+    switch (type) {
+        case NodeType.BONE: return '#52c41a';
+        case NodeType.HELPER: return '#1890ff';
+        case NodeType.ATTACHMENT: return '#faad14';
+        case NodeType.LIGHT: return '#ffec3d';
+        case NodeType.PARTICLE_EMITTER:
+        case NodeType.PARTICLE_EMITTER_2: return '#f759ab';
+        case NodeType.PARTICLE_EMITTER_POPCORN: return '#ff7a45';
+        case NodeType.RIBBON_EMITTER: return '#9254de';
+        case NodeType.EVENT_OBJECT: return '#ff4d4f';
+        case NodeType.COLLISION_SHAPE: return '#722ed1';
+        case NodeType.CAMERA: return '#13c2c2';
+        default: return '#aaa';
+    }
+}
+
+function iconFileForType(type: NodeType): string {
+    switch (type) {
+        case NodeType.BONE: return 'bone.svg';
+        case NodeType.HELPER: return 'helper.svg';
+        case NodeType.ATTACHMENT: return 'attachment.svg';
+        case NodeType.LIGHT: return 'light.svg';
+        case NodeType.PARTICLE_EMITTER: return 'particle.svg';
+        case NodeType.PARTICLE_EMITTER_2: return 'particle2.svg';
+        case NodeType.PARTICLE_EMITTER_POPCORN: return 'popcorn.svg';
+        case NodeType.RIBBON_EMITTER: return 'ribbon.svg';
+        case NodeType.EVENT_OBJECT: return 'event.svg';
+        case NodeType.COLLISION_SHAPE: return 'collision.svg';
+        case NodeType.CAMERA: return 'camera.svg';
+        default: return 'default.svg';
+    }
+}
+
+function NodeTypeIcon({ type }: { type: NodeType }): React.ReactElement {
+    return React.createElement(NodeIconImage, {
+        alt: String(type),
+        src: iconUrl(iconFileForType(type)),
+        fallbackColor: fallbackColorForType(type),
+    });
+}
+
+function NodeIconImage(
+    { src, alt, fallbackColor }: { src: string; alt: string; fallbackColor: string }
+): React.ReactElement {
+    const [broken, setBroken] = React.useState(false);
+
+    if (broken) {
+        return React.createElement(ApartmentOutlined, { style: { fontSize: NODE_ICON_SIZE, color: fallbackColor } });
+    }
+
+    return React.createElement('img', {
+        src,
+        alt,
+        width: NODE_ICON_SIZE,
+        height: NODE_ICON_SIZE,
+        draggable: false,
+        style: {
+            width: NODE_ICON_SIZE,
+            height: NODE_ICON_SIZE,
+            display: 'block',
+            objectFit: 'contain',
+            imageRendering: '-webkit-optimize-contrast',
+        } as any,
+        onError: () => setBroken(true),
+    });
 }
 
 /**
@@ -46,15 +121,16 @@ export function getNodeIcon(type: NodeType): React.ReactNode {
 export function getNodeTypeName(type: NodeType): string {
     const typeNames: Record<NodeType, string> = {
         [NodeType.BONE]: '骨骼',
-        [NodeType.HELPER]: '辅助点',
-        [NodeType.ATTACHMENT]: '附加点',
+        [NodeType.HELPER]: '帮助体',
+        [NodeType.ATTACHMENT]: '附着体',
         [NodeType.LIGHT]: '光源',
-        [NodeType.PARTICLE_EMITTER]: '粒子发射器',
-        [NodeType.PARTICLE_EMITTER_2]: '粒子发射器2',
-        [NodeType.RIBBON_EMITTER]: '带状发射器',
-        [NodeType.EVENT_OBJECT]: '事件对象',
-        [NodeType.COLLISION_SHAPE]: '碰撞体',
-        [NodeType.CAMERA]: '相机'
+        [NodeType.PARTICLE_EMITTER]: '粒子发射器1',
+        [NodeType.PARTICLE_EMITTER_2]: '2型粒子发射器',
+        [NodeType.RIBBON_EMITTER]: '丝带发射器',
+        [NodeType.EVENT_OBJECT]: '事件物体',
+        [NodeType.COLLISION_SHAPE]: '点击球',
+        [NodeType.CAMERA]: '相机',
+        [NodeType.PARTICLE_EMITTER_POPCORN]: 'Popcorn粒子发射器'
     };
 
     return typeNames[type] || '未知';

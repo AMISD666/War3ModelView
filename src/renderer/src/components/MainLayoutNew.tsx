@@ -131,8 +131,9 @@ export const MainLayoutNew: React.FC = () => {
         const onKeyDown = (event: KeyboardEvent) => {
             handleGlobalShortcutKeyDown(event);
         };
-        window.addEventListener('keydown', onKeyDown);
-        return () => window.removeEventListener('keydown', onKeyDown);
+        // Use capture so shortcuts still work even if some focused component stops propagation.
+        window.addEventListener('keydown', onKeyDown, true);
+        return () => window.removeEventListener('keydown', onKeyDown, true);
     }, []);
 
     const isBatchMode = mainMode === 'batch';

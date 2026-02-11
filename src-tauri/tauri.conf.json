@@ -1,6 +1,6 @@
 {
     "productName": "咕咕War3模型编辑器",
-    "version": "1.1.7",
+    "version": "1.2.0",
     "identifier": "com.war3model.editor",
     "build": {
         "beforeDevCommand": "npm run dev",
@@ -11,7 +11,7 @@
     "app": {
         "windows": [
             {
-                "title": "咕咕War3模型编辑器 测试版1.1.7",
+                "title": "咕咕War3模型编辑器 测试版1.2.0",
                 "width": 1200,
                 "height": 800,
                 "dragDropEnabled": true

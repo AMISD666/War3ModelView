@@ -49,6 +49,7 @@ let globalRenderLoopId = 0
 
 // Ref interface for external access to camera methods
 export interface ViewerRef {
+  fitToView: () => void
   getCamera: () => { distance: number; theta: number; phi: number; target: [number, number, number] }
   setCamera: (params: { distance: number; theta: number; phi: number; target: [number, number, number] }) => void
 }
@@ -109,10 +110,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const cameraRef = useRef<SimpleOrbitCamera | null>(null)
 
   const appMainMode = useSelectionStore((state) => state.mainMode)
+  const animationSubMode = useSelectionStore((state) => state.animationSubMode)
   const rendererReloadTrigger = useModelStore((state) => state.rendererReloadTrigger)
   const mpqLoaded = useRendererStore((state) => state.mpqLoaded)
-  // Note: animationSubMode removed as unused. Re-add if needed:
-  // const animationSubMode = useSelectionStore((state) => state.animationSubMode)
+  const glRef = useRef<WebGL2RenderingContext | WebGLRenderingContext | null>(null)
   const animationFrameId = useRef<number | null>(null)
   const shouldRunRenderLoop = useRef<boolean>(true) // Flag to stop RAF loop on cleanup
   const lastFpsTime = useRef<number>(performance.now())
@@ -187,9 +188,18 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const backgroundColorRef = useRef(backgroundColor)
 
   // Store-derived refs
-  const showVerticesRef = useRef(
-    useRendererStore.getState().showVerticesByMode[useSelectionStore.getState().mainMode] ?? true
-  )
+  const getShowVerticesForCurrentContext = () => {
+    const state = useRendererStore.getState() as any
+    const sel = useSelectionStore.getState()
+    if (sel.mainMode === 'animation') {
+      return sel.animationSubMode === 'binding'
+        ? (state.showVerticesInAnimationBinding ?? true)
+        : (state.showVerticesInAnimationKeyframe ?? false)
+    }
+    return state.showVerticesByMode?.[sel.mainMode] ?? true
+  }
+
+  const showVerticesRef = useRef(getShowVerticesForCurrentContext())
   const enableLightingRef = useRef(useRendererStore.getState().enableLighting)
   const vertexSettingsRef = useRef(useRendererStore.getState().vertexSettings)
 
@@ -224,8 +234,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
     // Sync store-only settings
     const state = useRendererStore.getState()
-    const { mainMode } = useSelectionStore.getState()
-    showVerticesRef.current = state.showVerticesByMode[mainMode] ?? true
+    showVerticesRef.current = getShowVerticesForCurrentContext()
     vertexSettingsRef.current = state.vertexSettings
   }, [showGrid, showNodes, showSkeleton, showCollisionShapes, showCameras, showLights, showAttachments, showWireframe, isPlaying, playbackSpeed, backgroundColor,
     // Add implicit dependencies if they result in re-render, otherwise we rely on the loop checking refs.
@@ -237,8 +246,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   // Separate effect for store-driven updates (since they aren't props)
   useEffect(() => {
     const unsub = useRendererStore.subscribe((state) => {
-      const { mainMode } = useSelectionStore.getState()
-      showVerticesRef.current = state.showVerticesByMode[mainMode] ?? true
+      showVerticesRef.current = getShowVerticesForCurrentContext()
       enableLightingRef.current = state.enableLighting
       vertexSettingsRef.current = state.vertexSettings
     })
@@ -246,9 +254,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   }, [])
 
   useEffect(() => {
-    const state = useRendererStore.getState()
-    showVerticesRef.current = state.showVerticesByMode[appMainMode] ?? true
-  }, [appMainMode])
+    // Update when mode/sub-mode changes even if rendererStore doesn't change.
+    showVerticesRef.current = getShowVerticesForCurrentContext()
+  }, [appMainMode, animationSubMode])
 
 
   useEffect(() => {
@@ -270,12 +278,32 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     setGlobalRenderer(renderer)
   }, [renderer, setGlobalRenderer])
 
-  const handleFitToView = () => {
-    // @ts-ignore
-    if (ref && ref.current && ref.current.fitToView) {
-      // @ts-ignore
-      ref.current.fitToView()
+  const readVec3 = (v: any): [number, number, number] | null => {
+    if (!v) return null
+    const a0 = Number((v as any)[0])
+    const a1 = Number((v as any)[1])
+    const a2 = Number((v as any)[2])
+    if (!Number.isFinite(a0) || !Number.isFinite(a1) || !Number.isFinite(a2)) return null
+    return [a0, a1, a2]
+  }
+
+  const getModelMinMax = (info: any): { min: [number, number, number], max: [number, number, number] } | null => {
+    // war3-model historically exposed Info.Extent = { Min, Max }
+    const extentMin = readVec3(info?.Extent?.Min)
+    const extentMax = readVec3(info?.Extent?.Max)
+    if (extentMin && extentMax) return { min: extentMin, max: extentMax }
+
+    // Many paths use Info.MinimumExtent / Info.MaximumExtent
+    const min = readVec3(info?.MinimumExtent)
+    const max = readVec3(info?.MaximumExtent)
+    if (min && max) return { min, max }
+
+    // Fallback: BoundsRadius around origin.
+    const r = Number(info?.BoundsRadius)
+    if (Number.isFinite(r) && r > 0) {
+      return { min: [-r, -r, -r], max: [r, r, r] }
     }
+    return null
   }
 
   useEffect(() => {
@@ -284,11 +312,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     // Fit to View when renderer changes (new model loaded)
     const keepCamera = useRendererStore.getState().keepCameraOnLoad;
     if (renderer && renderer.model && renderer.model.Info && !keepCamera) {
-      // @ts-ignore
-      if (ref && ref.current && ref.current.fitToView) {
-        // @ts-ignore
-        ref.current.fitToView()
-      }
+      // call internal impl; don't depend on external ref being present
+      // (toolbar/shortcuts should work even if parent doesn't pass a ref)
+      // eslint-disable-next-line @typescript-eslint/no-use-before-define
+      fitToViewImpl()
     }
   }, [renderer])
 
@@ -314,6 +341,39 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       vec3.copy(cameraRef.current.target, targetCamera.current.target)
       cameraRef.current.update()
     }
+  }
+
+  const fitToViewImpl = React.useCallback(() => {
+    const renderer = rendererRef.current
+    if (!renderer || !renderer.model || !renderer.model.Info) return
+
+    const info = renderer.model.Info as any
+    const bounds = getModelMinMax(info)
+    if (!bounds) return
+
+    const min = vec3.fromValues(bounds.min[0], bounds.min[1], bounds.min[2])
+    const max = vec3.fromValues(bounds.max[0], bounds.max[1], bounds.max[2])
+
+    const center = vec3.create()
+    vec3.add(center, min, max)
+    vec3.set(center, center[0] * 0.5, center[1] * 0.5, center[2] * 0.5)
+
+    const diagonal = vec3.dist(min, max)
+    const distance = Math.max(diagonal * 1.2, 300)
+
+    // If user was viewing a model camera, "fit" should return to orbit mode.
+    inCameraView.current = false
+    previousCameraState.current = null
+
+    targetCamera.current.target = center
+    targetCamera.current.distance = distance
+    targetCamera.current.theta = Math.PI / 4
+    targetCamera.current.phi = Math.PI / 3
+    syncCameraToOrbit()
+  }, [])
+
+  const handleFitToView = () => {
+    fitToViewImpl()
   }
 
   const handleCameraViewToggle = () => {
@@ -387,52 +447,36 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   }
 
   const getGizmoScale = () => {
-    let scale = 1.0
-    if (cameraRef.current) {
-      if (cameraRef.current.projectionMode === 'orthographic') {
-        // orthoSize 增大 = 视角缩小 → Gizmo 放大
-        scale = cameraRef.current.orthoSize / 400
-      } else {
-        // distance 增大 = 视角缩小 → Gizmo 放大
-        scale = cameraRef.current.distance / 600
-      }
-    }
-    // Clamp base scale first to keep camera auto-scaling stable
-    scale = Math.max(0.5, Math.min(50, scale * 10))
+    const cam = cameraRef.current
+    if (!cam) return 1.0
+
+    // NOTE: Historically we scaled ~linearly with distance to keep a near-constant screen size.
+    // Users reported the gizmo feeling too large when zoomed far out, so we intentionally make the
+    // scaling sub-linear (sqrt) to reduce growth at large distances.
+    const base = cam.projectionMode === 'orthographic' ? cam.orthoSize : cam.distance
+    const denom = cam.projectionMode === 'orthographic' ? 400 : 600
+
+    // Exponent < 1.0 => gizmo becomes smaller on screen when zooming out.
+    const EXP = 0.5
+    // Overall size tuning. Lower = smaller gizmo at all zoom levels.
+    const BASE_MULT = 6.0
+
+    let scale = Math.pow(Math.max(0.001, base) / denom, EXP) * BASE_MULT
+
+    // Clamp base scale first to keep scaling stable across extreme zooms.
+    scale = Math.max(0.15, Math.min(20, scale))
+
+    // User multiplier from settings (0.1..1.0).
     const gizmoSize = useRendererStore.getState().gizmoSize || 1
     scale *= gizmoSize
-    // Final clamp after user multiplier
-    return Math.max(0.1, Math.min(200, scale))
+
+    // Final clamp after user multiplier.
+    return Math.max(0.05, Math.min(40, scale))
   }
 
   // Expose methods to parent via ref
   useImperativeHandle(ref, () => ({
-    fitToView: () => {
-      const renderer = rendererRef.current
-      if (renderer && renderer.model && renderer.model.Info) {
-        const info = renderer.model.Info as any
-        if (info.Extent) {
-          const { Min, Max } = info.Extent
-          const min = vec3.fromValues(Min[0], Min[1], Min[2])
-          const max = vec3.fromValues(Max[0], Max[1], Max[2])
-
-          const center = vec3.create()
-          vec3.add(center, min, max)
-          vec3.set(center, center[0] * 0.5, center[1] * 0.5, center[2] * 0.5)
-
-          const diagonal = vec3.dist(min, max)
-          const distance = Math.max(diagonal * 1.2, 300)
-
-          console.log('[Viewer] fitToView call:', { center, distance })
-
-          targetCamera.current.target = center
-          targetCamera.current.distance = distance
-          targetCamera.current.theta = Math.PI / 4
-          targetCamera.current.phi = Math.PI / 3
-          syncCameraToOrbit()
-        }
-      }
-    },
+    fitToView: fitToViewImpl,
     getCamera: () => {
       // Read from SimpleOrbitCamera (actual camera used by render loop)
       if (cameraRef.current) {
@@ -479,7 +523,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
       }
     }
-  }), [])
+  }), [fitToViewImpl])
 
   // Mouse interaction state
   const mouseState = useRef({
@@ -492,6 +536,32 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     isBoxSelecting: false,
     isCtrlPressed: false // Store Ctrl state on mouseDown for reliable detection during drag
   })
+
+  // Hold Q in animation mode to temporarily ignore gizmo hit-testing so nearby nodes can be picked.
+  const qPressedRef = useRef(false)
+  useEffect(() => {
+    const onKeyDown = (ev: KeyboardEvent) => {
+      // Don't interfere with text input.
+      const el = document.activeElement
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return
+      if (el instanceof HTMLElement && el.isContentEditable) return
+
+      if (ev.key === 'q' || ev.key === 'Q') {
+        qPressedRef.current = true
+      }
+    }
+    const onKeyUp = (ev: KeyboardEvent) => {
+      if (ev.key === 'q' || ev.key === 'Q') {
+        qPressedRef.current = false
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+    }
+  }, [])
 
   const initialVertexPositions = useRef<Map<string, [number, number, number]>>(new Map())
   const initialNodePositions = useRef<Map<number, [number, number, number]>>(new Map())
@@ -789,47 +859,38 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           targetCamera.current.phi = Math.PI / 4
         }
         break
+      case 'orthographic':
+        // 切换到正交投影（不改变当前视角方向）
+        console.log('[Viewer] Switching to orthographic mode')
+        if (cameraRef.current) {
+          cameraRef.current.setOrthographic()
+        }
+        break
       case 'front':
-        targetCamera.current.theta = -Math.PI / 2
-        targetCamera.current.phi = Math.PI / 2
-        if (cameraRef.current) {
-          cameraRef.current.setOrthographic()
-        }
-        break
-      case 'back':
-        targetCamera.current.theta = Math.PI / 2
-        targetCamera.current.phi = Math.PI / 2
-        if (cameraRef.current) {
-          cameraRef.current.setOrthographic()
-        }
-        break
-      case 'left':
+        // War3 model coordinate system in this app: "front" visually matches +X view.
+        // (Previously, "left" was effectively front.)
         targetCamera.current.theta = 0
         targetCamera.current.phi = Math.PI / 2
-        if (cameraRef.current) {
-          cameraRef.current.setOrthographic()
-        }
         break
-      case 'right':
+      case 'back':
         targetCamera.current.theta = Math.PI
         targetCamera.current.phi = Math.PI / 2
-        if (cameraRef.current) {
-          cameraRef.current.setOrthographic()
-        }
+        break
+      case 'left':
+        targetCamera.current.theta = Math.PI / 2
+        targetCamera.current.phi = Math.PI / 2
+        break
+      case 'right':
+        targetCamera.current.theta = -Math.PI / 2
+        targetCamera.current.phi = Math.PI / 2
         break
       case 'top':
         targetCamera.current.theta = 0
         targetCamera.current.phi = 0.01
-        if (cameraRef.current) {
-          cameraRef.current.setOrthographic()
-        }
         break
       case 'bottom':
         targetCamera.current.theta = 0
         targetCamera.current.phi = Math.PI - 0.01
-        if (cameraRef.current) {
-          cameraRef.current.setOrthographic()
-        }
         break
       case 'focus':
         vec3.set(targetCamera.current.target, 0, 0, 0)
@@ -902,6 +963,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           }
         });
       }
+
+      // Nodes (including keyframes) changed; force a renderer.update(0) in the next RAF tick.
+      // Without this, keyframe mode can momentarily fall back to bind pose until another interaction
+      // (like a gizmo nudge) triggers a refresh.
+      needsRendererUpdateRef.current = true
     }
   }, [renderer, storeNodes]) // Now using proper Zustand selector for stable reference
 
@@ -922,6 +988,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       // Also sync other potential structural dependencies
       instance.syncMaterials()
       instance.syncGlobalSequences()
+
+      // Rebuild invalidates cached matrices; force a refresh in the render loop.
+      needsRendererUpdateRef.current = true
     }
   }, [structureUpdateTrigger, renderer])
 
@@ -970,11 +1039,12 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         }
         // Force a clear on the canvas
         if (canvasRef.current) {
-          const gl = canvasRef.current.getContext('webgl2') || canvasRef.current.getContext('webgl');
-          if (gl) {
-            gl.clearColor(0, 0, 0, 0);
-            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-          }
+          // Clear without creating a context.
+          const canvas = canvasRef.current
+          const w = canvas.width
+          const h = canvas.height
+          canvas.width = w
+          canvas.height = h
         }
       }
     }
@@ -1008,8 +1078,15 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     // In geometry mode: Alt = camera rotation (allow Gizmo)
     // In animation mode: Alt = box selection (block Gizmo)
     const shouldBlockGizmoForAlt = e.altKey && mainMode === 'animation'
+    const shouldIgnoreGizmoForQ = mainMode === 'animation' && qPressedRef.current && e.button === 0
+    const shouldBlockGizmo = shouldBlockGizmoForAlt || shouldIgnoreGizmoForQ
 
-    if (gizmoState.current.activeAxis && e.button === 0 && !shouldBlockGizmoForAlt) {
+    if (shouldIgnoreGizmoForQ) {
+      // Clear hover hit so Q+click won't be stolen by gizmo drag.
+      gizmoState.current.activeAxis = null
+    }
+
+    if (gizmoState.current.activeAxis && e.button === 0 && !shouldBlockGizmo) {
       // Block Gizmo in keyframe mode when autoKeyframe is disabled
       const { animationSubMode: subMode, isGlobalTransformMode } = useSelectionStore.getState()
       const { autoKeyframe } = useModelStore.getState()
@@ -1845,10 +1922,12 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         canvas.width = width
         canvas.height = height
 
-        // Update WebGL viewport
-        const gl = canvas.getContext('webgl2') || canvas.getContext('webgl')
-        if (gl) {
-          gl.viewport(0, 0, width, height)
+        // Update viewport only if we actually have a WebGL context.
+        // Create a WebGL context for the viewer canvas.
+        if (glRef.current) {
+          glRef.current.viewport(0, 0, width, height)
+        } else if (rendererRef.current && typeof (rendererRef.current as any).resize === 'function') {
+          ; (rendererRef.current as any).resize(width, height)
         }
 
         // Render immediately to prevent flicker (canvas clears on resize)
@@ -1892,15 +1971,14 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       setRenderer(null)
     }
 
-    // Clear the canvas to remove any visual artifacts from the old model
+    // Clear the canvas without creating a context.
     const canvas = canvasRef.current
     if (canvas) {
-      const clearGl = canvas.getContext('webgl2') || canvas.getContext('webgl')
-      if (clearGl) {
-        // Use alpha 0 to avoid black background bleeding through transparent textures
-        clearGl.clearColor(0, 0, 0, 0)
-        clearGl.clear(clearGl.COLOR_BUFFER_BIT | clearGl.DEPTH_BUFFER_BIT)
-      }
+      // Resetting width/height clears the drawing buffer.
+      const w = canvas.width
+      const h = canvas.height
+      canvas.width = w
+      canvas.height = h
     }
 
     try {
@@ -1917,14 +1995,18 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         preserveDrawingBuffer: false
       }
 
-      let gl: WebGL2RenderingContext | WebGLRenderingContext | null = canvas.getContext('webgl2', contextAttributes) as WebGL2RenderingContext | null
-      if (!gl) {
-        gl = canvas.getContext('webgl', contextAttributes) as WebGLRenderingContext | null
-      }
+      glRef.current = null
+
+      const gl =
+        (canvas.getContext('webgl2', contextAttributes) as WebGL2RenderingContext | null) ||
+        (canvas.getContext('webgl', contextAttributes) as WebGLRenderingContext | null)
+
       if (!gl) {
         console.error('[Viewer] WebGL not supported')
         return
       }
+
+      glRef.current = gl
 
       gl.clearColor(0.2, 0.2, 0.2, 0)
       gl.enable(gl.DEPTH_TEST)
@@ -1993,7 +2075,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       const { model: rendererModelWithSequences, usedFallback } = ensureRendererSequences(model)
       const { model: rendererModel, defaultNodeId } = ensureRenderNodes(rendererModelWithSequences)
       ensureGeosetGroups(rendererModel, defaultNodeId)
+      console.log('[Viewer] Initializing Renderer Backend (WebGL)... gl:', !!gl)
       const newRenderer = new ModelRenderer(rendererModel)
+      console.log('[Viewer] Calling initGL')
       newRenderer.initGL(gl)
       // NOTE: setRenderer(newRenderer) is called AFTER texture loading to avoid race condition
       newRenderer.update(0)
@@ -2075,14 +2159,16 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         return
       }
 
-      let gl: WebGL2RenderingContext | WebGLRenderingContext | null = canvas.getContext('webgl2') as WebGL2RenderingContext | null
-      if (!gl) {
-        gl = canvas.getContext('webgl') as WebGLRenderingContext | null
-      }
+      const gl =
+        (canvas.getContext('webgl2') as WebGL2RenderingContext | null) ||
+        (canvas.getContext('webgl') as WebGLRenderingContext | null)
+
       if (!gl) {
         console.error('[Viewer] WebGL not supported')
         return
       }
+
+      glRef.current = gl
 
       // Copy Geoset geometry data from captured old Geosets
       // The modelData from store loses TypedArrays (Vertices, Faces, Normals) during spread operations
@@ -2145,7 +2231,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       const newRenderer = new ModelRenderer(rendererModelWithSequences)
       console.log('[Viewer] Step 2: ModelRenderer created')
 
-      console.log('[Viewer] Step 3: Initializing WebGL...')
+      console.log('[Viewer] Step 3: Initializing Renderer Backend (WebGL)...')
       newRenderer.initGL(gl)
       console.log('[Viewer] Step 3: WebGL initialized')
 
@@ -2482,14 +2568,19 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         alpha: true,
         premultipliedAlpha: true
       }
-      const gl = canvasRef.current.getContext('webgl2', contextAttributes) || canvasRef.current.getContext('webgl', contextAttributes)
+      const gl =
+        glRef.current ||
+        (canvasRef.current.getContext('webgl2', contextAttributes) as any) ||
+        (canvasRef.current.getContext('webgl', contextAttributes) as any)
+
       if (!gl) return undefined
+      glRef.current = gl
 
       // Clear the canvas before initializing (use alpha 0 for transparency)
       gl.clearColor(0, 0, 0, 0)
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 
-      // Reinitialize helper renderers with the current GL context
+      // Reinitialize helper renderers with the current GL context.
       gridRenderer.current.init(gl)
       debugRenderer.current.init(gl)
       gizmoRenderer.current.init(gl)
@@ -2520,7 +2611,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
         try {
 
-          if (!gl || !canvasRef.current) {
+          const canvas = canvasRef.current
+          const mdlRenderer = rendererRef.current
+
+          if (!canvas || !mdlRenderer) {
             // Only continue polling if we should still run AND this is still the active loop
             if (runState.shouldRun && globalRenderLoopId === myLoopId) {
               animationFrameId.current = requestAnimationFrame(render)
@@ -2528,20 +2622,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             return
           }
 
-          const canvas = canvasRef.current
-          // CRITICAL: Use rendererRef.current instead of closure-captured 'renderer'
-          // to always get the LATEST renderer, even if component re-renders with new renderer
-          const mdlRenderer = rendererRef.current
-
-          const [r, g, b] = hexToRgb(backgroundColorRef.current)
-          gl.clearColor(r, g, b, 1.0)
-          gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
-
-          if (!mdlRenderer) {
-            if (globalRenderLoopId === myLoopId) {
-              animationFrameId.current = requestAnimationFrame(render)
-            }
-            return
+          if (gl) {
+            const [r, g, b] = hexToRgb(backgroundColorRef.current)
+            gl.clearColor(r, g, b, 1.0)
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
           }
           const delta = time - lastFrameTime.current
           lastFrameTime.current = time
@@ -2553,10 +2637,12 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           const pMatrix = pMatrixRef.current
           const mvMatrix = mvMatrixRef.current
 
-          gl.enable(gl.DEPTH_TEST)
-          gl.depthFunc(gl.LEQUAL)
-          gl.enable(gl.BLEND)
-          gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+          if (gl) {
+            gl.enable(gl.DEPTH_TEST)
+            gl.depthFunc(gl.LEQUAL)
+            gl.enable(gl.BLEND)
+            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+          }
 
           // Use SimpleOrbitCamera for matrices
           if (cameraRef.current) {
@@ -2631,12 +2717,23 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             // 性能优化: 仅在必要时更新骨骼矩阵（如 Gizmo 拖动或帧变化）
             // 静态姿势时跳过矩阵计算，节省 CPU
             const gizmoDragging = gizmoState.current.isDragging
-            const currentFrame = mdlRenderer.rendererData?.frame ?? 0
+            let currentFrame = mdlRenderer.rendererData?.frame ?? 0
+
+            // When paused, the STORE is the source of truth for scrubbing/stepping frames.
+            // If we don't push store.currentFrame -> rendererData.frame, the render loop can get "stuck"
+            // and appear to snap to bind pose until another interaction triggers update().
+            const storeFrame = useModelStore.getState().currentFrame
+            let forceFrameRefresh = false
+            if (mdlRenderer.rendererData && Math.abs(storeFrame - currentFrame) > 0.1) {
+              mdlRenderer.rendererData.frame = storeFrame
+              currentFrame = storeFrame
+              forceFrameRefresh = true
+            }
 
             // 使用 ref 替代 window 全局变量，避免污染和潜在冲突
             const lastFrame = frameCacheRef.current
 
-            const needsUpdate = needsRendererUpdateRef.current
+            const needsUpdate = needsRendererUpdateRef.current || forceFrameRefresh
             if (gizmoDragging || needsUpdate || currentFrame !== lastFrame) {
               // Update with delta=0 to refresh bone matrices without advancing animation
               mdlRenderer.update(0)
@@ -2656,7 +2753,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           }
 
           // === Collision Shape Rendering ===
-          if (showCollisionShapesRef.current && mdlRenderer.rendererData && mdlRenderer.rendererData.nodes) {
+          if (gl && showCollisionShapesRef.current && mdlRenderer.rendererData && mdlRenderer.rendererData.nodes) {
             // Filter nodes that look like collision shapes (have Shape property)
             const collisionNodes = mdlRenderer.rendererData.nodes.filter((n: any) => n.node.hasOwnProperty('Shape') || n.node.type === 'CollisionShape');
 
@@ -2698,7 +2795,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                   if (!center) center = node.Vertex1 || [0, 0, 0];
                   const radius = node.BoundsRadius || 0;
 
-                  if (center && (mdlRenderer as any).gl) {
+                  if (center && gl) {
                     debugRenderer.current.renderWireframeSphere(
                       (mdlRenderer as any).gl,
                       nodeMVMatrix,
@@ -2723,7 +2820,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                   if (!v1) v1 = node.Vertex1;
                   if (!v2) v2 = node.Vertex2;
 
-                  if (v1 && v2 && (mdlRenderer as any).gl) {
+                  if (v1 && v2 && gl) {
                     debugRenderer.current.renderWireframeBox(
                       (mdlRenderer as any).gl,
                       nodeMVMatrix,
@@ -2739,8 +2836,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           }
 
           // === Camera Frustum Rendering ===
-          if (showCamerasRef.current && (mdlRenderer as any).gl) {
-            const gl = (mdlRenderer as any).gl;
+          if (gl && showCamerasRef.current) {
             const { nodes: storeNodes } = useModelStore.getState();
             const cameraNodes = storeNodes.filter((n: any) => n.type === 'Camera');
 
@@ -2877,22 +2973,29 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               mat4.multiply(mvMatrix, mvMatrix, previewMatrix)
             }
 
-            mdlRenderer.render(mvMatrix, pMatrix, { wireframe: showWireframeRef.current || (currentMainMode === 'geometry' && (geometrySubMode === 'face' || geometrySubMode === 'group')), enableLighting: enableLightingRef.current } as any)
+            const { gridSettings, showGridXY, showGridXZ, showGridYZ } = useRendererStore.getState()
+
+            const renderOpts = {
+              wireframe: showWireframeRef.current || (currentMainMode === 'geometry' && (geometrySubMode === 'face' || geometrySubMode === 'group')),
+              enableLighting: enableLightingRef.current
+            } as any
+
+            // WebGL render
+            mdlRenderer.render(mvMatrix, pMatrix, renderOpts)
 
             // === Grid Rendering (Moved AFTER model for correct depth/overlay handling) ===
-            const { gridSettings, showGridXY, showGridXZ, showGridYZ } = useRendererStore.getState()
-            if (showGridXY || showGridXZ || showGridYZ) {
+            if (gl && (showGridXY || showGridXZ || showGridYZ)) {
               gridRenderer.current.updateBuffers(gl as WebGLRenderingContext, gridSettings.gridSize || 2048)
               gridRenderer.current.render(gl as WebGLRenderingContext, baseMvMatrix || mvMatrix, pMatrix, gridSettings, showGridXY, showGridXZ, showGridYZ)
             }
 
             // === Vertices Rendering (Moved AFTER model for correct depth/overlay handling) ===
-            if (showVerticesRef.current && mdlRenderer.model.Geosets && (mdlRenderer as any).gl) {
+            if (gl && showVerticesRef.current && mdlRenderer.model.Geosets) {
               const settings = vertexSettingsRef.current
               mdlRenderer.model.Geosets.forEach((geoset: any) => {
                 if (geoset.Vertices) {
                   debugRenderer.current.renderPoints(
-                    (mdlRenderer as any).gl,
+                    gl,
                     mvMatrix,
                     pMatrix,
                     geoset.Vertices,
@@ -2905,8 +3008,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             }
 
             // === Attachment Point Rendering (Moved AFTER main scene to handle depth/overlay) ===
-            if (showAttachmentsRef.current && (mdlRenderer as any).gl && mdlRenderer.rendererData?.nodes) {
-              const gl = (mdlRenderer as any).gl;
+            if (gl && showAttachmentsRef.current && mdlRenderer.rendererData?.nodes) {
               // Filter nodes that are attachments
               const attachmentNodes = (mdlRenderer.rendererData.nodes as any[]).filter((n: any) =>
                 n.node.type === NodeType.ATTACHMENT ||
@@ -2960,7 +3062,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             if (hoveredGeosetId !== null && mdlRenderer.model.Geosets && mdlRenderer.model.Geosets[hoveredGeosetId]) {
               const isWireframeMode = showWireframeRef.current || (currentMainMode === 'geometry' && (geometrySubMode === 'face' || geometrySubMode === 'group'))
 
-              if (isWireframeMode && debugRenderer.current) {
+              if (isWireframeMode && gl && debugRenderer.current) {
                 // In wireframe mode, draw red wireframe for hovered geoset using debugRenderer
                 const geoset = mdlRenderer.model.Geosets[hoveredGeosetId]
                 if (geoset && geoset.Faces && geoset.Vertices) {
@@ -3139,13 +3241,15 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
             if (showSkeletonRef.current && mdlRenderer.rendererData.nodes && currentMainMode === 'animation') {
               const { selectedNodeIds } = useSelectionStore.getState()
-              gl.disable(gl.DEPTH_TEST);
-              (mdlRenderer as any).renderSkeleton(mvMatrix, pMatrix, null, selectedNodeIds)
-              gl.enable(gl.DEPTH_TEST)
+              if (gl) {
+                gl.disable(gl.DEPTH_TEST)
+                  ; (mdlRenderer as any).renderSkeleton(mvMatrix, pMatrix, null, selectedNodeIds)
+                gl.enable(gl.DEPTH_TEST)
+              }
             }
 
             // === Light Object Rendering ===
-            if (showLightsRef.current && mdlRenderer.rendererData.nodes) {
+            if (gl && showLightsRef.current && mdlRenderer.rendererData.nodes) {
               const { nodes } = useModelStore.getState()
               const lightNodes = nodes.filter((n: any) => n.type === 'Light')
 
@@ -3216,8 +3320,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
           }
 
-          if ((currentMainMode === 'geometry' && geometrySubMode === 'vertex') ||
-            (currentMainMode === 'animation' && currentAnimationSubMode === 'binding')) {
+          if (gl && ((currentMainMode === 'geometry' && geometrySubMode === 'vertex') ||
+            (currentMainMode === 'animation' && currentAnimationSubMode === 'binding'))) {
             // Get geoset visibility state from modelStore
             const { hiddenGeosetIds, forceShowAllGeosets, hoveredGeosetId } = useModelStore.getState()
             // Get color settings from rendererStore
@@ -3317,7 +3421,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             }
           }
 
-          if (currentMainMode === 'geometry' && geometrySubMode === 'face') {
+          if (gl && currentMainMode === 'geometry' && geometrySubMode === 'face') {
             if (selectedFaceIds.length > 0) {
               const { selectionColor } = useRendererStore.getState()
               const selectionColorRgb = hexToRgb(selectionColor)
@@ -3439,7 +3543,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               showGizmo = true
             }
 
-            if (showGizmo && count > 0) {
+            if (gl && showGizmo && count > 0) {
               vec3.scale(center, center, 1.0 / count)
 
               const gizmoScale = getGizmoScale()
@@ -3462,7 +3566,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           // Grid already rendered before model for proper depth occlusion
 
           // Always render the axis indicator in bottom-left corner
-          axisIndicator.current.render(gl as WebGLRenderingContext, baseMvMatrix || mvMatrix, canvas.width, canvas.height)
+          if (gl) {
+            axisIndicator.current.render(gl as WebGLRenderingContext, baseMvMatrix || mvMatrix, canvas.width, canvas.height)
+          }
 
           frameCount.current++
           if (time - lastFpsTime.current >= 1000) {
@@ -3541,10 +3647,44 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   }
 
   const toNumberArray = (v: any, fallback: number[]): number[] => {
-    if (!v) return fallback
-    if (typeof v.length === 'number' && v.length === 0) return fallback
+    if (!v) return [...fallback]
+    if (typeof v.length === 'number' && v.length === 0) return [...fallback]
     const arr = Array.isArray(v) ? [...v] : Array.from(v) as number[]
-    return arr.length > 0 ? arr : fallback
+    if (!arr || arr.length === 0) return [...fallback]
+
+    // Keep shape stable and avoid propagating NaN/Infinity into keyframes.
+    return fallback.map((def, idx) => {
+      const n = Number(arr[idx])
+      return Number.isFinite(n) ? n : def
+    })
+  }
+
+  const normalizeQuatSafe = (q: number[]): number[] => {
+    const x = Number(q[0])
+    const y = Number(q[1])
+    const z = Number(q[2])
+    const w = Number(q[3])
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z) || !Number.isFinite(w)) {
+      return [0, 0, 0, 1]
+    }
+    const len = Math.hypot(x, y, z, w)
+    if (!Number.isFinite(len) || len < 1e-8) {
+      return [0, 0, 0, 1]
+    }
+    return [x / len, y / len, z / len, w / len]
+  }
+
+  const sanitizeTransformValue = (
+    propertyName: 'Translation' | 'Rotation' | 'Scaling',
+    value: any,
+    defaultVal: number[]
+  ): number[] => {
+    const base = toNumberArray(value, defaultVal)
+    if (propertyName === 'Rotation') {
+      return normalizeQuatSafe(base)
+    }
+    // Translation / Scaling: just guarantee finite values and stable length.
+    return base
   }
 
   const interpolateValueAtFrame = (keys: any[] | undefined, frame: number, defaultVal: number[]): number[] => {
@@ -3556,7 +3696,14 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     if (frame >= sorted[sorted.length - 1].Frame) return toNumberArray(sorted[sorted.length - 1].Vector, defaultVal)
     for (let i = 0; i < sorted.length - 1; i++) {
       if (frame >= sorted[i].Frame && frame <= sorted[i + 1].Frame) {
-        const t = (frame - sorted[i].Frame) / (sorted[i + 1].Frame - sorted[i].Frame)
+        const startFrame = Number(sorted[i].Frame)
+        const endFrame = Number(sorted[i + 1].Frame)
+        const span = endFrame - startFrame
+        if (!Number.isFinite(span) || Math.abs(span) < 1e-8) {
+          return toNumberArray(sorted[i + 1].Vector, defaultVal)
+        }
+        const tRaw = (frame - startFrame) / span
+        const t = Math.max(0, Math.min(1, tRaw))
         const from = toNumberArray(sorted[i].Vector, defaultVal)
         const to = toNumberArray(sorted[i + 1].Vector, defaultVal)
         return from.map((v, idx) => v + (to[idx] - v) * t)
@@ -4659,6 +4806,13 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     }
 
     if (!gizmoState.current.isDragging && !mouseState.current.isDragging && rendererRef.current) {
+      const { mainMode } = useSelectionStore.getState()
+      if (mainMode === 'animation' && qPressedRef.current) {
+        // While holding Q in animation mode, don't show gizmo hover hit and don't set activeAxis.
+        if (gizmoState.current.activeAxis) gizmoState.current.activeAxis = null
+        return
+      }
+
       // Center is already calculated at top of handleMouseMove
       // gizmoCenter and gizmoCount are used here from closure
       const center = gizmoCenter
@@ -5303,12 +5457,17 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     const { nodes, currentFrame } = useModelStore.getState()
     if (!nodes || nodes.length === 0) return false
     const frame = Math.round(currentFrame)
-    const poseNodes = nodes.map((n: any) => ({
-      nodeId: n.ObjectId,
-      translation: interpolateValueAtFrame(n.Translation?.Keys, frame, [0, 0, 0]),
-      rotation: interpolateValueAtFrame(n.Rotation?.Keys, frame, [0, 0, 0, 1]),
-      scaling: interpolateValueAtFrame(n.Scaling?.Keys, frame, [1, 1, 1])
-    }))
+    const poseNodes = nodes
+      .filter((n: any) => typeof n.ObjectId === 'number' && n.ObjectId >= 0 && n.type !== NodeType.CAMERA)
+      .map((n: any) => ({
+        nodeId: n.ObjectId,
+        translation: sanitizeTransformValue('Translation', interpolateValueAtFrame(n.Translation?.Keys, frame, [0, 0, 0]), [0, 0, 0]),
+        rotation: sanitizeTransformValue('Rotation', interpolateValueAtFrame(n.Rotation?.Keys, frame, [0, 0, 0, 1]), [0, 0, 0, 1]),
+        scaling: sanitizeTransformValue('Scaling', interpolateValueAtFrame(n.Scaling?.Keys, frame, [1, 1, 1]), [1, 1, 1])
+      }))
+
+    if (poseNodes.length === 0) return false
+
     poseClipboardRef.current = { frame, nodes: poseNodes }
     return true
   }
@@ -5319,7 +5478,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     const { nodes, currentFrame } = useModelStore.getState()
     if (!nodes || nodes.length === 0) return false
     const frame = Math.round(currentFrame)
-    const nodeMap = new Map(nodes.map((n: any) => [n.ObjectId, n]))
+    const nodeMap = new Map(
+      nodes
+        .filter((n: any) => typeof n.ObjectId === 'number' && n.ObjectId >= 0 && n.type !== NodeType.CAMERA)
+        .map((n: any) => [n.ObjectId, n])
+    )
     const changes: KeyframeChange[] = []
 
     const pushChange = (
@@ -5332,8 +5495,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       if (!node) return
       const prop = node[propertyName]
       const existingKey = prop?.Keys?.find((k: any) => Math.abs(k.Frame - frame) < 0.1)
-      const oldValue = existingKey?.Vector ? toNumberArray(existingKey.Vector, defaultVal) : null
-      const newValue = toNumberArray(value, defaultVal)
+      const oldValue = existingKey?.Vector ? sanitizeTransformValue(propertyName, existingKey.Vector, defaultVal) : null
+      const newValue = sanitizeTransformValue(propertyName, value, defaultVal)
       changes.push({
         nodeId,
         propertyName,
@@ -5528,16 +5691,22 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           position: 'absolute',
           top: '10px',
           right: '10px',
-          background: 'rgba(0, 0, 0, 0.5)',
-          color: '#0f0',
-          padding: '5px 10px',
+          background: 'rgba(0, 0, 0, 0.6)',
+          backdropFilter: 'blur(4px)',
+          color: (renderer as any)?.device ? '#00f2ff' : '#00ff00',
+          padding: '4px 10px',
           borderRadius: '4px',
+          border: '1px solid rgba(255, 255, 255, 0.1)',
           fontFamily: 'monospace',
-          fontSize: '14px',
+          fontSize: '13px',
           pointerEvents: 'none',
-          zIndex: 10
+          zIndex: 10,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'flex-end',
+          boxShadow: '0 2px 8px rgba(0, 0, 0, 0.3)'
         }}>
-          FPS: {fps}
+          <div style={{ fontWeight: 'bold' }}>{fps} FPS</div>
         </div>
       )}
 
