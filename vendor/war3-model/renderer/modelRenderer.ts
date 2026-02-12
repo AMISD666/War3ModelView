@@ -122,13 +122,13 @@ const GPU_LAYER_PROPS: [string, GPUBlendState, GPUDepthStencilState][] = [['none
     }], ['transparent', {
         color: {
             operation: 'add',
-            srcFactor: 'src-alpha',
-            dstFactor: 'one-minus-src-alpha'
+            srcFactor: 'one',
+            dstFactor: 'zero'
         },
         alpha: {
             operation: 'add',
             srcFactor: 'one',
-            dstFactor: 'one-minus-src-alpha'
+            dstFactor: 'zero'
         }
     }, {
         depthWriteEnabled: true,
@@ -152,12 +152,12 @@ const GPU_LAYER_PROPS: [string, GPUBlendState, GPUDepthStencilState][] = [['none
     }], ['additive', {
         color: {
             operation: 'add',
-            srcFactor: 'one',
+            srcFactor: 'src-alpha',
             dstFactor: 'one'
         },
         alpha: {
             operation: 'add',
-            srcFactor: 'one',
+            srcFactor: 'src-alpha',
             dstFactor: 'one'
         }
     }, {
@@ -1423,19 +1423,6 @@ export class ModelRenderer {
 
                     this.setLayerPropsHD(instance, materialID, material.Layers);
 
-                    if (instance.rendererData.geosetAlpha[i] < 1.0) {
-                        this.gl.enable(this.gl.BLEND);
-                        // For HD, we might generally want smooth transparency if forced by geoset alpha
-                        // Assuming standard blending is fine.
-                        // Check base layer filter mode for override needs
-                        const baseLayerMode = material.Layers[0]?.FilterMode || 0;
-                        if (baseLayerMode === FilterMode.None || baseLayerMode === FilterMode.Transparent) {
-                            this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
-                            this.gl.uniform1f(this.shaderProgramLocations.discardAlphaLevelUniform, 0.);
-                            this.gl.depthMask(false);
-                        }
-                    }
-
                     this.gl.drawElements(
                         wireframe ? this.gl.LINES : this.gl.TRIANGLES,
                         wireframe ? geoset.Faces.length * 2 : geoset.Faces.length,
@@ -1446,17 +1433,8 @@ export class ModelRenderer {
             } else {
                 const layerOrder = Array.from({ length: material.Layers.length }, (_, idx) => idx);
                 if (renderPass === 'transparent') {
-                    const priority = (mode: number) => {
-                        if (mode === FilterMode.Blend) return 0;
-                        if (mode === FilterMode.Additive || mode === FilterMode.AddAlpha) return 1;
-                        if (mode === FilterMode.Modulate || mode === FilterMode.Modulate2x) return 2;
-                        return 3;
-                    };
-                    layerOrder.sort((a, b) => {
-                        const modeA = material.Layers[a].FilterMode || 0;
-                        const modeB = material.Layers[b].FilterMode || 0;
-                        return priority(modeA) - priority(modeB) || a - b;
-                    });
+                    // Reference behavior (mdx-m3-viewer): sort translucent batches by filter mode.
+                    layerOrder.sort((a, b) => (material.Layers[a].FilterMode || 0) - (material.Layers[b].FilterMode || 0));
                 }
 
                 for (const j of layerOrder) {
@@ -1482,7 +1460,6 @@ export class ModelRenderer {
                         const layerAlpha = this.getLayerAlpha(layer, instance.interp);
                         this.gl.uniform3fv(this.shaderProgramLocations.geosetColorUniform, geosetColor);
                         this.gl.uniform1f(this.shaderProgramLocations.layerAlphaUniform, layerAlpha);
-                        this.gl.uniform1f(this.shaderProgramLocations.layerAlphaUniform, layerAlpha);
                         this.gl.uniform1f(this.shaderProgramLocations.geosetAlphaUniform, instance.rendererData.geosetAlpha[i]);
 
                         // --- unshaded support ---
@@ -1498,15 +1475,6 @@ export class ModelRenderer {
 
                         // setLayerProps now always returns true if texture exists in model even if missing file
                         this.setLayerProps(instance, layer, textureID);
-
-                        if (layerAlpha < 1.0 || instance.rendererData.geosetAlpha[i] < 1.0) {
-                            this.gl.enable(this.gl.BLEND);
-                            if (layer.FilterMode === FilterMode.None || layer.FilterMode === FilterMode.Transparent) {
-                                this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
-                                this.gl.uniform1f(this.shaderProgramLocations.discardAlphaLevelUniform, 0.);
-                                this.gl.depthMask(false);
-                            }
-                        }
 
                         this.gl.drawElements(
                             wireframe ? this.gl.LINES : this.gl.TRIANGLES,
@@ -1737,15 +1705,6 @@ export class ModelRenderer {
                     const textureID = instance.rendererData.materialLayerTextureID[geoset.MaterialID][j];
                     this.setLayerProps(instance, layer, textureID);
 
-                    if (layerAlpha < 1.0 || instance.rendererData.geosetAlpha[i] < 1.0) {
-                        this.gl.enable(this.gl.BLEND);
-                        if (layer.FilterMode === FilterMode.None || layer.FilterMode === FilterMode.Transparent) {
-                            this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
-                            this.gl.uniform1f(this.shaderProgramLocations.discardAlphaLevelUniform, 0.);
-                            this.gl.depthMask(false);
-                        }
-                    }
-
                     this.gl.drawElements(
                         wireframe ? this.gl.LINES : this.gl.TRIANGLES,
                         wireframe ? geoset.Faces.length * 2 : geoset.Faces.length,
@@ -1936,18 +1895,14 @@ export class ModelRenderer {
 
                 if (this.isHD) {
                     const baseLayer = material.Layers[0];
-                    if (depthTextureTarget && !FILTER_MODES_WITH_DEPTH_WRITE.has(baseLayer.FilterMode || 0)) {
+                    if (depthTextureTarget && !FILTER_MODES_WITH_DEPTH_WRITE.has(this.getNormalizedFilterMode(baseLayer.FilterMode))) {
                         continue;
                     }
-                    // If alpha is forced by animation, match WebGL behavior by switching "opaque" modes to Blend pipeline.
                     const baseLayerAlpha = this.getLayerAlpha(baseLayer, this.modelInstance.interp) * this.rendererData.geosetAlpha[i];
-                    const baseMode = baseLayer.FilterMode || 0;
-                    const forcedBlend = baseLayerAlpha < 0.999 && (baseMode === FilterMode.None || baseMode === FilterMode.Transparent);
-                    const pipelineBaseLayer = forcedBlend ? ({ ...baseLayer, FilterMode: FilterMode.Blend } as any) : baseLayer;
 
                     const pipeline = depthTextureTarget ?
                         this.gpuShadowPipeline :
-                        (wireframe ? this.gpuWireframePipeline : this.getGPUPipeline(pipelineBaseLayer));
+                        (wireframe ? this.gpuWireframePipeline : this.getGPUPipeline(baseLayer));
                     pass.setPipeline(pipeline);
 
                     const textures = this.rendererData.materialLayerTextureID[materialID];
@@ -1998,7 +1953,7 @@ export class ModelRenderer {
                 };
                     FSUniformsViews.replaceableColor.set(this.rendererData.teamColor);
                     // FSUniformsViews.replaceableType.set([texture.ReplaceableId || 0]);
-                    FSUniformsViews.discardAlphaLevel.set([(forcedBlend ? 0 : (baseLayer.FilterMode === FilterMode.Transparent ? .75 : 0))]);
+                    FSUniformsViews.discardAlphaLevel.set([this.getDiscardAlphaLevel(baseLayer.FilterMode)]);
                     FSUniformsViews.tVertexAnim.set(tVetexAnim.slice(0, 3));
                     FSUniformsViews.tVertexAnim.set(tVetexAnim.slice(3, 6), 4);
                     FSUniformsViews.tVertexAnim.set(tVetexAnim.slice(6, 9), 8);
@@ -2093,22 +2048,11 @@ export class ModelRenderer {
 
                     pass.drawIndexed(wireframe ? geoset.Faces.length * 2 : geoset.Faces.length);
                 } else {
-                    // Match WebGL ordering: render opaque layers first, then transparent layers (sorted by blend mode priority).
+                    // Match reference behavior: opaque first, then translucent layers sorted by filter mode.
                     const layerOrder = Array.from({ length: material.Layers.length }, (_, idx) => idx);
-                    const priority = (mode: number) => {
-                        if (mode === FilterMode.Blend) return 0;
-                        if (mode === FilterMode.Additive || mode === FilterMode.AddAlpha) return 1;
-                        if (mode === FilterMode.Modulate || mode === FilterMode.Modulate2x) return 2;
-                        return 3;
-                    };
                     const opaqueLayers = layerOrder.filter((idx) => ((material.Layers[idx].FilterMode || 0) <= 1));
-                    const transparentLayers = layerOrder
-                        .filter((idx) => ((material.Layers[idx].FilterMode || 0) > 1))
-                        .sort((a, b) => {
-                            const modeA = material.Layers[a].FilterMode || 0;
-                            const modeB = material.Layers[b].FilterMode || 0;
-                            return priority(modeA) - priority(modeB) || a - b;
-                        });
+                    const transparentLayers = layerOrder.filter((idx) => ((material.Layers[idx].FilterMode || 0) > 1));
+                    transparentLayers.sort((a, b) => (material.Layers[a].FilterMode || 0) - (material.Layers[b].FilterMode || 0));
 
                     const orderedLayers = opaqueLayers.concat(transparentLayers);
 
@@ -2121,16 +2065,7 @@ export class ModelRenderer {
                         const texture = this.model.Textures[textureID];
 
                         const layerAlpha = this.getLayerAlpha(layer, this.modelInstance.interp);
-                        const effectiveAlpha = layerAlpha * geosetAlpha;
-
-                        // If an "opaque" layer is forced to be translucent via animation, match WebGL behavior:
-                        // switch to Blend pipeline (depthWrite=false) and disable alpha-test.
-                        const originalMode = layer.FilterMode || 0;
-                        const forcedBlend = effectiveAlpha < 0.999 && (originalMode === FilterMode.None || originalMode === FilterMode.Transparent);
-                        const effectiveMode = forcedBlend ? FilterMode.Blend : originalMode;
-
-                        const pipelineLayer = forcedBlend ? ({ ...layer, FilterMode: effectiveMode } as any) : layer;
-                        const pipeline = wireframe ? this.gpuWireframePipeline : this.getGPUPipeline(pipelineLayer);
+                        const pipeline = wireframe ? this.gpuWireframePipeline : this.getGPUPipeline(layer);
                         pass.setPipeline(pipeline);
 
                         this.gpuFSUniformsBuffers[materialID] ||= [];
@@ -2159,7 +2094,7 @@ export class ModelRenderer {
                         };
                         FSUniformsViews.replaceableColor.set(this.rendererData.teamColor);
                         FSUniformsViews.replaceableType.set([texture.ReplaceableId || 0]);
-                        FSUniformsViews.discardAlphaLevel.set([(forcedBlend ? 0 : (layer.FilterMode === FilterMode.Transparent ? .75 : 0))]);
+                        FSUniformsViews.discardAlphaLevel.set([this.getDiscardAlphaLevel(layer.FilterMode)]);
                         FSUniformsViews.tVertexAnim.set(tVetexAnim.slice(0, 3));
                         FSUniformsViews.tVertexAnim.set(tVetexAnim.slice(3, 6), 4);
                         FSUniformsViews.tVertexAnim.set(tVetexAnim.slice(6, 9), 8);
@@ -2359,9 +2294,10 @@ export class ModelRenderer {
 
             if (this.isHD) {
                 const baseLayer = material.Layers[0];
-                if (depthTextureTarget && !FILTER_MODES_WITH_DEPTH_WRITE.has(baseLayer.FilterMode || 0)) {
+                if (depthTextureTarget && !FILTER_MODES_WITH_DEPTH_WRITE.has(this.getNormalizedFilterMode(baseLayer.FilterMode))) {
                     continue;
                 }
+                const baseLayerAlpha = this.getLayerAlpha(baseLayer, this.modelInstance.interp) * this.rendererData.geosetAlpha[i];
                 const pipeline = depthTextureTarget ?
                     this.gpuShadowPipeline :
                     (wireframe ? this.gpuWireframePipeline : this.getGPUPipeline(baseLayer));
@@ -2414,7 +2350,7 @@ export class ModelRenderer {
                     shadowMapLightMatrix: new Float32Array(FSUniformsValues, 128, 16),
                 };
                 FSUniformsViews.replaceableColor.set(this.rendererData.teamColor);
-                FSUniformsViews.discardAlphaLevel.set([baseLayer.FilterMode === FilterMode.Transparent ? .75 : 0]);
+                FSUniformsViews.discardAlphaLevel.set([this.getDiscardAlphaLevel(baseLayer.FilterMode)]);
                 FSUniformsViews.tVertexAnim.set(tVetexAnim.slice(0, 3));
                 FSUniformsViews.tVertexAnim.set(tVetexAnim.slice(3, 6), 4);
                 FSUniformsViews.tVertexAnim.set(tVetexAnim.slice(6, 9), 8);
@@ -2461,21 +2397,11 @@ export class ModelRenderer {
 
                 pass.drawIndexed(wireframe ? geoset.Faces.length * 2 : geoset.Faces.length);
             } else {
+                // Match reference behavior: opaque first, then translucent layers sorted by filter mode.
                 const layerOrder = Array.from({ length: material.Layers.length }, (_, idx) => idx);
-                const priority = (mode: number) => {
-                    if (mode === FilterMode.Blend) return 0;
-                    if (mode === FilterMode.Additive || mode === FilterMode.AddAlpha) return 1;
-                    if (mode === FilterMode.Modulate || mode === FilterMode.Modulate2x) return 2;
-                    return 3;
-                };
                 const opaqueLayers = layerOrder.filter((idx) => ((material.Layers[idx].FilterMode || 0) <= 1));
-                const transparentLayers = layerOrder
-                    .filter((idx) => ((material.Layers[idx].FilterMode || 0) > 1))
-                    .sort((a, b) => {
-                        const modeA = material.Layers[a].FilterMode || 0;
-                        const modeB = material.Layers[b].FilterMode || 0;
-                        return priority(modeA) - priority(modeB) || a - b;
-                    });
+                const transparentLayers = layerOrder.filter((idx) => ((material.Layers[idx].FilterMode || 0) > 1));
+                transparentLayers.sort((a, b) => (material.Layers[a].FilterMode || 0) - (material.Layers[b].FilterMode || 0));
                 const orderedLayers = opaqueLayers.concat(transparentLayers);
 
                 const geosetColor = this.modelInstance.findColor(i);
@@ -2487,13 +2413,7 @@ export class ModelRenderer {
                     const texture = this.model.Textures[textureID];
 
                     const layerAlpha = this.getLayerAlpha(layer, this.modelInstance.interp);
-                    const effectiveAlpha = layerAlpha * geosetAlpha;
-                    const originalMode = layer.FilterMode || 0;
-                    const forcedBlend = effectiveAlpha < 0.999 && (originalMode === FilterMode.None || originalMode === FilterMode.Transparent);
-                    const effectiveMode = forcedBlend ? FilterMode.Blend : originalMode;
-
-                    const pipelineLayer = forcedBlend ? ({ ...layer, FilterMode: effectiveMode } as any) : layer;
-                    const pipeline = wireframe ? this.gpuWireframePipeline : this.getGPUPipeline(pipelineLayer);
+                    const pipeline = wireframe ? this.gpuWireframePipeline : this.getGPUPipeline(layer);
                     pass.setPipeline(pipeline);
 
                     this.gpuFSUniformsBuffers[materialID] ||= [];
@@ -2522,7 +2442,7 @@ export class ModelRenderer {
                     };
                     FSUniformsViews.replaceableColor.set(this.rendererData.teamColor);
                     FSUniformsViews.replaceableType.set([texture.ReplaceableId || 0]);
-                    FSUniformsViews.discardAlphaLevel.set([(forcedBlend ? 0 : (layer.FilterMode === FilterMode.Transparent ? .75 : 0))]);
+                    FSUniformsViews.discardAlphaLevel.set([this.getDiscardAlphaLevel(layer.FilterMode)]);
                     FSUniformsViews.tVertexAnim.set(tVetexAnim.slice(0, 3));
                     FSUniformsViews.tVertexAnim.set(tVetexAnim.slice(3, 6), 4);
                     FSUniformsViews.tVertexAnim.set(tVetexAnim.slice(6, 9), 8);
@@ -4192,7 +4112,7 @@ export class ModelRenderer {
     }
 
     private getGPUPipeline(layer: Layer): GPURenderPipeline {
-        const filterMode = layer.FilterMode || 0;
+        const filterMode = this.getNormalizedFilterMode(layer.FilterMode);
         const twoSided = Boolean((layer.Shading || 0) & LayerShading.TwoSided);
 
         const key = `${filterMode}-${twoSided}`;
@@ -4811,6 +4731,25 @@ export class ModelRenderer {
         this.modelInstance.enableGeosetAnimColor = value;
     }
 
+    private getDiscardAlphaLevel(filterMode: number | undefined): number {
+        const mode = this.getNormalizedFilterMode(filterMode);
+        if (mode === FilterMode.Transparent) {
+            return 0.75;
+        }
+        if (mode === FilterMode.Modulate || mode === FilterMode.Modulate2x) {
+            return 0.02;
+        }
+        return 0.0;
+    }
+
+    private getNormalizedFilterMode(filterMode: number | undefined): FilterMode {
+        const mode = filterMode || 0;
+        if (mode > FilterMode.Modulate2x) {
+            return FilterMode.Blend;
+        }
+        return mode as FilterMode;
+    }
+
     private setLayerProps(instance: ModelInstance, layer: Layer, textureID: number): boolean {
         const texture = this.model.Textures[textureID];
         // If texture is null/undefined, it means the textureID was invalid or out of bounds.
@@ -4823,46 +4762,43 @@ export class ModelRenderer {
             this.gl.enable(this.gl.CULL_FACE);
         }
 
-        if (layer.FilterMode === FilterMode.Transparent) {
-            this.gl.uniform1f(this.shaderProgramLocations.discardAlphaLevelUniform, 0.75);
-        } else {
-            this.gl.uniform1f(this.shaderProgramLocations.discardAlphaLevelUniform, 0.);
-        }
+        this.gl.uniform1f(this.shaderProgramLocations.discardAlphaLevelUniform, this.getDiscardAlphaLevel(layer.FilterMode));
 
-        if (layer.FilterMode === FilterMode.None) {
+        const filterMode = this.getNormalizedFilterMode(layer.FilterMode);
+
+        if (filterMode === FilterMode.None) {
             this.gl.disable(this.gl.BLEND);
             this.gl.enable(this.gl.DEPTH_TEST);
-            // this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
             this.gl.depthMask(true);
-        } else if (layer.FilterMode === FilterMode.Transparent) {
-            this.gl.enable(this.gl.BLEND);
+        } else if (filterMode === FilterMode.Transparent) {
+            // Transparent is alpha-test style, not blended.
+            this.gl.disable(this.gl.BLEND);
             this.gl.enable(this.gl.DEPTH_TEST);
-            this.gl.blendFuncSeparate(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA, this.gl.ONE, this.gl.ONE_MINUS_SRC_ALPHA);
             this.gl.depthMask(true);
-        } else if (layer.FilterMode === FilterMode.Blend) {
+        } else if (filterMode === FilterMode.Blend) {
             this.gl.enable(this.gl.BLEND);
             this.gl.enable(this.gl.DEPTH_TEST);
-            this.gl.blendFuncSeparate(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA, this.gl.ONE, this.gl.ONE_MINUS_SRC_ALPHA);
+            this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
             this.gl.depthMask(false);
-        } else if (layer.FilterMode === FilterMode.Additive) {
-            this.gl.enable(this.gl.BLEND);
-            this.gl.enable(this.gl.DEPTH_TEST);
-            this.gl.blendFunc(this.gl.ONE, this.gl.ONE);
-            this.gl.depthMask(false);
-        } else if (layer.FilterMode === FilterMode.AddAlpha) {
+        } else if (filterMode === FilterMode.Additive) {
             this.gl.enable(this.gl.BLEND);
             this.gl.enable(this.gl.DEPTH_TEST);
             this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE);
             this.gl.depthMask(false);
-        } else if (layer.FilterMode === FilterMode.Modulate) {
+        } else if (filterMode === FilterMode.AddAlpha) {
             this.gl.enable(this.gl.BLEND);
             this.gl.enable(this.gl.DEPTH_TEST);
-            this.gl.blendFuncSeparate(this.gl.ZERO, this.gl.SRC_COLOR, this.gl.ZERO, this.gl.ONE);
+            this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE);
             this.gl.depthMask(false);
-        } else if (layer.FilterMode === FilterMode.Modulate2x) {
+        } else if (filterMode === FilterMode.Modulate) {
             this.gl.enable(this.gl.BLEND);
             this.gl.enable(this.gl.DEPTH_TEST);
-            this.gl.blendFuncSeparate(this.gl.DST_COLOR, this.gl.SRC_COLOR, this.gl.ZERO, this.gl.ONE);
+            this.gl.blendFunc(this.gl.ZERO, this.gl.SRC_COLOR);
+            this.gl.depthMask(false);
+        } else if (filterMode === FilterMode.Modulate2x) {
+            this.gl.enable(this.gl.BLEND);
+            this.gl.enable(this.gl.DEPTH_TEST);
+            this.gl.blendFunc(this.gl.DST_COLOR, this.gl.SRC_COLOR);
             this.gl.depthMask(false);
         }
 
@@ -4906,6 +4842,12 @@ export class ModelRenderer {
                 }
             }
         }
+
+        // Safety: prevent invalid alpha from breaking blend/discard behavior.
+        if (!Number.isFinite(layerAlpha)) {
+            return 1.0;
+        }
+
         return layerAlpha;
     }
 
@@ -4936,46 +4878,43 @@ export class ModelRenderer {
             this.gl.enable(this.gl.CULL_FACE);
         }
 
-        if (baseLayer.FilterMode === FilterMode.Transparent) {
-            this.gl.uniform1f(this.shaderProgramLocations.discardAlphaLevelUniform, 0.75);
-        } else {
-            this.gl.uniform1f(this.shaderProgramLocations.discardAlphaLevelUniform, 0.);
-        }
+        this.gl.uniform1f(this.shaderProgramLocations.discardAlphaLevelUniform, this.getDiscardAlphaLevel(baseLayer.FilterMode));
 
-        if (baseLayer.FilterMode === FilterMode.None) {
+        const filterMode = this.getNormalizedFilterMode(baseLayer.FilterMode);
+
+        if (filterMode === FilterMode.None) {
             this.gl.disable(this.gl.BLEND);
             this.gl.enable(this.gl.DEPTH_TEST);
-            // this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
             this.gl.depthMask(true);
-        } else if (baseLayer.FilterMode === FilterMode.Transparent) {
-            this.gl.enable(this.gl.BLEND);
+        } else if (filterMode === FilterMode.Transparent) {
+            // Transparent is alpha-test style, not blended.
+            this.gl.disable(this.gl.BLEND);
             this.gl.enable(this.gl.DEPTH_TEST);
-            this.gl.blendFuncSeparate(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA, this.gl.ONE, this.gl.ONE_MINUS_SRC_ALPHA);
             this.gl.depthMask(true);
-        } else if (baseLayer.FilterMode === FilterMode.Blend) {
+        } else if (filterMode === FilterMode.Blend) {
             this.gl.enable(this.gl.BLEND);
             this.gl.enable(this.gl.DEPTH_TEST);
-            this.gl.blendFuncSeparate(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA, this.gl.ONE, this.gl.ONE_MINUS_SRC_ALPHA);
+            this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
             this.gl.depthMask(false);
-        } else if (baseLayer.FilterMode === FilterMode.Additive) {
-            this.gl.enable(this.gl.BLEND);
-            this.gl.enable(this.gl.DEPTH_TEST);
-            this.gl.blendFunc(this.gl.ONE, this.gl.ONE);
-            this.gl.depthMask(false);
-        } else if (baseLayer.FilterMode === FilterMode.AddAlpha) {
+        } else if (filterMode === FilterMode.Additive) {
             this.gl.enable(this.gl.BLEND);
             this.gl.enable(this.gl.DEPTH_TEST);
             this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE);
             this.gl.depthMask(false);
-        } else if (baseLayer.FilterMode === FilterMode.Modulate) {
+        } else if (filterMode === FilterMode.AddAlpha) {
             this.gl.enable(this.gl.BLEND);
             this.gl.enable(this.gl.DEPTH_TEST);
-            this.gl.blendFuncSeparate(this.gl.ZERO, this.gl.SRC_COLOR, this.gl.ZERO, this.gl.ONE);
+            this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE);
             this.gl.depthMask(false);
-        } else if (baseLayer.FilterMode === FilterMode.Modulate2x) {
+        } else if (filterMode === FilterMode.Modulate) {
             this.gl.enable(this.gl.BLEND);
             this.gl.enable(this.gl.DEPTH_TEST);
-            this.gl.blendFuncSeparate(this.gl.DST_COLOR, this.gl.SRC_COLOR, this.gl.ZERO, this.gl.ONE);
+            this.gl.blendFunc(this.gl.ZERO, this.gl.SRC_COLOR);
+            this.gl.depthMask(false);
+        } else if (filterMode === FilterMode.Modulate2x) {
+            this.gl.enable(this.gl.BLEND);
+            this.gl.enable(this.gl.DEPTH_TEST);
+            this.gl.blendFunc(this.gl.DST_COLOR, this.gl.SRC_COLOR);
             this.gl.depthMask(false);
         }
 

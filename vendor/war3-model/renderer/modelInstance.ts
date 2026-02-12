@@ -243,16 +243,16 @@ export class ModelInstance {
 
                 for (let j = 0; j < material.Layers.length; ++j) {
                     const layer = material.Layers[j];
-                    this.rendererData.materialLayerTextureID[i][j] = typeof layer.TextureID === 'number' ? layer.TextureID : 0;
+                    this.rendererData.materialLayerTextureID[i][j] = (typeof layer.TextureID === 'number' && layer.TextureID >= 0) ? layer.TextureID : 0;
 
                     if (layer.NormalTextureID !== undefined) {
-                        this.rendererData.materialLayerNormalTextureID[i][j] = typeof layer.NormalTextureID === 'number' ? layer.NormalTextureID : 0;
+                        this.rendererData.materialLayerNormalTextureID[i][j] = (typeof layer.NormalTextureID === 'number' && layer.NormalTextureID >= 0) ? layer.NormalTextureID : 0;
                     }
                     if (layer.ORMTextureID !== undefined) {
-                        this.rendererData.materialLayerOrmTextureID[i][j] = typeof layer.ORMTextureID === 'number' ? layer.ORMTextureID : 0;
+                        this.rendererData.materialLayerOrmTextureID[i][j] = (typeof layer.ORMTextureID === 'number' && layer.ORMTextureID >= 0) ? layer.ORMTextureID : 0;
                     }
                     if (layer.ReflectionsTextureID !== undefined) {
-                        this.rendererData.materialLayerReflectionTextureID[i][j] = typeof layer.ReflectionsTextureID === 'number' ? layer.ReflectionsTextureID : 0;
+                        this.rendererData.materialLayerReflectionTextureID[i][j] = (typeof layer.ReflectionsTextureID === 'number' && layer.ReflectionsTextureID >= 0) ? layer.ReflectionsTextureID : 0;
                     }
                 }
             }
@@ -287,22 +287,36 @@ export class ModelInstance {
                 const NormalTextureID: AnimVector | number = layer.NormalTextureID;
                 const ORMTextureID: AnimVector | number = layer.ORMTextureID;
                 const ReflectionsTextureID: AnimVector | number = layer.ReflectionsTextureID;
+                const resolveTrackTextureId = (value: AnimVector | number | undefined, fallback: number): number => {
+                    if (typeof value === 'number') {
+                        return value >= 0 ? value : fallback;
+                    }
+                    if (!value) {
+                        return fallback;
+                    }
+                    const interpValue = this.interp.num(value);
+                    if (!Number.isFinite(interpValue as number)) {
+                        return fallback;
+                    }
+                    const id = Math.floor(interpValue as number);
+                    return id >= 0 ? id : fallback;
+                };
+                const defaultTextureID = (typeof TextureID === 'number' && TextureID >= 0) ? TextureID : 0;
 
-                if (typeof TextureID === 'number') {
-                    this.rendererData.materialLayerTextureID[materialId][layerId] = TextureID;
-                } else {
-                    // TextureID is an integer index - use Math.floor to avoid flickering
-                    // Linear interpolation produces floats like 0.5, 1.3 which cause texture flickering
-                    this.rendererData.materialLayerTextureID[materialId][layerId] = Math.floor(this.interp.num(TextureID));
-                }
+                // Texture track is an integer index. When the current sequence has no keys,
+                // keep the layer default ID instead of falling back to 0.
+                this.rendererData.materialLayerTextureID[materialId][layerId] = resolveTrackTextureId(TextureID, defaultTextureID);
                 if (typeof NormalTextureID !== 'undefined') {
-                    this.rendererData.materialLayerNormalTextureID[materialId][layerId] = typeof NormalTextureID === 'number' ? NormalTextureID : Math.floor(this.interp.num(NormalTextureID));
+                    const defaultNormalTextureID = (typeof NormalTextureID === 'number' && NormalTextureID >= 0) ? NormalTextureID : 0;
+                    this.rendererData.materialLayerNormalTextureID[materialId][layerId] = resolveTrackTextureId(NormalTextureID, defaultNormalTextureID);
                 }
                 if (typeof ORMTextureID !== 'undefined') {
-                    this.rendererData.materialLayerOrmTextureID[materialId][layerId] = typeof ORMTextureID === 'number' ? ORMTextureID : Math.floor(this.interp.num(ORMTextureID));
+                    const defaultOrmTextureID = (typeof ORMTextureID === 'number' && ORMTextureID >= 0) ? ORMTextureID : 0;
+                    this.rendererData.materialLayerOrmTextureID[materialId][layerId] = resolveTrackTextureId(ORMTextureID, defaultOrmTextureID);
                 }
                 if (typeof ReflectionsTextureID !== 'undefined') {
-                    this.rendererData.materialLayerReflectionTextureID[materialId][layerId] = typeof ReflectionsTextureID === 'number' ? ReflectionsTextureID : Math.floor(this.interp.num(ReflectionsTextureID));
+                    const defaultReflectionsTextureID = (typeof ReflectionsTextureID === 'number' && ReflectionsTextureID >= 0) ? ReflectionsTextureID : 0;
+                    this.rendererData.materialLayerReflectionTextureID[materialId][layerId] = resolveTrackTextureId(ReflectionsTextureID, defaultReflectionsTextureID);
                 }
             }
         }

@@ -538,6 +538,14 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             style={itemStyle}
                             onMouseEnter={hoverStyle}
                             onMouseLeave={unhoverStyle}
+                            onClick={() => { onToggleEditor('geosetVisibilityTool'); closeMenu() }}
+                        >
+                            多边形动作显隐工具
+                        </div>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
                             onClick={() => { onAddDeathAnimation(); closeMenu() }}
                         >
                             添加死亡动画

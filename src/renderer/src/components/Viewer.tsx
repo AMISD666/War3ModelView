@@ -1062,8 +1062,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (renderer && renderer.rendererData && renderer.rendererData.animationInfo) {
-      const newFrame = parseInt(e.target.value)
+      const newFrame = parseInt(e.target.value, 10)
       renderer.rendererData.frame = newFrame
+      useModelStore.getState().setFrame(newFrame)
       setProgress(newFrame)
     }
   }
@@ -2719,15 +2720,23 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             const gizmoDragging = gizmoState.current.isDragging
             let currentFrame = mdlRenderer.rendererData?.frame ?? 0
 
-            // When paused, the STORE is the source of truth for scrubbing/stepping frames.
-            // If we don't push store.currentFrame -> rendererData.frame, the render loop can get "stuck"
-            // and appear to snap to bind pose until another interaction triggers update().
-            const storeFrame = useModelStore.getState().currentFrame
             let forceFrameRefresh = false
-            if (mdlRenderer.rendererData && Math.abs(storeFrame - currentFrame) > 0.1) {
-              mdlRenderer.rendererData.frame = storeFrame
-              currentFrame = storeFrame
-              forceFrameRefresh = true
+
+            // In animation mode, Timeline is authoritative (store -> renderer).
+            // In view/geometry/uv modes, renderer frame is authoritative to avoid pause reset jumps.
+            const storeFrame = useModelStore.getState().currentFrame
+            if (mdlRenderer.rendererData) {
+              if (currentMainMode === 'animation') {
+                if (Math.abs(storeFrame - currentFrame) > 0.1) {
+                  mdlRenderer.rendererData.frame = storeFrame
+                  currentFrame = storeFrame
+                  forceFrameRefresh = true
+                }
+              } else {
+                if (Math.abs(storeFrame - currentFrame) > 0.1) {
+                  useModelStore.getState().setFrame(currentFrame)
+                }
+              }
             }
 
             // 使用 ref 替代 window 全局变量，避免污染和潜在冲突
@@ -2741,9 +2750,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               needsRendererUpdateRef.current = false
             }
 
-            // CRITICAL FIX: Sync frame to store even when paused
-            // This prevents "stale keyframe" bug where keyframes are created at the wrong frame
-            // because the store wasn't updated with the final paused frame.
+            // Keep timeline/store in sync while paused in animation mode.
             if (currentMainMode === 'animation' && mdlRenderer.rendererData) {
               const storeFrame = useModelStore.getState().currentFrame
               if (Math.abs(storeFrame - currentFrame) > 0.1) {

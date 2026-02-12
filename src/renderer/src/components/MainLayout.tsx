@@ -4,6 +4,7 @@ import MenuBar from './MenuBar'
 import EditorPanel from './EditorPanel'
 // Lazy load modal components for faster startup
 const GeosetAnimationModal = React.lazy(() => import('./modals/GeosetAnimationModal'))
+const GeosetVisibilityToolModal = React.lazy(() => import('./modals/GeosetVisibilityToolModal'))
 const TextureEditorModal = React.lazy(() => import('./modals/TextureEditorModal'))
 const TextureAnimationManagerModal = React.lazy(() => import('./modals/TextureAnimationManagerModal'))
 const SequenceEditorModal = React.lazy(() => import('./modals/SequenceEditorModal'))
@@ -1561,6 +1562,7 @@ const MainLayout: React.FC = () => {
 
     const [activeEditor, setActiveEditor] = useState<string | null>(null)
     const [showGeosetAnimModal, setShowGeosetAnimModal] = useState<boolean>(false)
+    const [showGeosetVisibilityToolModal, setShowGeosetVisibilityToolModal] = useState<boolean>(false)
     const [showTextureModal, setShowTextureModal] = useState<boolean>(false)
     const [showTextureAnimModal, setShowTextureAnimModal] = useState<boolean>(false)
     const [showSequenceModal, setShowSequenceModal] = useState<boolean>(false)
@@ -1612,11 +1614,13 @@ const MainLayout: React.FC = () => {
     const hasCheckedCli = useRef(false);
     const processedHotOpenPaths = useRef<Set<string>>(new Set())
     const isSavingRef = useRef(false); // Track if a save operation is in progress
+    const isExternalModelDragRef = useRef(false);
     const closeConfirmVisibleRef = useRef(false);
     const bypassClosePromptRef = useRef(false);
     const panelStateRef = useRef({
         activeEditor: null as string | null,
         showGeosetAnimModal: false,
+        showGeosetVisibilityToolModal: false,
         showTextureModal: false,
         showTextureAnimModal: false,
         showSequenceModal: false,
@@ -1651,6 +1655,7 @@ const MainLayout: React.FC = () => {
         panelStateRef.current = {
             activeEditor,
             showGeosetAnimModal,
+            showGeosetVisibilityToolModal,
             showTextureModal,
             showTextureAnimModal,
             showSequenceModal,
@@ -1663,6 +1668,7 @@ const MainLayout: React.FC = () => {
     }, [
         activeEditor,
         showGeosetAnimModal,
+        showGeosetVisibilityToolModal,
         showTextureModal,
         showTextureAnimModal,
         showSequenceModal,
@@ -2122,22 +2128,31 @@ const MainLayout: React.FC = () => {
         let unlistenDrop: (() => void) | undefined
         let unlistenEnter: (() => void) | undefined
         let unlistenLeave: (() => void) | undefined
+        const isSupportedModelFile = (filePath: string): boolean => {
+            const ext = filePath.toLowerCase().split('.').pop()
+            return ext === 'mdx' || ext === 'mdl'
+        }
 
         const setupDragDropListeners = async () => {
             try {
                 const { listen } = await import('@tauri-apps/api/event')
 
                 // Listen for file drop
-                unlistenDrop = await listen<{ paths: string[] }>('tauri://drag-drop', async (event) => {
+                unlistenDrop = await listen<{ paths?: string[]; position?: { x: number; y: number } }>('tauri://drag-drop', async (event) => {
                     setIsDragging(false)
-                    const paths = event.payload.paths
+                    isExternalModelDragRef.current = false
+                    const paths = Array.isArray(event.payload?.paths) ? event.payload.paths : []
                     if (!paths || paths.length === 0) return
 
-                    const filePath = paths[0]
-                    const ext = filePath.toLowerCase().split('.').pop()
-
-                    if (ext !== 'mdx' && ext !== 'mdl') {
-                        console.warn('[MainLayout] Invalid file type:', ext, '- only .mdx and .mdl are supported')
+                    const filePath = paths.find(isSupportedModelFile)
+                    if (!filePath) {
+                        // Forward non-model external drops to feature-specific handlers (e.g. texture drop zones)
+                        window.dispatchEvent(new CustomEvent('war3-external-file-drop', {
+                            detail: {
+                                paths,
+                                position: event.payload?.position ?? null
+                            }
+                        }))
                         return
                     }
 
@@ -2146,12 +2161,19 @@ const MainLayout: React.FC = () => {
                 })
 
                 // Listen for drag enter
-                unlistenEnter = await listen('tauri://drag-enter', () => {
-                    setIsDragging(true)
+                unlistenEnter = await listen<{ paths?: string[] }>('tauri://drag-enter', (event) => {
+                    const paths = Array.isArray(event.payload?.paths) ? event.payload.paths : []
+                    const hasSupportedModel = paths.some(isSupportedModelFile)
+                    isExternalModelDragRef.current = hasSupportedModel
+                    if (hasSupportedModel) {
+                        setIsDragging(true)
+                    }
                 })
 
                 // Listen for drag leave
                 unlistenLeave = await listen('tauri://drag-leave', () => {
+                    if (!isExternalModelDragRef.current) return
+                    isExternalModelDragRef.current = false
                     setIsDragging(false)
                 })
 
@@ -2163,6 +2185,7 @@ const MainLayout: React.FC = () => {
         setupDragDropListeners()
 
         return () => {
+            isExternalModelDragRef.current = false
             unlistenDrop?.()
             unlistenEnter?.()
             unlistenLeave?.()
@@ -2317,6 +2340,7 @@ const MainLayout: React.FC = () => {
             const panelState = panelStateRef.current;
             const hasPanels = !!panelState.activeEditor
                 || panelState.showGeosetAnimModal
+                || panelState.showGeosetVisibilityToolModal
                 || panelState.showTextureModal
                 || panelState.showTextureAnimModal
                 || panelState.showSequenceModal
@@ -2880,6 +2904,8 @@ const MainLayout: React.FC = () => {
                         toggleModelInfo()
                     } else if (editor === 'geosetAnim') {
                         setShowGeosetAnimModal(true)
+                    } else if (editor === 'geosetVisibilityTool') {
+                        setShowGeosetVisibilityToolModal(true)
                     } else if (editor === 'texture') {
                         setShowTextureModal(true)
                     } else if (editor === 'textureAnim') {
@@ -3116,6 +3142,10 @@ const MainLayout: React.FC = () => {
             <GeosetAnimationModal
                 visible={showGeosetAnimModal}
                 onClose={() => setShowGeosetAnimModal(false)}
+            />
+            <GeosetVisibilityToolModal
+                visible={showGeosetVisibilityToolModal}
+                onClose={() => setShowGeosetVisibilityToolModal(false)}
             />
             <TextureEditorModal
                 visible={showTextureModal}

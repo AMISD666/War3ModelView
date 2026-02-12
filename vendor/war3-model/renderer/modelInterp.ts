@@ -87,7 +87,9 @@ export class ModelInterp {
     }
 
     public findLocalFrame(animVector: AnimVector): { frame: number, from: number, to: number } {
-        if (typeof animVector.GlobalSeqId === 'number') {
+        // Warcraft tracks use -1 as "no global sequence".
+        // Treat negative ids as local sequence time, same as null/undefined.
+        if (typeof animVector.GlobalSeqId === 'number' && animVector.GlobalSeqId >= 0) {
             const globalSeqDuration = this.rendererData.model.GlobalSequences[animVector.GlobalSeqId];
 
             // Handle GlobalSequence with duration 0: treat as static (use first keyframe)

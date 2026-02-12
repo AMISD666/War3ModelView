@@ -389,12 +389,37 @@ const BoneParameterPanel: React.FC = () => {
         return nodes.filter(n => !descendantIds.has(n.ObjectId)).map(n => ({ label: `${n.Name} (${n.ObjectId})`, value: n.ObjectId }))
     }, [nodes, selectedNode])
 
+    const isKeyframeCompact = animationSubMode === 'keyframe'
+    const compactUi = {
+        statPadding: isKeyframeCompact ? '6px 8px' : '8px 10px',
+        statFontSize: isKeyframeCompact ? '10px' : '11px',
+        sectionPadding: isKeyframeCompact ? '8px' : '10px',
+        sectionTitleSize: isKeyframeCompact ? '12px' : '13px',
+        toggleGap: isKeyframeCompact ? 4 : 6,
+        toggleFontSize: isKeyframeCompact ? 10 : 11,
+        togglePadding: isKeyframeCompact ? '1px 6px' : '2px 6px',
+        topGap: isKeyframeCompact ? 8 : 10,
+        nodeNameMarginBottom: isKeyframeCompact ? 8 : 12,
+        nodeNameFontSize: isKeyframeCompact ? '11px' : '12px',
+        groupMarginBottom: isKeyframeCompact ? 8 : 12,
+        groupTopMargin: isKeyframeCompact ? 2 : 4,
+        fieldFontSize: isKeyframeCompact ? '10px' : '11px',
+        axisFontSize: isKeyframeCompact ? '10px' : '11px',
+        axisMarginRight: isKeyframeCompact ? 6 : 8,
+        inputMarginBottom: isKeyframeCompact ? 2 : 4,
+        inputPadding: isKeyframeCompact ? '2px 6px' : '4px 8px',
+        inputFontSize: isKeyframeCompact ? '11px' : '12px',
+        interpSelectWidth: isKeyframeCompact ? 64 : 70,
+        parentMarginBottom: isKeyframeCompact ? 8 : 10,
+        controlMarginTop: isKeyframeCompact ? 2 : 4
+    }
+
     // --- 渲染部分 ---
 
     // 输入行渲染，支持禁用状态
     const renderInputRow = (label: string, refs: any, axis: 'x' | 'y' | 'z', color: string, onCommit: () => void, disabled?: boolean) => (
-        <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
-            <span style={{ color: disabled ? '#555' : color, marginRight: 8, fontSize: '11px', width: 12 }}>{axis.toUpperCase()}</span>
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: compactUi.inputMarginBottom }}>
+            <span style={{ color: disabled ? '#555' : color, marginRight: compactUi.axisMarginRight, fontSize: compactUi.axisFontSize, width: 12 }}>{axis.toUpperCase()}</span>
             <input
                 ref={el => refs.current[axis] = el}
                 type="number"
@@ -409,8 +434,8 @@ const BoneParameterPanel: React.FC = () => {
                     border: disabled ? '1px solid #333' : '1px solid #444',
                     borderRadius: 4,
                     color: disabled ? '#555' : '#fff',
-                    padding: '4px 8px',
-                    fontSize: '12px',
+                    padding: compactUi.inputPadding,
+                    fontSize: compactUi.inputFontSize,
                     outline: 'none',
                     cursor: disabled ? 'not-allowed' : 'text'
                 }}
@@ -424,18 +449,18 @@ const BoneParameterPanel: React.FC = () => {
     return (
         <div style={{ height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: '#2b2b2b', color: '#eee' }}>
             {/* 统计信息 */}
-            <div style={{ padding: '8px 10px', borderBottom: '1px solid #444', backgroundColor: '#333' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }}>
+            <div style={{ padding: compactUi.statPadding, borderBottom: '1px solid #444', backgroundColor: '#333' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: compactUi.statFontSize }}>
                     <span style={{ color: '#aaa' }}>选中顶点: <span style={{ color: '#52c41a', fontWeight: 'bold' }}>{selectedVertexIds.length}</span></span>
                     {selectedNodeIds.length === 1 && <span style={{ color: '#aaa' }}>骨骼绑定: <span style={{ color: '#1890ff', fontWeight: 'bold' }}>{boneVertexCount}</span></span>}
                 </div>
             </div>
 
             {/* 骨骼参数 */}
-            <div style={{ padding: '10px', borderBottom: '1px solid #444' }}>
+            <div style={{ padding: compactUi.sectionPadding, borderBottom: '1px solid #444' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Text strong style={{ color: '#fff', fontSize: '13px' }}>骨骼参数</Text>
-                    <div style={{ display: 'flex', gap: 6 }}>
+                    <Text strong style={{ color: '#fff', fontSize: compactUi.sectionTitleSize }}>骨骼参数</Text>
+                    <div style={{ display: 'flex', gap: compactUi.toggleGap }}>
                         <button
                             type="button"
                             onClick={() => setTranslationSpace('world')}
@@ -443,8 +468,8 @@ const BoneParameterPanel: React.FC = () => {
                                 background: translationSpace === 'world' ? '#1890ff' : '#1f1f1f',
                                 border: '1px solid #3a3a3a',
                                 color: translationSpace === 'world' ? '#fff' : '#aaa',
-                                fontSize: 11,
-                                padding: '2px 6px',
+                                fontSize: compactUi.toggleFontSize,
+                                padding: compactUi.togglePadding,
                                 borderRadius: 4,
                                 cursor: 'pointer'
                             }}
@@ -458,8 +483,8 @@ const BoneParameterPanel: React.FC = () => {
                                 background: translationSpace === 'local' ? '#1890ff' : '#1f1f1f',
                                 border: '1px solid #3a3a3a',
                                 color: translationSpace === 'local' ? '#fff' : '#aaa',
-                                fontSize: 11,
-                                padding: '2px 6px',
+                                fontSize: compactUi.toggleFontSize,
+                                padding: compactUi.togglePadding,
                                 borderRadius: 4,
                                 cursor: 'pointer'
                             }}
@@ -469,18 +494,18 @@ const BoneParameterPanel: React.FC = () => {
                     </div>
                 </div>
 
-                <div style={{ marginTop: 10 }}>
+                <div style={{ marginTop: compactUi.topGap }}>
                     {/* 骨骼名称 */}
-                    <div style={{ marginBottom: 12, color: selectedNode ? '#aaa' : '#555', fontSize: '12px' }}>
+                    <div style={{ marginBottom: compactUi.nodeNameMarginBottom, color: selectedNode ? '#aaa' : '#555', fontSize: compactUi.nodeNameFontSize }}>
                         {selectedNode ? `${selectedNode.Name} (${selectedNode.type})` : (
                             selectedNodeIds.length === 0 ? '未选择骨骼' : `已选择 ${selectedNodeIds.length} 个骨骼`
                         )}
                     </div>
 
                     {/* Translation */}
-                    <div style={{ marginBottom: 12 }}>
+                    <div style={{ marginBottom: compactUi.groupMarginBottom }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <Text style={{ color: isInputDisabled ? '#555' : '#888', fontSize: '11px' }}>位移 (Translation) {selectedNode && hasExactKey('Translation') && <span style={{ color: '#52c41a', marginLeft: 4 }}>●</span>}</Text>
+                            <Text style={{ color: isInputDisabled ? '#555' : '#888', fontSize: compactUi.fieldFontSize }}>位移 (Translation) {selectedNode && hasExactKey('Translation') && <span style={{ color: '#52c41a', marginLeft: 4 }}>●</span>}</Text>
                             <Select
                                 size="small"
                                 value={selectedNode?.Translation?.InterpolationType ?? 1}
@@ -492,7 +517,7 @@ const BoneParameterPanel: React.FC = () => {
                                     updateNodeSilent(node.ObjectId, { Translation: { ...(node.Translation || { Keys: [] }), InterpolationType: val } })
                                     if (renderer) renderer.update(0)
                                 }}
-                                style={{ width: 70, fontSize: '10px' }}
+                                style={{ width: compactUi.interpSelectWidth, fontSize: '10px' }}
                                 dropdownStyle={{ minWidth: 80 }}
                             >
                                 <Select.Option value={0}>无</Select.Option>
@@ -501,7 +526,7 @@ const BoneParameterPanel: React.FC = () => {
                                 <Select.Option value={3}>贝塞尔</Select.Option>
                             </Select>
                         </div>
-                        <div style={{ marginTop: 4 }}>
+                        <div style={{ marginTop: compactUi.groupTopMargin }}>
                             {renderInputRow('X', transRefs, 'x', '#ff4d4f', handleCommitTrans, isInputDisabled)}
                             {renderInputRow('Y', transRefs, 'y', '#52c41a', handleCommitTrans, isInputDisabled)}
                             {renderInputRow('Z', transRefs, 'z', '#1890ff', handleCommitTrans, isInputDisabled)}
@@ -509,9 +534,9 @@ const BoneParameterPanel: React.FC = () => {
                     </div>
 
                     {/* Rotation */}
-                    <div style={{ marginBottom: 12 }}>
+                    <div style={{ marginBottom: compactUi.groupMarginBottom }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <Text style={{ color: isInputDisabled ? '#555' : '#888', fontSize: '11px' }}>旋转 (Rotation) {selectedNode && hasExactKey('Rotation') && <span style={{ color: '#52c41a', marginLeft: 4 }}>●</span>}</Text>
+                            <Text style={{ color: isInputDisabled ? '#555' : '#888', fontSize: compactUi.fieldFontSize }}>旋转 (Rotation) {selectedNode && hasExactKey('Rotation') && <span style={{ color: '#52c41a', marginLeft: 4 }}>●</span>}</Text>
                             <Select
                                 size="small"
                                 value={selectedNode?.Rotation?.InterpolationType ?? 1}
@@ -523,7 +548,7 @@ const BoneParameterPanel: React.FC = () => {
                                     updateNodeSilent(node.ObjectId, { Rotation: { ...(node.Rotation || { Keys: [] }), InterpolationType: val } })
                                     if (renderer) renderer.update(0)
                                 }}
-                                style={{ width: 70, fontSize: '10px' }}
+                                style={{ width: compactUi.interpSelectWidth, fontSize: '10px' }}
                                 dropdownStyle={{ minWidth: 80 }}
                             >
                                 <Select.Option value={0}>无</Select.Option>
@@ -532,7 +557,7 @@ const BoneParameterPanel: React.FC = () => {
                                 <Select.Option value={3}>贝塞尔</Select.Option>
                             </Select>
                         </div>
-                        <div style={{ marginTop: 4 }}>
+                        <div style={{ marginTop: compactUi.groupTopMargin }}>
                             {renderInputRow('X', rotRefs, 'x', '#ff4d4f', handleCommitRot, isInputDisabled)}
                             {renderInputRow('Y', rotRefs, 'y', '#52c41a', handleCommitRot, isInputDisabled)}
                             {renderInputRow('Z', rotRefs, 'z', '#1890ff', handleCommitRot, isInputDisabled)}
@@ -540,9 +565,9 @@ const BoneParameterPanel: React.FC = () => {
                     </div>
 
                     {/* Scaling */}
-                    <div style={{ marginBottom: 12 }}>
+                    <div style={{ marginBottom: compactUi.groupMarginBottom }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <Text style={{ color: isInputDisabled ? '#555' : '#888', fontSize: '11px' }}>缩放 (Scaling) {selectedNode && hasExactKey('Scaling') && <span style={{ color: '#52c41a', marginLeft: 4 }}>●</span>}</Text>
+                            <Text style={{ color: isInputDisabled ? '#555' : '#888', fontSize: compactUi.fieldFontSize }}>缩放 (Scaling) {selectedNode && hasExactKey('Scaling') && <span style={{ color: '#52c41a', marginLeft: 4 }}>●</span>}</Text>
                             <Select
                                 size="small"
                                 value={selectedNode?.Scaling?.InterpolationType ?? 1}
@@ -554,7 +579,7 @@ const BoneParameterPanel: React.FC = () => {
                                     updateNodeSilent(node.ObjectId, { Scaling: { ...(node.Scaling || { Keys: [] }), InterpolationType: val } })
                                     if (renderer) renderer.update(0)
                                 }}
-                                style={{ width: 70, fontSize: '10px' }}
+                                style={{ width: compactUi.interpSelectWidth, fontSize: '10px' }}
                                 dropdownStyle={{ minWidth: 80 }}
                             >
                                 <Select.Option value={0}>无</Select.Option>
@@ -563,7 +588,7 @@ const BoneParameterPanel: React.FC = () => {
                                 <Select.Option value={3}>贝塞尔</Select.Option>
                             </Select>
                         </div>
-                        <div style={{ marginTop: 4 }}>
+                        <div style={{ marginTop: compactUi.groupTopMargin }}>
                             {renderInputRow('X', scaleRefs, 'x', '#ff4d4f', handleCommitScale, isInputDisabled)}
                             {renderInputRow('Y', scaleRefs, 'y', '#52c41a', handleCommitScale, isInputDisabled)}
                             {renderInputRow('Z', scaleRefs, 'z', '#1890ff', handleCommitScale, isInputDisabled)}
@@ -571,10 +596,10 @@ const BoneParameterPanel: React.FC = () => {
                     </div>
 
                     {/* 父节点 */}
-                    <div style={{ marginBottom: 10 }}>
-                        <Text style={{ color: isInputDisabled ? '#555' : '#888', fontSize: '11px' }}>父节点</Text>
+                    <div style={{ marginBottom: compactUi.parentMarginBottom }}>
+                        <Text style={{ color: isInputDisabled ? '#555' : '#888', fontSize: compactUi.fieldFontSize }}>父节点</Text>
                         <Select
-                            style={{ width: '100%', marginTop: 4 }}
+                            style={{ width: '100%', marginTop: compactUi.controlMarginTop }}
                             size="small"
                             placeholder="无父节点"
                             allowClear

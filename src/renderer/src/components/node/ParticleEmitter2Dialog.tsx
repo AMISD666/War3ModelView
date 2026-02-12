@@ -7,6 +7,7 @@ import type { Color } from 'antd/es/color-picker';
 import type { ParticleEmitter2Node } from '../../types/node';
 import { useModelStore } from '../../store/modelStore';
 import { useHistoryStore } from '../../store/historyStore';
+import { getDraggedTextureIndex } from '../../utils/textureDragDrop';
 
 interface ParticleEmitter2DialogProps {
     visible: boolean;
@@ -45,8 +46,13 @@ const getStaticValue = (val: any, defaultVal: number = 0): number => {
 const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible, nodeId, onClose }) => {
     const [form] = Form.useForm();
     const { getNodeById, updateNode, modelData } = useModelStore();
+    const [isTextureDropActive, setIsTextureDropActive] = useState(false);
 
     const currentNode = nodeId !== null ? getNodeById(nodeId) as ParticleEmitter2Node : null;
+    const initialNodeRef = React.useRef<ParticleEmitter2Node | null>(null);
+    const isCommittingRef = React.useRef(false);
+    const didRealtimePreviewRef = React.useRef(false);
+    const suppressNextSyncRef = React.useRef(false);
 
     // Animation State
     const [animDataMap, setAnimDataMap] = useState<Record<string, any>>({});
@@ -86,7 +92,24 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
 
     // Load data into form with DEFAULTS
     useEffect(() => {
+        if (!visible) {
+            setIsTextureDropActive(false);
+            initialNodeRef.current = null;
+            isCommittingRef.current = false;
+            didRealtimePreviewRef.current = false;
+            suppressNextSyncRef.current = false;
+            return;
+        }
+
+        if (suppressNextSyncRef.current) {
+            suppressNextSyncRef.current = false;
+            return;
+        }
+
         if (visible) {
+            if (!initialNodeRef.current && currentNode) {
+                initialNodeRef.current = JSON.parse(JSON.stringify(currentNode));
+            }
             // Defaults as requested
             const defaults = {
                 Visibility: 1,
@@ -220,6 +243,29 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
         }
     }, [currentNode, visible, form]);
 
+    const applyRealtimeTexture = (textureId: number) => {
+        if (nodeId === null || !currentNode) return;
+        const textureCount = modelData?.Textures?.length || 0;
+        if (textureId >= textureCount && textureId !== -1) return;
+        const sourceNode = (getNodeById(nodeId) as ParticleEmitter2Node) || currentNode;
+        const safeTextureId = Number.isInteger(textureId) ? textureId : -1;
+        const previewNode: ParticleEmitter2Node = {
+            ...sourceNode,
+            TextureID: safeTextureId,
+        };
+        suppressNextSyncRef.current = true;
+        didRealtimePreviewRef.current = true;
+        updateNode(nodeId, previewNode);
+        form.setFieldValue('TextureID', safeTextureId);
+    };
+
+    const handleCancel = () => {
+        if (!isCommittingRef.current && didRealtimePreviewRef.current && initialNodeRef.current && nodeId !== null) {
+            updateNode(nodeId, initialNodeRef.current);
+        }
+        onClose();
+    };
+
     const handleOk = async () => {
         try {
             const values = await form.validateFields();
@@ -300,12 +346,14 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
                 }
             });
 
+            const oldNode = initialNodeRef.current || currentNode;
             useHistoryStore.getState().push({
                 name: `Edit Particle Emitter`,
-                undo: () => updateNode(nodeId, currentNode),
+                undo: () => updateNode(nodeId, oldNode),
                 redo: () => updateNode(nodeId, updatedNode)
             });
 
+            isCommittingRef.current = true;
             updateNode(nodeId, updatedNode);
             // NOTE: Auto renderer reload disabled - was causing model data corruption
             // const { triggerRendererReload } = useModelStore.getState();
@@ -448,10 +496,49 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
             </span>
 
             <div style={{ marginBottom: 12 }}>
-                <div style={{ marginBottom: 4, color: '#ccc' }}>贴图 ID:</div>
-                <Form.Item name="TextureID" noStyle>
-                    <Select options={textureOptions} style={{ width: '100%' }} size="small" popupMatchSelectWidth={false} />
-                </Form.Item>
+                <div style={{ marginBottom: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                    <span style={{ color: '#ccc' }}>贴图 ID:</span>
+                    <span style={{ color: '#7f7f7f', fontSize: 12 }}>可拖动替换贴图</span>
+                </div>
+                <div
+                        style={{
+                            border: isTextureDropActive ? '1px dashed #5a9cff' : '1px dashed transparent',
+                            borderRadius: 4,
+                            padding: 2,
+                            transition: 'border-color 0.15s ease'
+                        }}
+                        onDragOver={(e) => {
+                            const draggedIndex = getDraggedTextureIndex(e.dataTransfer);
+                            if (draggedIndex === null) return;
+                            e.preventDefault();
+                            e.dataTransfer.dropEffect = 'copy';
+                            setIsTextureDropActive(true);
+                        }}
+                        onDragEnter={(e) => {
+                            const draggedIndex = getDraggedTextureIndex(e.dataTransfer);
+                            if (draggedIndex === null) return;
+                            e.preventDefault();
+                            setIsTextureDropActive(true);
+                        }}
+                        onDragLeave={() => setIsTextureDropActive(false)}
+                        onDrop={(e) => {
+                            setIsTextureDropActive(false);
+                            const draggedIndex = getDraggedTextureIndex(e.dataTransfer);
+                            if (draggedIndex === null) return;
+                            e.preventDefault();
+                            applyRealtimeTexture(draggedIndex);
+                        }}
+                >
+                    <Form.Item name="TextureID" noStyle>
+                        <Select
+                            options={textureOptions}
+                            style={{ width: '100%' }}
+                            size="small"
+                            popupMatchSelectWidth={false}
+                            onChange={(v) => applyRealtimeTexture(Number(v))}
+                        />
+                    </Form.Item>
+                </div>
             </div>
 
             <div>
@@ -540,7 +627,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
             title="II型粒子发射器"
             open={visible}
             onOk={handleOk}
-            onCancel={onClose}
+            onCancel={handleCancel}
             footer={null} // Hide default footer
             width={850}
             style={{ top: 20 }}
@@ -711,7 +798,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
                             {/* Buttons inside Flags Box (Bottom) */}
                             <div style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 6 }}>
                                 <Button onClick={handleOk} type="primary" size="small" block>确定</Button>
-                                <Button onClick={onClose} size="small" block>取消</Button>
+                                <Button onClick={handleCancel} size="small" block>取消</Button>
                             </div>
                         </div>
                     </div>

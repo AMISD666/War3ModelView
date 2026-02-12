@@ -10,6 +10,7 @@ import { readFile } from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { decodeTextureData, getTextureCandidatePaths, isMPQPath, normalizePath } from '../viewer/textureLoader'
+import { setDraggedTextureIndex } from '../../utils/textureDragDrop'
 
 const { Text } = Typography
 
@@ -546,6 +547,11 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                         renderItem={(item, index) => (
                             <List.Item
                                 onClick={() => setSelectedIndex(index)}
+                                draggable
+                                onDragStart={(e) => {
+                                    setDraggedTextureIndex(e.dataTransfer, index)
+                                    e.dataTransfer.effectAllowed = 'copy'
+                                }}
                                 style={{
                                     cursor: 'pointer',
                                     padding: '8px 12px',
@@ -627,7 +633,10 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                             >
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                                     <div>
-                                        <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>路径:</Text>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '4px' }}>
+                                            <Text style={{ color: '#b0b0b0' }}>路径:</Text>
+                                            <Text style={{ color: '#7f7f7f', fontSize: '12px' }}>可拖动替换贴图</Text>
+                                        </div>
                                         <Input
                                             value={selectedTexture.Image}
                                             onChange={(e) => updateLocalTexture(selectedIndex, { Image: e.target.value })}

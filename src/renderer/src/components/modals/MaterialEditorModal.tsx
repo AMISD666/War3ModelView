@@ -6,6 +6,7 @@ import KeyframeEditor from '../editors/KeyframeEditor'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useHistoryStore } from '../../store/historyStore'
+import { getDraggedTextureIndex } from '../../utils/textureDragDrop'
 
 const { Text } = Typography
 
@@ -76,12 +77,13 @@ interface MaterialEditorModalProps {
 }
 
 const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onClose }) => {
-    const { modelData, setMaterials } = useModelStore()
+    const { modelData, modelPath, setMaterials, setTextures } = useModelStore()
     const [localMaterials, setLocalMaterials] = useState<any[]>([])
     const [selectedMaterialIndex, setSelectedMaterialIndex] = useState<number>(-1)
     const [selectedLayerIndex, setSelectedLayerIndex] = useState<number>(-1)
     const [dragLayerIndex, setDragLayerIndex] = useState<number | null>(null)
     const [dragOverLayerIndex, setDragOverLayerIndex] = useState<number | null>(null)
+    const [isTextureDropActive, setIsTextureDropActive] = useState(false)
 
     // Keyframe Editor State
     const [isKeyframeEditorOpen, setIsKeyframeEditorOpen] = useState(false)
@@ -91,7 +93,13 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const isInitialized = React.useRef(false)
     const materialListRef = React.useRef<HTMLDivElement>(null)
     const layerListRef = React.useRef<HTMLDivElement>(null)
+    const textureDropZoneRef = React.useRef<HTMLDivElement>(null)
     const dragOverLayerIndexRef = React.useRef<number | null>(null)
+    const originalMaterialsRef = React.useRef<any[] | null>(null)
+    const originalTexturesRef = React.useRef<any[] | null>(null)
+    const isCommittingRef = React.useRef(false)
+    const didRealtimePreviewRef = React.useRef(false)
+    const didRealtimeTexturePreviewRef = React.useRef(false)
 
     useEffect(() => {
         dragOverLayerIndexRef.current = dragOverLayerIndex
@@ -102,6 +110,11 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         if (visible) {
             if (!isInitialized.current && modelData && modelData.Materials) {
                 console.log('[MaterialEditorModal] Initializing local materials from store. Count:', modelData.Materials.length)
+                originalMaterialsRef.current = JSON.parse(JSON.stringify(modelData.Materials))
+                originalTexturesRef.current = JSON.parse(JSON.stringify(modelData.Textures || []))
+                isCommittingRef.current = false
+                didRealtimePreviewRef.current = false
+                didRealtimeTexturePreviewRef.current = false
                 // Convert Shading bitmask to boolean properties for UI display
                 const normalized = normalizeMaterialsForUI(JSON.parse(JSON.stringify(modelData.Materials)));
                 setLocalMaterials(normalized)
@@ -113,7 +126,15 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             setLocalMaterials([])
             setSelectedMaterialIndex(-1)
             setSelectedLayerIndex(-1)
+            setIsTextureDropActive(false)
             isInitialized.current = false
+            if (isCommittingRef.current) {
+                isCommittingRef.current = false
+            }
+            originalMaterialsRef.current = null
+            originalTexturesRef.current = null
+            didRealtimePreviewRef.current = false
+            didRealtimeTexturePreviewRef.current = false
         }
     }, [visible, modelData])
 
@@ -153,15 +174,37 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 
     const handleOk = () => {
         // Convert boolean flags back to Shading bitmask before saving
-        const materialsForSave = denormalizeMaterialsForSave(localMaterials);
-        const oldMaterials = modelData?.Materials || [];
+        const materialsForSave = denormalizeMaterialsForSave(localMaterials)
+        const texturesForSave = JSON.parse(JSON.stringify(modelData?.Textures || []))
+        const oldMaterials = originalMaterialsRef.current || modelData?.Materials || []
+        const oldTextures = originalTexturesRef.current || modelData?.Textures || []
+
         useHistoryStore.getState().push({
             name: 'Edit Materials',
-            undo: () => setMaterials(oldMaterials),
-            redo: () => setMaterials(materialsForSave)
-        });
+            undo: () => {
+                setTextures(oldTextures)
+                setMaterials(oldMaterials)
+            },
+            redo: () => {
+                setTextures(texturesForSave)
+                setMaterials(materialsForSave)
+            }
+        })
+
+        isCommittingRef.current = true
+        setTextures(texturesForSave)
         setMaterials(materialsForSave)
         message.success('材质已保存')
+        onClose()
+    }
+
+    const handleCancel = () => {
+        if (!isCommittingRef.current && didRealtimeTexturePreviewRef.current && originalTexturesRef.current) {
+            setTextures(originalTexturesRef.current)
+        }
+        if (!isCommittingRef.current && didRealtimePreviewRef.current && originalMaterialsRef.current) {
+            setMaterials(originalMaterialsRef.current)
+        }
         onClose()
     }
 
@@ -171,12 +214,17 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         setLocalMaterials(newMaterials)
     }
 
-    const updateLocalLayer = (matIndex: number, layerIndex: number, updates: any) => {
+    const updateLocalLayer = (matIndex: number, layerIndex: number, updates: any, applyRealtime: boolean = false) => {
         const newMaterials = [...localMaterials]
         const newLayers = [...newMaterials[matIndex].Layers]
         newLayers[layerIndex] = { ...newLayers[layerIndex], ...updates }
         newMaterials[matIndex].Layers = newLayers
         setLocalMaterials(newMaterials)
+
+        if (applyRealtime) {
+            didRealtimePreviewRef.current = true
+            setMaterials(denormalizeMaterialsForSave(newMaterials))
+        }
     }
 
     const moveLayer = (fromIndex: number, toIndex: number) => {
@@ -395,12 +443,264 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         { value: 6, label: 'Modulate 2X' },
     ]
 
-    // Helper to get texture options (mock or from store if available, for now using just indices)
-    // The previous code used 'textureOptions' but it was not defined in the snippet I saw.
-    // I will assume it creates options based on likely available logic or just numbers.
-    // Ideally we should get textures from modelData.Textures, but let's stick to simple indices if unknown.
-    // Wait, in previous ViewFile output, textureOptions was NOT defined. It was a lint error "找不到名称“textureOptions”".
-    // I need to define it.
+    const SUPPORTED_TEXTURE_EXTENSIONS = new Set(['.blp', '.tga'])
+
+    const isSupportedTextureFile = (path: string): boolean => {
+        const lower = path.toLowerCase()
+        for (const ext of SUPPORTED_TEXTURE_EXTENSIONS) {
+            if (lower.endsWith(ext)) return true
+        }
+        return false
+    }
+
+    const normalizeTexturePathKey = (path: string): string => path.replace(/\//g, '\\').toLowerCase()
+
+    const isAbsoluteWindowsPath = (path: string): boolean => /^[a-zA-Z]:\\/.test(path) || path.startsWith('\\\\')
+
+    const getModelDirectory = (): string | null => {
+        if (!modelPath) return null
+        const normalizedModelPath = modelPath.replace(/\//g, '\\')
+        const modelDir = normalizedModelPath.split('\\').slice(0, -1).join('\\')
+        return modelDir || null
+    }
+
+    const getFileName = (path: string): string => path.replace(/\//g, '\\').split('\\').pop() || path
+
+    const splitFileName = (fileName: string): { stem: string; ext: string } => {
+        const dot = fileName.lastIndexOf('.')
+        if (dot <= 0) return { stem: fileName, ext: '' }
+        return { stem: fileName.slice(0, dot), ext: fileName.slice(dot) }
+    }
+
+    const tryParseFileUriToPath = (uri: string): string | null => {
+        if (!uri || !uri.toLowerCase().startsWith('file://')) return null
+        try {
+            const decoded = decodeURIComponent(uri.replace(/^file:\/\//i, ''))
+            if (/^\/[a-zA-Z]:\//.test(decoded)) {
+                return decoded.slice(1).replace(/\//g, '\\')
+            }
+            return decoded.replace(/\//g, '\\')
+        } catch {
+            return null
+        }
+    }
+
+    const getExternalTexturePathsFromDrop = (dataTransfer: DataTransfer): string[] => {
+        const result: string[] = []
+        const seen = new Set<string>()
+
+        const pushIfSupported = (raw: string | null | undefined) => {
+            if (!raw) return
+            const trimmed = raw.trim()
+            if (!trimmed) return
+            const parsedUriPath = tryParseFileUriToPath(trimmed)
+            const finalPath = parsedUriPath || trimmed
+            if (!isSupportedTextureFile(finalPath)) return
+
+            const key = normalizeTexturePathKey(finalPath)
+            if (seen.has(key)) return
+            seen.add(key)
+            result.push(finalPath)
+        }
+
+        const files = Array.from(dataTransfer.files || [])
+        for (const file of files) {
+            const filePath = (file as any).path as string | undefined
+            if (filePath) {
+                pushIfSupported(filePath)
+            } else {
+                pushIfSupported(file.name)
+            }
+        }
+
+        const uriList = dataTransfer.getData('text/uri-list')
+        if (uriList) {
+            uriList
+                .split(/\r?\n/)
+                .map((line) => line.trim())
+                .filter((line) => line && !line.startsWith('#'))
+                .forEach((line) => pushIfSupported(line))
+        }
+
+        const textPlain = dataTransfer.getData('text/plain')
+        if (textPlain) {
+            textPlain
+                .split(/\r?\n/)
+                .map((line) => line.trim())
+                .filter(Boolean)
+                .forEach((line) => pushIfSupported(line))
+        }
+
+        return result
+    }
+
+    const ensureTextureInModelDir = async (rawPath: string): Promise<{ relativePath: string; copied: boolean } | null> => {
+        const modelDir = getModelDirectory()
+        if (!modelDir) {
+            message.warning('当前模型路径无效，无法导入外部贴图')
+            return null
+        }
+
+        const sourcePath = rawPath.replace(/\//g, '\\')
+        if (!isAbsoluteWindowsPath(sourcePath)) {
+            return null
+        }
+
+        const sourceLower = sourcePath.toLowerCase()
+        const modelDirLower = modelDir.toLowerCase()
+        const modelDirPrefix = `${modelDirLower}\\`
+
+        // Already under model directory: keep a relative path.
+        if (sourceLower.startsWith(modelDirPrefix)) {
+            return {
+                relativePath: sourcePath.slice(modelDir.length + 1),
+                copied: false
+            }
+        }
+
+        const { copyFile, exists, size } = await import('@tauri-apps/plugin-fs')
+        const originalFileName = getFileName(sourcePath)
+        let targetFileName = originalFileName
+        let targetAbsPath = `${modelDir}\\${targetFileName}`
+        const sourceSize = await size(sourcePath).catch(() => null)
+
+        // Same-name file exists: reuse it when file size matches.
+        if (await exists(targetAbsPath)) {
+            const targetSize = await size(targetAbsPath).catch(() => null)
+            if (sourceSize !== null && targetSize !== null && sourceSize === targetSize) {
+                return {
+                    relativePath: targetFileName,
+                    copied: false
+                }
+            }
+
+            // Name collision with different size: search suffixed names.
+            const { stem, ext } = splitFileName(originalFileName)
+            let index = 1
+            while (await exists(`${modelDir}\\${stem}_${index}${ext}`)) {
+                const candidateFileName = `${stem}_${index}${ext}`
+                const candidateAbsPath = `${modelDir}\\${candidateFileName}`
+                const candidateSize = await size(candidateAbsPath).catch(() => null)
+                if (sourceSize !== null && candidateSize !== null && sourceSize === candidateSize) {
+                    return {
+                        relativePath: candidateFileName,
+                        copied: false
+                    }
+                }
+                index++
+            }
+            targetFileName = `${stem}_${index}${ext}`
+            targetAbsPath = `${modelDir}\\${targetFileName}`
+        }
+
+        await copyFile(sourcePath, targetAbsPath)
+        return {
+            relativePath: targetFileName,
+            copied: true
+        }
+    }
+
+    const importExternalTexturesAndGetFirstId = async (externalPaths: string[]): Promise<number | null> => {
+        if (externalPaths.length === 0) return null
+
+        const currentTextures = Array.isArray(modelData?.Textures) ? [...modelData.Textures] : []
+        const pathToIndex = new Map<string, number>()
+        currentTextures.forEach((tex: any, index: number) => {
+            const path = tex?.Image
+            if (typeof path === 'string' && path.length > 0) {
+                pathToIndex.set(normalizeTexturePathKey(path), index)
+            }
+        })
+
+        let firstTextureId: number | null = null
+        let addedCount = 0
+        let copiedCount = 0
+
+        for (const rawPath of externalPaths) {
+            let imported: { relativePath: string; copied: boolean } | null = null
+            try {
+                imported = await ensureTextureInModelDir(rawPath)
+            } catch (error) {
+                console.error('[MaterialEditorModal] Failed to import external texture:', rawPath, error)
+                continue
+            }
+            if (!imported) continue
+
+            const modelTexturePath = imported.relativePath
+            const key = normalizeTexturePathKey(modelTexturePath)
+            let textureId = pathToIndex.get(key)
+            if (textureId === undefined) {
+                textureId = currentTextures.length
+                currentTextures.push({
+                    Image: modelTexturePath,
+                    ReplaceableId: 0,
+                    Flags: 0
+                })
+                pathToIndex.set(key, textureId)
+                addedCount++
+            }
+            if (imported.copied) copiedCount++
+
+            if (firstTextureId === null) {
+                firstTextureId = textureId
+            }
+        }
+
+        if (firstTextureId === null) return null
+
+        if (addedCount > 0) {
+            didRealtimeTexturePreviewRef.current = true
+            setTextures(currentTextures)
+            if (copiedCount > 0) {
+                message.success(`已复制 ${copiedCount} 个贴图到模型目录并应用`)
+            } else {
+                message.success(`已导入 ${addedCount} 个贴图并应用到当前图层`)
+            }
+        } else {
+            message.success('已应用已存在的贴图到当前图层')
+        }
+
+        return firstTextureId
+    }
+
+    const isPointInsideElement = (x: number, y: number, element: HTMLElement | null): boolean => {
+        if (!element) return false
+        const rect = element.getBoundingClientRect()
+        return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+    }
+
+    useEffect(() => {
+        if (!visible) return
+
+        const onExternalFileDrop = async (evt: Event) => {
+            if (selectedMaterialIndex < 0 || selectedLayerIndex < 0) return
+
+            const customEvent = evt as CustomEvent<{ paths?: string[]; position?: { x: number; y: number } | null }>
+            const paths = Array.isArray(customEvent.detail?.paths) ? customEvent.detail.paths : []
+            if (paths.length === 0) return
+
+            const supportedPaths = paths.filter(isSupportedTextureFile)
+            if (supportedPaths.length === 0) return
+
+            const position = customEvent.detail?.position
+            if (position && !isPointInsideElement(position.x, position.y, textureDropZoneRef.current)) {
+                return
+            }
+
+            try {
+                const nextTextureId = await importExternalTexturesAndGetFirstId(supportedPaths)
+                if (nextTextureId === null) return
+                updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TextureID: nextTextureId }, true)
+            } catch (error) {
+                console.error('[MaterialEditorModal] External file drop handling failed:', error)
+                message.error('贴图导入失败')
+            }
+        }
+
+        window.addEventListener('war3-external-file-drop', onExternalFileDrop as EventListener)
+        return () => window.removeEventListener('war3-external-file-drop', onExternalFileDrop as EventListener)
+    }, [visible, selectedMaterialIndex, selectedLayerIndex, modelData, modelPath, localMaterials])
+
     const textureCount = (modelData as any)?.Textures?.length || 0
     const textureOptions = Array.from({ length: textureCount }, (_, i) => {
         const path = (modelData as any)?.Textures?.[i]?.Image || '';
@@ -423,12 +723,54 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         textureOptions.push({ value: -1, label: <span>No Textures</span> })
     }
 
+    const handleTextureDropOver = (e: React.DragEvent<HTMLDivElement>) => {
+        const draggedIndex = getDraggedTextureIndex(e.dataTransfer)
+        const externalTexturePaths = getExternalTexturePathsFromDrop(e.dataTransfer)
+        const hasFilePayload = Array.from(e.dataTransfer.types || []).includes('Files')
+        if (draggedIndex === null && externalTexturePaths.length === 0 && !hasFilePayload) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'copy'
+        setIsTextureDropActive(true)
+    }
+
+    const handleTextureDropLeave = () => {
+        setIsTextureDropActive(false)
+    }
+
+    const handleTextureDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+        setIsTextureDropActive(false)
+        if (selectedMaterialIndex < 0 || selectedLayerIndex < 0) return
+        e.preventDefault()
+
+        const draggedIndex = getDraggedTextureIndex(e.dataTransfer)
+        if (draggedIndex !== null) {
+            if (draggedIndex >= textureCount) {
+                message.warning(`拖放的贴图索引 ${draggedIndex} 超出范围`)
+                return
+            }
+            updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TextureID: draggedIndex }, true)
+            return
+        }
+
+        const externalTexturePaths = getExternalTexturePathsFromDrop(e.dataTransfer)
+        if (externalTexturePaths.length === 0) return
+
+        try {
+            const nextTextureId = await importExternalTexturesAndGetFirstId(externalTexturePaths)
+            if (nextTextureId === null) return
+            updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TextureID: nextTextureId }, true)
+        } catch (error) {
+            console.error('[MaterialEditorModal] Texture drop import failed:', error)
+            message.error('贴图导入失败')
+        }
+    }
+
     return (
         <DraggableModal
             title="材质编辑器 (Material Editor)"
             open={visible}
             onOk={handleOk}
-            onCancel={onClose}
+            onCancel={handleCancel}
             okText="保存"
             cancelText="取消"
             width={850}
@@ -498,7 +840,6 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                                             data-layer-index={index}
                                             onMouseDown={(e) => handleLayerMouseDown(e, index)}
                                             style={{
-                                                cursor: 'pointer',
                                                 padding: '4px 12px',
                                                 backgroundColor: selectedLayerIndex === index ? '#5a9cff' : 'transparent',
                                                 color: selectedLayerIndex === index ? '#fff' : '#b0b0b0',
@@ -541,7 +882,10 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                             <Card title={<span style={{ color: '#b0b0b0' }}>图层属性</span>} size="small" bordered={false} style={{ background: '#333333', border: '1px solid #4a4a4a' }} headStyle={{ borderBottom: '1px solid #4a4a4a' }}>
                                 {/* Row 1: Texture ID (Full Width) */}
                                 <div style={{ marginBottom: 16 }}>
-                                    <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>贴图 ID:</Text>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '4px' }}>
+                                        <Text style={{ color: '#b0b0b0' }}>贴图 ID:</Text>
+                                        <Text style={{ color: '#7f7f7f', fontSize: '12px' }}>可拖动替换贴图</Text>
+                                    </div>
                                     <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                                         <Checkbox
                                             checked={selectedLayer.TextureID && typeof selectedLayer.TextureID !== 'number'}
@@ -553,14 +897,29 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                                         {selectedLayer.TextureID && typeof selectedLayer.TextureID !== 'number' ? (
                                             <Button size="small" onClick={() => openKeyframeEditor('TextureID', 1)}>编辑动画</Button>
                                         ) : (
-                                            <Select
-                                                size="small"
-                                                style={{ flex: 1 }}
-                                                value={typeof selectedLayer.TextureID === 'number' ? selectedLayer.TextureID : 0}
-                                                onChange={(v) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TextureID: v })}
-                                                options={textureOptions}
-                                                popupClassName="dark-theme-select-dropdown"
-                                            />
+                                            <div
+                                                ref={textureDropZoneRef}
+                                                style={{
+                                                    flex: 1,
+                                                    border: isTextureDropActive ? '1px dashed #5a9cff' : '1px dashed transparent',
+                                                    borderRadius: 4,
+                                                    padding: 2,
+                                                    transition: 'border-color 0.15s ease'
+                                                }}
+                                                onDragOver={handleTextureDropOver}
+                                                onDragEnter={handleTextureDropOver}
+                                                onDragLeave={handleTextureDropLeave}
+                                                onDrop={handleTextureDrop}
+                                            >
+                                                <Select
+                                                    size="small"
+                                                    style={{ width: '100%' }}
+                                                    value={typeof selectedLayer.TextureID === 'number' ? selectedLayer.TextureID : 0}
+                                                    onChange={(v) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TextureID: v }, true)}
+                                                    options={textureOptions}
+                                                    popupClassName="dark-theme-select-dropdown"
+                                                />
+                                            </div>
                                         )}
                                     </div>
                                 </div>
@@ -682,3 +1041,5 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 }
 
 export default MaterialEditorModal
+
+
