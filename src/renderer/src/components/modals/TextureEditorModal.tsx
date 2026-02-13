@@ -18,9 +18,19 @@ interface TextureEditorModalProps {
     visible: boolean
     onClose: () => void
     modelPath?: string
+    initialTextures?: any[] | null
+    onApply?: (textures: any[]) => void | Promise<void>
+    asWindow?: boolean
 }
 
-const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClose, modelPath: propModelPath }) => {
+const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
+    visible,
+    onClose,
+    modelPath: propModelPath,
+    initialTextures,
+    onApply,
+    asWindow = false
+}) => {
     const { modelData, setTextures, modelPath: storeModelPath } = useModelStore()
     const [localTextures, setLocalTextures] = useState<any[]>([])
     const [selectedIndex, setSelectedIndex] = useState<number>(-1)
@@ -30,6 +40,11 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
     const [previewSource, setPreviewSource] = useState<string | null>(null) // 'mpq' | 'file' | null
     const listRef = useRef<HTMLDivElement>(null)
     const previewLoadIdRef = useRef(0)
+    const suppressNextLiveApplyRef = useRef(false)
+    const lastAppliedSignatureRef = useRef('')
+    const pendingLiveApplyRef = useRef<Promise<void>>(Promise.resolve())
+    const [pathDraft, setPathDraft] = useState<string>('')
+    const pathCommitTimerRef = useRef<number | null>(null)
 
     // Helper to scroll to selected item
     const scrollToItem = (index: number) => {
@@ -60,10 +75,24 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
     // Use prop modelPath if provided, otherwise fall back to store
     const modelPath = propModelPath || storeModelPath
 
+    const getTexturesSignature = (textures: any[]) => {
+        try {
+            return JSON.stringify(textures)
+        } catch {
+            return `${textures.length}`
+        }
+    }
+
     // Initialize local state
     useEffect(() => {
-        if (visible && modelData && modelData.Textures) {
-            const cloned = JSON.parse(JSON.stringify(modelData.Textures))
+        const sourceTextures = Array.isArray(initialTextures)
+            ? initialTextures
+            : (modelData?.Textures || null)
+
+        if (visible && sourceTextures) {
+            const cloned = typeof structuredClone === 'function'
+                ? structuredClone(sourceTextures)
+                : JSON.parse(JSON.stringify(sourceTextures))
             const withReplaceables = cloned.map((t: any) => {
                 if (!t?.Image && t?.ReplaceableId === 1) {
                     return { ...t, Image: 'ReplaceableTextures\\TeamColor\\TeamColor00.blp' }
@@ -73,21 +102,24 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                 }
                 return t
             })
+            suppressNextLiveApplyRef.current = true
+            lastAppliedSignatureRef.current = getTexturesSignature(withReplaceables)
             setLocalTextures(withReplaceables)
 
-            // If no selection yet, try to select based on picked geoset
-            const initialPickedIndex = useSelectionStore.getState().pickedGeosetIndex
-            let initialSelection = -1
+            let initialSelection = withReplaceables.length > 0 ? 0 : -1
 
-            if (initialPickedIndex !== null && modelData.Geosets && modelData.Geosets[initialPickedIndex]) {
-                const materialId = modelData.Geosets[initialPickedIndex].MaterialID
-                if (materialId !== undefined && modelData.Materials && modelData.Materials[materialId]) {
-                    const material = modelData.Materials[materialId]
-                    if (material.Layers && material.Layers.length > 0) {
-                        const textureId = material.Layers[0].TextureID
-                        if (typeof textureId === 'number' && textureId >= 0 && textureId < modelData.Textures.length) {
-                            initialSelection = textureId
-                            console.log('[TextureEditor] Initial auto-selected texture', textureId, 'for geoset', initialPickedIndex)
+            if (!Array.isArray(initialTextures) && modelData) {
+                const initialPickedIndex = useSelectionStore.getState().pickedGeosetIndex
+                if (initialPickedIndex !== null && modelData.Geosets && modelData.Geosets[initialPickedIndex]) {
+                    const materialId = modelData.Geosets[initialPickedIndex].MaterialID
+                    if (materialId !== undefined && modelData.Materials && modelData.Materials[materialId]) {
+                        const material = modelData.Materials[materialId]
+                        if (material.Layers && material.Layers.length > 0) {
+                            const textureId = material.Layers[0].TextureID
+                            if (typeof textureId === 'number' && textureId >= 0 && textureId < withReplaceables.length) {
+                                initialSelection = textureId
+                                console.log('[TextureEditor] Initial auto-selected texture', textureId, 'for geoset', initialPickedIndex)
+                            }
                         }
                     }
                 }
@@ -97,17 +129,42 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                 setSelectedIndex(initialSelection)
                 setTimeout(() => scrollToItem(initialSelection), 0)
             } else {
-                setSelectedIndex(modelData.Textures.length > 0 ? 0 : -1)
+                setSelectedIndex(withReplaceables.length > 0 ? 0 : -1)
             }
         } else if (visible) {
+            suppressNextLiveApplyRef.current = true
+            lastAppliedSignatureRef.current = getTexturesSignature([])
             setLocalTextures([])
             setSelectedIndex(-1)
         }
-    }, [visible, modelData])
+    }, [visible, modelData, initialTextures])
+
+    useEffect(() => {
+        if (!visible || !onApply) return
+        if (suppressNextLiveApplyRef.current) {
+            suppressNextLiveApplyRef.current = false
+            return
+        }
+
+        const signature = getTexturesSignature(localTextures)
+        if (signature === lastAppliedSignatureRef.current) {
+            return
+        }
+        lastAppliedSignatureRef.current = signature
+
+        pendingLiveApplyRef.current = pendingLiveApplyRef.current
+            .catch(() => { })
+            .then(async () => {
+                await onApply(localTextures)
+            })
+            .catch((error) => {
+                console.error('[TextureEditor] Live apply failed:', error)
+            })
+    }, [localTextures, onApply, visible])
 
     // Subscribe to Ctrl+Click geoset picking - auto-select texture
     useEffect(() => {
-        if (!visible || !modelData) return
+        if (!visible || !modelData || Array.isArray(initialTextures)) return
 
         // Initial check is handled in the init effect above to avoid race conditions or double sets
         // But we still need to subscribe to subsequent changes while modal is open
@@ -136,7 +193,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
             }
         })
         return unsubscribe
-    }, [visible, modelData, localTextures.length])
+    }, [visible, modelData, localTextures.length, initialTextures])
 
     const imageDataToDataUrl = (imageData: ImageData): string | null => {
         const canvas = document.createElement('canvas')
@@ -220,7 +277,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                     setPreviewSource(null)
                 } else {
                     setPreviewUrl(null)
-                    setPreviewError('无法加载贴图')
+                    setPreviewError('Unable to load texture')
                     setPreviewSource(null)
                 }
                 return
@@ -274,7 +331,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                         setPreviewError(null)
                         setPreviewSource('Replaceable')
                     } else {
-                        setPreviewError('无法加载贴图：MPQ 未找到')
+                        setPreviewError('Unable to load texture: MPQ not found')
                     }
                     setIsLoadingPreview(false)
                     return
@@ -297,19 +354,19 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                 const dataUrl = imageData ? imageDataToDataUrl(imageData) : null
                                 if (dataUrl) {
                                     setPreviewUrl(dataUrl)
-                                    setPreviewSource('文件')
+                                    setPreviewSource('File')
                                     loaded = true
                                     console.log('[TextureEditor] Loaded from file system successfully')
                                     break
                                 } else {
-                                    lastError = '无法加载贴图：BLP 解码失败'
+                                    lastError = 'Unable to load texture: BLP decode failed'
                                 }
                             } else {
-                                lastError = '无法加载贴图：读取失败'
+                                lastError = 'Unable to load texture: read failed'
                             }
                         } catch (e: any) {
                             if (!loaded) {
-                                lastError = `无法加载贴图：${e.message || '读取失败'}`
+                                lastError = 'Unable to load texture: ' + (e.message || 'read failed')
                             }
                         }
                     }
@@ -320,7 +377,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                 } catch (e: any) {
                     console.error("[TextureEditor] File system load failed:", e)
                     if (!loaded) {
-                        setPreviewError(`无法加载贴图：${e.message || '读取失败'}`)
+                        setPreviewError('Unable to load texture: ' + (e.message || 'read failed'))
                     }
                 }
             }
@@ -343,7 +400,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                     }
                 } catch (e: any) {
                     if (!loaded) {
-                        setPreviewError(`无法加载贴图：MPQ 读取失败`)
+                        setPreviewError('Unable to load texture: MPQ read failed')
                     }
                 }
             }
@@ -363,7 +420,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                     }
                 }
                 setPreviewUrl(`file://${fullPath}`)
-                setPreviewSource('文件')
+                setPreviewSource('File')
             }
 
             if (isStale()) return
@@ -374,8 +431,23 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
 
     const handleOk = () => {
         setTextures(localTextures)
-        message.success('纹理已保存')
+        message.success('Texture saved')
         onClose()
+    }
+
+    const handleModalOk = async () => {
+        if (onApply) {
+            try {
+                await onApply(localTextures)
+                message.success('Texture saved')
+                onClose()
+            } catch (error) {
+                console.error('[TextureEditor] Apply failed:', error)
+                message.error('Failed to save textures')
+            }
+            return
+        }
+        handleOk()
     }
 
     const updateLocalTexture = (index: number, updates: any) => {
@@ -399,277 +471,215 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
 
     const selectedTexture = selectedIndex >= 0 ? localTextures[selectedIndex] : null
 
+    useEffect(() => {
+        if (selectedTexture?.Image !== undefined && selectedTexture?.Image !== null) {
+            setPathDraft(String(selectedTexture.Image))
+        } else {
+            setPathDraft('')
+        }
+    }, [selectedIndex, selectedTexture?.Image])
+
+    useEffect(() => {
+        return () => {
+            if (pathCommitTimerRef.current !== null) {
+                window.clearTimeout(pathCommitTimerRef.current)
+            }
+        }
+    }, [])
+
+    const commitPathDraft = (indexAtCommit: number, valueAtCommit: string) => {
+        if (indexAtCommit < 0) return
+        if (pathCommitTimerRef.current !== null) {
+            window.clearTimeout(pathCommitTimerRef.current)
+        }
+        pathCommitTimerRef.current = window.setTimeout(() => {
+            updateLocalTexture(indexAtCommit, { Image: valueAtCommit })
+            pathCommitTimerRef.current = null
+        }, 100)
+    }
+
+    const renderEditorContent = (contentHeight: string | number = '500px') => (
+        <div style={{ display: 'flex', height: contentHeight, border: '1px solid #4a4a4a', backgroundColor: '#252525' }}>
+            <div ref={listRef} style={{ width: '220px', overflowY: 'auto', display: 'flex', flexDirection: 'column', backgroundColor: '#333333', borderRight: '1px solid #4a4a4a' }}>
+                <div style={{ padding: '8px', borderBottom: '1px solid #4a4a4a' }}>
+                    <Button
+                        type="primary"
+                        icon={<PlusOutlined />}
+                        block
+                        style={{ backgroundColor: '#5a9cff', borderColor: '#5a9cff' }}
+                        onClick={async () => {
+                            try {
+                                const selected = await open({
+                                    multiple: true,
+                                    filters: [{ name: 'Texture files', extensions: ['blp', 'png', 'tga', 'jpg', 'jpeg'] }],
+                                })
+                                const paths = Array.isArray(selected) ? selected : (selected ? [selected] : [])
+                                if (!paths.length) return
+
+                                const existingPaths = new Set(localTextures.map(texture => (texture.Image || '').toLowerCase()))
+                                const newTextures: any[] = []
+
+                                for (const filePath of paths) {
+                                    let relativePath = filePath
+                                    if (modelPath) {
+                                        const modelDir = modelPath.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
+                                        const selectedNormalized = filePath.replace(/\\/g, '/')
+                                        if (selectedNormalized.toLowerCase().startsWith(modelDir.toLowerCase())) {
+                                            relativePath = selectedNormalized.substring(modelDir.length + 1).replace(/\//g, '\\')
+                                        } else {
+                                            relativePath = filePath.replace(/\\/g, '/').split('/').pop() || filePath
+                                        }
+                                    }
+                                    if (existingPaths.has(relativePath.toLowerCase())) continue
+                                    existingPaths.add(relativePath.toLowerCase())
+                                    newTextures.push({ Image: relativePath, ReplaceableId: 0, Flags: 0 })
+                                }
+
+                                if (newTextures.length > 0) {
+                                    const updatedTextures = [...localTextures, ...newTextures]
+                                    setLocalTextures(updatedTextures)
+                                    setSelectedIndex(updatedTextures.length - 1)
+                                    setTimeout(() => scrollToItem(updatedTextures.length - 1), 0)
+                                    message.success(`Added ${newTextures.length} texture(s)`) 
+                                } else {
+                                    message.warning('No new textures were added')
+                                }
+                            } catch (error) {
+                                console.error('Failed to import textures:', error)
+                            }
+                        }}
+                    >
+                        Add
+                    </Button>
+                </div>
+                <List
+                    dataSource={localTextures}
+                    renderItem={(item, index) => (
+                        <List.Item
+                            onClick={() => setSelectedIndex(index)}
+                            draggable
+                            onDragStart={(event) => {
+                                setDraggedTextureIndex(event.dataTransfer, index)
+                                event.dataTransfer.effectAllowed = 'copy'
+                            }}
+                            style={{
+                                cursor: 'pointer',
+                                padding: '8px 12px',
+                                backgroundColor: selectedIndex === index ? '#5a9cff' : 'transparent',
+                                color: selectedIndex === index ? '#fff' : '#b0b0b0',
+                                borderBottom: '1px solid #3a3a3a',
+                            }}
+                        >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '150px' }}>
+                                    <span style={{ marginRight: '8px', opacity: 0.7 }}>{index}:</span>
+                                    {item.Image || getReplaceableLabel(item.ReplaceableId) || 'Texture unavailable'}
+                                </div>
+                                <DeleteOutlined
+                                    onClick={(event) => {
+                                        event.stopPropagation()
+                                        const newTextures = localTextures.filter((_, i) => i !== index)
+                                        setLocalTextures(newTextures)
+                                        if (selectedIndex === index) setSelectedIndex(-1)
+                                        else if (selectedIndex > index) setSelectedIndex(selectedIndex - 1)
+                                    }}
+                                    style={{ color: '#ff4d4f' }}
+                                />
+                            </div>
+                        </List.Item>
+                    )}
+                />
+            </div>
+
+            <div style={{ flex: 1, padding: '16px', overflowY: 'auto', backgroundColor: '#252525', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                {selectedTexture ? (
+                    <>
+                        <div style={{ height: '200px', border: '1px solid #4a4a4a', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', backgroundColor: '#1f1f1f', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
+                            {isLoadingPreview ? (
+                                <div style={{ color: '#5a9cff', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                                    <div className="ant-spin ant-spin-spinning" style={{ fontSize: 24 }}>...</div>
+                                    <span>Loading...</span>
+                                </div>
+                            ) : previewUrl ? (
+                                <>
+                                    <img src={previewUrl} alt="Preview" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+                                    {previewSource && (
+                                        <div style={{ position: 'absolute', bottom: 4, right: 4, backgroundColor: previewSource === 'MPQ' ? '#52c41a' : '#1677ff', color: '#fff', padding: '2px 6px', borderRadius: 3, fontSize: 10, fontWeight: 'bold' }}>
+                                            {previewSource}
+                                        </div>
+                                    )}
+                                </>
+                            ) : previewError ? (
+                                <div style={{ color: '#ff4d4f', textAlign: 'center', padding: 8 }}>
+                                    <div>Warning: {previewError}</div>
+                                    <div style={{ fontSize: 11, color: '#888', marginTop: 4 }}>{selectedTexture?.Image}</div>
+                                </div>
+                            ) : (
+                                <span style={{ color: '#666' }}>No preview</span>
+                            )}
+                        </div>
+
+                        <Card title={<span style={{ color: '#b0b0b0' }}>Texture Settings</span>} size="small" bordered={false} style={{ background: '#333333', border: '1px solid #4a4a4a' }} headStyle={{ borderBottom: '1px solid #4a4a4a' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                <div>
+                                    <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>Path:</Text>
+                                    <Input
+                                        value={pathDraft}
+                                        onChange={(event) => setPathDraft(event.target.value)}
+                                        onBlur={() => commitPathDraft(selectedIndex, pathDraft)}
+                                        onPressEnter={() => commitPathDraft(selectedIndex, pathDraft)}
+                                        style={{ backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
+                                    />
+                                </div>
+                                <div>
+                                    <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>Replaceable ID:</Text>
+                                    <InputNumber value={selectedTexture.ReplaceableId} onChange={(value) => updateLocalTexture(selectedIndex, { ReplaceableId: value })} style={{ width: '100%', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }} />
+                                    <Text style={{ fontSize: '12px', color: '#808080' }}>0: None, 1: TeamColor, 2: TeamGlow, 31+: Trees</Text>
+                                </div>
+                                <div style={{ display: 'flex', gap: '16px' }}>
+                                    <Checkbox checked={isFlagSet(1)} onChange={(event) => handleFlagChange(1, event.target.checked)} style={{ color: '#e8e8e8' }}>Wrap Width</Checkbox>
+                                    <Checkbox checked={isFlagSet(2)} onChange={(event) => handleFlagChange(2, event.target.checked)} style={{ color: '#e8e8e8' }}>Wrap Height</Checkbox>
+                                </div>
+                            </div>
+                        </Card>
+                    </>
+                ) : (
+                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#808080' }}>
+                        Select one texture from the left list
+                    </div>
+                )}
+            </div>
+        </div>
+    )
+
+    if (asWindow) {
+        if (!visible) return null
+        return (
+            <div style={{ height: '100vh', padding: 12, backgroundColor: '#1f1f1f', overflow: 'hidden' }}>
+                {renderEditorContent('calc(100vh - 24px)')}
+            </div>
+        )
+    }
+
     return (
         <DraggableModal
-            title="纹理管理器"
+            title="Texture Manager"
             open={visible}
-            onOk={handleOk}
+            onOk={handleModalOk}
             onCancel={onClose}
             width={900}
-            okText="确定"
-            cancelText="取消"
+            okText="Save"
+            cancelText="Cancel"
             maskClosable={false}
             wrapClassName="dark-theme-modal"
             styles={{
                 content: { backgroundColor: '#333333', border: '1px solid #4a4a4a' },
                 header: { backgroundColor: '#333333', borderBottom: '1px solid #4a4a4a' },
                 body: { backgroundColor: '#2d2d2d' },
-                footer: { borderTop: '1px solid #4a4a4a' }
+                footer: { borderTop: '1px solid #4a4a4a' },
             }}
         >
-            <div style={{ display: 'flex', height: '500px', border: '1px solid #4a4a4a', backgroundColor: '#252525' }}>
-                {/* List (Left) */}
-                <div ref={listRef} style={{ width: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', backgroundColor: '#333333', borderRight: '1px solid #4a4a4a' }}>
-                    <div style={{ padding: '8px', borderBottom: '1px solid #4a4a4a' }}>
-                        <Dropdown
-                            menu={{
-                                items: [
-                                    {
-                                        key: 'file',
-                                        label: '从文件导入',
-                                        icon: <FolderOpenOutlined />,
-                                        onClick: async () => {
-                                            try {
-                                                const selected = await open({
-                                                    multiple: true,
-                                                    filters: [{
-                                                        name: '纹理文件',
-                                                        extensions: ['blp', 'png', 'tga', 'jpg', 'jpeg']
-                                                    }]
-                                                })
-
-                                                // Handle both single and multiple selection
-                                                const paths = Array.isArray(selected) ? selected : (selected ? [selected] : [])
-
-                                                if (paths.length === 0) return
-
-                                                // Get existing texture paths for duplicate detection
-                                                const existingPaths = new Set(
-                                                    localTextures.map(t => (t.Image || '').toLowerCase())
-                                                )
-
-                                                const newTextures: any[] = []
-                                                let addedCount = 0
-                                                let skippedCount = 0
-
-                                                for (const filePath of paths) {
-                                                    // 计算相对路径
-                                                    let relativePath = filePath
-
-                                                    if (modelPath) {
-                                                        // 获取模型所在目录
-                                                        const modelDir = modelPath.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
-                                                        const selectedNormalized = filePath.replace(/\\/g, '/')
-
-                                                        // 检查是否在模型目录下
-                                                        if (selectedNormalized.toLowerCase().startsWith(modelDir.toLowerCase())) {
-                                                            // 提取相对路径
-                                                            relativePath = selectedNormalized.substring(modelDir.length + 1)
-                                                            // 转换为反斜杠（MDX 标准格式）
-                                                            relativePath = relativePath.replace(/\//g, '\\')
-                                                        } else {
-                                                            // 不在模型目录下，使用文件名
-                                                            relativePath = filePath.replace(/\\/g, '/').split('/').pop() || filePath
-                                                        }
-                                                    }
-
-                                                    // Check for duplicate (same path)
-                                                    if (existingPaths.has(relativePath.toLowerCase())) {
-                                                        skippedCount++
-                                                        continue
-                                                    }
-
-                                                    // Also add to existing set to prevent duplicates within the batch
-                                                    existingPaths.add(relativePath.toLowerCase())
-
-                                                    newTextures.push({ Image: relativePath, ReplaceableId: 0, Flags: 0 })
-                                                    addedCount++
-                                                }
-
-                                                if (newTextures.length > 0) {
-                                                    const updatedTextures = [...localTextures, ...newTextures]
-                                                    setLocalTextures(updatedTextures)
-                                                    setSelectedIndex(updatedTextures.length - 1) // Select the last added texture
-                                                    setTimeout(() => scrollToItem(updatedTextures.length - 1), 0)
-
-                                                    if (addedCount === 1 && skippedCount === 0) {
-                                                        message.success(`已添加纹理: ${newTextures[0].Image}`)
-                                                    } else if (skippedCount > 0) {
-                                                        message.success(`已添加 ${addedCount} 个纹理，跳过 ${skippedCount} 个重复`)
-                                                    } else {
-                                                        message.success(`已批量添加 ${addedCount} 个纹理`)
-                                                    }
-                                                } else if (skippedCount > 0) {
-                                                    message.warning(`所有选择的纹理都已存在，跳过 ${skippedCount} 个重复`)
-                                                }
-                                            } catch (e) {
-                                                console.error('Failed to open file dialog:', e)
-                                            }
-                                        }
-                                    },
-                                    {
-                                        key: 'mpq',
-                                        label: '从 MPQ 选择',
-                                        icon: <DatabaseOutlined />,
-                                        disabled: true,  // 暂时禁用
-                                        onClick: () => {
-                                            message.info('MPQ 纹理选择功能即将推出')
-                                        }
-                                    },
-                                    { type: 'divider' },
-                                    {
-                                        key: 'blank',
-                                        label: '新建空白纹理',
-                                        icon: <PlusOutlined />,
-                                        onClick: () => {
-                                            const newTexture = { Image: 'Textures\\white.blp', ReplaceableId: 0, Flags: 0 }
-                                            setLocalTextures([...localTextures, newTexture])
-                                            setSelectedIndex(localTextures.length)
-                                            setTimeout(() => scrollToItem(localTextures.length), 0)
-                                        }
-                                    }
-                                ] as MenuProps['items']
-                            }}
-                            trigger={['click']}
-                        >
-                            <Button
-                                type="primary"
-                                icon={<PlusOutlined />}
-                                block
-                                style={{ backgroundColor: '#5a9cff', borderColor: '#5a9cff' }}
-                            >
-                                添加 ▼
-                            </Button>
-                        </Dropdown>
-                    </div>
-                    <List
-                        dataSource={localTextures}
-                        renderItem={(item, index) => (
-                            <List.Item
-                                onClick={() => setSelectedIndex(index)}
-                                draggable
-                                onDragStart={(e) => {
-                                    setDraggedTextureIndex(e.dataTransfer, index)
-                                    e.dataTransfer.effectAllowed = 'copy'
-                                }}
-                                style={{
-                                    cursor: 'pointer',
-                                    padding: '8px 12px',
-                                    backgroundColor: selectedIndex === index ? '#5a9cff' : 'transparent',
-                                    color: selectedIndex === index ? '#fff' : '#b0b0b0',
-                                    transition: 'background 0.2s',
-                                    borderBottom: '1px solid #3a3a3a'
-                                }}
-                                className="hover:bg-[#454545]"
-                            >
-                                <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px' }}>
-                                        <span style={{ marginRight: '8px', opacity: 0.7 }}>{index}:</span>
-                                        {item.Image || getReplaceableLabel(item.ReplaceableId) || '无法加载贴图'}
-                                    </div>
-                                    <DeleteOutlined
-                                        onClick={(e) => {
-                                            e.stopPropagation()
-                                            const newTextures = localTextures.filter((_, i) => i !== index)
-                                            setLocalTextures(newTextures)
-                                            if (selectedIndex === index) setSelectedIndex(-1)
-                                            else if (selectedIndex > index) setSelectedIndex(selectedIndex - 1)
-                                        }}
-                                        style={{ color: '#ff4d4f' }}
-                                    />
-                                </div>
-                            </List.Item>
-                        )}
-                    />
-                </div>
-
-                {/* Details (Right) */}
-                <div style={{ flex: 1, padding: '16px', overflowY: 'auto', backgroundColor: '#252525', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                    {selectedTexture ? (
-                        <>
-                            {/* Preview */}
-                            <div style={{ height: '200px', border: '1px solid #4a4a4a', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', backgroundColor: '#1f1f1f', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
-                                {isLoadingPreview ? (
-                                    <div style={{ color: '#5a9cff', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-                                        <div className="ant-spin ant-spin-spinning" style={{ fontSize: 24 }}>⏳</div>
-                                        <span>加载中...</span>
-                                    </div>
-                                ) : previewUrl ? (
-                                    <>
-                                        <img src={previewUrl} alt="Preview" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
-                                        {previewSource && (
-                                            <div style={{
-                                                position: 'absolute',
-                                                bottom: 4,
-                                                right: 4,
-                                                backgroundColor: previewSource === 'MPQ' ? '#52c41a' : '#1677ff',
-                                                color: '#fff',
-                                                padding: '2px 6px',
-                                                borderRadius: 3,
-                                                fontSize: 10,
-                                                fontWeight: 'bold'
-                                            }}>
-                                                {previewSource}
-                                            </div>
-                                        )}
-                                    </>
-                                ) : previewError ? (
-                                    <div style={{ color: '#ff4d4f', textAlign: 'center', padding: 8 }}>
-                                        <div>⚠️ {previewError}</div>
-                                        <div style={{ fontSize: 11, color: '#888', marginTop: 4 }}>{selectedTexture?.Image}</div>
-                                    </div>
-                                ) : (
-                                    <span style={{ color: '#666' }}>无预览</span>
-                                )}
-                            </div>
-
-                            {/* Settings */}
-                            <Card
-                                title={<span style={{ color: '#b0b0b0' }}>纹理设置</span>}
-                                size="small"
-                                bordered={false}
-                                style={{ background: '#333333', border: '1px solid #4a4a4a' }}
-                                headStyle={{ borderBottom: '1px solid #4a4a4a' }}
-                            >
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                    <div>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '4px' }}>
-                                            <Text style={{ color: '#b0b0b0' }}>路径:</Text>
-                                            <Text style={{ color: '#7f7f7f', fontSize: '12px' }}>可拖动替换贴图</Text>
-                                        </div>
-                                        <Input
-                                            value={selectedTexture.Image}
-                                            onChange={(e) => updateLocalTexture(selectedIndex, { Image: e.target.value })}
-                                            style={{ backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
-                                        />
-                                    </div>
-                                    <div>
-                                        <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>可替换 ID:</Text>
-                                        <InputNumber
-                                            value={selectedTexture.ReplaceableId}
-                                            onChange={(v) => updateLocalTexture(selectedIndex, { ReplaceableId: v })}
-                                            style={{ width: '100%', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
-                                        />
-                                        <Text style={{ fontSize: '12px', color: '#808080' }}>0: 无, 1: 队伍颜色, 2: 队伍光晕, 31+: 树木</Text>
-                                    </div>
-                                    <div style={{ display: 'flex', gap: '16px' }}>
-                                        <Checkbox checked={isFlagSet(1)} onChange={(e) => handleFlagChange(1, e.target.checked)} style={{ color: '#e8e8e8' }}>
-                                            笼罩宽度 (Wrap Width)
-                                        </Checkbox>
-                                        <Checkbox checked={isFlagSet(2)} onChange={(e) => handleFlagChange(2, e.target.checked)} style={{ color: '#e8e8e8' }}>
-                                            笼罩高度 (Wrap Height)
-                                        </Checkbox>
-                                    </div>
-                                </div>
-                            </Card>
-                        </>
-                    ) : (
-                        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#808080' }}>
-                            请从左侧列表选择一个纹理
-                        </div>
-                    )}
-                </div>
-            </div>
+            {renderEditorContent()}
         </DraggableModal>
     )
 }

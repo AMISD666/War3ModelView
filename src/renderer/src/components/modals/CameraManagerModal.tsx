@@ -1,158 +1,163 @@
-import React, { useState } from 'react';
-import { Button, Card, Space, InputNumber, Row, Col, Input, Checkbox, Tooltip } from 'antd';
-import { EyeOutlined, CameraOutlined } from '@ant-design/icons';
-import { MasterDetailLayout } from '../MasterDetailLayout';
-import { useModelStore } from '../../store/modelStore';
-import { DraggableModal } from '../DraggableModal';
-import { useHistoryStore } from '../../store/historyStore';
-
-import KeyframeEditor from '../editors/KeyframeEditor';
-import { CameraNode, NodeType } from '../../types/node';
-
-
+﻿import React, { useState } from 'react'
+import { Button, Card, Space, InputNumber, Row, Col, Input, Checkbox, Tooltip } from 'antd'
+import { EyeOutlined, CameraOutlined } from '@ant-design/icons'
+import { MasterDetailLayout } from '../MasterDetailLayout'
+import { useModelStore } from '../../store/modelStore'
+import { DraggableModal } from '../DraggableModal'
+import { useHistoryStore } from '../../store/historyStore'
+import KeyframeEditor from '../editors/KeyframeEditor'
+import { CameraNode, NodeType } from '../../types/node'
 
 interface CameraManagerModalProps {
-    visible: boolean;
-    onClose: () => void;
-    onAddFromView?: () => void;
-    onViewCamera?: (camera: CameraNode) => void;
+    visible: boolean
+    onClose: () => void
+    onAddFromView?: () => void
+    onViewCamera?: (camera: CameraNode) => void
+    asWindow?: boolean
 }
 
-const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClose, onAddFromView, onViewCamera }) => {
-    const { modelData, updateNodes, nodes, addNode, deleteNode } = useModelStore();
-    const [selectedIndex, setSelectedIndex] = useState<number>(-1);
+const CameraManagerModal: React.FC<CameraManagerModalProps> = ({
+    visible,
+    onClose,
+    onAddFromView,
+    onViewCamera,
+    asWindow = false
+}) => {
+    const { modelData, updateNodes, nodes, addNode, deleteNode } = useModelStore()
+    const [selectedIndex, setSelectedIndex] = useState<number>(-1)
 
-    // Editor State
-    const [editorVisible, setEditorVisible] = useState(false);
-    const [editingBlock, setEditingBlock] = useState<{ index: number, field: string } | null>(null);
+    const [editorVisible, setEditorVisible] = useState(false)
+    const [editingBlock, setEditingBlock] = useState<{ index: number, field: string } | null>(null)
 
-    // Filter cameras from nodes
-    const cameras = nodes.filter(n => n.type === NodeType.CAMERA) as CameraNode[];
-    const globalSequences = (modelData?.GlobalSequences || []) as unknown as number[];
+    const cameras = nodes.filter((n) => n.type === NodeType.CAMERA) as CameraNode[]
+    const globalSequences = (modelData?.GlobalSequences || []) as unknown as number[]
 
     const handleAdd = () => {
         const newCamera: Partial<CameraNode> & { Name: string, type: NodeType } = {
             Name: `Camera ${cameras.length + 1}`,
             type: NodeType.CAMERA,
-            FieldOfView: 0.7853, // Approx 45 degrees
+            FieldOfView: 0.7853,
             NearClip: 16,
             FarClip: 5000,
-            Translation: { // Position
+            Translation: {
                 InterpolationType: 0,
                 GlobalSeqId: null,
                 Keys: [{ Frame: 0, Vector: [0, 0, 0] }]
             },
-            TargetTranslation: { // Target Position
+            TargetTranslation: {
                 InterpolationType: 0,
                 GlobalSeqId: null,
                 Keys: [{ Frame: 0, Vector: [100, 0, 0] }]
             }
-        };
+        }
 
-        const currentNodes = useModelStore.getState().nodes;
-        const maxObjectId = currentNodes.reduce((max, n) => Math.max(max, n.ObjectId), -1);
-        const newObjectId = maxObjectId + 1;
+        const currentNodes = useModelStore.getState().nodes
+        const maxObjectId = currentNodes.reduce((max, n) => Math.max(max, n.ObjectId), -1)
+        const newObjectId = maxObjectId + 1
 
         useHistoryStore.getState().push({
             name: 'Add Camera',
             undo: () => deleteNode(newObjectId),
             redo: () => addNode({ ...newCamera, ObjectId: newObjectId })
-        });
+        })
 
-        addNode(newCamera);
-    };
+        addNode(newCamera)
+    }
 
     const handleDelete = (index: number) => {
-        if (index >= 0 && index < cameras.length) {
-            const node = cameras[index];
-            const nodeClone = JSON.parse(JSON.stringify(node));
+        if (index < 0 || index >= cameras.length) return
 
-            useHistoryStore.getState().push({
-                name: 'Delete Camera',
-                undo: () => addNode(nodeClone),
-                redo: () => deleteNode(node.ObjectId)
-            });
+        const node = cameras[index]
+        const nodeClone = JSON.parse(JSON.stringify(node))
 
-            deleteNode(node.ObjectId);
-            if (selectedIndex >= index) setSelectedIndex(Math.max(-1, selectedIndex - 1));
-        }
-    };
+        useHistoryStore.getState().push({
+            name: 'Delete Camera',
+            undo: () => addNode(nodeClone),
+            redo: () => deleteNode(node.ObjectId)
+        })
+
+        deleteNode(node.ObjectId)
+        if (selectedIndex >= index) setSelectedIndex(Math.max(-1, selectedIndex - 1))
+    }
 
     const updateCamera = (index: number, updates: Partial<CameraNode>) => {
-        const camera = cameras[index];
-        if (camera) {
-            const oldData: Partial<CameraNode> = {};
-            Object.keys(updates).forEach(key => {
-                const k = key as keyof CameraNode;
-                oldData[k] = (camera as any)[k];
-            });
-            const objectId = camera.ObjectId;
+        const camera = cameras[index]
+        if (!camera) return
 
-            useHistoryStore.getState().push({
-                name: 'Update Camera',
-                undo: () => updateNodes([{ objectId, data: oldData }]),
-                redo: () => updateNodes([{ objectId, data: updates }])
-            });
+        const oldData: Partial<CameraNode> = {}
+        Object.keys(updates).forEach((key) => {
+            const k = key as keyof CameraNode
+            oldData[k] = (camera as any)[k]
+        })
 
-            updateNodes([{ objectId: camera.ObjectId, data: updates }]);
-        }
-    };
+        const objectId = camera.ObjectId
+        useHistoryStore.getState().push({
+            name: 'Update Camera',
+            undo: () => updateNodes([{ objectId, data: oldData }]),
+            redo: () => updateNodes([{ objectId, data: updates }])
+        })
+
+        updateNodes([{ objectId: camera.ObjectId, data: updates }])
+    }
 
     const toggleBlock = (index: number, key: keyof CameraNode, checked: boolean) => {
-        const currentCam = cameras[index];
+        const currentCam = cameras[index]
         if (checked) {
-            updateCamera(index, { [key]: (currentCam as any)[key] || { InterpolationType: 0, GlobalSeqId: null, Keys: [{ Frame: 0, Vector: [0, 0, 0] }] } });
+            updateCamera(index, {
+                [key]: (currentCam as any)[key] || {
+                    InterpolationType: 0,
+                    GlobalSeqId: null,
+                    Keys: [{ Frame: 0, Vector: [0, 0, 0] }]
+                }
+            })
         } else {
-            updateCamera(index, { [key]: undefined } as any);
+            updateCamera(index, { [key]: undefined } as any)
         }
-    };
+    }
 
-    const openEditor = (index: number, field: string, _label: string) => {
-        setEditingBlock({ index, field });
-        setEditorVisible(true);
-    };
+    const openEditor = (index: number, field: string) => {
+        setEditingBlock({ index, field })
+        setEditorVisible(true)
+    }
 
     const handleEditorSave = (result: any) => {
-        if (editingBlock) {
-            const { index, field } = editingBlock;
-            updateCamera(index, { [field]: result });
-            setEditorVisible(false);
-            setEditingBlock(null);
-        }
-    };
+        if (!editingBlock) return
+        const { index, field } = editingBlock
+        updateCamera(index, { [field]: result })
+        setEditorVisible(false)
+        setEditingBlock(null)
+    }
 
     const renderListItem = (item: any, index: number, isSelected: boolean) => (
-        <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            color: isSelected ? '#fff' : '#b0b0b0'
-        }}>
+        <div
+            style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                color: isSelected ? '#fff' : '#b0b0b0'
+            }}
+        >
             <span>{item.Name || `Camera ${index}`}</span>
         </div>
-    );
+    )
 
     const renderDetail = (item: any, index: number) => {
-        const cam = item as CameraNode;
-        // Get position from camera - check multiple possible formats
-        // Note: Position may be Float32Array which fails Array.isArray()
-        const isArrayLike = (v: any) => Array.isArray(v) || v instanceof Float32Array || ArrayBuffer.isView(v);
-        const toArray = (v: any) => v instanceof Float32Array ? Array.from(v) : v;
+        const cam = item as CameraNode
+        const isArrayLike = (v: any) => Array.isArray(v) || v instanceof Float32Array || ArrayBuffer.isView(v)
+        const toArray = (v: any) => (v instanceof Float32Array ? Array.from(v) : v)
 
         const getPos = (prop: any, directProp?: any) => {
-            if (directProp && isArrayLike(directProp)) return toArray(directProp);
-            if (isArrayLike(prop)) return toArray(prop);
+            if (directProp && isArrayLike(directProp)) return toArray(directProp)
+            if (isArrayLike(prop)) return toArray(prop)
             if (prop && prop.Keys && prop.Keys.length > 0) {
-                const v = prop.Keys[0].Vector;
-                return v ? toArray(v) : [0, 0, 0];
+                const v = prop.Keys[0].Vector
+                return v ? toArray(v) : [0, 0, 0]
             }
-            return [0, 0, 0];
-        };
+            return [0, 0, 0]
+        }
 
-        // Use Position/TargetPosition first (raw parser format), 
-        // then Translation/TargetTranslation (animation format)
-        const pos = getPos(cam.Translation, (cam as any).Position);
-        const target = getPos(cam.TargetTranslation, (cam as any).TargetPosition);
+        const pos = getPos(cam.Translation, (cam as any).Position)
+        const target = getPos(cam.TargetTranslation, (cam as any).TargetPosition)
 
         const VectorInputs = ({ value, onChange, label }: { value: number[], onChange: (val: number[]) => void, label: string }) => (
             <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -165,31 +170,29 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
                             style={{ flex: 1, background: '#222', borderColor: '#444', color: '#fff' }}
                             value={value[i]}
                             onChange={(v) => {
-                                const newVal = [...value];
-                                newVal[i] = v || 0;
-                                onChange(newVal);
+                                const newVal = [...value]
+                                newVal[i] = v || 0
+                                onChange(newVal)
                             }}
                         />
                     </div>
                 ))}
             </div>
-        );
+        )
 
         const updateStaticPos = (key: 'Translation' | 'TargetTranslation', newVal: number[]) => {
-            const block = (cam as any)[key];
-            const newBlock = block ? { ...block } : { InterpolationType: 0, GlobalSeqId: null, Keys: [{ Frame: 0, Vector: newVal }] };
+            const block = (cam as any)[key]
+            const newBlock = block ? { ...block } : { InterpolationType: 0, GlobalSeqId: null, Keys: [{ Frame: 0, Vector: newVal }] }
             if (newBlock.Keys && newBlock.Keys.length > 0) {
-                newBlock.Keys[0].Vector = newVal;
+                newBlock.Keys[0].Vector = newVal
             } else {
-                newBlock.Keys = [{ Frame: 0, Vector: newVal }];
+                newBlock.Keys = [{ Frame: 0, Vector: newVal }]
             }
-            updateCamera(index, { [key]: newBlock });
-        };
-
+            updateCamera(index, { [key]: newBlock })
+        }
 
         return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                {/* Name */}
                 <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8, border: '1px solid #484848', padding: 8 }}>
                     <span style={{ color: '#ccc', marginRight: 8 }}>Name:</span>
                     <Input
@@ -200,36 +203,43 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
                 </div>
 
                 <div style={{ display: 'flex', gap: 16 }}>
-                    {/* Position */}
-                    <Card size="small" title="镜头位置" style={{ background: '#333', borderColor: '#444', flex: 1 }} headStyle={{ color: '#ddd' }}>
+                    <Card size="small" title="Camera Position" style={{ background: '#333', borderColor: '#444', flex: 1 }} headStyle={{ color: '#ddd' }}>
                         <VectorInputs value={pos} onChange={(v) => updateStaticPos('Translation', v)} label="" />
                         <div style={{ marginTop: 8 }}>
                             <Checkbox
                                 checked={!!cam.Translation && (cam.Translation.Keys?.length > 1 || cam.Translation.GlobalSeqId !== null)}
                                 onChange={(e) => toggleBlock(index, 'Translation', e.target.checked)}
-                                style={{ color: '#ccc' }}>动态移动</Checkbox>
-                            <Button size="small" style={{ width: '100%', marginTop: 4 }} onClick={() => openEditor(index, 'Translation', '编辑位置')}>移动</Button>
+                                style={{ color: '#ccc' }}
+                            >
+                                Animate
+                            </Checkbox>
+                            <Button size="small" style={{ width: '100%', marginTop: 4 }} onClick={() => openEditor(index, 'Translation')}>
+                                Edit Translation
+                            </Button>
                         </div>
                     </Card>
 
-                    {/* Target */}
-                    <Card size="small" title="焦点位置" style={{ background: '#333', borderColor: '#444', flex: 1 }} headStyle={{ color: '#ddd' }}>
+                    <Card size="small" title="Target Position" style={{ background: '#333', borderColor: '#444', flex: 1 }} headStyle={{ color: '#ddd' }}>
                         <VectorInputs value={target} onChange={(v) => updateStaticPos('TargetTranslation', v)} label="" />
                         <div style={{ marginTop: 8 }}>
                             <Checkbox
                                 checked={!!cam.TargetTranslation}
                                 onChange={(e) => toggleBlock(index, 'TargetTranslation', e.target.checked)}
-                                style={{ color: '#ccc' }}>动态移动</Checkbox>
-                            <Button size="small" style={{ width: '100%', marginTop: 4 }} onClick={() => openEditor(index, 'TargetTranslation', '编辑目标')}>移动</Button>
+                                style={{ color: '#ccc' }}
+                            >
+                                Animate
+                            </Checkbox>
+                            <Button size="small" style={{ width: '100%', marginTop: 4 }} onClick={() => openEditor(index, 'TargetTranslation')}>
+                                Edit Target
+                            </Button>
                         </div>
                     </Card>
                 </div>
 
-                {/* Other */}
-                <Card size="small" title="其他" style={{ background: '#333', borderColor: '#444' }} headStyle={{ color: '#ddd' }}>
+                <Card size="small" title="Other" style={{ background: '#333', borderColor: '#444' }} headStyle={{ color: '#ddd' }}>
                     <Row gutter={16}>
                         <Col span={12}>
-                            <div style={{ color: '#aaa', marginBottom: 4 }}>视野范围:</div>
+                            <div style={{ color: '#aaa', marginBottom: 4 }}>Field of View:</div>
                             <InputNumber
                                 style={{ width: '100%', background: '#222', borderColor: '#444', color: '#fff' }}
                                 value={cam.FieldOfView}
@@ -237,7 +247,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
                             />
                         </Col>
                         <Col span={12}>
-                            <div style={{ color: '#aaa', marginBottom: 4 }}>近景距离:</div>
+                            <div style={{ color: '#aaa', marginBottom: 4 }}>Near Clip:</div>
                             <InputNumber
                                 style={{ width: '100%', background: '#222', borderColor: '#444', color: '#fff' }}
                                 value={cam.NearClip}
@@ -247,7 +257,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
                     </Row>
                     <Row gutter={16} style={{ marginTop: 8 }}>
                         <Col span={12}>
-                            <div style={{ color: '#aaa', marginBottom: 4 }}>远景距离:</div>
+                            <div style={{ color: '#aaa', marginBottom: 4 }}>Far Clip:</div>
                             <InputNumber
                                 style={{ width: '100%', background: '#222', borderColor: '#444', color: '#fff' }}
                                 value={cam.FarClip}
@@ -259,24 +269,29 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
                         <Checkbox
                             checked={!!cam.Rotation}
                             onChange={(e) => toggleBlock(index, 'Rotation', e.target.checked)}
-                            style={{ color: '#ccc' }}>动画旋转</Checkbox>
-                        <Button size="small" style={{ marginLeft: 8 }} onClick={() => openEditor(index, 'Rotation', '编辑旋转')}>旋转</Button>
+                            style={{ color: '#ccc' }}
+                        >
+                            Animate Rotation
+                        </Checkbox>
+                        <Button size="small" style={{ marginLeft: 8 }} onClick={() => openEditor(index, 'Rotation')}>
+                            Edit Rotation
+                        </Button>
                     </div>
                 </Card>
             </div>
-        );
-    };
+        )
+    }
 
     const getCurrentEditorData = () => {
-        if (!editingBlock || selectedIndex < 0) return null;
-        const cam = cameras[editingBlock.index];
-        if (!cam) return null;
-        return (cam as any)[editingBlock.field];
-    };
+        if (!editingBlock || selectedIndex < 0) return null
+        const cam = cameras[editingBlock.index]
+        if (!cam) return null
+        return (cam as any)[editingBlock.field]
+    }
 
     const extraButtons = (
         <Space size={4}>
-            <Tooltip title="从当前视角新建">
+            <Tooltip title="Add from current view">
                 <Button
                     type="text"
                     size="small"
@@ -285,7 +300,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
                     style={{ color: '#1677ff' }}
                 />
             </Tooltip>
-            <Tooltip title="查看选中相机 (View)">
+            <Tooltip title="View selected camera">
                 <Button
                     type="text"
                     size="small"
@@ -293,46 +308,71 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
                     disabled={selectedIndex < 0}
                     onClick={() => {
                         if (selectedIndex >= 0 && onViewCamera) {
-                            onViewCamera(cameras[selectedIndex]);
+                            onViewCamera(cameras[selectedIndex])
                         }
                     }}
                     style={{ color: selectedIndex < 0 ? '#666' : '#52c41a', opacity: selectedIndex < 0 ? 0.5 : 1 }}
                 />
             </Tooltip>
         </Space>
-    );
+    )
+
+    const renderManagerContent = (contentHeight: string | number = 650) => (
+        <div style={{ height: contentHeight, background: '#222', border: '1px solid #444' }}>
+            <MasterDetailLayout
+                items={cameras}
+                selectedIndex={selectedIndex}
+                onSelect={setSelectedIndex}
+                renderListItem={renderListItem}
+                renderDetail={renderDetail}
+                onAdd={handleAdd}
+                onDelete={handleDelete}
+                listTitle="Camera List"
+                detailTitle="Camera Properties"
+                listWidth={200}
+                extraButtons={extraButtons}
+            />
+        </div>
+    )
+
+    if (asWindow) {
+        if (!visible) return null
+        return (
+            <>
+                <div style={{ height: '100vh', padding: 12, backgroundColor: '#1f1f1f', overflow: 'hidden' }}>
+                    {renderManagerContent('calc(100vh - 24px)')}
+                </div>
+                {editorVisible && (
+                    <KeyframeEditor
+                        visible={editorVisible}
+                        onCancel={() => setEditorVisible(false)}
+                        onOk={handleEditorSave}
+                        initialData={getCurrentEditorData()}
+                        title={`Edit ${editingBlock?.field}`}
+                        vectorSize={3}
+                        globalSequences={globalSequences}
+                    />
+                )}
+            </>
+        )
+    }
 
     return (
         <>
             <DraggableModal
-                title="相机管理器 (Camera Manager)"
+                title="Camera Manager"
                 open={visible}
                 onCancel={onClose}
                 width={850}
                 footer={null}
                 wrapClassName="dark-theme-modal"
             >
-                <div style={{ height: 650, background: '#222', border: '1px solid #444' }}
-                >
-                    <MasterDetailLayout
-                        items={cameras}
-                        selectedIndex={selectedIndex}
-                        onSelect={setSelectedIndex}
-                        renderListItem={renderListItem}
-                        renderDetail={renderDetail}
-                        onAdd={handleAdd}
-                        onDelete={handleDelete}
-                        listTitle="相机列表"
-                        detailTitle="相机属性"
-                        listWidth={200}
-                        extraButtons={extraButtons}
-                    />
-                </div>
+                {renderManagerContent()}
                 <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
-                    <Button type="primary" onClick={onClose} style={{ marginRight: 8 }}>确定</Button>
-                    <Button onClick={onClose}>取消</Button>
+                    <Button type="primary" onClick={onClose} style={{ marginRight: 8 }}>Confirm</Button>
+                    <Button onClick={onClose}>Cancel</Button>
                 </div>
-            </DraggableModal >
+            </DraggableModal>
 
             {editorVisible && (
                 <KeyframeEditor
@@ -340,14 +380,13 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
                     onCancel={() => setEditorVisible(false)}
                     onOk={handleEditorSave}
                     initialData={getCurrentEditorData()}
-                    title={`编辑 ${editingBlock?.field}`}
+                    title={`Edit ${editingBlock?.field}`}
                     vectorSize={3}
                     globalSequences={globalSequences}
                 />
-            )
-            }
+            )}
         </>
-    );
-};
+    )
+}
 
-export default CameraManagerModal;
+export default CameraManagerModal

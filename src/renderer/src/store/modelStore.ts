@@ -303,7 +303,11 @@ interface ModelState {
     resetPreviewTransform: () => void;
     reset: () => void;
 
-    setModelData: (data: ModelData | null, path: string | null) => void;
+    setModelData: (
+        data: ModelData | null,
+        path: string | null,
+        options?: { skipAutoRecalculate?: boolean }
+    ) => void;
     setLoading: (loading: boolean) => void;
     updateNode: (objectId: number, updates: Partial<ModelNode>) => void;
     // 静默更新节点 - 不触发 renderer reload（用于关键帧编辑等高频更新）
@@ -1089,7 +1093,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
     isLooping: true,
     autoKeyframe: true,
 
-    setModelData: (data, path) => {
+    setModelData: (data, path, options) => {
         if (data && path) {
             (data as any).__modelPath = path;
         }
@@ -1100,12 +1104,14 @@ export const useModelStore = create<ModelState>((set, get) => ({
         const correctedData = updateModelDataWithNodes(data, nodes, false);
 
         // Auto recalculate extent and normals based on settings
-        const rendererState = useRendererStore.getState();
-        if (rendererState.autoRecalculateExtent) {
-            recalculateModelExtent(correctedData);
-        }
-        if (rendererState.autoRecalculateNormals) {
-            recalculateModelNormals(correctedData);
+        if (!options?.skipAutoRecalculate) {
+            const rendererState = useRendererStore.getState();
+            if (rendererState.autoRecalculateExtent) {
+                recalculateModelExtent(correctedData);
+            }
+            if (rendererState.autoRecalculateNormals) {
+                recalculateModelNormals(correctedData);
+            }
         }
 
         // Reset animation state on new model load

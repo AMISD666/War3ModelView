@@ -1,9 +1,13 @@
-import { useEffect, useState } from 'react'
-import MainLayoutNew from './components/MainLayoutNew'
-import ActivationModal from './components/modals/ActivationModal'
-import { initDebugLogging } from './utils/debugLog'
+import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { Spin } from 'antd'
+import { DETACHED_TEXTURE_EDITOR_QUERY } from './constants/detachedWindows'
+import { initDebugLogging } from './utils/debugLog'
+
+const MainLayoutNew = lazy(() => import('./components/MainLayoutNew'))
+const ActivationModal = lazy(() => import('./components/modals/ActivationModal'))
+const TextureEditorDetachedWindow = lazy(() => import('./components/detached/TextureEditorDetachedWindow'))
+const DetachedManagerWindow = lazy(() => import('./components/detached/DetachedManagerWindow'))
 
 interface ActivationStatus {
     is_activated: boolean
@@ -17,11 +21,18 @@ function App(): JSX.Element {
     const [isActivated, setIsActivated] = useState<boolean | null>(null)
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const [_activationError, setActivationError] = useState<string | null>(null)
+    const detachedMode = useMemo(() => {
+        const params = new URLSearchParams(window.location.search)
+        return params.get('detached')
+    }, [])
 
     useEffect(() => {
+        if (detachedMode) {
+            return
+        }
         initDebugLogging()
         checkActivation()
-    }, [])
+    }, [detachedMode])
 
     const checkActivation = async () => {
         try {
@@ -41,6 +52,26 @@ function App(): JSX.Element {
         setActivationError(null)
     }
 
+    const detachedFallback = (
+        <div style={{ width: '100vw', height: '100vh', backgroundColor: '#1f1f1f' }} />
+    )
+
+    // Detached windows do not need activation/bootstrap UI.
+    if (detachedMode === DETACHED_TEXTURE_EDITOR_QUERY) {
+        return (
+            <Suspense fallback={detachedFallback}>
+                <TextureEditorDetachedWindow />
+            </Suspense>
+        )
+    }
+    if (typeof detachedMode === 'string' && detachedMode.startsWith('manager-')) {
+        return (
+            <Suspense fallback={detachedFallback}>
+                <DetachedManagerWindow detachedMode={detachedMode} />
+            </Suspense>
+        )
+    }
+
     // Loading state
     if (isActivated === null) {
         return (
@@ -51,7 +82,7 @@ function App(): JSX.Element {
                 height: '100vh',
                 backgroundColor: '#1e1e1e'
             }}>
-                <Spin size="large" tip="正在检查激活状态..." />
+                <Spin size="large" />
             </div>
         )
     }
@@ -60,10 +91,12 @@ function App(): JSX.Element {
     if (!isActivated) {
         return (
             <>
-                <ActivationModal
-                    open={true}
-                    onActivated={handleActivated}
-                />
+                <Suspense fallback={null}>
+                    <ActivationModal
+                        open={true}
+                        onActivated={handleActivated}
+                    />
+                </Suspense>
                 {/* Dark background placeholder */}
                 <div style={{
                     width: '100vw',
@@ -76,7 +109,9 @@ function App(): JSX.Element {
 
     // Activated - show main app
     return (
-        <MainLayoutNew />
+        <Suspense fallback={null}>
+            <MainLayoutNew />
+        </Suspense>
     )
 }
 

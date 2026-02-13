@@ -74,9 +74,10 @@ function denormalizeMaterialsForSave(materials: any[]): any[] {
 interface MaterialEditorModalProps {
     visible: boolean
     onClose: () => void
+    asWindow?: boolean
 }
 
-const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onClose }) => {
+const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onClose, asWindow = false }) => {
     const { modelData, modelPath, setMaterials, setTextures } = useModelStore()
     const [localMaterials, setLocalMaterials] = useState<any[]>([])
     const [selectedMaterialIndex, setSelectedMaterialIndex] = useState<number>(-1)
@@ -100,6 +101,8 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const isCommittingRef = React.useRef(false)
     const didRealtimePreviewRef = React.useRef(false)
     const didRealtimeTexturePreviewRef = React.useRef(false)
+    const suppressNextLiveApplyRef = React.useRef(false)
+    const lastAppliedSignatureRef = React.useRef('')
 
     useEffect(() => {
         dragOverLayerIndexRef.current = dragOverLayerIndex
@@ -117,6 +120,12 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                 didRealtimeTexturePreviewRef.current = false
                 // Convert Shading bitmask to boolean properties for UI display
                 const normalized = normalizeMaterialsForUI(JSON.parse(JSON.stringify(modelData.Materials)));
+                suppressNextLiveApplyRef.current = true
+                try {
+                    lastAppliedSignatureRef.current = JSON.stringify(normalized)
+                } catch {
+                    lastAppliedSignatureRef.current = `${normalized.length}`
+                }
                 setLocalMaterials(normalized)
                 setSelectedMaterialIndex(modelData.Materials.length > 0 ? 0 : -1)
                 setSelectedLayerIndex(-1)
@@ -135,6 +144,8 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             originalTexturesRef.current = null
             didRealtimePreviewRef.current = false
             didRealtimeTexturePreviewRef.current = false
+            suppressNextLiveApplyRef.current = false
+            lastAppliedSignatureRef.current = ''
         }
     }, [visible, modelData])
 
@@ -172,6 +183,26 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         return unsubscribe
     }, [visible, modelData, localMaterials.length])
 
+    useEffect(() => {
+        if (!visible || !asWindow) return
+        if (suppressNextLiveApplyRef.current) {
+            suppressNextLiveApplyRef.current = false
+            return
+        }
+
+        let signature = ''
+        try {
+            signature = JSON.stringify(localMaterials)
+        } catch {
+            signature = `${localMaterials.length}`
+        }
+        if (signature === lastAppliedSignatureRef.current) return
+        lastAppliedSignatureRef.current = signature
+
+        didRealtimePreviewRef.current = true
+        setMaterials(denormalizeMaterialsForSave(localMaterials))
+    }, [visible, asWindow, localMaterials, setMaterials])
+
     const handleOk = () => {
         // Convert boolean flags back to Shading bitmask before saving
         const materialsForSave = denormalizeMaterialsForSave(localMaterials)
@@ -199,10 +230,10 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     }
 
     const handleCancel = () => {
-        if (!isCommittingRef.current && didRealtimeTexturePreviewRef.current && originalTexturesRef.current) {
+        if (!asWindow && !isCommittingRef.current && didRealtimeTexturePreviewRef.current && originalTexturesRef.current) {
             setTextures(originalTexturesRef.current)
         }
-        if (!isCommittingRef.current && didRealtimePreviewRef.current && originalMaterialsRef.current) {
+        if (!asWindow && !isCommittingRef.current && didRealtimePreviewRef.current && originalMaterialsRef.current) {
             setMaterials(originalMaterialsRef.current)
         }
         onClose()
@@ -765,20 +796,8 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         }
     }
 
-    return (
-        <DraggableModal
-            title="材质编辑器 (Material Editor)"
-            open={visible}
-            onOk={handleOk}
-            onCancel={handleCancel}
-            okText="保存"
-            cancelText="取消"
-            width={850}
-            maskClosable={false}
-            wrapClassName="dark-theme-modal"
-            styles={{ body: { padding: 0, backgroundColor: '#252525' } }}
-        >
-            <div style={{ display: 'flex', height: '600px', border: '1px solid #4a4a4a', backgroundColor: '#252525' }}>
+    const renderEditorContent = (contentHeight: string | number = '600px') => (
+        <div style={{ display: 'flex', height: contentHeight, border: '1px solid #4a4a4a', backgroundColor: '#252525' }}>
                 {/* Lists (Left) */}
                 <div style={{ width: '250px', display: 'flex', flexDirection: 'column', borderRight: '1px solid #4a4a4a' }}>
                     {/* Top: Materials */}
@@ -1023,23 +1042,48 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                     )}
                 </div>
             </div>
+    )
 
-            {isKeyframeEditorOpen && editingField && (
-                <KeyframeEditor
-                    visible={isKeyframeEditorOpen}
-                    onCancel={() => setIsKeyframeEditorOpen(false)}
-                    onOk={handleKeyframeSave}
-                    initialData={selectedLayer ? selectedLayer[editingField] : null}
-                    title={`编辑 ${editingField}`}
-                    vectorSize={editingVectorSize}
-                    globalSequences={(modelData as any)?.GlobalSequences || []}
-                    fieldName={editingField || ''}
-                />
-            )}
+    const keyframeEditorNode = isKeyframeEditorOpen && editingField ? (
+        <KeyframeEditor
+            visible={isKeyframeEditorOpen}
+            onCancel={() => setIsKeyframeEditorOpen(false)}
+            onOk={handleKeyframeSave}
+            initialData={selectedLayer ? selectedLayer[editingField] : null}
+            title={`编辑 ${editingField}`}
+            vectorSize={editingVectorSize}
+            globalSequences={(modelData as any)?.GlobalSequences || []}
+            fieldName={editingField || ''}
+        />
+    ) : null
+
+    if (asWindow) {
+        if (!visible) return null
+        return (
+            <div style={{ height: '100vh', padding: 12, backgroundColor: '#1f1f1f', overflow: 'hidden' }}>
+                {renderEditorContent('calc(100vh - 24px)')}
+                {keyframeEditorNode}
+            </div>
+        )
+    }
+
+    return (
+        <DraggableModal
+            title="材质编辑器 (Material Editor)"
+            open={visible}
+            onOk={handleOk}
+            onCancel={handleCancel}
+            okText="保存"
+            cancelText="取消"
+            width={850}
+            maskClosable={false}
+            wrapClassName="dark-theme-modal"
+            styles={{ body: { padding: 0, backgroundColor: '#252525' } }}
+        >
+            {renderEditorContent()}
+            {keyframeEditorNode}
         </DraggableModal>
     )
 }
 
 export default MaterialEditorModal
-
-
