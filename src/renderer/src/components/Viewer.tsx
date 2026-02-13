@@ -2519,6 +2519,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         // === GEOSET ANIMATIONS ===
         if (modelData.GeosetAnims) {
           renderer.model.GeosetAnims = modelData.GeosetAnims
+          if ((renderer as any).modelInstance && typeof (renderer as any).modelInstance.syncMaterials === 'function') {
+            ; (renderer as any).modelInstance.syncMaterials()
+          }
         }
 
         // === SEQUENCES ===

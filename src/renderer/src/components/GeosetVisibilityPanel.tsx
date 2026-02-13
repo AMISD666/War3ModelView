@@ -1,4 +1,4 @@
-﻿import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Checkbox, message } from 'antd';
 import { EyeOutlined, EyeInvisibleOutlined, CloseOutlined, MinusOutlined, DeleteOutlined, MergeCellsOutlined } from '@ant-design/icons';
 import { useModelStore } from '../store/modelStore';
@@ -23,7 +23,8 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
         setGeosets,
         setMaterials,
         selectedGeosetIndex,
-        setSelectedGeosetIndex
+        selectedGeosetIndices,
+        setSelectedGeosetIndices
     } = useModelStore();
 
     // Imports for command manager (ensure these are imported at top of file)
@@ -44,15 +45,29 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
     const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
     const [lastClickedIndex, setLastClickedIndex] = useState<number | null>(null);
 
+    const areSameIndices = (a: number[], b: number[]) => {
+        if (a.length !== b.length) return false;
+        for (let i = 0; i < a.length; i++) {
+            if (a[i] !== b[i]) return false;
+        }
+        return true;
+    };
+
     // Sync from global store to local state
     useEffect(() => {
-        if (selectedGeosetIndex !== null) {
-            // Only update if not already matching single selection to avoid thrashing
-            if (selectedIndices.length !== 1 || selectedIndices[0] !== selectedGeosetIndex) {
-                setSelectedIndices([selectedGeosetIndex]);
-            }
+        const globalSelection = selectedGeosetIndices.length > 0
+            ? selectedGeosetIndices
+            : (selectedGeosetIndex !== null ? [selectedGeosetIndex] : []);
+        if (!areSameIndices(selectedIndices, globalSelection)) {
+            setSelectedIndices(globalSelection);
         }
-    }, [selectedGeosetIndex]);
+    }, [selectedGeosetIndices, selectedGeosetIndex]);
+
+    const applySelection = (indices: number[]) => {
+        const cleaned = Array.from(new Set(indices.filter(i => Number.isInteger(i) && i >= 0)));
+        setSelectedIndices(cleaned);
+        setSelectedGeosetIndices(cleaned);
+    };
 
     // Context menu state
     const [contextMenuVisible, setContextMenuVisible] = useState(false);
@@ -69,22 +84,20 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
 
         if (e.ctrlKey || e.metaKey) {
             // Ctrl+Click: Toggle selection
-            setSelectedIndices(prev =>
-                prev.includes(index)
-                    ? prev.filter(i => i !== index)
-                    : [...prev, index]
-            );
+            const next = selectedIndices.includes(index)
+                ? selectedIndices.filter(i => i !== index)
+                : [...selectedIndices, index];
+            applySelection(next);
         } else if (e.shiftKey && lastClickedIndex !== null) {
             // Shift+Click: Range selection (subtract mode per user request)
             const start = Math.min(lastClickedIndex, index);
             const end = Math.max(lastClickedIndex, index);
             const rangeIndices = Array.from({ length: end - start + 1 }, (_, i) => start + i);
             // Remove range from selection
-            setSelectedIndices(prev => prev.filter(i => !rangeIndices.includes(i)));
+            applySelection(selectedIndices.filter(i => !rangeIndices.includes(i)));
         } else {
             // Regular click: Clear and select one
-            setSelectedIndices([index]);
-            setSelectedGeosetIndex(index);
+            applySelection([index]);
         }
         setLastClickedIndex(index);
     };
@@ -96,7 +109,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
 
         // If right-clicking on unselected item, select it
         if (!selectedIndices.includes(index)) {
-            setSelectedIndices([index]);
+            applySelection([index]);
         }
 
         setContextMenuPosition({ x: e.clientX, y: e.clientY });
@@ -125,7 +138,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
         });
 
         setGeosets(newGeosets);
-        setSelectedIndices([]);
+        applySelection([]);
         setContextMenuVisible(false);
         message.success(`已删除 ${sortedIndices.length} 个多边形`);
     };
@@ -337,7 +350,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
         // Update state and modelStore (lightweight update)
         setGeosets(newGeosets);
         useModelStore.getState().setGeosets(newGeosets);
-        setSelectedIndices([]);
+        applySelection([]);
         setMergeDialogVisible(false);
         message.success(`已合并 ${sortedIndices.length} 个多边形`);
     };

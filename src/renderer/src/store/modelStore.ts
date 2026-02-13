@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Model State Management using Zustand
  */
 
@@ -291,6 +291,7 @@ interface ModelState {
     forceShowAllGeosets: boolean;
     hoveredGeosetId: number | null;
     selectedGeosetIndex: number | null;  // Persistent selection for sync with managers
+    selectedGeosetIndices: number[];
 
     // Global Preview Transform (unbaked gizmo state)
     previewTransform: {
@@ -377,6 +378,7 @@ interface ModelState {
     setForceShowAllGeosets: (show: boolean) => void;
     setHoveredGeosetId: (id: number | null) => void;
     setSelectedGeosetIndex: (index: number | null) => void;
+    setSelectedGeosetIndices: (indices: number[]) => void;
     setHiddenGeosetIds: (ids: number[]) => void;
     resetGeosetVisibility: () => void;
     removeSequence: (index: number, pruneKeyframes?: boolean) => void;
@@ -1052,6 +1054,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
     forceShowAllGeosets: true,
     hoveredGeosetId: null,
     selectedGeosetIndex: null,
+    selectedGeosetIndices: [],
 
     // Tab Management State
     tabs: [],
@@ -1126,7 +1129,9 @@ export const useModelStore = create<ModelState>((set, get) => ({
             currentFrame: 0,
             isPlaying: hasSequences,
             hiddenGeosetIds: allGeosetIds,
-            forceShowAllGeosets: true
+            forceShowAllGeosets: true,
+            selectedGeosetIndex: null,
+            selectedGeosetIndices: []
         });
     },
 
@@ -2305,7 +2310,15 @@ export const useModelStore = create<ModelState>((set, get) => ({
     },
 
     setSelectedGeosetIndex: (index: number | null) => {
-        set({ selectedGeosetIndex: index });
+        set({ selectedGeosetIndex: index, selectedGeosetIndices: index === null ? [] : [index] });
+    },
+
+    setSelectedGeosetIndices: (indices: number[]) => {
+        const cleaned = Array.from(new Set(indices.filter((value) => Number.isInteger(value) && value >= 0)));
+        set({
+            selectedGeosetIndices: cleaned,
+            selectedGeosetIndex: cleaned.length > 0 ? cleaned[0] : null
+        });
     },
 
     setHiddenGeosetIds: (ids: number[]) => {
@@ -2313,7 +2326,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
     },
 
     resetGeosetVisibility: () => {
-        set({ hiddenGeosetIds: [], forceShowAllGeosets: true, hoveredGeosetId: null, selectedGeosetIndex: null });
+        set({ hiddenGeosetIds: [], forceShowAllGeosets: true, hoveredGeosetId: null, selectedGeosetIndex: null, selectedGeosetIndices: [] });
     },
 
     // Tab Management Actions
@@ -2515,6 +2528,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             forceShowAllGeosets: true,
             hoveredGeosetId: null,
             selectedGeosetIndex: null,
+            selectedGeosetIndices: [],
             rendererReloadTrigger: 0,
             previewTransform: {
                 translation: [0, 0, 0],

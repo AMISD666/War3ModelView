@@ -178,6 +178,9 @@ export function lightweightSync(renderer: any, modelData: any): void {
     // === GEOSET ANIMS ===
     if (modelData.GeosetAnims) {
         renderer.model.GeosetAnims = modelData.GeosetAnims
+        if ((renderer as any).modelInstance && typeof (renderer as any).modelInstance.syncMaterials === 'function') {
+            (renderer as any).modelInstance.syncMaterials()
+        }
     }
 
     // === SEQUENCES ===

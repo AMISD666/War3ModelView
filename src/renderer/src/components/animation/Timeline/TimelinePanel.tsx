@@ -40,7 +40,8 @@ const OFFSET_SCALING = 40
 const CONTEXT_MENU_WIDTH = 170
 const CONTEXT_MENU_HEIGHT = 160
 
-const makeKeyframeUid = (nodeId: number, type: string, frame: number) => `${nodeId}-${type}-${frame}`
+const makeKeyframeUid = (ownerType: 'node' | 'geoset', ownerId: number, type: string, frame: number) =>
+    `${ownerType}-${ownerId}-${type}-${frame}`
 
 const cloneNodesForKeyframes = (input: any[]) => {
     if (typeof structuredClone === 'function') {
@@ -77,6 +78,108 @@ const cloneNodesForKeyframes = (input: any[]) => {
     }))
 }
 
+const isAnimTrack = (value: any): value is { Keys: any[] } => {
+    return !!value && typeof value === 'object' && Array.isArray(value.Keys)
+}
+
+const isKeyframeTypeVisible = (
+    type: string,
+    showAll: boolean,
+    currentMode: 'translate' | 'rotate' | 'scale' | null
+) => {
+    if (showAll) return true
+    if (type === 'GeosetAlpha' || type === 'GeosetColor') return true
+    if (currentMode === 'translate' && type === 'Translation') return true
+    if (currentMode === 'rotate' && type === 'Rotation') return true
+    if (currentMode === 'scale' && type === 'Scaling') return true
+    return false
+}
+
+type KeyframeOwnerType = 'node' | 'geoset'
+
+type TimelineClipboardKeyframe = {
+    ownerType: KeyframeOwnerType
+    ownerId: number
+    type: string
+    frame: number
+    value: any
+    inTan?: any
+    outTan?: any
+}
+
+type DragKeyframeData = {
+    ownerType: KeyframeOwnerType
+    ownerId: number
+    type: string
+    originalFrame: number
+    keyIndex: number
+}
+
+type TimelineKeyframeData = {
+    ownerType: KeyframeOwnerType
+    ownerId: number
+    type: string
+    frame: number
+    keyIndex: number
+    value: any
+    inTan?: any
+    outTan?: any
+}
+
+const cloneGeosetAnimsForKeyframes = (input: any[]) => {
+    if (typeof structuredClone === 'function') {
+        return structuredClone(input)
+    }
+    return input.map((anim: any) => ({
+        ...anim,
+        Alpha: isAnimTrack(anim?.Alpha)
+            ? {
+                ...anim.Alpha,
+                Keys: anim.Alpha.Keys.map((key: any) => ({
+                    ...key,
+                    Vector: Array.isArray(key?.Vector) ? [...key.Vector] : key?.Vector,
+                    InTan: Array.isArray(key?.InTan) ? [...key.InTan] : key?.InTan,
+                    OutTan: Array.isArray(key?.OutTan) ? [...key.OutTan] : key?.OutTan
+                }))
+            }
+            : anim?.Alpha,
+        Color: isAnimTrack(anim?.Color)
+            ? {
+                ...anim.Color,
+                Keys: anim.Color.Keys.map((key: any) => ({
+                    ...key,
+                    Vector: Array.isArray(key?.Vector) ? [...key.Vector] : key?.Vector,
+                    InTan: Array.isArray(key?.InTan) ? [...key.InTan] : key?.InTan,
+                    OutTan: Array.isArray(key?.OutTan) ? [...key.OutTan] : key?.OutTan
+                }))
+            }
+            : anim?.Color
+    }))
+}
+
+const getGeosetTrackInfo = (type: string): { propName: 'Alpha' | 'Color'; vectorSize: number } | null => {
+    if (type === 'GeosetAlpha') return { propName: 'Alpha', vectorSize: 1 }
+    if (type === 'GeosetColor') return { propName: 'Color', vectorSize: 3 }
+    return null
+}
+
+const toVectorArray = (value: any, vectorSize: number, fallback: number[]) => {
+    if (Array.isArray(value)) {
+        const out = [...value]
+        while (out.length < vectorSize) out.push(fallback[out.length] ?? 0)
+        return out.slice(0, vectorSize)
+    }
+    if (ArrayBuffer.isView(value)) {
+        const out = Array.from(value as any)
+        while (out.length < vectorSize) out.push(fallback[out.length] ?? 0)
+        return out.slice(0, vectorSize)
+    }
+    if (typeof value === 'number') {
+        return [value]
+    }
+    return [...fallback]
+}
+
 // Singleton loop counter for TimelinePanel (MUST be at module scope, not inside component)
 let globalTimelineLoopId = 0
 
@@ -95,12 +198,15 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         playbackSpeed,
         modelData,
         nodes: modelNodes,
+        selectedGeosetIndex,
+        selectedGeosetIndices,
         setPlaying,
         setPlaybackSpeed,
         setFrame,
+        setGeosetAnims,
     } = useModelStore()
 
-    const { selectedNodeIds, transformMode, multiMoveMode, setMultiMoveMode } = useSelectionStore()
+    const { selectedNodeIds, transformMode, multiMoveMode, setMultiMoveMode, pickedGeosetIndex } = useSelectionStore()
 
     // Derived Global Info
     const allSequencesMax = useMemo(() => {
@@ -141,7 +247,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
     // Clipboard State for Keyframes
     const [clipboardKeyframes, setClipboardKeyframes] = useState<{
-        keyframes: { nodeId: number, type: string, frame: number, value: any, inTan?: any, outTan?: any }[]
+        keyframes: TimelineClipboardKeyframe[]
         isCut: boolean
         baseFrame: number
     } | null>(null)
@@ -175,7 +281,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         dragSequenceIndex: -1,
         initialInterval: [0, 0],
         dragKeyframeStartFrame: 0,
-        dragKeyframeData: [] as { nodeId: number, type: string, originalFrame: number, keyIndex: number }[],
+        dragKeyframeData: [] as DragKeyframeData[],
         dragKeyframeMinFrame: 0,
         dragKeyframeMaxFrame: 0,
         dragKeyframeScaleAnchorFrame: 0
@@ -208,12 +314,17 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
     // Cache active keyframes
     useEffect(() => {
-        if (!modelData || selectedNodeIds.length === 0) {
+        if (!modelData) {
             activeKeyframesRef.current = []
             return
         }
 
         const keyframes: any[] = []
+        const geosetSelection = selectedGeosetIndices.length > 0
+            ? selectedGeosetIndices
+            : (selectedGeosetIndex !== null
+                ? [selectedGeosetIndex]
+                : (pickedGeosetIndex !== null ? [pickedGeosetIndex] : []))
 
         selectedNodeIds.forEach(nodeId => {
             const node = modelNodes.find((n: any) => n.ObjectId === nodeId)
@@ -221,13 +332,13 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
             const addKeys = (propData: any, type: string, color: string) => {
                 if (propData && Array.isArray(propData.Keys)) {
-                    propData.Keys.forEach((k: any, _idx: number) => {
+                    propData.Keys.forEach((k: any) => {
                         keyframes.push({
                             frame: k.Frame,
-                            nodeId,
+                            ownerType: 'node',
+                            ownerId: nodeId,
                             type,
-                            // Use frame-based UID so selection survives key sorting/reordering.
-                            uid: makeKeyframeUid(nodeId, type, k.Frame),
+                            uid: makeKeyframeUid('node', nodeId, type, k.Frame),
                             color
                         })
                     })
@@ -239,8 +350,30 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             addKeys(node.Scaling, 'Scaling', '#1890ff')
         })
 
+        if (geosetSelection.length > 0 && Array.isArray((modelData as any).GeosetAnims)) {
+            const addGeosetKeys = (geosetId: number, propData: any, type: 'GeosetAlpha' | 'GeosetColor', color: string) => {
+                if (!isAnimTrack(propData)) return
+                propData.Keys.forEach((k: any) => {
+                    keyframes.push({
+                        frame: k.Frame,
+                        ownerType: 'geoset',
+                        ownerId: Number(geosetId),
+                        type,
+                        uid: makeKeyframeUid('geoset', Number(geosetId), type, k.Frame),
+                        color
+                    })
+                })
+            }
+
+            geosetSelection.forEach((geosetId) => {
+                const geosetAnim = (modelData as any).GeosetAnims.find((anim: any) => Number(anim?.GeosetId) === Number(geosetId))
+                addGeosetKeys(geosetId, geosetAnim?.Alpha, 'GeosetAlpha', '#fadb14')
+                addGeosetKeys(geosetId, geosetAnim?.Color, 'GeosetColor', '#ff85c0')
+            })
+        }
+
         activeKeyframesRef.current = keyframes
-    }, [modelData, selectedNodeIds, modelNodes])
+    }, [modelData, selectedNodeIds, modelNodes, selectedGeosetIndex, selectedGeosetIndices, pickedGeosetIndex])
 
     const didInitialAutoFitRef = useRef(false)
 
@@ -417,12 +550,17 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const seqTrackY = height - SEQUENCE_HEIGHT
         const trackTop = RULER_HEIGHT + LANE_PADDING
         const trackBottom = seqTrackY - LANE_PADDING
+        const laneTypes = ['Translation', 'Rotation', 'Scaling', 'GeosetAlpha', 'GeosetColor']
         const fallbackGap = OFFSET_ROTATION - OFFSET_TRANSLATION
-        const laneGap = trackBottom > trackTop ? (trackBottom - trackTop) / 2 : Math.max(1, fallbackGap)
+        const laneGap = trackBottom > trackTop
+            ? (trackBottom - trackTop) / Math.max(1, laneTypes.length - 1)
+            : Math.max(1, fallbackGap)
         const laneYMap: Record<string, number> = {
             Translation: trackBottom > trackTop ? trackTop : RULER_HEIGHT + OFFSET_TRANSLATION,
             Rotation: trackBottom > trackTop ? trackTop + laneGap : RULER_HEIGHT + OFFSET_ROTATION,
-            Scaling: trackBottom > trackTop ? trackTop + laneGap * 2 : RULER_HEIGHT + OFFSET_SCALING
+            Scaling: trackBottom > trackTop ? trackTop + laneGap * 2 : RULER_HEIGHT + OFFSET_SCALING,
+            GeosetAlpha: trackBottom > trackTop ? trackTop + laneGap * 3 : RULER_HEIGHT + OFFSET_SCALING + fallbackGap,
+            GeosetColor: trackBottom > trackTop ? trackTop + laneGap * 4 : RULER_HEIGHT + OFFSET_SCALING + fallbackGap * 2
         }
         const effectiveKeyframeSize = Math.min(
             KEYFRAME_SIZE,
@@ -554,16 +692,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             let drawFrame = kf.frame
 
             // Filter logic
-            let isVisible = false
-            if (showAll) {
-                isVisible = true
-            } else {
-                if (currentMode === 'translate' && kf.type === 'Translation') isVisible = true
-                else if (currentMode === 'rotate' && kf.type === 'Rotation') isVisible = true
-                else if (currentMode === 'scale' && kf.type === 'Scaling') isVisible = true
-            }
-
-            if (!isVisible) return
+            if (!isKeyframeTypeVisible(kf.type, showAll, currentMode)) return
 
             const laneY = laneYMap[kf.type] ?? (RULER_HEIGHT + OFFSET_TRANSLATION)
 
@@ -651,15 +780,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         let minDistX = SNAP_THRESHOLD_X
 
         activeKeyframesRef.current.forEach(kf => {
-            let isVisible = false
-            if (showAll) {
-                isVisible = true
-            } else {
-                if (currentMode === 'translate' && kf.type === 'Translation') isVisible = true
-                else if (currentMode === 'rotate' && kf.type === 'Rotation') isVisible = true
-                else if (currentMode === 'scale' && kf.type === 'Scaling') isVisible = true
-            }
-            if (!isVisible) return
+            if (!isKeyframeTypeVisible(kf.type, showAll, currentMode)) return
 
             const kx = (kf.frame - scroll) * pxPerMs
             const dist = Math.abs(kx - x)
@@ -826,34 +947,87 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         return true
     }, [])
 
+    const applyKeyframeSnapshots = useCallback((
+        nodesSnapshot: any[],
+        geosetAnimsSnapshot: any[],
+        options?: { nodeChanged?: boolean; geosetChanged?: boolean }
+    ) => {
+        const replaceNodes = useModelStore.getState().replaceNodes
+        const nodeChanged = options?.nodeChanged ?? true
+        const geosetChanged = options?.geosetChanged ?? true
+
+        if (nodeChanged && geosetChanged) {
+            replaceNodes(nodesSnapshot, { triggerReload: false })
+            setGeosetAnims(geosetAnimsSnapshot)
+            return
+        }
+        if (nodeChanged) {
+            replaceNodes(nodesSnapshot)
+            return
+        }
+        if (geosetChanged) {
+            setGeosetAnims(geosetAnimsSnapshot)
+        }
+    }, [setGeosetAnims])
+
     // Helper: Get keyframe data for selected UIDs
     const getSelectedKeyframeData = useCallback(() => {
-        const result: { nodeId: number, type: string, frame: number, keyIndex: number, value: any, inTan?: any, outTan?: any }[] = []
-        const nodes = useModelStore.getState().nodes as any[]
+        const result: TimelineKeyframeData[] = []
+        const state = useModelStore.getState()
+        const nodes = state.nodes as any[]
+        const geosetAnims = Array.isArray((state.modelData as any)?.GeosetAnims)
+            ? ((state.modelData as any).GeosetAnims as any[])
+            : []
 
-        activeKeyframesRef.current.forEach((kf, _idx) => {
+        activeKeyframesRef.current.forEach((kf) => {
             if (!selectedKeyframeUids.has(kf.uid)) return
 
-            const node = nodes.find((n: any) => n.ObjectId === kf.nodeId)
-            if (!node) return
+            if (kf.ownerType === 'node') {
+                const node = nodes.find((n: any) => n.ObjectId === kf.ownerId)
+                if (!node) return
 
-            const propData = node[kf.type]
-            if (!propData?.Keys) return
+                const propData = node[kf.type]
+                if (!isAnimTrack(propData)) return
 
-            // Find actual key index by frame
-            const keyIndex = propData.Keys.findIndex((k: any) => k.Frame === kf.frame)
-            if (keyIndex === -1) return
+                const keyIndex = propData.Keys.findIndex((k: any) => k.Frame === kf.frame)
+                if (keyIndex === -1) return
 
-            const key = propData.Keys[keyIndex]
-            result.push({
-                nodeId: kf.nodeId,
-                type: kf.type,
-                frame: kf.frame,
-                keyIndex,
-                value: Array.isArray(key.Vector) ? [...key.Vector] : key.Vector,
-                inTan: key.InTan ? [...key.InTan] : undefined,
-                outTan: key.OutTan ? [...key.OutTan] : undefined
-            })
+                const key = propData.Keys[keyIndex]
+                result.push({
+                    ownerType: 'node',
+                    ownerId: kf.ownerId,
+                    type: kf.type,
+                    frame: kf.frame,
+                    keyIndex,
+                    value: Array.isArray(key.Vector) ? [...key.Vector] : key.Vector,
+                    inTan: Array.isArray(key.InTan) ? [...key.InTan] : key.InTan,
+                    outTan: Array.isArray(key.OutTan) ? [...key.OutTan] : key.OutTan
+                })
+                return
+            }
+
+            if (kf.ownerType === 'geoset') {
+                const geosetTrack = getGeosetTrackInfo(kf.type)
+                if (!geosetTrack) return
+                const geosetAnim = geosetAnims.find((anim: any) => Number(anim?.GeosetId) === Number(kf.ownerId))
+                const track = geosetAnim?.[geosetTrack.propName]
+                if (!isAnimTrack(track)) return
+
+                const keyIndex = track.Keys.findIndex((k: any) => k.Frame === kf.frame)
+                if (keyIndex === -1) return
+
+                const key = track.Keys[keyIndex]
+                result.push({
+                    ownerType: 'geoset',
+                    ownerId: Number(kf.ownerId),
+                    type: kf.type,
+                    frame: kf.frame,
+                    keyIndex,
+                    value: Array.isArray(key.Vector) ? [...key.Vector] : key.Vector,
+                    inTan: Array.isArray(key.InTan) ? [...key.InTan] : key.InTan,
+                    outTan: Array.isArray(key.OutTan) ? [...key.OutTan] : key.OutTan
+                })
+            }
         })
         return result
     }, [selectedKeyframeUids])
@@ -869,7 +1043,8 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             source: 'selection' as const,
             data: {
                 keyframes: selectedData.map(kf => ({
-                    nodeId: kf.nodeId,
+                    ownerType: kf.ownerType,
+                    ownerId: kf.ownerId,
                     type: kf.type,
                     frame: kf.frame,
                     value: kf.value,
@@ -902,44 +1077,64 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const keyframeData = getSelectedKeyframeData()
         if (keyframeData.length === 0) return
 
-        const nodes = useModelStore.getState().nodes
+        const state = useModelStore.getState()
+        const nodes = state.nodes
+        const geosetAnims = Array.isArray((state.modelData as any)?.GeosetAnims)
+            ? ((state.modelData as any).GeosetAnims as any[])
+            : []
         const oldNodes = cloneNodesForKeyframes(nodes)
         const nodesCopy = cloneNodesForKeyframes(nodes)
-        const replaceNodes = useModelStore.getState().replaceNodes
+        const oldGeosetAnims = cloneGeosetAnimsForKeyframes(geosetAnims)
+        const geosetAnimsCopy = cloneGeosetAnimsForKeyframes(geosetAnims)
+        let nodeChanged = false
+        let geosetChanged = false
 
-        // Group by nodeId and type for efficient deletion
-        const grouped = new Map<string, { nodeId: number, type: string, frames: number[] }>()
+        const grouped = new Map<string, { ownerType: KeyframeOwnerType, ownerId: number, type: string, frames: number[] }>()
         keyframeData.forEach(kf => {
-            const key = `${kf.nodeId}-${kf.type}`
+            const key = `${kf.ownerType}-${kf.ownerId}-${kf.type}`
             if (!grouped.has(key)) {
-                grouped.set(key, { nodeId: kf.nodeId, type: kf.type, frames: [] })
+                grouped.set(key, { ownerType: kf.ownerType, ownerId: kf.ownerId, type: kf.type, frames: [] })
             }
             grouped.get(key)!.frames.push(kf.frame)
         })
 
-        // Delete keyframes (reverse order to preserve indices)
-        grouped.forEach(({ nodeId, type, frames }) => {
-            const node = nodesCopy.find((n: any) => n.ObjectId === nodeId)
-            if (!node || !node[type]?.Keys) return
+        grouped.forEach(({ ownerType, ownerId, type, frames }) => {
+            if (ownerType === 'node') {
+                const node = nodesCopy.find((n: any) => n.ObjectId === ownerId)
+                if (!node || !isAnimTrack(node[type])) return
+                node[type].Keys = node[type].Keys.filter((k: any) => !frames.includes(k.Frame))
+                nodeChanged = true
+                if (node[type].Keys.length === 0) {
+                    delete node[type]
+                }
+                return
+            }
 
-            node[type].Keys = node[type].Keys.filter((k: any) => !frames.includes(k.Frame))
-
-            // If no keys left, remove the AnimVector
-            if (node[type].Keys.length === 0) {
-                delete node[type]
+            if (ownerType === 'geoset') {
+                const geosetTrack = getGeosetTrackInfo(type)
+                if (!geosetTrack) return
+                const geosetAnim = geosetAnimsCopy.find((anim: any) => Number(anim?.GeosetId) === Number(ownerId))
+                const track = geosetAnim?.[geosetTrack.propName]
+                if (!isAnimTrack(track)) return
+                track.Keys = track.Keys.filter((k: any) => !frames.includes(k.Frame))
+                geosetChanged = true
+                if (track.Keys.length === 0 && geosetAnim) {
+                    delete geosetAnim[geosetTrack.propName]
+                }
             }
         })
 
-        // Push to history
+        if (!nodeChanged && !geosetChanged) return
+
         useHistoryStore.getState().push({
             name: `删除 ${keyframeData.length} 个关键帧`,
-            undo: () => replaceNodes(oldNodes as any),
-            redo: () => replaceNodes(nodesCopy)
+            undo: () => applyKeyframeSnapshots(oldNodes, oldGeosetAnims, { nodeChanged, geosetChanged }),
+            redo: () => applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, { nodeChanged, geosetChanged })
         })
 
-        replaceNodes(nodesCopy)
+        applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, { nodeChanged, geosetChanged })
         setSelectedKeyframeUids(new Set())
-    }, [selectedKeyframeUids, getSelectedKeyframeData])
+    }, [selectedKeyframeUids, getSelectedKeyframeData, applyKeyframeSnapshots])
 
     // Copy keyframes to clipboard (isCut = true for cut operation)
     const copyKeyframes = useCallback((isCut: boolean) => {
@@ -948,12 +1143,12 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const keyframeData = getSelectedKeyframeData()
         if (keyframeData.length === 0) return
 
-        // Find minimum frame as base
         const baseFrame = Math.min(...keyframeData.map(kf => kf.frame))
 
         setClipboardKeyframes({
             keyframes: keyframeData.map(kf => ({
-                nodeId: kf.nodeId,
+                ownerType: kf.ownerType,
+                ownerId: kf.ownerId,
                 type: kf.type,
                 frame: kf.frame,
                 value: kf.value,
@@ -977,58 +1172,95 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const currentFrame = frameRef.current
         const offset = currentFrame - source.baseFrame
 
-        const nodes = useModelStore.getState().nodes
+        const state = useModelStore.getState()
+        const nodes = state.nodes
+        const geosetAnims = Array.isArray((state.modelData as any)?.GeosetAnims)
+            ? ((state.modelData as any).GeosetAnims as any[])
+            : []
         const oldNodes = cloneNodesForKeyframes(nodes)
         const nodesCopy = cloneNodesForKeyframes(nodes)
-        const replaceNodes = useModelStore.getState().replaceNodes
+        const oldGeosetAnims = cloneGeosetAnimsForKeyframes(geosetAnims)
+        const geosetAnimsCopy = cloneGeosetAnimsForKeyframes(geosetAnims)
+        let nodeChanged = false
+        let geosetChanged = false
 
         source.keyframes.forEach(kf => {
-            const node = nodesCopy.find((n: any) => n.ObjectId === kf.nodeId)
-            if (!node) return
-
             const targetFrame = kf.frame + offset
+            if (kf.ownerType === 'node') {
+                const node = nodesCopy.find((n: any) => n.ObjectId === kf.ownerId)
+                if (!node) return
 
-            // Ensure AnimVector exists
-            if (!node[kf.type]) {
-                node[kf.type] = {
-                    Keys: [],
-                    LineType: 1, // Linear interpolation default
-                    GlobalSeqId: -1
+                if (!node[kf.type]) {
+                    node[kf.type] = {
+                        Keys: [],
+                        LineType: 1,
+                        GlobalSeqId: -1
+                    }
                 }
+
+                const existingIdx = node[kf.type].Keys.findIndex((k: any) => k.Frame === targetFrame)
+                const newKey: any = {
+                    Frame: targetFrame,
+                    Vector: Array.isArray(kf.value) ? [...kf.value] : kf.value
+                }
+                if (kf.inTan) newKey.InTan = [...kf.inTan]
+                if (kf.outTan) newKey.OutTan = [...kf.outTan]
+
+                if (existingIdx >= 0) {
+                    node[kf.type].Keys[existingIdx] = newKey
+                } else {
+                    node[kf.type].Keys.push(newKey)
+                    node[kf.type].Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                }
+                nodeChanged = true
+                return
             }
 
-            // Check if a key already exists at this frame
-            const existingIdx = node[kf.type].Keys.findIndex((k: any) => k.Frame === targetFrame)
-            const newKey: any = {
-                Frame: targetFrame,
-                Vector: Array.isArray(kf.value) ? [...kf.value] : kf.value
-            }
-            if (kf.inTan) newKey.InTan = [...kf.inTan]
-            if (kf.outTan) newKey.OutTan = [...kf.outTan]
+            if (kf.ownerType === 'geoset') {
+                const geosetTrack = getGeosetTrackInfo(kf.type)
+                if (!geosetTrack) return
 
-            if (existingIdx >= 0) {
-                node[kf.type].Keys[existingIdx] = newKey
-            } else {
-                node[kf.type].Keys.push(newKey)
-                // Sort by frame
-                node[kf.type].Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                let geosetAnim = geosetAnimsCopy.find((anim: any) => Number(anim?.GeosetId) === Number(kf.ownerId))
+                if (!geosetAnim) {
+                    geosetAnim = { GeosetId: Number(kf.ownerId) }
+                    geosetAnimsCopy.push(geosetAnim)
+                }
+
+                if (!isAnimTrack(geosetAnim[geosetTrack.propName])) {
+                    geosetAnim[geosetTrack.propName] = { InterpolationType: 1, GlobalSeqId: -1, Keys: [] }
+                }
+                const track = geosetAnim[geosetTrack.propName]
+                const existingIdx = track.Keys.findIndex((k: any) => k.Frame === targetFrame)
+                const fallback = geosetTrack.vectorSize === 1 ? [1] : [1, 1, 1]
+                const vector = toVectorArray(kf.value, geosetTrack.vectorSize, fallback)
+                const newKey: any = { Frame: targetFrame, Vector: vector }
+                if (Array.isArray(kf.inTan)) newKey.InTan = [...kf.inTan]
+                if (Array.isArray(kf.outTan)) newKey.OutTan = [...kf.outTan]
+
+                if (existingIdx >= 0) {
+                    track.Keys[existingIdx] = newKey
+                } else {
+                    track.Keys.push(newKey)
+                    track.Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                }
+                geosetChanged = true
             }
         })
 
-        // Push to history
+        if (!nodeChanged && !geosetChanged) return
+
         useHistoryStore.getState().push({
             name: `粘贴 ${source.keyframes.length} 个关键帧`,
-            undo: () => replaceNodes(oldNodes as any),
-            redo: () => replaceNodes(nodesCopy)
+            undo: () => applyKeyframeSnapshots(oldNodes, oldGeosetAnims, { nodeChanged, geosetChanged }),
+            redo: () => applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, { nodeChanged, geosetChanged })
         })
 
-        replaceNodes(nodesCopy)
+        applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, { nodeChanged, geosetChanged })
 
-        // Clear clipboard if it was a cut operation
         if (effectiveClipboard.source === 'clipboard' && source.isCut) {
             setClipboardKeyframes(null)
         }
-    }, [effectiveClipboard])
+    }, [effectiveClipboard, applyKeyframeSnapshots])
 
     const pasteKeyframesScaled = useCallback((mode: 'ratio' | 'range') => {
         if (!effectiveClipboard) return
@@ -1053,54 +1285,94 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             scale = (scalePasteEnd - scalePasteStart) / sourceSpan
         }
 
-        const nodes = useModelStore.getState().nodes
+        const state = useModelStore.getState()
+        const nodes = state.nodes
+        const geosetAnims = Array.isArray((state.modelData as any)?.GeosetAnims)
+            ? ((state.modelData as any).GeosetAnims as any[])
+            : []
         const oldNodes = cloneNodesForKeyframes(nodes)
         const nodesCopy = cloneNodesForKeyframes(nodes)
-        const replaceNodes = useModelStore.getState().replaceNodes
+        const oldGeosetAnims = cloneGeosetAnimsForKeyframes(geosetAnims)
+        const geosetAnimsCopy = cloneGeosetAnimsForKeyframes(geosetAnims)
+        let nodeChanged = false
+        let geosetChanged = false
 
         source.keyframes.forEach(kf => {
-            const node = nodesCopy.find((n: any) => n.ObjectId === kf.nodeId)
-            if (!node) return
-
             const targetFrame = Math.round(targetStart + (kf.frame - sourceStart) * scale)
+            if (kf.ownerType === 'node') {
+                const node = nodesCopy.find((n: any) => n.ObjectId === kf.ownerId)
+                if (!node) return
 
-            if (!node[kf.type]) {
-                node[kf.type] = {
-                    Keys: [],
-                    LineType: 1,
-                    GlobalSeqId: -1
+                if (!node[kf.type]) {
+                    node[kf.type] = {
+                        Keys: [],
+                        LineType: 1,
+                        GlobalSeqId: -1
+                    }
                 }
+
+                const existingIdx = node[kf.type].Keys.findIndex((k: any) => k.Frame === targetFrame)
+                const newKey: any = {
+                    Frame: targetFrame,
+                    Vector: Array.isArray(kf.value) ? [...kf.value] : kf.value
+                }
+                if (kf.inTan) newKey.InTan = [...kf.inTan]
+                if (kf.outTan) newKey.OutTan = [...kf.outTan]
+
+                if (existingIdx >= 0) {
+                    node[kf.type].Keys[existingIdx] = newKey
+                } else {
+                    node[kf.type].Keys.push(newKey)
+                    node[kf.type].Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                }
+                nodeChanged = true
+                return
             }
 
-            const existingIdx = node[kf.type].Keys.findIndex((k: any) => k.Frame === targetFrame)
-            const newKey: any = {
-                Frame: targetFrame,
-                Vector: Array.isArray(kf.value) ? [...kf.value] : kf.value
-            }
-            if (kf.inTan) newKey.InTan = [...kf.inTan]
-            if (kf.outTan) newKey.OutTan = [...kf.outTan]
+            if (kf.ownerType === 'geoset') {
+                const geosetTrack = getGeosetTrackInfo(kf.type)
+                if (!geosetTrack) return
+                let geosetAnim = geosetAnimsCopy.find((anim: any) => Number(anim?.GeosetId) === Number(kf.ownerId))
+                if (!geosetAnim) {
+                    geosetAnim = { GeosetId: Number(kf.ownerId) }
+                    geosetAnimsCopy.push(geosetAnim)
+                }
 
-            if (existingIdx >= 0) {
-                node[kf.type].Keys[existingIdx] = newKey
-            } else {
-                node[kf.type].Keys.push(newKey)
-                node[kf.type].Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                if (!isAnimTrack(geosetAnim[geosetTrack.propName])) {
+                    geosetAnim[geosetTrack.propName] = { InterpolationType: 1, GlobalSeqId: -1, Keys: [] }
+                }
+                const track = geosetAnim[geosetTrack.propName]
+                const existingIdx = track.Keys.findIndex((k: any) => k.Frame === targetFrame)
+                const fallback = geosetTrack.vectorSize === 1 ? [1] : [1, 1, 1]
+                const vector = toVectorArray(kf.value, geosetTrack.vectorSize, fallback)
+                const newKey: any = { Frame: targetFrame, Vector: vector }
+                if (Array.isArray(kf.inTan)) newKey.InTan = [...kf.inTan]
+                if (Array.isArray(kf.outTan)) newKey.OutTan = [...kf.outTan]
+
+                if (existingIdx >= 0) {
+                    track.Keys[existingIdx] = newKey
+                } else {
+                    track.Keys.push(newKey)
+                    track.Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                }
+                geosetChanged = true
             }
         })
+
+        if (!nodeChanged && !geosetChanged) return
 
         useHistoryStore.getState().push({
             name: `缩放粘贴 ${source.keyframes.length} 个关键帧`,
-            undo: () => replaceNodes(oldNodes as any),
-            redo: () => replaceNodes(nodesCopy)
+            undo: () => applyKeyframeSnapshots(oldNodes, oldGeosetAnims, { nodeChanged, geosetChanged }),
+            redo: () => applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, { nodeChanged, geosetChanged })
         })
 
-        replaceNodes(nodesCopy)
+        applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, { nodeChanged, geosetChanged })
 
         if (effectiveClipboard.source === 'clipboard' && source.isCut) {
             setClipboardKeyframes(null)
         }
-    }, [effectiveClipboard, clipboardInfo, scalePastePercent, scalePasteStart, scalePasteEnd])
-
+    }, [effectiveClipboard, clipboardInfo, scalePastePercent, scalePasteStart, scalePasteEnd, applyKeyframeSnapshots])
     const openScalePasteDialog = useCallback(() => {
         if (!clipboardInfo) return
         const currentFrame = Math.round(frameRef.current)
@@ -1387,93 +1659,173 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
             // Only process if there was actual movement
             if (dragScale !== null && interactionRef.current.dragKeyframeData.length > 0 && Math.abs(dragScale - 1) > 1e-4) {
-                const nodes = useModelStore.getState().nodes
+                const state = useModelStore.getState()
+                const nodes = state.nodes
+                const geosetAnims = Array.isArray((state.modelData as any)?.GeosetAnims)
+                    ? ((state.modelData as any).GeosetAnims as any[])
+                    : []
                 const oldNodes = cloneNodesForKeyframes(nodes)
                 const nodesCopy = cloneNodesForKeyframes(nodes)
-                const replaceNodes = useModelStore.getState().replaceNodes
+                const oldGeosetAnims = cloneGeosetAnimsForKeyframes(geosetAnims)
+                const geosetAnimsCopy = cloneGeosetAnimsForKeyframes(geosetAnims)
+                let nodeChanged = false
+                let geosetChanged = false
 
-                // Apply scaling to all dragged keyframes
                 interactionRef.current.dragKeyframeData.forEach(kfData => {
-                    const node = nodesCopy.find((n: any) => n.ObjectId === kfData.nodeId)
-                    if (!node || !node[kfData.type]?.Keys) return
+                    const newFrame = Math.round(scaleAnchor + (kfData.originalFrame - scaleAnchor) * dragScale)
+                    if (kfData.ownerType === 'node') {
+                        const node = nodesCopy.find((n: any) => n.ObjectId === kfData.ownerId)
+                        if (!node || !isAnimTrack(node[kfData.type])) return
 
-                    // Find and update the keyframe
-                    let keyIdx = kfData.keyIndex
-                    if (keyIdx < 0 || keyIdx >= node[kfData.type].Keys.length) {
-                        keyIdx = node[kfData.type].Keys.findIndex((k: any) => k.Frame === kfData.originalFrame)
+                        let keyIdx = kfData.keyIndex
+                        if (keyIdx < 0 || keyIdx >= node[kfData.type].Keys.length) {
+                            keyIdx = node[kfData.type].Keys.findIndex((k: any) => k.Frame === kfData.originalFrame)
+                        }
+                        if (keyIdx >= 0) {
+                            node[kfData.type].Keys[keyIdx].Frame = newFrame
+                            nodeChanged = true
+                        }
+                        return
                     }
-                    if (keyIdx >= 0) {
-                        node[kfData.type].Keys[keyIdx].Frame = Math.round(scaleAnchor + (kfData.originalFrame - scaleAnchor) * dragScale)
+
+                    if (kfData.ownerType === 'geoset') {
+                        const geosetTrack = getGeosetTrackInfo(kfData.type)
+                        if (!geosetTrack) return
+                        const geosetAnim = geosetAnimsCopy.find((anim: any) => Number(anim?.GeosetId) === Number(kfData.ownerId))
+                        const track = geosetAnim?.[geosetTrack.propName]
+                        if (!isAnimTrack(track)) return
+
+                        let keyIdx = kfData.keyIndex
+                        if (keyIdx < 0 || keyIdx >= track.Keys.length) {
+                            keyIdx = track.Keys.findIndex((k: any) => k.Frame === kfData.originalFrame)
+                        }
+                        if (keyIdx >= 0) {
+                            track.Keys[keyIdx].Frame = newFrame
+                            geosetChanged = true
+                        }
                     }
                 })
 
-                // Sort keys by frame after scaling
                 interactionRef.current.dragKeyframeData.forEach(kfData => {
-                    const node = nodesCopy.find((n: any) => n.ObjectId === kfData.nodeId)
-                    if (node && node[kfData.type]?.Keys) {
-                        node[kfData.type].Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                    if (kfData.ownerType === 'node') {
+                        const node = nodesCopy.find((n: any) => n.ObjectId === kfData.ownerId)
+                        if (node && isAnimTrack(node[kfData.type])) {
+                            node[kfData.type].Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                        }
+                        return
+                    }
+
+                    if (kfData.ownerType === 'geoset') {
+                        const geosetTrack = getGeosetTrackInfo(kfData.type)
+                        if (!geosetTrack) return
+                        const geosetAnim = geosetAnimsCopy.find((anim: any) => Number(anim?.GeosetId) === Number(kfData.ownerId))
+                        const track = geosetAnim?.[geosetTrack.propName]
+                        if (isAnimTrack(track)) {
+                            track.Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                        }
                     }
                 })
 
-                // Push to history
-                useHistoryStore.getState().push({
-                    name: `\u7f29\u653e ${interactionRef.current.dragKeyframeData.length} \u4e2a\u5173\u952e\u5e27`,
-                    undo: () => replaceNodes(oldNodes as any),
-                    redo: () => replaceNodes(nodesCopy)
-                })
+                if (nodeChanged || geosetChanged) {
+                    useHistoryStore.getState().push({
+                        name: `缩放 ${interactionRef.current.dragKeyframeData.length} 个关键帧`,
+                        undo: () => applyKeyframeSnapshots(oldNodes, oldGeosetAnims, { nodeChanged, geosetChanged }),
+                        redo: () => applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, { nodeChanged, geosetChanged })
+                    })
 
-                replaceNodes(nodesCopy)
+                    applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, { nodeChanged, geosetChanged })
+                }
 
                 // Keep selection on the transformed keyframes.
                 const next = new Set<string>()
                 interactionRef.current.dragKeyframeData.forEach((kfData) => {
                     const newFrame = Math.round(scaleAnchor + (kfData.originalFrame - scaleAnchor) * dragScale)
-                    next.add(makeKeyframeUid(kfData.nodeId, kfData.type, newFrame))
+                    next.add(makeKeyframeUid(kfData.ownerType, kfData.ownerId, kfData.type, newFrame))
                 })
                 setSelectedKeyframeUids(next)
             } else if (dragScale === null && frameOffset !== 0 && interactionRef.current.dragKeyframeData.length > 0) {
-                const nodes = useModelStore.getState().nodes
+                const state = useModelStore.getState()
+                const nodes = state.nodes
+                const geosetAnims = Array.isArray((state.modelData as any)?.GeosetAnims)
+                    ? ((state.modelData as any).GeosetAnims as any[])
+                    : []
                 const oldNodes = cloneNodesForKeyframes(nodes)
                 const nodesCopy = cloneNodesForKeyframes(nodes)
-                const replaceNodes = useModelStore.getState().replaceNodes
+                const oldGeosetAnims = cloneGeosetAnimsForKeyframes(geosetAnims)
+                const geosetAnimsCopy = cloneGeosetAnimsForKeyframes(geosetAnims)
+                let nodeChanged = false
+                let geosetChanged = false
 
-                // Apply frame offset to all dragged keyframes
                 interactionRef.current.dragKeyframeData.forEach(kfData => {
-                    const node = nodesCopy.find((n: any) => n.ObjectId === kfData.nodeId)
-                    if (!node || !node[kfData.type]?.Keys) return
+                    const newFrame = kfData.originalFrame + frameOffset
+                    if (kfData.ownerType === 'node') {
+                        const node = nodesCopy.find((n: any) => n.ObjectId === kfData.ownerId)
+                        if (!node || !isAnimTrack(node[kfData.type])) return
 
-                    // Find and update the keyframe
-                    let keyIdx = kfData.keyIndex
-                    if (keyIdx < 0 || keyIdx >= node[kfData.type].Keys.length) {
-                        keyIdx = node[kfData.type].Keys.findIndex((k: any) => k.Frame === kfData.originalFrame)
+                        let keyIdx = kfData.keyIndex
+                        if (keyIdx < 0 || keyIdx >= node[kfData.type].Keys.length) {
+                            keyIdx = node[kfData.type].Keys.findIndex((k: any) => k.Frame === kfData.originalFrame)
+                        }
+                        if (keyIdx >= 0) {
+                            node[kfData.type].Keys[keyIdx].Frame = newFrame
+                            nodeChanged = true
+                        }
+                        return
                     }
-                    if (keyIdx >= 0) {
-                        node[kfData.type].Keys[keyIdx].Frame = kfData.originalFrame + frameOffset
+
+                    if (kfData.ownerType === 'geoset') {
+                        const geosetTrack = getGeosetTrackInfo(kfData.type)
+                        if (!geosetTrack) return
+                        const geosetAnim = geosetAnimsCopy.find((anim: any) => Number(anim?.GeosetId) === Number(kfData.ownerId))
+                        const track = geosetAnim?.[geosetTrack.propName]
+                        if (!isAnimTrack(track)) return
+
+                        let keyIdx = kfData.keyIndex
+                        if (keyIdx < 0 || keyIdx >= track.Keys.length) {
+                            keyIdx = track.Keys.findIndex((k: any) => k.Frame === kfData.originalFrame)
+                        }
+                        if (keyIdx >= 0) {
+                            track.Keys[keyIdx].Frame = newFrame
+                            geosetChanged = true
+                        }
                     }
                 })
 
-                // Sort keys by frame after moving
                 interactionRef.current.dragKeyframeData.forEach(kfData => {
-                    const node = nodesCopy.find((n: any) => n.ObjectId === kfData.nodeId)
-                    if (node && node[kfData.type]?.Keys) {
-                        node[kfData.type].Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                    if (kfData.ownerType === 'node') {
+                        const node = nodesCopy.find((n: any) => n.ObjectId === kfData.ownerId)
+                        if (node && isAnimTrack(node[kfData.type])) {
+                            node[kfData.type].Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                        }
+                        return
+                    }
+
+                    if (kfData.ownerType === 'geoset') {
+                        const geosetTrack = getGeosetTrackInfo(kfData.type)
+                        if (!geosetTrack) return
+                        const geosetAnim = geosetAnimsCopy.find((anim: any) => Number(anim?.GeosetId) === Number(kfData.ownerId))
+                        const track = geosetAnim?.[geosetTrack.propName]
+                        if (isAnimTrack(track)) {
+                            track.Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                        }
                     }
                 })
 
-                // Push to history
-                useHistoryStore.getState().push({
-                    name: `移动 ${interactionRef.current.dragKeyframeData.length} 个关键帧`,
-                    undo: () => replaceNodes(oldNodes as any),
-                    redo: () => replaceNodes(nodesCopy)
-                })
+                if (nodeChanged || geosetChanged) {
+                    useHistoryStore.getState().push({
+                        name: `移动 ${interactionRef.current.dragKeyframeData.length} 个关键帧`,
+                        undo: () => applyKeyframeSnapshots(oldNodes, oldGeosetAnims, { nodeChanged, geosetChanged }),
+                        redo: () => applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, { nodeChanged, geosetChanged })
+                    })
 
-                replaceNodes(nodesCopy)
+                    applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, { nodeChanged, geosetChanged })
+                }
 
                 // Keep selection on the moved keyframes.
                 const next = new Set<string>()
                 interactionRef.current.dragKeyframeData.forEach((kfData) => {
                     const newFrame = kfData.originalFrame + frameOffset
-                    next.add(makeKeyframeUid(kfData.nodeId, kfData.type, newFrame))
+                    next.add(makeKeyframeUid(kfData.ownerType, kfData.ownerId, kfData.type, newFrame))
                 })
                 setSelectedKeyframeUids(next)
             }
@@ -1508,14 +1860,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
                 const ids = new Set<string>()
                 activeKeyframesRef.current.forEach(kf => {
-                    let isVisible = false
-                    if (showAll) isVisible = true
-                    else {
-                        if (currentMode === 'translate' && kf.type === 'Translation') isVisible = true
-                        else if (currentMode === 'rotate' && kf.type === 'Rotation') isVisible = true
-                        else if (currentMode === 'scale' && kf.type === 'Scaling') isVisible = true
-                    }
-                    if (!isVisible) return
+                    if (!isKeyframeTypeVisible(kf.type, showAll, currentMode)) return
 
                     const kx = (kf.frame - scroll) * pxPerMs
                     if (kx >= rectStart && kx <= rectEnd) {
@@ -1615,7 +1960,8 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             if (clickedKf && selectedKeyframeUids.has(clickedKf.uid)) {
                 // 开始待定拖动模式（需要移动超过阈值才能真正拖动）
                 const dragData = getSelectedKeyframeData().map(kf => ({
-                    nodeId: kf.nodeId,
+                    ownerType: kf.ownerType,
+                    ownerId: kf.ownerId,
                     type: kf.type,
                     originalFrame: kf.frame,
                     keyIndex: kf.keyIndex
@@ -2133,3 +2479,4 @@ const btnStyle: React.CSSProperties = {
 }
 
 export default React.memo(TimelinePanel)
+
