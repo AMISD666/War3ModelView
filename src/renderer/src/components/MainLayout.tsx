@@ -71,6 +71,17 @@ const readDetachedFieldValue = (source: any, field: DetachedSnapshotField): any 
     return undefined
 }
 
+const coerceDetachedArray = (value: any): any[] | null => {
+    if (Array.isArray(value)) return value
+    if (!value || typeof value !== 'object') return null
+    const numericKeys = Object.keys(value).filter((key) => /^\d+$/.test(key))
+    if (numericKeys.length === 0) return null
+    return numericKeys
+        .map((key) => Number(key))
+        .sort((a, b) => a - b)
+        .map((index) => value[index])
+}
+
 const toSlimGeoset = (geoset: any) => ({
     MaterialID: typeof geoset?.MaterialID === 'number' ? geoset.MaterialID : 0,
     SelectionGroup: typeof geoset?.SelectionGroup === 'number' ? geoset.SelectionGroup : 0,
@@ -94,21 +105,7 @@ const toSlimMaterialsForTextureAnim = (materials: any[]): any[] => {
 }
 
 const DETACHED_MANAGER_SEQUENCE_FIELDS: DetachedSnapshotField[] = [
-    { key: 'Sequences', aliases: ['Sequence'] },
-    { key: 'GeosetAnims', aliases: ['GeosetAnim'] },
-    { key: 'TextureAnims', aliases: ['TextureAnim'] },
-    { key: 'Materials', aliases: ['Material'] },
-    { key: 'Cameras', aliases: ['Camera'] },
-    { key: 'Bones', aliases: ['Bone'] },
-    { key: 'Helpers', aliases: ['Helper'] },
-    { key: 'Attachments', aliases: ['Attachment'] },
-    { key: 'Lights', aliases: ['Light'] },
-    { key: 'ParticleEmitters', aliases: ['ParticleEmitter'] },
-    { key: 'ParticleEmitters2', aliases: ['ParticleEmitter2'] },
-    { key: 'ParticleEmitterPopcorns', aliases: ['ParticleEmitterPopcorn'] },
-    { key: 'RibbonEmitters', aliases: ['RibbonEmitter'] },
-    { key: 'EventObjects', aliases: ['EventObject'] },
-    { key: 'CollisionShapes', aliases: ['CollisionShape'] }
+    { key: 'Sequences', aliases: ['Sequence'] }
 ]
 
 const buildDetachedManagerSnapshotModelData = (managerType: DetachedManagerType, source: any): any => {
@@ -1981,10 +1978,10 @@ const MainLayout: React.FC = () => {
                     const detachedWindow = new WebviewWindow(DETACHED_TEXTURE_EDITOR_LABEL, {
                         title: '纹理管理器',
                         url: `/?detached=${DETACHED_TEXTURE_EDITOR_QUERY}`,
-                        width: 980,
-                        height: 720,
-                        minWidth: 800,
-                        minHeight: 560,
+                        width: 820,
+                        height: 660,
+                        minWidth: 700,
+                        minHeight: 500,
                         center: false,
                         focus: false,
                         visible: false,
@@ -2048,6 +2045,18 @@ const MainLayout: React.FC = () => {
     }, [])
 
     const ensureDetachedManagerWindow = useCallback(async (managerType: DetachedManagerType, showOnReady: boolean) => {
+        const MANAGER_WINDOW_DIMENSIONS: Record<string, { width: number; height: number; minWidth: number; minHeight: number }> = {
+            'material-editor': { width: 700, height: 520, minWidth: 600, minHeight: 400 },
+            'geoset-editor': { width: 580, height: 450, minWidth: 480, minHeight: 350 },
+            'sequence-editor': { width: 550, height: 450, minWidth: 450, minHeight: 350 },
+            'global-sequence': { width: 300, height: 240, minWidth: 260, minHeight: 180 },
+            'camera-manager': { width: 580, height: 450, minWidth: 480, minHeight: 350 },
+            'geoset-animation': { width: 580, height: 450, minWidth: 480, minHeight: 350 },
+            'texture-animation': { width: 550, height: 420, minWidth: 450, minHeight: 320 },
+        }
+
+        const dimensions = MANAGER_WINDOW_DIMENSIONS[managerType] || { width: 700, height: 520, minWidth: 600, minHeight: 400 }
+
         const windowLabel = getDetachedManagerLabel(managerType)
         const windowQuery = getDetachedManagerQuery(managerType)
         const windowTitle = getDetachedManagerWindowTitle(managerType)
@@ -2062,10 +2071,10 @@ const MainLayout: React.FC = () => {
                     const windowOptions: any = {
                         title: windowTitle,
                         url: `/?detached=${windowQuery}`,
-                        width: 980,
-                        height: 720,
-                        minWidth: 760,
-                        minHeight: 540,
+                        width: dimensions.width,
+                        height: dimensions.height,
+                        minWidth: dimensions.minWidth,
+                        minHeight: dimensions.minHeight,
                         center: false,
                         focus: false,
                         visible: false,
@@ -2289,6 +2298,19 @@ const MainLayout: React.FC = () => {
                     const managerType = event.payload?.managerType
                     const nextModelData = event.payload?.modelData
                     if (!managerType || !nextModelData) return
+
+                    // Sequence edits should only touch Sequences. Applying full model back can
+                    // trigger node rebuild paths and corrupt ObjectId mapping.
+                    if (managerType === 'sequence') {
+                        const sequencesRaw = readDetachedFieldValue(nextModelData, { key: 'Sequences', aliases: ['Sequence'] })
+                        const sequences = coerceDetachedArray(sequencesRaw)
+                        if (sequences) {
+                            const { setSequences } = useModelStore.getState()
+                            setSequences(sequences)
+                        }
+                        return
+                    }
+
                     const { setModelData, modelPath: currentModelPath, modelData: currentModelData } = useModelStore.getState()
                     const mergedModelData = mergeDetachedManagerModelData(
                         managerType,
@@ -2296,9 +2318,10 @@ const MainLayout: React.FC = () => {
                         nextModelData
                     )
                     if (!mergedModelData) return
+                    const shouldFastApply = managerType !== 'sequence'
                     setModelData(mergedModelData, currentModelPath || event.payload?.modelPath || null, {
                         skipAutoRecalculate: true,
-                        skipModelRebuild: true
+                        skipModelRebuild: shouldFastApply
                     })
                 }
             )

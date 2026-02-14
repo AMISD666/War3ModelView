@@ -1,5 +1,5 @@
 ﻿import React, { useState, useEffect, useRef } from 'react'
-import { List, Button, InputNumber, Typography, message } from 'antd'
+import { List, Button, InputNumber, Typography, message, Card } from 'antd'
 import { DraggableModal } from '../DraggableModal'
 import { useModelStore } from '../../store/modelStore'
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
@@ -102,60 +102,57 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({ visible, onCl
                         添加
                     </Button>
                 </div>
-                <List
-                    dataSource={localSequences}
-                    renderItem={(duration, index) => (
-                        <List.Item
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px', padding: '4px' }}>
+                    {localSequences.map((duration, index) => (
+                        <div
+                            key={index}
                             onClick={() => setSelectedIndex(index)}
                             style={{
                                 cursor: 'pointer',
-                                padding: '6px 12px',
-                                backgroundColor: selectedIndex === index ? '#1677ff' : 'transparent',
+                                padding: '4px 4px',
+                                backgroundColor: selectedIndex === index ? '#1677ff' : '#2a2a2a',
                                 color: selectedIndex === index ? '#fff' : '#b0b0b0',
-                                borderBottom: '1px solid #3a3a3a',
-                                minHeight: '36px'
+                                border: '1px solid #3a3a3a',
+                                borderRadius: '2px',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                minHeight: '24px',
+                                fontSize: '11px',
+                                overflow: 'hidden'
                             }}
                         >
-                            <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                    <span style={{ fontSize: '11px', opacity: 0.5, minWidth: '30px' }}>ID: {index}</span>
-                                    <span style={{ fontSize: '13px' }}>{duration}ms</span>
-                                </div>
-                                <Button
-                                    type="text"
-                                    danger
-                                    size="small"
-                                    icon={<DeleteOutlined />}
-                                    onClick={(e) => {
-                                        e.stopPropagation()
-                                        handleDeleteSequence(index)
-                                    }}
-                                    style={{ color: selectedIndex === index ? '#fff' : '#ff4d4f', fontSize: '12px' }}
-                                />
-                            </div>
-                        </List.Item>
-                    )}
-                />
+                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>GSeq {index}</span>
+                            <DeleteOutlined
+                                onClick={(e) => {
+                                    e.stopPropagation()
+                                    handleDeleteSequence(index)
+                                }}
+                                style={{ color: selectedIndex === index ? '#fff' : '#ff4d4f', fontSize: '10px' }}
+                            />
+                        </div>
+                    ))}
+                </div>
             </div>
 
-            <div style={{ flex: 1, padding: '24px', overflowY: 'auto', backgroundColor: '#252525' }}>
+            <div style={{ flex: 1, padding: '8px', overflowY: 'auto', backgroundColor: '#252525' }}>
                 {selectedDuration !== null ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                         <Card
                             title={<span style={{ color: '#e8e8e8', fontSize: '13px' }}>时长设置</span>}
                             size="small"
                             bordered={false}
                             style={{ background: '#333333', border: '1px solid #4a4a4a' }}
-                            styles={{ header: { padding: '4px 12px', minHeight: 0, borderBottom: '1px solid #4a4a4a' }, body: { padding: '12px' } }}
+                            styles={{ header: { padding: '4px 8px', minHeight: '32px', borderBottom: '1px solid #4a4a4a' }, body: { padding: '8px' } }}
                         >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                 <Text style={{ color: '#b0b0b0', fontSize: '12px' }}>时长 (ms):</Text>
                                 <InputNumber
                                     size="small"
                                     value={selectedDuration}
                                     onChange={handleDurationChange}
                                     min={0}
-                                    style={{ width: '120px', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
+                                    style={{ width: '80px', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
                                 />
                             </div>
                             <div style={{ marginTop: '12px', padding: '8px', backgroundColor: 'rgba(0,0,0,0.2)', borderRadius: '4px', border: '1px solid #444' }}>
@@ -177,8 +174,8 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({ visible, onCl
     if (asWindow) {
         if (!visible) return null
         return (
-            <div style={{ height: '100vh', padding: 12, backgroundColor: '#1f1f1f', overflow: 'hidden' }}>
-                {renderEditorContent('calc(100vh - 24px)')}
+            <div style={{ height: '100vh', padding: 8, backgroundColor: '#1f1f1f', overflow: 'hidden' }}>
+                {renderEditorContent('calc(100vh - 16px)')}
             </div>
         )
     }

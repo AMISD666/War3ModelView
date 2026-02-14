@@ -500,7 +500,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
 
     const renderEditorContent = (contentHeight: string | number = '500px') => (
         <div style={{ display: 'flex', height: contentHeight, border: '1px solid #4a4a4a', backgroundColor: '#252525' }}>
-            <div ref={listRef} style={{ width: '220px', overflowY: 'auto', display: 'flex', flexDirection: 'column', backgroundColor: '#333333', borderRight: '1px solid #4a4a4a' }}>
+            <div ref={listRef} style={{ width: '180px', overflowY: 'auto', display: 'flex', flexDirection: 'column', backgroundColor: '#333333', borderRight: '1px solid #4a4a4a' }}>
                 <div style={{ padding: '8px', borderBottom: '1px solid #4a4a4a' }}>
                     <Button
                         type="primary"
@@ -557,7 +557,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
                             }}
                         >
                             <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px', fontSize: '13px' }}>
+                                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '110px', fontSize: '13px' }}>
                                     <span style={{ marginRight: '6px', opacity: 0.5, fontSize: '11px' }}>{index}:</span>
                                     {item.Image ? item.Image.split('\\').pop() : (getReplaceableLabel(item.ReplaceableId) || 'Unknown')}
                                 </div>
@@ -580,7 +580,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
             <div style={{ flex: 1, padding: '12px', overflowY: 'auto', backgroundColor: '#252525', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {selectedTexture ? (
                     <>
-                        <div style={{ height: '180px', border: '1px solid #4a4a4a', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', backgroundColor: '#1a1a1a', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
+                        <div style={{ height: '350px', border: '1px solid #4a4a4a', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', backgroundColor: '#1a1a1a', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
                             {isLoadingPreview ? (
                                 <div style={{ color: '#1677ff', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
                                     <div className="ant-spin ant-spin-spinning" style={{ fontSize: 20 }}>...</div>

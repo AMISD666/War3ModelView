@@ -29,6 +29,60 @@ const pickDefaultSequenceIndex = (sequences: any[]) => {
     return standIndex >= 0 ? standIndex : 0;
 };
 
+const normalizeSequenceInterval = (interval: any): [number, number] => {
+    let start = 0;
+    let end = 1000;
+
+    if (ArrayBuffer.isView(interval) || Array.isArray(interval)) {
+        start = Number((interval as any)[0]);
+        end = Number((interval as any)[1]);
+    } else if (interval && typeof interval === 'object') {
+        start = Number((interval as any)[0] ?? (interval as any).start ?? (interval as any).Start ?? 0);
+        end = Number((interval as any)[1] ?? (interval as any).end ?? (interval as any).End ?? 1000);
+    }
+
+    if (!Number.isFinite(start)) start = 0;
+    if (!Number.isFinite(end)) end = start + 1000;
+    start = Math.floor(start);
+    end = Math.floor(end);
+    if (end < start) {
+        const t = start;
+        start = end;
+        end = t;
+    }
+    if (end === start) {
+        end = start + 1;
+    }
+    return [start, end];
+};
+
+const normalizeSequencesForStore = (sequences: any[]): any[] => {
+    if (!Array.isArray(sequences)) return [];
+    return sequences.map((seq: any, index: number) => {
+        const safeSeq = seq && typeof seq === 'object' ? seq : {};
+        const interval = normalizeSequenceInterval((safeSeq as any).Interval);
+        return {
+            ...safeSeq,
+            Name: (safeSeq as any).Name ?? `Sequence ${index}`,
+            Interval: interval
+        };
+    });
+};
+
+const shouldResyncRendererSequence = (
+    previousSequences: any[],
+    nextSequences: any[],
+    currentSequence: number
+): boolean => {
+    if (currentSequence < 0) return false;
+    const prev = previousSequences?.[currentSequence];
+    const next = nextSequences?.[currentSequence];
+    if (!prev || !next) return true;
+    const prevInterval = normalizeSequenceInterval((prev as any).Interval);
+    const nextInterval = normalizeSequenceInterval((next as any).Interval);
+    return prevInterval[0] !== nextInterval[0] || prevInterval[1] !== nextInterval[1];
+};
+
 
 /**
  * 重新计算 Geoset 的边界范围 (Extent)
@@ -1208,7 +1262,11 @@ export const useModelStore = create<ModelState>((set, get) => ({
             }
 
             const newSequences = [...state.modelData.Sequences];
-            newSequences[index] = { ...newSequences[index], ...updates };
+            const nextSequence = { ...newSequences[index], ...updates };
+            if (Object.prototype.hasOwnProperty.call(updates || {}, 'Interval')) {
+                nextSequence.Interval = normalizeSequenceInterval((nextSequence as any).Interval);
+            }
+            newSequences[index] = nextSequence;
 
             // Also update the sequences array in store root if it exists distinct from modelData
             // (In this store structure, 'sequences' seems to be a derived reference or copy? 
@@ -1814,15 +1872,17 @@ export const useModelStore = create<ModelState>((set, get) => ({
     // Animation Actions Implementation
     // Animation Actions Implementation
     setSequences: (sequences) => {
+        const normalizedSequences = normalizeSequencesForStore(sequences as any[]);
+        const { sequences: previousSequences, currentSequence } = get();
+        const shouldResync = shouldResyncRendererSequence(previousSequences as any[], normalizedSequences, currentSequence);
         set((state) => {
-            const updatedModelData = state.modelData ? { ...state.modelData, Sequences: sequences } : state.modelData;
-            return { sequences, modelData: updatedModelData };
+            const updatedModelData = state.modelData ? { ...state.modelData, Sequences: normalizedSequences } : state.modelData;
+            return { sequences: normalizedSequences, modelData: updatedModelData };
         });
         const renderer = useRendererStore.getState().renderer;
         if (renderer?.model) {
-            renderer.model.Sequences = sequences;
-            const currentSequence = get().currentSequence;
-            if (currentSequence >= 0 && typeof (renderer as any).setSequence === 'function') {
+            renderer.model.Sequences = normalizedSequences;
+            if (shouldResync && currentSequence >= 0 && typeof (renderer as any).setSequence === 'function') {
                 (renderer as any).setSequence(currentSequence);
             }
         }

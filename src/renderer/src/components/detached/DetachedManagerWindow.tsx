@@ -163,9 +163,12 @@ const DetachedManagerWindow: React.FC<DetachedManagerWindowProps> = ({ detachedM
         }
 
         applyTimerRef.current = window.setTimeout(() => {
+            const payloadModelData = managerType === 'sequence'
+                ? { Sequences: (modelData as any)?.Sequences || [] }
+                : modelData
             const payload: DetachedManagerApplyPayload = {
                 managerType,
-                modelData,
+                modelData: payloadModelData,
                 modelPath: modelPath || undefined
             }
             emitTo('main', DETACHED_MANAGER_EVENTS.apply, payload).catch((error) => {

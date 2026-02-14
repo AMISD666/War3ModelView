@@ -4,8 +4,8 @@ import { Button, Checkbox } from 'antd';
 
 const fieldsetStyle: React.CSSProperties = {
     border: '1px solid #484848',
-    padding: '8px 12px',
-    marginBottom: 8,
+    padding: '4px 8px',
+    marginBottom: 4,
     backgroundColor: 'transparent',
     borderRadius: 0,
     height: '100%'

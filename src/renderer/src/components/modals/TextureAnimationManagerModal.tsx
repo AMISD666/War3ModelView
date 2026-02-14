@@ -168,7 +168,7 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
                         size="small"
                         title={<span style={{ fontSize: '12px' }}>{prop}</span>}
                         style={{ background: '#2d2d2d', borderColor: '#444' }}
-                        styles={{ header: { padding: '4px 12px', minHeight: 0, borderBottom: '1px solid #444' }, body: { padding: '12px' } }}
+                        styles={{ header: { padding: '4px 8px', minHeight: '32px', borderBottom: '1px solid #444' }, body: { padding: '8px' } }}
                     >
                         <DynamicField
                             label=""
@@ -216,8 +216,8 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
         if (!visible) return null
         return (
             <>
-                <div style={{ height: '100vh', padding: 12, backgroundColor: '#1f1f1f', overflow: 'hidden' }}>
-                    {renderManagerContent('calc(100vh - 24px)')}
+                <div style={{ height: '100vh', padding: 8, backgroundColor: '#1f1f1f', overflow: 'hidden' }}>
+                    {renderManagerContent('calc(100vh - 16px)')}
                 </div>
 
                 {editorVisible && (

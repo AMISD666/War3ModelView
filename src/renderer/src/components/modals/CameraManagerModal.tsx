@@ -163,13 +163,13 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({
 
         const VectorInputs = ({ value, onChange, label }: { value: number[], onChange: (val: number[]) => void, label: string }) => (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                {label && <div style={{ color: '#888', fontSize: '11px', marginBottom: 2 }}>{label}</div>}
+                {label && <div style={{ color: '#e8e8e8', fontSize: '11px', marginBottom: 2 }}>{label}</div>}
                 {['X', 'Y', 'Z'].map((axis, i) => (
                     <div key={axis} style={{ display: 'flex', alignItems: 'center' }}>
-                        <span style={{ color: '#666', width: 16, fontSize: '11px' }}>{axis}</span>
+                        <span style={{ color: '#e8e8e8', width: 16, fontSize: '11px' }}>{axis}</span>
                         <InputNumber
                             size="small"
-                            style={{ flex: 1, background: '#1a1a1a', borderColor: '#333', color: '#fff', fontSize: '12px' }}
+                            style={{ flex: 1, background: '#1a1a1a', borderColor: '#333', color: '#fff', fontSize: '11px', minWidth: '40px' }}
                             value={value[i]}
                             onChange={(v) => {
                                 const newVal = [...value]
@@ -196,7 +196,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({
         return (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4, border: '1px solid #444', padding: '4px 8px', borderRadius: 4, background: '#222' }}>
-                    <span style={{ color: '#aaa', marginRight: 8, fontSize: '12px' }}>名称:</span>
+                    <span style={{ color: '#e8e8e8', marginRight: 8, fontSize: '12px' }}>名称:</span>
                     <Input
                         size="small"
                         value={cam.Name}
@@ -205,8 +205,8 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({
                     />
                 </div>
 
-                <div style={{ display: 'flex', gap: 12 }}>
-                    <Card size="small" title={<span style={{ fontSize: '12px' }}>摄像机位置</span>} style={{ background: '#2d2d2d', borderColor: '#444', flex: 1 }} styles={{ header: { padding: '4px 12px', minHeight: 0 }, body: { padding: '8px' } }}>
+                <div style={{ display: 'flex', gap: 8 }}>
+                    <Card size="small" title={<span style={{ fontSize: '12px', color: '#fff' }}>摄像机位置</span>} style={{ background: '#2d2d2d', borderColor: '#444', flex: 1 }} styles={{ header: { padding: '4px 8px', minHeight: '32px' }, body: { padding: '8px' } }}>
                         <VectorInputs value={pos} onChange={(v) => updateStaticPos('Translation', v)} label="" />
                         <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                             <Checkbox
@@ -222,7 +222,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({
                         </div>
                     </Card>
 
-                    <Card size="small" title={<span style={{ fontSize: '12px' }}>目标位置</span>} style={{ background: '#2d2d2d', borderColor: '#444', flex: 1 }} styles={{ header: { padding: '4px 12px', minHeight: 0 }, body: { padding: '8px' } }}>
+                    <Card size="small" title={<span style={{ fontSize: '12px', color: '#fff' }}>目标位置</span>} style={{ background: '#2d2d2d', borderColor: '#444', flex: 1 }} styles={{ header: { padding: '4px 8px', minHeight: '32px' }, body: { padding: '8px' } }}>
                         <VectorInputs value={target} onChange={(v) => updateStaticPos('TargetTranslation', v)} label="" />
                         <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                             <Checkbox
@@ -239,31 +239,31 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({
                     </Card>
                 </div>
 
-                <Card size="small" title={<span style={{ fontSize: '12px' }}>裁剪与设置</span>} style={{ background: '#2d2d2d', borderColor: '#444' }} styles={{ header: { padding: '4px 12px', minHeight: 0 }, body: { padding: '12px' } }}>
-                    <Row gutter={[12, 12]}>
+                <Card size="small" title={<span style={{ fontSize: '12px', color: '#fff' }}>裁剪与设置</span>} style={{ background: '#2d2d2d', borderColor: '#444' }} styles={{ header: { padding: '4px 8px', minHeight: '32px' }, body: { padding: '8px' } }}>
+                    <Row gutter={[8, 8]}>
                         <Col span={8}>
-                            <div style={{ color: '#888', marginBottom: 2, fontSize: '11px' }}>视场角:</div>
+                            <div style={{ color: '#e8e8e8', marginBottom: 2, fontSize: '11px' }}>视场角:</div>
                             <InputNumber
                                 size="small"
-                                style={{ width: '100%', background: '#1a1a1a', borderColor: '#333', color: '#fff' }}
+                                style={{ width: '60px', background: '#1a1a1a', borderColor: '#333', color: '#fff' }}
                                 value={cam.FieldOfView}
                                 onChange={(v) => updateCamera(index, { FieldOfView: v || 0 })}
                             />
                         </Col>
                         <Col span={8}>
-                            <div style={{ color: '#888', marginBottom: 2, fontSize: '11px' }}>近裁面:</div>
+                            <div style={{ color: '#e8e8e8', marginBottom: 2, fontSize: '11px' }}>近裁面:</div>
                             <InputNumber
                                 size="small"
-                                style={{ width: '100%', background: '#1a1a1a', borderColor: '#333', color: '#fff' }}
+                                style={{ width: '60px', background: '#1a1a1a', borderColor: '#333', color: '#fff' }}
                                 value={cam.NearClip}
                                 onChange={(v) => updateCamera(index, { NearClip: v || 0 })}
                             />
                         </Col>
                         <Col span={8}>
-                            <div style={{ color: '#888', marginBottom: 2, fontSize: '11px' }}>远裁面:</div>
+                            <div style={{ color: '#e8e8e8', marginBottom: 2, fontSize: '11px' }}>远裁面:</div>
                             <InputNumber
                                 size="small"
-                                style={{ width: '100%', background: '#1a1a1a', borderColor: '#333', color: '#fff' }}
+                                style={{ width: '60px', background: '#1a1a1a', borderColor: '#333', color: '#fff' }}
                                 value={cam.FarClip}
                                 onChange={(v) => updateCamera(index, { FarClip: v || 0 })}
                             />
@@ -343,8 +343,8 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({
         if (!visible) return null
         return (
             <>
-                <div style={{ height: '100vh', padding: 12, backgroundColor: '#1f1f1f', overflow: 'hidden' }}>
-                    {renderManagerContent('calc(100vh - 24px)')}
+                <div style={{ height: '100vh', padding: 8, backgroundColor: '#1f1f1f', overflow: 'hidden' }}>
+                    {renderManagerContent('calc(100vh - 16px)')}
                 </div>
                 {editorVisible && (
                     <KeyframeEditor

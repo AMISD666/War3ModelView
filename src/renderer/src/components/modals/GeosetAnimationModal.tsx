@@ -301,39 +301,42 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
                         添加
                     </Button>
                 </div>
-                <List
-                    dataSource={localAnims}
-                    renderItem={(_item, index) => (
-                        <List.Item
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px', padding: '4px' }}>
+                    {localAnims.map((item, index) => (
+                        <div
+                            key={index}
                             onClick={() => setSelectedIndex(index)}
                             style={{
                                 cursor: 'pointer',
-                                padding: '6px 12px',
-                                backgroundColor: selectedIndex === index ? '#1677ff' : 'transparent',
+                                padding: '4px 4px',
+                                backgroundColor: selectedIndex === index ? '#1677ff' : '#2a2a2a',
                                 color: selectedIndex === index ? '#fff' : '#b0b0b0',
-                                transition: 'background 0.2s',
-                                borderBottom: '1px solid #3a3a3a',
-                                minHeight: '36px'
+                                border: '1px solid #3a3a3a',
+                                borderRadius: '2px',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                minHeight: '24px',
+                                fontSize: '11px',
+                                overflow: 'hidden'
                             }}
                         >
-                            <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                                <span style={{ fontSize: '13px' }}>Anim {index} (G:{_item.GeosetId})</span>
-                                <DeleteOutlined
-                                    onClick={(e) => {
-                                        e.stopPropagation()
-                                        handleDeleteAnim(index)
-                                    }}
-                                    style={{ color: selectedIndex === index ? '#fff' : '#ff4d4f', fontSize: '12px' }}
-                                />
-                            </div>
-                        </List.Item>
-                    )}
-                />
+                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>A{index} (G{item.GeosetId})</span>
+                            <DeleteOutlined
+                                onClick={(e) => {
+                                    e.stopPropagation()
+                                    handleDeleteAnim(index)
+                                }}
+                                style={{ color: selectedIndex === index ? '#fff' : '#ff4d4f', fontSize: '10px' }}
+                            />
+                        </div>
+                    ))}
+                </div>
             </div>
 
-            <div style={{ flex: 1, padding: '16px', overflowY: 'auto', backgroundColor: '#252525' }}>
+            <div style={{ flex: 1, padding: '12px', overflowY: 'auto', backgroundColor: '#252525' }}>
                 {selectedAnim ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                         <div style={{ display: 'flex', gap: '12px' }}>
                             <Card
                                 title={<span style={{ color: '#e8e8e8', fontSize: '13px' }}>颜色</span>}
@@ -407,7 +410,7 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
                                                 step={0.1}
                                                 min={0}
                                                 max={1}
-                                                style={{ width: '60px', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8', fontSize: '12px' }}
+                                                style={{ width: '50px', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8', fontSize: '11px' }}
                                             />
                                             <span style={{ color: '#888', fontSize: '11px' }}>静态透明度</span>
                                         </div>
@@ -421,10 +424,10 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
                             size="small"
                             bordered={false}
                             style={{ background: '#333333', border: '1px solid #4a4a4a' }}
-                            styles={{ header: { borderBottom: '1px solid #4a4a4a', padding: '4px 12px' }, body: { padding: '12px' } }}
+                            styles={{ header: { borderBottom: '1px solid #4a4a4a', padding: '4px 8px', minHeight: '32px' }, body: { padding: '8px' } }}
                         >
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                     <Text style={{ minWidth: '80px', color: '#b0b0b0', fontSize: '12px' }}>Geoset 目标:</Text>
                                     <Select
                                         size="small"
@@ -472,8 +475,8 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
         <>
             {asWindow ? (
                 visible ? (
-                    <div style={{ height: '100vh', padding: 12, backgroundColor: '#1f1f1f', overflow: 'hidden' }}>
-                        {renderEditorContent('calc(100vh - 24px)')}
+                    <div style={{ height: '100vh', padding: 8, backgroundColor: '#1f1f1f', overflow: 'hidden' }}>
+                        {renderEditorContent('calc(100vh - 16px)')}
                     </div>
                 ) : null
             ) : (

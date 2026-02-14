@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Button, List, Card, Checkbox, InputNumber, Select, Typography, message, Row, Col } from 'antd'
+import { Button, List, Card, Checkbox, InputNumber, Select, Typography, message, Row, Col, Input } from 'antd'
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { DraggableModal } from '../DraggableModal'
 import KeyframeEditor from '../editors/KeyframeEditor'
@@ -90,11 +90,14 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const [isKeyframeEditorOpen, setIsKeyframeEditorOpen] = useState(false)
     const [editingField, setEditingField] = useState<string | null>(null)
     const [editingVectorSize, setEditingVectorSize] = useState(1)
+    const [isTextureAnimIdEditorOpen, setIsTextureAnimIdEditorOpen] = useState(false)
+    const [textureAnimIdEditorText, setTextureAnimIdEditorText] = useState('')
 
     const isInitialized = React.useRef(false)
     const materialListRef = React.useRef<HTMLDivElement>(null)
     const layerListRef = React.useRef<HTMLDivElement>(null)
     const textureDropZoneRef = React.useRef<HTMLDivElement>(null)
+    const textureAnimIdInputRef = React.useRef<any>(null)
     const dragOverLayerIndexRef = React.useRef<number | null>(null)
     const originalMaterialsRef = React.useRef<any[] | null>(null)
     const originalTexturesRef = React.useRef<any[] | null>(null)
@@ -128,7 +131,11 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                 }
                 setLocalMaterials(normalized)
                 setSelectedMaterialIndex(modelData.Materials.length > 0 ? 0 : -1)
-                setSelectedLayerIndex(-1)
+                setSelectedLayerIndex(
+                    modelData.Materials.length > 0 && Array.isArray(normalized[0]?.Layers) && normalized[0].Layers.length > 0
+                        ? 0
+                        : -1
+                )
                 isInitialized.current = true
             }
         } else {
@@ -159,7 +166,8 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             const materialId = modelData.Geosets[initialPickedIndex].MaterialID
             if (materialId !== undefined && materialId >= 0 && materialId < localMaterials.length) {
                 setSelectedMaterialIndex(materialId)
-                setSelectedLayerIndex(-1)
+                const layers = localMaterials[materialId]?.Layers
+                setSelectedLayerIndex(Array.isArray(layers) && layers.length > 0 ? 0 : -1)
                 console.log('[MaterialEditor] Initial auto-selected material', materialId, 'for geoset', initialPickedIndex)
             }
         }
@@ -174,7 +182,8 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                     const materialId = modelData.Geosets[pickedGeosetIndex].MaterialID
                     if (materialId !== undefined && materialId >= 0 && materialId < localMaterials.length) {
                         setSelectedMaterialIndex(materialId)
-                        setSelectedLayerIndex(-1)
+                        const layers = localMaterials[materialId]?.Layers
+                        setSelectedLayerIndex(Array.isArray(layers) && layers.length > 0 ? 0 : -1)
                         console.log('[MaterialEditor] Auto-selected material', materialId, 'for geoset', pickedGeosetIndex)
                     }
                 }
@@ -202,6 +211,21 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         didRealtimePreviewRef.current = true
         setMaterials(denormalizeMaterialsForSave(localMaterials))
     }, [visible, asWindow, localMaterials, setMaterials])
+
+    useEffect(() => {
+        if (selectedMaterialIndex < 0) {
+            if (selectedLayerIndex !== -1) setSelectedLayerIndex(-1)
+            return
+        }
+        const layers = localMaterials[selectedMaterialIndex]?.Layers || []
+        if (!Array.isArray(layers) || layers.length === 0) {
+            if (selectedLayerIndex !== -1) setSelectedLayerIndex(-1)
+            return
+        }
+        if (selectedLayerIndex < 0 || selectedLayerIndex >= layers.length) {
+            setSelectedLayerIndex(0)
+        }
+    }, [localMaterials, selectedMaterialIndex, selectedLayerIndex])
 
     const handleOk = () => {
         // Convert boolean flags back to Shading bitmask before saving
@@ -349,8 +373,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         const newMaterial = { PriorityPlane: 0, RenderMode: 0, Layers: [defaultLayer] }
         setLocalMaterials([...localMaterials, newMaterial])
         setSelectedMaterialIndex(localMaterials.length)
-        // Don't auto-select layer - stay on material view to prevent flickering
-        setSelectedLayerIndex(-1)
+        setSelectedLayerIndex(0)
         // Auto-scroll to the new material after state update
         setTimeout(() => {
             if (materialListRef.current) {
@@ -426,6 +449,32 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         setEditingField(field)
         setEditingVectorSize(vectorSize)
         setIsKeyframeEditorOpen(true)
+    }
+
+    const openTextureAnimIdTextEditor = () => {
+        if (selectedMaterialIndex < 0 || selectedLayerIndex < 0) return
+        const layer = localMaterials[selectedMaterialIndex]?.Layers?.[selectedLayerIndex]
+        if (!layer) return
+        const currentId = layer.TVertexAnimId === null || layer.TVertexAnimId === undefined ? -1 : layer.TVertexAnimId
+        setTextureAnimIdEditorText(String(currentId))
+        setIsTextureAnimIdEditorOpen(true)
+    }
+
+    const handleTextureAnimIdTextSave = () => {
+        if (selectedMaterialIndex < 0 || selectedLayerIndex < 0) return
+        const raw = textureAnimIdEditorText.trim()
+        const match = raw.match(/-?\d+/)
+        if (!match) {
+            message.warning('请输入整数ID（-1 表示无）')
+            return
+        }
+        const parsed = Number.parseInt(match[0], 10)
+        if (!Number.isFinite(parsed) || parsed < -1) {
+            message.warning('贴图动画ID无效，请输入 -1 或非负整数')
+            return
+        }
+        updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TVertexAnimId: parsed === -1 ? null : parsed }, true)
+        setIsTextureAnimIdEditorOpen(false)
     }
 
     const handleKeyframeSave = (animVector: any) => {
@@ -811,43 +860,47 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                         添加材质
                     </Button>
                 </div>
-                <List
-                    dataSource={localMaterials}
-                    renderItem={(_item, index) => (
-                        <List.Item
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px', padding: '4px' }}>
+                    {localMaterials.map((_item, index) => (
+                        <div
+                            key={index}
                             onClick={() => {
                                 setSelectedMaterialIndex(index)
-                                setSelectedLayerIndex(-1)
+                                const layers = localMaterials[index]?.Layers
+                                setSelectedLayerIndex(Array.isArray(layers) && layers.length > 0 ? 0 : -1)
                             }}
                             style={{
                                 cursor: 'pointer',
-                                padding: '6px 12px',
-                                backgroundColor: selectedMaterialIndex === index ? '#1677ff' : 'transparent',
+                                padding: '4px 4px',
+                                backgroundColor: selectedMaterialIndex === index ? '#1677ff' : '#2a2a2a',
                                 color: selectedMaterialIndex === index ? '#fff' : '#b0b0b0',
-                                borderBottom: '1px solid #3a3a3a',
-                                minHeight: '36px'
+                                border: '1px solid #3a3a3a',
+                                borderRadius: '2px',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                minHeight: '24px',
+                                fontSize: '11px'
                             }}
                         >
-                            <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                                <span style={{ fontSize: '13px' }}>材质 {index}</span>
-                                <DeleteOutlined
-                                    onClick={(e) => {
-                                        e.stopPropagation()
-                                        handleDeleteMaterial(index)
-                                    }}
-                                    style={{ color: selectedMaterialIndex === index ? '#fff' : '#ff4d4f', fontSize: '12px' }}
-                                />
-                            </div>
-                        </List.Item>
-                    )}
-                />
+                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>M{index}</span>
+                            <DeleteOutlined
+                                onClick={(e) => {
+                                    e.stopPropagation()
+                                    handleDeleteMaterial(index)
+                                }}
+                                style={{ color: selectedMaterialIndex === index ? '#fff' : '#ff4d4f', fontSize: '10px' }}
+                            />
+                        </div>
+                    ))}
+                </div>
             </div>
 
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', backgroundColor: '#252525', overflow: 'hidden' }}>
                 {selectedMaterial ? (
                     <div style={{ display: 'flex', height: '100%' }}>
                         {/* Layer List */}
-                        <div style={{ width: '220px', borderRight: '1px solid #4a4a4a', display: 'flex', flexDirection: 'column', backgroundColor: '#2a2a2a' }}>
+                        <div style={{ width: '150px', borderRight: '1px solid #4a4a4a', display: 'flex', flexDirection: 'column', backgroundColor: '#2a2a2a' }}>
                             <div style={{ padding: '8px', borderBottom: '1px solid #4a4a4a', backgroundColor: '#333' }}>
                                 <Button
                                     type="primary"
@@ -868,7 +921,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                                         onMouseDown={(e) => handleLayerMouseDown(e, lIdx)}
                                         onClick={() => setSelectedLayerIndex(lIdx)}
                                         style={{
-                                            padding: '6px 12px',
+                                            padding: '4px 8px',
                                             cursor: 'pointer',
                                             backgroundColor: selectedLayerIndex === lIdx ? '#1677ff' : (dragLayerIndex === lIdx ? '#444' : (dragOverLayerIndex === lIdx ? '#555' : 'transparent')),
                                             color: selectedLayerIndex === lIdx ? '#fff' : '#b0b0b0',
@@ -876,7 +929,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                                             display: 'flex',
                                             alignItems: 'center',
                                             justifyContent: 'space-between',
-                                            minHeight: '36px',
+                                            minHeight: '32px',
                                             opacity: dragLayerIndex === lIdx ? 0.5 : 1
                                         }}
                                     >
@@ -910,6 +963,31 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                                 </div>
                             )}
 
+                            <Card
+                                title={<span style={{ color: '#b0b0b0', fontSize: '12px' }}>材质属性</span>}
+                                size="small"
+                                bordered={false}
+                                style={{ background: '#333333', border: '1px solid #4a4a4a' }}
+                                styles={{ header: { padding: '4px 8px', minHeight: '32px', borderBottom: '1px solid #4a4a4a' }, body: { padding: '8px' } }}
+                            >
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                        <Text style={{ color: '#b0b0b0', fontSize: '12px' }}>优先级</Text>
+                                        <InputNumber
+                                            size="small"
+                                            value={selectedMaterial.PriorityPlane || 0}
+                                            onChange={(v) => updateLocalMaterial(selectedMaterialIndex, { PriorityPlane: v })}
+                                            style={{ width: '70px', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
+                                        />
+                                    </div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                                        <Checkbox checked={selectedMaterial.ConstantColor} onChange={(e) => updateLocalMaterial(selectedMaterialIndex, { ConstantColor: e.target.checked })} style={{ color: '#e8e8e8', fontSize: '11px' }}>固定颜色</Checkbox>
+                                        <Checkbox checked={selectedMaterial.SortPrimsFarZ} onChange={(e) => updateLocalMaterial(selectedMaterialIndex, { SortPrimsFarZ: e.target.checked })} style={{ color: '#e8e8e8', fontSize: '11px' }}>远Z排序</Checkbox>
+                                        <Checkbox checked={selectedMaterial.FullResolution} onChange={(e) => updateLocalMaterial(selectedMaterialIndex, { FullResolution: e.target.checked })} style={{ color: '#e8e8e8', fontSize: '11px' }}>全分辨率</Checkbox>
+                                    </div>
+                                </div>
+                            </Card>
+
                             {selectedLayer ? (
                                 <>
                                     <Card
@@ -917,10 +995,10 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                                         size="small"
                                         bordered={false}
                                         style={{ background: '#333333', border: '1px solid #4a4a4a' }}
-                                        styles={{ header: { borderBottom: '1px solid #4a4a4a', padding: '4px 12px' }, body: { padding: '12px' } }}
+                                        styles={{ header: { borderBottom: '1px solid #4a4a4a', padding: '4px 8px', minHeight: '32px' }, body: { padding: '8px' } }}
                                     >
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                 <Text style={{ minWidth: '70px', color: '#b0b0b0', fontSize: '12px' }}>贴图:</Text>
                                                 <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8 }}>
                                                     <Select
@@ -938,12 +1016,12 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                                                         ]}
                                                     />
                                                     {typeof selectedLayer.TextureID !== 'number' && (
-                                                        <Button size="small" type="link" onClick={() => openKeyframeEditor('TextureID', 1)} style={{ padding: 0, height: 'auto' }}>Edit</Button>
+                                                        <Button size="small" type="link" onClick={() => openKeyframeEditor('TextureID', 1)} style={{ padding: 0, height: 'auto' }}>编辑</Button>
                                                     )}
                                                 </div>
                                             </div>
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                                <Text style={{ minWidth: '70px', color: '#b0b0b0', fontSize: '12px' }}>Filter:</Text>
+                                                <Text style={{ minWidth: '70px', color: '#b0b0b0', fontSize: '12px' }}>滤镜:</Text>
                                                 <Select
                                                     size="small"
                                                     style={{ flex: 1 }}
@@ -957,21 +1035,31 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                                     </Card>
 
                                     <Card
-                                        title={<span style={{ color: '#e8e8e8', fontSize: '13px' }}>Alpha & Animation</span>}
+                                        title={<span style={{ color: '#e8e8e8', fontSize: '13px' }}>透明度与动画</span>}
                                         size="small"
                                         bordered={false}
                                         style={{ background: '#333333', border: '1px solid #4a4a4a' }}
-                                        styles={{ header: { borderBottom: '1px solid #4a4a4a', padding: '4px 12px' }, body: { padding: '12px' } }}
+                                        styles={{ header: { borderBottom: '1px solid #4a4a4a', padding: '4px 8px', minHeight: '32px' }, body: { padding: '8px' } }}
                                     >
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                                                 <Checkbox
                                                     checked={typeof selectedLayer.Alpha !== 'number'}
                                                     onChange={(e) => handleAnimToggle('Alpha', e.target.checked)}
                                                     style={{ color: '#e8e8e8', fontSize: '12px' }}
                                                 >
-                                                    Anim Alpha
+                                                    动态透明度
                                                 </Checkbox>
+                                                <InputNumber
+                                                    size="small"
+                                                    value={typeof selectedLayer.Alpha === 'number' ? selectedLayer.Alpha : undefined}
+                                                    onChange={(v) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { Alpha: v ?? 1 }, true)}
+                                                    step={0.1}
+                                                    min={0}
+                                                    max={1}
+                                                    disabled={typeof selectedLayer.Alpha !== 'number'}
+                                                    style={{ width: '80px', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8', fontSize: '12px' }}
+                                                />
                                                 {typeof selectedLayer.Alpha !== 'number' && (
                                                     <Button
                                                         type="link"
@@ -983,29 +1071,31 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                                                     </Button>
                                                 )}
                                             </div>
-                                            {typeof selectedLayer.Alpha === 'number' && (
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                                    <InputNumber
-                                                        size="small"
-                                                        value={selectedLayer.Alpha}
-                                                        onChange={(v) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { Alpha: v }, true)}
-                                                        step={0.1}
-                                                        min={0}
-                                                        max={1}
-                                                        style={{ width: '80px', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8', fontSize: '12px' }}
-                                                    />
-                                                    <span style={{ color: '#888', fontSize: '11px' }}>Static Alpha</span>
-                                                </div>
-                                            )}
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: 4 }}>
-                                                <Text style={{ minWidth: '70px', color: '#b0b0b0', fontSize: '12px' }}>Anim ID:</Text>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                                <Checkbox
+                                                    checked={selectedLayer.TVertexAnimId !== null && selectedLayer.TVertexAnimId !== undefined}
+                                                    onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TVertexAnimId: e.target.checked ? 0 : null }, true)}
+                                                    style={{ color: '#e8e8e8', fontSize: '12px' }}
+                                                >
+                                                    贴图动画ID
+                                                </Checkbox>
                                                 <InputNumber
+                                                    ref={textureAnimIdInputRef}
                                                     size="small"
                                                     value={selectedLayer.TVertexAnimId === null ? -1 : selectedLayer.TVertexAnimId}
                                                     onChange={(v) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TVertexAnimId: v === -1 ? null : v }, true)}
-                                                    style={{ width: '80px', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8', fontSize: '12px' }}
+                                                    disabled={selectedLayer.TVertexAnimId === null || selectedLayer.TVertexAnimId === undefined}
+                                                    style={{ width: '50px', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8', fontSize: '11px' }}
                                                 />
-                                                <span style={{ color: '#888', fontSize: '11px' }}>-1 for None</span>
+                                                <Button
+                                                    type="link"
+                                                    size="small"
+                                                    disabled={selectedLayer.TVertexAnimId === null || selectedLayer.TVertexAnimId === undefined}
+                                                    onClick={openTextureAnimIdTextEditor}
+                                                    style={{ color: '#1677ff', padding: 0, height: 'auto', fontSize: '12px' }}
+                                                >
+                                                    编辑
+                                                </Button>
                                             </div>
                                         </div>
                                     </Card>
@@ -1018,34 +1108,18 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                                         styles={{ header: { borderBottom: '1px solid #4a4a4a', padding: '4px 12px' }, body: { padding: '12px' } }}
                                     >
                                         <Row gutter={[8, 8]}>
-                                            <Col span={12}><Checkbox checked={selectedLayer.Unshaded} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { Unshaded: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '11px' }}>Unshaded</Checkbox></Col>
-                                            <Col span={12}><Checkbox checked={selectedLayer.SphereEnvMap} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { SphereEnvMap: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '11px' }}>SphereEnv</Checkbox></Col>
-                                            <Col span={12}><Checkbox checked={selectedLayer.TwoSided} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TwoSided: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '11px' }}>TwoSided</Checkbox></Col>
-                                            <Col span={12}><Checkbox checked={selectedLayer.Unfogged} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { Unfogged: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '11px' }}>Unfogged</Checkbox></Col>
-                                            <Col span={12}><Checkbox checked={selectedLayer.NoDepthTest} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { NoDepthTest: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '11px' }}>NoDepthTest</Checkbox></Col>
-                                            <Col span={12}><Checkbox checked={selectedLayer.NoDepthSet} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { NoDepthSet: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '11px' }}>NoDepthSet</Checkbox></Col>
+                                            <Col span={12}><Checkbox checked={selectedLayer.Unshaded} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { Unshaded: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '11px' }}>无阴影</Checkbox></Col>
+                                            <Col span={12}><Checkbox checked={selectedLayer.SphereEnvMap} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { SphereEnvMap: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '11px' }}>球面环境映射</Checkbox></Col>
+                                            <Col span={12}><Checkbox checked={selectedLayer.TwoSided} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TwoSided: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '11px' }}>双面</Checkbox></Col>
+                                            <Col span={12}><Checkbox checked={selectedLayer.Unfogged} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { Unfogged: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '11px' }}>无雾</Checkbox></Col>
+                                            <Col span={12}><Checkbox checked={selectedLayer.NoDepthTest} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { NoDepthTest: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '11px' }}>禁用深度测试</Checkbox></Col>
+                                            <Col span={12}><Checkbox checked={selectedLayer.NoDepthSet} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { NoDepthSet: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '11px' }}>禁用深度写入</Checkbox></Col>
                                         </Row>
                                     </Card>
                                 </>
                             ) : (
-                                <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#888', gap: 12 }}>
-                                    <Text style={{ color: '#888', fontSize: '13px' }}>请从列表中选择一个图层</Text>
-                                    <Card title={<span style={{ color: '#b0b0b0', fontSize: '12px' }}>材质设置</span>} size="small" style={{ background: '#333333', border: '1px solid #4a4a4a', width: '240px' }} styles={{ body: { padding: '12px' } }}>
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                                <Text style={{ color: '#b0b0b0', fontSize: '12px' }}>优先级:</Text>
-                                                <InputNumber
-                                                    size="small"
-                                                    value={selectedMaterial.PriorityPlane || 0}
-                                                    onChange={(v) => updateLocalMaterial(selectedMaterialIndex, { PriorityPlane: v })}
-                                                    style={{ width: '80px', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
-                                                />
-                                            </div>
-                                            <Checkbox checked={selectedMaterial.ConstantColor} onChange={(e) => updateLocalMaterial(selectedMaterialIndex, { ConstantColor: e.target.checked })} style={{ color: '#e8e8e8', fontSize: '11px' }}>Constant Color</Checkbox>
-                                            <Checkbox checked={selectedMaterial.SortPrimsFarZ} onChange={(e) => updateLocalMaterial(selectedMaterialIndex, { SortPrimsFarZ: e.target.checked })} style={{ color: '#e8e8e8', fontSize: '11px' }}>Sort Far Z</Checkbox>
-                                            <Checkbox checked={selectedMaterial.FullResolution} onChange={(e) => updateLocalMaterial(selectedMaterialIndex, { FullResolution: e.target.checked })} style={{ color: '#e8e8e8', fontSize: '11px' }}>Full Resolution</Checkbox>
-                                        </div>
-                                    </Card>
+                                <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '120px', color: '#888' }}>
+                                    <Text style={{ color: '#888', fontSize: '13px' }}>请从图层列表中选择一个图层</Text>
                                 </div>
                             )}
                         </div>
@@ -1072,12 +1146,38 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         />
     ) : null
 
+    const textureAnimIdEditorNode = (
+        <DraggableModal
+            title="编辑贴图动画ID"
+            open={isTextureAnimIdEditorOpen}
+            onCancel={() => setIsTextureAnimIdEditorOpen(false)}
+            onOk={handleTextureAnimIdTextSave}
+            okText="应用"
+            cancelText="取消"
+            width={380}
+            maskClosable={false}
+            wrapClassName="dark-theme-modal"
+            styles={{ body: { padding: 12, backgroundColor: '#252525' } }}
+        >
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <Text style={{ color: '#b0b0b0', fontSize: '12px' }}>请输入贴图动画ID文本（-1表示无）</Text>
+                <Input.TextArea
+                    value={textureAnimIdEditorText}
+                    onChange={(e) => setTextureAnimIdEditorText(e.target.value)}
+                    autoSize={{ minRows: 3, maxRows: 6 }}
+                    style={{ fontFamily: 'Consolas, monospace', backgroundColor: '#1f1f1f', color: '#e8e8e8', borderColor: '#4a4a4a' }}
+                />
+            </div>
+        </DraggableModal>
+    )
+
     if (asWindow) {
         if (!visible) return null
         return (
-            <div style={{ height: '100vh', padding: 12, backgroundColor: '#1f1f1f', overflow: 'hidden' }}>
-                {renderEditorContent('calc(100vh - 24px)')}
+            <div style={{ height: '100vh', padding: 8, backgroundColor: '#1f1f1f', overflow: 'hidden' }}>
+                {renderEditorContent('calc(100vh - 16px)')}
                 {keyframeEditorNode}
+                {textureAnimIdEditorNode}
             </div>
         )
     }
@@ -1097,6 +1197,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         >
             {renderEditorContent()}
             {keyframeEditorNode}
+            {textureAnimIdEditorNode}
         </DraggableModal>
     )
 }
