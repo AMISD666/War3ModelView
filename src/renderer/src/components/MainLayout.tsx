@@ -53,6 +53,223 @@ import {
     getDetachedManagerQuery
 } from '../constants/detachedWindows';
 
+type DetachedSnapshotField = {
+    key: string
+    aliases?: string[]
+}
+
+const readDetachedFieldValue = (source: any, field: DetachedSnapshotField): any => {
+    if (!source || typeof source !== 'object') return undefined
+    if (Object.prototype.hasOwnProperty.call(source, field.key)) {
+        return source[field.key]
+    }
+    for (const alias of field.aliases || []) {
+        if (Object.prototype.hasOwnProperty.call(source, alias)) {
+            return source[alias]
+        }
+    }
+    return undefined
+}
+
+const toSlimGeoset = (geoset: any) => ({
+    MaterialID: typeof geoset?.MaterialID === 'number' ? geoset.MaterialID : 0,
+    SelectionGroup: typeof geoset?.SelectionGroup === 'number' ? geoset.SelectionGroup : 0,
+    VertexCount: ArrayBuffer.isView(geoset?.Vertices) || Array.isArray(geoset?.Vertices)
+        ? Math.floor((geoset.Vertices.length || 0) / 3)
+        : 0,
+    FaceCount: ArrayBuffer.isView(geoset?.Faces) || Array.isArray(geoset?.Faces)
+        ? Math.floor((geoset.Faces.length || 0) / 3)
+        : 0
+})
+
+const toSlimMaterialsForTextureAnim = (materials: any[]): any[] => {
+    if (!Array.isArray(materials)) return []
+    return materials.map((material) => ({
+        Layers: Array.isArray(material?.Layers)
+            ? material.Layers.map((layer: any) => ({
+                TVertexAnimId: layer?.TVertexAnimId ?? layer?.TextureAnimationId ?? layer?.TextureAnimId ?? null
+            }))
+            : []
+    }))
+}
+
+const DETACHED_MANAGER_SEQUENCE_FIELDS: DetachedSnapshotField[] = [
+    { key: 'Sequences', aliases: ['Sequence'] },
+    { key: 'GeosetAnims', aliases: ['GeosetAnim'] },
+    { key: 'TextureAnims', aliases: ['TextureAnim'] },
+    { key: 'Materials', aliases: ['Material'] },
+    { key: 'Cameras', aliases: ['Camera'] },
+    { key: 'Bones', aliases: ['Bone'] },
+    { key: 'Helpers', aliases: ['Helper'] },
+    { key: 'Attachments', aliases: ['Attachment'] },
+    { key: 'Lights', aliases: ['Light'] },
+    { key: 'ParticleEmitters', aliases: ['ParticleEmitter'] },
+    { key: 'ParticleEmitters2', aliases: ['ParticleEmitter2'] },
+    { key: 'ParticleEmitterPopcorns', aliases: ['ParticleEmitterPopcorn'] },
+    { key: 'RibbonEmitters', aliases: ['RibbonEmitter'] },
+    { key: 'EventObjects', aliases: ['EventObject'] },
+    { key: 'CollisionShapes', aliases: ['CollisionShape'] }
+]
+
+const buildDetachedManagerSnapshotModelData = (managerType: DetachedManagerType, source: any): any => {
+    if (!source || typeof source !== 'object') return null
+
+    switch (managerType) {
+        case 'camera':
+            return {
+                Cameras: readDetachedFieldValue(source, { key: 'Cameras', aliases: ['Camera'] }) || [],
+                GlobalSequences: readDetachedFieldValue(source, { key: 'GlobalSequences', aliases: ['GlobalSequence'] }) || []
+            }
+        case 'geoset': {
+            const geosets = readDetachedFieldValue(source, { key: 'Geosets', aliases: ['Geoset'] }) || []
+            const materials = readDetachedFieldValue(source, { key: 'Materials', aliases: ['Material'] }) || []
+            return {
+                Geosets: Array.isArray(geosets) ? geosets.map(toSlimGeoset) : [],
+                Materials: Array.isArray(materials) ? materials.map(() => ({})) : []
+            }
+        }
+        case 'geosetAnim': {
+            const geosetAnims = readDetachedFieldValue(source, { key: 'GeosetAnims', aliases: ['GeosetAnim'] }) || []
+            const geosets = readDetachedFieldValue(source, { key: 'Geosets', aliases: ['Geoset'] }) || []
+            const globalSequences = readDetachedFieldValue(source, { key: 'GlobalSequences', aliases: ['GlobalSequence'] }) || []
+            return {
+                GeosetAnims: Array.isArray(geosetAnims) ? geosetAnims : [],
+                Geosets: Array.isArray(geosets) ? geosets.map(toSlimGeoset) : [],
+                GlobalSequences: Array.isArray(globalSequences) ? globalSequences : []
+            }
+        }
+        case 'textureAnim': {
+            const textureAnims = readDetachedFieldValue(source, { key: 'TextureAnims', aliases: ['TextureAnim'] }) || []
+            const geosets = readDetachedFieldValue(source, { key: 'Geosets', aliases: ['Geoset'] }) || []
+            const materials = readDetachedFieldValue(source, { key: 'Materials', aliases: ['Material'] }) || []
+            const globalSequences = readDetachedFieldValue(source, { key: 'GlobalSequences', aliases: ['GlobalSequence'] }) || []
+            return {
+                TextureAnims: Array.isArray(textureAnims) ? textureAnims : [],
+                Geosets: Array.isArray(geosets) ? geosets.map(toSlimGeoset) : [],
+                Materials: toSlimMaterialsForTextureAnim(materials),
+                GlobalSequences: Array.isArray(globalSequences) ? globalSequences : []
+            }
+        }
+        case 'material': {
+            const materials = readDetachedFieldValue(source, { key: 'Materials', aliases: ['Material'] }) || []
+            const textures = readDetachedFieldValue(source, { key: 'Textures', aliases: ['Texture'] }) || []
+            const geosets = readDetachedFieldValue(source, { key: 'Geosets', aliases: ['Geoset'] }) || []
+            const textureAnims = readDetachedFieldValue(source, { key: 'TextureAnims', aliases: ['TextureAnim'] }) || []
+            const globalSequences = readDetachedFieldValue(source, { key: 'GlobalSequences', aliases: ['GlobalSequence'] }) || []
+            return {
+                Materials: Array.isArray(materials) ? materials : [],
+                Textures: Array.isArray(textures) ? textures : [],
+                Geosets: Array.isArray(geosets) ? geosets.map(toSlimGeoset) : [],
+                TextureAnims: Array.isArray(textureAnims) ? textureAnims : [],
+                GlobalSequences: Array.isArray(globalSequences) ? globalSequences : []
+            }
+        }
+        case 'sequence': {
+            const snapshot: any = {}
+            for (const field of DETACHED_MANAGER_SEQUENCE_FIELDS) {
+                const value = readDetachedFieldValue(source, field)
+                if (value !== undefined) {
+                    snapshot[field.key] = value
+                }
+            }
+            return snapshot
+        }
+        case 'globalSequence':
+            return {
+                GlobalSequences: readDetachedFieldValue(source, { key: 'GlobalSequences', aliases: ['GlobalSequence'] }) || []
+            }
+        default:
+            return null
+    }
+}
+
+const mergeGeosetBindings = (
+    baseGeosets: any[] | undefined,
+    incomingGeosets: any[] | undefined,
+    options: { includeSelectionGroup: boolean }
+): any[] => {
+    if (!Array.isArray(baseGeosets)) return Array.isArray(incomingGeosets) ? incomingGeosets : []
+    if (!Array.isArray(incomingGeosets)) return baseGeosets
+
+    const nextGeosets = [...baseGeosets]
+    const count = Math.min(nextGeosets.length, incomingGeosets.length)
+    for (let index = 0; index < count; index++) {
+        const incoming = incomingGeosets[index]
+        if (!incoming || typeof incoming !== 'object') continue
+        const patch: any = {}
+        if (typeof incoming.MaterialID === 'number') {
+            patch.MaterialID = incoming.MaterialID
+        }
+        if (options.includeSelectionGroup && typeof incoming.SelectionGroup === 'number') {
+            patch.SelectionGroup = incoming.SelectionGroup
+        }
+        if (Object.keys(patch).length > 0) {
+            nextGeosets[index] = { ...nextGeosets[index], ...patch }
+        }
+    }
+    return nextGeosets
+}
+
+const mergeDetachedManagerModelData = (
+    managerType: DetachedManagerType,
+    baseModelData: any,
+    incomingModelData: any
+): any => {
+    if (!incomingModelData) return baseModelData
+    if (!baseModelData) return incomingModelData
+
+    const merged = { ...baseModelData }
+
+    switch (managerType) {
+        case 'camera': {
+            const cameras = readDetachedFieldValue(incomingModelData, { key: 'Cameras', aliases: ['Camera'] })
+            if (cameras !== undefined) merged.Cameras = cameras
+            return merged
+        }
+        case 'geoset': {
+            const geosets = readDetachedFieldValue(incomingModelData, { key: 'Geosets', aliases: ['Geoset'] })
+            merged.Geosets = mergeGeosetBindings(baseModelData.Geosets, geosets, { includeSelectionGroup: true })
+            return merged
+        }
+        case 'geosetAnim': {
+            const geosetAnims = readDetachedFieldValue(incomingModelData, { key: 'GeosetAnims', aliases: ['GeosetAnim'] })
+            if (geosetAnims !== undefined) merged.GeosetAnims = geosetAnims
+            return merged
+        }
+        case 'textureAnim': {
+            const textureAnims = readDetachedFieldValue(incomingModelData, { key: 'TextureAnims', aliases: ['TextureAnim'] })
+            if (textureAnims !== undefined) merged.TextureAnims = textureAnims
+            return merged
+        }
+        case 'material': {
+            const materials = readDetachedFieldValue(incomingModelData, { key: 'Materials', aliases: ['Material'] })
+            const textures = readDetachedFieldValue(incomingModelData, { key: 'Textures', aliases: ['Texture'] })
+            const geosets = readDetachedFieldValue(incomingModelData, { key: 'Geosets', aliases: ['Geoset'] })
+
+            if (materials !== undefined) merged.Materials = materials
+            if (textures !== undefined) merged.Textures = textures
+            merged.Geosets = mergeGeosetBindings(baseModelData.Geosets, geosets, { includeSelectionGroup: false })
+            return merged
+        }
+        case 'sequence': {
+            for (const field of DETACHED_MANAGER_SEQUENCE_FIELDS) {
+                const value = readDetachedFieldValue(incomingModelData, field)
+                if (value !== undefined) {
+                    merged[field.key] = value
+                }
+            }
+            return merged
+        }
+        case 'globalSequence': {
+            const globalSequences = readDetachedFieldValue(incomingModelData, { key: 'GlobalSequences', aliases: ['GlobalSequence'] })
+            if (globalSequences !== undefined) merged.GlobalSequences = globalSequences
+            return merged
+        }
+        default:
+            return merged
+    }
+}
+
 /**
  * Normalize model data before saving to ensure typed arrays are correct.
  * The war3-model library expects Uint32Array for Intervals and Float32Array for extents,
@@ -1671,6 +1888,7 @@ const MainLayout: React.FC = () => {
         }
         return added
     }, [addTab])
+    const hasModelData = Boolean(modelData)
 
     const cloneTexturesForSync = useCallback((textures: any[]): any[] => {
         try {
@@ -1829,62 +2047,16 @@ const MainLayout: React.FC = () => {
         return windowTitles[managerType]
     }, [])
 
-    const waitForDetachedManagerLifecycle = useCallback(async (
-        eventKey: 'ready' | 'hydrated',
-        managerType: DetachedManagerType,
-        windowLabel: string,
-        timeoutMs: number
-    ) => {
-        await new Promise<void>((resolve) => {
-            let settled = false
-            let timeoutId: number | null = null
-            let unlistenLifecycle: (() => void) | null = null
-
-            const finish = () => {
-                if (settled) return
-                settled = true
-                if (timeoutId !== null) {
-                    window.clearTimeout(timeoutId)
-                }
-                if (unlistenLifecycle) {
-                    unlistenLifecycle()
-                    unlistenLifecycle = null
-                }
-                resolve()
-            }
-
-            timeoutId = window.setTimeout(finish, timeoutMs)
-
-            listen<DetachedManagerLifecyclePayload>(DETACHED_MANAGER_EVENTS[eventKey], (event) => {
-                const payload = event.payload
-                if (!payload || payload.managerType !== managerType || payload.windowLabel !== windowLabel) {
-                    return
-                }
-                if (eventKey === 'hydrated') {
-                    detachedManagerHydratedRef.current[managerType] = true
-                }
-                finish()
-            }).then((dispose) => {
-                if (settled) {
-                    dispose()
-                    return
-                }
-                unlistenLifecycle = dispose
-            }).catch((error) => {
-                console.warn(`[MainLayout] detached manager ${eventKey} listener setup failed:`, error)
-                finish()
-            })
-        })
-    }, [])
-
     const ensureDetachedManagerWindow = useCallback(async (managerType: DetachedManagerType, showOnReady: boolean) => {
         const windowLabel = getDetachedManagerLabel(managerType)
         const windowQuery = getDetachedManagerQuery(managerType)
         const windowTitle = getDetachedManagerWindowTitle(managerType)
 
         let windowInstance = await WebviewWindow.getByLabel(windowLabel)
+        const hadExistingWindow = Boolean(windowInstance)
 
         if (!windowInstance) {
+            detachedManagerHydratedRef.current[managerType] = false
             if (!detachedManagerWindowPromiseRef.current[managerType]) {
                 detachedManagerWindowPromiseRef.current[managerType] = (async () => {
                     const windowOptions: any = {
@@ -1923,11 +2095,13 @@ const MainLayout: React.FC = () => {
         const pushSnapshot = async () => {
             const { modelData: currentModelData, modelPath: currentModelPath } = useModelStore.getState()
             if (!currentModelData) return
+            const snapshotModelData = buildDetachedManagerSnapshotModelData(managerType, currentModelData)
+            if (!snapshotModelData) return
 
             try {
                 await emitTo(windowLabel, DETACHED_MANAGER_EVENTS.snapshot, {
                     managerType,
-                    modelData: currentModelData,
+                    modelData: snapshotModelData,
                     modelPath: currentModelPath || undefined
                 })
                 return
@@ -1938,14 +2112,14 @@ const MainLayout: React.FC = () => {
             let serializableModelData: any = null
             try {
                 if (typeof structuredClone === 'function') {
-                    serializableModelData = structuredClone(currentModelData)
+                    serializableModelData = structuredClone(snapshotModelData)
                 }
             } catch {
                 // Fallback to JSON clone.
             }
             if (!serializableModelData) {
                 try {
-                    serializableModelData = JSON.parse(JSON.stringify(currentModelData))
+                    serializableModelData = JSON.parse(JSON.stringify(snapshotModelData))
                 } catch {
                     serializableModelData = null
                 }
@@ -1963,9 +2137,16 @@ const MainLayout: React.FC = () => {
             await windowInstance.show()
             await windowInstance.setFocus()
         }
-        pushSnapshot().catch((error) => {
-            console.warn(`[MainLayout] detached manager snapshot push failed (${managerType}):`, error)
-        })
+        // New windows receive snapshot via "ready" handshake from detached side.
+        // Existing hidden windows need an immediate refresh when reopened.
+        const shouldPushSnapshotNow =
+            (showOnReady && hadExistingWindow) ||
+            detachedManagerHydratedRef.current[managerType] === true
+        if (shouldPushSnapshotNow) {
+            pushSnapshot().catch((error) => {
+                console.warn(`[MainLayout] detached manager snapshot push failed (${managerType}):`, error)
+            })
+        }
 
         return windowInstance
     }, [getDetachedManagerWindowTitle])
@@ -1999,12 +2180,14 @@ const MainLayout: React.FC = () => {
     const emitManagerSnapshot = useCallback(async (managerType: DetachedManagerType, targetLabel?: string) => {
         const { modelData: currentModelData, modelPath: currentModelPath } = useModelStore.getState()
         if (!currentModelData) return
+        const snapshotModelData = buildDetachedManagerSnapshotModelData(managerType, currentModelData)
+        if (!snapshotModelData) return
 
         const label = targetLabel ?? getDetachedManagerLabel(managerType)
         try {
             await emitTo(label, DETACHED_MANAGER_EVENTS.snapshot, {
                 managerType,
-                modelData: currentModelData,
+                modelData: snapshotModelData,
                 modelPath: currentModelPath || undefined
             })
             return
@@ -2012,7 +2195,7 @@ const MainLayout: React.FC = () => {
             console.warn(`[MainLayout] manager raw snapshot failed, fallback clone (${managerType}):`, error)
         }
 
-        const serializableModelData = toDetachedSerializableModelData(currentModelData)
+        const serializableModelData = toDetachedSerializableModelData(snapshotModelData)
         if (!serializableModelData) return
         await emitTo(label, DETACHED_MANAGER_EVENTS.snapshot, {
             managerType,
@@ -2103,10 +2286,20 @@ const MainLayout: React.FC = () => {
             unlistenApply = await listen<DetachedManagerApplyPayload>(
                 DETACHED_MANAGER_EVENTS.apply,
                 async (event) => {
+                    const managerType = event.payload?.managerType
                     const nextModelData = event.payload?.modelData
-                    if (!nextModelData) return
-                    const { setModelData, modelPath: currentModelPath } = useModelStore.getState()
-                    setModelData(nextModelData, currentModelPath || event.payload?.modelPath || null)
+                    if (!managerType || !nextModelData) return
+                    const { setModelData, modelPath: currentModelPath, modelData: currentModelData } = useModelStore.getState()
+                    const mergedModelData = mergeDetachedManagerModelData(
+                        managerType,
+                        currentModelData,
+                        nextModelData
+                    )
+                    if (!mergedModelData) return
+                    setModelData(mergedModelData, currentModelPath || event.payload?.modelPath || null, {
+                        skipAutoRecalculate: true,
+                        skipModelRebuild: true
+                    })
                 }
             )
 
@@ -2248,15 +2441,23 @@ const MainLayout: React.FC = () => {
         let cancelled = false
 
         const prewarmManagers = async () => {
-            for (const managerType of DETACHED_MANAGER_TYPES) {
-                if (cancelled) break
-                try {
-                    await ensureDetachedManagerWindow(managerType, false)
-                } catch (error) {
-                    console.warn(`[MainLayout] detached manager prewarm skipped (${managerType}):`, error)
+            const queue = [...DETACHED_MANAGER_TYPES]
+            const workerCount = 2
+            const workers = Array.from({ length: workerCount }, async () => {
+                while (!cancelled) {
+                    const managerType = queue.shift()
+                    if (!managerType) break
+                    try {
+                        await ensureDetachedManagerWindow(managerType, false)
+                        if (hasModelData) {
+                            await emitManagerSnapshot(managerType, getDetachedManagerLabel(managerType))
+                        }
+                    } catch (error) {
+                        console.warn(`[MainLayout] detached manager prewarm skipped (${managerType}):`, error)
+                    }
                 }
-                await new Promise((resolve) => window.setTimeout(resolve, 80))
-            }
+            })
+            await Promise.all(workers)
         }
 
         if (typeof win.requestIdleCallback === 'function') {
@@ -2264,13 +2465,13 @@ const MainLayout: React.FC = () => {
                 prewarmManagers().catch((error) => {
                     console.warn('[MainLayout] detached manager prewarm failed:', error)
                 })
-            })
+            }, { timeout: hasModelData ? 800 : 1600 })
         } else {
             timeoutId = window.setTimeout(() => {
                 prewarmManagers().catch((error) => {
                     console.warn('[MainLayout] detached manager prewarm failed:', error)
                 })
-            }, 350)
+            }, hasModelData ? 80 : 350)
         }
 
         return () => {
@@ -2282,7 +2483,7 @@ const MainLayout: React.FC = () => {
                 window.clearTimeout(timeoutId)
             }
         }
-    }, [ensureDetachedManagerWindow])
+    }, [ensureDetachedManagerWindow, emitManagerSnapshot, hasModelData, modelPath])
 
     const hasResetStore = useRef(false);
     useEffect(() => {

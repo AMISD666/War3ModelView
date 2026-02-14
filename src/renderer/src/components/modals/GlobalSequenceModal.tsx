@@ -99,7 +99,7 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({ visible, onCl
                         onClick={handleAddSequence}
                         style={{ backgroundColor: '#5a9cff', borderColor: '#5a9cff' }}
                     >
-                        Add
+                        添加
                     </Button>
                 </div>
                 <List
@@ -109,16 +109,18 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({ visible, onCl
                             onClick={() => setSelectedIndex(index)}
                             style={{
                                 cursor: 'pointer',
-                                padding: '8px 12px',
-                                backgroundColor: selectedIndex === index ? '#5a9cff' : 'transparent',
+                                padding: '6px 12px',
+                                backgroundColor: selectedIndex === index ? '#1677ff' : 'transparent',
                                 color: selectedIndex === index ? '#fff' : '#b0b0b0',
-                                transition: 'background 0.2s',
-                                borderBottom: '1px solid #3a3a3a'
+                                borderBottom: '1px solid #3a3a3a',
+                                minHeight: '36px'
                             }}
                         >
                             <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                                <span>GlobalSeq {index}</span>
-                                <span style={{ fontSize: '11px', opacity: 0.7 }}>{duration}ms</span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                    <span style={{ fontSize: '11px', opacity: 0.5, minWidth: '30px' }}>ID: {index}</span>
+                                    <span style={{ fontSize: '13px' }}>{duration}ms</span>
+                                </div>
                                 <Button
                                     type="text"
                                     danger
@@ -128,7 +130,7 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({ visible, onCl
                                         e.stopPropagation()
                                         handleDeleteSequence(index)
                                     }}
-                                    style={{ color: selectedIndex === index ? '#fff' : '#ff4d4f' }}
+                                    style={{ color: selectedIndex === index ? '#fff' : '#ff4d4f', fontSize: '12px' }}
                                 />
                             </div>
                         </List.Item>
@@ -138,32 +140,34 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({ visible, onCl
 
             <div style={{ flex: 1, padding: '24px', overflowY: 'auto', backgroundColor: '#252525' }}>
                 {selectedDuration !== null ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-                        <div>
-                            <Text style={{ display: 'block', marginBottom: '12px', color: '#e8e8e8', fontSize: '14px' }}>
-                                Global Sequence ID: {selectedIndex}
-                            </Text>
-                        </div>
-                        <div>
-                            <Text style={{ display: 'block', marginBottom: '8px', color: '#b0b0b0' }}>
-                                Duration (ms):
-                            </Text>
-                            <InputNumber
-                                value={selectedDuration}
-                                onChange={handleDurationChange}
-                                min={0}
-                                style={{ width: '150px', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
-                            />
-                        </div>
-                        <div style={{ padding: '16px', backgroundColor: '#333333', borderRadius: '4px', border: '1px solid #4a4a4a' }}>
-                            <Text style={{ color: '#808080', fontSize: '12px' }}>
-                                Global sequences drive shared animation timers across different animated properties.
-                            </Text>
-                        </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                        <Card
+                            title={<span style={{ color: '#e8e8e8', fontSize: '13px' }}>时长设置</span>}
+                            size="small"
+                            bordered={false}
+                            style={{ background: '#333333', border: '1px solid #4a4a4a' }}
+                            styles={{ header: { padding: '4px 12px', minHeight: 0, borderBottom: '1px solid #4a4a4a' }, body: { padding: '12px' } }}
+                        >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                <Text style={{ color: '#b0b0b0', fontSize: '12px' }}>时长 (ms):</Text>
+                                <InputNumber
+                                    size="small"
+                                    value={selectedDuration}
+                                    onChange={handleDurationChange}
+                                    min={0}
+                                    style={{ width: '120px', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
+                                />
+                            </div>
+                            <div style={{ marginTop: '12px', padding: '8px', backgroundColor: 'rgba(0,0,0,0.2)', borderRadius: '4px', border: '1px solid #444' }}>
+                                <Text style={{ color: '#888', fontSize: '11px' }}>
+                                    ID {selectedIndex}: 控制同步属性的共享动画定时器。
+                                </Text>
+                            </div>
+                        </Card>
                     </div>
                 ) : (
                     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#808080' }}>
-                        Select a global sequence from the list
+                        请从列表中选择一个全局序列
                     </div>
                 )}
             </div>
@@ -181,13 +185,13 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({ visible, onCl
 
     return (
         <DraggableModal
-            title="Global Sequence Manager"
+            title="全局序列管理器"
             open={visible}
             onOk={handleOk}
             onCancel={onClose}
             width={700}
-            okText="Confirm"
-            cancelText="Cancel"
+            okText="保存"
+            cancelText="取消"
             maskClosable={false}
             wrapClassName="dark-theme-modal"
             styles={{

@@ -10,6 +10,7 @@ import TextureAnimationManagerModal from '../modals/TextureAnimationManagerModal
 import MaterialEditorModal from '../modals/MaterialEditorModal'
 import SequenceEditorModal from '../modals/SequenceEditorModal'
 import GlobalSequenceModal from '../modals/GlobalSequenceModal'
+
 import {
     DETACHED_CAMERA_EVENTS,
     DETACHED_MANAGER_EVENTS,
@@ -38,12 +39,9 @@ const DetachedManagerWindow: React.FC<DetachedManagerWindowProps> = ({ detachedM
     const [hasSnapshot, setHasSnapshot] = useState(false)
     const setModelData = useModelStore((state) => state.setModelData)
     const modelData = useModelStore((state) => state.modelData)
-    const nodes = useModelStore((state) => state.nodes)
-    const getModelDataForSave = useModelStore((state) => state.getModelDataForSave)
     const modelPath = useModelStore((state) => state.modelPath)
     const suppressNextApplyRef = useRef(false)
     const applyTimerRef = useRef<number | null>(null)
-    const lastSignatureRef = useRef('')
     const requestRetryTimerRef = useRef<number | null>(null)
     const hasSnapshotRef = useRef(false)
 
@@ -97,7 +95,10 @@ const DetachedManagerWindow: React.FC<DetachedManagerWindowProps> = ({ detachedM
                     const payload = event.payload
                     if (!payload || payload.managerType !== managerType || !payload.modelData) return
                     suppressNextApplyRef.current = true
-                    setModelData(payload.modelData, payload.modelPath ?? null, { skipAutoRecalculate: true })
+                    setModelData(payload.modelData, payload.modelPath ?? null, {
+                        skipAutoRecalculate: true,
+                        skipModelRebuild: true
+                    })
                     hasSnapshotRef.current = true
                     setHasSnapshot(true)
                     setIsReady(true)
@@ -117,20 +118,18 @@ const DetachedManagerWindow: React.FC<DetachedManagerWindowProps> = ({ detachedM
                 await emitTo('main', DETACHED_MANAGER_EVENTS.requestSnapshot, requestPayload)
             }
 
-            await requestSnapshot()
-
-            // Retry pull if first request misses due startup timing.
+            // Fallback pull if "ready -> snapshot" misses due startup timing.
             let retries = 0
-            const maxRetries = 20
+            const maxRetries = 8
             const retry = () => {
                 if (!mounted || hasSnapshotRef.current || retries >= maxRetries) return
                 retries += 1
                 requestSnapshot().catch((error) => {
                     console.error('[DetachedManagerWindow] snapshot retry failed:', error)
                 })
-                requestRetryTimerRef.current = window.setTimeout(retry, 120)
+                requestRetryTimerRef.current = window.setTimeout(retry, 220)
             }
-            requestRetryTimerRef.current = window.setTimeout(retry, 120)
+            requestRetryTimerRef.current = window.setTimeout(retry, 220)
         }
 
         setup().catch((error) => {
@@ -159,18 +158,6 @@ const DetachedManagerWindow: React.FC<DetachedManagerWindowProps> = ({ detachedM
             return
         }
 
-        const saveData = getModelDataForSave?.() ?? modelData
-        let signature = ''
-        try {
-            signature = JSON.stringify(saveData)
-        } catch {
-            signature = `${Date.now()}-${nodes.length}`
-        }
-        if (signature === lastSignatureRef.current) {
-            return
-        }
-        lastSignatureRef.current = signature
-
         if (applyTimerRef.current !== null) {
             window.clearTimeout(applyTimerRef.current)
         }
@@ -178,7 +165,7 @@ const DetachedManagerWindow: React.FC<DetachedManagerWindowProps> = ({ detachedM
         applyTimerRef.current = window.setTimeout(() => {
             const payload: DetachedManagerApplyPayload = {
                 managerType,
-                modelData: saveData,
+                modelData,
                 modelPath: modelPath || undefined
             }
             emitTo('main', DETACHED_MANAGER_EVENTS.apply, payload).catch((error) => {
@@ -186,7 +173,7 @@ const DetachedManagerWindow: React.FC<DetachedManagerWindowProps> = ({ detachedM
             })
             applyTimerRef.current = null
         }, 120)
-    }, [managerType, isReady, hasSnapshot, modelData, nodes, getModelDataForSave, modelPath])
+    }, [managerType, isReady, hasSnapshot, modelData, modelPath])
 
     const handleClose = async () => {
         try {

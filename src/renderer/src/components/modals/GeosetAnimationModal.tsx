@@ -144,7 +144,7 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
     const handleOk = () => {
         const oldAnims = modelData?.GeosetAnims || []
         useHistoryStore.getState().push({
-            name: 'Edit Geoset Animations',
+            name: '编辑Geoset动画',
             undo: () => setGeosetAnims ? setGeosetAnims(oldAnims) : null,
             redo: () => setGeosetAnims ? setGeosetAnims(localAnims) : null
         })
@@ -298,7 +298,7 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
                         }}
                         style={{ backgroundColor: '#5a9cff', borderColor: '#5a9cff' }}
                     >
-                        Add
+                        添加
                     </Button>
                 </div>
                 <List
@@ -308,25 +308,22 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
                             onClick={() => setSelectedIndex(index)}
                             style={{
                                 cursor: 'pointer',
-                                padding: '8px 12px',
-                                backgroundColor: selectedIndex === index ? '#5a9cff' : 'transparent',
+                                padding: '6px 12px',
+                                backgroundColor: selectedIndex === index ? '#1677ff' : 'transparent',
                                 color: selectedIndex === index ? '#fff' : '#b0b0b0',
                                 transition: 'background 0.2s',
-                                borderBottom: '1px solid #3a3a3a'
+                                borderBottom: '1px solid #3a3a3a',
+                                minHeight: '36px'
                             }}
                         >
                             <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                                <span>GeosetAnim {index}</span>
-                                <Button
-                                    type="text"
-                                    danger
-                                    size="small"
-                                    icon={<DeleteOutlined />}
+                                <span style={{ fontSize: '13px' }}>Anim {index} (G:{_item.GeosetId})</span>
+                                <DeleteOutlined
                                     onClick={(e) => {
                                         e.stopPropagation()
                                         handleDeleteAnim(index)
                                     }}
-                                    style={{ color: selectedIndex === index ? '#fff' : '#ff4d4f' }}
+                                    style={{ color: selectedIndex === index ? '#fff' : '#ff4d4f', fontSize: '12px' }}
                                 />
                             </div>
                         </List.Item>
@@ -337,126 +334,134 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
             <div style={{ flex: 1, padding: '16px', overflowY: 'auto', backgroundColor: '#252525' }}>
                 {selectedAnim ? (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                        <div style={{ display: 'flex', gap: '16px' }}>
+                        <div style={{ display: 'flex', gap: '12px' }}>
                             <Card
-                                title={<span style={{ color: '#e8e8e8' }}>Color</span>}
+                                title={<span style={{ color: '#e8e8e8', fontSize: '13px' }}>颜色</span>}
                                 size="small"
                                 bordered={false}
                                 style={{ flex: 1, background: '#333333', border: '1px solid #4a4a4a' }}
-                                styles={{ header: { borderBottom: '1px solid #4a4a4a', color: '#e8e8e8' } }}
+                                styles={{ header: { borderBottom: '1px solid #4a4a4a', padding: '4px 12px' }, body: { padding: '12px' } }}
                             >
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-                                    <Checkbox
-                                        checked={isDynamic(selectedAnim.Color)}
-                                        onChange={(e) => handleColorAnimToggle(e.target.checked)}
-                                        style={{ color: '#e8e8e8' }}
-                                    >
-                                        <span style={{ color: '#e8e8e8' }}>Animated</span>
-                                    </Checkbox>
-                                    {isDynamic(selectedAnim.Color) && (
-                                        <Button
-                                            type="link"
-                                            icon={<EditOutlined />}
-                                            onClick={() => openKeyframeEditor('Color', 3)}
-                                            style={{ color: '#5a9cff' }}
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                        <Checkbox
+                                            checked={isDynamic(selectedAnim.Color)}
+                                            onChange={(e) => handleColorAnimToggle(e.target.checked)}
+                                            style={{ color: '#e8e8e8', fontSize: '12px' }}
                                         >
-                                            Edit Keyframes
-                                        </Button>
+                                            动画
+                                        </Checkbox>
+                                        {isDynamic(selectedAnim.Color) && (
+                                            <Button
+                                                type="link"
+                                                size="small"
+                                                onClick={() => openKeyframeEditor('Color', 3)}
+                                                style={{ color: '#1677ff', padding: 0, height: 'auto', fontSize: '12px' }}
+                                            >
+                                                编辑关键帧
+                                            </Button>
+                                        )}
+                                    </div>
+                                    {!isDynamic(selectedAnim.Color) && (
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            <ColorPicker size="small" value={getColor(selectedAnim)} onChange={handleColorChange} />
+                                            <span style={{ color: '#888', fontSize: '11px' }}>静态颜色</span>
+                                        </div>
                                     )}
                                 </div>
-                                {!isDynamic(selectedAnim.Color) && (
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                        <span style={{ color: '#b0b0b0', fontSize: '12px' }}>Color:</span>
-                                        <ColorPicker value={getColor(selectedAnim)} onChange={handleColorChange} />
-                                    </div>
-                                )}
                             </Card>
 
                             <Card
-                                title={<span style={{ color: '#e8e8e8' }}>Alpha</span>}
+                                title={<span style={{ color: '#e8e8e8', fontSize: '13px' }}>透明度</span>}
                                 size="small"
                                 bordered={false}
                                 style={{ flex: 1, background: '#333333', border: '1px solid #4a4a4a' }}
-                                styles={{ header: { borderBottom: '1px solid #4a4a4a', color: '#e8e8e8' } }}
+                                styles={{ header: { borderBottom: '1px solid #4a4a4a', padding: '4px 12px' }, body: { padding: '12px' } }}
                             >
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-                                    <Checkbox
-                                        checked={isDynamic(selectedAnim.Alpha)}
-                                        onChange={(e) => handleAlphaAnimToggle(e.target.checked)}
-                                        style={{ color: '#e8e8e8' }}
-                                    >
-                                        <span style={{ color: '#e8e8e8' }}>Animated</span>
-                                    </Checkbox>
-                                    {isDynamic(selectedAnim.Alpha) && (
-                                        <Button
-                                            type="link"
-                                            icon={<EditOutlined />}
-                                            onClick={() => openKeyframeEditor('Alpha', 1)}
-                                            style={{ color: '#5a9cff' }}
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                        <Checkbox
+                                            checked={isDynamic(selectedAnim.Alpha)}
+                                            onChange={(e) => handleAlphaAnimToggle(e.target.checked)}
+                                            style={{ color: '#e8e8e8', fontSize: '12px' }}
                                         >
-                                            Edit Keyframes
-                                        </Button>
+                                            动画
+                                        </Checkbox>
+                                        {isDynamic(selectedAnim.Alpha) && (
+                                            <Button
+                                                type="link"
+                                                size="small"
+                                                onClick={() => openKeyframeEditor('Alpha', 1)}
+                                                style={{ color: '#1677ff', padding: 0, height: 'auto', fontSize: '12px' }}
+                                            >
+                                                编辑关键帧
+                                            </Button>
+                                        )}
+                                    </div>
+                                    {!isDynamic(selectedAnim.Alpha) && (
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                            <InputNumber
+                                                size="small"
+                                                value={getAlpha(selectedAnim)}
+                                                onChange={handleAlphaChange}
+                                                step={0.1}
+                                                min={0}
+                                                max={1}
+                                                style={{ width: '60px', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8', fontSize: '12px' }}
+                                            />
+                                            <span style={{ color: '#888', fontSize: '11px' }}>静态透明度</span>
+                                        </div>
                                     )}
                                 </div>
-                                {!isDynamic(selectedAnim.Alpha) && (
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                        <span style={{ color: '#b0b0b0', fontSize: '12px' }}>Alpha:</span>
-                                        <InputNumber
-                                            value={getAlpha(selectedAnim)}
-                                            onChange={handleAlphaChange}
-                                            step={0.1}
-                                            min={0}
-                                            max={1}
-                                            style={{ width: '80px', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
-                                        />
-                                    </div>
-                                )}
                             </Card>
                         </div>
 
                         <Card
-                            title={<span style={{ color: '#e8e8e8' }}>Other</span>}
+                            title={<span style={{ color: '#e8e8e8', fontSize: '13px' }}>目标与其他</span>}
                             size="small"
                             bordered={false}
                             style={{ background: '#333333', border: '1px solid #4a4a4a' }}
-                            styles={{ header: { borderBottom: '1px solid #4a4a4a', color: '#e8e8e8' } }}
+                            styles={{ header: { borderBottom: '1px solid #4a4a4a', padding: '4px 12px' }, body: { padding: '12px' } }}
                         >
-                            <div style={{ marginBottom: '16px' }}>
-                                <Text style={{ display: 'block', marginBottom: '8px', color: '#b0b0b0' }}>Geoset ID:</Text>
-                                <Select
-                                    style={{ width: '100%' }}
-                                    value={selectedAnim.GeosetId}
-                                    onChange={handleGeosetChange}
-                                    popupClassName="dark-theme-select-dropdown"
-                                >
-                                    {geosets.map((_, idx) => (
-                                        <Option key={idx} value={idx}>
-                                            Geoset {idx}
-                                        </Option>
-                                    ))}
-                                </Select>
-                            </div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                <Checkbox
-                                    checked={selectedAnim.UseColor === undefined ? true : selectedAnim.UseColor}
-                                    onChange={handleUseColorChange}
-                                    style={{ color: '#e8e8e8' }}
-                                >
-                                    <span style={{ color: '#e8e8e8' }}>Use Color</span>
-                                </Checkbox>
-                                <Checkbox
-                                    checked={selectedAnim.DropShadow}
-                                    onChange={handleDropShadowChange}
-                                    style={{ color: '#e8e8e8' }}
-                                >
-                                    <span style={{ color: '#e8e8e8' }}>Drop Shadow</span>
-                                </Checkbox>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    <Text style={{ minWidth: '80px', color: '#b0b0b0', fontSize: '12px' }}>Geoset 目标:</Text>
+                                    <Select
+                                        size="small"
+                                        style={{ flex: 1 }}
+                                        value={selectedAnim.GeosetId}
+                                        onChange={handleGeosetChange}
+                                        popupClassName="dark-theme-select-dropdown"
+                                    >
+                                        {geosets.map((_, idx) => (
+                                            <Option key={idx} value={idx}>
+                                                Geoset {idx}
+                                            </Option>
+                                        ))}
+                                    </Select>
+                                </div>
+                                <div style={{ display: 'flex', gap: '24px', paddingLeft: '92px' }}>
+                                    <Checkbox
+                                        checked={selectedAnim.UseColor === undefined ? true : selectedAnim.UseColor}
+                                        onChange={handleUseColorChange}
+                                        style={{ color: '#e8e8e8', fontSize: '12px' }}
+                                    >
+                                        使用颜色
+                                    </Checkbox>
+                                    <Checkbox
+                                        checked={selectedAnim.DropShadow}
+                                        onChange={handleDropShadowChange}
+                                        style={{ color: '#e8e8e8', fontSize: '12px' }}
+                                    >
+                                        投射阴影
+                                    </Checkbox>
+                                </div>
                             </div>
                         </Card>
                     </div>
                 ) : (
                     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#808080' }}>
-                        Select one geoset animation from the list
+                        请从列表中选择一个 Geoset 动画
                     </div>
                 )}
             </div>
@@ -473,13 +478,13 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
                 ) : null
             ) : (
                 <DraggableModal
-                    title="Geoset Animation Manager"
+                    title="Geoset 动画管理器"
                     open={visible}
                     onOk={handleOk}
                     onCancel={onClose}
                     width={900}
-                    okText="Confirm"
-                    cancelText="Cancel"
+                    okText="保存"
+                    cancelText="取消"
                     maskClosable={false}
                     wrapClassName="dark-theme-modal"
                     styles={{

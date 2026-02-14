@@ -56,7 +56,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({
         const newObjectId = maxObjectId + 1
 
         useHistoryStore.getState().push({
-            name: 'Add Camera',
+            name: '添加摄像机',
             undo: () => deleteNode(newObjectId),
             redo: () => addNode({ ...newCamera, ObjectId: newObjectId })
         })
@@ -71,7 +71,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({
         const nodeClone = JSON.parse(JSON.stringify(node))
 
         useHistoryStore.getState().push({
-            name: 'Delete Camera',
+            name: '删除摄像机',
             undo: () => addNode(nodeClone),
             redo: () => deleteNode(node.ObjectId)
         })
@@ -92,7 +92,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({
 
         const objectId = camera.ObjectId
         useHistoryStore.getState().push({
-            name: 'Update Camera',
+            name: '更新摄像机',
             undo: () => updateNodes([{ objectId, data: oldData }]),
             redo: () => updateNodes([{ objectId, data: updates }])
         })
@@ -134,10 +134,12 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                color: isSelected ? '#fff' : '#b0b0b0'
+                color: isSelected ? '#fff' : '#b0b0b0',
+                fontSize: '13px',
+                padding: '4px 0'
             }}
         >
-            <span>{item.Name || `Camera ${index}`}</span>
+            <span>{item.Name || `摄像机 ${index}`}</span>
         </div>
     )
 
@@ -160,14 +162,14 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({
         const target = getPos(cam.TargetTranslation, (cam as any).TargetPosition)
 
         const VectorInputs = ({ value, onChange, label }: { value: number[], onChange: (val: number[]) => void, label: string }) => (
-            <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <div style={{ color: '#ccc', marginBottom: 4 }}>{label}</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {label && <div style={{ color: '#888', fontSize: '11px', marginBottom: 2 }}>{label}</div>}
                 {['X', 'Y', 'Z'].map((axis, i) => (
-                    <div key={axis} style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
-                        <span style={{ color: '#888', width: 20 }}>{axis}: </span>
+                    <div key={axis} style={{ display: 'flex', alignItems: 'center' }}>
+                        <span style={{ color: '#666', width: 16, fontSize: '11px' }}>{axis}</span>
                         <InputNumber
                             size="small"
-                            style={{ flex: 1, background: '#222', borderColor: '#444', color: '#fff' }}
+                            style={{ flex: 1, background: '#1a1a1a', borderColor: '#333', color: '#fff', fontSize: '12px' }}
                             value={value[i]}
                             onChange={(v) => {
                                 const newVal = [...value]
@@ -192,89 +194,91 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({
         }
 
         return (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8, border: '1px solid #484848', padding: 8 }}>
-                    <span style={{ color: '#ccc', marginRight: 8 }}>Name:</span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4, border: '1px solid #444', padding: '4px 8px', borderRadius: 4, background: '#222' }}>
+                    <span style={{ color: '#aaa', marginRight: 8, fontSize: '12px' }}>名称:</span>
                     <Input
+                        size="small"
                         value={cam.Name}
                         onChange={(e) => updateCamera(index, { Name: e.target.value })}
-                        style={{ background: '#222', borderColor: '#444', color: '#fff' }}
+                        style={{ background: '#1a1a1a', borderColor: '#333', color: '#fff', fontSize: '13px' }}
                     />
                 </div>
 
-                <div style={{ display: 'flex', gap: 16 }}>
-                    <Card size="small" title="Camera Position" style={{ background: '#333', borderColor: '#444', flex: 1 }} headStyle={{ color: '#ddd' }}>
+                <div style={{ display: 'flex', gap: 12 }}>
+                    <Card size="small" title={<span style={{ fontSize: '12px' }}>摄像机位置</span>} style={{ background: '#2d2d2d', borderColor: '#444', flex: 1 }} styles={{ header: { padding: '4px 12px', minHeight: 0 }, body: { padding: '8px' } }}>
                         <VectorInputs value={pos} onChange={(v) => updateStaticPos('Translation', v)} label="" />
-                        <div style={{ marginTop: 8 }}>
+                        <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                             <Checkbox
                                 checked={!!cam.Translation && (cam.Translation.Keys?.length > 1 || cam.Translation.GlobalSeqId !== null)}
                                 onChange={(e) => toggleBlock(index, 'Translation', e.target.checked)}
-                                style={{ color: '#ccc' }}
+                                style={{ color: '#ccc', fontSize: '12px' }}
                             >
-                                Animate
+                                动画
                             </Checkbox>
-                            <Button size="small" style={{ width: '100%', marginTop: 4 }} onClick={() => openEditor(index, 'Translation')}>
-                                Edit Translation
+                            <Button size="small" type="link" style={{ padding: 0, height: 'auto', fontSize: '12px' }} onClick={() => openEditor(index, 'Translation')}>
+                                编辑关键帧
                             </Button>
                         </div>
                     </Card>
 
-                    <Card size="small" title="Target Position" style={{ background: '#333', borderColor: '#444', flex: 1 }} headStyle={{ color: '#ddd' }}>
+                    <Card size="small" title={<span style={{ fontSize: '12px' }}>目标位置</span>} style={{ background: '#2d2d2d', borderColor: '#444', flex: 1 }} styles={{ header: { padding: '4px 12px', minHeight: 0 }, body: { padding: '8px' } }}>
                         <VectorInputs value={target} onChange={(v) => updateStaticPos('TargetTranslation', v)} label="" />
-                        <div style={{ marginTop: 8 }}>
+                        <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                             <Checkbox
                                 checked={!!cam.TargetTranslation}
                                 onChange={(e) => toggleBlock(index, 'TargetTranslation', e.target.checked)}
-                                style={{ color: '#ccc' }}
+                                style={{ color: '#ccc', fontSize: '12px' }}
                             >
-                                Animate
+                                动画
                             </Checkbox>
-                            <Button size="small" style={{ width: '100%', marginTop: 4 }} onClick={() => openEditor(index, 'TargetTranslation')}>
-                                Edit Target
+                            <Button size="small" type="link" style={{ padding: 0, height: 'auto', fontSize: '12px' }} onClick={() => openEditor(index, 'TargetTranslation')}>
+                                编辑关键帧
                             </Button>
                         </div>
                     </Card>
                 </div>
 
-                <Card size="small" title="Other" style={{ background: '#333', borderColor: '#444' }} headStyle={{ color: '#ddd' }}>
-                    <Row gutter={16}>
-                        <Col span={12}>
-                            <div style={{ color: '#aaa', marginBottom: 4 }}>Field of View:</div>
+                <Card size="small" title={<span style={{ fontSize: '12px' }}>裁剪与设置</span>} style={{ background: '#2d2d2d', borderColor: '#444' }} styles={{ header: { padding: '4px 12px', minHeight: 0 }, body: { padding: '12px' } }}>
+                    <Row gutter={[12, 12]}>
+                        <Col span={8}>
+                            <div style={{ color: '#888', marginBottom: 2, fontSize: '11px' }}>视场角:</div>
                             <InputNumber
-                                style={{ width: '100%', background: '#222', borderColor: '#444', color: '#fff' }}
+                                size="small"
+                                style={{ width: '100%', background: '#1a1a1a', borderColor: '#333', color: '#fff' }}
                                 value={cam.FieldOfView}
                                 onChange={(v) => updateCamera(index, { FieldOfView: v || 0 })}
                             />
                         </Col>
-                        <Col span={12}>
-                            <div style={{ color: '#aaa', marginBottom: 4 }}>Near Clip:</div>
+                        <Col span={8}>
+                            <div style={{ color: '#888', marginBottom: 2, fontSize: '11px' }}>近裁面:</div>
                             <InputNumber
-                                style={{ width: '100%', background: '#222', borderColor: '#444', color: '#fff' }}
+                                size="small"
+                                style={{ width: '100%', background: '#1a1a1a', borderColor: '#333', color: '#fff' }}
                                 value={cam.NearClip}
                                 onChange={(v) => updateCamera(index, { NearClip: v || 0 })}
                             />
                         </Col>
-                    </Row>
-                    <Row gutter={16} style={{ marginTop: 8 }}>
-                        <Col span={12}>
-                            <div style={{ color: '#aaa', marginBottom: 4 }}>Far Clip:</div>
+                        <Col span={8}>
+                            <div style={{ color: '#888', marginBottom: 2, fontSize: '11px' }}>远裁面:</div>
                             <InputNumber
-                                style={{ width: '100%', background: '#222', borderColor: '#444', color: '#fff' }}
+                                size="small"
+                                style={{ width: '100%', background: '#1a1a1a', borderColor: '#333', color: '#fff' }}
                                 value={cam.FarClip}
                                 onChange={(v) => updateCamera(index, { FarClip: v || 0 })}
                             />
                         </Col>
                     </Row>
-                    <div style={{ marginTop: 12 }}>
+                    <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
                         <Checkbox
                             checked={!!cam.Rotation}
                             onChange={(e) => toggleBlock(index, 'Rotation', e.target.checked)}
-                            style={{ color: '#ccc' }}
+                            style={{ color: '#ccc', fontSize: '12px' }}
                         >
-                            Animate Rotation
+                            旋转动画
                         </Checkbox>
-                        <Button size="small" style={{ marginLeft: 8 }} onClick={() => openEditor(index, 'Rotation')}>
-                            Edit Rotation
+                        <Button size="small" type="link" style={{ padding: 0, height: 'auto', fontSize: '12px' }} onClick={() => openEditor(index, 'Rotation')}>
+                            编辑旋转关键帧
                         </Button>
                     </div>
                 </Card>
@@ -291,7 +295,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({
 
     const extraButtons = (
         <Space size={4}>
-            <Tooltip title="Add from current view">
+            <Tooltip title="从当前视角添加">
                 <Button
                     type="text"
                     size="small"
@@ -300,7 +304,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({
                     style={{ color: '#1677ff' }}
                 />
             </Tooltip>
-            <Tooltip title="View selected camera">
+            <Tooltip title="查看选中的摄像机">
                 <Button
                     type="text"
                     size="small"
@@ -327,8 +331,8 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({
                 renderDetail={renderDetail}
                 onAdd={handleAdd}
                 onDelete={handleDelete}
-                listTitle="Camera List"
-                detailTitle="Camera Properties"
+                listTitle="摄像机列表"
+                detailTitle="摄像机属性"
                 listWidth={200}
                 extraButtons={extraButtons}
             />
@@ -348,7 +352,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({
                         onCancel={() => setEditorVisible(false)}
                         onOk={handleEditorSave}
                         initialData={getCurrentEditorData()}
-                        title={`Edit ${editingBlock?.field}`}
+                        title={`编辑 ${editingBlock?.field}`}
                         vectorSize={3}
                         globalSequences={globalSequences}
                     />
@@ -360,7 +364,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({
     return (
         <>
             <DraggableModal
-                title="Camera Manager"
+                title="摄像机管理器"
                 open={visible}
                 onCancel={onClose}
                 width={850}
@@ -369,8 +373,8 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({
             >
                 {renderManagerContent()}
                 <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
-                    <Button type="primary" onClick={onClose} style={{ marginRight: 8 }}>Confirm</Button>
-                    <Button onClick={onClose}>Cancel</Button>
+                    <Button type="primary" onClick={onClose} style={{ marginRight: 8 }}>确认</Button>
+                    <Button onClick={onClose}>取消</Button>
                 </div>
             </DraggableModal>
 
@@ -380,7 +384,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({
                     onCancel={() => setEditorVisible(false)}
                     onOk={handleEditorSave}
                     initialData={getCurrentEditorData()}
-                    title={`Edit ${editingBlock?.field}`}
+                    title={`编辑 ${editingBlock?.field}`}
                     vectorSize={3}
                     globalSequences={globalSequences}
                 />

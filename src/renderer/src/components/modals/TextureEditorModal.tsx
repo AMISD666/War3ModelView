@@ -508,39 +508,24 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
                         block
                         style={{ backgroundColor: '#5a9cff', borderColor: '#5a9cff' }}
                         onClick={async () => {
+                            const selected = await open({
+                                multiple: true,
+                                filters: [{ name: 'Textures', extensions: ['blp', 'tga', 'png', 'jpg', 'jpeg', 'bmp'] }]
+                            })
+                            if (!selected) return
                             try {
-                                const selected = await open({
-                                    multiple: true,
-                                    filters: [{ name: 'Texture files', extensions: ['blp', 'png', 'tga', 'jpg', 'jpeg'] }],
-                                })
-                                const paths = Array.isArray(selected) ? selected : (selected ? [selected] : [])
-                                if (!paths.length) return
-
-                                const existingPaths = new Set(localTextures.map(texture => (texture.Image || '').toLowerCase()))
-                                const newTextures: any[] = []
-
-                                for (const filePath of paths) {
-                                    let relativePath = filePath
-                                    if (modelPath) {
-                                        const modelDir = modelPath.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
-                                        const selectedNormalized = filePath.replace(/\\/g, '/')
-                                        if (selectedNormalized.toLowerCase().startsWith(modelDir.toLowerCase())) {
-                                            relativePath = selectedNormalized.substring(modelDir.length + 1).replace(/\//g, '\\')
-                                        } else {
-                                            relativePath = filePath.replace(/\\/g, '/').split('/').pop() || filePath
-                                        }
-                                    }
-                                    if (existingPaths.has(relativePath.toLowerCase())) continue
-                                    existingPaths.add(relativePath.toLowerCase())
-                                    newTextures.push({ Image: relativePath, ReplaceableId: 0, Flags: 0 })
-                                }
-
+                                const paths = Array.isArray(selected) ? selected : [selected]
+                                const newTextures = paths.map((p: string) => ({
+                                    Image: p,
+                                    ReplaceableId: 0,
+                                    Flags: 0
+                                }))
                                 if (newTextures.length > 0) {
                                     const updatedTextures = [...localTextures, ...newTextures]
                                     setLocalTextures(updatedTextures)
                                     setSelectedIndex(updatedTextures.length - 1)
                                     setTimeout(() => scrollToItem(updatedTextures.length - 1), 0)
-                                    message.success(`Added ${newTextures.length} texture(s)`) 
+                                    message.success(`Added ${newTextures.length} texture(s)`)
                                 } else {
                                     message.warning('No new textures were added')
                                 }
@@ -549,7 +534,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
                             }
                         }}
                     >
-                        Add
+                        Add Texture
                     </Button>
                 </div>
                 <List
@@ -564,16 +549,17 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
                             }}
                             style={{
                                 cursor: 'pointer',
-                                padding: '8px 12px',
-                                backgroundColor: selectedIndex === index ? '#5a9cff' : 'transparent',
+                                padding: '6px 12px',
+                                backgroundColor: selectedIndex === index ? '#1677ff' : 'transparent',
                                 color: selectedIndex === index ? '#fff' : '#b0b0b0',
                                 borderBottom: '1px solid #3a3a3a',
+                                minHeight: '36px'
                             }}
                         >
                             <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '150px' }}>
-                                    <span style={{ marginRight: '8px', opacity: 0.7 }}>{index}:</span>
-                                    {item.Image || getReplaceableLabel(item.ReplaceableId) || 'Texture unavailable'}
+                                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px', fontSize: '13px' }}>
+                                    <span style={{ marginRight: '6px', opacity: 0.5, fontSize: '11px' }}>{index}:</span>
+                                    {item.Image ? item.Image.split('\\').pop() : (getReplaceableLabel(item.ReplaceableId) || 'Unknown')}
                                 </div>
                                 <DeleteOutlined
                                     onClick={(event) => {
@@ -583,7 +569,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
                                         if (selectedIndex === index) setSelectedIndex(-1)
                                         else if (selectedIndex > index) setSelectedIndex(selectedIndex - 1)
                                     }}
-                                    style={{ color: '#ff4d4f' }}
+                                    style={{ color: selectedIndex === index ? '#fff' : '#ff4d4f', fontSize: '12px', opacity: 0.8 }}
                                 />
                             </div>
                         </List.Item>
@@ -591,65 +577,66 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
                 />
             </div>
 
-            <div style={{ flex: 1, padding: '16px', overflowY: 'auto', backgroundColor: '#252525', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div style={{ flex: 1, padding: '12px', overflowY: 'auto', backgroundColor: '#252525', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {selectedTexture ? (
                     <>
-                        <div style={{ height: '200px', border: '1px solid #4a4a4a', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', backgroundColor: '#1f1f1f', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
+                        <div style={{ height: '180px', border: '1px solid #4a4a4a', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', backgroundColor: '#1a1a1a', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
                             {isLoadingPreview ? (
-                                <div style={{ color: '#5a9cff', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-                                    <div className="ant-spin ant-spin-spinning" style={{ fontSize: 24 }}>...</div>
-                                    <span>Loading...</span>
+                                <div style={{ color: '#1677ff', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                                    <div className="ant-spin ant-spin-spinning" style={{ fontSize: 20 }}>...</div>
+                                    <span style={{ fontSize: 12 }}>Loading Preview...</span>
                                 </div>
                             ) : previewUrl ? (
                                 <>
                                     <img src={previewUrl} alt="Preview" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
                                     {previewSource && (
-                                        <div style={{ position: 'absolute', bottom: 4, right: 4, backgroundColor: previewSource === 'MPQ' ? '#52c41a' : '#1677ff', color: '#fff', padding: '2px 6px', borderRadius: 3, fontSize: 10, fontWeight: 'bold' }}>
+                                        <div style={{ position: 'absolute', bottom: 4, right: 4, backgroundColor: previewSource === 'MPQ' ? '#52c41a' : '#1677ff', color: '#fff', padding: '1px 5px', borderRadius: 2, fontSize: 10, fontWeight: 'bold', opacity: 0.8 }}>
                                             {previewSource}
                                         </div>
                                     )}
                                 </>
                             ) : previewError ? (
-                                <div style={{ color: '#ff4d4f', textAlign: 'center', padding: 8 }}>
+                                <div style={{ color: '#ff4d4f', textAlign: 'center', padding: 8, fontSize: '12px' }}>
                                     <div>Warning: {previewError}</div>
-                                    <div style={{ fontSize: 11, color: '#888', marginTop: 4 }}>{selectedTexture?.Image}</div>
+                                    <div style={{ fontSize: 10, color: '#888', marginTop: 4 }}>{selectedTexture?.Image}</div>
                                 </div>
                             ) : (
-                                <span style={{ color: '#666' }}>No preview</span>
+                                <span style={{ color: '#666', fontSize: '12px' }}>No Available Preview</span>
                             )}
                         </div>
 
-                        <Card title={<span style={{ color: '#b0b0b0' }}>Texture Settings</span>} size="small" bordered={false} style={{ background: '#333333', border: '1px solid #4a4a4a' }} headStyle={{ borderBottom: '1px solid #4a4a4a' }}>
+                        <Card title={<span style={{ color: '#e8e8e8', fontSize: '13px' }}>Texture Properties</span>} size="small" bordered={false} style={{ background: '#333333', border: '1px solid #4a4a4a' }} styles={{ header: { borderBottom: '1px solid #4a4a4a', padding: '4px 12px' }, body: { padding: '12px' } }}>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                <div>
-                                    <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>Path:</Text>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <Text style={{ minWidth: '45px', color: '#b0b0b0', fontSize: '12px' }}>Path:</Text>
                                     <Input
+                                        size="small"
                                         value={pathDraft}
                                         onChange={(event) => setPathDraft(event.target.value)}
                                         onBlur={() => commitPathDraft(selectedIndex, pathDraft)}
                                         onPressEnter={() => commitPathDraft(selectedIndex, pathDraft)}
-                                        style={{ backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
+                                        style={{ backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8', fontSize: '12px' }}
                                     />
                                 </div>
-                                <div>
-                                    <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>Replaceable ID:</Text>
-                                    <InputNumber value={selectedTexture.ReplaceableId} onChange={(value) => updateLocalTexture(selectedIndex, { ReplaceableId: value })} style={{ width: '100%', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }} />
-                                    <Text style={{ fontSize: '12px', color: '#808080' }}>0: None, 1: TeamColor, 2: TeamGlow, 31+: Trees</Text>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <Text style={{ minWidth: '45px', color: '#b0b0b0', fontSize: '12px' }}>ReplID:</Text>
+                                    <InputNumber size="small" value={selectedTexture.ReplaceableId} onChange={(value) => updateLocalTexture(selectedIndex, { ReplaceableId: value })} style={{ width: '80px', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8', fontSize: '12px' }} />
+                                    <Text style={{ fontSize: '11px', color: '#808080', marginLeft: '4px' }}>0:None, 1:TeamColor, 2:TeamGlow, 31+:Trees</Text>
                                 </div>
-                                <div style={{ display: 'flex', gap: '16px' }}>
-                                    <Checkbox checked={isFlagSet(1)} onChange={(event) => handleFlagChange(1, event.target.checked)} style={{ color: '#e8e8e8' }}>Wrap Width</Checkbox>
-                                    <Checkbox checked={isFlagSet(2)} onChange={(event) => handleFlagChange(2, event.target.checked)} style={{ color: '#e8e8e8' }}>Wrap Height</Checkbox>
+                                <div style={{ display: 'flex', gap: '16px', paddingLeft: '53px' }}>
+                                    <Checkbox checked={isFlagSet(1)} onChange={(event) => handleFlagChange(1, event.target.checked)} style={{ color: '#e8e8e8', fontSize: '12px' }}>Wrap Width</Checkbox>
+                                    <Checkbox checked={isFlagSet(2)} onChange={(event) => handleFlagChange(2, event.target.checked)} style={{ color: '#e8e8e8', fontSize: '12px' }}>Wrap Height</Checkbox>
                                 </div>
                             </div>
                         </Card>
                     </>
                 ) : (
-                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#808080' }}>
-                        Select one texture from the left list
+                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#888', fontSize: '13px' }}>
+                        Please select a texture from the left list
                     </div>
                 )}
             </div>
-        </div>
+        </div >
     )
 
     if (asWindow) {
@@ -663,13 +650,13 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
 
     return (
         <DraggableModal
-            title="Texture Manager"
+            title="纹理管理器"
             open={visible}
             onOk={handleModalOk}
             onCancel={onClose}
             width={900}
-            okText="Save"
-            cancelText="Cancel"
+            okText="保存"
+            cancelText="取消"
             maskClosable={false}
             wrapClassName="dark-theme-modal"
             styles={{

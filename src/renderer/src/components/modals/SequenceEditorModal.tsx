@@ -190,7 +190,7 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
                         }}
                         style={{ backgroundColor: '#5a9cff', borderColor: '#5a9cff' }}
                     >
-                        Add
+                        添加
                     </Button>
                 </div>
                 <List
@@ -200,24 +200,28 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
                             onClick={() => handleSelectSequence(index)}
                             style={{
                                 cursor: 'pointer',
-                                padding: '8px 12px',
-                                backgroundColor: selectedIndex === index ? '#5a9cff' : 'transparent',
+                                padding: '6px 12px',
+                                backgroundColor: selectedIndex === index ? '#1677ff' : 'transparent',
                                 color: selectedIndex === index ? '#fff' : '#b0b0b0',
-                                transition: 'background 0.2s',
-                                borderBottom: '1px solid #3a3a3a'
+                                borderBottom: '1px solid #3a3a3a',
+                                minHeight: '36px'
                             }}
-                            className="hover:bg-[#454545]"
                         >
                             <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px' }}>
-                                    {item.Name || `Sequence ${index}`}
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', overflow: 'hidden' }}>
+                                    <span style={{ fontSize: '13px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '130px' }}>
+                                        {item.Name || `Seq ${index}`}
+                                    </span>
+                                    <span style={{ fontSize: '11px', opacity: 0.5 }}>
+                                        {item.Interval[0]} - {item.Interval[1]}
+                                    </span>
                                 </div>
                                 <DeleteOutlined
                                     onClick={(e) => {
                                         e.stopPropagation()
                                         removeSequenceAtIndex(index)
                                     }}
-                                    style={{ color: '#ff4d4f' }}
+                                    style={{ color: selectedIndex === index ? '#fff' : '#ff4d4f', fontSize: '12px' }}
                                 />
                             </div>
                         </List.Item>
@@ -229,89 +233,95 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
                 {selectedSequence ? (
                     <>
                         <Card
-                            title={<span style={{ color: '#b0b0b0' }}>Basic</span>}
+                            title={<span style={{ color: '#e8e8e8', fontSize: '13px' }}>序列设置</span>}
                             size="small"
                             bordered={false}
                             style={{ background: '#333333', border: '1px solid #4a4a4a' }}
-                            headStyle={{ borderBottom: '1px solid #4a4a4a' }}
+                            styles={{ header: { padding: '4px 12px', minHeight: 0, borderBottom: '1px solid #4a4a4a' }, body: { padding: '12px' } }}
                         >
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                <div>
-                                    <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>Name:</Text>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    <Text style={{ minWidth: '60px', color: '#b0b0b0', fontSize: '12px' }}>名称:</Text>
                                     <Input
+                                        size="small"
                                         value={selectedSequence.Name}
                                         onChange={(e) => updateLocalSequence(selectedIndex, { Name: e.target.value })}
-                                        style={{ backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
+                                        style={{ flex: 1, backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
                                     />
                                 </div>
-                                <div style={{ display: 'flex', gap: '16px' }}>
-                                    <div style={{ flex: 1 }}>
-                                        <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>Start:</Text>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    <Text style={{ minWidth: '60px', color: '#b0b0b0', fontSize: '12px' }}>区间:</Text>
+                                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px' }}>
                                         <InputNumber
+                                            size="small"
                                             value={selectedSequence.Interval[0]}
                                             onChange={(v) => handleIntervalChange(selectedIndex, 0, v)}
-                                            style={{ width: '100%', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
+                                            style={{ flex: 1, backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
                                         />
-                                    </div>
-                                    <div style={{ flex: 1 }}>
-                                        <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>End:</Text>
+                                        <span style={{ color: '#888' }}>-</span>
                                         <InputNumber
+                                            size="small"
                                             value={selectedSequence.Interval[1]}
                                             onChange={(v) => handleIntervalChange(selectedIndex, 1, v)}
-                                            style={{ width: '100%', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
+                                            style={{ flex: 1, backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
                                         />
                                     </div>
                                 </div>
-                                <Checkbox
-                                    checked={!!selectedSequence.NonLooping}
-                                    onChange={(e) => updateLocalSequence(selectedIndex, { NonLooping: e.target.checked ? 1 : 0 })}
-                                    style={{ color: '#e8e8e8' }}
-                                >
-                                    NonLooping
-                                </Checkbox>
+                                <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                                    <Checkbox
+                                        checked={!!selectedSequence.NonLooping}
+                                        onChange={(e) => updateLocalSequence(selectedIndex, { NonLooping: e.target.checked ? 1 : 0 })}
+                                        style={{ color: '#e8e8e8', fontSize: '12px' }}
+                                    >
+                                        非循环
+                                    </Checkbox>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                        <Text style={{ color: '#b0b0b0', fontSize: '11px' }}>稀有度:</Text>
+                                        <InputNumber
+                                            size="small"
+                                            value={selectedSequence.Rarity}
+                                            onChange={(v) => updateLocalSequence(selectedIndex, { Rarity: v })}
+                                            style={{ width: '60px', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
+                                        />
+                                    </div>
+                                </div>
                             </div>
                         </Card>
 
                         <Card
-                            title={<span style={{ color: '#b0b0b0' }}>Advanced</span>}
+                            title={<span style={{ color: '#e8e8e8', fontSize: '13px' }}>边界与物理</span>}
                             size="small"
                             bordered={false}
                             style={{ background: '#333333', border: '1px solid #4a4a4a' }}
-                            headStyle={{ borderBottom: '1px solid #4a4a4a' }}
+                            styles={{ header: { padding: '4px 12px', minHeight: 0, borderBottom: '1px solid #4a4a4a' }, body: { padding: '12px' } }}
                         >
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                                 <div style={{ display: 'flex', gap: '16px' }}>
                                     <div style={{ flex: 1 }}>
-                                        <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>Rarity:</Text>
+                                        <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0', fontSize: '11px' }}>移动速度:</Text>
                                         <InputNumber
-                                            value={selectedSequence.Rarity}
-                                            onChange={(v) => updateLocalSequence(selectedIndex, { Rarity: v })}
-                                            style={{ width: '100%', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
-                                        />
-                                    </div>
-                                    <div style={{ flex: 1 }}>
-                                        <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>MoveSpeed:</Text>
-                                        <InputNumber
+                                            size="small"
                                             value={selectedSequence.MoveSpeed}
                                             onChange={(v) => updateLocalSequence(selectedIndex, { MoveSpeed: v })}
                                             style={{ width: '100%', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
                                         />
                                     </div>
-                                </div>
-                                <div>
-                                    <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>BoundsRadius:</Text>
-                                    <InputNumber
-                                        value={selectedSequence.BoundsRadius}
-                                        onChange={(v) => updateLocalSequence(selectedIndex, { BoundsRadius: v })}
-                                        style={{ width: '100%', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
-                                    />
+                                    <div style={{ flex: 1 }}>
+                                        <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0', fontSize: '11px' }}>包围半径:</Text>
+                                        <InputNumber
+                                            size="small"
+                                            value={selectedSequence.BoundsRadius}
+                                            onChange={(v) => updateLocalSequence(selectedIndex, { BoundsRadius: v })}
+                                            style={{ width: '100%', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
+                                        />
+                                    </div>
                                 </div>
                             </div>
                         </Card>
                     </>
                 ) : (
                     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#808080' }}>
-                        Select a sequence from the list
+                        请从列表中选择一个序列
                     </div>
                 )}
             </div>
@@ -329,13 +339,13 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
 
     return (
         <DraggableModal
-            title="Sequence Editor"
+            title="序列编辑器"
             open={visible}
             onOk={handleOk}
             onCancel={onClose}
             width={950}
-            okText="Confirm"
-            cancelText="Cancel"
+            okText="保存"
+            cancelText="取消"
             maskClosable={false}
             wrapClassName="dark-theme-modal"
             styles={{
@@ -347,11 +357,11 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
             footer={
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <Checkbox checked={pruneKeyframes} onChange={(e) => setPruneKeyframes(e.target.checked)} style={{ color: '#aaa' }}>
-                        Prune Keyframes on Delete
+                        删除时裁剪关键帧
                     </Checkbox>
                     <div>
-                        <Button onClick={onClose}>Cancel</Button>
-                        <Button type="primary" onClick={handleOk} style={{ marginLeft: 8 }}>Confirm</Button>
+                        <Button onClick={onClose}>取消</Button>
+                        <Button type="primary" onClick={handleOk} style={{ marginLeft: 8 }}>保存</Button>
                     </div>
                 </div>
             }

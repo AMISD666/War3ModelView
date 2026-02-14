@@ -121,20 +121,31 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
                             onClick={() => setSelectedIndex(index)}
                             style={{
                                 cursor: 'pointer',
-                                padding: '8px 12px',
-                                backgroundColor: selectedIndex === index ? '#5a9cff' : 'transparent',
+                                padding: '6px 12px',
+                                backgroundColor: selectedIndex === index ? '#1677ff' : 'transparent',
                                 color: selectedIndex === index ? '#fff' : '#b0b0b0',
                                 transition: 'background 0.2s',
-                                borderBottom: '1px solid #3a3a3a'
+                                borderBottom: '1px solid #3a3a3a',
+                                minHeight: '36px'
                             }}
                             className="hover:bg-[#454545]"
                         >
-                            <div style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
-                                <span style={{ fontWeight: 'bold' }}>Geoset {index}</span>
-                                <span style={{ fontSize: '10px', opacity: 0.7 }}>
-                                    {item.Vertices ? item.Vertices.length / 3 : 0}v / {item.Faces ? item.Faces.length / 3 : 0}f
+                            {(() => {
+                                const vertexCount = Array.isArray(item.Vertices) || ArrayBuffer.isView(item.Vertices)
+                                    ? Math.floor((item.Vertices.length || 0) / 3)
+                                    : (Number(item.VertexCount) || 0)
+                                const faceCount = Array.isArray(item.Faces) || ArrayBuffer.isView(item.Faces)
+                                    ? Math.floor((item.Faces.length || 0) / 3)
+                                    : (Number(item.FaceCount) || 0)
+                                return (
+                            <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                <span style={{ fontWeight: '500', fontSize: '13px' }}>Geoset {index}</span>
+                                <span style={{ fontSize: '10px', opacity: 0.6 }}>
+                                    {vertexCount}v | {faceCount}f
                                 </span>
                             </div>
+                                )
+                            })()}
                         </List.Item>
                     )}
                 />
@@ -144,17 +155,18 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
                 {selectedGeoset ? (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                         <Card
-                            title={<span style={{ color: '#b0b0b0' }}>Geoset Properties</span>}
+                            title={<span style={{ color: '#e8e8e8', fontSize: '13px' }}>Geoset 属性</span>}
                             size="small"
                             bordered={false}
                             style={{ background: '#333333', border: '1px solid #4a4a4a' }}
-                            headStyle={{ borderBottom: '1px solid #4a4a4a' }}
+                            styles={{ header: { borderBottom: '1px solid #4a4a4a', padding: '4px 12px' }, body: { padding: '12px' } }}
                         >
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                                <div>
-                                    <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>Material ID:</Text>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    <Text style={{ minWidth: '80px', color: '#b0b0b0', fontSize: '12px' }}>材质:</Text>
                                     <Select
-                                        style={{ width: '100%' }}
+                                        size="small"
+                                        style={{ flex: 1 }}
                                         value={selectedGeoset.MaterialID}
                                         onChange={(v) => {
                                             const materialCount = (modelData as any)?.Materials?.length || 0
@@ -166,14 +178,15 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
                                         popupClassName="dark-theme-select-dropdown"
                                         options={(modelData as any)?.Materials?.map((_m: any, i: number) => ({
                                             value: i,
-                                            label: `Material ${i}`
+                                            label: `材质 ${i}`
                                         })) || []}
                                     />
                                 </div>
-                                <div>
-                                    <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>Selection Group:</Text>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    <Text style={{ minWidth: '80px', color: '#b0b0b0', fontSize: '12px' }}>选择组:</Text>
                                     <InputNumber
-                                        style={{ width: '100%', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
+                                        size="small"
+                                        style={{ width: '80px', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8', fontSize: '12px' }}
                                         value={selectedGeoset.SelectionGroup}
                                         onChange={(v) => updateLocalGeoset(selectedIndex, { SelectionGroup: v })}
                                     />
@@ -191,17 +204,17 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
                                         lastAppliedSignatureRef.current = getSignature(cloned)
                                         setLocalGeosets(cloned)
                                         setHasChanges(false)
-                                        message.info('Changes reset')
+                                        message.info('已重置更改')
                                     }
                                 }}
                             >
-                                Reset
+                                重置
                             </Button>
                         </div>
                     </div>
                 ) : (
                     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#808080' }}>
-                        Select a geoset from the list
+                        请从列表中选择一个 Geoset
                     </div>
                 )}
             </div>
@@ -219,13 +232,13 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
 
     return (
         <DraggableModal
-            title="Geoset Editor"
+            title="Geoset 编辑器"
             open={visible}
             onOk={handleOk}
             onCancel={onClose}
             width={850}
-            okText="Confirm"
-            cancelText="Cancel"
+            okText="保存"
+            cancelText="取消"
             maskClosable={false}
             wrapClassName="dark-theme-modal"
             styles={{

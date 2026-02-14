@@ -306,7 +306,12 @@ interface ModelState {
     setModelData: (
         data: ModelData | null,
         path: string | null,
-        options?: { skipAutoRecalculate?: boolean }
+        options?: {
+            skipAutoRecalculate?: boolean
+            // Detached manager snapshots are already normalized in main window.
+            // Skip expensive rebuild passes to speed up detached window startup.
+            skipModelRebuild?: boolean
+        }
     ) => void;
     setLoading: (loading: boolean) => void;
     updateNode: (objectId: number, updates: Partial<ModelNode>) => void;
@@ -1100,34 +1105,39 @@ export const useModelStore = create<ModelState>((set, get) => ({
         const nodes = extractNodesFromModel(data);
         console.log('[ModelStore] Loaded model with', nodes.length, 'nodes');
 
-        // FORCE NO REORDERING ON LOAD to prevent invalidating saved bone references
-        const correctedData = updateModelDataWithNodes(data, nodes, false);
+        const fastLoad = options?.skipModelRebuild === true
+
+        // FORCE NO REORDERING ON LOAD to prevent invalidating saved bone references.
+        // In detached fast-load mode, use snapshot data directly to reduce startup latency.
+        const correctedData = fastLoad ? data : updateModelDataWithNodes(data, nodes, false);
+        const activeData = correctedData ?? data;
 
         // Auto recalculate extent and normals based on settings
-        if (!options?.skipAutoRecalculate) {
+        if (!options?.skipAutoRecalculate && activeData) {
             const rendererState = useRendererStore.getState();
             if (rendererState.autoRecalculateExtent) {
-                recalculateModelExtent(correctedData);
+                recalculateModelExtent(activeData);
             }
             if (rendererState.autoRecalculateNormals) {
-                recalculateModelNormals(correctedData);
+                recalculateModelNormals(activeData);
             }
         }
 
         // Reset animation state on new model load
         // Initialize geosets as hidden (User request: default unchecked)
-        const geosetCount = (correctedData as any)?.Geosets?.length || 0;
+        const geosetCount = (activeData as any)?.Geosets?.length || 0;
         const allGeosetIds = Array.from({ length: geosetCount }, (_, i) => i);
 
-        // Extract nodes again from corrected data to get updated ObjectIds
-        const correctedNodes = extractNodesFromModel(correctedData);
+        // Extract nodes again from corrected data to get updated ObjectIds.
+        // Fast-load can safely reuse the first extraction.
+        const correctedNodes = fastLoad ? nodes : extractNodesFromModel(activeData);
 
-        const sequences = (correctedData as any)?.Sequences || [];
+        const sequences = (activeData as any)?.Sequences || [];
         const defaultSequenceIndex = pickDefaultSequenceIndex(sequences);
         const hasSequences = sequences.length > 0;
 
         set({
-            modelData: correctedData,
+            modelData: activeData,
             modelPath: path || (data as any)?.path || (data as any)?.__modelPath || null,
             nodes: correctedNodes,
             sequences,

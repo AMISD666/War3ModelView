@@ -1,5 +1,5 @@
 ﻿import React, { useState, useEffect } from 'react'
-import { Button } from 'antd'
+import { Button, Card } from 'antd'
 import { MasterDetailLayout } from '../MasterDetailLayout'
 import { useModelStore } from '../../store/modelStore'
 import { useHistoryStore } from '../../store/historyStore'
@@ -67,7 +67,7 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
         const oldAnims = [...textureAnims]
 
         useHistoryStore.getState().push({
-            name: 'Add Texture Animation',
+            name: '添加贴图动画',
             undo: () => setTextureAnims(oldAnims),
             redo: () => setTextureAnims(newAnims)
         })
@@ -81,7 +81,7 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
         const oldAnims = [...textureAnims]
 
         useHistoryStore.getState().push({
-            name: `Delete Texture Animation ${index}`,
+            name: `删除贴图动画 ${index}`,
             undo: () => setTextureAnims(oldAnims),
             redo: () => setTextureAnims(newAnims)
         })
@@ -98,7 +98,7 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
         const oldAnims = [...textureAnims]
 
         useHistoryStore.getState().push({
-            name: `Update Texture Animation ${index}`,
+            name: `更新贴图动画 ${index}`,
             undo: () => setTextureAnims(oldAnims),
             redo: () => setTextureAnims(newAnims)
         })
@@ -122,7 +122,7 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
 
         const oldAnims = [...textureAnims]
         useHistoryStore.getState().push({
-            name: `Toggle Texture Animation Block ${key}`,
+            name: `切换贴图动画块 ${key}`,
             undo: () => setTextureAnims(oldAnims),
             redo: () => setTextureAnims(newAnims)
         })
@@ -149,40 +149,39 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                color: isSelected ? '#fff' : '#b0b0b0'
+                color: isSelected ? '#fff' : '#b0b0b0',
+                fontSize: '13px',
+                padding: '4px 0'
             }}
         >
-            <span>{`TextureAnim ${index}`}</span>
+            <span>{`动画 ${index}`}</span>
         </div>
     )
 
-    const renderDetail = (item: any, index: number) => (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-            <DynamicField
-                label="Translation"
-                isDynamic={!!item.Translation}
-                onDynamicChange={(c) => toggleBlock(index, 'Translation', c)}
-                onEdit={() => openEditor(index, 'Translation')}
-                buttonLabel="Edit Translation"
-            />
-
-            <DynamicField
-                label="Rotation"
-                isDynamic={!!item.Rotation}
-                onDynamicChange={(c) => toggleBlock(index, 'Rotation', c)}
-                onEdit={() => openEditor(index, 'Rotation')}
-                buttonLabel="Edit Rotation"
-            />
-
-            <DynamicField
-                label="Scaling"
-                isDynamic={!!item.Scaling}
-                onDynamicChange={(c) => toggleBlock(index, 'Scaling', c)}
-                onEdit={() => openEditor(index, 'Scaling')}
-                buttonLabel="Edit Scaling"
-            />
-        </div>
-    )
+    const renderDetail = (item: any, index: number) => {
+        const propertyNames = ['Translation', 'Rotation', 'Scaling']
+        return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {propertyNames.map((prop) => (
+                    <Card
+                        key={prop}
+                        size="small"
+                        title={<span style={{ fontSize: '12px' }}>{prop}</span>}
+                        style={{ background: '#2d2d2d', borderColor: '#444' }}
+                        styles={{ header: { padding: '4px 12px', minHeight: 0, borderBottom: '1px solid #444' }, body: { padding: '12px' } }}
+                    >
+                        <DynamicField
+                            label=""
+                            isDynamic={!!item[prop]}
+                            onDynamicChange={(c) => toggleBlock(index, prop, c)}
+                            onEdit={() => openEditor(index, prop)}
+                            buttonLabel={`编辑 ${prop}`}
+                        />
+                    </Card>
+                ))}
+            </div>
+        )
+    }
 
     const getCurrentEditorData = () => {
         if (!editingBlock || selectedIndex < 0) return null
@@ -206,8 +205,8 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
                 renderDetail={renderDetail}
                 onAdd={handleAdd}
                 onDelete={handleDelete}
-                listTitle="Animation List"
-                detailTitle="Animation Detail"
+                listTitle="动画列表"
+                detailTitle="动画详情"
                 listWidth={200}
             />
         </div>
@@ -227,7 +226,7 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
                         onCancel={() => setEditorVisible(false)}
                         onOk={handleEditorSave}
                         initialData={getCurrentEditorData()}
-                        title={`Edit ${editingBlock?.field}`}
+                        title={`编辑 ${editingBlock?.field}`}
                         vectorSize={getVectorSize()}
                         globalSequences={globalSequences}
                     />
@@ -239,7 +238,7 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
     return (
         <>
             <DraggableModal
-                title="Texture Animation Manager"
+                title="贴图动画管理器"
                 open={visible}
                 onCancel={onClose}
                 width={800}
@@ -248,7 +247,7 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
             >
                 {renderManagerContent()}
                 <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
-                    <Button onClick={onClose}>Close</Button>
+                    <Button onClick={onClose}>关闭</Button>
                 </div>
             </DraggableModal>
 
@@ -258,7 +257,7 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
                     onCancel={() => setEditorVisible(false)}
                     onOk={handleEditorSave}
                     initialData={getCurrentEditorData()}
-                    title={`Edit ${editingBlock?.field}`}
+                    title={`编辑 ${editingBlock?.field}`}
                     vectorSize={getVectorSize()}
                     globalSequences={globalSequences}
                 />
