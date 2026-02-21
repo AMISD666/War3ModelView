@@ -12,6 +12,43 @@ interface GeosetVisibilityPanelProps {
     onClose: () => void;
 }
 
+const DEFAULT_PANEL_SIZE = { width: 220, height: 300 };
+const MINIMIZED_PANEL_SIZE = { width: 160, height: 34 };
+const FALLBACK_DEFAULT_POSITION = { x: 980, y: 96 };
+
+const clampPanelPosition = (x: number, y: number, width: number, height: number) => {
+    if (typeof window === 'undefined') {
+        return { x: Math.round(x), y: Math.round(y) };
+    }
+
+    const maxX = Math.max(8, window.innerWidth - width - 8);
+    const maxY = Math.max(8, window.innerHeight - height - 8);
+
+    return {
+        x: Math.max(8, Math.min(Math.round(x), maxX)),
+        y: Math.max(8, Math.min(Math.round(y), maxY))
+    };
+};
+
+const getDefaultPanelPosition = (width: number, height: number) => {
+    if (typeof window === 'undefined') {
+        return FALLBACK_DEFAULT_POSITION;
+    }
+
+    const viewerHost = document.getElementById('main-viewer-host');
+    const viewerRect = viewerHost?.getBoundingClientRect();
+
+    const fallbackRightX = window.innerWidth - width - 12;
+    const anchorX = viewerRect
+        ? viewerRect.right - width - 12
+        : fallbackRightX;
+    const anchorY = viewerRect
+        ? viewerRect.top + 52
+        : FALLBACK_DEFAULT_POSITION.y;
+
+    return clampPanelPosition(anchorX, anchorY, width, height);
+};
+
 export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ visible, onClose }) => {
     const {
         modelData,
@@ -27,16 +64,13 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
         setSelectedGeosetIndices
     } = useModelStore();
 
-    // Imports for command manager (ensure these are imported at top of file)
-    // We'll trust the import block to be handled by the user or auto-added if I can't reach top.
-    // Wait, I should add imports at the top. But let's check if I can reach line 1.
-    // I'll do a separate chunk for imports.
-
-    const [position, setPosition] = useState({ x: 20, y: 140 });
-    const [size, setSize] = useState({ width: 220, height: 350 });
+    const [position, setPosition] = useState(() => getDefaultPanelPosition(DEFAULT_PANEL_SIZE.width, DEFAULT_PANEL_SIZE.height));
+    const [size, setSize] = useState(DEFAULT_PANEL_SIZE);
     const [isDragging, setIsDragging] = useState(false);
     const [isResizing, setIsResizing] = useState<'right' | 'bottom' | 'corner' | null>(null);
     const [isMinimized, setIsMinimized] = useState(false);
+    const hasInitializedDefaultPosition = useRef(false);
+    const hasUserDragged = useRef(false);
     const dragStart = useRef({ x: 0, y: 0, posX: 0, posY: 0, width: 0, height: 0 });
     const panelRef = useRef<HTMLDivElement>(null);
     const contentRef = useRef<HTMLDivElement>(null);
@@ -125,6 +159,41 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
         }
         return undefined;
     }, [contextMenuVisible]);
+
+    useEffect(() => {
+        if (!visible || hasInitializedDefaultPosition.current || hasUserDragged.current) {
+            return undefined;
+        }
+
+        const rafId = window.requestAnimationFrame(() => {
+            setPosition(getDefaultPanelPosition(size.width, size.height));
+            hasInitializedDefaultPosition.current = true;
+        });
+
+        return () => window.cancelAnimationFrame(rafId);
+    }, [visible, size.width, size.height]);
+
+    useEffect(() => {
+        if (!visible) {
+            return undefined;
+        }
+
+        const handleWindowResize = () => {
+            const effectiveWidth = isMinimized ? MINIMIZED_PANEL_SIZE.width : size.width;
+            const effectiveHeight = isMinimized ? MINIMIZED_PANEL_SIZE.height : size.height;
+
+            if (hasUserDragged.current) {
+                setPosition((prev) => clampPanelPosition(prev.x, prev.y, effectiveWidth, effectiveHeight));
+                return;
+            }
+
+            setPosition(getDefaultPanelPosition(effectiveWidth, effectiveHeight));
+        };
+
+        handleWindowResize();
+        window.addEventListener('resize', handleWindowResize);
+        return () => window.removeEventListener('resize', handleWindowResize);
+    }, [visible, isMinimized, size.width, size.height]);
 
     // Delete selected geosets
     const handleDeleteGeosets = () => {
@@ -360,6 +429,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
         if ((e.target as HTMLElement).closest('.panel-control-btn')) return;
         if ((e.target as HTMLElement).closest('.resize-handle')) return;
         if ((e.target as HTMLElement).closest('.geoset-item')) return;
+        hasUserDragged.current = true;
         setIsDragging(true);
         dragStart.current = {
             x: e.clientX,
@@ -391,7 +461,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                 const deltaX = e.clientX - dragStart.current.x;
                 const deltaY = e.clientY - dragStart.current.y;
                 setPosition({
-                    x: dragStart.current.posX - deltaX,
+                    x: dragStart.current.posX + deltaX,
                     y: dragStart.current.posY + deltaY
                 });
             }
@@ -400,7 +470,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                 const deltaY = e.clientY - dragStart.current.y;
 
                 if (isResizing === 'right' || isResizing === 'corner') {
-                    const newWidth = Math.max(150, dragStart.current.width - deltaX);
+                    const newWidth = Math.max(150, dragStart.current.width + deltaX);
                     setSize(prev => ({ ...prev, width: newWidth }));
                 }
                 if (isResizing === 'bottom' || isResizing === 'corner') {
@@ -436,9 +506,9 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                 ref={panelRef}
                 style={{
                     position: 'fixed',
-                    right: position.x,
+                    left: position.x,
                     top: position.y,
-                    width: isMinimized ? 140 : size.width,
+                    width: isMinimized ? 160 : size.width,
                     height: isMinimized ? 'auto' : size.height,
                     backgroundColor: 'rgba(30, 30, 30, 0.95)',
                     border: '1px solid rgba(80, 80, 80, 0.6)',
@@ -465,54 +535,62 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                         flexShrink: 0
                     }}
                 >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <Checkbox
-                            checked={forceShowAllGeosets}
-                            onChange={(e) => setForceShowAllGeosets(e.target.checked)}
-                        />
-                        <span style={{ color: '#ddd', fontSize: 11, fontWeight: 500 }}>
-                            {forceShowAllGeosets ? <EyeOutlined /> : <EyeInvisibleOutlined />} 全部
-                        </span>
-                        <div style={{ display: 'flex', gap: 4, marginLeft: 4 }}>
-                            <button
-                                className="panel-control-btn"
-                                onClick={() => {
-                                    const cmd = new SetGeosetVisibilityCommand([]);
-                                    commandManager.execute(cmd);
-                                }}
-                                style={{
-                                    background: 'rgba(60, 130, 200, 0.3)',
-                                    border: '1px solid #4a9eff',
-                                    borderRadius: 3,
-                                    color: '#8bc4ff',
-                                    cursor: 'pointer',
-                                    padding: '2px 6px',
-                                    fontSize: 10
-                                }}
-                                title="全选"
-                            >
-                                ✓全选
-                            </button>
-                            <button
-                                className="panel-control-btn"
-                                onClick={() => {
-                                    const cmd = new SetGeosetVisibilityCommand(geosets.map((_, i) => i));
-                                    commandManager.execute(cmd);
-                                }}
-                                style={{
-                                    background: 'rgba(100, 100, 100, 0.3)',
-                                    border: '1px solid #666',
-                                    borderRadius: 3,
-                                    color: '#aaa',
-                                    cursor: 'pointer',
-                                    padding: '2px 6px',
-                                    fontSize: 10
-                                }}
-                                title="取消全选"
-                            >
-                                取消
-                            </button>
-                        </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, whiteSpace: 'nowrap' }}>
+                        {isMinimized ? (
+                            <span style={{ color: '#ddd', fontSize: 11, fontWeight: 600 }}>
+                                多边形工具
+                            </span>
+                        ) : (
+                            <>
+                                <Checkbox
+                                    checked={forceShowAllGeosets}
+                                    onChange={(e) => setForceShowAllGeosets(e.target.checked)}
+                                />
+                                <span style={{ color: '#ddd', fontSize: 11, fontWeight: 500 }}>
+                                    {forceShowAllGeosets ? <EyeOutlined /> : <EyeInvisibleOutlined />} 全部
+                                </span>
+                                <div style={{ display: 'flex', gap: 4, marginLeft: 4 }}>
+                                    <button
+                                        className="panel-control-btn"
+                                        onClick={() => {
+                                            const cmd = new SetGeosetVisibilityCommand([]);
+                                            commandManager.execute(cmd);
+                                        }}
+                                        style={{
+                                            background: 'rgba(60, 130, 200, 0.3)',
+                                            border: '1px solid #4a9eff',
+                                            borderRadius: 3,
+                                            color: '#8bc4ff',
+                                            cursor: 'pointer',
+                                            padding: '2px 6px',
+                                            fontSize: 10
+                                        }}
+                                        title="全选"
+                                    >
+                                        ✓全选
+                                    </button>
+                                    <button
+                                        className="panel-control-btn"
+                                        onClick={() => {
+                                            const cmd = new SetGeosetVisibilityCommand(geosets.map((_, i) => i));
+                                            commandManager.execute(cmd);
+                                        }}
+                                        style={{
+                                            background: 'rgba(100, 100, 100, 0.3)',
+                                            border: '1px solid #666',
+                                            borderRadius: 3,
+                                            color: '#aaa',
+                                            cursor: 'pointer',
+                                            padding: '2px 6px',
+                                            fontSize: 10
+                                        }}
+                                        title="取消全选"
+                                    >
+                                        取消
+                                    </button>
+                                </div>
+                            </>
+                        )}
                     </div>
                     <div style={{ display: 'flex', gap: 4 }}>
                         <button
@@ -659,7 +737,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                             onMouseDown={(e) => handleResizeStart(e, 'right')}
                             style={{
                                 position: 'absolute',
-                                left: 0,
+                                right: 0,
                                 top: 0,
                                 width: 6,
                                 height: '100%',
@@ -684,10 +762,10 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                             style={{
                                 position: 'absolute',
                                 bottom: 0,
-                                left: 0,
+                                right: 0,
                                 width: 12,
                                 height: 12,
-                                cursor: 'nesw-resize'
+                                cursor: 'nwse-resize'
                             }}
                         />
                     </>

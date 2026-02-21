@@ -1,4 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react'
+import { Tooltip } from 'antd'
+import {
+    AimOutlined,
+    AppstoreOutlined,
+    BgColorsOutlined,
+    BorderOutlined,
+    BulbOutlined,
+    DeploymentUnitOutlined,
+    FireOutlined,
+    LinkOutlined,
+    ToolOutlined
+} from '@ant-design/icons'
+import { useRendererStore } from '../store/rendererStore'
 
 
 interface MenuBarProps {
@@ -109,6 +122,39 @@ const MenuBar: React.FC<MenuBarProps> = ({
     const [activeMenu, setActiveMenu] = useState<string | null>(null)
     const [settingsSubMenu, setSettingsSubMenu] = useState<string | null>(null)
     const menuRef = useRef<HTMLDivElement>(null)
+    const {
+        showGridXY: quickShowGridXY, setShowGridXY: setQuickShowGridXY,
+        showGridXZ: quickShowGridXZ, setShowGridXZ: setQuickShowGridXZ,
+        showGridYZ: quickShowGridYZ, setShowGridYZ: setQuickShowGridYZ,
+        showNodes: quickShowNodes, setShowNodes: setQuickShowNodes,
+        showSkeleton: quickShowSkeleton, setShowSkeleton: setQuickShowSkeleton,
+        showGeosetVisibility: quickShowGeosetVisibility, setShowGeosetVisibility: setQuickShowGeosetVisibility,
+        showCollisionShapes: quickShowCollisionShapes, setShowCollisionShapes: setQuickShowCollisionShapes,
+        showLights: quickShowLights, setShowLights: setQuickShowLights,
+        showParticles: quickShowParticles, setShowParticles: setQuickShowParticles,
+        showRibbons: quickShowRibbons, setShowRibbons: setQuickShowRibbons
+    } = useRendererStore((state) => ({
+        showGridXY: state.showGridXY,
+        setShowGridXY: state.setShowGridXY,
+        showGridXZ: state.showGridXZ,
+        setShowGridXZ: state.setShowGridXZ,
+        showGridYZ: state.showGridYZ,
+        setShowGridYZ: state.setShowGridYZ,
+        showNodes: state.showNodes,
+        setShowNodes: state.setShowNodes,
+        showSkeleton: state.showSkeleton,
+        setShowSkeleton: state.setShowSkeleton,
+        showGeosetVisibility: state.showGeosetVisibility,
+        setShowGeosetVisibility: state.setShowGeosetVisibility,
+        showCollisionShapes: state.showCollisionShapes,
+        setShowCollisionShapes: state.setShowCollisionShapes,
+        showLights: state.showLights,
+        setShowLights: state.setShowLights,
+        showParticles: state.showParticles,
+        setShowParticles: state.setShowParticles,
+        showRibbons: state.showRibbons,
+        setShowRibbons: state.setShowRibbons
+    }))
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
@@ -168,6 +214,50 @@ const MenuBar: React.FC<MenuBarProps> = ({
     const unhoverStyle = (e: React.MouseEvent) => {
         (e.currentTarget as HTMLElement).style.backgroundColor = 'transparent'
     }
+
+    const quickToggleItems: Array<{
+        key: string
+        label: string
+        checked: boolean
+        onToggle: (next: boolean) => void
+        icon: React.ReactNode
+        badge?: string
+    }> = [
+            { key: 'grid-xy', label: 'XY 网格', checked: quickShowGridXY, onToggle: setQuickShowGridXY, icon: <AppstoreOutlined />, badge: 'XY' },
+            { key: 'grid-xz', label: 'XZ 网格', checked: quickShowGridXZ, onToggle: setQuickShowGridXZ, icon: <AppstoreOutlined />, badge: 'XZ' },
+            { key: 'grid-yz', label: 'YZ 网格', checked: quickShowGridYZ, onToggle: setQuickShowGridYZ, icon: <AppstoreOutlined />, badge: 'YZ' },
+            { key: 'nodes', label: '骨骼节点', checked: quickShowNodes, onToggle: setQuickShowNodes, icon: <AimOutlined /> },
+            { key: 'skeleton', label: '渲染骨架', checked: quickShowSkeleton, onToggle: setQuickShowSkeleton, icon: <DeploymentUnitOutlined /> },
+            { key: 'geoset-tool', label: '多边形工具', checked: quickShowGeosetVisibility, onToggle: setQuickShowGeosetVisibility, icon: <ToolOutlined /> },
+            { key: 'collision', label: '碰撞节点', checked: quickShowCollisionShapes, onToggle: setQuickShowCollisionShapes, icon: <BorderOutlined /> },
+            { key: 'lights', label: '灯光对象', checked: quickShowLights, onToggle: setQuickShowLights, icon: <BulbOutlined /> },
+            { key: 'particles', label: '粒子显示', checked: quickShowParticles, onToggle: setQuickShowParticles, icon: <FireOutlined /> },
+            { key: 'ribbons', label: '丝带显示', checked: quickShowRibbons, onToggle: setQuickShowRibbons, icon: <LinkOutlined /> },
+            {
+                key: 'render-mode',
+                label: '线框模式',
+                checked: renderMode === 'wireframe',
+                onToggle: (next) => onChangeRenderMode(next ? 'wireframe' : 'textured'),
+                icon: <BgColorsOutlined />
+            }
+        ]
+
+    const quickBtnStyle = (checked: boolean): React.CSSProperties => ({
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 3,
+        minWidth: 26,
+        height: 22,
+        padding: '0 6px',
+        borderRadius: 4,
+        border: checked ? '1px solid #2f7dff' : '1px solid #555',
+        backgroundColor: checked ? '#1f4f9f' : '#303030',
+        color: checked ? '#fff' : '#bfbfbf',
+        cursor: 'pointer',
+        fontSize: 11,
+        lineHeight: 1
+    })
 
     return (
         <div ref={menuRef} style={{
@@ -640,6 +730,27 @@ const MenuBar: React.FC<MenuBarProps> = ({
                 onMouseLeave={mainMode !== 'batch' ? unhoverStyle : undefined}
             >
                 批量模式
+            </div>
+
+            <div style={{ width: 1, height: 18, backgroundColor: '#555', margin: '0 8px 0 6px' }} />
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingRight: 8 }}>
+                {quickToggleItems.map((item) => (
+                    <Tooltip
+                        key={item.key}
+                        title={`${item.label}：${item.checked ? '已开启' : '已关闭'}`}
+                        mouseEnterDelay={0.15}
+                    >
+                        <button
+                            type="button"
+                            onClick={() => item.onToggle(!item.checked)}
+                            style={quickBtnStyle(item.checked)}
+                        >
+                            {item.icon}
+                            {item.badge && <span style={{ fontSize: 9, fontWeight: 600 }}>{item.badge}</span>}
+                        </button>
+                    </Tooltip>
+                ))}
             </div>
         </div >
     )

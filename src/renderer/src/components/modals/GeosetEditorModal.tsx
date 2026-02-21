@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react'
-import { List, Button, InputNumber, Select, Card, Typography, message } from 'antd'
+﻿import React, { useState, useEffect, useRef } from 'react'
+import { List, Button, Select, Card, Typography, message } from 'antd'
+import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { DraggableModal } from '../DraggableModal';
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
@@ -224,3 +225,4 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose 
 }
 
 export default GeosetEditorModal
+

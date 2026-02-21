@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react'
-import { List, Button, Input, Checkbox, InputNumber, Card, Typography, message, Dropdown } from 'antd'
+﻿import React, { useState, useEffect, useRef } from 'react'
+import { List, Button, Input, Checkbox, Card, Typography, message, Dropdown } from 'antd'
+import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import type { MenuProps } from 'antd'
 import { DraggableModal } from '../DraggableModal';
 import { PlusOutlined, DeleteOutlined, FolderOpenOutlined, DatabaseOutlined } from '@ant-design/icons'
@@ -675,3 +676,4 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
 }
 
 export default TextureEditorModal
+

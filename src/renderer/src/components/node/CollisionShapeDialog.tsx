@@ -1,5 +1,6 @@
+﻿import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import React, { useEffect } from 'react';
-import { Form, InputNumber, Radio, Button, Row, Col } from 'antd';
+import { Form, Radio, Button, Row, Col } from 'antd';
 import { DraggableModal } from '../DraggableModal';
 import { useModelStore } from '../../store/modelStore';
 import type { CollisionShapeNode } from '../../types/node';
@@ -228,3 +229,4 @@ const CollisionShapeDialog: React.FC<CollisionShapeDialogProps> = ({ visible, no
 };
 
 export default CollisionShapeDialog;
+

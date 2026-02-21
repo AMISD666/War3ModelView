@@ -184,6 +184,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const showCamerasRef = useRef(showCameras)
   const showLightsRef = useRef(showLights)
   const showAttachmentsRef = useRef(showAttachments)
+  const showParticlesRef = useRef(useRendererStore.getState().showParticles ?? true)
+  const showRibbonsRef = useRef(useRendererStore.getState().showRibbons ?? true)
   const showWireframeRef = useRef(showWireframe)
   const isPlayingRef = useRef(isPlaying)
   const playbackSpeedRef = useRef(playbackSpeed)
@@ -251,6 +253,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       showVerticesRef.current = getShowVerticesForCurrentContext()
       enableLightingRef.current = state.enableLighting
       vertexSettingsRef.current = state.vertexSettings
+      showParticlesRef.current = state.showParticles ?? true
+      showRibbonsRef.current = state.showRibbons ?? true
     })
     return () => unsub()
   }, [])
@@ -2993,7 +2997,38 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             } as any
 
             // WebGL render
-            mdlRenderer.render(mvMatrix, pMatrix, renderOpts)
+            // Runtime toggles for particles/ribbons share the same state as ViewSettings.
+            const modelInstance = (mdlRenderer as any)?.modelInstance
+            const particlesController = modelInstance?.particlesController
+            const ribbonsController = modelInstance?.ribbonsController
+            const noopRender = () => { }
+
+            const originalParticleRender = particlesController?.render
+            const originalParticleRenderGPU = particlesController?.renderGPU
+            const originalRibbonRender = ribbonsController?.render
+            const originalRibbonRenderGPU = ribbonsController?.renderGPU
+
+            if (particlesController && !showParticlesRef.current) {
+              particlesController.render = noopRender
+              particlesController.renderGPU = noopRender
+            }
+            if (ribbonsController && !showRibbonsRef.current) {
+              ribbonsController.render = noopRender
+              ribbonsController.renderGPU = noopRender
+            }
+
+            try {
+              mdlRenderer.render(mvMatrix, pMatrix, renderOpts)
+            } finally {
+              if (particlesController) {
+                particlesController.render = originalParticleRender
+                particlesController.renderGPU = originalParticleRenderGPU
+              }
+              if (ribbonsController) {
+                ribbonsController.render = originalRibbonRender
+                ribbonsController.renderGPU = originalRibbonRenderGPU
+              }
+            }
 
             // === Grid Rendering (Moved AFTER model for correct depth/overlay handling) ===
             if (gl && (showGridXY || showGridXZ || showGridYZ)) {
@@ -3393,7 +3428,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               )
             }
 
-            if (showSkeletonRef.current && mdlRenderer.rendererData.nodes && currentMainMode === 'animation') {
+            if (showSkeletonRef.current && mdlRenderer.rendererData.nodes && currentMainMode !== 'uv') {
               const { selectedNodeIds } = useSelectionStore.getState()
               if (gl) {
                 gl.disable(gl.DEPTH_TEST)

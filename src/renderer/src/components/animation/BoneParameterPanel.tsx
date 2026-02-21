@@ -1,5 +1,5 @@
-import React, { useMemo, useCallback, useRef, useEffect, useState } from 'react'
-import { Typography, Select, message, InputNumber, Button, ColorPicker } from 'antd'
+﻿import React, { useMemo, useCallback, useRef, useEffect, useState } from 'react'
+import { Typography, Select, message, Button, ColorPicker, Input, Tooltip } from 'antd'
 import { quat, vec3 } from 'gl-matrix'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useModelStore } from '../../store/modelStore'
@@ -14,7 +14,7 @@ const { Text } = Typography
 // --- 转换工具函数 ---
 
 /**
- * 四元数转欧拉角 (弧度 -> 度)
+ * 四元数转欧拉角（弧度 -> 度）
  */
 function quatToEuler(q: number[] | Float32Array): [number, number, number] {
     const [x, y, z, w] = q
@@ -35,7 +35,7 @@ function quatToEuler(q: number[] | Float32Array): [number, number, number] {
 }
 
 /**
- * 欧拉角转四元数 (度 -> 弧度 -> 四元数)
+ * 欧拉角转四元数（度 -> 弧度 -> 四元数）
  */
 function eulerToQuat(euler: [number, number, number]): [number, number, number, number] {
     const [rx, ry, rz] = euler.map(v => v * Math.PI / 180)
@@ -158,223 +158,31 @@ const isAnimTrack = (value: any): value is { Keys: any[]; LineType?: number; Glo
     return !!value && typeof value === 'object' && Array.isArray(value.Keys)
 }
 
+
 const deepClone = <T,>(value: T): T => {
     const cloneFn = (globalThis as any).structuredClone
     if (typeof cloneFn === 'function') return cloneFn(value)
     return JSON.parse(JSON.stringify(value))
 }
 
-const normalizeScalarKeys = (keys: any[]): any[] => {
-    if (!Array.isArray(keys)) return []
-    return keys
-        .map((key) => {
-            const frame = typeof key?.Frame === 'number' ? key.Frame : Number(key?.Time ?? 0)
-            const raw = ArrayBuffer.isView(key?.Vector) ? Array.from(key.Vector as ArrayLike<number>) : key?.Vector
-            const value = Array.isArray(raw) ? Number(raw[0] ?? 0) : Number(raw ?? 0)
-            return {
-                Frame: Number.isFinite(frame) ? Math.round(frame) : 0,
-                Vector: [Number.isFinite(value) ? value : 0],
-                InTan: [0],
-                OutTan: [0]
-            }
-        })
-        .sort((a, b) => a.Frame - b.Frame)
+const MAX_DISPLAY_DECIMALS = 4
+
+const roundToDecimals = (value: number, decimals: number): number => {
+    if (!Number.isFinite(value)) return 0
+    const factor = 10 ** decimals
+    const rounded = Math.round((value + Number.EPSILON) * factor) / factor
+    return Object.is(rounded, -0) ? 0 : rounded
 }
 
-const normalizeColorKeys = (keys: any[]): any[] => {
-    if (!Array.isArray(keys)) return []
-    return keys
-        .map((key) => {
-            const frame = typeof key?.Frame === 'number' ? key.Frame : Number(key?.Time ?? 0)
-            const raw = ArrayBuffer.isView(key?.Vector) ? Array.from(key.Vector as ArrayLike<number>) : key?.Vector
-            const vector = Array.isArray(raw) ? raw : [1, 1, 1]
-            return {
-                Frame: Number.isFinite(frame) ? Math.round(frame) : 0,
-                Vector: [
-                    Number(vector[0] ?? 1),
-                    Number(vector[1] ?? 1),
-                    Number(vector[2] ?? 1)
-                ],
-                InTan: [0, 0, 0],
-                OutTan: [0, 0, 0]
-            }
-        })
-        .sort((a, b) => a.Frame - b.Frame)
-}
-
-const upsertScalarKey = (keys: any[], frame: number, value: number) => {
-    const next = normalizeScalarKeys(keys)
-    const f = Math.round(frame)
-    const index = next.findIndex((key) => key.Frame === f)
-    const newKey = { Frame: f, Vector: [value], InTan: [0], OutTan: [0] }
-    if (index >= 0) next[index] = newKey
-    else next.push(newKey)
-    next.sort((a, b) => a.Frame - b.Frame)
-    return next
-}
-
-const ensureScalarDefaultZeroKey = (keys: any[]) => {
-    const next = normalizeScalarKeys(keys)
-    if (next.some((key) => key.Frame === 0)) return next
-    return upsertScalarKey(next, 0, 0)
-}
-
-const upsertColorKey = (keys: any[], frame: number, color: [number, number, number]) => {
-    const next = normalizeColorKeys(keys)
-    const f = Math.round(frame)
-    const index = next.findIndex((key) => key.Frame === f)
-    const newKey = { Frame: f, Vector: [color[0], color[1], color[2]], InTan: [0, 0, 0], OutTan: [0, 0, 0] }
-    if (index >= 0) next[index] = newKey
-    else next.push(newKey)
-    next.sort((a, b) => a.Frame - b.Frame)
-    return next
-}
-
-const removeKeyByFrame = (keys: any[], frame: number, size: 1 | 3) => {
-    const normalized = size === 1 ? normalizeScalarKeys(keys) : normalizeColorKeys(keys)
-    const f = Math.round(frame)
-    return normalized.filter((key) => key.Frame !== f)
-}
-
-const PARTICLE_PANEL_TRACKS = [
-    { label: '可见度', propName: 'Visibility', fallback: 1, step: 0.05, precision: 5, min: 0, max: 1 },
-    { label: '放射速率', propName: 'EmissionRate', fallback: 0, step: 0.1, precision: 5 },
-    { label: '速度', propName: 'Speed', fallback: 0, step: 0.1, precision: 5 },
-    { label: '变化', propName: 'Variation', fallback: 0, step: 0.1, precision: 5 },
-    { label: '纬度', propName: 'Latitude', fallback: 0, step: 0.1, precision: 5 },
-    { label: '重力', propName: 'Gravity', fallback: 0, step: 0.1, precision: 5 }
-] as const
-
-type ParticlePanelTrackProp = typeof PARTICLE_PANEL_TRACKS[number]['propName']
-
-const DEFAULT_PARTICLE_PANEL_INPUTS: Record<ParticlePanelTrackProp, number> = {
-    Visibility: 1,
-    EmissionRate: 0,
-    Speed: 0,
-    Variation: 0,
-    Latitude: 0,
-    Gravity: 0
-}
-
-const isParticleEmitter2Node = (node: any): boolean => String(node?.type ?? '') === 'ParticleEmitter2'
-
-const sampleScalarTrack = (track: any, frame: number, fallback = 1) => {
-    if (!isAnimTrack(track) || track.Keys.length === 0) return fallback
-    const keys = normalizeScalarKeys(track.Keys)
-    if (keys.length === 0) return fallback
-    if (frame <= keys[0].Frame) return Number(keys[0].Vector?.[0] ?? fallback)
-    if (frame >= keys[keys.length - 1].Frame) return Number(keys[keys.length - 1].Vector?.[0] ?? fallback)
-    for (let i = 0; i < keys.length - 1; i++) {
-        const left = keys[i]
-        const right = keys[i + 1]
-        if (frame >= left.Frame && frame <= right.Frame) {
-            const span = right.Frame - left.Frame
-            if (span <= 0) return Number(left.Vector?.[0] ?? fallback)
-            const t = (frame - left.Frame) / span
-            const lv = Number(left.Vector?.[0] ?? fallback)
-            const rv = Number(right.Vector?.[0] ?? fallback)
-            return lv + (rv - lv) * t
-        }
-    }
-    return fallback
-}
-
-const readParticleScalarValueAtFrame = (node: any, propName: string, frame: number, fallback: number) => {
-    const prop = node?.[propName]
-    if (isAnimTrack(prop)) {
-        return Number(sampleScalarTrack(prop, frame, fallback))
-    }
-    if (typeof prop === 'number' && Number.isFinite(prop)) return Number(prop)
-    if (Array.isArray(prop) && prop.length > 0) {
-        const first = Number(prop[0])
-        return Number.isFinite(first) ? first : fallback
-    }
-    return fallback
-}
-
-const sampleColorTrack = (track: any, frame: number, fallback: [number, number, number]): [number, number, number] => {
-    if (!isAnimTrack(track) || track.Keys.length === 0) return fallback
-    const keys = normalizeColorKeys(track.Keys)
-    if (keys.length === 0) return fallback
-    if (frame <= keys[0].Frame) return [keys[0].Vector[0], keys[0].Vector[1], keys[0].Vector[2]]
-    if (frame >= keys[keys.length - 1].Frame) return [keys[keys.length - 1].Vector[0], keys[keys.length - 1].Vector[1], keys[keys.length - 1].Vector[2]]
-    for (let i = 0; i < keys.length - 1; i++) {
-        const left = keys[i]
-        const right = keys[i + 1]
-        if (frame >= left.Frame && frame <= right.Frame) {
-            const span = right.Frame - left.Frame
-            if (span <= 0) return [left.Vector[0], left.Vector[1], left.Vector[2]]
-            const t = (frame - left.Frame) / span
-            return [
-                left.Vector[0] + (right.Vector[0] - left.Vector[0]) * t,
-                left.Vector[1] + (right.Vector[1] - left.Vector[1]) * t,
-                left.Vector[2] + (right.Vector[2] - left.Vector[2]) * t
-            ]
-        }
-    }
-    return fallback
-}
-
-const clamp01 = (value: number, fallback = 1) => {
-    const safe = Number.isFinite(value) ? value : fallback
-    return Math.max(0, Math.min(1, safe))
-}
-
-const parseColorToNormalized = (
-    color: any,
-    fallback: [number, number, number]
-): [number, number, number] => {
-    if (color?.toRgb && typeof color.toRgb === 'function') {
-        const rgb = color.toRgb()
-        return [
-            clamp01((rgb?.r ?? fallback[0] * 255) / 255),
-            clamp01((rgb?.g ?? fallback[1] * 255) / 255),
-            clamp01((rgb?.b ?? fallback[2] * 255) / 255)
-        ]
-    }
-
-    if (Array.isArray(color) && color.length >= 3) {
-        return [
-            clamp01(Number(color[0] ?? fallback[0])),
-            clamp01(Number(color[1] ?? fallback[1])),
-            clamp01(Number(color[2] ?? fallback[2]))
-        ]
-    }
-
-    if (typeof color === 'string') {
-        const value = color.trim().toLowerCase()
-        if (/^#([0-9a-f]{6})$/.test(value)) {
-            const r = parseInt(value.slice(1, 3), 16) / 255
-            const g = parseInt(value.slice(3, 5), 16) / 255
-            const b = parseInt(value.slice(5, 7), 16) / 255
-            return [clamp01(r), clamp01(g), clamp01(b)]
-        }
-        if (/^#([0-9a-f]{3})$/.test(value)) {
-            const r = parseInt(value[1] + value[1], 16) / 255
-            const g = parseInt(value[2] + value[2], 16) / 255
-            const b = parseInt(value[3] + value[3], 16) / 255
-            return [clamp01(r), clamp01(g), clamp01(b)]
-        }
-    }
-
-    if (color && typeof color === 'object') {
-        const rr = Number(color.r)
-        const gg = Number(color.g)
-        const bb = Number(color.b)
-        if (Number.isFinite(rr) && Number.isFinite(gg) && Number.isFinite(bb)) {
-            const is255Scale = rr > 1 || gg > 1 || bb > 1
-            if (is255Scale) {
-                return [clamp01(rr / 255), clamp01(gg / 255), clamp01(bb / 255)]
-            }
-            return [clamp01(rr), clamp01(gg), clamp01(bb)]
-        }
-    }
-
-    return [...fallback]
+const formatInputNumber = (value: number, decimals = MAX_DISPLAY_DECIMALS): string => {
+    const safeDecimals = Math.max(0, Math.min(decimals, MAX_DISPLAY_DECIMALS))
+    const rounded = roundToDecimals(Number(value) || 0, safeDecimals)
+    if (Number.isInteger(rounded)) return String(rounded)
+    return rounded.toFixed(safeDecimals).replace(/\.?0+$/, '')
 }
 
 /**
- * 骨骼参数面板 - 显示选中骨骼的 T/R/S 信息和绑定骨骼列表
+ * 节点参数面板 - 显示选中骨骼的 T/R/S 信息和绑定骨骼列表
  */
 const BoneParameterPanel: React.FC = () => {
     const {
@@ -384,28 +192,18 @@ const BoneParameterPanel: React.FC = () => {
         multiMoveMode,
         setMultiMoveMode,
         animationSubMode,
-        pickedGeosetIndex
+        pickedGeosetIndex,
+        timelineKeyframeDisplayMode
     } = useSelectionStore()
 
     const nodes = useModelStore(state => state.nodes)
     const modelData = useModelStore(state => state.modelData)
     const currentFrame = useModelStore(state => state.currentFrame)
-    const selectedGeosetIndex = useModelStore(state => state.selectedGeosetIndex)
-    const selectedGeosetIndices = useModelStore(state => state.selectedGeosetIndices)
-    const setSelectedGeosetIndex = useModelStore(state => state.setSelectedGeosetIndex)
-    const setSelectedGeosetIndices = useModelStore(state => state.setSelectedGeosetIndices)
-    const setGeosetAnims = useModelStore(state => state.setGeosetAnims)
-    const replaceNodes = useModelStore(state => state.replaceNodes)
-
     const renderer = useRendererStore(state => state.renderer)
     const { executeCommand } = useCommandManager()
     const [translationSpace, setTranslationSpace] = useState<'world' | 'local'>('world')
     const [worldTick, setWorldTick] = useState(0)
-    const [geosetAlphaInput, setGeosetAlphaInput] = useState<number>(1)
-    const [geosetColorInput, setGeosetColorInput] = useState<[number, number, number]>([1, 1, 1])
-    const [editingGeosetField, setEditingGeosetField] = useState<'Alpha' | 'Color' | null>(null)
-    const [isGeosetEditorOpen, setIsGeosetEditorOpen] = useState(false)
-    const [particlePanelInputs, setParticlePanelInputs] = useState<Record<ParticlePanelTrackProp, number>>(DEFAULT_PARTICLE_PANEL_INPUTS)
+    const [viewportHeight, setViewportHeight] = useState(() => (typeof window !== 'undefined' ? window.innerHeight : 720))
 
     // 选中的单个骨骼
     const selectedNode = selectedNodeIds.length === 1
@@ -446,162 +244,6 @@ const BoneParameterPanel: React.FC = () => {
         })
         return Array.from(boneMap.entries()).map(([index, name]) => ({ index, name }))
     }, [modelData, nodes, selectedVertexIds])
-
-    const geosetIds = useMemo(() => {
-        const geosets = (modelData as any)?.Geosets
-        if (!Array.isArray(geosets)) return []
-        return geosets.map((_: any, index: number) => index)
-    }, [modelData])
-
-    const selectedGeosetIds = useMemo(() => {
-        const fromMulti = selectedGeosetIndices.filter((id) => geosetIds.includes(id))
-        if (fromMulti.length > 0) return fromMulti
-        if (selectedGeosetIndex !== null && geosetIds.includes(selectedGeosetIndex)) return [selectedGeosetIndex]
-        if (pickedGeosetIndex !== null && geosetIds.includes(pickedGeosetIndex)) return [pickedGeosetIndex]
-        return geosetIds.length > 0 ? [geosetIds[0]] : []
-    }, [selectedGeosetIndices, selectedGeosetIndex, pickedGeosetIndex, geosetIds])
-
-    const selectedParticleIds = useMemo(() => {
-        const particleIdSet = new Set<number>(
-            (nodes as any[])
-                .filter((node) => isParticleEmitter2Node(node))
-                .map((node: any) => Number(node.ObjectId))
-                .filter((id) => Number.isFinite(id))
-        )
-        return selectedNodeIds
-            .map((id) => Number(id))
-            .filter((id) => Number.isFinite(id) && particleIdSet.has(id))
-    }, [nodes, selectedNodeIds])
-
-    useEffect(() => {
-        if (animationSubMode !== 'keyframe') return
-        if (pickedGeosetIndex === null || pickedGeosetIndex < 0) return
-        if (!geosetIds.includes(pickedGeosetIndex)) return
-        if (!selectedGeosetIds.includes(pickedGeosetIndex)) {
-            setSelectedGeosetIndices([pickedGeosetIndex])
-        }
-    }, [animationSubMode, pickedGeosetIndex, geosetIds, selectedGeosetIds, setSelectedGeosetIndices])
-
-    useEffect(() => {
-        if (animationSubMode !== 'keyframe') return
-        if (geosetIds.length === 0) return
-        if (selectedGeosetIds.length === 0) {
-            setSelectedGeosetIndices([geosetIds[0]])
-        }
-    }, [animationSubMode, geosetIds, selectedGeosetIds, setSelectedGeosetIndices])
-
-    useEffect(() => {
-        if (selectedGeosetIds.length === 0) {
-            if (selectedGeosetIndex !== null) setSelectedGeosetIndex(null)
-            return
-        }
-        if (selectedGeosetIndex !== selectedGeosetIds[0]) {
-            setSelectedGeosetIndex(selectedGeosetIds[0])
-        }
-    }, [selectedGeosetIds, selectedGeosetIndex, setSelectedGeosetIndex])
-
-    const activeGeosetId = selectedGeosetIds.length > 0 ? selectedGeosetIds[0] : null
-
-    const geosetAnimIndex = useMemo(() => {
-        if (activeGeosetId === null) return -1
-        const anims = (modelData as any)?.GeosetAnims
-        if (!Array.isArray(anims)) return -1
-        return anims.findIndex((anim: any) => Number(anim?.GeosetId) === Number(activeGeosetId))
-    }, [modelData, activeGeosetId])
-
-    const activeGeosetAnim = useMemo(() => {
-        if (geosetAnimIndex < 0) return null
-        const anims = (modelData as any)?.GeosetAnims
-        if (!Array.isArray(anims)) return null
-        return anims[geosetAnimIndex] || null
-    }, [modelData, geosetAnimIndex])
-
-    const currentGeosetAlpha = useMemo(() => {
-        if (!activeGeosetAnim) return 1
-        if (isAnimTrack(activeGeosetAnim.Alpha)) {
-            return sampleScalarTrack(activeGeosetAnim.Alpha, currentFrame, 1)
-        }
-        if (typeof activeGeosetAnim.Alpha === 'number') return activeGeosetAnim.Alpha
-        return 1
-    }, [activeGeosetAnim, currentFrame])
-
-    const currentGeosetColor = useMemo<[number, number, number]>(() => {
-        if (!activeGeosetAnim) return [1, 1, 1]
-        if (isAnimTrack(activeGeosetAnim.Color)) {
-            return sampleColorTrack(activeGeosetAnim.Color, currentFrame, [1, 1, 1])
-        }
-        if (Array.isArray(activeGeosetAnim.Color)) {
-            return [
-                Number(activeGeosetAnim.Color[0] ?? 1),
-                Number(activeGeosetAnim.Color[1] ?? 1),
-                Number(activeGeosetAnim.Color[2] ?? 1)
-            ]
-        }
-        if (ArrayBuffer.isView(activeGeosetAnim.Color)) {
-            const arr = Array.from(activeGeosetAnim.Color as ArrayLike<number>)
-            return [Number(arr[0] ?? 1), Number(arr[1] ?? 1), Number(arr[2] ?? 1)]
-        }
-        return [1, 1, 1]
-    }, [activeGeosetAnim, currentFrame])
-
-    const hasExactGeosetAlphaKey = useMemo(() => {
-        if (!activeGeosetAnim || !isAnimTrack(activeGeosetAnim.Alpha)) return false
-        const frame = Math.round(currentFrame)
-        return normalizeScalarKeys(activeGeosetAnim.Alpha.Keys).some((key) => key.Frame === frame)
-    }, [activeGeosetAnim, currentFrame])
-
-    const hasExactGeosetColorKey = useMemo(() => {
-        if (!activeGeosetAnim || !isAnimTrack(activeGeosetAnim.Color)) return false
-        const frame = Math.round(currentFrame)
-        return normalizeColorKeys(activeGeosetAnim.Color.Keys).some((key) => key.Frame === frame)
-    }, [activeGeosetAnim, currentFrame])
-
-    const hasExactParticleKeyByProp = useMemo(() => {
-        const result: Record<ParticlePanelTrackProp, boolean> = {
-            Visibility: false,
-            EmissionRate: false,
-            Speed: false,
-            Variation: false,
-            Latitude: false,
-            Gravity: false
-        }
-        if (selectedParticleIds.length === 0) return result
-        const frame = Math.round(currentFrame)
-        PARTICLE_PANEL_TRACKS.forEach(({ propName }) => {
-            result[propName] = selectedParticleIds.some((id) => {
-                const node = nodes.find((n: any) => Number(n?.ObjectId) === Number(id))
-                if (!node) return false
-                const track = (node as any)[propName]
-                if (!isAnimTrack(track)) return false
-                return normalizeScalarKeys(track.Keys).some((key) => key.Frame === frame)
-            })
-        })
-        return result
-    }, [selectedParticleIds, currentFrame, nodes])
-
-    useEffect(() => {
-        setGeosetAlphaInput(Number(currentGeosetAlpha.toFixed(3)))
-    }, [currentGeosetAlpha, activeGeosetId])
-
-    useEffect(() => {
-        setGeosetColorInput([currentGeosetColor[0], currentGeosetColor[1], currentGeosetColor[2]])
-    }, [currentGeosetColor, activeGeosetId])
-
-    useEffect(() => {
-        if (selectedParticleIds.length === 0) {
-            setParticlePanelInputs(DEFAULT_PARTICLE_PANEL_INPUTS)
-            return
-        }
-        const firstParticleId = selectedParticleIds[0]
-        const node = nodes.find((n: any) => Number(n?.ObjectId) === Number(firstParticleId))
-        if (!node) return
-        const frame = Math.round(currentFrame)
-        const nextInputs = { ...DEFAULT_PARTICLE_PANEL_INPUTS }
-        PARTICLE_PANEL_TRACKS.forEach(({ propName, fallback }) => {
-            nextInputs[propName] = Number(readParticleScalarValueAtFrame(node, propName, frame, fallback))
-        })
-        setParticlePanelInputs(nextInputs)
-    }, [selectedParticleIds, nodes, currentFrame])
 
     // 插值数据
     const translationLocal = useMemo(() => {
@@ -644,22 +286,31 @@ const BoneParameterPanel: React.FC = () => {
     const transRefs = useRef<{ x: HTMLInputElement | null, y: HTMLInputElement | null, z: HTMLInputElement | null }>({ x: null, y: null, z: null })
     const rotRefs = useRef<{ x: HTMLInputElement | null, y: HTMLInputElement | null, z: HTMLInputElement | null }>({ x: null, y: null, z: null })
     const scaleRefs = useRef<{ x: HTMLInputElement | null, y: HTMLInputElement | null, z: HTMLInputElement | null }>({ x: null, y: null, z: null })
+    const transAddRefs = useRef<{ x: HTMLInputElement | null, y: HTMLInputElement | null, z: HTMLInputElement | null }>({ x: null, y: null, z: null })
+    const rotAddRefs = useRef<{ x: HTMLInputElement | null, y: HTMLInputElement | null, z: HTMLInputElement | null }>({ x: null, y: null, z: null })
+    const scaleAddRefs = useRef<{ x: HTMLInputElement | null, y: HTMLInputElement | null, z: HTMLInputElement | null }>({ x: null, y: null, z: null })
     const isEditingRef = useRef(false)
 
     // 同步到输入框
     useEffect(() => {
         if (isEditingRef.current) return
-        if (transRefs.current.x) transRefs.current.x.value = (translationDisplay[0] || 0).toFixed(5)
-        if (transRefs.current.y) transRefs.current.y.value = (translationDisplay[1] || 0).toFixed(5)
-        if (transRefs.current.z) transRefs.current.z.value = (translationDisplay[2] || 0).toFixed(5)
+        if (transRefs.current.x) transRefs.current.x.value = formatInputNumber(translationDisplay[0] || 0, 4)
+        if (transRefs.current.y) transRefs.current.y.value = formatInputNumber(translationDisplay[1] || 0, 4)
+        if (transRefs.current.z) transRefs.current.z.value = formatInputNumber(translationDisplay[2] || 0, 4)
 
-        if (rotRefs.current.x) rotRefs.current.x.value = (euler[0] || 0).toFixed(2)
-        if (rotRefs.current.y) rotRefs.current.y.value = (euler[1] || 0).toFixed(2)
-        if (rotRefs.current.z) rotRefs.current.z.value = (euler[2] || 0).toFixed(2)
+        if (rotRefs.current.x) rotRefs.current.x.value = formatInputNumber(euler[0] || 0, 2)
+        if (rotRefs.current.y) rotRefs.current.y.value = formatInputNumber(euler[1] || 0, 2)
+        if (rotRefs.current.z) rotRefs.current.z.value = formatInputNumber(euler[2] || 0, 2)
 
-        if (scaleRefs.current.x) scaleRefs.current.x.value = (scaling[0] || 0).toFixed(5)
-        if (scaleRefs.current.y) scaleRefs.current.y.value = (scaling[1] || 0).toFixed(5)
-        if (scaleRefs.current.z) scaleRefs.current.z.value = (scaling[2] || 0).toFixed(5)
+        if (scaleRefs.current.x) scaleRefs.current.x.value = formatInputNumber(scaling[0] || 0, 4)
+        if (scaleRefs.current.y) scaleRefs.current.y.value = formatInputNumber(scaling[1] || 0, 4)
+        if (scaleRefs.current.z) scaleRefs.current.z.value = formatInputNumber(scaling[2] || 0, 4)
+
+            ; (['x', 'y', 'z'] as const).forEach((axis) => {
+                if (transAddRefs.current[axis]) transAddRefs.current[axis]!.value = ''
+                if (rotAddRefs.current[axis]) rotAddRefs.current[axis]!.value = ''
+                if (scaleAddRefs.current[axis]) scaleAddRefs.current[axis]!.value = ''
+            })
     }, [translationDisplay, euler, scaling])
 
     useEffect(() => {
@@ -668,6 +319,12 @@ const BoneParameterPanel: React.FC = () => {
         renderer.update(0)
         setWorldTick((tick) => tick + 1)
     }, [renderer, selectedNodeIds, currentFrame, translationSpace])
+
+    useEffect(() => {
+        const onResize = () => setViewportHeight(window.innerHeight)
+        window.addEventListener('resize', onResize)
+        return () => window.removeEventListener('resize', onResize)
+    }, [])
 
     const handleFocus = useCallback(() => { isEditingRef.current = true }, [])
 
@@ -707,7 +364,7 @@ const BoneParameterPanel: React.FC = () => {
             const rNode = renderer.model.Nodes.find((n: any) => n.ObjectId === nodeId) as any
             if (rNode) rNode[propName] = { ...existingProp, Keys: keys }
         }
-        message.success(`已更新 ${propName} 关键帧 (帧 ${frame})`)
+        message.success(`已更新 ${propName} 关键帧（帧 ${frame}）`)
     }, [selectedNode, currentFrame, renderer])
 
     const handleCommitTrans = () => {
@@ -759,316 +416,27 @@ const BoneParameterPanel: React.FC = () => {
 
 
 
+    // 可用的父节点列表
+    const availableParents = useMemo(() => {
+        if (!nodes) return []
+        return nodes
+            .filter((n: any) => !selectedNode || n.ObjectId !== selectedNode.ObjectId)
+            .map((n: any) => ({ label: `${n.Name} (${n.ObjectId})`, value: n.ObjectId }))
+    }, [nodes, selectedNode])
+
     const handleParentChange = (value: number | undefined) => {
         if (!renderer || !selectedNode) return
         executeCommand(new SetNodeParentCommand(renderer, selectedNode.ObjectId, value))
         message.success('已修改父节点')
     }
 
-    const availableParents = useMemo(() => {
-        if (!selectedNode) return []
-        const descendantIds = new Set<number>([selectedNode.ObjectId])
-        const stack = [selectedNode.ObjectId]
-        while (stack.length > 0) {
-            const curr = stack.pop()!
-            nodes.filter(n => n.Parent === curr).forEach(c => {
-                if (!descendantIds.has(c.ObjectId)) { descendantIds.add(c.ObjectId); stack.push(c.ObjectId) }
-            })
-        }
-        return nodes.filter(n => !descendantIds.has(n.ObjectId)).map(n => ({ label: `${n.Name} (${n.ObjectId})`, value: n.ObjectId }))
-    }, [nodes, selectedNode])
 
-    const commitGeosetAnims = useCallback((historyName: string, updater: (nextAnims: any[]) => void) => {
-        if (!modelData) return
-        const oldAnims = deepClone((modelData as any).GeosetAnims || [])
-        const nextAnims = deepClone(oldAnims)
-        updater(nextAnims)
-
-        useHistoryStore.getState().push({
-            name: historyName,
-            undo: () => setGeosetAnims(deepClone(oldAnims)),
-            redo: () => setGeosetAnims(deepClone(nextAnims))
-        })
-
-        setGeosetAnims(nextAnims)
-    }, [modelData, setGeosetAnims])
-
-    const commitParticleTracks = useCallback((historyName: string, updater: (nextNodes: any[]) => void) => {
-        const state = useModelStore.getState()
-        const oldNodes = deepClone(state.nodes || [])
-        const nextNodes = deepClone(oldNodes)
-        updater(nextNodes)
-
-        useHistoryStore.getState().push({
-            name: historyName,
-            undo: () => replaceNodes(deepClone(oldNodes), { triggerReload: false }),
-            redo: () => replaceNodes(deepClone(nextNodes), { triggerReload: false })
-        })
-
-        replaceNodes(nextNodes, { triggerReload: false })
-    }, [replaceNodes])
-
-    const handleParticleInputChange = useCallback((propName: ParticlePanelTrackProp, value: number | null) => {
-        const safeValue = Number.isFinite(Number(value)) ? Number(value) : DEFAULT_PARTICLE_PANEL_INPUTS[propName]
-        setParticlePanelInputs((prev) => ({ ...prev, [propName]: safeValue }))
-    }, [])
-
-    const handleInsertSingleParticleDynamicKey = useCallback((propName: ParticlePanelTrackProp) => {
-        if (selectedParticleIds.length === 0) return
-        const frame = Math.round(currentFrame)
-        const field = PARTICLE_PANEL_TRACKS.find((track) => track.propName === propName)
-        const fallback = field?.fallback ?? DEFAULT_PARTICLE_PANEL_INPUTS[propName]
-        const rawInput = particlePanelInputs[propName]
-        const keyValue = Number.isFinite(Number(rawInput)) ? Number(rawInput) : fallback
-
-        commitParticleTracks(`Particle ${propName} Key x${selectedParticleIds.length}`, (nextNodes) => {
-            selectedParticleIds.forEach((particleId) => {
-                const nodeIndex = nextNodes.findIndex((n: any) => Number(n?.ObjectId) === Number(particleId))
-                if (nodeIndex < 0) return
-                const nextNode = { ...nextNodes[nodeIndex] } as any
-                const track = isAnimTrack(nextNode[propName])
-                    ? { ...nextNode[propName], Keys: normalizeScalarKeys(nextNode[propName].Keys) }
-                    : { LineType: 1, GlobalSeqId: null, Keys: [] as any[] }
-                track.Keys = ensureScalarDefaultZeroKey(track.Keys)
-                track.Keys = upsertScalarKey(track.Keys, frame, keyValue)
-                nextNode[propName] = track
-                nextNodes[nodeIndex] = nextNode
-            })
-        })
-    }, [selectedParticleIds, currentFrame, particlePanelInputs, commitParticleTracks])
-
-    const handleInsertParticleDynamicKeys = useCallback(() => {
-        if (selectedParticleIds.length === 0) return
-        const frame = Math.round(currentFrame)
-        commitParticleTracks(`Particle Dynamic Key x${selectedParticleIds.length}`, (nextNodes) => {
-            selectedParticleIds.forEach((particleId) => {
-                const nodeIndex = nextNodes.findIndex((n: any) => Number(n?.ObjectId) === Number(particleId))
-                if (nodeIndex < 0) return
-                const nextNode = { ...nextNodes[nodeIndex] } as any
-                PARTICLE_PANEL_TRACKS.forEach(({ propName, fallback }) => {
-                    const inputValue = Number(particlePanelInputs[propName])
-                    const currentValue = Number.isFinite(inputValue)
-                        ? inputValue
-                        : readParticleScalarValueAtFrame(nextNode, propName, frame, fallback)
-                    const track = isAnimTrack(nextNode[propName])
-                        ? { ...nextNode[propName], Keys: normalizeScalarKeys(nextNode[propName].Keys) }
-                        : { LineType: 1, GlobalSeqId: null, Keys: [] as any[] }
-                    track.Keys = ensureScalarDefaultZeroKey(track.Keys)
-                    track.Keys = upsertScalarKey(track.Keys, frame, currentValue)
-                    nextNode[propName] = track
-                })
-                nextNodes[nodeIndex] = nextNode
-            })
-        })
-    }, [selectedParticleIds, currentFrame, particlePanelInputs, commitParticleTracks])
-
-    const handleInsertGeosetAlphaKey = useCallback(() => {
-        if (selectedGeosetIds.length === 0) return
-        const frame = Math.round(currentFrame)
-        const alpha = Math.max(0, Math.min(1, Number(geosetAlphaInput)))
-        commitGeosetAnims(`Geoset Alpha Key x${selectedGeosetIds.length}`, (nextAnims) => {
-            selectedGeosetIds.forEach((geosetId) => {
-                let index = nextAnims.findIndex((anim: any) => Number(anim?.GeosetId) === Number(geosetId))
-                if (index < 0) {
-                    nextAnims.push({ GeosetId: geosetId, Alpha: 1, Color: [1, 1, 1], Flags: 0, UseColor: true, DropShadow: false })
-                    index = nextAnims.length - 1
-                }
-                const currentAnim = { ...nextAnims[index] }
-                const track = isAnimTrack(currentAnim.Alpha)
-                    ? { ...currentAnim.Alpha, Keys: normalizeScalarKeys(currentAnim.Alpha.Keys) }
-                    : { LineType: 1, GlobalSeqId: null, Keys: [] as any[] }
-                track.Keys = upsertScalarKey(track.Keys, 0, 1)
-                track.Keys = upsertScalarKey(track.Keys, frame, alpha)
-                currentAnim.Alpha = track
-                nextAnims[index] = currentAnim
-            })
-        })
-    }, [selectedGeosetIds, currentFrame, geosetAlphaInput, commitGeosetAnims])
-
-    const handleDeleteGeosetAlphaKey = useCallback(() => {
-        if (selectedGeosetIds.length === 0) return
-        const frame = Math.round(currentFrame)
-        commitGeosetAnims(`Delete Geoset Alpha Key x${selectedGeosetIds.length}`, (nextAnims) => {
-            selectedGeosetIds.forEach((geosetId) => {
-                const index = nextAnims.findIndex((anim: any) => Number(anim?.GeosetId) === Number(geosetId))
-                if (index < 0) return
-                const currentAnim = { ...nextAnims[index] }
-                const track = isAnimTrack(currentAnim.Alpha)
-                    ? { ...currentAnim.Alpha, Keys: normalizeScalarKeys(currentAnim.Alpha.Keys) }
-                    : { LineType: 1, GlobalSeqId: null, Keys: [] as any[] }
-                track.Keys = removeKeyByFrame(track.Keys, frame, 1)
-                track.Keys = upsertScalarKey(track.Keys, 0, 1)
-                currentAnim.Alpha = track
-                nextAnims[index] = currentAnim
-            })
-        })
-    }, [selectedGeosetIds, currentFrame, commitGeosetAnims])
-
-    const handleInsertGeosetColorKey = useCallback(() => {
-        if (selectedGeosetIds.length === 0) return
-        const frame = Math.round(currentFrame)
-        const color: [number, number, number] = [
-            Math.max(0, Math.min(1, Number(geosetColorInput[0] ?? 1))),
-            Math.max(0, Math.min(1, Number(geosetColorInput[1] ?? 1))),
-            Math.max(0, Math.min(1, Number(geosetColorInput[2] ?? 1)))
-        ]
-        commitGeosetAnims(`Geoset Color Key x${selectedGeosetIds.length}`, (nextAnims) => {
-            selectedGeosetIds.forEach((geosetId) => {
-                let index = nextAnims.findIndex((anim: any) => Number(anim?.GeosetId) === Number(geosetId))
-                if (index < 0) {
-                    nextAnims.push({ GeosetId: geosetId, Alpha: 1, Color: [1, 1, 1], Flags: 0, UseColor: true, DropShadow: false })
-                    index = nextAnims.length - 1
-                }
-                const currentAnim = { ...nextAnims[index], UseColor: true }
-                const track = isAnimTrack(currentAnim.Color)
-                    ? { ...currentAnim.Color, Keys: normalizeColorKeys(currentAnim.Color.Keys) }
-                    : { LineType: 1, GlobalSeqId: null, Keys: [] as any[] }
-                track.Keys = upsertColorKey(track.Keys, frame, color)
-                currentAnim.Color = track
-                nextAnims[index] = currentAnim
-            })
-        })
-    }, [selectedGeosetIds, currentFrame, geosetColorInput, commitGeosetAnims])
-
-    const handleDeleteGeosetColorKey = useCallback(() => {
-        if (selectedGeosetIds.length === 0) return
-        const frame = Math.round(currentFrame)
-        commitGeosetAnims(`Delete Geoset Color Key x${selectedGeosetIds.length}`, (nextAnims) => {
-            selectedGeosetIds.forEach((geosetId) => {
-                const index = nextAnims.findIndex((anim: any) => Number(anim?.GeosetId) === Number(geosetId))
-                if (index < 0) return
-                const currentAnim = { ...nextAnims[index] }
-                const track = isAnimTrack(currentAnim.Color)
-                    ? { ...currentAnim.Color, Keys: normalizeColorKeys(currentAnim.Color.Keys) }
-                    : { LineType: 1, GlobalSeqId: null, Keys: [] as any[] }
-                track.Keys = removeKeyByFrame(track.Keys, frame, 3)
-                currentAnim.Color = track.Keys.length > 0 ? track : [1, 1, 1]
-                nextAnims[index] = currentAnim
-            })
-        })
-    }, [selectedGeosetIds, currentFrame, commitGeosetAnims])
-
-    const applyStaticAlphaToTracklessGeosets = useCallback((alpha: number) => {
-        if (selectedGeosetIds.length === 0) return
-        const anims = (modelData as any)?.GeosetAnims
-        const targets = selectedGeosetIds.filter((geosetId) => {
-            if (!Array.isArray(anims)) return true
-            const anim = anims.find((item: any) => Number(item?.GeosetId) === Number(geosetId))
-            return !isAnimTrack(anim?.Alpha)
-        })
-        if (targets.length === 0) return
-
-        commitGeosetAnims(`Set Geoset Static Alpha x${targets.length}`, (nextAnims) => {
-            targets.forEach((geosetId) => {
-                let index = nextAnims.findIndex((anim: any) => Number(anim?.GeosetId) === Number(geosetId))
-                if (index < 0) {
-                    nextAnims.push({ GeosetId: geosetId, Alpha: 1, Color: [1, 1, 1], Flags: 0, UseColor: true, DropShadow: false })
-                    index = nextAnims.length - 1
-                }
-                const currentAnim = { ...nextAnims[index] }
-                currentAnim.Alpha = alpha
-                nextAnims[index] = currentAnim
-            })
-        })
-    }, [selectedGeosetIds, modelData, commitGeosetAnims])
-
-    const applyStaticColorToTracklessGeosets = useCallback((color: [number, number, number]) => {
-        if (selectedGeosetIds.length === 0) return
-        const anims = (modelData as any)?.GeosetAnims
-        const targets = selectedGeosetIds.filter((geosetId) => {
-            if (!Array.isArray(anims)) return true
-            const anim = anims.find((item: any) => Number(item?.GeosetId) === Number(geosetId))
-            return !isAnimTrack(anim?.Color)
-        })
-        if (targets.length === 0) return
-
-        commitGeosetAnims(`Set Geoset Static Color x${targets.length}`, (nextAnims) => {
-            targets.forEach((geosetId) => {
-                let index = nextAnims.findIndex((anim: any) => Number(anim?.GeosetId) === Number(geosetId))
-                if (index < 0) {
-                    nextAnims.push({ GeosetId: geosetId, Alpha: 1, Color: [1, 1, 1], Flags: 0, UseColor: true, DropShadow: false })
-                    index = nextAnims.length - 1
-                }
-                const currentAnim = { ...nextAnims[index], UseColor: true }
-                currentAnim.Color = [color[0], color[1], color[2]]
-                nextAnims[index] = currentAnim
-            })
-        })
-    }, [selectedGeosetIds, modelData, commitGeosetAnims])
-
-    const handleGeosetAlphaInputChange = useCallback((value: number | null) => {
-        const alpha = Math.max(0, Math.min(1, Number(value ?? 1)))
-        setGeosetAlphaInput(alpha)
-        applyStaticAlphaToTracklessGeosets(alpha)
-    }, [applyStaticAlphaToTracklessGeosets])
-
-    const handleGeosetColorInputChange = useCallback((color: any) => {
-        setGeosetColorInput((prev) => parseColorToNormalized(color, prev))
-    }, [])
-
-    const handleGeosetColorInputChangeComplete = useCallback((color: any) => {
-        const nextColor = parseColorToNormalized(color, geosetColorInput)
-        setGeosetColorInput(nextColor)
-        applyStaticColorToTracklessGeosets(nextColor)
-    }, [geosetColorInput, applyStaticColorToTracklessGeosets])
-
-    const handleSaveGeosetKeyframeEditor = useCallback((animVector: any) => {
-        if (!editingGeosetField || activeGeosetId === null) {
-            setIsGeosetEditorOpen(false)
-            return
-        }
-        const frame = Math.round(currentFrame)
-        commitGeosetAnims(`Edit Geoset ${activeGeosetId} ${editingGeosetField}`, (nextAnims) => {
-            let index = nextAnims.findIndex((anim: any) => Number(anim?.GeosetId) === Number(activeGeosetId))
-            if (index < 0) {
-                nextAnims.push({ GeosetId: activeGeosetId, Alpha: 1, Color: [1, 1, 1], Flags: 0, UseColor: true, DropShadow: false })
-                index = nextAnims.length - 1
-            }
-            const currentAnim = { ...nextAnims[index] }
-            if (editingGeosetField === 'Alpha') {
-                const keys = upsertScalarKey(normalizeScalarKeys(animVector?.Keys || []), 0, 1)
-                currentAnim.Alpha = {
-                    LineType: typeof animVector?.LineType === 'number' ? animVector.LineType : 1,
-                    GlobalSeqId: animVector?.GlobalSeqId ?? null,
-                    Keys: keys.length > 0 ? keys : upsertScalarKey([], frame, 1)
-                }
-            } else {
-                const keys = normalizeColorKeys(animVector?.Keys || [])
-                currentAnim.Color = {
-                    LineType: typeof animVector?.LineType === 'number' ? animVector.LineType : 1,
-                    GlobalSeqId: animVector?.GlobalSeqId ?? null,
-                    Keys: keys
-                }
-                currentAnim.UseColor = true
-            }
-            nextAnims[index] = currentAnim
-        })
-        setIsGeosetEditorOpen(false)
-    }, [editingGeosetField, activeGeosetId, currentFrame, commitGeosetAnims])
-
-    const geosetEditorData = useMemo(() => {
-        if (!editingGeosetField) return null
-        if (editingGeosetField === 'Alpha') {
-            if (isAnimTrack(activeGeosetAnim?.Alpha)) return activeGeosetAnim?.Alpha
-            return {
-                LineType: 1,
-                GlobalSeqId: null,
-                Keys: [{ Frame: 0, Vector: [currentGeosetAlpha], InTan: [0], OutTan: [0] }]
-            }
-        }
-        if (isAnimTrack(activeGeosetAnim?.Color)) return activeGeosetAnim?.Color
-        return {
-            LineType: 1,
-            GlobalSeqId: null,
-            Keys: [{ Frame: 0, Vector: [...currentGeosetColor], InTan: [0, 0, 0], OutTan: [0, 0, 0] }]
-        }
-    }, [editingGeosetField, activeGeosetAnim, currentGeosetAlpha, currentGeosetColor])
-
-    const isKeyframeCompact = animationSubMode === 'keyframe'
-    const compactUi = {
-        statPadding: isKeyframeCompact ? '6px 8px' : '8px 10px',
+    // 紧凑 UI 布局参数
+    const isKeyframeCompact = viewportHeight < 900
+    const compactUi = useMemo(() => ({
+        statPadding: isKeyframeCompact ? '4px 8px' : '6px 10px',
         statFontSize: isKeyframeCompact ? '10px' : '11px',
-        sectionPadding: isKeyframeCompact ? '8px' : '10px',
+        sectionPadding: isKeyframeCompact ? '6px 8px' : '8px 10px',
         sectionTitleSize: isKeyframeCompact ? '12px' : '13px',
         toggleGap: isKeyframeCompact ? 4 : 6,
         toggleFontSize: isKeyframeCompact ? 10 : 11,
@@ -1088,382 +456,344 @@ const BoneParameterPanel: React.FC = () => {
         parentMarginBottom: isKeyframeCompact ? 8 : 10,
         controlMarginTop: isKeyframeCompact ? 2 : 4,
         geosetRowGap: isKeyframeCompact ? 4 : 6
-    }
+    }), [isKeyframeCompact])
 
     // --- 渲染部分 ---
 
-    // 输入行渲染，支持禁用状态
-    const renderInputRow = (label: string, refs: any, axis: 'x' | 'y' | 'z', color: string, onCommit: () => void, disabled?: boolean) => (
-        <div style={{ display: 'flex', alignItems: 'center', marginBottom: compactUi.inputMarginBottom }}>
-            <span style={{ color: disabled ? '#555' : color, marginRight: compactUi.axisMarginRight, fontSize: compactUi.axisFontSize, width: 12 }}>{axis.toUpperCase()}</span>
-            <input
-                ref={el => refs.current[axis] = el}
-                type="number"
-                step="0.1"
-                disabled={disabled}
-                onFocus={handleFocus}
-                onBlur={onCommit}
-                onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') onCommit() }}
-                style={{
-                    flex: 1,
-                    background: disabled ? '#252525' : '#1f1f1f',
-                    border: disabled ? '1px solid #333' : '1px solid #444',
-                    borderRadius: 4,
-                    color: disabled ? '#555' : '#fff',
-                    padding: compactUi.inputPadding,
-                    fontSize: compactUi.inputFontSize,
-                    outline: 'none',
-                    cursor: disabled ? 'not-allowed' : 'text'
-                }}
-            />
-        </div>
-    )
+    // 输入行渲染：左侧主值，右侧叠加值（输入后主值 += 叠加值）
+    const renderInputRow = (
+        _label: string,
+        refs: React.MutableRefObject<{ x: HTMLInputElement | null, y: HTMLInputElement | null, z: HTMLInputElement | null }>,
+        addRefs: React.MutableRefObject<{ x: HTMLInputElement | null, y: HTMLInputElement | null, z: HTMLInputElement | null }>,
+        axis: 'x' | 'y' | 'z',
+        color: string,
+        onCommit: () => void,
+        disabled?: boolean,
+        digits: number = 5,
+        unit: string = ''
+    ) => {
+        const applyAdditiveValue = () => {
+            if (disabled) return
+            const baseInput = refs.current[axis]
+            const addInput = addRefs.current[axis]
+            if (!baseInput || !addInput) return
+
+            const addText = addInput.value.trim()
+            if (addText.length === 0) return
+
+            const base = Number(baseInput.value)
+            const add = Number(addText)
+            if (!Number.isFinite(add)) {
+                addInput.value = ''
+                return
+            }
+
+            const next = (Number.isFinite(base) ? base : 0) + add
+            baseInput.value = formatInputNumber(next, digits)
+            addInput.value = ''
+            onCommit()
+        }
+
+        return (
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: compactUi.inputMarginBottom }}>
+                <span style={{ color: disabled ? '#555' : color, marginRight: compactUi.axisMarginRight, fontSize: compactUi.axisFontSize, width: 12 }}>{axis.toUpperCase()}</span>
+                <div style={{ flex: 1, display: 'flex', gap: 6 }}>
+                    <div style={{ position: 'relative', width: '50%' }}>
+                        <input
+                            ref={el => refs.current[axis] = el}
+                            type="text"
+                            inputMode="decimal"
+                            disabled={disabled}
+                            onFocus={handleFocus}
+                            onBlur={onCommit}
+                            onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') onCommit() }}
+                            style={{
+                                width: '100%',
+                                background: disabled ? '#252525' : '#1f1f1f',
+                                border: disabled ? '1px solid #333' : '1px solid #444',
+                                borderRadius: 4,
+                                color: disabled ? '#555' : '#fff',
+                                padding: compactUi.inputPadding,
+                                paddingRight: unit ? 18 : undefined,
+                                fontSize: compactUi.inputFontSize,
+                                outline: 'none',
+                                cursor: disabled ? 'not-allowed' : 'text',
+                                boxSizing: 'border-box'
+                            }}
+                        />
+                        {unit && (
+                            <span
+                                style={{
+                                    position: 'absolute',
+                                    right: 6,
+                                    top: '50%',
+                                    transform: 'translateY(-50%)',
+                                    color: disabled ? '#555' : '#888',
+                                    fontSize: compactUi.inputFontSize,
+                                    pointerEvents: 'none'
+                                }}
+                            >
+                                {unit}
+                            </span>
+                        )}
+                    </div>
+                    <div style={{ position: 'relative', width: '50%' }}>
+                        <input
+                            ref={el => addRefs.current[axis] = el}
+                            type="text"
+                            inputMode="decimal"
+                            disabled={disabled}
+                            placeholder="+叠加值"
+                            onFocus={handleFocus}
+                            onBlur={applyAdditiveValue}
+                            onKeyDown={(e) => {
+                                e.stopPropagation()
+                                if (e.key === 'Enter') {
+                                    e.preventDefault()
+                                    applyAdditiveValue()
+                                }
+                            }}
+                            style={{
+                                width: '100%',
+                                background: disabled ? '#252525' : '#1f1f1f',
+                                border: disabled ? '1px solid #333' : '1px solid #444',
+                                borderRadius: 4,
+                                color: disabled ? '#555' : '#fff',
+                                padding: compactUi.inputPadding,
+                                paddingRight: unit ? 18 : undefined,
+                                fontSize: compactUi.inputFontSize,
+                                outline: 'none',
+                                cursor: disabled ? 'not-allowed' : 'text',
+                                boxSizing: 'border-box'
+                            }}
+                        />
+                        {unit && (
+                            <span
+                                style={{
+                                    position: 'absolute',
+                                    right: 6,
+                                    top: '50%',
+                                    transform: 'translateY(-50%)',
+                                    color: disabled ? '#555' : '#888',
+                                    fontSize: compactUi.inputFontSize,
+                                    pointerEvents: 'none'
+                                }}
+                            >
+                                {unit}
+                            </span>
+                        )}
+                    </div>
+                </div>
+            </div>
+        )
+    }
 
     // 是否禁用输入（未选中单个骨骼时）
     const isInputDisabled = !selectedNode
     const globalSequences = (modelData as any)?.GlobalSequences || []
+    const isGeosetPanelMode = animationSubMode === 'keyframe' && timelineKeyframeDisplayMode === 'geosetAnim'
+    const geosetPanelBottom = Math.min(180, Math.max(130, Math.round(viewportHeight * 0.2))) + 10
 
     return (
         <>
             <div style={{ height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: '#2b2b2b', color: '#eee' }}>
-            {/* 统计信息 */}
-            <div style={{ padding: compactUi.statPadding, borderBottom: '1px solid #444', backgroundColor: '#333' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: compactUi.statFontSize }}>
-                    <span style={{ color: '#aaa' }}>选中顶点: <span style={{ color: '#52c41a', fontWeight: 'bold' }}>{selectedVertexIds.length}</span></span>
-                    {selectedNodeIds.length === 1 && <span style={{ color: '#aaa' }}>骨骼绑定: <span style={{ color: '#1890ff', fontWeight: 'bold' }}>{boneVertexCount}</span></span>}
-                </div>
-            </div>
-
-            {/* 骨骼参数 */}
-            <div style={{ padding: compactUi.sectionPadding, borderBottom: '1px solid #444' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Text strong style={{ color: '#fff', fontSize: compactUi.sectionTitleSize }}>骨骼参数</Text>
-                    <div style={{ display: 'flex', gap: compactUi.toggleGap }}>
-                        <button
-                            type="button"
-                            onClick={() => setTranslationSpace('world')}
-                            style={{
-                                background: translationSpace === 'world' ? '#1890ff' : '#1f1f1f',
-                                border: '1px solid #3a3a3a',
-                                color: translationSpace === 'world' ? '#fff' : '#aaa',
-                                fontSize: compactUi.toggleFontSize,
-                                padding: compactUi.togglePadding,
-                                borderRadius: 4,
-                                cursor: 'pointer'
-                            }}
-                        >
-                            {"\u4e16\u754c"}
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => setTranslationSpace('local')}
-                            style={{
-                                background: translationSpace === 'local' ? '#1890ff' : '#1f1f1f',
-                                border: '1px solid #3a3a3a',
-                                color: translationSpace === 'local' ? '#fff' : '#aaa',
-                                fontSize: compactUi.toggleFontSize,
-                                padding: compactUi.togglePadding,
-                                borderRadius: 4,
-                                cursor: 'pointer'
-                            }}
-                        >
-                            {"\u76f8\u5bf9"}
-                        </button>
+                {/* 统计信息 */}
+                <div style={{ padding: compactUi.statPadding, borderBottom: '1px solid #444', backgroundColor: '#333' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: compactUi.statFontSize }}>
+                        <span style={{ color: '#aaa' }}>选中顶点: <span style={{ color: '#52c41a', fontWeight: 'bold' }}>{selectedVertexIds.length}</span></span>
+                        {selectedNodeIds.length === 1 && <span style={{ color: '#aaa' }}>骨骼绑定: <span style={{ color: '#1890ff', fontWeight: 'bold' }}>{boneVertexCount}</span></span>}
                     </div>
                 </div>
 
-                <div style={{ marginTop: compactUi.topGap }}>
-                    {/* 骨骼名称 */}
-                    <div style={{ marginBottom: compactUi.nodeNameMarginBottom, color: selectedNode ? '#aaa' : '#555', fontSize: compactUi.nodeNameFontSize }}>
-                        {selectedNode ? `${selectedNode.Name} (${selectedNode.type})` : (
-                            selectedNodeIds.length === 0 ? '未选择骨骼' : `已选择 ${selectedNodeIds.length} 个骨骼`
-                        )}
-                    </div>
-
-                    {/* Translation */}
-                    <div style={{ marginBottom: compactUi.groupMarginBottom }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <Text style={{ color: isInputDisabled ? '#555' : '#888', fontSize: compactUi.fieldFontSize }}>位移 (Translation) {selectedNode && hasExactKey('Translation') && <span style={{ color: '#52c41a', marginLeft: 4 }}>●</span>}</Text>
-                            <Select
-                                size="small"
-                                value={selectedNode?.Translation?.InterpolationType ?? 1}
-                                disabled={isInputDisabled}
-                                onChange={(val) => {
-                                    if (!selectedNode) return
-                                    const node = selectedNode as any
-                                    const { updateNodeSilent } = useModelStore.getState()
-                                    updateNodeSilent(node.ObjectId, { Translation: { ...(node.Translation || { Keys: [] }), InterpolationType: val } })
-                                    if (renderer) renderer.update(0)
+                {/* 节点参数 */}
+                <div style={{ padding: compactUi.sectionPadding, borderBottom: '1px solid #444' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Text strong style={{ color: '#fff', fontSize: compactUi.sectionTitleSize }}>节点参数</Text>
+                        <div style={{ display: 'flex', gap: compactUi.toggleGap }}>
+                            <button
+                                type="button"
+                                onClick={() => setTranslationSpace('world')}
+                                style={{
+                                    background: translationSpace === 'world' ? '#1890ff' : '#1f1f1f',
+                                    border: '1px solid #3a3a3a',
+                                    color: translationSpace === 'world' ? '#fff' : '#aaa',
+                                    fontSize: compactUi.toggleFontSize,
+                                    padding: compactUi.togglePadding,
+                                    borderRadius: 4,
+                                    cursor: 'pointer'
                                 }}
-                                style={{ width: compactUi.interpSelectWidth, fontSize: '10px' }}
-                                dropdownStyle={{ minWidth: 80 }}
                             >
-                                <Select.Option value={0}>无</Select.Option>
-                                <Select.Option value={1}>线性</Select.Option>
-                                <Select.Option value={2}>平滑</Select.Option>
-                                <Select.Option value={3}>贝塞尔</Select.Option>
-                            </Select>
-                        </div>
-                        <div style={{ marginTop: compactUi.groupTopMargin }}>
-                            {renderInputRow('X', transRefs, 'x', '#ff4d4f', handleCommitTrans, isInputDisabled)}
-                            {renderInputRow('Y', transRefs, 'y', '#52c41a', handleCommitTrans, isInputDisabled)}
-                            {renderInputRow('Z', transRefs, 'z', '#1890ff', handleCommitTrans, isInputDisabled)}
-                        </div>
-                    </div>
-
-                    {/* Rotation */}
-                    <div style={{ marginBottom: compactUi.groupMarginBottom }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <Text style={{ color: isInputDisabled ? '#555' : '#888', fontSize: compactUi.fieldFontSize }}>旋转 (Rotation) {selectedNode && hasExactKey('Rotation') && <span style={{ color: '#52c41a', marginLeft: 4 }}>●</span>}</Text>
-                            <Select
-                                size="small"
-                                value={selectedNode?.Rotation?.InterpolationType ?? 1}
-                                disabled={isInputDisabled}
-                                onChange={(val) => {
-                                    if (!selectedNode) return
-                                    const node = selectedNode as any
-                                    const { updateNodeSilent } = useModelStore.getState()
-                                    updateNodeSilent(node.ObjectId, { Rotation: { ...(node.Rotation || { Keys: [] }), InterpolationType: val } })
-                                    if (renderer) renderer.update(0)
+                                {"\u4e16\u754c"}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setTranslationSpace('local')}
+                                style={{
+                                    background: translationSpace === 'local' ? '#1890ff' : '#1f1f1f',
+                                    border: '1px solid #3a3a3a',
+                                    color: translationSpace === 'local' ? '#fff' : '#aaa',
+                                    fontSize: compactUi.toggleFontSize,
+                                    padding: compactUi.togglePadding,
+                                    borderRadius: 4,
+                                    cursor: 'pointer'
                                 }}
-                                style={{ width: compactUi.interpSelectWidth, fontSize: '10px' }}
-                                dropdownStyle={{ minWidth: 80 }}
                             >
-                                <Select.Option value={0}>无</Select.Option>
-                                <Select.Option value={1}>线性</Select.Option>
-                                <Select.Option value={2}>平滑</Select.Option>
-                                <Select.Option value={3}>贝塞尔</Select.Option>
-                            </Select>
-                        </div>
-                        <div style={{ marginTop: compactUi.groupTopMargin }}>
-                            {renderInputRow('X', rotRefs, 'x', '#ff4d4f', handleCommitRot, isInputDisabled)}
-                            {renderInputRow('Y', rotRefs, 'y', '#52c41a', handleCommitRot, isInputDisabled)}
-                            {renderInputRow('Z', rotRefs, 'z', '#1890ff', handleCommitRot, isInputDisabled)}
+                                {"\u76f8\u5bf9"}
+                            </button>
                         </div>
                     </div>
 
-                    {/* Scaling */}
-                    <div style={{ marginBottom: compactUi.groupMarginBottom }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <Text style={{ color: isInputDisabled ? '#555' : '#888', fontSize: compactUi.fieldFontSize }}>缩放 (Scaling) {selectedNode && hasExactKey('Scaling') && <span style={{ color: '#52c41a', marginLeft: 4 }}>●</span>}</Text>
-                            <Select
-                                size="small"
-                                value={selectedNode?.Scaling?.InterpolationType ?? 1}
-                                disabled={isInputDisabled}
-                                onChange={(val) => {
-                                    if (!selectedNode) return
-                                    const node = selectedNode as any
-                                    const { updateNodeSilent } = useModelStore.getState()
-                                    updateNodeSilent(node.ObjectId, { Scaling: { ...(node.Scaling || { Keys: [] }), InterpolationType: val } })
-                                    if (renderer) renderer.update(0)
-                                }}
-                                style={{ width: compactUi.interpSelectWidth, fontSize: '10px' }}
-                                dropdownStyle={{ minWidth: 80 }}
-                            >
-                                <Select.Option value={0}>无</Select.Option>
-                                <Select.Option value={1}>线性</Select.Option>
-                                <Select.Option value={2}>平滑</Select.Option>
-                                <Select.Option value={3}>贝塞尔</Select.Option>
-                            </Select>
+                    <div style={{ marginTop: compactUi.topGap }}>
+                        {/* 节点名称 */}
+                        <div style={{ marginBottom: compactUi.nodeNameMarginBottom, color: selectedNode ? '#aaa' : '#555', fontSize: compactUi.nodeNameFontSize }}>
+                            {selectedNode ? (selectedNode.Name + ' (' + selectedNode.type + ')') : (
+                                selectedNodeIds.length === 0 ? '未选择骨骼' : ('已选择 ' + selectedNodeIds.length + ' 个骨骼')
+                            )}
                         </div>
-                        <div style={{ marginTop: compactUi.groupTopMargin }}>
-                            {renderInputRow('X', scaleRefs, 'x', '#ff4d4f', handleCommitScale, isInputDisabled)}
-                            {renderInputRow('Y', scaleRefs, 'y', '#52c41a', handleCommitScale, isInputDisabled)}
-                            {renderInputRow('Z', scaleRefs, 'z', '#1890ff', handleCommitScale, isInputDisabled)}
-                        </div>
-                    </div>
 
-                    {/* 父节点 */}
-                    <div style={{ marginBottom: compactUi.parentMarginBottom }}>
-                        <Text style={{ color: isInputDisabled ? '#555' : '#888', fontSize: compactUi.fieldFontSize }}>父节点</Text>
-                        <Select
-                            style={{ width: '100%', marginTop: compactUi.controlMarginTop }}
-                            size="small"
-                            placeholder="无父节点"
-                            allowClear
-                            showSearch
-                            optionFilterProp="label"
-                            value={selectedNode?.Parent === -1 ? undefined : selectedNode?.Parent}
-                            onChange={handleParentChange}
-                            options={availableParents}
-                            disabled={isInputDisabled || !renderer}
-                        />
-                    </div>
-
-                    {animationSubMode === 'keyframe' && (
-                        <div style={{ marginBottom: compactUi.groupMarginBottom, paddingTop: 6, borderTop: '1px solid #3a3a3a' }}>
-                            <Text strong style={{ color: '#fff', fontSize: compactUi.sectionTitleSize }}>多边形组关键帧</Text>
-
-                            <div style={{ marginTop: compactUi.controlMarginTop }}>
-                                <Text style={{ color: '#888', fontSize: compactUi.fieldFontSize }}>多边形组（已选 {selectedGeosetIds.length}）</Text>
+                        {/* Translation */}
+                        <div style={{ marginBottom: compactUi.groupMarginBottom }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <Text style={{ color: isInputDisabled ? '#555' : '#888', fontSize: compactUi.fieldFontSize }}>位移 (Translation) {selectedNode && hasExactKey('Translation') && <span style={{ color: '#52c41a', marginLeft: 4 }}>●</span>}</Text>
                                 <Select
                                     size="small"
-                                    style={{ width: '100%', marginTop: compactUi.controlMarginTop }}
-                                    mode="multiple"
-                                    maxTagCount={3}
-                                    value={selectedGeosetIds}
-                                    options={geosetIds.map((id) => ({ label: `Geoset ${id}`, value: id }))}
-                                    onChange={(values) => setSelectedGeosetIndices(values as number[])}
-                                    placeholder="无可用多边形组"
-                                />
-                            </div>
-
-                            <div style={{ marginTop: compactUi.geosetRowGap }}>
-                                <Text style={{ color: '#888', fontSize: compactUi.fieldFontSize }}>
-                                    透明度 {hasExactGeosetAlphaKey && <span style={{ color: '#52c41a', marginLeft: 4 }}>●</span>}
-                                </Text>
-                                <div style={{ display: 'flex', gap: 6, marginTop: compactUi.controlMarginTop }}>
-                                    <InputNumber
-                                        size="small"
-                                        min={0}
-                                        max={1}
-                                        step={0.05}
-                                        value={geosetAlphaInput}
-                                        onChange={handleGeosetAlphaInputChange}
-                                        style={{ flex: 1 }}
-                                    />
-                                    <Button size="small" onClick={handleInsertGeosetAlphaKey} disabled={selectedGeosetIds.length === 0} style={{ backgroundColor: '#333', borderColor: '#555', color: '#ddd' }}>K透明度</Button>
-                                    <Button size="small" onClick={handleDeleteGeosetAlphaKey} disabled={selectedGeosetIds.length === 0} style={{ backgroundColor: '#333', borderColor: '#555', color: '#ddd' }}>删帧</Button>
-                                </div>
-                            </div>
-
-                            <div style={{ marginTop: compactUi.geosetRowGap }}>
-                                <Text style={{ color: '#888', fontSize: compactUi.fieldFontSize }}>
-                                    颜色 {hasExactGeosetColorKey && <span style={{ color: '#52c41a', marginLeft: 4 }}>●</span>}
-                                </Text>
-                                <div style={{ display: 'flex', gap: 6, marginTop: compactUi.controlMarginTop }}>
-                                    <ColorPicker
-                                        size="small"
-                                        showText={false}
-                                        format="rgb"
-                                        value={`rgb(${Math.round((geosetColorInput[0] ?? 1) * 255)}, ${Math.round((geosetColorInput[1] ?? 1) * 255)}, ${Math.round((geosetColorInput[2] ?? 1) * 255)})`}
-                                        onChange={handleGeosetColorInputChange}
-                                        onChangeComplete={handleGeosetColorInputChangeComplete}
-                                    />
-                                    <Button size="small" onClick={handleInsertGeosetColorKey} disabled={selectedGeosetIds.length === 0} style={{ backgroundColor: '#333', borderColor: '#555', color: '#ddd' }}>K颜色</Button>
-                                    <Button size="small" onClick={handleDeleteGeosetColorKey} disabled={selectedGeosetIds.length === 0} style={{ backgroundColor: '#333', borderColor: '#555', color: '#ddd' }}>删帧</Button>
-                                </div>
-                            </div>
-
-                            <div style={{ display: 'flex', gap: 6, marginTop: compactUi.geosetRowGap }}>
-                                <Button
-                                    size="small"
-                                    onClick={() => {
-                                        setEditingGeosetField('Alpha')
-                                        setIsGeosetEditorOpen(true)
+                                    value={selectedNode?.Translation?.InterpolationType ?? 1}
+                                    disabled={isInputDisabled}
+                                    onChange={(val) => {
+                                        if (!selectedNode) return
+                                        const node = selectedNode as any
+                                        const { updateNodeSilent } = useModelStore.getState()
+                                        updateNodeSilent(node.ObjectId, { Translation: { ...(node.Translation || { Keys: [] }), InterpolationType: val } })
+                                        if (renderer) renderer.update(0)
                                     }}
-                                    disabled={selectedGeosetIds.length !== 1}
-                                    style={{ backgroundColor: '#333', borderColor: '#555', color: '#ddd' }}
+                                    style={{ width: compactUi.interpSelectWidth, fontSize: '10px' }}
+                                    dropdownStyle={{ minWidth: 80 }}
                                 >
-                                    编辑透明度轨道
-                                </Button>
-                                <Button
-                                    size="small"
-                                    onClick={() => {
-                                        setEditingGeosetField('Color')
-                                        setIsGeosetEditorOpen(true)
-                                    }}
-                                    disabled={selectedGeosetIds.length !== 1}
-                                    style={{ backgroundColor: '#333', borderColor: '#555', color: '#ddd' }}
-                                >
-                                    编辑颜色轨道
-                                </Button>
+                                    <Select.Option value={0}>无</Select.Option>
+                                    <Select.Option value={1}>线性</Select.Option>
+                                    <Select.Option value={2}>平滑</Select.Option>
+                                    <Select.Option value={3}>贝塞尔</Select.Option>
+                                </Select>
                             </div>
+                            <div style={{ marginTop: compactUi.groupTopMargin }}>
+                                {renderInputRow('X', transRefs, transAddRefs, 'x', '#ff4d4f', handleCommitTrans, isInputDisabled, 5)}
+                                {renderInputRow('Y', transRefs, transAddRefs, 'y', '#52c41a', handleCommitTrans, isInputDisabled, 5)}
+                                {renderInputRow('Z', transRefs, transAddRefs, 'z', '#1890ff', handleCommitTrans, isInputDisabled, 5)}
+                            </div>
+                        </div>
 
-                            <div style={{ marginTop: compactUi.geosetRowGap + 6, paddingTop: 6, borderTop: '1px dashed #3a3a3a' }}>
-                                <Text style={{ color: '#888', fontSize: compactUi.fieldFontSize }}>
-                                    粒子参数（已选 {selectedParticleIds.length}）
-                                </Text>
-                                {selectedParticleIds.length === 0 ? (
-                                    <div style={{ marginTop: compactUi.controlMarginTop }}>
-                                        <Text style={{ color: '#666', fontSize: compactUi.fieldFontSize }}>
-                                            请选择粒子发射器节点后再编辑参数关键帧
-                                        </Text>
+                        {/* Rotation */}
+                        <div style={{ marginBottom: compactUi.groupMarginBottom }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <Text style={{ color: isInputDisabled ? '#555' : '#888', fontSize: compactUi.fieldFontSize }}>旋转 (Rotation) {selectedNode && hasExactKey('Rotation') && <span style={{ color: '#52c41a', marginLeft: 4 }}>●</span>}</Text>
+                                <Select
+                                    size="small"
+                                    value={selectedNode?.Rotation?.InterpolationType ?? 1}
+                                    disabled={isInputDisabled}
+                                    onChange={(val) => {
+                                        if (!selectedNode) return
+                                        const node = selectedNode as any
+                                        const { updateNodeSilent } = useModelStore.getState()
+                                        updateNodeSilent(node.ObjectId, { Rotation: { ...(node.Rotation || { Keys: [] }), InterpolationType: val } })
+                                        if (renderer) renderer.update(0)
+                                    }}
+                                    style={{ width: compactUi.interpSelectWidth, fontSize: '10px' }}
+                                    dropdownStyle={{ minWidth: 80 }}
+                                >
+                                    <Select.Option value={0}>无</Select.Option>
+                                    <Select.Option value={1}>线性</Select.Option>
+                                    <Select.Option value={2}>平滑</Select.Option>
+                                    <Select.Option value={3}>贝塞尔</Select.Option>
+                                </Select>
+                            </div>
+                            <div style={{ marginTop: compactUi.groupTopMargin }}>
+                                {renderInputRow('X', rotRefs, rotAddRefs, 'x', '#ff4d4f', handleCommitRot, isInputDisabled, 2, '°')}
+                                {renderInputRow('Y', rotRefs, rotAddRefs, 'y', '#52c41a', handleCommitRot, isInputDisabled, 2, '°')}
+                                {renderInputRow('Z', rotRefs, rotAddRefs, 'z', '#1890ff', handleCommitRot, isInputDisabled, 2, '°')}
+                            </div>
+                        </div>
+
+                        {/* Scaling */}
+                        <div style={{ marginBottom: compactUi.groupMarginBottom }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <Text style={{ color: isInputDisabled ? '#555' : '#888', fontSize: compactUi.fieldFontSize }}>缩放 (Scaling) {selectedNode && hasExactKey('Scaling') && <span style={{ color: '#52c41a', marginLeft: 4 }}>●</span>}</Text>
+                                <Select
+                                    size="small"
+                                    value={selectedNode?.Scaling?.InterpolationType ?? 1}
+                                    disabled={isInputDisabled}
+                                    onChange={(val) => {
+                                        if (!selectedNode) return
+                                        const node = selectedNode as any
+                                        const { updateNodeSilent } = useModelStore.getState()
+                                        updateNodeSilent(node.ObjectId, { Scaling: { ...(node.Scaling || { Keys: [] }), InterpolationType: val } })
+                                        if (renderer) renderer.update(0)
+                                    }}
+                                    style={{ width: compactUi.interpSelectWidth, fontSize: '10px' }}
+                                    dropdownStyle={{ minWidth: 80 }}
+                                >
+                                    <Select.Option value={0}>无</Select.Option>
+                                    <Select.Option value={1}>线性</Select.Option>
+                                    <Select.Option value={2}>平滑</Select.Option>
+                                    <Select.Option value={3}>贝塞尔</Select.Option>
+                                </Select>
+                            </div>
+                            <div style={{ marginTop: compactUi.groupTopMargin }}>
+                                {renderInputRow('X', scaleRefs, scaleAddRefs, 'x', '#ff4d4f', handleCommitScale, isInputDisabled, 5)}
+                                {renderInputRow('Y', scaleRefs, scaleAddRefs, 'y', '#52c41a', handleCommitScale, isInputDisabled, 5)}
+                                {renderInputRow('Z', scaleRefs, scaleAddRefs, 'z', '#1890ff', handleCommitScale, isInputDisabled, 5)}
+                            </div>
+                        </div>
+
+                        {/* 父节点 */}
+                        <div style={{ marginBottom: compactUi.parentMarginBottom }}>
+                            <Text style={{ color: isInputDisabled ? '#555' : '#888', fontSize: compactUi.fieldFontSize }}>父节点</Text>
+                            <Select
+                                style={{ width: '100%', marginTop: compactUi.controlMarginTop }}
+                                size="small"
+                                placeholder="无父节点"
+                                allowClear
+                                showSearch
+                                optionFilterProp="label"
+                                value={selectedNode?.Parent === -1 ? undefined : selectedNode?.Parent}
+                                onChange={handleParentChange}
+                                options={availableParents}
+                                disabled={isInputDisabled || !renderer}
+                            />
+                        </div>
+
+                    </div>
+                </div>
+
+
+                {/* 绑定骨骼列表 - 仅在绑定模式显示 */}
+                {animationSubMode === 'binding' && (
+                    <div style={{ flex: 1, overflow: 'auto', padding: '10px' }}>
+                        <Text strong style={{ color: '#fff', fontSize: '13px' }}>绑定骨骼 ({boundBones.length})</Text>
+                        {boundBones.length === 0 ? (
+                            <div style={{ marginTop: 10, color: '#666', fontSize: '12px', textAlign: 'center', padding: '20px 0' }}>未选择顶点或无绑定</div>
+                        ) : (
+                            <div style={{ marginTop: 10 }}>
+                                {boundBones.map(bone => (
+                                    <div key={bone.index} onClick={() => selectNodes([bone.index])}
+                                        style={{
+                                            padding: '6px 8px', cursor: 'pointer', fontSize: '12px', marginBottom: 2, borderRadius: 2, display: 'flex', alignItems: 'center',
+                                            backgroundColor: selectedNodeIds.includes(bone.index) ? 'rgba(24, 144, 255, 0.3)' : 'transparent',
+                                            border: selectedNodeIds.includes(bone.index) ? '1px solid #1890ff' : '1px solid transparent',
+                                        }}>
+                                        <span style={{ width: 8, height: 8, borderRadius: '50%', marginRight: 8, display: 'inline-block', backgroundColor: selectedNodeIds.includes(bone.index) ? '#1890ff' : '#52c41a' }} />
+                                        {bone.name}
                                     </div>
-                                ) : (
-                                    <>
-                                        <div style={{ marginTop: compactUi.controlMarginTop, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                            {PARTICLE_PANEL_TRACKS.map((track) => (
-                                                <div key={track.propName} style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap' }}>
-                                                    <Text style={{ color: '#888', fontSize: compactUi.fieldFontSize, width: 56 }}>
-                                                        {track.label}
-                                                        {hasExactParticleKeyByProp[track.propName] && <span style={{ color: '#52c41a', marginLeft: 4 }}>●</span>}
-                                                    </Text>
-                                                    <InputNumber
-                                                        size="small"
-                                                        min={track.min}
-                                                        max={track.max}
-                                                        step={track.step}
-                                                        precision={track.precision}
-                                                        value={particlePanelInputs[track.propName]}
-                                                        onChange={(value) => handleParticleInputChange(track.propName, value)}
-                                                        style={{ width: 96 }}
-                                                    />
-                                                    <Button
-                                                        size="small"
-                                                        onClick={() => handleInsertSingleParticleDynamicKey(track.propName)}
-                                                        style={{ width: 50, minWidth: 50, padding: '0 6px', backgroundColor: '#333', borderColor: '#555', color: '#ddd' }}
-                                                    >
-                                                        K帧
-                                                    </Button>
-                                                </div>
-                                            ))}
-                                        </div>
-                                        <div style={{ marginTop: compactUi.controlMarginTop, display: 'flex', alignItems: 'center', gap: 6 }}>
-                                            <Button
-                                                size="small"
-                                                onClick={handleInsertParticleDynamicKeys}
-                                                style={{ backgroundColor: '#333', borderColor: '#555', color: '#ddd' }}
-                                            >
-                                                K粒子
-                                            </Button>
-                                        </div>
-                                    </>
-                                )}
+                                ))}
                             </div>
-                        </div>
-                    )}
-                </div>
+                        )}
+                    </div>
+                )}
             </div>
 
 
-            {/* 绑定骨骼列表 - 仅在绑定模式显示 */}
-            {animationSubMode === 'binding' && (
-                <div style={{ flex: 1, overflow: 'auto', padding: '10px' }}>
-                    <Text strong style={{ color: '#fff', fontSize: '13px' }}>绑定骨骼 ({boundBones.length})</Text>
-                    {boundBones.length === 0 ? (
-                        <div style={{ marginTop: 10, color: '#666', fontSize: '12px', textAlign: 'center', padding: '20px 0' }}>未选择顶点或无绑定</div>
-                    ) : (
-                        <div style={{ marginTop: 10 }}>
-                            {boundBones.map(bone => (
-                                <div key={bone.index} onClick={() => selectNodes([bone.index])}
-                                    style={{
-                                        padding: '6px 8px', cursor: 'pointer', fontSize: '12px', marginBottom: 2, borderRadius: 2, display: 'flex', alignItems: 'center',
-                                        backgroundColor: selectedNodeIds.includes(bone.index) ? 'rgba(24, 144, 255, 0.3)' : 'transparent',
-                                        border: selectedNodeIds.includes(bone.index) ? '1px solid #1890ff' : '1px solid transparent',
-                                    }}>
-                                    <span style={{ width: 8, height: 8, borderRadius: '50%', marginRight: 8, display: 'inline-block', backgroundColor: selectedNodeIds.includes(bone.index) ? '#1890ff' : '#52c41a' }} />
-                                    {bone.name}
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            )}
-            </div>
-
-            <KeyframeEditor
-                visible={isGeosetEditorOpen}
-                onCancel={() => setIsGeosetEditorOpen(false)}
-                onOk={handleSaveGeosetKeyframeEditor}
-                initialData={geosetEditorData}
-                title={editingGeosetField === 'Color' ? '多边形组颜色关键帧' : '多边形组透明度关键帧'}
-                vectorSize={editingGeosetField === 'Color' ? 3 : 1}
-                globalSequences={globalSequences}
-                fieldName={editingGeosetField || undefined}
-            />
         </>
     )
 }
 
 export default React.memo(BoneParameterPanel)
+

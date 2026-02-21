@@ -1,10 +1,11 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react'
+﻿import React, { useRef, useEffect, useState, useCallback } from 'react'
 import { useModelStore } from '../../store/modelStore'
 import { readFile } from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'
 // @ts-ignore
 import { decodeBLP, getBLPImageData } from 'war3-model'
-import { Button, Tooltip, InputNumber } from 'antd'
+import { Button, Tooltip } from 'antd'
+import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useRendererStore } from '../../store/rendererStore'
 import { registerShortcutHandler } from '../../shortcuts/manager'
@@ -1291,3 +1292,4 @@ const UVEditor: React.FC<UVEditorProps> = ({
 }
 
 export default UVEditor
+

@@ -1,5 +1,6 @@
+﻿import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Checkbox, Form, Input, InputNumber } from 'antd';
+import { Button, Checkbox, Form, Input } from 'antd';
 
 import { DraggableModal } from '../DraggableModal';
 import KeyframeEditor from '../editors/KeyframeEditor';
@@ -306,3 +307,4 @@ const ParticleEmitterDialog: React.FC<ParticleEmitterDialogProps> = ({ visible, 
 };
 
 export default ParticleEmitterDialog;
+

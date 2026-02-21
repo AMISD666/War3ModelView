@@ -1,5 +1,6 @@
+﻿import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import React, { useEffect, useState } from 'react';
-import { Form, Button, InputNumber, Select, Space } from 'antd';
+import { Form, Button, Select, Space } from 'antd';
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
 import { DraggableModal } from '../DraggableModal';
 import { useModelStore } from '../../store/modelStore';
@@ -257,3 +258,4 @@ const EventObjectDialog: React.FC<EventObjectDialogProps> = ({ visible, nodeId, 
 };
 
 export default EventObjectDialog;
+

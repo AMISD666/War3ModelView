@@ -1,10 +1,11 @@
-/**
+﻿/**
  * 节点编辑对话框组件
  * 用于编辑节点的基本属性、位置、变换和标志位
  */
 
 import React, { useEffect, useState } from 'react'
-import { Form, Input, InputNumber, Select, Checkbox, Row, Col, Card, Button } from 'antd'
+import { Form, Input, Select, Checkbox, Row, Col, Card, Button } from 'antd'
+import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { DraggableModal } from '../DraggableModal'
 import KeyframeEditor from '../editors/KeyframeEditor'
 import type { ModelNode } from '../../types/node'
@@ -390,4 +391,5 @@ const NodeDialog: React.FC<NodeDialogProps> = ({ visible, nodeId, onClose }) => 
 }
 
 export default NodeDialog
+
 

@@ -1,5 +1,6 @@
+﻿import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import React from 'react';
-import { Button, Tooltip, Space, message, InputNumber } from 'antd';
+import { Button, Tooltip, Space, message } from 'antd';
 import {
     GatewayOutlined, // Vertex/Point
     AppstoreOutlined, // Face
@@ -498,3 +499,4 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         </div>
     );
 };
+

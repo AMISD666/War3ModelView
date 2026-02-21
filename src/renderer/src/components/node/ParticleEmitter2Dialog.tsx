@@ -1,5 +1,6 @@
+﻿import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import React, { useEffect, useState } from 'react';
-import { Form, InputNumber, Checkbox, Select, ColorPicker, Button, Input } from 'antd';
+import { Form, Checkbox, Select, ColorPicker, Button, Input } from 'antd';
 
 import { DraggableModal } from '../DraggableModal';
 import KeyframeEditor from '../editors/KeyframeEditor';
@@ -145,7 +146,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
                 // Flags
                 Unshaded: true,
                 Unfogged: false,
-                SortPrimsFarZ: true,
+                SortPrimsFarZ: false,
                 LineEmitter: false,
                 ModelSpace: false,
                 XYQuad: false,
@@ -827,3 +828,4 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
 };
 
 export default ParticleEmitter2Dialog;
+

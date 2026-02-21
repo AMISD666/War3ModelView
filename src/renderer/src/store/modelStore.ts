@@ -912,7 +912,7 @@ function getDefaultNodeProperties(type: NodeType): Partial<ModelNode> {
                 // @ts-ignore
                 FrameFlags: 1, // 1=Head, 2=Tail, 3=Both - REQUIRED by renderer
                 Unshaded: true,
-                SortPrimsFarZ: true,
+                SortPrimsFarZ: false,
                 LineEmitter: false,
                 Unfogged: false,
                 ModelSpace: false,

@@ -1,5 +1,6 @@
+﻿import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import React from 'react';
-import { Select, InputNumber, Checkbox, Typography } from 'antd';
+import { Select, Checkbox, Typography } from 'antd';
 
 const { Text } = Typography;
 
@@ -157,3 +158,4 @@ export function layerConfigToMaterialLayer(config: LayerConfig): any {
 }
 
 export default MaterialLayerOptions;
+

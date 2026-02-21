@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react'
-import { List, Button, Input, Checkbox, InputNumber, Card, Typography, message } from 'antd'
+﻿import React, { useState, useEffect, useRef } from 'react'
+import { List, Button, Input, Checkbox, Card, Typography, message } from 'antd'
+import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { DraggableModal } from '../DraggableModal';
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useModelStore } from '../../store/modelStore'
@@ -324,3 +325,4 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
 }
 
 export default SequenceEditorModal
+

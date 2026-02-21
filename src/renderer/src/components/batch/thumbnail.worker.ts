@@ -24,6 +24,7 @@ const REPLACEABLE_TEXTURES: Record<number, string> = {
 }
 
 const THUMBNAIL_SIZE = 128;
+const MAX_BATCH_TEXTURES = 16;
 
 let canvas: OffscreenCanvas | null = null;
 let gl: WebGLRenderingContext | WebGL2RenderingContext | null = null;
@@ -37,6 +38,8 @@ interface RendererCacheItem {
     aabb?: { min: any, max: any };
     textureImages?: Record<string, ImageData>;
     teamColorData?: Record<number, any>;
+    appliedTexturePaths: Set<string>;
+    texturePaths: string[];
 }
 
 let renderers: Map<string, RendererCacheItem> = new Map();
@@ -96,6 +99,111 @@ async function initGL() {
     gl.enable(gl.DEPTH_TEST);
 }
 
+function applyTextureImagesToRenderer(
+    renderer: any,
+    textureImages: Record<string, ImageData> | undefined,
+    appliedTexturePaths: Set<string>
+) {
+    if (!textureImages || !renderer?.setTextureImageData) return;
+
+    for (const [path, img] of Object.entries(textureImages)) {
+        if (appliedTexturePaths.has(path)) continue;
+        try {
+            renderer.setTextureImageData(path, [img]);
+            appliedTexturePaths.add(path);
+        } catch (e) {
+            console.warn(`[Worker] Failed to apply texture ${path}:`, e);
+        }
+    }
+}
+
+function collectTextureIdsFromAnimVector(value: any, ids: Set<number>) {
+    if (value === undefined || value === null) return;
+    if (typeof value === 'number') {
+        if (value >= 0) ids.add(value);
+        return;
+    }
+    if (value.Keys) {
+        // Thumbnail mode only needs the primary animated texture id.
+        const v0 = value.Keys?.[0]?.Vector?.[0];
+        if (typeof v0 === 'number' && v0 >= 0) {
+            ids.add(v0);
+        }
+    }
+}
+
+function getUsedTextureIds(model: any): Set<number> {
+    const usedIds = new Set<number>();
+
+    if (model.Materials) {
+        for (const material of model.Materials) {
+            if (material.Layers) {
+                for (const layer of material.Layers) {
+                    collectTextureIdsFromAnimVector(layer.TextureID, usedIds);
+                    collectTextureIdsFromAnimVector(layer.NormalTextureID, usedIds);
+                    collectTextureIdsFromAnimVector(layer.ORMTextureID, usedIds);
+                    collectTextureIdsFromAnimVector(layer.EmissiveTextureID, usedIds);
+                    collectTextureIdsFromAnimVector(layer.TeamColorTextureID, usedIds);
+                    collectTextureIdsFromAnimVector(layer.ReflectionsTextureID, usedIds);
+                }
+            }
+        }
+    }
+
+    if (model.ParticleEmitters2) {
+        for (const emitter of model.ParticleEmitters2) {
+            if (typeof emitter.TextureID === 'number' && emitter.TextureID >= 0) {
+                usedIds.add(emitter.TextureID);
+            }
+        }
+    }
+
+    if (model.Textures) {
+        for (let i = 0; i < model.Textures.length; i++) {
+            const tex = model.Textures[i];
+            if (tex?.ReplaceableId && tex.ReplaceableId > 0) {
+                usedIds.add(i);
+            }
+        }
+    }
+
+    return usedIds;
+}
+
+function collectTexturePaths(model: any): string[] {
+    const texturePaths = new Set<string>();
+
+    if (model.Textures) {
+        const usedIds = getUsedTextureIds(model);
+        let entries = model.Textures
+            .map((texture: any, idx: number) => ({ idx, path: texture.Image || texture.Path }))
+            .filter((entry: any) => !!entry.path);
+
+        if (usedIds.size > 0) {
+            const filtered = entries.filter((entry: any) => usedIds.has(entry.idx));
+            if (filtered.length > 0) {
+                entries = filtered;
+            }
+        }
+
+        if (entries.length > MAX_BATCH_TEXTURES) {
+            entries = entries.slice(0, MAX_BATCH_TEXTURES);
+        }
+
+        entries.forEach((entry: any) => texturePaths.add(entry.path as string));
+    }
+
+    if (model.ParticleEmitters) {
+        model.ParticleEmitters.forEach((emitter: any) => {
+            if (emitter.FileName && typeof emitter.FileName === 'string') {
+                texturePaths.add(emitter.FileName);
+            }
+        });
+    }
+
+    return Array.from(texturePaths);
+}
+
 async function render(
     payload: {
         fullPath: string,
@@ -112,14 +220,20 @@ async function render(
 
     await initGL();
     if (!gl) return null;
+    const renderStartMs = performance.now();
+    let coldStartMs = 0;
+    let parseMs = 0;
+    let drawMs = 0;
 
     let item = renderers.get(fullPath);
 
     if (!item) {
+        const coldStartBegin = performance.now();
         if (!modelBuffer) {
             throw new Error(`Model data missing and not in cache: ${fullPath}`);
         }
 
+        const parseStart = performance.now();
         let model: any;
         if (fullPath.toLowerCase().endsWith('.mdl')) {
             const text = new TextDecoder().decode(modelBuffer);
@@ -127,6 +241,7 @@ async function render(
         } else {
             model = parseMDX(modelBuffer);
         }
+        parseMs = performance.now() - parseStart;
 
         if (!model) throw new Error('Failed to parse model');
 
@@ -169,15 +284,6 @@ async function render(
                 if (oldestItem?.renderer?.destroy) {
                     try { oldestItem.renderer.destroy(); } catch (e) { }
                 }
-                // The provided code snippet for `scanDirV2` seems to be out of context for this worker file.
-                // It references `modelFiles` and `@tauri-apps/plugin-fs`, which are not part of this worker's scope.
-                // Assuming the intent was to add recovery logic to the worker, and the `scanDirV2`
-                // was a misplaced instruction or example from another file, I will proceed with the
-                // original cache cleanup logic, as inserting `scanDirV2` here would cause syntax errors
-                // and undefined references.
-                // If the intention was to replace `renderers.delete(oldestKey);` with `scanDirV2`,
-                // that would break the cache cleanup logic.
-                // Therefore, I'm keeping the original `renderers.delete(oldestKey);` line.
                 renderers.delete(oldestKey);
             }
         }
@@ -185,13 +291,8 @@ async function render(
         const renderer = new ModelRenderer(model);
         renderer.initGL(gl);
 
-        if (textureImages) {
-            for (const [path, img] of Object.entries(textureImages)) {
-                if (renderer.setTextureImageData) {
-                    renderer.setTextureImageData(path, [img]);
-                }
-            }
-        }
+        const appliedTexturePaths = new Set<string>();
+        applyTextureImagesToRenderer(renderer, textureImages, appliedTexturePaths);
 
         if (teamColorData && renderer.setReplaceableTexture) {
             for (const [id, img] of Object.entries(teamColorData)) {
@@ -249,14 +350,22 @@ async function render(
             lastTime: (frame !== undefined ? frame : performance.now()),
             aabb: { min, max },
             textureImages,
-            teamColorData
+            teamColorData,
+            appliedTexturePaths,
+            texturePaths: collectTexturePaths(model)
         };
         renderers.set(fullPath, item);
+        coldStartMs = performance.now() - coldStartBegin;
     }
 
     // At this point item is guaranteed to exist
     const cacheItem = item!;
     const { renderer, model } = cacheItem;
+
+    // Progressive texture streaming: allow texture sync after the model is already cached.
+    if (textureImages && Object.keys(textureImages).length > 0) {
+        applyTextureImagesToRenderer(renderer, textureImages, cacheItem.appliedTexturePaths);
+    }
 
     // === CRITICAL: Complete WebGL state reset for proper clearing ===
     // When preserveDrawingBuffer=false (or even true), we must ensure all masks are enabled
@@ -364,8 +473,10 @@ async function render(
     }
 
     try {
+        const drawStart = performance.now();
         renderer.render(mvMatrix, pMatrix, { wireframe: false, enableLighting: true });
         gl!.flush(); // Ensure GPU is done before transfer
+        drawMs = performance.now() - drawStart;
     } catch (e) {
         console.error(`[Worker] WebGL Render failed for ${fullPath}:`, e);
         // FORCE RELOAD on next try to recover from poisoned State/Buffers
@@ -373,7 +484,18 @@ async function render(
     }
 
     const bitmap = canvas!.transferToImageBitmap();
-    return { bitmap, animations: (model.Sequences || []).map((s: any) => s.Name || 'Unknown') };
+    const renderMs = performance.now() - renderStartMs;
+    return {
+        bitmap,
+        ...(coldStartMs > 0 ? { animations: (model.Sequences || []).map((s: any) => s.Name || 'Unknown') } : {}),
+        ...(coldStartMs > 0 ? { texturePaths: cacheItem.texturePaths || [] } : {}),
+        metrics: {
+            renderMs,
+            coldStartMs,
+            parseMs,
+            drawMs
+        }
+    };
 }
 
 function validateAllParticleEmitters(model: any): void {

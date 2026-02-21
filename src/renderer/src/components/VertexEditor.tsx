@@ -1,6 +1,7 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react'
+﻿import React, { useEffect, useState, useRef, useCallback } from 'react'
 import { useSelectionStore } from '../store/selectionStore'
-import { InputNumber, Button, Tooltip, Divider } from 'antd'
+import { Button, Tooltip, Divider } from 'antd'
+import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { commandManager } from '../utils/CommandManager'
 import { MoveVerticesCommand, VertexChange } from '../commands/MoveVerticesCommand'
 import { SplitVerticesCommand } from '../commands/SplitVerticesCommand'
@@ -283,4 +284,5 @@ export const VertexEditor: React.FC<VertexEditorProps> = ({ renderer, onBeginUpd
         </>
     )
 }
+
 

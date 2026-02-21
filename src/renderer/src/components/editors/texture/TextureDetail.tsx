@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react'
-import { Input, Checkbox, InputNumber, Button } from 'antd'
+﻿import React, { useState, useEffect } from 'react'
+import { Input, Checkbox, Button } from 'antd'
+import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { readFile } from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'
 import { decodeTextureData, normalizePath } from '../../viewer/textureLoader'
@@ -219,3 +220,4 @@ const TextureDetail: React.FC<TextureDetailProps> = ({ texture, modelPath, onUpd
 }
 
 export default TextureDetail
+

@@ -39,6 +39,36 @@ interface BatchManagerProps {
     selectedPath?: string | null;
 }
 
+interface BatchPerfSnapshot {
+    workersBusy: number;
+    workersTotal: number;
+    modelCache: number;
+    textureCache: number;
+    sharedTextureCache: number;
+    modelLoading: number;
+    textureLoading: number;
+    textureTaskRunning: number;
+    textureTaskPending: number;
+    avgModelReadMs: number;
+    avgModelParseMs: number;
+    avgTextureMs: number;
+    avgTextureBatchMs: number;
+    avgTextureBatchMpqMs: number;
+    avgTextureBatchFsMs: number;
+    avgTextureQueueMs: number;
+    avgTextureDecodeMs: number;
+    avgTextureFallbackMs: number;
+    avgPrepareMs: number;
+    avgWorkerRenderMs: number;
+    avgEndToEndMs: number;
+    textureLoadRatioPct: number;
+    textureCoveragePct: number;
+    sharedTextureHitRatePct: number;
+    hotspotModelName: string;
+    hotspotStage: 'texture' | 'parse' | 'read' | 'worker' | 'none';
+    hotspotMs: number;
+}
+
 export const BatchManager: React.FC<BatchManagerProps> = ({
     onSelectModel,
     onAnimationChange,
@@ -73,6 +103,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
     const [deathApplyLoading, setDeathApplyLoading] = useState(false);
     const [actionScope, setActionScope] = useState<'selected' | 'all'>('selected');
     const [isPrefixModalVisible, setIsPrefixModalVisible] = useState(false);
+    const [perfSnapshot, setPerfSnapshot] = useState<BatchPerfSnapshot>(() => thumbnailService.getPerfSnapshot());
 
 
     // Shared states for animations moved to store
@@ -100,17 +131,25 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
         setLoading(true);
         try {
             const modelFiles: ModelFile[] = [];
+            const { readDir } = await import('@tauri-apps/plugin-fs');
+            const dirs: string[] = [path];
+            const scanWorkers = Math.min(8, Math.max(2, (navigator.hardwareConcurrency || 8) >> 1));
 
-            // Recursive function to scan directories
-            const scanDirV2 = async (dirPath: string) => {
-                try {
-                    const { readDir } = await import('@tauri-apps/plugin-fs');
-                    const entries = await readDir(dirPath);
-                    for (const entry of entries) {
-                        const entryPath = dirPath + (dirPath.endsWith('\\') || dirPath.endsWith('/') ? '' : '\\') + entry.name;
-                        if (entry.isDirectory) {
-                            await scanDirV2(entryPath);
-                        } else {
+            const scanWorker = async () => {
+                while (dirs.length > 0) {
+                    const dirPath = dirs.pop();
+                    if (!dirPath) continue;
+
+                    try {
+                        const entries = await readDir(dirPath);
+                        for (const entry of entries) {
+                            if (!entry?.name) continue;
+                            const entryPath = dirPath + (dirPath.endsWith('\\') || dirPath.endsWith('/') ? '' : '\\') + entry.name;
+                            if (entry.isDirectory) {
+                                dirs.push(entryPath);
+                                continue;
+                            }
+
                             const name = entry.name.toLowerCase();
                             if (name.endsWith('.mdx') || name.endsWith('.mdl')) {
                                 modelFiles.push({
@@ -120,19 +159,21 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                                 });
                             }
                         }
+                    } catch (readErr) {
+                        console.warn(`Failed to read directory: ${dirPath}`, readErr);
                     }
-                } catch (readErr) {
-                    console.warn(`Failed to read directory: ${dirPath}`, readErr);
                 }
             };
 
-            await scanDirV2(path);
+            await Promise.all(Array.from({ length: scanWorkers }, () => scanWorker()));
 
             setFiles(modelFiles);
 
             // Only queue the current page
             const initialPageFiles = modelFiles.slice(0, pageSize);
             setQueue(initialPageFiles.map(f => ({ name: f.name, fullPath: f.fullPath })));
+            const warmupFiles = modelFiles.slice(pageSize, pageSize * 2).map(f => f.fullPath);
+            void thumbnailService.prefetch(warmupFiles, 4, { withTextures: false });
 
             message.success(`找到 ${modelFiles.length} 个模型文件`);
         } catch (err) {
@@ -269,6 +310,9 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
         const start = (page - 1) * size;
         const pageFiles = files.slice(start, start + size);
         setQueue(pageFiles.map(f => ({ name: f.name, fullPath: f.fullPath })));
+        const warmupStart = start + size;
+        const warmupFiles = files.slice(warmupStart, warmupStart + size).map(f => f.fullPath);
+        void thumbnailService.prefetch(warmupFiles, 4, { withTextures: false });
     };
 
     const handleFastModeChange = (checked: boolean) => {
@@ -326,6 +370,13 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
         )
         return () => unsubscribe()
     }, [selectedPath, selectedFile, files, handleCopyModel])
+
+    useEffect(() => {
+        const timer = setInterval(() => {
+            setPerfSnapshot(thumbnailService.getPerfSnapshot());
+        }, 500);
+        return () => clearInterval(timer);
+    }, []);
 
     const applyDeathAnimationToPath = async (targetPath: string): Promise<'added' | 'updated'> => {
         const buffer = await readFile(targetPath);
@@ -662,6 +713,28 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
 
                 <div style={{ flex: 1 }} />
 
+                {files.length > 0 && (
+                    <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        fontSize: 11,
+                        color: '#9fb3c8',
+                        background: 'rgba(255,255,255,0.06)',
+                        border: '1px solid rgba(120,140,160,0.25)',
+                        borderRadius: 6,
+                        padding: '3px 8px',
+                        marginRight: 8,
+                        whiteSpace: 'nowrap'
+                    }}>
+                        <span>{`W ${perfSnapshot.workersBusy}/${perfSnapshot.workersTotal}`}</span>
+                        <span>{`T ${perfSnapshot.textureCache}/${perfSnapshot.sharedTextureCache}`}</span>
+                        <span>{`L ${perfSnapshot.modelLoading + perfSnapshot.textureLoading}`}</span>
+                        <span>{`hit ${perfSnapshot.sharedTextureHitRatePct.toFixed(0)}%`}</span>
+                        <span>{`tex ${perfSnapshot.textureLoadRatioPct.toFixed(0)}%`}</span>
+                    </div>
+                )}
+
                 {currentPath && (
                     <div style={{
                         flex: 1,
@@ -753,6 +826,31 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                         </span>
                     )}
                 </div>
+                {files.length > 0 && (
+                    <div style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 2,
+                        marginBottom: 8,
+                        padding: '6px 8px',
+                        border: '1px solid #2f3a42',
+                        borderRadius: 6,
+                        background: 'rgba(11,18,24,0.72)',
+                        overflowX: 'auto'
+                    }}>
+                        <div style={{ color: '#9ec9ff', fontSize: 10, whiteSpace: 'nowrap' }}>
+                            {`AVG read ${perfSnapshot.avgModelReadMs.toFixed(1)}ms | parse ${perfSnapshot.avgModelParseMs.toFixed(1)}ms | prep ${perfSnapshot.avgPrepareMs.toFixed(1)}ms | tex ${perfSnapshot.avgTextureMs.toFixed(1)}ms (${perfSnapshot.textureLoadRatioPct.toFixed(0)}%) | worker ${perfSnapshot.avgWorkerRenderMs.toFixed(1)}ms | e2e ${perfSnapshot.avgEndToEndMs.toFixed(1)}ms`}
+                        </div>
+                        <div style={{ color: '#8bd6be', fontSize: 10, whiteSpace: 'nowrap' }}>
+                            {`TEX hit ${perfSnapshot.sharedTextureHitRatePct.toFixed(0)}% | cover ${perfSnapshot.textureCoveragePct.toFixed(0)}% | batch ${perfSnapshot.avgTextureBatchMs.toFixed(1)}ms (mpq ${perfSnapshot.avgTextureBatchMpqMs.toFixed(1)}ms/fs ${perfSnapshot.avgTextureBatchFsMs.toFixed(1)}ms) | queue ${perfSnapshot.avgTextureQueueMs.toFixed(1)}ms | decode ${perfSnapshot.avgTextureDecodeMs.toFixed(1)}ms | fallback ${perfSnapshot.avgTextureFallbackMs.toFixed(1)}ms | task ${perfSnapshot.textureTaskRunning}/${perfSnapshot.textureTaskPending}`}
+                        </div>
+                        {perfSnapshot.hotspotModelName && perfSnapshot.hotspotStage !== 'none' && (
+                            <div style={{ color: '#ffd591', fontSize: 10, whiteSpace: 'nowrap' }}>
+                                {`HOT ${perfSnapshot.hotspotStage} ${perfSnapshot.hotspotMs.toFixed(1)}ms @ ${perfSnapshot.hotspotModelName}`}
+                            </div>
+                        )}
+                    </div>
+                )}
                 {loading ? (
                     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', flexDirection: 'column' }}>
                         <Spin size="large" />
@@ -831,6 +929,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                     isAnimating={!fastMode}
                     selectedAnimations={selectedAnimations}
                     modelAnimations={modelAnimations}
+                    selectedPath={selectedPath ?? selectedFile}
                 />
 
                 <BatchTexturePrefixModal

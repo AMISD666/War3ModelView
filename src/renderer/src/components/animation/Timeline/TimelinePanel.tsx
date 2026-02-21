@@ -1,6 +1,6 @@
-import React, { useRef, useEffect, useState, useCallback, useMemo, useLayoutEffect } from 'react'
+﻿import React, { useRef, useEffect, useState, useCallback, useMemo, useLayoutEffect } from 'react'
 import { useModelStore } from '../../../store/modelStore'
-import { useSelectionStore } from '../../../store/selectionStore'
+import { useSelectionStore, type KeyframeDisplayMode } from '../../../store/selectionStore'
 import { useRendererStore } from '../../../store/rendererStore'
 import {
     PlayCircleOutlined,
@@ -16,7 +16,8 @@ import {
     DownOutlined
 } from '@ant-design/icons'
 import { useHistoryStore } from '../../../store/historyStore'
-import { Button, Slider, Input, InputNumber, Radio, Tooltip, Menu, Modal, Dropdown } from 'antd'
+import { Button, Slider, Input, Radio, Tooltip, Menu, Modal, Dropdown } from 'antd'
+import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { registerShortcutHandler } from '../../../shortcuts/manager'
 import { UpdateKeyframeCommand, KeyframeChange } from '../../../commands/UpdateKeyframeCommand'
 import { commandManager } from '../../../utils/CommandManager'
@@ -36,13 +37,14 @@ const CLICK_MOVE_THRESHOLD = 5 // px, max movement to count as click
 
 const LANE_HEIGHT = 14
 const LANE_PADDING = 10
+const SEQUENCE_TRACK_HEIGHT = 30
 const OFFSET_TRANSLATION = 12
 const OFFSET_ROTATION = 26
 const OFFSET_SCALING = 40
 const CONTEXT_MENU_WIDTH = 170
 const CONTEXT_MENU_HEIGHT = 160
 
-const makeKeyframeUid = (ownerType: 'node' | 'geoset', ownerId: number, type: string, frame: number) =>
+const makeKeyframeUid = (ownerType: 'node' | 'geoset' | 'textureAnim', ownerId: number, type: string, frame: number) =>
     `${ownerType}-${ownerId}-${type}-${frame}`
 
 const PARTICLE_TRACK_INFOS = [
@@ -128,8 +130,6 @@ const isAnimTrack = (value: any): value is { Keys: any[] } => {
     return !!value && typeof value === 'object' && Array.isArray(value.Keys)
 }
 
-type KeyframeDisplayMode = 'node' | 'geosetAnim' | 'particle' | 'textureAnim'
-
 const NODE_KEYFRAME_TYPES = ['Translation', 'Rotation', 'Scaling'] as const
 const GEOSET_ANIM_KEYFRAME_TYPES = ['GeosetAlpha', 'GeosetColor'] as const
 const KEYFRAME_DISPLAY_MODE_ORDER: KeyframeDisplayMode[] = ['node', 'geosetAnim', 'particle', 'textureAnim']
@@ -160,9 +160,9 @@ const KEYFRAME_DISPLAY_MODE_CONFIG: Record<KeyframeDisplayMode, {
     },
     textureAnim: {
         label: '贴图动画',
-        tooltip: '关键帧显示: 贴图动画参数（待接入）',
+        tooltip: '关键帧显示: 贴图动画参数，可以控制贴图的平移、旋转、缩放',
         buttonColor: '#5a2e70',
-        laneTypes: []
+        laneTypes: ['TexTranslation', 'TexRotation', 'TexScaling']
     }
 }
 
@@ -178,7 +178,55 @@ const isKeyframeTypeVisible = (
     return laneTypes.includes(type as typeof laneTypes[number])
 }
 
-type KeyframeOwnerType = 'node' | 'geoset'
+type LaneMetrics = {
+    laneYMap: Record<string, number>
+    trackTop: number
+    trackBottom: number
+    laneGap: number
+    effectiveKeyframeSize: number
+}
+
+const getLaneMetrics = (displayMode: KeyframeDisplayMode, canvasHeight: number): LaneMetrics => {
+    const seqTrackY = canvasHeight - SEQUENCE_TRACK_HEIGHT
+    const trackTop = RULER_HEIGHT + LANE_PADDING
+    const trackBottom = seqTrackY - LANE_PADDING
+    const laneTypes = getLaneTypesByMode(displayMode)
+    const fallbackGap = OFFSET_ROTATION - OFFSET_TRANSLATION
+    const laneGap = trackBottom > trackTop
+        ? (trackBottom - trackTop) / Math.max(1, laneTypes.length - 1)
+        : Math.max(1, fallbackGap)
+    const laneYMap: Record<string, number> = {}
+
+    if (displayMode === 'particle') {
+        const unifiedLaneY = trackBottom > trackTop
+            ? trackTop + (trackBottom - trackTop) * 0.5
+            : RULER_HEIGHT + OFFSET_TRANSLATION
+        laneTypes.forEach((laneType) => {
+            laneYMap[laneType] = unifiedLaneY
+        })
+    } else {
+        laneTypes.forEach((laneType, index) => {
+            laneYMap[laneType] = trackBottom > trackTop
+                ? trackTop + laneGap * index
+                : RULER_HEIGHT + OFFSET_TRANSLATION + fallbackGap * index
+        })
+    }
+
+    const effectiveKeyframeSize = Math.min(
+        KEYFRAME_SIZE,
+        Math.max(3, Math.floor(laneGap / 2) - 2)
+    )
+
+    return {
+        laneYMap,
+        trackTop,
+        trackBottom,
+        laneGap,
+        effectiveKeyframeSize
+    }
+}
+
+type KeyframeOwnerType = 'node' | 'geoset' | 'textureAnim'
 
 type TimelineClipboardKeyframe = {
     ownerType: KeyframeOwnerType
@@ -246,6 +294,22 @@ const getGeosetTrackInfo = (type: string): { propName: 'Alpha' | 'Color'; vector
     return null
 }
 
+const TEXTURE_ANIM_TRACK_INFOS = [
+    { type: 'TexTranslation', propName: 'Translation', vectorSize: 3 as const, color: '#73d13d' },
+    { type: 'TexRotation', propName: 'Rotation', vectorSize: 4 as const, color: '#40a9ff' },
+    { type: 'TexScaling', propName: 'Scaling', vectorSize: 3 as const, color: '#ff85c0' }
+] as const
+
+type TextureAnimTrackType = typeof TEXTURE_ANIM_TRACK_INFOS[number]['type']
+
+const TEXTURE_ANIM_KEYFRAME_TYPES = TEXTURE_ANIM_TRACK_INFOS.map((item) => item.type) as TextureAnimTrackType[]
+
+const getTextureAnimTrackInfo = (type: string): { propName: 'Translation' | 'Rotation' | 'Scaling'; vectorSize: 3 | 4; color: string } | null => {
+    const hit = TEXTURE_ANIM_TRACK_INFOS.find((item) => item.type === type)
+    if (!hit) return null
+    return { propName: hit.propName, vectorSize: hit.vectorSize, color: hit.color }
+}
+
 const toVectorArray = (value: any, vectorSize: number, fallback: number[]) => {
     if (Array.isArray(value)) {
         const out = [...value]
@@ -261,6 +325,48 @@ const toVectorArray = (value: any, vectorSize: number, fallback: number[]) => {
         return [value]
     }
     return [...fallback]
+}
+
+const cloneTextureAnimsForKeyframes = (input: any[]) => {
+    if (typeof structuredClone === 'function') {
+        return structuredClone(input)
+    }
+    return input.map((anim: any) => ({
+        ...anim,
+        Translation: isAnimTrack(anim?.Translation)
+            ? {
+                ...anim.Translation,
+                Keys: anim.Translation.Keys.map((key: any) => ({
+                    ...key,
+                    Vector: Array.isArray(key?.Vector) ? [...key.Vector] : key?.Vector,
+                    InTan: Array.isArray(key?.InTan) ? [...key.InTan] : key?.InTan,
+                    OutTan: Array.isArray(key?.OutTan) ? [...key.OutTan] : key?.OutTan
+                }))
+            }
+            : anim?.Translation,
+        Rotation: isAnimTrack(anim?.Rotation)
+            ? {
+                ...anim.Rotation,
+                Keys: anim.Rotation.Keys.map((key: any) => ({
+                    ...key,
+                    Vector: Array.isArray(key?.Vector) ? [...key.Vector] : key?.Vector,
+                    InTan: Array.isArray(key?.InTan) ? [...key.InTan] : key?.InTan,
+                    OutTan: Array.isArray(key?.OutTan) ? [...key.OutTan] : key?.OutTan
+                }))
+            }
+            : anim?.Rotation,
+        Scaling: isAnimTrack(anim?.Scaling)
+            ? {
+                ...anim.Scaling,
+                Keys: anim.Scaling.Keys.map((key: any) => ({
+                    ...key,
+                    Vector: Array.isArray(key?.Vector) ? [...key.Vector] : key?.Vector,
+                    InTan: Array.isArray(key?.InTan) ? [...key.InTan] : key?.InTan,
+                    OutTan: Array.isArray(key?.OutTan) ? [...key.OutTan] : key?.OutTan
+                }))
+            }
+            : anim?.Scaling
+    }))
 }
 
 // Singleton loop counter for TimelinePanel (MUST be at module scope, not inside component)
@@ -287,9 +393,17 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         setPlaybackSpeed,
         setFrame,
         setGeosetAnims,
+        setTextureAnims,
     } = useModelStore()
 
-    const { selectedNodeIds, pickedGeosetIndex } = useSelectionStore()
+    const {
+        selectedNodeIds,
+        pickedGeosetIndex,
+        selectedTextureAnimIndex,
+        setSelectedTextureAnimIndex,
+        timelineKeyframeDisplayMode,
+        setTimelineKeyframeDisplayMode
+    } = useSelectionStore()
 
     // Derived Global Info
     const allSequencesMax = useMemo(() => {
@@ -311,7 +425,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     const [isEditingFrame, setIsEditingFrame] = useState(false)
     const [inputFrameValue, setInputFrameValue] = useState('')
     const [showAllKeyframes, setShowAllKeyframes] = useState(true)
-    const [keyframeDisplayMode, setKeyframeDisplayMode] = useState<KeyframeDisplayMode>('node')
+    const keyframeDisplayMode = timelineKeyframeDisplayMode
     const currentKeyframeModeConfig = KEYFRAME_DISPLAY_MODE_CONFIG[keyframeDisplayMode]
     const keyframeModeMenuItems = useMemo(() => (
         KEYFRAME_DISPLAY_MODE_ORDER.map(mode => ({
@@ -404,7 +518,25 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         setSelectionRect(null)
     }, [keyframeDisplayMode])
 
-    
+    useEffect(() => {
+        if (keyframeDisplayMode !== 'textureAnim') return
+        const textureAnims = Array.isArray((modelData as any)?.TextureAnims)
+            ? ((modelData as any).TextureAnims as any[])
+            : []
+        if (textureAnims.length === 0) {
+            if (selectedTextureAnimIndex !== null) setSelectedTextureAnimIndex(null)
+            return
+        }
+        if (
+            selectedTextureAnimIndex === null ||
+            selectedTextureAnimIndex < 0 ||
+            selectedTextureAnimIndex >= textureAnims.length
+        ) {
+            setSelectedTextureAnimIndex(0)
+        }
+    }, [keyframeDisplayMode, modelData, selectedTextureAnimIndex, setSelectedTextureAnimIndex])
+
+
 
     // Cache active keyframes
     useEffect(() => {
@@ -494,8 +626,36 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             })
         }
 
+        if (keyframeDisplayMode === 'textureAnim') {
+            const textureAnims = Array.isArray((modelData as any)?.TextureAnims)
+                ? ((modelData as any).TextureAnims as any[])
+                : []
+            const textureAnimId = selectedTextureAnimIndex
+            if (
+                typeof textureAnimId === 'number' &&
+                textureAnimId >= 0 &&
+                textureAnimId < textureAnims.length
+            ) {
+                const anim = textureAnims[textureAnimId]
+                TEXTURE_ANIM_TRACK_INFOS.forEach(({ type, propName, color }) => {
+                    const track = anim?.[propName]
+                    if (!isAnimTrack(track)) return
+                    track.Keys.forEach((k: any) => {
+                        keyframes.push({
+                            frame: Number(k.Frame),
+                            ownerType: 'textureAnim',
+                            ownerId: textureAnimId,
+                            type,
+                            uid: makeKeyframeUid('textureAnim', textureAnimId, type, Number(k.Frame)),
+                            color
+                        })
+                    })
+                })
+            }
+        }
+
         activeKeyframesRef.current = keyframes
-    }, [modelData, selectedNodeIds, modelNodes, selectedGeosetIndex, selectedGeosetIndices, pickedGeosetIndex, keyframeDisplayMode])
+    }, [modelData, selectedNodeIds, modelNodes, selectedGeosetIndex, selectedGeosetIndices, pickedGeosetIndex, selectedTextureAnimIndex, keyframeDisplayMode])
 
     const didInitialAutoFitRef = useRef(false)
 
@@ -651,7 +811,6 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
         const width = containerSizeRef.current.width
         const height = containerSizeRef.current.height
-        const SEQUENCE_HEIGHT = 30 // Increased for Name below markers
 
         if (canvas.width !== width || canvas.height !== height) {
             canvas.width = width
@@ -683,35 +842,14 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         ctx.stroke()
 
         // Sequence Track Bg (Bottom)
-        const seqTrackY = height - SEQUENCE_HEIGHT
-        const trackTop = RULER_HEIGHT + LANE_PADDING
-        const trackBottom = seqTrackY - LANE_PADDING
-        const laneTypes = getLaneTypesByMode(displayMode)
-        const fallbackGap = OFFSET_ROTATION - OFFSET_TRANSLATION
-        const laneGap = trackBottom > trackTop
-            ? (trackBottom - trackTop) / Math.max(1, laneTypes.length - 1)
-            : Math.max(1, fallbackGap)
-        const laneYMap: Record<string, number> = {}
-        if (displayMode === 'particle') {
-            const unifiedLaneY = trackBottom > trackTop
-                ? trackTop + (trackBottom - trackTop) * 0.5
-                : RULER_HEIGHT + OFFSET_TRANSLATION
-            laneTypes.forEach((laneType) => {
-                laneYMap[laneType] = unifiedLaneY
-            })
-        } else {
-            laneTypes.forEach((laneType, index) => {
-                laneYMap[laneType] = trackBottom > trackTop
-                    ? trackTop + laneGap * index
-                    : RULER_HEIGHT + OFFSET_TRANSLATION + fallbackGap * index
-            })
-        }
-        const effectiveKeyframeSize = Math.min(
-            KEYFRAME_SIZE,
-            Math.max(3, Math.floor(laneGap / 2) - 2)
-        )
+        const seqTrackY = height - SEQUENCE_TRACK_HEIGHT
+        const laneMetrics = getLaneMetrics(displayMode, height)
+        const laneYMap = laneMetrics.laneYMap
+        const trackTop = laneMetrics.trackTop
+        const trackBottom = laneMetrics.trackBottom
+        const effectiveKeyframeSize = laneMetrics.effectiveKeyframeSize
         ctx.fillStyle = '#202020'
-        ctx.fillRect(0, seqTrackY, width, SEQUENCE_HEIGHT)
+        ctx.fillRect(0, seqTrackY, width, SEQUENCE_TRACK_HEIGHT)
         ctx.strokeStyle = '#333'
         ctx.beginPath()
         ctx.moveTo(0, seqTrackY)
@@ -922,6 +1060,9 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const pxPerMs = pixelsPerMsRef.current
         const scroll = scrollXRef.current
         const displayMode = keyframeDisplayModeRef.current
+        const laneMetrics = getLaneMetrics(displayMode, canvas.height)
+        const laneYMap = laneMetrics.laneYMap
+        const yThreshold = Math.max(8, laneMetrics.effectiveKeyframeSize + 4)
 
         const visibleKeyframes = activeKeyframesRef.current.filter((kf) =>
             isKeyframeTypeVisible(kf.type, displayMode)
@@ -973,14 +1114,28 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         }
 
         const dynamicThreshold = getDynamicSnapThreshold()
-        let found: any = null // Explicit type fix
-        let minDistX = dynamicThreshold
+        let found: any = null
+        let minScore = Number.POSITIVE_INFINITY
 
         visibleKeyframes.forEach((kf) => {
             const kx = (kf.frame - scroll) * pxPerMs
-            const dist = Math.abs(kx - x)
-            if (dist <= minDistX) {
-                minDistX = dist
+            const xDist = Math.abs(kx - x)
+            if (xDist > dynamicThreshold) return
+
+            const laneY = laneYMap[kf.type] ?? (RULER_HEIGHT + OFFSET_TRANSLATION)
+            let yDist = 0
+            if (displayMode === 'particle') {
+                if (y < laneMetrics.trackTop) yDist = laneMetrics.trackTop - y
+                else if (y > laneMetrics.trackBottom) yDist = y - laneMetrics.trackBottom
+            } else {
+                yDist = Math.abs(y - laneY)
+            }
+
+            if (yDist > yThreshold) return
+
+            const score = xDist + yDist * 0.9
+            if (score < minScore) {
+                minScore = score
                 found = kf
             }
         })
@@ -995,9 +1150,8 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const x = clientX - rect.left
         const y = clientY - rect.top
 
-        const SEQUENCE_HEIGHT = 30 // Must match draw
         const height = canvas.height
-        const seqTrackY = height - SEQUENCE_HEIGHT
+        const seqTrackY = height - SEQUENCE_TRACK_HEIGHT
 
         if (y < seqTrackY) return null // Only check bottom track
 
@@ -1143,25 +1297,42 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     const applyKeyframeSnapshots = useCallback((
         nodesSnapshot: any[],
         geosetAnimsSnapshot: any[],
-        options?: { nodeChanged?: boolean; geosetChanged?: boolean }
+        textureAnimsSnapshot: any[],
+        options?: { nodeChanged?: boolean; geosetChanged?: boolean; textureChanged?: boolean }
     ) => {
         const replaceNodes = useModelStore.getState().replaceNodes
         const nodeChanged = options?.nodeChanged ?? true
         const geosetChanged = options?.geosetChanged ?? true
+        const textureChanged = options?.textureChanged ?? true
 
-        if (nodeChanged && geosetChanged) {
+        if (nodeChanged && geosetChanged && textureChanged) {
             replaceNodes(nodesSnapshot, { triggerReload: false })
+            setGeosetAnims(geosetAnimsSnapshot)
+            setTextureAnims(textureAnimsSnapshot)
+            return
+        }
+        if (nodeChanged && !geosetChanged && !textureChanged) {
+            replaceNodes(nodesSnapshot)
+            return
+        }
+        if (!nodeChanged && geosetChanged && !textureChanged) {
             setGeosetAnims(geosetAnimsSnapshot)
             return
         }
-        if (nodeChanged) {
-            replaceNodes(nodesSnapshot)
+        if (!nodeChanged && !geosetChanged && textureChanged) {
+            setTextureAnims(textureAnimsSnapshot)
             return
+        }
+        if (nodeChanged) {
+            replaceNodes(nodesSnapshot, { triggerReload: false })
         }
         if (geosetChanged) {
             setGeosetAnims(geosetAnimsSnapshot)
         }
-    }, [setGeosetAnims])
+        if (textureChanged) {
+            setTextureAnims(textureAnimsSnapshot)
+        }
+    }, [setGeosetAnims, setTextureAnims])
 
     // Helper: Get keyframe data for selected UIDs
     const getSelectedKeyframeData = useCallback(() => {
@@ -1170,6 +1341,9 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const nodes = state.nodes as any[]
         const geosetAnims = Array.isArray((state.modelData as any)?.GeosetAnims)
             ? ((state.modelData as any).GeosetAnims as any[])
+            : []
+        const textureAnims = Array.isArray((state.modelData as any)?.TextureAnims)
+            ? ((state.modelData as any).TextureAnims as any[])
             : []
 
         activeKeyframesRef.current.forEach((kf) => {
@@ -1212,6 +1386,30 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 const key = track.Keys[keyIndex]
                 result.push({
                     ownerType: 'geoset',
+                    ownerId: Number(kf.ownerId),
+                    type: kf.type,
+                    frame: kf.frame,
+                    keyIndex,
+                    value: Array.isArray(key.Vector) ? [...key.Vector] : key.Vector,
+                    inTan: Array.isArray(key.InTan) ? [...key.InTan] : key.InTan,
+                    outTan: Array.isArray(key.OutTan) ? [...key.OutTan] : key.OutTan
+                })
+                return
+            }
+
+            if (kf.ownerType === 'textureAnim') {
+                const textureTrack = getTextureAnimTrackInfo(kf.type)
+                if (!textureTrack) return
+                const textureAnim = textureAnims[Number(kf.ownerId)]
+                const track = textureAnim?.[textureTrack.propName]
+                if (!isAnimTrack(track)) return
+
+                const keyIndex = track.Keys.findIndex((k: any) => k.Frame === kf.frame)
+                if (keyIndex === -1) return
+
+                const key = track.Keys[keyIndex]
+                result.push({
+                    ownerType: 'textureAnim',
                     ownerId: Number(kf.ownerId),
                     type: kf.type,
                     frame: kf.frame,
@@ -1275,12 +1473,18 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const geosetAnims = Array.isArray((state.modelData as any)?.GeosetAnims)
             ? ((state.modelData as any).GeosetAnims as any[])
             : []
+        const textureAnims = Array.isArray((state.modelData as any)?.TextureAnims)
+            ? ((state.modelData as any).TextureAnims as any[])
+            : []
         const oldNodes = cloneNodesForKeyframes(nodes)
         const nodesCopy = cloneNodesForKeyframes(nodes)
         const oldGeosetAnims = cloneGeosetAnimsForKeyframes(geosetAnims)
         const geosetAnimsCopy = cloneGeosetAnimsForKeyframes(geosetAnims)
+        const oldTextureAnims = cloneTextureAnimsForKeyframes(textureAnims)
+        const textureAnimsCopy = cloneTextureAnimsForKeyframes(textureAnims)
         let nodeChanged = false
         let geosetChanged = false
+        let textureChanged = false
 
         const grouped = new Map<string, { ownerType: KeyframeOwnerType, ownerId: number, type: string, frames: number[] }>()
         keyframeData.forEach(kf => {
@@ -1315,18 +1519,32 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 if (track.Keys.length === 0 && geosetAnim) {
                     delete geosetAnim[geosetTrack.propName]
                 }
+                return
+            }
+
+            if (ownerType === 'textureAnim') {
+                const textureTrack = getTextureAnimTrackInfo(type)
+                if (!textureTrack) return
+                const textureAnim = textureAnimsCopy[Number(ownerId)]
+                const track = textureAnim?.[textureTrack.propName]
+                if (!isAnimTrack(track)) return
+                track.Keys = track.Keys.filter((k: any) => !frames.includes(k.Frame))
+                textureChanged = true
+                if (track.Keys.length === 0 && textureAnim) {
+                    delete textureAnim[textureTrack.propName]
+                }
             }
         })
 
-        if (!nodeChanged && !geosetChanged) return
+        if (!nodeChanged && !geosetChanged && !textureChanged) return
 
         useHistoryStore.getState().push({
             name: `删除 ${keyframeData.length} 个关键帧`,
-            undo: () => applyKeyframeSnapshots(oldNodes, oldGeosetAnims, { nodeChanged, geosetChanged }),
-            redo: () => applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, { nodeChanged, geosetChanged })
+            undo: () => applyKeyframeSnapshots(oldNodes, oldGeosetAnims, oldTextureAnims, { nodeChanged, geosetChanged, textureChanged }),
+            redo: () => applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, { nodeChanged, geosetChanged, textureChanged })
         })
 
-        applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, { nodeChanged, geosetChanged })
+        applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, { nodeChanged, geosetChanged, textureChanged })
         setSelectedKeyframeUids(new Set())
     }, [selectedKeyframeUids, getSelectedKeyframeData, applyKeyframeSnapshots])
 
@@ -1371,12 +1589,18 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const geosetAnims = Array.isArray((state.modelData as any)?.GeosetAnims)
             ? ((state.modelData as any).GeosetAnims as any[])
             : []
+        const textureAnims = Array.isArray((state.modelData as any)?.TextureAnims)
+            ? ((state.modelData as any).TextureAnims as any[])
+            : []
         const oldNodes = cloneNodesForKeyframes(nodes)
         const nodesCopy = cloneNodesForKeyframes(nodes)
         const oldGeosetAnims = cloneGeosetAnimsForKeyframes(geosetAnims)
         const geosetAnimsCopy = cloneGeosetAnimsForKeyframes(geosetAnims)
+        const oldTextureAnims = cloneTextureAnimsForKeyframes(textureAnims)
+        const textureAnimsCopy = cloneTextureAnimsForKeyframes(textureAnims)
         let nodeChanged = false
         let geosetChanged = false
+        let textureChanged = false
 
         source.keyframes.forEach(kf => {
             const targetFrame = kf.frame + offset
@@ -1441,18 +1665,48 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                     track.Keys.sort((a: any, b: any) => a.Frame - b.Frame)
                 }
                 geosetChanged = true
+                return
+            }
+
+            if (kf.ownerType === 'textureAnim') {
+                const textureTrack = getTextureAnimTrackInfo(kf.type)
+                if (!textureTrack) return
+                const textureAnimId = Number(kf.ownerId)
+                if (!Number.isFinite(textureAnimId) || textureAnimId < 0) return
+                if (!textureAnimsCopy[textureAnimId]) textureAnimsCopy[textureAnimId] = {}
+                const textureAnim = textureAnimsCopy[textureAnimId]
+                if (!isAnimTrack(textureAnim[textureTrack.propName])) {
+                    textureAnim[textureTrack.propName] = { InterpolationType: 1, GlobalSeqId: -1, Keys: [] }
+                }
+                const track = textureAnim[textureTrack.propName]
+                const existingIdx = track.Keys.findIndex((k: any) => k.Frame === targetFrame)
+                const vectorSize = textureTrack.propName === 'Rotation'
+                    ? ((Array.isArray(kf.value) && kf.value.length <= 1) ? 1 : 4)
+                    : 3
+                const fallback = vectorSize === 4 ? [0, 0, 0, 1] : [0, 0, 0]
+                const vector = toVectorArray(kf.value, vectorSize, fallback)
+                const newKey: any = { Frame: targetFrame, Vector: vector }
+                if (Array.isArray(kf.inTan)) newKey.InTan = [...kf.inTan]
+                if (Array.isArray(kf.outTan)) newKey.OutTan = [...kf.outTan]
+                if (existingIdx >= 0) {
+                    track.Keys[existingIdx] = newKey
+                } else {
+                    track.Keys.push(newKey)
+                    track.Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                }
+                textureChanged = true
             }
         })
 
-        if (!nodeChanged && !geosetChanged) return
+        if (!nodeChanged && !geosetChanged && !textureChanged) return
 
         useHistoryStore.getState().push({
             name: `粘贴 ${source.keyframes.length} 个关键帧`,
-            undo: () => applyKeyframeSnapshots(oldNodes, oldGeosetAnims, { nodeChanged, geosetChanged }),
-            redo: () => applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, { nodeChanged, geosetChanged })
+            undo: () => applyKeyframeSnapshots(oldNodes, oldGeosetAnims, oldTextureAnims, { nodeChanged, geosetChanged, textureChanged }),
+            redo: () => applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, { nodeChanged, geosetChanged, textureChanged })
         })
 
-        applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, { nodeChanged, geosetChanged })
+        applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, { nodeChanged, geosetChanged, textureChanged })
 
         if (effectiveClipboard.source === 'clipboard' && source.isCut) {
             setClipboardKeyframes(null)
@@ -1487,12 +1741,18 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const geosetAnims = Array.isArray((state.modelData as any)?.GeosetAnims)
             ? ((state.modelData as any).GeosetAnims as any[])
             : []
+        const textureAnims = Array.isArray((state.modelData as any)?.TextureAnims)
+            ? ((state.modelData as any).TextureAnims as any[])
+            : []
         const oldNodes = cloneNodesForKeyframes(nodes)
         const nodesCopy = cloneNodesForKeyframes(nodes)
         const oldGeosetAnims = cloneGeosetAnimsForKeyframes(geosetAnims)
         const geosetAnimsCopy = cloneGeosetAnimsForKeyframes(geosetAnims)
+        const oldTextureAnims = cloneTextureAnimsForKeyframes(textureAnims)
+        const textureAnimsCopy = cloneTextureAnimsForKeyframes(textureAnims)
         let nodeChanged = false
         let geosetChanged = false
+        let textureChanged = false
 
         source.keyframes.forEach(kf => {
             const targetFrame = Math.round(targetStart + (kf.frame - sourceStart) * scale)
@@ -1556,18 +1816,49 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                     track.Keys.sort((a: any, b: any) => a.Frame - b.Frame)
                 }
                 geosetChanged = true
+                return
+            }
+
+            if (kf.ownerType === 'textureAnim') {
+                const textureTrack = getTextureAnimTrackInfo(kf.type)
+                if (!textureTrack) return
+                const textureAnimId = Number(kf.ownerId)
+                if (!Number.isFinite(textureAnimId) || textureAnimId < 0) return
+                if (!textureAnimsCopy[textureAnimId]) textureAnimsCopy[textureAnimId] = {}
+                const textureAnim = textureAnimsCopy[textureAnimId]
+                if (!isAnimTrack(textureAnim[textureTrack.propName])) {
+                    textureAnim[textureTrack.propName] = { InterpolationType: 1, GlobalSeqId: -1, Keys: [] }
+                }
+                const track = textureAnim[textureTrack.propName]
+                const existingIdx = track.Keys.findIndex((k: any) => k.Frame === targetFrame)
+                const vectorSize = textureTrack.propName === 'Rotation'
+                    ? ((Array.isArray(kf.value) && kf.value.length <= 1) ? 1 : 4)
+                    : 3
+                const fallback = vectorSize === 4 ? [0, 0, 0, 1] : [0, 0, 0]
+                const vector = toVectorArray(kf.value, vectorSize, fallback)
+                const newKey: any = { Frame: targetFrame, Vector: vector }
+                if (Array.isArray(kf.inTan)) newKey.InTan = [...kf.inTan]
+                if (Array.isArray(kf.outTan)) newKey.OutTan = [...kf.outTan]
+
+                if (existingIdx >= 0) {
+                    track.Keys[existingIdx] = newKey
+                } else {
+                    track.Keys.push(newKey)
+                    track.Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                }
+                textureChanged = true
             }
         })
 
-        if (!nodeChanged && !geosetChanged) return
+        if (!nodeChanged && !geosetChanged && !textureChanged) return
 
         useHistoryStore.getState().push({
             name: `缩放粘贴 ${source.keyframes.length} 个关键帧`,
-            undo: () => applyKeyframeSnapshots(oldNodes, oldGeosetAnims, { nodeChanged, geosetChanged }),
-            redo: () => applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, { nodeChanged, geosetChanged })
+            undo: () => applyKeyframeSnapshots(oldNodes, oldGeosetAnims, oldTextureAnims, { nodeChanged, geosetChanged, textureChanged }),
+            redo: () => applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, { nodeChanged, geosetChanged, textureChanged })
         })
 
-        applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, { nodeChanged, geosetChanged })
+        applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, { nodeChanged, geosetChanged, textureChanged })
 
         if (effectiveClipboard.source === 'clipboard' && source.isCut) {
             setClipboardKeyframes(null)
@@ -1864,12 +2155,18 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 const geosetAnims = Array.isArray((state.modelData as any)?.GeosetAnims)
                     ? ((state.modelData as any).GeosetAnims as any[])
                     : []
+                const textureAnims = Array.isArray((state.modelData as any)?.TextureAnims)
+                    ? ((state.modelData as any).TextureAnims as any[])
+                    : []
                 const oldNodes = cloneNodesForKeyframes(nodes)
                 const nodesCopy = cloneNodesForKeyframes(nodes)
                 const oldGeosetAnims = cloneGeosetAnimsForKeyframes(geosetAnims)
                 const geosetAnimsCopy = cloneGeosetAnimsForKeyframes(geosetAnims)
+                const oldTextureAnims = cloneTextureAnimsForKeyframes(textureAnims)
+                const textureAnimsCopy = cloneTextureAnimsForKeyframes(textureAnims)
                 let nodeChanged = false
                 let geosetChanged = false
+                let textureChanged = false
 
                 interactionRef.current.dragKeyframeData.forEach(kfData => {
                     const newFrame = Math.round(scaleAnchor + (kfData.originalFrame - scaleAnchor) * dragScale)
@@ -1904,6 +2201,23 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                             track.Keys[keyIdx].Frame = newFrame
                             geosetChanged = true
                         }
+                        return
+                    }
+
+                    if (kfData.ownerType === 'textureAnim') {
+                        const textureTrack = getTextureAnimTrackInfo(kfData.type)
+                        if (!textureTrack) return
+                        const textureAnim = textureAnimsCopy[Number(kfData.ownerId)]
+                        const track = textureAnim?.[textureTrack.propName]
+                        if (!isAnimTrack(track)) return
+                        let keyIdx = kfData.keyIndex
+                        if (keyIdx < 0 || keyIdx >= track.Keys.length) {
+                            keyIdx = track.Keys.findIndex((k: any) => k.Frame === kfData.originalFrame)
+                        }
+                        if (keyIdx >= 0) {
+                            track.Keys[keyIdx].Frame = newFrame
+                            textureChanged = true
+                        }
                     }
                 })
 
@@ -1925,17 +2239,28 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                         if (isAnimTrack(track)) {
                             track.Keys.sort((a: any, b: any) => a.Frame - b.Frame)
                         }
+                        return
+                    }
+
+                    if (kfData.ownerType === 'textureAnim') {
+                        const textureTrack = getTextureAnimTrackInfo(kfData.type)
+                        if (!textureTrack) return
+                        const textureAnim = textureAnimsCopy[Number(kfData.ownerId)]
+                        const track = textureAnim?.[textureTrack.propName]
+                        if (isAnimTrack(track)) {
+                            track.Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                        }
                     }
                 })
 
-                if (nodeChanged || geosetChanged) {
+                if (nodeChanged || geosetChanged || textureChanged) {
                     useHistoryStore.getState().push({
                         name: `缩放 ${interactionRef.current.dragKeyframeData.length} 个关键帧`,
-                        undo: () => applyKeyframeSnapshots(oldNodes, oldGeosetAnims, { nodeChanged, geosetChanged }),
-                        redo: () => applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, { nodeChanged, geosetChanged })
+                        undo: () => applyKeyframeSnapshots(oldNodes, oldGeosetAnims, oldTextureAnims, { nodeChanged, geosetChanged, textureChanged }),
+                        redo: () => applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, { nodeChanged, geosetChanged, textureChanged })
                     })
 
-                    applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, { nodeChanged, geosetChanged })
+                    applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, { nodeChanged, geosetChanged, textureChanged })
                 }
 
                 // Keep selection on the transformed keyframes.
@@ -1951,12 +2276,18 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 const geosetAnims = Array.isArray((state.modelData as any)?.GeosetAnims)
                     ? ((state.modelData as any).GeosetAnims as any[])
                     : []
+                const textureAnims = Array.isArray((state.modelData as any)?.TextureAnims)
+                    ? ((state.modelData as any).TextureAnims as any[])
+                    : []
                 const oldNodes = cloneNodesForKeyframes(nodes)
                 const nodesCopy = cloneNodesForKeyframes(nodes)
                 const oldGeosetAnims = cloneGeosetAnimsForKeyframes(geosetAnims)
                 const geosetAnimsCopy = cloneGeosetAnimsForKeyframes(geosetAnims)
+                const oldTextureAnims = cloneTextureAnimsForKeyframes(textureAnims)
+                const textureAnimsCopy = cloneTextureAnimsForKeyframes(textureAnims)
                 let nodeChanged = false
                 let geosetChanged = false
+                let textureChanged = false
 
                 interactionRef.current.dragKeyframeData.forEach(kfData => {
                     const newFrame = kfData.originalFrame + frameOffset
@@ -1991,6 +2322,24 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                             track.Keys[keyIdx].Frame = newFrame
                             geosetChanged = true
                         }
+                        return
+                    }
+
+                    if (kfData.ownerType === 'textureAnim') {
+                        const textureTrack = getTextureAnimTrackInfo(kfData.type)
+                        if (!textureTrack) return
+                        const textureAnim = textureAnimsCopy[Number(kfData.ownerId)]
+                        const track = textureAnim?.[textureTrack.propName]
+                        if (!isAnimTrack(track)) return
+
+                        let keyIdx = kfData.keyIndex
+                        if (keyIdx < 0 || keyIdx >= track.Keys.length) {
+                            keyIdx = track.Keys.findIndex((k: any) => k.Frame === kfData.originalFrame)
+                        }
+                        if (keyIdx >= 0) {
+                            track.Keys[keyIdx].Frame = newFrame
+                            textureChanged = true
+                        }
                     }
                 })
 
@@ -2012,17 +2361,28 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                         if (isAnimTrack(track)) {
                             track.Keys.sort((a: any, b: any) => a.Frame - b.Frame)
                         }
+                        return
+                    }
+
+                    if (kfData.ownerType === 'textureAnim') {
+                        const textureTrack = getTextureAnimTrackInfo(kfData.type)
+                        if (!textureTrack) return
+                        const textureAnim = textureAnimsCopy[Number(kfData.ownerId)]
+                        const track = textureAnim?.[textureTrack.propName]
+                        if (isAnimTrack(track)) {
+                            track.Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                        }
                     }
                 })
 
-                if (nodeChanged || geosetChanged) {
+                if (nodeChanged || geosetChanged || textureChanged) {
                     useHistoryStore.getState().push({
                         name: `移动 ${interactionRef.current.dragKeyframeData.length} 个关键帧`,
-                        undo: () => applyKeyframeSnapshots(oldNodes, oldGeosetAnims, { nodeChanged, geosetChanged }),
-                        redo: () => applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, { nodeChanged, geosetChanged })
+                        undo: () => applyKeyframeSnapshots(oldNodes, oldGeosetAnims, oldTextureAnims, { nodeChanged, geosetChanged, textureChanged }),
+                        redo: () => applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, { nodeChanged, geosetChanged, textureChanged })
                     })
 
-                    applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, { nodeChanged, geosetChanged })
+                    applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, { nodeChanged, geosetChanged, textureChanged })
                 }
 
                 // Keep selection on the moved keyframes.
@@ -2056,19 +2416,31 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             } else {
                 const rectStart = Math.min(interactionRef.current.startX, mouseX)
                 const rectEnd = Math.max(interactionRef.current.startX, mouseX)
+                const rectTop = Math.min(interactionRef.current.startY, mouseY)
+                const rectBottom = Math.max(interactionRef.current.startY, mouseY)
 
                 const pxPerMs = pixelsPerMsRef.current
                 const scroll = scrollXRef.current
                 const displayMode = keyframeDisplayModeRef.current
+                const laneMetrics = getLaneMetrics(displayMode, canvas.height)
+                const laneYMap = laneMetrics.laneYMap
 
                 const ids = new Set<string>()
                 activeKeyframesRef.current.forEach(kf => {
                     if (!isKeyframeTypeVisible(kf.type, displayMode)) return
 
                     const kx = (kf.frame - scroll) * pxPerMs
-                    if (kx >= rectStart && kx <= rectEnd) {
-                        ids.add(kf.uid)
+                    if (kx < rectStart || kx > rectEnd) return
+
+                    if (displayMode === 'particle') {
+                        const intersectsParticleBand =
+                            !(rectBottom < laneMetrics.trackTop || rectTop > laneMetrics.trackBottom)
+                        if (intersectsParticleBand) ids.add(kf.uid)
+                        return
                     }
+
+                    const ky = laneYMap[kf.type] ?? (RULER_HEIGHT + OFFSET_TRANSLATION)
+                    if (ky >= rectTop && ky <= rectBottom) ids.add(kf.uid)
                 })
                 setSelectedKeyframeUids(ids)
             }
@@ -2454,8 +2826,21 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 </div>
             </Modal>
             {/* Toolbar */}
-            <div style={{ height: '36px', borderBottom: '1px solid #333', display: 'flex', alignItems: 'center', padding: '0 10px', justifyContent: 'center', position: 'relative' }}>
-                <div style={{ position: 'absolute', left: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div
+                style={{
+                    minHeight: 36,
+                    borderBottom: '1px solid #333',
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(0, 1fr) auto minmax(0, 1fr)',
+                    alignItems: 'center',
+                    padding: '4px 10px',
+                    columnGap: 10,
+                    rowGap: 0,
+                    overflowX: 'auto',
+                    overflowY: 'hidden'
+                }}
+            >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flexWrap: 'nowrap', whiteSpace: 'nowrap', justifySelf: 'start' }}>
 
                     {/* Frame/Current */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -2508,14 +2893,14 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 </div>
 
                 {/* Playback Controls */}
-                <div style={{ display: 'flex', gap: 8 }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'nowrap', whiteSpace: 'nowrap', minWidth: 'max-content', justifySelf: 'center' }}>
                     <div style={{ marginTop: 2 }}>
                         <Tooltip title={currentKeyframeModeConfig.tooltip}>
                             <Dropdown
                                 menu={{
                                     items: keyframeModeMenuItems,
                                     selectedKeys: [keyframeDisplayMode],
-                                    onClick: ({ key }) => setKeyframeDisplayMode(key as KeyframeDisplayMode)
+                                    onClick: ({ key }) => setTimelineKeyframeDisplayMode(key as KeyframeDisplayMode)
                                 }}
                                 trigger={['click']}
                             >
@@ -2551,7 +2936,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                     <Button type="text" icon={<FastForwardOutlined />} onClick={handleNextFrame} style={{ color: '#eee' }} />
                     <Button type="text" icon={<StepForwardOutlined />} onClick={handleGoToEnd} style={{ color: '#eee' }} />
 
-                                        {/* Show All Keyframes Toggle (Moved to Right of Auto Key) */}
+                    {/* Show All Keyframes Toggle (Moved to Right of Auto Key) */}
                     <Button
                         type="text"
                         icon={showAllKeyframes ? <EyeOutlined style={{ color: '#1890ff' }} /> : <EyeInvisibleOutlined />}
@@ -2562,7 +2947,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 </div>
 
                 {/* Zoom & Sequence Range (Right Aligned) */}
-                <div style={{ position: 'absolute', right: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flexWrap: 'nowrap', whiteSpace: 'nowrap', justifyContent: 'flex-end', justifySelf: 'end' }}>
                     {/* Sequence Range Inputs */}
                     {sequence && sequence.Interval && sequence.Interval.length >= 2 && (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -2597,7 +2982,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                             // Keep center focused
                             setScrollX(Math.max(0, centerFrame - (containerSizeRef.current.width / 2) / (v as number)))
                         }}
-                        style={{ width: 100 }}
+                        style={{ width: 90 }}
                         tooltip={{ formatter: null }}
                     />
                     <ZoomInOutlined style={{ color: '#888' }} />
@@ -2679,3 +3064,4 @@ const btnStyle: React.CSSProperties = {
 }
 
 export default React.memo(TimelinePanel)
+

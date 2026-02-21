@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react'
-import { List, Button, InputNumber, Typography, message } from 'antd'
+﻿import React, { useState, useEffect } from 'react'
+import { List, Button, Typography, message } from 'antd'
+import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { DraggableModal } from '../DraggableModal';
 import { useModelStore } from '../../store/modelStore'
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
@@ -169,3 +170,4 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({ visible, onCl
 }
 
 export default GlobalSequenceModal
+

@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react'
-import { Button, List, Card, Checkbox, InputNumber, Select, Typography, message } from 'antd'
+﻿import React, { useState, useEffect } from 'react'
+import { Button, List, Card, Checkbox, Select, Typography, message } from 'antd'
+import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { DraggableModal } from '../DraggableModal'
 import KeyframeEditor from '../editors/KeyframeEditor'
@@ -1041,5 +1042,6 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 }
 
 export default MaterialEditorModal
+
 
 

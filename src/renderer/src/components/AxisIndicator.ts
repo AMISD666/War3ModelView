@@ -184,7 +184,7 @@ export class AxisIndicator {
 
         // Set up a larger viewport in bottom-left corner
         const indicatorSize = 300
-        const margin = 5
+        const margin = 2
         const vpX = margin
         const vpY = margin
         gl.viewport(vpX, vpY, indicatorSize, indicatorSize)

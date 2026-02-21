@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react'
-import { List, Checkbox, Button, InputNumber, Select, ColorPicker, Card, Typography, message } from 'antd'
+﻿import React, { useState, useEffect } from 'react'
+import { List, Checkbox, Button, Select, ColorPicker, Card, Typography, message } from 'antd'
+import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { DraggableModal } from '../DraggableModal';
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
@@ -496,3 +497,4 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
 }
 
 export default GeosetAnimationModal
+

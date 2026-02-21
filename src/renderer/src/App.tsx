@@ -51,7 +51,10 @@ function App(): JSX.Element {
                 height: '100vh',
                 backgroundColor: '#1e1e1e'
             }}>
-                <Spin size="large" tip="正在检查激活状态..." />
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                    <Spin size="large" />
+                    <span style={{ color: '#d0d0d0', fontSize: 12 }}>正在检查激活状态...</span>
+                </div>
             </div>
         )
     }

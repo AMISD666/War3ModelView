@@ -1,5 +1,6 @@
+﻿import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import React, { useState, useEffect } from 'react';
-import { Form, InputNumber, Checkbox, ConfigProvider, theme, Row, Col, Divider } from 'antd';
+import { Form, Checkbox, ConfigProvider, theme, Row, Col, Divider } from 'antd';
 import { DraggableModal } from '../DraggableModal';
 import { useModelStore } from '../../store/modelStore';
 import { useUIStore } from '../../store/uiStore';
@@ -227,3 +228,4 @@ export const TransformModelDialog: React.FC = () => {
         </ConfigProvider>
     );
 };
+

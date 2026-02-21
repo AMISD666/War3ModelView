@@ -1,5 +1,6 @@
+﻿import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import React, { useState } from 'react';
-import { Button, Card, Space, InputNumber, Row, Col, Input, Checkbox, Tooltip } from 'antd';
+import { Button, Card, Space, Row, Col, Input, Checkbox, Tooltip } from 'antd';
 import { EyeOutlined, CameraOutlined } from '@ant-design/icons';
 import { MasterDetailLayout } from '../MasterDetailLayout';
 import { useModelStore } from '../../store/modelStore';
@@ -357,3 +358,4 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
 };
 
 export default CameraManagerModal;
+

@@ -6,7 +6,8 @@
  */
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { Layout, ConfigProvider, theme } from 'antd';
+import { Layout, ConfigProvider, theme, Button } from 'antd';
+import { CloseOutlined } from '@ant-design/icons';
 import { useUIStore } from '../store/uiStore';
 import { useSelectionStore } from '../store/selectionStore';
 import { useModelStore } from '../store/modelStore';
@@ -21,13 +22,15 @@ import { listen } from '@tauri-apps/api/event';
 import { handleGlobalShortcutKeyDown } from '../shortcuts/manager';
 
 const { Content } = Layout;
+const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
 export const MainLayoutNew: React.FC = () => {
     const {
         showNodeManager,
         showNodeDialog,
         editingNodeId,
-        setNodeDialogVisible
+        setNodeDialogVisible,
+        setShowNodeManager
     } = useUIStore();
 
     const mainMode = useSelectionStore(state => state.mainMode);
@@ -44,7 +47,20 @@ export const MainLayoutNew: React.FC = () => {
     // Batch mode state: track selected model for preview
     const [batchSelectedPath, setBatchSelectedPath] = useState<string | null>(null);
     const [batchSelectedAnimation, setBatchSelectedAnimation] = useState<number>(0);
-    const { setModelData: setZustandModelData, addTab, tabs } = useModelStore();
+    const { setModelData: setZustandModelData, addTab } = useModelStore();
+    const getNodeManagerBounds = useCallback(() => {
+        const containerWidth = containerRef.current?.clientWidth ?? window.innerWidth;
+        const minWidth = 180;
+        const maxWidth = Math.max(minWidth, Math.min(560, containerWidth - 520));
+        return { minWidth, maxWidth };
+    }, []);
+    const getBatchPanelBounds = useCallback(() => {
+        const containerWidth = Math.max(1, containerRef.current?.clientWidth ?? window.innerWidth);
+        const minPercentByPx = (260 / containerWidth) * 100;
+        const minPercent = Math.min(48, Math.max(20, minPercentByPx));
+        const maxPercent = Math.max(52, Math.min(80, 100 - minPercent));
+        return { minPercent, maxPercent };
+    }, []);
 
     // Handle model selection from BatchManager
     const handleBatchSelectModel = useCallback((path: string, animationIndex: number) => {
@@ -75,18 +91,17 @@ export const MainLayoutNew: React.FC = () => {
     useEffect(() => {
         const handleMouseMove = (e: MouseEvent) => {
             if (isResizingNodeMgr) {
-                const newWidth = e.clientX;
-                if (newWidth >= 200 && newWidth <= 600) {
-                    setNodeManagerWidth(newWidth);
-                }
+                const containerRect = containerRef.current?.getBoundingClientRect();
+                const newWidth = containerRect ? e.clientX - containerRect.left : e.clientX;
+                const { minWidth, maxWidth } = getNodeManagerBounds();
+                setNodeManagerWidth(clamp(newWidth, minWidth, maxWidth));
             }
             if (isResizingBatch && containerRef.current) {
                 const containerRect = containerRef.current.getBoundingClientRect();
                 const newWidthPx = e.clientX - containerRect.left;
                 const newWidthPercent = (newWidthPx / containerRect.width) * 100;
-                if (newWidthPercent >= 30 && newWidthPercent <= 80) {
-                    setBatchPanelWidth(newWidthPercent);
-                }
+                const { minPercent, maxPercent } = getBatchPanelBounds();
+                setBatchPanelWidth(clamp(newWidthPercent, minPercent, maxPercent));
             }
         };
 
@@ -104,7 +119,19 @@ export const MainLayoutNew: React.FC = () => {
             document.removeEventListener('mousemove', handleMouseMove);
             document.removeEventListener('mouseup', handleMouseUp);
         };
-    }, [isResizingNodeMgr, isResizingBatch]);
+    }, [isResizingNodeMgr, isResizingBatch, getNodeManagerBounds, getBatchPanelBounds]);
+
+    useEffect(() => {
+        const clampPanelSizes = () => {
+            const { minWidth, maxWidth } = getNodeManagerBounds();
+            const { minPercent, maxPercent } = getBatchPanelBounds();
+            setNodeManagerWidth((prev) => clamp(prev, minWidth, maxWidth));
+            setBatchPanelWidth((prev) => clamp(prev, minPercent, maxPercent));
+        };
+        clampPanelSizes();
+        window.addEventListener('resize', clampPanelSizes);
+        return () => window.removeEventListener('resize', clampPanelSizes);
+    }, [getNodeManagerBounds, getBatchPanelBounds]);
 
     // Listen for open-files events from single-instance plugin (handles multiple files)
     useEffect(() => {
@@ -142,7 +169,7 @@ export const MainLayoutNew: React.FC = () => {
         <>
             <div
                 ref={containerRef}
-                style={{ height: '100vh', display: 'flex', overflow: 'hidden', position: 'relative' }}
+                style={{ height: '100dvh', display: 'flex', overflow: 'hidden', position: 'relative', minWidth: 0 }}
             >
                 {/* Batch Mode: Left Panel - BatchManager */}
                 {isBatchMode && (
@@ -151,7 +178,8 @@ export const MainLayoutNew: React.FC = () => {
                             width: `${batchPanelWidth}%`,
                             height: '100%',
                             overflow: 'hidden',
-                            flexShrink: 0
+                            flexShrink: 0,
+                            minWidth: 0
                         }}>
                             <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
                                 <BatchManager
@@ -202,7 +230,8 @@ export const MainLayoutNew: React.FC = () => {
                     flex: 1,
                     display: 'flex',
                     height: '100%',
-                    overflow: 'hidden'
+                    overflow: 'hidden',
+                    minWidth: 0
                 }}>
                     {/* Node Manager - only shown when not in batch/uv mode */}
                     {showNodeManager && !isBatchMode && mainMode !== 'uv' && (
@@ -215,11 +244,33 @@ export const MainLayoutNew: React.FC = () => {
                                     display: 'flex',
                                     flexDirection: 'column',
                                     position: 'relative',
-                                    flexShrink: 0
+                                    flexShrink: 0,
+                                    minWidth: 0
                                 }}
                             >
-                                <div style={{ padding: '8px 12px', borderBottom: '1px solid #303030', fontWeight: 'bold', color: '#fff' }}>
-                                    节点管理器
+                                <div
+                                    style={{
+                                        padding: '6px 8px 6px 12px',
+                                        borderBottom: '1px solid #303030',
+                                        fontWeight: 'bold',
+                                        color: '#fff',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'space-between',
+                                        gap: 8
+                                    }}
+                                >
+                                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                        节点管理器
+                                    </span>
+                                    <Button
+                                        type="text"
+                                        size="small"
+                                        icon={<CloseOutlined />}
+                                        onClick={() => setShowNodeManager(false)}
+                                        title="关闭节点管理器"
+                                        style={{ color: '#bbb', marginRight: 6 }}
+                                    />
                                 </div>
                                 <div style={{ flex: 1, overflow: 'hidden' }}>
                                     <NodeManagerWindow />
@@ -257,7 +308,8 @@ export const MainLayoutNew: React.FC = () => {
                         display: 'flex',
                         flexDirection: 'column',
                         overflow: 'hidden',
-                        backgroundColor: isBatchMode ? '#1a1a1a' : 'transparent'
+                        backgroundColor: isBatchMode ? '#1a1a1a' : 'transparent',
+                        minWidth: 0
                     }}>
                         {/* Tab Bar - only show in normal mode when tabs exist */}
                         {!isBatchMode && (
@@ -281,7 +333,7 @@ export const MainLayoutNew: React.FC = () => {
                         )}
 
                         {/* SINGLE MainLayoutOld - always rendered, positioned based on mode */}
-                        <Content style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                        <Content style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
                             <MainLayoutOld />
                         </Content>
                     </div>

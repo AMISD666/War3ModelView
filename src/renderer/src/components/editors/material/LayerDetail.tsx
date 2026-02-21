@@ -1,5 +1,6 @@
-import React, { useState } from 'react'
-import { Checkbox, InputNumber, Button, Select, Space } from 'antd'
+﻿import React, { useState } from 'react'
+import { Checkbox, Button, Select, Space } from 'antd'
+import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { EditOutlined } from '@ant-design/icons'
 import KeyframeEditor from '../KeyframeEditor'
 import { useModelStore } from '../../../store/modelStore'
@@ -230,3 +231,4 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
 }
 
 export default LayerDetail
+

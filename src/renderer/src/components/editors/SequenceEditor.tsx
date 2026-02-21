@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react'
-import { Table, Button, Input, Space, Modal, message, InputNumber, Tooltip, Checkbox } from 'antd'
+﻿import React, { useState, useEffect } from 'react'
+import { Table, Button, Input, Space, Modal, message, Tooltip, Checkbox } from 'antd'
+import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { PlusOutlined, DeleteOutlined, SaveOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useModelStore } from '../../store/modelStore'
 
@@ -222,3 +223,4 @@ const SequenceEditor: React.FC<SequenceEditorProps> = () => {
 }
 
 export default SequenceEditor
+

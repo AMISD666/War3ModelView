@@ -809,6 +809,21 @@ function prepareModelDataForSave(modelData: any): any {
             ];
 
             const fixEmitterAnimProps = (emitter: any, props: typeof animProps) => {
+                const ensureScalarZeroAtFrame0 = (track: any) => {
+                    if (!isAnimVector(track)) return
+                    if (!Array.isArray(track.Keys)) {
+                        track.Keys = []
+                    }
+                    const hasFrame0 = track.Keys.some((key: any) => Number(key?.Frame) === 0)
+                    if (!hasFrame0) {
+                        track.Keys.push({
+                            Frame: 0,
+                            Vector: toTypedVector([0], 1, false, [0])
+                        })
+                    }
+                    track.Keys.sort((a: any, b: any) => Number(a?.Frame ?? 0) - Number(b?.Frame ?? 0))
+                }
+
                 props.forEach(({ prop, animKey }) => {
                     if (!emitter[prop] && emitter[animKey]) {
                         emitter[prop] = emitter[animKey];
@@ -818,6 +833,11 @@ function prepareModelDataForSave(modelData: any): any {
                     }
                     if (isAnimVector(emitter[animKey])) {
                         emitter[animKey] = fixAnimVector(emitter[animKey], 1, false, undefined, globalSeqCount);
+                    }
+                    // Width/Length tracks should always have a frame-0 default key (0 -> 0).
+                    if (prop === 'Width' || prop === 'Length') {
+                        ensureScalarZeroAtFrame0(emitter[prop]);
+                        ensureScalarZeroAtFrame0(emitter[animKey]);
                     }
                 });
             };
@@ -1609,6 +1629,11 @@ const MainLayout: React.FC = () => {
     // Editor Panel Resizing
     const [editorWidth, setEditorWidth] = useState<number>(400)
     const [isResizingEditor, setIsResizingEditor] = useState<boolean>(false)
+    const clampEditorWidth = useCallback((rawWidth: number) => {
+        const minWidth = 220
+        const maxWidth = Math.max(minWidth, window.innerWidth - 420)
+        return Math.max(minWidth, Math.min(maxWidth, rawWidth))
+    }, [])
 
     const viewerRef = useRef<ViewerRef>(null)
     const hasCheckedCli = useRef(false);
@@ -1936,9 +1961,7 @@ const MainLayout: React.FC = () => {
         const handleMouseMove = (e: MouseEvent) => {
             if (!isResizingEditor) return
             const newWidth = window.innerWidth - e.clientX
-            if (newWidth >= 300 && newWidth <= 800) {
-                setEditorWidth(newWidth)
-            }
+            setEditorWidth(clampEditorWidth(newWidth))
         }
 
         const handleMouseUp = () => {
@@ -1954,7 +1977,16 @@ const MainLayout: React.FC = () => {
             document.removeEventListener('mousemove', handleMouseMove)
             document.removeEventListener('mouseup', handleMouseUp)
         }
-    }, [isResizingEditor])
+    }, [isResizingEditor, clampEditorWidth])
+
+    useEffect(() => {
+        const handleResize = () => {
+            setEditorWidth((prev) => clampEditorWidth(prev))
+        }
+        handleResize()
+        window.addEventListener('resize', handleResize)
+        return () => window.removeEventListener('resize', handleResize)
+    }, [clampEditorWidth])
 
     // Save settings when they change
     useEffect(() => localStorage.setItem('teamColor', JSON.stringify(teamColor)), [teamColor])
@@ -3184,10 +3216,13 @@ const MainLayout: React.FC = () => {
             </Suspense>
 
 
-            <div style={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative' }}>
+            <div style={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative', minWidth: 0 }}>
                 {/* Left Panel - Animation Panel (hidden in UV mode) */}
                 {mainMode !== 'uv' && mainMode !== 'animation' && (
-                    <div style={{ width: '230px', display: 'flex', flexDirection: 'column', borderRight: '1px solid #333' }}>
+                    <div
+                        data-left-animation-panel="true"
+                        style={{ width: 'clamp(160px, 18vw, 230px)', display: 'flex', flexDirection: 'column', borderRight: '1px solid #333', minWidth: 0 }}
+                    >
                         <AnimationPanel
                             onImport={handleImport}
                         />
@@ -3195,7 +3230,7 @@ const MainLayout: React.FC = () => {
                 )}
 
                 {/* Center - 3D Viewer or Animation/UV Mode Layout */}
-                <div style={{ flex: 1, position: 'relative', backgroundColor }}>
+                <div id="main-viewer-host" style={{ flex: 1, position: 'relative', backgroundColor, minWidth: 0 }}>
                     <AnimationModeLayout isActive={mainMode === 'animation'}>
                         <UVModeLayout
 
@@ -3257,12 +3292,13 @@ const MainLayout: React.FC = () => {
                 {/* Right Panel - Editors */}
                 {activeEditor && (
                     <div style={{
-                        width: editorWidth,
+                        width: clampEditorWidth(editorWidth),
                         display: 'flex',
                         flexDirection: 'column',
                         borderLeft: '1px solid #333',
                         backgroundColor: '#222',
-                        position: 'relative' // Needed for resize handle
+                        position: 'relative', // Needed for resize handle
+                        minWidth: 0
                     }}>
                         {/* Resize Handle */}
                         <div

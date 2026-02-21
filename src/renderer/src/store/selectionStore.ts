@@ -12,6 +12,7 @@ export interface SelectionId {
 export type AppMode = 'view' | 'geometry' | 'uv' | 'animation' | 'batch';
 export type GeometrySubMode = 'vertex' | 'face' | 'group';
 export type TransformMode = 'translate' | 'rotate' | 'scale' | null;
+export type KeyframeDisplayMode = 'node' | 'geosetAnim' | 'particle' | 'textureAnim';
 
 export type SelectionMode = 'object' | 'vertex' | 'face' | 'group'; // Deprecated in favor of AppMode + SubMode, keeping for compatibility for now
 export type GizmoMode = 'translate' | 'rotate' | 'scale'; // Deprecated in favor of TransformMode
@@ -22,14 +23,18 @@ interface SelectionState {
     mainMode: AppMode;
     geometrySubMode: GeometrySubMode;
     animationSubMode: 'binding' | 'keyframe';
+    timelineKeyframeDisplayMode: KeyframeDisplayMode;
     transformMode: TransformMode;
     multiMoveMode: 'relative' | 'worldUniform';
+    selectedTextureAnimIndex: number | null;
 
     setMainMode: (mode: AppMode) => void;
     setGeometrySubMode: (mode: GeometrySubMode) => void;
     setAnimationSubMode: (mode: 'binding' | 'keyframe') => void;
+    setTimelineKeyframeDisplayMode: (mode: KeyframeDisplayMode) => void;
     setTransformMode: (mode: TransformMode) => void;
     setMultiMoveMode: (mode: 'relative' | 'worldUniform') => void;
+    setSelectedTextureAnimIndex: (index: number | null) => void;
 
     // Legacy (to be refactored)
     selectionMode: SelectionMode;
@@ -89,8 +94,10 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
     mainMode: 'view',
     geometrySubMode: 'vertex',
     animationSubMode: 'binding',
+    timelineKeyframeDisplayMode: 'node',
     transformMode: 'translate',
     multiMoveMode: 'relative',
+    selectedTextureAnimIndex: null,
 
     setMainMode: (mode) => {
         set({ mainMode: mode });
@@ -110,6 +117,9 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
     setAnimationSubMode: (mode) => {
         set({ animationSubMode: mode });
     },
+    setTimelineKeyframeDisplayMode: (mode) => {
+        set({ timelineKeyframeDisplayMode: mode });
+    },
     setTransformMode: (mode) => {
         set({ transformMode: mode });
         if (mode) {
@@ -118,6 +128,9 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
     },
     setMultiMoveMode: (mode) => {
         set({ multiMoveMode: mode });
+    },
+    setSelectedTextureAnimIndex: (index) => {
+        set({ selectedTextureAnimIndex: index });
     },
 
     // Legacy Init
@@ -291,8 +304,10 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
             mainMode: 'view',
             geometrySubMode: 'vertex',
             animationSubMode: 'binding',
+            timelineKeyframeDisplayMode: 'node',
             transformMode: 'translate',
             multiMoveMode: 'relative',
+            selectedTextureAnimIndex: null,
             selectionMode: 'object',
             selectedNodeIds: [],
             selectedVertexIds: [],

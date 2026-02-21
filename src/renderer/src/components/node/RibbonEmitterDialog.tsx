@@ -1,5 +1,6 @@
+﻿import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import React, { useEffect, useState } from 'react';
-import { Form, InputNumber, Select, Button, Row, Col, Checkbox, ColorPicker } from 'antd';
+import { Form, Select, Button, Row, Col, Checkbox, ColorPicker } from 'antd';
 import { DraggableModal } from '../DraggableModal';
 import { useModelStore } from '../../store/modelStore';
 import type { RibbonEmitterNode } from '../../types/node';
@@ -442,3 +443,4 @@ const RibbonEmitterDialog: React.FC<RibbonEmitterDialogProps> = ({ visible, node
 };
 
 export default RibbonEmitterDialog;
+

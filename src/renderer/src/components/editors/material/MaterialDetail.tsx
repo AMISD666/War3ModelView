@@ -1,5 +1,6 @@
-import React, { useState } from 'react'
-import { Checkbox, InputNumber, Menu, Dropdown } from 'antd'
+﻿import React, { useState } from 'react'
+import { Checkbox, Menu, Dropdown } from 'antd'
+import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { showMessage } from '../../../store/messageStore'
 
@@ -164,3 +165,4 @@ const MaterialDetail: React.FC<MaterialDetailProps> = ({ material, onUpdate, onS
 }
 
 export default MaterialDetail
+

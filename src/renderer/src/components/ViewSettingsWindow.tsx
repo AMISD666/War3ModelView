@@ -78,6 +78,8 @@ export const ViewSettingsWindow: React.FC = () => {
         showCameras, setShowCameras,
         showLights, setShowLights,
         showAttachments, setShowAttachments,
+        showParticles, setShowParticles,
+        showRibbons, setShowRibbons,
         enableLighting, setEnableLighting,
         renderMode, setRenderMode,
         backgroundColor, setBackgroundColor,
@@ -507,6 +509,8 @@ export const ViewSettingsWindow: React.FC = () => {
                                         <ToggleButton checked={showCameras} onChange={setShowCameras} fullWidth>相机位置</ToggleButton>
                                         <ToggleButton checked={showLights} onChange={setShowLights} fullWidth>灯光对象</ToggleButton>
                                         <ToggleButton checked={showAttachments} onChange={setShowAttachments} fullWidth>模型附件</ToggleButton>
+                                        <ToggleButton checked={showParticles} onChange={setShowParticles} fullWidth>粒子显示</ToggleButton>
+                                        <ToggleButton checked={showRibbons} onChange={setShowRibbons} fullWidth>丝带显示</ToggleButton>
                                     </div>
                                 </div>
 
@@ -765,4 +769,3 @@ export const ViewSettingsWindow: React.FC = () => {
         </>
     );
 };
-

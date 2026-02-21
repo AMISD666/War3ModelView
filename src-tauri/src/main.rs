@@ -11,6 +11,8 @@ mod texture_decode;
 use base64::Engine;
 use mpq_manager::MpqManager;
 use serde::Serialize;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{ipc::Response, Emitter, Manager, State};
 use texture_decode::{get_texture_candidate_paths, normalize_path};
@@ -22,6 +24,110 @@ static DEBUG_CONSOLE_ENABLED: AtomicBool = AtomicBool::new(false);
 static CLI_ARGS_CONSUMED: AtomicBool = AtomicBool::new(false);
 static PENDING_FILES: once_cell::sync::Lazy<std::sync::Mutex<Vec<String>>> =
     once_cell::sync::Lazy::new(|| std::sync::Mutex::new(Vec::new()));
+
+const TEXTURE_PATH_CACHE_LIMIT: usize = 8192;
+const TEXTURE_RESULT_CACHE_LIMIT: usize = 1024;
+const TEXTURE_RESULT_CACHE_MAX_BYTES: usize = 192 * 1024 * 1024;
+const TEXTURE_RESULT_CACHE_MAX_ENTRY_BYTES: usize = 8 * 1024 * 1024;
+
+#[derive(Default)]
+struct TextureBatchCacheInner {
+    // key: "{normalized_model_path_lower}|{normalized_texture_path_lower}"
+    // value: Some(resolved fs file path) or None (fs path miss)
+    path_hits: HashMap<String, Option<String>>,
+    path_lru: VecDeque<String>,
+
+    // key: "fs:{path_lower}" / "mpq:{path_lower}"
+    result_bytes: HashMap<String, Arc<Vec<u8>>>,
+    result_lru: VecDeque<String>,
+    result_total_bytes: usize,
+}
+
+struct TextureBatchCache {
+    inner: Mutex<TextureBatchCacheInner>,
+}
+
+impl TextureBatchCache {
+    fn new() -> Self {
+        Self {
+            inner: Mutex::new(TextureBatchCacheInner::default()),
+        }
+    }
+
+    fn touch_lru(order: &mut VecDeque<String>, key: &str) {
+        if let Some(pos) = order.iter().position(|k| k == key) {
+            order.remove(pos);
+        }
+        order.push_back(key.to_string());
+    }
+
+    fn get_path_hit(&self, key: &str) -> Option<Option<String>> {
+        let mut guard = self.inner.lock().unwrap();
+        let value = guard.path_hits.get(key).cloned();
+        if value.is_some() {
+            Self::touch_lru(&mut guard.path_lru, key);
+        }
+        value
+    }
+
+    fn put_path_hit(&self, key: String, value: Option<String>) {
+        let mut guard = self.inner.lock().unwrap();
+        guard.path_hits.insert(key.clone(), value);
+        Self::touch_lru(&mut guard.path_lru, &key);
+
+        while guard.path_hits.len() > TEXTURE_PATH_CACHE_LIMIT {
+            let old_key = match guard.path_lru.pop_front() {
+                Some(k) => k,
+                None => break,
+            };
+            guard.path_hits.remove(&old_key);
+        }
+    }
+
+    fn invalidate_path_hit(&self, key: &str) {
+        let mut guard = self.inner.lock().unwrap();
+        guard.path_hits.remove(key);
+        if let Some(pos) = guard.path_lru.iter().position(|k| k == key) {
+            guard.path_lru.remove(pos);
+        }
+    }
+
+    fn get_result_bytes(&self, key: &str) -> Option<Arc<Vec<u8>>> {
+        let mut guard = self.inner.lock().unwrap();
+        let value = guard.result_bytes.get(key).cloned();
+        if value.is_some() {
+            Self::touch_lru(&mut guard.result_lru, key);
+        }
+        value
+    }
+
+    fn put_result_bytes(&self, key: String, bytes: Arc<Vec<u8>>) {
+        // Avoid very large single-entry cache pollution.
+        if bytes.len() > TEXTURE_RESULT_CACHE_MAX_ENTRY_BYTES {
+            return;
+        }
+
+        let mut guard = self.inner.lock().unwrap();
+        if let Some(old) = guard.result_bytes.remove(&key) {
+            guard.result_total_bytes = guard.result_total_bytes.saturating_sub(old.len());
+        }
+        guard.result_total_bytes = guard.result_total_bytes.saturating_add(bytes.len());
+        guard.result_bytes.insert(key.clone(), bytes);
+        Self::touch_lru(&mut guard.result_lru, &key);
+
+        while guard.result_bytes.len() > TEXTURE_RESULT_CACHE_LIMIT
+            || guard.result_total_bytes > TEXTURE_RESULT_CACHE_MAX_BYTES
+        {
+            let old_key = match guard.result_lru.pop_front() {
+                Some(k) => k,
+                None => break,
+            };
+            if let Some(old) = guard.result_bytes.remove(&old_key) {
+                guard.result_total_bytes = guard.result_total_bytes.saturating_sub(old.len());
+            }
+        }
+    }
+}
 
 #[tauri::command]
 fn detect_warcraft_path() -> Result<String, String> {
@@ -131,37 +237,84 @@ fn load_textures_batch_bin(
     model_path: String,
     texture_paths: Vec<String>,
     state: State<'_, MpqManager>,
+    cache: State<'_, TextureBatchCache>,
 ) -> Result<Response, String> {
     let mut payload: Vec<u8> = Vec::new();
     payload.extend_from_slice(&(texture_paths.len() as u32).to_le_bytes());
 
     let normalized_model_path = normalize_path(&model_path);
+    let normalized_model_path_lc = normalized_model_path.to_lowercase();
     let skip_fs = normalized_model_path.starts_with("dropped:") || normalized_model_path.is_empty();
 
     for texture_path in texture_paths {
         let normalized_texture_path = normalize_path(&texture_path);
-        let mut data: Option<Vec<u8>> = None;
+        let normalized_texture_path_lc = normalized_texture_path.to_lowercase();
+        let mut data: Option<Arc<Vec<u8>>> = None;
+        let path_cache_key = format!(
+            "{}|{}",
+            normalized_model_path_lc.as_str(),
+            normalized_texture_path_lc.as_str()
+        );
 
         if !skip_fs {
-            let candidates = get_texture_candidate_paths(&normalized_model_path, &normalized_texture_path);
-            for candidate in candidates {
-                if let Ok(bytes) = std::fs::read(&candidate) {
+            let mut cached_fs_path = cache.get_path_hit(&path_cache_key).unwrap_or(None);
+
+            if let Some(fs_path) = cached_fs_path.clone() {
+                let fs_key = format!("fs:{}", fs_path.to_lowercase());
+                if let Some(bytes) = cache.get_result_bytes(&fs_key) {
+                    data = Some(bytes);
+                } else if let Ok(bytes) = std::fs::read(&fs_path) {
                     if bytes.len() <= 50 * 1024 * 1024 {
-                        data = Some(bytes);
-                        break;
+                        let bytes_arc = Arc::new(bytes);
+                        cache.put_result_bytes(fs_key, bytes_arc.clone());
+                        data = Some(bytes_arc);
+                    }
+                } else {
+                    // Cached path became stale, force re-probe.
+                    cache.invalidate_path_hit(&path_cache_key);
+                    cached_fs_path = None;
+                }
+            }
+
+            if data.is_none() && cached_fs_path.is_none() {
+                let candidates = get_texture_candidate_paths(&normalized_model_path, &normalized_texture_path);
+                let mut resolved_fs_path: Option<String> = None;
+                for candidate in candidates {
+                    if let Ok(bytes) = std::fs::read(&candidate) {
+                        if bytes.len() <= 50 * 1024 * 1024 {
+                            let fs_key = format!("fs:{}", candidate.to_lowercase());
+                            let bytes_arc = Arc::new(bytes);
+                            cache.put_result_bytes(fs_key, bytes_arc.clone());
+                            data = Some(bytes_arc);
+                            resolved_fs_path = Some(candidate);
+                            break;
+                        }
                     }
                 }
+                cache.put_path_hit(path_cache_key.clone(), resolved_fs_path);
             }
         }
 
         if data.is_none() {
-            data = state.read_file(&normalized_texture_path);
+            let mpq_key = format!("mpq:{}", normalized_texture_path_lc.as_str());
+            if let Some(bytes) = cache.get_result_bytes(&mpq_key) {
+                data = Some(bytes);
+            } else if let Some(bytes) = state.read_file(&normalized_texture_path) {
+                let bytes_arc = Arc::new(bytes);
+                cache.put_result_bytes(mpq_key, bytes_arc.clone());
+                data = Some(bytes_arc);
+            }
         }
 
         if let Some(bytes) = data {
-            payload.push(1u8);
-            payload.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
-            payload.extend_from_slice(&bytes);
+            if bytes.len() <= 50 * 1024 * 1024 {
+                payload.push(1u8);
+                payload.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+                payload.extend_from_slice(bytes.as_slice());
+            } else {
+                payload.push(0u8);
+                payload.extend_from_slice(&0u32.to_le_bytes());
+            }
         } else {
             payload.push(0u8);
             payload.extend_from_slice(&0u32.to_le_bytes());
@@ -986,6 +1139,7 @@ fn main() {
 
     tauri::Builder::default()
         .manage(MpqManager::new())
+        .manage(TextureBatchCache::new())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_http::init())

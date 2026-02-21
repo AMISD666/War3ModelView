@@ -14,6 +14,11 @@ export interface TextureLoadResult {
     error?: string
 }
 
+export interface DecodeTextureOptions {
+    // For thumbnail/batch use-cases: decode a smaller texture representation.
+    maxDimension?: number
+}
+
 /**
  * Normalize path separators to backslashes
  */
@@ -155,19 +160,87 @@ export function getTextureCandidatePaths(modelPath: string, texturePath: string)
 /**
  * Robustly decode a texture buffer (BLP or TGA)
  */
-export function decodeTextureData(buffer: ArrayBuffer, path: string): ImageData | null {
+function chooseBlpMipLevel(blp: any, maxDimension?: number): number {
+    if (!maxDimension || maxDimension <= 0) return 0
+
+    const width = Number(blp?.width ?? blp?.Width ?? 0)
+    const height = Number(blp?.height ?? blp?.Height ?? 0)
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        return 0
+    }
+
+    const maxSide = Math.max(width, height)
+    if (maxSide <= maxDimension) return 0
+
+    return Math.max(0, Math.floor(Math.log2(maxSide / maxDimension)))
+}
+
+function downscaleImageDataIfNeeded(imageData: ImageData, maxDimension?: number): ImageData {
+    if (!maxDimension || maxDimension <= 0) return imageData
+    if (imageData.width <= maxDimension && imageData.height <= maxDimension) return imageData
+
+    const scale = maxDimension / Math.max(imageData.width, imageData.height)
+    const targetWidth = Math.max(1, Math.round(imageData.width * scale))
+    const targetHeight = Math.max(1, Math.round(imageData.height * scale))
+
+    if (typeof OffscreenCanvas !== 'undefined') {
+        const sourceCanvas = new OffscreenCanvas(imageData.width, imageData.height)
+        const sourceCtx = sourceCanvas.getContext('2d')
+        if (sourceCtx) {
+            sourceCtx.putImageData(imageData, 0, 0)
+            const targetCanvas = new OffscreenCanvas(targetWidth, targetHeight)
+            const targetCtx = targetCanvas.getContext('2d')
+            if (targetCtx) {
+                targetCtx.drawImage(sourceCanvas, 0, 0, targetWidth, targetHeight)
+                return targetCtx.getImageData(0, 0, targetWidth, targetHeight)
+            }
+        }
+    }
+
+    if (typeof document !== 'undefined') {
+        const sourceCanvas = document.createElement('canvas')
+        sourceCanvas.width = imageData.width
+        sourceCanvas.height = imageData.height
+        const sourceCtx = sourceCanvas.getContext('2d')
+        if (sourceCtx) {
+            sourceCtx.putImageData(imageData, 0, 0)
+            const targetCanvas = document.createElement('canvas')
+            targetCanvas.width = targetWidth
+            targetCanvas.height = targetHeight
+            const targetCtx = targetCanvas.getContext('2d')
+            if (targetCtx) {
+                targetCtx.drawImage(sourceCanvas, 0, 0, targetWidth, targetHeight)
+                return targetCtx.getImageData(0, 0, targetWidth, targetHeight)
+            }
+        }
+    }
+
+    return imageData
+}
+
+export function decodeTextureData(buffer: ArrayBuffer, path: string, options?: DecodeTextureOptions): ImageData | null {
     const isTga = path.toLowerCase().endsWith('.tga');
     try {
         if (isTga) {
-            return decodeTGA(buffer);
+            const decoded = decodeTGA(buffer);
+            return downscaleImageDataIfNeeded(decoded, options?.maxDimension);
         } else {
             const blp = decodeBLP(buffer);
-            const mip0 = getBLPImageData(blp, 0);
-            return new ImageData(
-                (mip0.data instanceof Uint8ClampedArray ? mip0.data : new Uint8ClampedArray(mip0.data)) as any,
-                mip0.width,
-                mip0.height
+            const preferredMip = chooseBlpMipLevel(blp, options?.maxDimension);
+
+            let mip: any;
+            try {
+                mip = getBLPImageData(blp, preferredMip);
+            } catch {
+                mip = getBLPImageData(blp, 0);
+            }
+
+            const decoded = new ImageData(
+                (mip.data instanceof Uint8ClampedArray ? mip.data : new Uint8ClampedArray(mip.data)) as any,
+                mip.width,
+                mip.height
             );
+            return downscaleImageDataIfNeeded(decoded, options?.maxDimension);
         }
     } catch (e) {
         console.warn(`[Texture] Failed to decode ${path}:`, e);

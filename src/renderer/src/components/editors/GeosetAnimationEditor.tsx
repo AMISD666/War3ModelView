@@ -1,6 +1,7 @@
-import React, { useState } from 'react'
+﻿import React, { useState } from 'react'
 import { useModelStore } from '../../store/modelStore'
-import { Card, List, Checkbox, Button, InputNumber, Select, ColorPicker, Typography } from 'antd'
+import { Card, List, Checkbox, Button, Select, ColorPicker, Typography } from 'antd'
+import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { PlusOutlined } from '@ant-design/icons'
 
 const { Text } = Typography
@@ -177,3 +178,4 @@ const GeosetAnimationEditor: React.FC = () => {
 }
 
 export default GeosetAnimationEditor
+

@@ -1,5 +1,6 @@
-import React, { useState } from 'react'
-import { Button, Input, Form, InputNumber, Checkbox, message, Modal } from 'antd'
+﻿import React, { useState } from 'react'
+import { Button, Input, Form, Checkbox, message, Modal } from 'antd'
+import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { PlusOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons'
 import { DraggableModal } from '../DraggableModal'
 import { useSelectionStore } from '../../store/selectionStore'
@@ -299,3 +300,4 @@ const SequenceManager: React.FC = () => {
 }
 
 export default SequenceManager
+

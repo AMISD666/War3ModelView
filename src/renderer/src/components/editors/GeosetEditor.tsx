@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react'
-import { Table, Button, Space, message, Select, Tooltip, InputNumber } from 'antd'
+﻿import React, { useState, useEffect } from 'react'
+import { Table, Button, Space, message, Select, Tooltip } from 'antd'
+import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { SaveOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useModelStore } from '../../store/modelStore'
 
@@ -138,3 +139,4 @@ const GeosetEditor: React.FC<GeosetEditorProps> = () => {
 }
 
 export default GeosetEditor
+
