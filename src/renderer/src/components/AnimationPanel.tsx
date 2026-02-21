@@ -59,6 +59,7 @@ const AnimationPanel: React.FC<AnimationPanelProps> = ({
             }
         }
         setSequence(index)
+        window.dispatchEvent(new Event('timeline-fit-current-sequence'))
         // Auto-play if in View Mode
         if (index !== -1 && useSelectionStore.getState().mainMode === 'view') {
             setPlaying(true)

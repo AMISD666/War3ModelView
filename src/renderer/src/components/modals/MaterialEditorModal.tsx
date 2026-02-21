@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Button, List, Card, Checkbox, InputNumber, Select, Typography, message, Row, Col, Input } from 'antd'
+import { Button, List, Card, Checkbox, InputNumber, Select, Typography, message } from 'antd'
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { DraggableModal } from '../DraggableModal'
 import KeyframeEditor from '../editors/KeyframeEditor'
@@ -74,10 +74,9 @@ function denormalizeMaterialsForSave(materials: any[]): any[] {
 interface MaterialEditorModalProps {
     visible: boolean
     onClose: () => void
-    asWindow?: boolean
 }
 
-const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onClose, asWindow = false }) => {
+const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onClose }) => {
     const { modelData, modelPath, setMaterials, setTextures } = useModelStore()
     const [localMaterials, setLocalMaterials] = useState<any[]>([])
     const [selectedMaterialIndex, setSelectedMaterialIndex] = useState<number>(-1)
@@ -90,22 +89,17 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const [isKeyframeEditorOpen, setIsKeyframeEditorOpen] = useState(false)
     const [editingField, setEditingField] = useState<string | null>(null)
     const [editingVectorSize, setEditingVectorSize] = useState(1)
-    const [isTextureAnimIdEditorOpen, setIsTextureAnimIdEditorOpen] = useState(false)
-    const [textureAnimIdEditorText, setTextureAnimIdEditorText] = useState('')
 
     const isInitialized = React.useRef(false)
     const materialListRef = React.useRef<HTMLDivElement>(null)
     const layerListRef = React.useRef<HTMLDivElement>(null)
     const textureDropZoneRef = React.useRef<HTMLDivElement>(null)
-    const textureAnimIdInputRef = React.useRef<any>(null)
     const dragOverLayerIndexRef = React.useRef<number | null>(null)
     const originalMaterialsRef = React.useRef<any[] | null>(null)
     const originalTexturesRef = React.useRef<any[] | null>(null)
     const isCommittingRef = React.useRef(false)
     const didRealtimePreviewRef = React.useRef(false)
     const didRealtimeTexturePreviewRef = React.useRef(false)
-    const suppressNextLiveApplyRef = React.useRef(false)
-    const lastAppliedSignatureRef = React.useRef('')
 
     useEffect(() => {
         dragOverLayerIndexRef.current = dragOverLayerIndex
@@ -123,19 +117,9 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                 didRealtimeTexturePreviewRef.current = false
                 // Convert Shading bitmask to boolean properties for UI display
                 const normalized = normalizeMaterialsForUI(JSON.parse(JSON.stringify(modelData.Materials)));
-                suppressNextLiveApplyRef.current = true
-                try {
-                    lastAppliedSignatureRef.current = JSON.stringify(normalized)
-                } catch {
-                    lastAppliedSignatureRef.current = `${normalized.length}`
-                }
                 setLocalMaterials(normalized)
                 setSelectedMaterialIndex(modelData.Materials.length > 0 ? 0 : -1)
-                setSelectedLayerIndex(
-                    modelData.Materials.length > 0 && Array.isArray(normalized[0]?.Layers) && normalized[0].Layers.length > 0
-                        ? 0
-                        : -1
-                )
+                setSelectedLayerIndex(-1)
                 isInitialized.current = true
             }
         } else {
@@ -151,8 +135,6 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             originalTexturesRef.current = null
             didRealtimePreviewRef.current = false
             didRealtimeTexturePreviewRef.current = false
-            suppressNextLiveApplyRef.current = false
-            lastAppliedSignatureRef.current = ''
         }
     }, [visible, modelData])
 
@@ -166,8 +148,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             const materialId = modelData.Geosets[initialPickedIndex].MaterialID
             if (materialId !== undefined && materialId >= 0 && materialId < localMaterials.length) {
                 setSelectedMaterialIndex(materialId)
-                const layers = localMaterials[materialId]?.Layers
-                setSelectedLayerIndex(Array.isArray(layers) && layers.length > 0 ? 0 : -1)
+                setSelectedLayerIndex(-1)
                 console.log('[MaterialEditor] Initial auto-selected material', materialId, 'for geoset', initialPickedIndex)
             }
         }
@@ -182,8 +163,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                     const materialId = modelData.Geosets[pickedGeosetIndex].MaterialID
                     if (materialId !== undefined && materialId >= 0 && materialId < localMaterials.length) {
                         setSelectedMaterialIndex(materialId)
-                        const layers = localMaterials[materialId]?.Layers
-                        setSelectedLayerIndex(Array.isArray(layers) && layers.length > 0 ? 0 : -1)
+                        setSelectedLayerIndex(-1)
                         console.log('[MaterialEditor] Auto-selected material', materialId, 'for geoset', pickedGeosetIndex)
                     }
                 }
@@ -191,41 +171,6 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         })
         return unsubscribe
     }, [visible, modelData, localMaterials.length])
-
-    useEffect(() => {
-        if (!visible || !asWindow) return
-        if (suppressNextLiveApplyRef.current) {
-            suppressNextLiveApplyRef.current = false
-            return
-        }
-
-        let signature = ''
-        try {
-            signature = JSON.stringify(localMaterials)
-        } catch {
-            signature = `${localMaterials.length}`
-        }
-        if (signature === lastAppliedSignatureRef.current) return
-        lastAppliedSignatureRef.current = signature
-
-        didRealtimePreviewRef.current = true
-        setMaterials(denormalizeMaterialsForSave(localMaterials))
-    }, [visible, asWindow, localMaterials, setMaterials])
-
-    useEffect(() => {
-        if (selectedMaterialIndex < 0) {
-            if (selectedLayerIndex !== -1) setSelectedLayerIndex(-1)
-            return
-        }
-        const layers = localMaterials[selectedMaterialIndex]?.Layers || []
-        if (!Array.isArray(layers) || layers.length === 0) {
-            if (selectedLayerIndex !== -1) setSelectedLayerIndex(-1)
-            return
-        }
-        if (selectedLayerIndex < 0 || selectedLayerIndex >= layers.length) {
-            setSelectedLayerIndex(0)
-        }
-    }, [localMaterials, selectedMaterialIndex, selectedLayerIndex])
 
     const handleOk = () => {
         // Convert boolean flags back to Shading bitmask before saving
@@ -235,7 +180,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         const oldTextures = originalTexturesRef.current || modelData?.Textures || []
 
         useHistoryStore.getState().push({
-            name: '编辑材质',
+            name: 'Edit Materials',
             undo: () => {
                 setTextures(oldTextures)
                 setMaterials(oldMaterials)
@@ -254,10 +199,10 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     }
 
     const handleCancel = () => {
-        if (!asWindow && !isCommittingRef.current && didRealtimeTexturePreviewRef.current && originalTexturesRef.current) {
+        if (!isCommittingRef.current && didRealtimeTexturePreviewRef.current && originalTexturesRef.current) {
             setTextures(originalTexturesRef.current)
         }
-        if (!asWindow && !isCommittingRef.current && didRealtimePreviewRef.current && originalMaterialsRef.current) {
+        if (!isCommittingRef.current && didRealtimePreviewRef.current && originalMaterialsRef.current) {
             setMaterials(originalMaterialsRef.current)
         }
         onClose()
@@ -373,7 +318,8 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         const newMaterial = { PriorityPlane: 0, RenderMode: 0, Layers: [defaultLayer] }
         setLocalMaterials([...localMaterials, newMaterial])
         setSelectedMaterialIndex(localMaterials.length)
-        setSelectedLayerIndex(0)
+        // Don't auto-select layer - stay on material view to prevent flickering
+        setSelectedLayerIndex(-1)
         // Auto-scroll to the new material after state update
         setTimeout(() => {
             if (materialListRef.current) {
@@ -449,32 +395,6 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         setEditingField(field)
         setEditingVectorSize(vectorSize)
         setIsKeyframeEditorOpen(true)
-    }
-
-    const openTextureAnimIdTextEditor = () => {
-        if (selectedMaterialIndex < 0 || selectedLayerIndex < 0) return
-        const layer = localMaterials[selectedMaterialIndex]?.Layers?.[selectedLayerIndex]
-        if (!layer) return
-        const currentId = layer.TVertexAnimId === null || layer.TVertexAnimId === undefined ? -1 : layer.TVertexAnimId
-        setTextureAnimIdEditorText(String(currentId))
-        setIsTextureAnimIdEditorOpen(true)
-    }
-
-    const handleTextureAnimIdTextSave = () => {
-        if (selectedMaterialIndex < 0 || selectedLayerIndex < 0) return
-        const raw = textureAnimIdEditorText.trim()
-        const match = raw.match(/-?\d+/)
-        if (!match) {
-            message.warning('请输入整数ID（-1 表示无）')
-            return
-        }
-        const parsed = Number.parseInt(match[0], 10)
-        if (!Number.isFinite(parsed) || parsed < -1) {
-            message.warning('贴图动画ID无效，请输入 -1 或非负整数')
-            return
-        }
-        updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TVertexAnimId: parsed === -1 ? null : parsed }, true)
-        setIsTextureAnimIdEditorOpen(false)
     }
 
     const handleKeyframeSave = (animVector: any) => {
@@ -845,346 +765,9 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         }
     }
 
-    const renderEditorContent = (contentHeight: string | number = '600px') => (
-        <div style={{ display: 'flex', height: contentHeight, border: '1px solid #4a4a4a', backgroundColor: '#252525' }}>
-            <div style={{ width: '180px', overflowY: 'auto', display: 'flex', flexDirection: 'column', backgroundColor: '#333333', borderRight: '1px solid #4a4a4a' }}>
-                <div style={{ padding: '8px', borderBottom: '1px solid #4a4a4a' }}>
-                    <Button
-                        type="primary"
-                        icon={<PlusOutlined />}
-                        block
-                        size="small"
-                        onClick={handleAddMaterial}
-                        style={{ fontSize: '12px' }}
-                    >
-                        添加材质
-                    </Button>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px', padding: '4px' }}>
-                    {localMaterials.map((_item, index) => (
-                        <div
-                            key={index}
-                            onClick={() => {
-                                setSelectedMaterialIndex(index)
-                                const layers = localMaterials[index]?.Layers
-                                setSelectedLayerIndex(Array.isArray(layers) && layers.length > 0 ? 0 : -1)
-                            }}
-                            style={{
-                                cursor: 'pointer',
-                                padding: '4px 4px',
-                                backgroundColor: selectedMaterialIndex === index ? '#1677ff' : '#2a2a2a',
-                                color: selectedMaterialIndex === index ? '#fff' : '#b0b0b0',
-                                border: '1px solid #3a3a3a',
-                                borderRadius: '2px',
-                                display: 'flex',
-                                justifyContent: 'space-between',
-                                alignItems: 'center',
-                                minHeight: '24px',
-                                fontSize: '11px'
-                            }}
-                        >
-                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>M{index}</span>
-                            <DeleteOutlined
-                                onClick={(e) => {
-                                    e.stopPropagation()
-                                    handleDeleteMaterial(index)
-                                }}
-                                style={{ color: selectedMaterialIndex === index ? '#fff' : '#ff4d4f', fontSize: '10px' }}
-                            />
-                        </div>
-                    ))}
-                </div>
-            </div>
-
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', backgroundColor: '#252525', overflow: 'hidden' }}>
-                {selectedMaterial ? (
-                    <div style={{ display: 'flex', height: '100%' }}>
-                        {/* Layer List */}
-                        <div style={{ width: '150px', borderRight: '1px solid #4a4a4a', display: 'flex', flexDirection: 'column', backgroundColor: '#2a2a2a' }}>
-                            <div style={{ padding: '8px', borderBottom: '1px solid #4a4a4a', backgroundColor: '#333' }}>
-                                <Button
-                                    type="primary"
-                                    icon={<PlusOutlined />}
-                                    block
-                                    size="small"
-                                    onClick={handleAddLayer}
-                                    style={{ fontSize: '12px' }}
-                                >
-                                    添加图层
-                                </Button>
-                            </div>
-                            <div ref={layerListRef} style={{ flex: 1, overflowY: 'auto' }}>
-                                {selectedMaterial.Layers.map((layer: any, lIdx: number) => (
-                                    <div
-                                        key={lIdx}
-                                        data-layer-index={lIdx}
-                                        onMouseDown={(e) => handleLayerMouseDown(e, lIdx)}
-                                        onClick={() => setSelectedLayerIndex(lIdx)}
-                                        style={{
-                                            padding: '4px 8px',
-                                            cursor: 'pointer',
-                                            backgroundColor: selectedLayerIndex === lIdx ? '#1677ff' : (dragLayerIndex === lIdx ? '#444' : (dragOverLayerIndex === lIdx ? '#555' : 'transparent')),
-                                            color: selectedLayerIndex === lIdx ? '#fff' : '#b0b0b0',
-                                            borderBottom: '1px solid #3a3a3a',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'space-between',
-                                            minHeight: '32px',
-                                            opacity: dragLayerIndex === lIdx ? 0.5 : 1
-                                        }}
-                                    >
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
-                                            <span style={{ fontSize: '11px', opacity: 0.5 }}>{lIdx}:</span>
-                                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: '12px' }}>
-                                                T:{typeof layer.TextureID === 'number' ? layer.TextureID : 'Anim'} | {filterModeOptions.find(o => o.value === layer.FilterMode)?.label || 'None'}
-                                            </span>
-                                        </div>
-                                        <DeleteOutlined
-                                            onClick={(e) => {
-                                                e.stopPropagation()
-                                                handleDeleteLayer(lIdx)
-                                            }}
-                                            style={{ color: selectedLayerIndex === lIdx ? '#fff' : '#ff4d4f', fontSize: '11px' }}
-                                        />
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-
-                        {/* Layer Details */}
-                        <div ref={textureDropZoneRef} style={{ flex: 1, padding: '12px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}
-                            onDragOver={handleTextureDropOver}
-                            onDragLeave={handleTextureDropLeave}
-                            onDrop={handleTextureDrop}>
-
-                            {isTextureDropActive && (
-                                <div style={{ position: 'absolute', inset: 8, border: '2px dashed #1677ff', borderRadius: 8, backgroundColor: 'rgba(22, 119, 255, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10, pointerEvents: 'none' }}>
-                                    <span style={{ color: '#1677ff', fontWeight: 'bold' }}>拖放贴图到这里</span>
-                                </div>
-                            )}
-
-                            <Card
-                                title={<span style={{ color: '#b0b0b0', fontSize: '12px' }}>材质属性</span>}
-                                size="small"
-                                bordered={false}
-                                style={{ background: '#333333', border: '1px solid #4a4a4a' }}
-                                styles={{ header: { padding: '4px 8px', minHeight: '32px', borderBottom: '1px solid #4a4a4a' }, body: { padding: '8px' } }}
-                            >
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                        <Text style={{ color: '#b0b0b0', fontSize: '12px' }}>优先级</Text>
-                                        <InputNumber
-                                            size="small"
-                                            value={selectedMaterial.PriorityPlane || 0}
-                                            onChange={(v) => updateLocalMaterial(selectedMaterialIndex, { PriorityPlane: v })}
-                                            style={{ width: '70px', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
-                                        />
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-                                        <Checkbox checked={selectedMaterial.ConstantColor} onChange={(e) => updateLocalMaterial(selectedMaterialIndex, { ConstantColor: e.target.checked })} style={{ color: '#e8e8e8', fontSize: '11px' }}>固定颜色</Checkbox>
-                                        <Checkbox checked={selectedMaterial.SortPrimsFarZ} onChange={(e) => updateLocalMaterial(selectedMaterialIndex, { SortPrimsFarZ: e.target.checked })} style={{ color: '#e8e8e8', fontSize: '11px' }}>远Z排序</Checkbox>
-                                        <Checkbox checked={selectedMaterial.FullResolution} onChange={(e) => updateLocalMaterial(selectedMaterialIndex, { FullResolution: e.target.checked })} style={{ color: '#e8e8e8', fontSize: '11px' }}>全分辨率</Checkbox>
-                                    </div>
-                                </div>
-                            </Card>
-
-                            {selectedLayer ? (
-                                <>
-                                    <Card
-                                        title={<span style={{ color: '#e8e8e8', fontSize: '13px' }}>贴图与滤镜</span>}
-                                        size="small"
-                                        bordered={false}
-                                        style={{ background: '#333333', border: '1px solid #4a4a4a' }}
-                                        styles={{ header: { borderBottom: '1px solid #4a4a4a', padding: '4px 8px', minHeight: '32px' }, body: { padding: '8px' } }}
-                                    >
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                                <Text style={{ minWidth: '70px', color: '#b0b0b0', fontSize: '12px' }}>贴图:</Text>
-                                                <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 8 }}>
-                                                    <Select
-                                                        size="small"
-                                                        style={{ flex: 1 }}
-                                                        value={typeof selectedLayer.TextureID === 'number' ? selectedLayer.TextureID : -2}
-                                                        onChange={(v) => {
-                                                            if (v === -2) handleAnimToggle('TextureID', true)
-                                                            else updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TextureID: v }, true)
-                                                        }}
-                                                        popupClassName="dark-theme-select-dropdown"
-                                                        options={[
-                                                            ...textureOptions,
-                                                            { value: -2, label: 'Animated Texture' }
-                                                        ]}
-                                                    />
-                                                    {typeof selectedLayer.TextureID !== 'number' && (
-                                                        <Button size="small" type="link" onClick={() => openKeyframeEditor('TextureID', 1)} style={{ padding: 0, height: 'auto' }}>编辑</Button>
-                                                    )}
-                                                </div>
-                                            </div>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                                <Text style={{ minWidth: '70px', color: '#b0b0b0', fontSize: '12px' }}>滤镜:</Text>
-                                                <Select
-                                                    size="small"
-                                                    style={{ flex: 1 }}
-                                                    value={selectedLayer.FilterMode}
-                                                    onChange={(v) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { FilterMode: v }, true)}
-                                                    popupClassName="dark-theme-select-dropdown"
-                                                    options={filterModeOptions}
-                                                />
-                                            </div>
-                                        </div>
-                                    </Card>
-
-                                    <Card
-                                        title={<span style={{ color: '#e8e8e8', fontSize: '13px' }}>透明度与动画</span>}
-                                        size="small"
-                                        bordered={false}
-                                        style={{ background: '#333333', border: '1px solid #4a4a4a' }}
-                                        styles={{ header: { borderBottom: '1px solid #4a4a4a', padding: '4px 8px', minHeight: '32px' }, body: { padding: '8px' } }}
-                                    >
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                                                <Checkbox
-                                                    checked={typeof selectedLayer.Alpha !== 'number'}
-                                                    onChange={(e) => handleAnimToggle('Alpha', e.target.checked)}
-                                                    style={{ color: '#e8e8e8', fontSize: '12px' }}
-                                                >
-                                                    动态透明度
-                                                </Checkbox>
-                                                <InputNumber
-                                                    size="small"
-                                                    value={typeof selectedLayer.Alpha === 'number' ? selectedLayer.Alpha : undefined}
-                                                    onChange={(v) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { Alpha: v ?? 1 }, true)}
-                                                    step={0.1}
-                                                    min={0}
-                                                    max={1}
-                                                    disabled={typeof selectedLayer.Alpha !== 'number'}
-                                                    style={{ width: '80px', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8', fontSize: '12px' }}
-                                                />
-                                                {typeof selectedLayer.Alpha !== 'number' && (
-                                                    <Button
-                                                        type="link"
-                                                        size="small"
-                                                        onClick={() => openKeyframeEditor('Alpha', 1)}
-                                                        style={{ color: '#1677ff', padding: 0, height: 'auto', fontSize: '12px' }}
-                                                    >
-                                                        编辑关键帧
-                                                    </Button>
-                                                )}
-                                            </div>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                                                <Checkbox
-                                                    checked={selectedLayer.TVertexAnimId !== null && selectedLayer.TVertexAnimId !== undefined}
-                                                    onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TVertexAnimId: e.target.checked ? 0 : null }, true)}
-                                                    style={{ color: '#e8e8e8', fontSize: '12px' }}
-                                                >
-                                                    贴图动画ID
-                                                </Checkbox>
-                                                <InputNumber
-                                                    ref={textureAnimIdInputRef}
-                                                    size="small"
-                                                    value={selectedLayer.TVertexAnimId === null ? -1 : selectedLayer.TVertexAnimId}
-                                                    onChange={(v) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TVertexAnimId: v === -1 ? null : v }, true)}
-                                                    disabled={selectedLayer.TVertexAnimId === null || selectedLayer.TVertexAnimId === undefined}
-                                                    style={{ width: '50px', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8', fontSize: '11px' }}
-                                                />
-                                                <Button
-                                                    type="link"
-                                                    size="small"
-                                                    disabled={selectedLayer.TVertexAnimId === null || selectedLayer.TVertexAnimId === undefined}
-                                                    onClick={openTextureAnimIdTextEditor}
-                                                    style={{ color: '#1677ff', padding: 0, height: 'auto', fontSize: '12px' }}
-                                                >
-                                                    编辑
-                                                </Button>
-                                            </div>
-                                        </div>
-                                    </Card>
-
-                                    <Card
-                                        title={<span style={{ color: '#e8e8e8', fontSize: '13px' }}>着色标志</span>}
-                                        size="small"
-                                        bordered={false}
-                                        style={{ background: '#333333', border: '1px solid #4a4a4a' }}
-                                        styles={{ header: { borderBottom: '1px solid #4a4a4a', padding: '4px 12px' }, body: { padding: '12px' } }}
-                                    >
-                                        <Row gutter={[8, 8]}>
-                                            <Col span={12}><Checkbox checked={selectedLayer.Unshaded} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { Unshaded: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '11px' }}>无阴影</Checkbox></Col>
-                                            <Col span={12}><Checkbox checked={selectedLayer.SphereEnvMap} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { SphereEnvMap: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '11px' }}>球面环境映射</Checkbox></Col>
-                                            <Col span={12}><Checkbox checked={selectedLayer.TwoSided} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TwoSided: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '11px' }}>双面</Checkbox></Col>
-                                            <Col span={12}><Checkbox checked={selectedLayer.Unfogged} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { Unfogged: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '11px' }}>无雾</Checkbox></Col>
-                                            <Col span={12}><Checkbox checked={selectedLayer.NoDepthTest} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { NoDepthTest: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '11px' }}>禁用深度测试</Checkbox></Col>
-                                            <Col span={12}><Checkbox checked={selectedLayer.NoDepthSet} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { NoDepthSet: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '11px' }}>禁用深度写入</Checkbox></Col>
-                                        </Row>
-                                    </Card>
-                                </>
-                            ) : (
-                                <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '120px', color: '#888' }}>
-                                    <Text style={{ color: '#888', fontSize: '13px' }}>请从图层列表中选择一个图层</Text>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                ) : (
-                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#888', fontSize: '13px' }}>
-                        请从左侧列表中选择一个材质
-                    </div>
-                )}
-            </div>
-        </div>
-    )
-
-    const keyframeEditorNode = isKeyframeEditorOpen && editingField ? (
-        <KeyframeEditor
-            visible={isKeyframeEditorOpen}
-            onCancel={() => setIsKeyframeEditorOpen(false)}
-            onOk={handleKeyframeSave}
-            initialData={selectedLayer ? selectedLayer[editingField] : null}
-            title={`编辑 ${editingField}`}
-            vectorSize={editingVectorSize}
-            globalSequences={(modelData as any)?.GlobalSequences || []}
-            fieldName={editingField || ''}
-        />
-    ) : null
-
-    const textureAnimIdEditorNode = (
-        <DraggableModal
-            title="编辑贴图动画ID"
-            open={isTextureAnimIdEditorOpen}
-            onCancel={() => setIsTextureAnimIdEditorOpen(false)}
-            onOk={handleTextureAnimIdTextSave}
-            okText="应用"
-            cancelText="取消"
-            width={380}
-            maskClosable={false}
-            wrapClassName="dark-theme-modal"
-            styles={{ body: { padding: 12, backgroundColor: '#252525' } }}
-        >
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <Text style={{ color: '#b0b0b0', fontSize: '12px' }}>请输入贴图动画ID文本（-1表示无）</Text>
-                <Input.TextArea
-                    value={textureAnimIdEditorText}
-                    onChange={(e) => setTextureAnimIdEditorText(e.target.value)}
-                    autoSize={{ minRows: 3, maxRows: 6 }}
-                    style={{ fontFamily: 'Consolas, monospace', backgroundColor: '#1f1f1f', color: '#e8e8e8', borderColor: '#4a4a4a' }}
-                />
-            </div>
-        </DraggableModal>
-    )
-
-    if (asWindow) {
-        if (!visible) return null
-        return (
-            <div style={{ height: '100vh', padding: 8, backgroundColor: '#1f1f1f', overflow: 'hidden' }}>
-                {renderEditorContent('calc(100vh - 16px)')}
-                {keyframeEditorNode}
-                {textureAnimIdEditorNode}
-            </div>
-        )
-    }
-
     return (
         <DraggableModal
-            title="材质编辑器"
+            title="材质编辑器 (Material Editor)"
             open={visible}
             onOk={handleOk}
             onCancel={handleCancel}
@@ -1195,11 +778,268 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             wrapClassName="dark-theme-modal"
             styles={{ body: { padding: 0, backgroundColor: '#252525' } }}
         >
-            {renderEditorContent()}
-            {keyframeEditorNode}
-            {textureAnimIdEditorNode}
+            <div style={{ display: 'flex', height: '600px', border: '1px solid #4a4a4a', backgroundColor: '#252525' }}>
+                {/* Lists (Left) */}
+                <div style={{ width: '250px', display: 'flex', flexDirection: 'column', borderRight: '1px solid #4a4a4a' }}>
+                    {/* Top: Materials */}
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', borderBottom: '1px solid #4a4a4a', backgroundColor: '#333333', overflow: 'hidden' }}>
+                        <div style={{ padding: '8px', borderBottom: '1px solid #4a4a4a', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <Text style={{ color: '#e8e8e8', fontWeight: 'bold' }}>材质 (Materials)</Text>
+                            <Button type="primary" size="small" icon={<PlusOutlined />} onClick={handleAddMaterial} style={{ backgroundColor: '#5a9cff', borderColor: '#5a9cff' }} />
+                        </div>
+                        <div ref={materialListRef} style={{ overflowY: 'auto', flex: 1 }}>
+                            <List
+                                dataSource={localMaterials}
+                                renderItem={(_item: any, index: number) => (
+                                    <List.Item
+                                        onClick={() => {
+                                            setSelectedMaterialIndex(index)
+                                            setSelectedLayerIndex(-1)
+                                        }}
+                                        style={{
+                                            cursor: 'pointer',
+                                            padding: '4px 12px',
+                                            backgroundColor: selectedMaterialIndex === index ? '#5a9cff' : 'transparent',
+                                            color: selectedMaterialIndex === index ? '#fff' : '#b0b0b0',
+                                            borderBottom: '1px solid #3a3a3a'
+                                        }}
+                                        className="hover:bg-[#454545]"
+                                    >
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                                            <span>Material {index}</span>
+                                            {selectedMaterialIndex === index && (
+                                                <DeleteOutlined onClick={(e) => { e.stopPropagation(); handleDeleteMaterial(index) }} style={{ color: '#fff' }} />
+                                            )}
+                                        </div>
+                                    </List.Item>
+                                )}
+                            />
+                        </div>
+                    </div>
+
+                    {/* Bottom: Layers */}
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', backgroundColor: '#2d2d2d', overflow: 'hidden' }}>
+                        <div style={{ padding: '8px', borderBottom: '1px solid #4a4a4a', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <Text style={{ color: '#e8e8e8', fontWeight: 'bold' }}>图层 (Layers)</Text>
+                            <Button
+                                type="primary"
+                                size="small"
+                                icon={<PlusOutlined />}
+                                onClick={handleAddLayer}
+                                disabled={selectedMaterialIndex < 0}
+                                style={{ backgroundColor: '#5a9cff', borderColor: '#5a9cff' }}
+                            />
+                        </div>
+                        <div ref={layerListRef} style={{ overflowY: 'auto', flex: 1 }}>
+                            {selectedMaterial ? (
+                                <List
+                                    dataSource={selectedMaterial.Layers || []}
+                                    renderItem={(_item: any, index: number) => (
+                                        <List.Item
+                                            onClick={() => setSelectedLayerIndex(index)}
+                                            data-layer-index={index}
+                                            onMouseDown={(e) => handleLayerMouseDown(e, index)}
+                                            style={{
+                                                padding: '4px 12px',
+                                                backgroundColor: selectedLayerIndex === index ? '#5a9cff' : 'transparent',
+                                                color: selectedLayerIndex === index ? '#fff' : '#b0b0b0',
+                                                borderBottom: '1px solid #3a3a3a',
+                                                opacity: dragLayerIndex === index ? 0.6 : 1,
+                                                outline: dragOverLayerIndex === index && dragLayerIndex !== null && dragLayerIndex !== index ? '1px dashed #5a9cff' : 'none',
+                                                cursor: dragLayerIndex === index ? 'grabbing' : 'grab',
+                                                userSelect: 'none'
+                                            }}
+                                            className="hover:bg-[#454545]"
+                                        >
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                                                <span>Layer {index}</span>
+                                                {selectedLayerIndex === index && (
+                                                    <DeleteOutlined onClick={(e) => { e.stopPropagation(); handleDeleteLayer(index) }} style={{ color: '#fff' }} />
+                                                )}
+                                            </div>
+                                        </List.Item>
+                                    )}
+                                />
+                            ) : (
+                                <div style={{ padding: '16px', color: '#666', textAlign: 'center' }}>
+                                    请先选择材质
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+
+                {/* Details (Right) */}
+                <div style={{ flex: 1, padding: '16px', overflowY: 'auto', backgroundColor: '#252525', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    {selectedLayer ? (
+                        // Layer Details
+                        <>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                                <Button size="small" onClick={() => setSelectedLayerIndex(-1)}>返回材质设置</Button>
+                                <Text style={{ color: '#b0b0b0' }}>正在编辑: Layer {selectedLayerIndex}</Text>
+                            </div>
+
+                            <Card title={<span style={{ color: '#b0b0b0' }}>图层属性</span>} size="small" bordered={false} style={{ background: '#333333', border: '1px solid #4a4a4a' }} headStyle={{ borderBottom: '1px solid #4a4a4a' }}>
+                                {/* Row 1: Texture ID (Full Width) */}
+                                <div style={{ marginBottom: 16 }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '4px' }}>
+                                        <Text style={{ color: '#b0b0b0' }}>贴图 ID:</Text>
+                                        <Text style={{ color: '#7f7f7f', fontSize: '12px' }}>可拖动替换贴图</Text>
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                        <Checkbox
+                                            checked={selectedLayer.TextureID && typeof selectedLayer.TextureID !== 'number'}
+                                            onChange={(e) => handleAnimToggle('TextureID', e.target.checked)}
+                                            style={{ color: '#e8e8e8' }}
+                                        >
+                                            动态
+                                        </Checkbox>
+                                        {selectedLayer.TextureID && typeof selectedLayer.TextureID !== 'number' ? (
+                                            <Button size="small" onClick={() => openKeyframeEditor('TextureID', 1)}>编辑动画</Button>
+                                        ) : (
+                                            <div
+                                                ref={textureDropZoneRef}
+                                                style={{
+                                                    flex: 1,
+                                                    border: isTextureDropActive ? '1px dashed #5a9cff' : '1px dashed transparent',
+                                                    borderRadius: 4,
+                                                    padding: 2,
+                                                    transition: 'border-color 0.15s ease'
+                                                }}
+                                                onDragOver={handleTextureDropOver}
+                                                onDragEnter={handleTextureDropOver}
+                                                onDragLeave={handleTextureDropLeave}
+                                                onDrop={handleTextureDrop}
+                                            >
+                                                <Select
+                                                    size="small"
+                                                    style={{ width: '100%' }}
+                                                    value={typeof selectedLayer.TextureID === 'number' ? selectedLayer.TextureID : 0}
+                                                    onChange={(v) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TextureID: v }, true)}
+                                                    options={textureOptions}
+                                                    popupClassName="dark-theme-select-dropdown"
+                                                />
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Row 2: Alpha, Filter Mode, TVertexAnim */}
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
+                                    <div>
+                                        <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>透明度 (Alpha):</Text>
+                                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                            <Checkbox
+                                                checked={selectedLayer.Alpha && typeof selectedLayer.Alpha !== 'number'}
+                                                onChange={(e) => handleAnimToggle('Alpha', e.target.checked)}
+                                                style={{ color: '#e8e8e8' }}
+                                            >
+                                                动态
+                                            </Checkbox>
+                                            {selectedLayer.Alpha && typeof selectedLayer.Alpha !== 'number' ? (
+                                                <Button size="small" onClick={() => openKeyframeEditor('Alpha', 1)}>编辑动画</Button>
+                                            ) : (
+                                                <InputNumber
+                                                    size="small"
+                                                    value={selectedLayer.Alpha || 1}
+                                                    onChange={(v) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { Alpha: v })}
+                                                    step={0.01} min={0} max={1}
+                                                    precision={2}
+                                                    style={{ backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
+                                                />
+                                            )}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>过滤模式:</Text>
+                                        <Select
+                                            size="small"
+                                            style={{ width: '100%' }}
+                                            value={selectedLayer.FilterMode}
+                                            onChange={(v) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { FilterMode: v })}
+                                            options={filterModeOptions}
+                                            popupClassName="dark-theme-select-dropdown"
+                                        />
+                                    </div>
+                                    <div>
+                                        <Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>纹理动画 (TVertexAnim):</Text>
+                                        <Select
+                                            size="small"
+                                            style={{ width: '100%' }}
+                                            value={selectedLayer.TVertexAnimId === null || selectedLayer.TVertexAnimId === undefined ? -1 : selectedLayer.TVertexAnimId}
+                                            onChange={(v) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TVertexAnimId: v === -1 ? null : v })}
+                                            options={[
+                                                { value: -1, label: 'None' },
+                                                ...((modelData as any)?.TextureAnims?.map((_: any, i: number) => ({
+                                                    value: i,
+                                                    label: `Anim ${i}`
+                                                })) || [])
+                                            ]}
+                                            popupClassName="dark-theme-select-dropdown"
+                                        />
+                                    </div>
+                                </div>
+                            </Card>
+
+                            <Card title={<span style={{ color: '#b0b0b0' }}>标记 (Flags)</span>} size="small" bordered={false} style={{ background: '#333333', border: '1px solid #4a4a4a' }} headStyle={{ borderBottom: '1px solid #4a4a4a' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                    <Checkbox checked={selectedLayer.Unshaded} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { Unshaded: e.target.checked })} style={{ color: '#e8e8e8' }}>无阴影 (Unshaded)</Checkbox>
+                                    <Checkbox checked={selectedLayer.Unfogged} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { Unfogged: e.target.checked })} style={{ color: '#e8e8e8' }}>无迷雾 (Unfogged)</Checkbox>
+                                    <Checkbox checked={selectedLayer.TwoSided} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TwoSided: e.target.checked })} style={{ color: '#e8e8e8' }}>双面的 (Two Sided)</Checkbox>
+                                    <Checkbox checked={selectedLayer.SphereEnvMap} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { SphereEnvMap: e.target.checked })} style={{ color: '#e8e8e8' }}>球面环境贴图</Checkbox>
+                                    <Checkbox checked={selectedLayer.NoDepthTest} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { NoDepthTest: e.target.checked })} style={{ color: '#e8e8e8' }}>无深度测试</Checkbox>
+                                    <Checkbox checked={selectedLayer.NoDepthSet} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { NoDepthSet: e.target.checked })} style={{ color: '#e8e8e8' }}>无深度设置</Checkbox>
+                                </div>
+                            </Card>
+                        </>
+                    ) : selectedMaterial ? (
+                        // Material Details
+                        <>
+                            <Text style={{ color: '#b0b0b0', marginBottom: '8px' }}>正在编辑: Material {selectedMaterialIndex}</Text>
+                            <Card title={<span style={{ color: '#b0b0b0' }}>材质设置</span>} size="small" bordered={false} style={{ background: '#333333', border: '1px solid #4a4a4a' }} headStyle={{ borderBottom: '1px solid #4a4a4a' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                    <div>
+                                        <Text style={{ marginRight: '8px', color: '#b0b0b0' }}>优先平面 (Priority Plane):</Text>
+                                        <InputNumber
+                                            size="small"
+                                            value={selectedMaterial.PriorityPlane || 0}
+                                            onChange={(v) => updateLocalMaterial(selectedMaterialIndex, { PriorityPlane: v })}
+                                            style={{ backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
+                                        />
+                                    </div>
+                                    <Checkbox checked={selectedMaterial.ConstantColor} onChange={(e) => updateLocalMaterial(selectedMaterialIndex, { ConstantColor: e.target.checked })} style={{ color: '#e8e8e8' }}>固定颜色 (Constant Color)</Checkbox>
+                                    <Checkbox checked={selectedMaterial.SortPrimsFarZ} onChange={(e) => updateLocalMaterial(selectedMaterialIndex, { SortPrimsFarZ: e.target.checked })} style={{ color: '#e8e8e8' }}>沿Z轴远向排列</Checkbox>
+                                    <Checkbox checked={selectedMaterial.FullResolution} onChange={(e) => updateLocalMaterial(selectedMaterialIndex, { FullResolution: e.target.checked })} style={{ color: '#e8e8e8' }}>最大分辨率 (Full Resolution)</Checkbox>
+                                </div>
+                            </Card>
+                            <div style={{ marginTop: '20px', color: '#808080', textAlign: 'center' }}>
+                                请在左侧选择一个图层以编辑详细属性
+                            </div>
+                        </>
+                    ) : (
+                        <div style={{ marginTop: '20px', color: '#808080', textAlign: 'center' }}>
+                            请在左侧选择一个材质
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {isKeyframeEditorOpen && editingField && (
+                <KeyframeEditor
+                    visible={isKeyframeEditorOpen}
+                    onCancel={() => setIsKeyframeEditorOpen(false)}
+                    onOk={handleKeyframeSave}
+                    initialData={selectedLayer ? selectedLayer[editingField] : null}
+                    title={`编辑 ${editingField}`}
+                    vectorSize={editingVectorSize}
+                    globalSequences={(modelData as any)?.GlobalSequences || []}
+                    fieldName={editingField || ''}
+                />
+            )}
         </DraggableModal>
     )
 }
 
 export default MaterialEditorModal
+
+

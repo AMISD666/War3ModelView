@@ -125,44 +125,41 @@ export function MasterDetailLayout<T>({
                 ) : (
                     <List
                         dataSource={items}
-                        grid={{ gutter: 2, column: 2 }}
+                        split={false}
                         renderItem={(item, index) => {
                             const isSelected = index === selectedIndex
                             return (
-                                <List.Item style={{ padding: 0, margin: 0 }}>
-                                    <div
-                                        key={index}
-                                        onClick={() => onSelect(index)}
-                                        style={{
-                                            ...darkTheme.listItem,
-                                            padding: '4px 4px',
-                                            margin: '1px',
-                                            minHeight: '24px',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'space-between',
-                                            fontSize: '11px',
-                                            border: '1px solid #3a3a3a',
-                                            backgroundColor: isSelected ? '#1677ff' : '#2a2a2a',
-                                            color: isSelected ? '#fff' : '#b0b0b0',
-                                            transition: 'background-color 0.2s',
-                                        }}
-                                        onMouseEnter={(e) => {
-                                            if (!isSelected) {
-                                                e.currentTarget.style.backgroundColor = '#3a3a3a'
-                                            }
-                                        }}
-                                        onMouseLeave={(e) => {
-                                            if (!isSelected) {
-                                                e.currentTarget.style.backgroundColor = '#2a2a2a'
-                                            }
-                                        }}
-                                    >
-                                        <div style={{ flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
-                                            {renderListItem(item, index, isSelected)}
-                                        </div>
-                                    </div>
-                                </List.Item>
+                                <div
+                                    key={index}
+                                    onClick={() => onSelect(index)}
+                                    style={{
+                                        ...darkTheme.listItem,
+                                        ...(isSelected ? darkTheme.listItemSelected : {}),
+                                        transition: 'background-color 0.2s',
+                                    }}
+                                    onContextMenu={(e) => {
+                                        if (onContextMenu) {
+                                            // e.preventDefault() is already handled by parent, or we can do it here too to be safe/specific
+                                            // Actually parent just disables browser menu. We want to trigger custom menu.
+                                            // The user might want to prevent browser menu on the whole list, but allow custom on items.
+                                            // The parent onContextMenu={e => e.preventDefault()} handles the browser one.
+                                            // We just fire the callback.
+                                            onContextMenu(item, index, e)
+                                        }
+                                    }}
+                                    onMouseEnter={(e) => {
+                                        if (!isSelected) {
+                                            e.currentTarget.style.backgroundColor = '#3a3a3a'
+                                        }
+                                    }}
+                                    onMouseLeave={(e) => {
+                                        if (!isSelected) {
+                                            e.currentTarget.style.backgroundColor = 'transparent'
+                                        }
+                                    }}
+                                >
+                                    {renderListItem(item, index, isSelected)}
+                                </div>
                             )
                         }}
                     />

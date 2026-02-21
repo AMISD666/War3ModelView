@@ -6,8 +6,7 @@
  */
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { Layout, ConfigProvider, theme, Button } from 'antd';
-import { CloseOutlined } from '@ant-design/icons';
+import { Layout, ConfigProvider, theme } from 'antd';
 import { useUIStore } from '../store/uiStore';
 import { useSelectionStore } from '../store/selectionStore';
 import { useModelStore } from '../store/modelStore';
@@ -28,8 +27,7 @@ export const MainLayoutNew: React.FC = () => {
         showNodeManager,
         showNodeDialog,
         editingNodeId,
-        setNodeDialogVisible,
-        setShowNodeManager
+        setNodeDialogVisible
     } = useUIStore();
 
     const mainMode = useSelectionStore(state => state.mainMode);
@@ -223,13 +221,6 @@ export const MainLayoutNew: React.FC = () => {
                                 <div style={{ padding: '8px 12px', borderBottom: '1px solid #303030', fontWeight: 'bold', color: '#fff' }}>
                                     节点管理器
                                 </div>
-                                <Button
-                                    type="text"
-                                    size="small"
-                                    icon={<CloseOutlined />}
-                                    onClick={() => setShowNodeManager(false)}
-                                    style={{ position: 'absolute', top: 6, right: 8, color: '#fff', zIndex: 2 }}
-                                />
                                 <div style={{ flex: 1, overflow: 'hidden' }}>
                                     <NodeManagerWindow />
                                 </div>

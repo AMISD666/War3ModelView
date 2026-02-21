@@ -12,11 +12,11 @@ import {
     ZoomInOutlined,
     ZoomOutOutlined,
     EyeOutlined,
-    EyeInvisibleOutlined
+    EyeInvisibleOutlined,
+    DownOutlined
 } from '@ant-design/icons'
 import { useHistoryStore } from '../../../store/historyStore'
-import { Button, Slider, Input, InputNumber, Radio, Tooltip, Menu, Modal } from 'antd'
-import { SwapOutlined, GlobalOutlined } from '@ant-design/icons'
+import { Button, Slider, Input, InputNumber, Radio, Tooltip, Menu, Modal, Dropdown } from 'antd'
 import { registerShortcutHandler } from '../../../shortcuts/manager'
 import { UpdateKeyframeCommand, KeyframeChange } from '../../../commands/UpdateKeyframeCommand'
 import { commandManager } from '../../../utils/CommandManager'
@@ -29,7 +29,9 @@ interface TimelinePanelProps {
 const RULER_HEIGHT = 28
 // Track visual settings
 const KEYFRAME_SIZE = 8
-const SNAP_THRESHOLD_X = 50 // px, distance in X to snap (Large range)
+const SNAP_THRESHOLD_X = 90 // px, fallback snap threshold in X
+const MIN_SNAP_THRESHOLD_X = 10 // px, lower bound for dynamic threshold
+const MAX_SNAP_THRESHOLD_X = 160 // px, upper bound for dynamic threshold
 const CLICK_MOVE_THRESHOLD = 5 // px, max movement to count as click
 
 const LANE_HEIGHT = 14
@@ -42,6 +44,37 @@ const CONTEXT_MENU_HEIGHT = 160
 
 const makeKeyframeUid = (ownerType: 'node' | 'geoset', ownerId: number, type: string, frame: number) =>
     `${ownerType}-${ownerId}-${type}-${frame}`
+
+const PARTICLE_TRACK_INFOS = [
+    { type: 'ParticleVisibility', propName: 'Visibility' },
+    { type: 'ParticleEmissionRate', propName: 'EmissionRate' },
+    { type: 'ParticleSpeed', propName: 'Speed' },
+    { type: 'ParticleVariation', propName: 'Variation' },
+    { type: 'ParticleLatitude', propName: 'Latitude' },
+    { type: 'ParticleLength', propName: 'Length' },
+    { type: 'ParticleWidth', propName: 'Width' },
+    { type: 'ParticleGravity', propName: 'Gravity' }
+] as const
+
+type ParticleTrackType = typeof PARTICLE_TRACK_INFOS[number]['type']
+const PARTICLE_KEYFRAME_TYPES = PARTICLE_TRACK_INFOS.map((item) => item.type) as ParticleTrackType[]
+
+const getParticleTrackInfo = (type: string): { type: ParticleTrackType; propName: string; vectorSize: 1 } | null => {
+    const hit = PARTICLE_TRACK_INFOS.find((item) => item.type === type)
+    if (!hit) return null
+    return { type: hit.type, propName: hit.propName, vectorSize: 1 }
+}
+
+const isParticleEmitter2Node = (node: any): boolean => {
+    const t = String(node?.type ?? '')
+    return t === 'ParticleEmitter2'
+}
+
+const getNodeTrackPropertyName = (type: string): string => {
+    const particleTrack = getParticleTrackInfo(type)
+    if (particleTrack) return particleTrack.propName
+    return type
+}
 
 const cloneNodesForKeyframes = (input: any[]) => {
     if (typeof structuredClone === 'function') {
@@ -70,11 +103,24 @@ const cloneNodesForKeyframes = (input: any[]) => {
         })) : track.Keys
         return { ...track, Keys: keys }
     }
+    const cloneScalarParticleTrack = (node: any, propName: string) => {
+        const track = node?.[propName]
+        if (!track || typeof track !== 'object' || !Array.isArray(track.Keys)) return track
+        return cloneTrack(node[propName], 1)
+    }
     return input.map((n: any) => ({
         ...n,
         Translation: cloneTrack(n.Translation, 3),
         Rotation: cloneTrack(n.Rotation, 4),
-        Scaling: cloneTrack(n.Scaling, 3)
+        Scaling: cloneTrack(n.Scaling, 3),
+        Visibility: cloneScalarParticleTrack(n, 'Visibility'),
+        EmissionRate: cloneScalarParticleTrack(n, 'EmissionRate'),
+        Speed: cloneScalarParticleTrack(n, 'Speed'),
+        Variation: cloneScalarParticleTrack(n, 'Variation'),
+        Latitude: cloneScalarParticleTrack(n, 'Latitude'),
+        Length: cloneScalarParticleTrack(n, 'Length'),
+        Width: cloneScalarParticleTrack(n, 'Width'),
+        Gravity: cloneScalarParticleTrack(n, 'Gravity')
     }))
 }
 
@@ -82,17 +128,54 @@ const isAnimTrack = (value: any): value is { Keys: any[] } => {
     return !!value && typeof value === 'object' && Array.isArray(value.Keys)
 }
 
+type KeyframeDisplayMode = 'node' | 'geosetAnim' | 'particle' | 'textureAnim'
+
+const NODE_KEYFRAME_TYPES = ['Translation', 'Rotation', 'Scaling'] as const
+const GEOSET_ANIM_KEYFRAME_TYPES = ['GeosetAlpha', 'GeosetColor'] as const
+const KEYFRAME_DISPLAY_MODE_ORDER: KeyframeDisplayMode[] = ['node', 'geosetAnim', 'particle', 'textureAnim']
+
+const KEYFRAME_DISPLAY_MODE_CONFIG: Record<KeyframeDisplayMode, {
+    label: string
+    tooltip: string
+    buttonColor: string
+    laneTypes: string[]
+}> = {
+    node: {
+        label: '节点模式',
+        tooltip: '关键帧显示: 节点位移/旋转/缩放',
+        buttonColor: '#1f4f8f',
+        laneTypes: [...NODE_KEYFRAME_TYPES]
+    },
+    geosetAnim: {
+        label: '多边形动画',
+        tooltip: '关键帧显示: 多边形动画透明度/颜色',
+        buttonColor: '#7a4d10',
+        laneTypes: [...GEOSET_ANIM_KEYFRAME_TYPES]
+    },
+    particle: {
+        label: '粒子模式',
+        tooltip: '关键帧显示: 粒子参数关键帧（统一轨道）',
+        buttonColor: '#3f5f2a',
+        laneTypes: [...PARTICLE_KEYFRAME_TYPES]
+    },
+    textureAnim: {
+        label: '贴图动画',
+        tooltip: '关键帧显示: 贴图动画参数（待接入）',
+        buttonColor: '#5a2e70',
+        laneTypes: []
+    }
+}
+
+const getLaneTypesByMode = (mode: KeyframeDisplayMode): string[] => (
+    KEYFRAME_DISPLAY_MODE_CONFIG[mode].laneTypes
+)
+
 const isKeyframeTypeVisible = (
     type: string,
-    showAll: boolean,
-    currentMode: 'translate' | 'rotate' | 'scale' | null
+    displayMode: KeyframeDisplayMode
 ) => {
-    if (showAll) return true
-    if (type === 'GeosetAlpha' || type === 'GeosetColor') return true
-    if (currentMode === 'translate' && type === 'Translation') return true
-    if (currentMode === 'rotate' && type === 'Rotation') return true
-    if (currentMode === 'scale' && type === 'Scaling') return true
-    return false
+    const laneTypes = getLaneTypesByMode(displayMode)
+    return laneTypes.includes(type as typeof laneTypes[number])
 }
 
 type KeyframeOwnerType = 'node' | 'geoset'
@@ -206,7 +289,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         setGeosetAnims,
     } = useModelStore()
 
-    const { selectedNodeIds, transformMode, multiMoveMode, setMultiMoveMode, pickedGeosetIndex } = useSelectionStore()
+    const { selectedNodeIds, pickedGeosetIndex } = useSelectionStore()
 
     // Derived Global Info
     const allSequencesMax = useMemo(() => {
@@ -227,7 +310,15 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     const [displayFrame, setDisplayFrame] = useState(0)
     const [isEditingFrame, setIsEditingFrame] = useState(false)
     const [inputFrameValue, setInputFrameValue] = useState('')
-    const [showAllKeyframes, setShowAllKeyframes] = useState(false)
+    const [showAllKeyframes, setShowAllKeyframes] = useState(true)
+    const [keyframeDisplayMode, setKeyframeDisplayMode] = useState<KeyframeDisplayMode>('node')
+    const currentKeyframeModeConfig = KEYFRAME_DISPLAY_MODE_CONFIG[keyframeDisplayMode]
+    const keyframeModeMenuItems = useMemo(() => (
+        KEYFRAME_DISPLAY_MODE_ORDER.map(mode => ({
+            key: mode,
+            label: KEYFRAME_DISPLAY_MODE_CONFIG[mode].label
+        }))
+    ), [])
 
     // Missing State from previous error
     const [isDragging, setIsDragging] = useState(false)
@@ -267,7 +358,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     const selectedKeyframeUidsRef = useRef<Set<string>>(new Set())
     const selectionRectRef = useRef<{ startX: number, startY: number, endX: number, endY: number } | null>(null)
     const showAllKeyframesRef = useRef(showAllKeyframes)
-    const transformModeRef = useRef(transformMode)
+    const keyframeDisplayModeRef = useRef<KeyframeDisplayMode>(keyframeDisplayMode)
     const dragKeyframeOffsetRef = useRef(0)
     const dragKeyframeScaleRef = useRef<number | null>(null)
 
@@ -291,24 +382,27 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     useEffect(() => { pixelsPerMsRef.current = pixelsPerMs }, [pixelsPerMs])
     useEffect(() => { scrollXRef.current = scrollX }, [scrollX])
     useEffect(() => {
-        // If showing all sequences (currentSequence=-1) OR showing all keyframe types, use 0-Max.
-        // Otherwise use the selected sequence's interval.
-        if (isAllSequences || showAllKeyframes) {
+        // Use full range only when selecting "all sequences" mode.
+        if (isAllSequences) {
             seqStartRef.current = 0
             seqEndRef.current = allSequencesMax
         } else {
             seqStartRef.current = seqStart
             seqEndRef.current = seqEnd
         }
-    }, [seqStart, seqEnd, showAllKeyframes, allSequencesMax, isAllSequences])
+    }, [seqStart, seqEnd, allSequencesMax, isAllSequences])
 
     useEffect(() => { selectedKeyframeUidsRef.current = selectedKeyframeUids }, [selectedKeyframeUids])
     useEffect(() => { selectionRectRef.current = selectionRect }, [selectionRect])
     useEffect(() => { showAllKeyframesRef.current = showAllKeyframes }, [showAllKeyframes])
-    useEffect(() => { transformModeRef.current = transformMode }, [transformMode])
+    useEffect(() => { keyframeDisplayModeRef.current = keyframeDisplayMode }, [keyframeDisplayMode])
     useEffect(() => { isDraggingRef.current = isDragging }, [isDragging])
     useEffect(() => { dragKeyframeOffsetRef.current = dragKeyframeOffset }, [dragKeyframeOffset])
     useEffect(() => { dragKeyframeScaleRef.current = dragKeyframeScale }, [dragKeyframeScale])
+    useEffect(() => {
+        setSelectedKeyframeUids(new Set())
+        setSelectionRect(null)
+    }, [keyframeDisplayMode])
 
     
 
@@ -326,31 +420,33 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 ? [selectedGeosetIndex]
                 : (pickedGeosetIndex !== null ? [pickedGeosetIndex] : []))
 
-        selectedNodeIds.forEach(nodeId => {
-            const node = modelNodes.find((n: any) => n.ObjectId === nodeId)
-            if (!node) return
+        if (keyframeDisplayMode === 'node') {
+            selectedNodeIds.forEach(nodeId => {
+                const node = modelNodes.find((n: any) => n.ObjectId === nodeId)
+                if (!node) return
 
-            const addKeys = (propData: any, type: string, color: string) => {
-                if (propData && Array.isArray(propData.Keys)) {
-                    propData.Keys.forEach((k: any) => {
-                        keyframes.push({
-                            frame: k.Frame,
-                            ownerType: 'node',
-                            ownerId: nodeId,
-                            type,
-                            uid: makeKeyframeUid('node', nodeId, type, k.Frame),
-                            color
+                const addKeys = (propData: any, type: string, color: string) => {
+                    if (propData && Array.isArray(propData.Keys)) {
+                        propData.Keys.forEach((k: any) => {
+                            keyframes.push({
+                                frame: k.Frame,
+                                ownerType: 'node',
+                                ownerId: nodeId,
+                                type,
+                                uid: makeKeyframeUid('node', nodeId, type, k.Frame),
+                                color
+                            })
                         })
-                    })
+                    }
                 }
-            }
 
-            addKeys(node.Translation, 'Translation', '#ff4d4f')
-            addKeys(node.Rotation, 'Rotation', '#52c41a')
-            addKeys(node.Scaling, 'Scaling', '#1890ff')
-        })
+                addKeys(node.Translation, 'Translation', '#ff4d4f')
+                addKeys(node.Rotation, 'Rotation', '#52c41a')
+                addKeys(node.Scaling, 'Scaling', '#1890ff')
+            })
+        }
 
-        if (geosetSelection.length > 0 && Array.isArray((modelData as any).GeosetAnims)) {
+        if (keyframeDisplayMode === 'geosetAnim' && geosetSelection.length > 0 && Array.isArray((modelData as any).GeosetAnims)) {
             const addGeosetKeys = (geosetId: number, propData: any, type: 'GeosetAlpha' | 'GeosetColor', color: string) => {
                 if (!isAnimTrack(propData)) return
                 propData.Keys.forEach((k: any) => {
@@ -372,8 +468,34 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             })
         }
 
+        if (keyframeDisplayMode === 'particle') {
+            const selectedParticleIds = selectedNodeIds
+                .map((id) => Number(id))
+                .filter((id) => Number.isFinite(id))
+
+            selectedParticleIds.forEach((nodeId) => {
+                const node = modelNodes.find((n: any) => Number(n?.ObjectId) === nodeId)
+                if (!node || !isParticleEmitter2Node(node)) return
+
+                PARTICLE_TRACK_INFOS.forEach(({ type, propName }) => {
+                    const track = (node as any)[propName]
+                    if (!isAnimTrack(track)) return
+                    track.Keys.forEach((k: any) => {
+                        keyframes.push({
+                            frame: Number(k.Frame),
+                            ownerType: 'node',
+                            ownerId: nodeId,
+                            type,
+                            uid: makeKeyframeUid('node', nodeId, type, Number(k.Frame)),
+                            color: '#95de64'
+                        })
+                    })
+                })
+            })
+        }
+
         activeKeyframesRef.current = keyframes
-    }, [modelData, selectedNodeIds, modelNodes, selectedGeosetIndex, selectedGeosetIndices, pickedGeosetIndex])
+    }, [modelData, selectedNodeIds, modelNodes, selectedGeosetIndex, selectedGeosetIndices, pickedGeosetIndex, keyframeDisplayMode])
 
     const didInitialAutoFitRef = useRef(false)
 
@@ -385,7 +507,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         // When the panel is hidden via display:none, width is 0. Don't lock in a bad zoom.
         if (!Number.isFinite(containerWidth) || containerWidth < 20) return false
 
-        const useFullRange = isAllSequences || showAllKeyframes
+        const useFullRange = isAllSequences
         const start = useFullRange ? 0 : (sequence?.Interval?.[0] ?? 0)
         const end = useFullRange ? allSequencesMax : (sequence?.Interval?.[1] ?? 1000)
         const duration = end - start
@@ -395,7 +517,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         setPixelsPerMs(Math.max(0.01, Math.min(2, newPixelsPerMs)))
         setScrollX(Math.max(0, start - duration * 0.1))
         return true
-    }, [sequence, isAllSequences, showAllKeyframes, allSequencesMax])
+    }, [sequence, isAllSequences, allSequencesMax])
 
     // Reset the one-time auto-fit when leaving keyframe mode, so re-entering matches the selected sequence.
     useEffect(() => {
@@ -426,6 +548,20 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
         fitToCurrentSequenceInterval()
     }, [currentSequence, isActive, fitToCurrentSequenceInterval])
+
+    // Allow external sequence list clicks (including re-click on the same sequence)
+    // to force a timeline fit to the current sequence interval.
+    useEffect(() => {
+        const onForceFit = () => {
+            if (!isActive) return
+            if (isDraggingRef.current) return
+            fitToCurrentSequenceInterval()
+        }
+        window.addEventListener('timeline-fit-current-sequence', onForceFit)
+        return () => {
+            window.removeEventListener('timeline-fit-current-sequence', onForceFit)
+        }
+    }, [isActive, fitToCurrentSequenceInterval])
 
     // Resize Observer
     useEffect(() => {
@@ -531,7 +667,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const selectedUids = selectedKeyframeUidsRef.current
         const selRect = selectionRectRef.current
         const showAll = showAllKeyframesRef.current
-        const currentMode = transformModeRef.current
+        const displayMode = keyframeDisplayModeRef.current
 
         // Bg
         ctx.fillStyle = '#1e1e1e'
@@ -550,17 +686,25 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const seqTrackY = height - SEQUENCE_HEIGHT
         const trackTop = RULER_HEIGHT + LANE_PADDING
         const trackBottom = seqTrackY - LANE_PADDING
-        const laneTypes = ['Translation', 'Rotation', 'Scaling', 'GeosetAlpha', 'GeosetColor']
+        const laneTypes = getLaneTypesByMode(displayMode)
         const fallbackGap = OFFSET_ROTATION - OFFSET_TRANSLATION
         const laneGap = trackBottom > trackTop
             ? (trackBottom - trackTop) / Math.max(1, laneTypes.length - 1)
             : Math.max(1, fallbackGap)
-        const laneYMap: Record<string, number> = {
-            Translation: trackBottom > trackTop ? trackTop : RULER_HEIGHT + OFFSET_TRANSLATION,
-            Rotation: trackBottom > trackTop ? trackTop + laneGap : RULER_HEIGHT + OFFSET_ROTATION,
-            Scaling: trackBottom > trackTop ? trackTop + laneGap * 2 : RULER_HEIGHT + OFFSET_SCALING,
-            GeosetAlpha: trackBottom > trackTop ? trackTop + laneGap * 3 : RULER_HEIGHT + OFFSET_SCALING + fallbackGap,
-            GeosetColor: trackBottom > trackTop ? trackTop + laneGap * 4 : RULER_HEIGHT + OFFSET_SCALING + fallbackGap * 2
+        const laneYMap: Record<string, number> = {}
+        if (displayMode === 'particle') {
+            const unifiedLaneY = trackBottom > trackTop
+                ? trackTop + (trackBottom - trackTop) * 0.5
+                : RULER_HEIGHT + OFFSET_TRANSLATION
+            laneTypes.forEach((laneType) => {
+                laneYMap[laneType] = unifiedLaneY
+            })
+        } else {
+            laneTypes.forEach((laneType, index) => {
+                laneYMap[laneType] = trackBottom > trackTop
+                    ? trackTop + laneGap * index
+                    : RULER_HEIGHT + OFFSET_TRANSLATION + fallbackGap * index
+            })
         }
         const effectiveKeyframeSize = Math.min(
             KEYFRAME_SIZE,
@@ -692,7 +836,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             let drawFrame = kf.frame
 
             // Filter logic
-            if (!isKeyframeTypeVisible(kf.type, showAll, currentMode)) return
+            if (!isKeyframeTypeVisible(kf.type, displayMode)) return
 
             const laneY = laneYMap[kf.type] ?? (RULER_HEIGHT + OFFSET_TRANSLATION)
 
@@ -708,8 +852,12 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             const drawX = (drawFrame - scroll) * pxPerMs
             if (drawX < -10 || drawX > width + 10) return
 
-            const lineTop = laneY - effectiveKeyframeSize
-            const lineBottom = laneY + effectiveKeyframeSize
+            const lineTop = displayMode === 'particle'
+                ? trackTop
+                : laneY - effectiveKeyframeSize
+            const lineBottom = displayMode === 'particle'
+                ? trackBottom
+                : laneY + effectiveKeyframeSize
             const lineColor = isSelected ? '#ffcc00' : kf.color
 
             if (isSelected) {
@@ -773,20 +921,65 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
         const pxPerMs = pixelsPerMsRef.current
         const scroll = scrollXRef.current
-        const showAll = showAllKeyframesRef.current
-        const currentMode = transformModeRef.current
+        const displayMode = keyframeDisplayModeRef.current
 
+        const visibleKeyframes = activeKeyframesRef.current.filter((kf) =>
+            isKeyframeTypeVisible(kf.type, displayMode)
+        )
+        if (visibleKeyframes.length === 0) return null
+
+        // Build unique screen-space keyframe columns and find neighbors around click X.
+        const keyframeXs = Array.from(new Set(
+            visibleKeyframes
+                .map((kf) => (kf.frame - scroll) * pxPerMs)
+                .filter((kx) => Number.isFinite(kx))
+        )).sort((a, b) => a - b)
+
+        const getDynamicSnapThreshold = () => {
+            if (keyframeXs.length === 0) return SNAP_THRESHOLD_X
+
+            let left = 0
+            let right = keyframeXs.length
+            while (left < right) {
+                const mid = (left + right) >> 1
+                if (keyframeXs[mid] < x) left = mid + 1
+                else right = mid
+            }
+
+            const prevX = left > 0 ? keyframeXs[left - 1] : null
+            const nextX = left < keyframeXs.length ? keyframeXs[left] : null
+
+            if (prevX !== null && nextX !== null) {
+                const localGap = Math.abs(nextX - prevX)
+                const halfGap = localGap > 0 ? localGap * 0.5 : MIN_SNAP_THRESHOLD_X
+                return Math.max(MIN_SNAP_THRESHOLD_X, Math.min(MAX_SNAP_THRESHOLD_X, halfGap))
+            }
+
+            if (prevX !== null) {
+                const prev2X = left > 1 ? keyframeXs[left - 2] : null
+                const edgeGap = prev2X !== null ? Math.abs(prevX - prev2X) : SNAP_THRESHOLD_X
+                const halfGap = edgeGap > 0 ? edgeGap * 0.5 : SNAP_THRESHOLD_X
+                return Math.max(MIN_SNAP_THRESHOLD_X, Math.min(MAX_SNAP_THRESHOLD_X, halfGap))
+            }
+
+            if (nextX !== null) {
+                const next2X = left + 1 < keyframeXs.length ? keyframeXs[left + 1] : null
+                const edgeGap = next2X !== null ? Math.abs(next2X - nextX) : SNAP_THRESHOLD_X
+                const halfGap = edgeGap > 0 ? edgeGap * 0.5 : SNAP_THRESHOLD_X
+                return Math.max(MIN_SNAP_THRESHOLD_X, Math.min(MAX_SNAP_THRESHOLD_X, halfGap))
+            }
+
+            return SNAP_THRESHOLD_X
+        }
+
+        const dynamicThreshold = getDynamicSnapThreshold()
         let found: any = null // Explicit type fix
-        let minDistX = SNAP_THRESHOLD_X
+        let minDistX = dynamicThreshold
 
-        activeKeyframesRef.current.forEach(kf => {
-            if (!isKeyframeTypeVisible(kf.type, showAll, currentMode)) return
-
+        visibleKeyframes.forEach((kf) => {
             const kx = (kf.frame - scroll) * pxPerMs
             const dist = Math.abs(kx - x)
-
-            // X Check only (vertical column snap)
-            if (dist < minDistX) {
+            if (dist <= minDistX) {
                 minDistX = dist
                 found = kf
             }
@@ -986,7 +1179,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 const node = nodes.find((n: any) => n.ObjectId === kf.ownerId)
                 if (!node) return
 
-                const propData = node[kf.type]
+                const propData = node[getNodeTrackPropertyName(kf.type)]
                 if (!isAnimTrack(propData)) return
 
                 const keyIndex = propData.Keys.findIndex((k: any) => k.Frame === kf.frame)
@@ -1101,11 +1294,12 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         grouped.forEach(({ ownerType, ownerId, type, frames }) => {
             if (ownerType === 'node') {
                 const node = nodesCopy.find((n: any) => n.ObjectId === ownerId)
-                if (!node || !isAnimTrack(node[type])) return
-                node[type].Keys = node[type].Keys.filter((k: any) => !frames.includes(k.Frame))
+                const propName = getNodeTrackPropertyName(type)
+                if (!node || !isAnimTrack(node[propName])) return
+                node[propName].Keys = node[propName].Keys.filter((k: any) => !frames.includes(k.Frame))
                 nodeChanged = true
-                if (node[type].Keys.length === 0) {
-                    delete node[type]
+                if (node[propName].Keys.length === 0) {
+                    delete node[propName]
                 }
                 return
             }
@@ -1190,27 +1384,30 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 const node = nodesCopy.find((n: any) => n.ObjectId === kf.ownerId)
                 if (!node) return
 
-                if (!node[kf.type]) {
-                    node[kf.type] = {
+                const propName = getNodeTrackPropertyName(kf.type)
+                if (!node[propName]) {
+                    node[propName] = {
                         Keys: [],
                         LineType: 1,
                         GlobalSeqId: -1
                     }
                 }
 
-                const existingIdx = node[kf.type].Keys.findIndex((k: any) => k.Frame === targetFrame)
+                const existingIdx = node[propName].Keys.findIndex((k: any) => k.Frame === targetFrame)
+                const vectorSize = getParticleTrackInfo(kf.type)?.vectorSize ?? (kf.type === 'Rotation' ? 4 : (kf.type === 'Translation' || kf.type === 'Scaling' ? 3 : 1))
+                const fallback = vectorSize === 1 ? [0] : (vectorSize === 4 ? [0, 0, 0, 1] : [0, 0, 0])
                 const newKey: any = {
                     Frame: targetFrame,
-                    Vector: Array.isArray(kf.value) ? [...kf.value] : kf.value
+                    Vector: toVectorArray(kf.value, vectorSize, fallback)
                 }
                 if (kf.inTan) newKey.InTan = [...kf.inTan]
                 if (kf.outTan) newKey.OutTan = [...kf.outTan]
 
                 if (existingIdx >= 0) {
-                    node[kf.type].Keys[existingIdx] = newKey
+                    node[propName].Keys[existingIdx] = newKey
                 } else {
-                    node[kf.type].Keys.push(newKey)
-                    node[kf.type].Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                    node[propName].Keys.push(newKey)
+                    node[propName].Keys.sort((a: any, b: any) => a.Frame - b.Frame)
                 }
                 nodeChanged = true
                 return
@@ -1303,27 +1500,30 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 const node = nodesCopy.find((n: any) => n.ObjectId === kf.ownerId)
                 if (!node) return
 
-                if (!node[kf.type]) {
-                    node[kf.type] = {
+                const propName = getNodeTrackPropertyName(kf.type)
+                if (!node[propName]) {
+                    node[propName] = {
                         Keys: [],
                         LineType: 1,
                         GlobalSeqId: -1
                     }
                 }
 
-                const existingIdx = node[kf.type].Keys.findIndex((k: any) => k.Frame === targetFrame)
+                const existingIdx = node[propName].Keys.findIndex((k: any) => k.Frame === targetFrame)
+                const vectorSize = getParticleTrackInfo(kf.type)?.vectorSize ?? (kf.type === 'Rotation' ? 4 : (kf.type === 'Translation' || kf.type === 'Scaling' ? 3 : 1))
+                const fallback = vectorSize === 1 ? [0] : (vectorSize === 4 ? [0, 0, 0, 1] : [0, 0, 0])
                 const newKey: any = {
                     Frame: targetFrame,
-                    Vector: Array.isArray(kf.value) ? [...kf.value] : kf.value
+                    Vector: toVectorArray(kf.value, vectorSize, fallback)
                 }
                 if (kf.inTan) newKey.InTan = [...kf.inTan]
                 if (kf.outTan) newKey.OutTan = [...kf.outTan]
 
                 if (existingIdx >= 0) {
-                    node[kf.type].Keys[existingIdx] = newKey
+                    node[propName].Keys[existingIdx] = newKey
                 } else {
-                    node[kf.type].Keys.push(newKey)
-                    node[kf.type].Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                    node[propName].Keys.push(newKey)
+                    node[propName].Keys.sort((a: any, b: any) => a.Frame - b.Frame)
                 }
                 nodeChanged = true
                 return
@@ -1675,14 +1875,15 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                     const newFrame = Math.round(scaleAnchor + (kfData.originalFrame - scaleAnchor) * dragScale)
                     if (kfData.ownerType === 'node') {
                         const node = nodesCopy.find((n: any) => n.ObjectId === kfData.ownerId)
-                        if (!node || !isAnimTrack(node[kfData.type])) return
+                        const propName = getNodeTrackPropertyName(kfData.type)
+                        if (!node || !isAnimTrack(node[propName])) return
 
                         let keyIdx = kfData.keyIndex
-                        if (keyIdx < 0 || keyIdx >= node[kfData.type].Keys.length) {
-                            keyIdx = node[kfData.type].Keys.findIndex((k: any) => k.Frame === kfData.originalFrame)
+                        if (keyIdx < 0 || keyIdx >= node[propName].Keys.length) {
+                            keyIdx = node[propName].Keys.findIndex((k: any) => k.Frame === kfData.originalFrame)
                         }
                         if (keyIdx >= 0) {
-                            node[kfData.type].Keys[keyIdx].Frame = newFrame
+                            node[propName].Keys[keyIdx].Frame = newFrame
                             nodeChanged = true
                         }
                         return
@@ -1709,8 +1910,9 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 interactionRef.current.dragKeyframeData.forEach(kfData => {
                     if (kfData.ownerType === 'node') {
                         const node = nodesCopy.find((n: any) => n.ObjectId === kfData.ownerId)
-                        if (node && isAnimTrack(node[kfData.type])) {
-                            node[kfData.type].Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                        const propName = getNodeTrackPropertyName(kfData.type)
+                        if (node && isAnimTrack(node[propName])) {
+                            node[propName].Keys.sort((a: any, b: any) => a.Frame - b.Frame)
                         }
                         return
                     }
@@ -1760,14 +1962,15 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                     const newFrame = kfData.originalFrame + frameOffset
                     if (kfData.ownerType === 'node') {
                         const node = nodesCopy.find((n: any) => n.ObjectId === kfData.ownerId)
-                        if (!node || !isAnimTrack(node[kfData.type])) return
+                        const propName = getNodeTrackPropertyName(kfData.type)
+                        if (!node || !isAnimTrack(node[propName])) return
 
                         let keyIdx = kfData.keyIndex
-                        if (keyIdx < 0 || keyIdx >= node[kfData.type].Keys.length) {
-                            keyIdx = node[kfData.type].Keys.findIndex((k: any) => k.Frame === kfData.originalFrame)
+                        if (keyIdx < 0 || keyIdx >= node[propName].Keys.length) {
+                            keyIdx = node[propName].Keys.findIndex((k: any) => k.Frame === kfData.originalFrame)
                         }
                         if (keyIdx >= 0) {
-                            node[kfData.type].Keys[keyIdx].Frame = newFrame
+                            node[propName].Keys[keyIdx].Frame = newFrame
                             nodeChanged = true
                         }
                         return
@@ -1794,8 +1997,9 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 interactionRef.current.dragKeyframeData.forEach(kfData => {
                     if (kfData.ownerType === 'node') {
                         const node = nodesCopy.find((n: any) => n.ObjectId === kfData.ownerId)
-                        if (node && isAnimTrack(node[kfData.type])) {
-                            node[kfData.type].Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                        const propName = getNodeTrackPropertyName(kfData.type)
+                        if (node && isAnimTrack(node[propName])) {
+                            node[propName].Keys.sort((a: any, b: any) => a.Frame - b.Frame)
                         }
                         return
                     }
@@ -1855,12 +2059,11 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
                 const pxPerMs = pixelsPerMsRef.current
                 const scroll = scrollXRef.current
-                const showAll = showAllKeyframesRef.current
-                const currentMode = transformModeRef.current
+                const displayMode = keyframeDisplayModeRef.current
 
                 const ids = new Set<string>()
                 activeKeyframesRef.current.forEach(kf => {
-                    if (!isKeyframeTypeVisible(kf.type, showAll, currentMode)) return
+                    if (!isKeyframeTypeVisible(kf.type, displayMode)) return
 
                     const kx = (kf.frame - scroll) * pxPerMs
                     if (kx >= rectStart && kx <= rectEnd) {
@@ -2304,40 +2507,37 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
                 </div>
 
-                {/* Multi-Move Mode Toggle */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginRight: 16 }}>
-                    <button
-                        onClick={() => setMultiMoveMode('relative')}
-                        style={{
-                            padding: '2px 8px',
-                            fontSize: '11px',
-                            border: 'none',
-                            borderRadius: '3px 0 0 3px',
-                            cursor: 'pointer',
-                            backgroundColor: multiMoveMode === 'relative' ? '#2a4a6a' : '#3a3a3a',
-                            color: multiMoveMode === 'relative' ? '#7eb8e8' : '#888'
-                        }}
-                    >
-                        相继移动
-                    </button>
-                    <button
-                        onClick={() => setMultiMoveMode('worldUniform')}
-                        style={{
-                            padding: '2px 8px',
-                            fontSize: '11px',
-                            border: 'none',
-                            borderRadius: '0 3px 3px 0',
-                            cursor: 'pointer',
-                            backgroundColor: multiMoveMode === 'worldUniform' ? '#2a4a6a' : '#3a3a3a',
-                            color: multiMoveMode === 'worldUniform' ? '#7eb8e8' : '#888'
-                        }}
-                    >
-                        世界移动
-                    </button>
-                </div>
-
                 {/* Playback Controls */}
                 <div style={{ display: 'flex', gap: 8 }}>
+                    <div style={{ marginTop: 2 }}>
+                        <Tooltip title={currentKeyframeModeConfig.tooltip}>
+                            <Dropdown
+                                menu={{
+                                    items: keyframeModeMenuItems,
+                                    selectedKeys: [keyframeDisplayMode],
+                                    onClick: ({ key }) => setKeyframeDisplayMode(key as KeyframeDisplayMode)
+                                }}
+                                trigger={['click']}
+                            >
+                                <Button
+                                    size="small"
+                                    style={{
+                                        minWidth: 112,
+                                        height: 24,
+                                        backgroundColor: currentKeyframeModeConfig.buttonColor,
+                                        border: '1px solid #555',
+                                        color: '#eee',
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'space-between'
+                                    }}
+                                >
+                                    {currentKeyframeModeConfig.label}
+                                    <DownOutlined style={{ fontSize: 10, marginLeft: 6 }} />
+                                </Button>
+                            </Dropdown>
+                        </Tooltip>
+                    </div>
                     <Button type="text" icon={<StepBackwardOutlined />} onClick={handleGoToStart} style={{ color: '#eee' }} />
                     <Button type="text" icon={<FastBackwardOutlined />} onClick={handlePrevFrame} style={{ color: '#eee' }} />
 
@@ -2479,4 +2679,3 @@ const btnStyle: React.CSSProperties = {
 }
 
 export default React.memo(TimelinePanel)
-

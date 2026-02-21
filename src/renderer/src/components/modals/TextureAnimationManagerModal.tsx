@@ -1,29 +1,30 @@
-﻿import React, { useState, useEffect } from 'react'
-import { Button, Card } from 'antd'
-import { MasterDetailLayout } from '../MasterDetailLayout'
-import { useModelStore } from '../../store/modelStore'
-import { useHistoryStore } from '../../store/historyStore'
-import { useSelectionStore } from '../../store/selectionStore'
-import { DraggableModal } from '../DraggableModal'
-import DynamicField from '../node/DynamicField'
-import KeyframeEditor from '../editors/KeyframeEditor'
+import React, { useState, useEffect } from 'react';
+import { Button } from 'antd';
+import { MasterDetailLayout } from '../MasterDetailLayout';
+import { useModelStore } from '../../store/modelStore';
+import { useHistoryStore } from '../../store/historyStore';
+import { useSelectionStore } from '../../store/selectionStore';
+import { DraggableModal } from '../DraggableModal';
+import DynamicField from '../node/DynamicField';
+import KeyframeEditor from '../editors/KeyframeEditor';
 
 interface TextureAnimationManagerModalProps {
-    visible: boolean
-    onClose: () => void
-    asWindow?: boolean
+    visible: boolean;
+    onClose: () => void;
 }
 
-const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> = ({ visible, onClose, asWindow = false }) => {
-    const { modelData, setTextureAnims } = useModelStore()
-    const [selectedIndex, setSelectedIndex] = useState<number>(-1)
+const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> = ({ visible, onClose }) => {
+    const { modelData, setTextureAnims } = useModelStore();
+    const [selectedIndex, setSelectedIndex] = useState<number>(-1);
 
-    const [editorVisible, setEditorVisible] = useState(false)
-    const [editingBlock, setEditingBlock] = useState<{ index: number, field: string } | null>(null)
+    // Editor State
+    const [editorVisible, setEditorVisible] = useState(false);
+    const [editingBlock, setEditingBlock] = useState<{ index: number, field: string } | null>(null);
 
-    const textureAnims = modelData?.TextureAnims || []
-    const globalSequences = (modelData?.GlobalSequences || []) as unknown as number[]
+    const textureAnims = modelData?.TextureAnims || [];
+    const globalSequences = (modelData?.GlobalSequences || []) as unknown as number[];
 
+    // Subscribe to Ctrl+Click geoset picking - auto-select texture animation
     useEffect(() => {
         if (!visible || !modelData) return
 
@@ -37,6 +38,7 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
                         const animId = layer.TVertexAnimId
                         if (typeof animId === 'number' && animId >= 0 && animId < textureAnims.length) {
                             setSelectedIndex(animId)
+                            console.log('[TextureAnimManager] Auto-selected animation', animId, 'for geoset', pickedGeosetIndex)
                             return true
                         }
                     }
@@ -45,11 +47,13 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
             return false
         }
 
+        // Initial check
         const initialPickedIndex = useSelectionStore.getState().pickedGeosetIndex
         if (selectedIndex === -1) {
             trySelect(initialPickedIndex)
         }
 
+        // Subscribe
         let lastPickedIndex: number | null = initialPickedIndex
         const unsubscribe = useSelectionStore.subscribe((state) => {
             const pickedGeosetIndex = state.pickedGeosetIndex
@@ -59,193 +63,173 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
             }
         })
         return unsubscribe
-    }, [visible, modelData, textureAnims.length, selectedIndex])
+    }, [visible, modelData, textureAnims.length])
 
     const handleAdd = () => {
-        const newAnim = {}
-        const newAnims = [...textureAnims, newAnim]
-        const oldAnims = [...textureAnims]
+        // Create an empty texture animation - do NOT add empty {} as blocks
+        // The renderer will crash if it finds a block without Keys array
+        const newAnim = {
+            // No Translation, Rotation, or Scaling by default
+            // User can enable them via the checkboxes which will create valid blocks
+        };
+        const newAnims = [...textureAnims, newAnim];
+        const oldAnims = [...textureAnims];
 
         useHistoryStore.getState().push({
-            name: '添加贴图动画',
+            name: 'Add Texture Animation',
             undo: () => setTextureAnims(oldAnims),
             redo: () => setTextureAnims(newAnims)
-        })
+        });
 
-        setTextureAnims(newAnims)
-        setSelectedIndex(newAnims.length - 1)
-    }
+        setTextureAnims(newAnims);
+        setSelectedIndex(newAnims.length - 1);
+    };
 
     const handleDelete = (index: number) => {
-        const newAnims = textureAnims.filter((_, i) => i !== index)
-        const oldAnims = [...textureAnims]
+        const newAnims = textureAnims.filter((_, i) => i !== index);
+        const oldAnims = [...textureAnims];
 
         useHistoryStore.getState().push({
-            name: `删除贴图动画 ${index}`,
+            name: `Delete Texture Animation ${index}`,
             undo: () => setTextureAnims(oldAnims),
             redo: () => setTextureAnims(newAnims)
-        })
+        });
 
-        setTextureAnims(newAnims)
+        setTextureAnims(newAnims);
         if (selectedIndex >= newAnims.length) {
-            setSelectedIndex(newAnims.length - 1)
+            setSelectedIndex(newAnims.length - 1);
         }
-    }
+    };
 
     const updateAnim = (index: number, updates: any) => {
-        const newAnims = [...textureAnims]
-        newAnims[index] = { ...newAnims[index], ...updates }
-        const oldAnims = [...textureAnims]
+        const newAnims = [...textureAnims];
+        newAnims[index] = { ...newAnims[index], ...updates };
+        const oldAnims = [...textureAnims];
 
         useHistoryStore.getState().push({
-            name: `更新贴图动画 ${index}`,
+            name: `Update Texture Animation ${index}`,
             undo: () => setTextureAnims(oldAnims),
             redo: () => setTextureAnims(newAnims)
-        })
+        });
 
-        setTextureAnims(newAnims)
-    }
+        setTextureAnims(newAnims);
+    };
 
     const toggleBlock = (index: number, key: string, checked: boolean) => {
-        const currentAnim = textureAnims[index]
-        const newAnims = [...textureAnims]
+        const currentAnim = textureAnims[index];
+        const newAnims = [...textureAnims];
 
         if (checked) {
+            // Add the block if it doesn't exist
             newAnims[index] = {
                 ...currentAnim,
                 [key]: (currentAnim as any)[key] || { InterpolationType: 0, GlobalSeqId: null, Keys: [] }
-            }
+            };
         } else {
-            const { [key]: _discard, ...rest } = currentAnim as any
-            newAnims[index] = rest
+            // Remove the block
+            const { [key]: _, ...rest } = currentAnim as any;
+            newAnims[index] = rest;
         }
-
-        const oldAnims = [...textureAnims]
+        const oldAnims = [...textureAnims];
         useHistoryStore.getState().push({
-            name: `切换贴图动画块 ${key}`,
+            name: `Toggle Texture Animation Block ${key}`,
             undo: () => setTextureAnims(oldAnims),
             redo: () => setTextureAnims(newAnims)
-        })
-        setTextureAnims(newAnims)
-    }
+        });
+        setTextureAnims(newAnims);
+    };
 
-    const openEditor = (index: number, field: string) => {
-        setEditingBlock({ index, field })
-        setEditorVisible(true)
-    }
+    const openEditor = (index: number, field: string, _label: string) => {
+        setEditingBlock({ index, field });
+        setEditorVisible(true);
+    };
 
     const handleEditorSave = (result: any) => {
         if (editingBlock) {
-            const { index, field } = editingBlock
-            updateAnim(index, { [field]: result })
-            setEditorVisible(false)
-            setEditingBlock(null)
+            const { index, field } = editingBlock;
+            updateAnim(index, { [field]: result });
+            setEditorVisible(false);
+            setEditingBlock(null);
         }
-    }
+    };
 
     const renderListItem = (_item: any, index: number, isSelected: boolean) => (
-        <div
-            style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                color: isSelected ? '#fff' : '#b0b0b0',
-                fontSize: '13px',
-                padding: '4px 0'
-            }}
-        >
-            <span>{`动画 ${index}`}</span>
+        <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            color: isSelected ? '#fff' : '#b0b0b0' // Fix: Ensure text is visible when not selected
+        }}>
+            <span>{`TextureAnim ${index}`}</span>
         </div>
-    )
+    );
 
     const renderDetail = (item: any, index: number) => {
-        const propertyNames = ['Translation', 'Rotation', 'Scaling']
         return (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {propertyNames.map((prop) => (
-                    <Card
-                        key={prop}
-                        size="small"
-                        title={<span style={{ fontSize: '12px' }}>{prop}</span>}
-                        style={{ background: '#2d2d2d', borderColor: '#444' }}
-                        styles={{ header: { padding: '4px 8px', minHeight: '32px', borderBottom: '1px solid #444' }, body: { padding: '8px' } }}
-                    >
-                        <DynamicField
-                            label=""
-                            isDynamic={!!item[prop]}
-                            onDynamicChange={(c) => toggleBlock(index, prop, c)}
-                            onEdit={() => openEditor(index, prop)}
-                            buttonLabel={`编辑 ${prop}`}
-                        />
-                    </Card>
-                ))}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                <DynamicField
+                    label="移动 (Translation)"
+                    isDynamic={!!item.Translation}
+                    onDynamicChange={(c) => toggleBlock(index, 'Translation', c)}
+                    onEdit={() => openEditor(index, 'Translation', '编辑移动')}
+                    buttonLabel="编辑移动"
+                />
+
+                <DynamicField
+                    label="旋转 (Rotation)"
+                    isDynamic={!!item.Rotation}
+                    onDynamicChange={(c) => toggleBlock(index, 'Rotation', c)}
+                    onEdit={() => openEditor(index, 'Rotation', '编辑旋转')}
+                    buttonLabel="编辑旋转"
+                />
+
+                <DynamicField
+                    label="缩放 (Scaling)"
+                    isDynamic={!!item.Scaling}
+                    onDynamicChange={(c) => toggleBlock(index, 'Scaling', c)}
+                    onEdit={() => openEditor(index, 'Scaling', '编辑缩放')}
+                    buttonLabel="编辑缩放"
+                />
             </div>
-        )
-    }
+        );
+    };
 
     const getCurrentEditorData = () => {
-        if (!editingBlock || selectedIndex < 0) return null
-        const anim = textureAnims[editingBlock.index] as any
-        return anim ? anim[editingBlock.field] : null
-    }
+        if (!editingBlock || selectedIndex < 0) return null;
+        const anim = textureAnims[editingBlock.index] as any;
+        return anim ? anim[editingBlock.field] : null;
+    };
 
     const getVectorSize = () => {
-        if (!editingBlock) return 3
-        if (editingBlock.field === 'Rotation') return 4
-        return 3
-    }
-
-    const renderManagerContent = (contentHeight: string | number = 500) => (
-        <div style={{ height: contentHeight, background: '#222', border: '1px solid #444' }}>
-            <MasterDetailLayout
-                items={textureAnims}
-                selectedIndex={selectedIndex}
-                onSelect={setSelectedIndex}
-                renderListItem={renderListItem}
-                renderDetail={renderDetail}
-                onAdd={handleAdd}
-                onDelete={handleDelete}
-                listTitle="动画列表"
-                detailTitle="动画详情"
-                listWidth={200}
-            />
-        </div>
-    )
-
-    if (asWindow) {
-        if (!visible) return null
-        return (
-            <>
-                <div style={{ height: '100vh', padding: 8, backgroundColor: '#1f1f1f', overflow: 'hidden' }}>
-                    {renderManagerContent('calc(100vh - 16px)')}
-                </div>
-
-                {editorVisible && (
-                    <KeyframeEditor
-                        visible={editorVisible}
-                        onCancel={() => setEditorVisible(false)}
-                        onOk={handleEditorSave}
-                        initialData={getCurrentEditorData()}
-                        title={`编辑 ${editingBlock?.field}`}
-                        vectorSize={getVectorSize()}
-                        globalSequences={globalSequences}
-                    />
-                )}
-            </>
-        )
-    }
+        if (!editingBlock) return 3;
+        if (editingBlock.field === 'Rotation') return 4; // Rotations are usually quaternions (4)
+        return 3; // Translation and Scaling are vector3
+    };
 
     return (
         <>
             <DraggableModal
-                title="贴图动画管理器"
+                title="纹理动画管理器"
                 open={visible}
                 onCancel={onClose}
                 width={800}
                 footer={null}
                 wrapClassName="dark-theme-modal"
             >
-                {renderManagerContent()}
+                <div style={{ height: 500, background: '#222', border: '1px solid #444' }}>
+                    <MasterDetailLayout
+                        items={textureAnims}
+                        selectedIndex={selectedIndex}
+                        onSelect={setSelectedIndex}
+                        renderListItem={renderListItem}
+                        renderDetail={renderDetail}
+                        onAdd={handleAdd}
+                        onDelete={handleDelete}
+                        listTitle="动画列表"
+                        detailTitle="动画详情"
+                        listWidth={200}
+                    />
+                </div>
                 <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
                     <Button onClick={onClose}>关闭</Button>
                 </div>
@@ -263,7 +247,7 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
                 />
             )}
         </>
-    )
-}
+    );
+};
 
-export default TextureAnimationManagerModal
+export default TextureAnimationManagerModal;

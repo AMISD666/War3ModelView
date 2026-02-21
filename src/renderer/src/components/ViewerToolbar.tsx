@@ -76,7 +76,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         setGizmoOrientation
     } = useRendererStore(state => state);
     const { executeCommand } = useCommandManager();
-    const snapButtonSize = 32
+    const snapButtonSize = 28
     const snapButtonStyle: React.CSSProperties = {
         width: snapButtonSize,
         height: snapButtonSize,
@@ -87,10 +87,10 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
     const snapInputStyle: React.CSSProperties = {
         width: snapButtonSize,
         minWidth: snapButtonSize,
-        height: 18,
-        fontSize: 10,
+        height: 16,
+        fontSize: 9,
         padding: 0,
-        lineHeight: '18px'
+        lineHeight: '16px'
     }
     const snapStackStyle: React.CSSProperties = {
         position: 'relative',
@@ -103,8 +103,14 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
     const snapInputFloatingStyle: React.CSSProperties = {
         ...snapInputStyle,
         position: 'absolute',
-        top: snapButtonSize + 2,
+        top: snapButtonSize + 1,
         left: 0
+    }
+    const dividerStyle: React.CSSProperties = {
+        width: 1,
+        backgroundColor: '#555',
+        height: '20px',
+        alignSelf: 'center'
     }
 
     const handleBind = () => {
@@ -226,15 +232,16 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
     return (
         <div style={{
             position: 'absolute',
-            top: 10,
+            top: 8,
             left: '50%',
-            transform: 'translateX(-50%)',
+            transform: 'translateX(-50%) scale(0.86)',
+            transformOrigin: 'top center',
             backgroundColor: 'rgba(40, 40, 40, 0.9)',
-            padding: '8px 16px',
-            borderRadius: '8px',
+            padding: '6px 12px',
+            borderRadius: '7px',
             display: 'flex',
-            gap: '16px',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+            gap: '12px',
+            boxShadow: '0 3px 10px rgba(0,0,0,0.45)',
             zIndex: 1000,
             pointerEvents: 'auto'
         }}>
@@ -292,7 +299,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                             />
                         </Tooltip>
                     </Space>
-                    <div style={{ width: 1, backgroundColor: '#555', height: '24px', alignSelf: 'center' }} />
+                    <div style={dividerStyle} />
                 </>
             )}
 
@@ -324,7 +331,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                             </Button>
                         </Tooltip>
                     </Space>
-                    <div style={{ width: 1, backgroundColor: '#555', height: '24px', alignSelf: 'center' }} />
+                    <div style={dividerStyle} />
 
                     {animationSubMode === 'binding' && (
                         <>
@@ -353,7 +360,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                                     />
                                 </Tooltip>
                             </Space>
-                            <div style={{ width: 1, backgroundColor: '#555', height: '24px', alignSelf: 'center' }} />
+                            <div style={dividerStyle} />
                         </>
                     )}
                 </>
@@ -388,7 +395,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                 )}
             </Space>
 
-            <div style={{ width: 1, backgroundColor: '#555', height: '24px', alignSelf: 'center' }} />
+            <div style={dividerStyle} />
             <Space size={4}>
                 <Tooltip title={'\u4e16\u754c\u5750\u6807\u671d\u5411'}>
                     <Button
@@ -406,7 +413,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                 </Tooltip>
             </Space>
 
-            <div style={{ width: 1, backgroundColor: '#555', height: '24px', alignSelf: 'center' }} />
+            <div style={dividerStyle} />
             <Space size={10}>
                 <div style={snapStackStyle}>
                     <Tooltip title={'\u8ddd\u79bb\u6355\u6349'}>
@@ -454,7 +461,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
 
             {mainMode === 'view' && (
                 <>
-                    <div style={{ width: 1, backgroundColor: '#555', height: '24px', alignSelf: 'center' }} />
+                    <div style={dividerStyle} />
                     <Space>
                         <Tooltip title="全局变换模式 (锁定在原点，对整个模型生效)">
                             <Button
@@ -476,7 +483,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                             </Button>
                         </Tooltip>
                     </Space>
-                    <div style={{ width: 1, backgroundColor: '#555', height: '24px', alignSelf: 'center' }} />
+                    <div style={dividerStyle} />
                 </>
             )}
 

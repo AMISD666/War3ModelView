@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import 'antd/dist/reset.css'
 import App from './App'
 import './assets/index.css'
+import { parseMDX } from 'war3-model'
 
 // Tauri webview still has some "browser" accelerators (find/refresh/print, etc.).
 // We disable those so function keys (e.g. F3/F5) and app shortcuts aren't hijacked.
@@ -60,6 +61,8 @@ console.warn = (...args: any[]) => {
     }
     originalWarn(...args);
 };
+
+console.log('war3-model loaded:', parseMDX)
 
 installBrowserGuards()
 

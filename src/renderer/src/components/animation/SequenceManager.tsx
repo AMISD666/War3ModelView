@@ -28,6 +28,7 @@ const SequenceManager: React.FC = () => {
 
         const isEditingMode = animationSubMode === 'keyframe' || animationSubMode === 'binding'
         setPlaying(!isEditingMode)
+        window.dispatchEvent(new Event('timeline-fit-current-sequence'))
     }
 
     const getNextInterval = () => {

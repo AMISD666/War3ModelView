@@ -1,301 +1,288 @@
-﻿import React, { useState } from 'react'
-import { Button, Card, Space, InputNumber, Row, Col, Input, Checkbox, Tooltip } from 'antd'
-import { EyeOutlined, CameraOutlined } from '@ant-design/icons'
-import { MasterDetailLayout } from '../MasterDetailLayout'
-import { useModelStore } from '../../store/modelStore'
-import { DraggableModal } from '../DraggableModal'
-import { useHistoryStore } from '../../store/historyStore'
-import KeyframeEditor from '../editors/KeyframeEditor'
-import { CameraNode, NodeType } from '../../types/node'
+import React, { useState } from 'react';
+import { Button, Card, Space, InputNumber, Row, Col, Input, Checkbox, Tooltip } from 'antd';
+import { EyeOutlined, CameraOutlined } from '@ant-design/icons';
+import { MasterDetailLayout } from '../MasterDetailLayout';
+import { useModelStore } from '../../store/modelStore';
+import { DraggableModal } from '../DraggableModal';
+import { useHistoryStore } from '../../store/historyStore';
+
+import KeyframeEditor from '../editors/KeyframeEditor';
+import { CameraNode, NodeType } from '../../types/node';
+
+
 
 interface CameraManagerModalProps {
-    visible: boolean
-    onClose: () => void
-    onAddFromView?: () => void
-    onViewCamera?: (camera: CameraNode) => void
-    asWindow?: boolean
+    visible: boolean;
+    onClose: () => void;
+    onAddFromView?: () => void;
+    onViewCamera?: (camera: CameraNode) => void;
 }
 
-const CameraManagerModal: React.FC<CameraManagerModalProps> = ({
-    visible,
-    onClose,
-    onAddFromView,
-    onViewCamera,
-    asWindow = false
-}) => {
-    const { modelData, updateNodes, nodes, addNode, deleteNode } = useModelStore()
-    const [selectedIndex, setSelectedIndex] = useState<number>(-1)
+const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClose, onAddFromView, onViewCamera }) => {
+    const { modelData, updateNodes, nodes, addNode, deleteNode } = useModelStore();
+    const [selectedIndex, setSelectedIndex] = useState<number>(-1);
 
-    const [editorVisible, setEditorVisible] = useState(false)
-    const [editingBlock, setEditingBlock] = useState<{ index: number, field: string } | null>(null)
+    // Editor State
+    const [editorVisible, setEditorVisible] = useState(false);
+    const [editingBlock, setEditingBlock] = useState<{ index: number, field: string } | null>(null);
 
-    const cameras = nodes.filter((n) => n.type === NodeType.CAMERA) as CameraNode[]
-    const globalSequences = (modelData?.GlobalSequences || []) as unknown as number[]
+    // Filter cameras from nodes
+    const cameras = nodes.filter(n => n.type === NodeType.CAMERA) as CameraNode[];
+    const globalSequences = (modelData?.GlobalSequences || []) as unknown as number[];
 
     const handleAdd = () => {
         const newCamera: Partial<CameraNode> & { Name: string, type: NodeType } = {
             Name: `Camera ${cameras.length + 1}`,
             type: NodeType.CAMERA,
-            FieldOfView: 0.7853,
+            FieldOfView: 0.7853, // Approx 45 degrees
             NearClip: 16,
             FarClip: 5000,
-            Translation: {
+            Translation: { // Position
                 InterpolationType: 0,
                 GlobalSeqId: null,
                 Keys: [{ Frame: 0, Vector: [0, 0, 0] }]
             },
-            TargetTranslation: {
+            TargetTranslation: { // Target Position
                 InterpolationType: 0,
                 GlobalSeqId: null,
                 Keys: [{ Frame: 0, Vector: [100, 0, 0] }]
             }
-        }
+        };
 
-        const currentNodes = useModelStore.getState().nodes
-        const maxObjectId = currentNodes.reduce((max, n) => Math.max(max, n.ObjectId), -1)
-        const newObjectId = maxObjectId + 1
+        const currentNodes = useModelStore.getState().nodes;
+        const maxObjectId = currentNodes.reduce((max, n) => Math.max(max, n.ObjectId), -1);
+        const newObjectId = maxObjectId + 1;
 
         useHistoryStore.getState().push({
-            name: '添加摄像机',
+            name: 'Add Camera',
             undo: () => deleteNode(newObjectId),
             redo: () => addNode({ ...newCamera, ObjectId: newObjectId })
-        })
+        });
 
-        addNode(newCamera)
-    }
+        addNode(newCamera);
+    };
 
     const handleDelete = (index: number) => {
-        if (index < 0 || index >= cameras.length) return
+        if (index >= 0 && index < cameras.length) {
+            const node = cameras[index];
+            const nodeClone = JSON.parse(JSON.stringify(node));
 
-        const node = cameras[index]
-        const nodeClone = JSON.parse(JSON.stringify(node))
+            useHistoryStore.getState().push({
+                name: 'Delete Camera',
+                undo: () => addNode(nodeClone),
+                redo: () => deleteNode(node.ObjectId)
+            });
 
-        useHistoryStore.getState().push({
-            name: '删除摄像机',
-            undo: () => addNode(nodeClone),
-            redo: () => deleteNode(node.ObjectId)
-        })
-
-        deleteNode(node.ObjectId)
-        if (selectedIndex >= index) setSelectedIndex(Math.max(-1, selectedIndex - 1))
-    }
+            deleteNode(node.ObjectId);
+            if (selectedIndex >= index) setSelectedIndex(Math.max(-1, selectedIndex - 1));
+        }
+    };
 
     const updateCamera = (index: number, updates: Partial<CameraNode>) => {
-        const camera = cameras[index]
-        if (!camera) return
+        const camera = cameras[index];
+        if (camera) {
+            const oldData: Partial<CameraNode> = {};
+            Object.keys(updates).forEach(key => {
+                const k = key as keyof CameraNode;
+                oldData[k] = (camera as any)[k];
+            });
+            const objectId = camera.ObjectId;
 
-        const oldData: Partial<CameraNode> = {}
-        Object.keys(updates).forEach((key) => {
-            const k = key as keyof CameraNode
-            oldData[k] = (camera as any)[k]
-        })
+            useHistoryStore.getState().push({
+                name: 'Update Camera',
+                undo: () => updateNodes([{ objectId, data: oldData }]),
+                redo: () => updateNodes([{ objectId, data: updates }])
+            });
 
-        const objectId = camera.ObjectId
-        useHistoryStore.getState().push({
-            name: '更新摄像机',
-            undo: () => updateNodes([{ objectId, data: oldData }]),
-            redo: () => updateNodes([{ objectId, data: updates }])
-        })
-
-        updateNodes([{ objectId: camera.ObjectId, data: updates }])
-    }
+            updateNodes([{ objectId: camera.ObjectId, data: updates }]);
+        }
+    };
 
     const toggleBlock = (index: number, key: keyof CameraNode, checked: boolean) => {
-        const currentCam = cameras[index]
+        const currentCam = cameras[index];
         if (checked) {
-            updateCamera(index, {
-                [key]: (currentCam as any)[key] || {
-                    InterpolationType: 0,
-                    GlobalSeqId: null,
-                    Keys: [{ Frame: 0, Vector: [0, 0, 0] }]
-                }
-            })
+            updateCamera(index, { [key]: (currentCam as any)[key] || { InterpolationType: 0, GlobalSeqId: null, Keys: [{ Frame: 0, Vector: [0, 0, 0] }] } });
         } else {
-            updateCamera(index, { [key]: undefined } as any)
+            updateCamera(index, { [key]: undefined } as any);
         }
-    }
+    };
 
-    const openEditor = (index: number, field: string) => {
-        setEditingBlock({ index, field })
-        setEditorVisible(true)
-    }
+    const openEditor = (index: number, field: string, _label: string) => {
+        setEditingBlock({ index, field });
+        setEditorVisible(true);
+    };
 
     const handleEditorSave = (result: any) => {
-        if (!editingBlock) return
-        const { index, field } = editingBlock
-        updateCamera(index, { [field]: result })
-        setEditorVisible(false)
-        setEditingBlock(null)
-    }
+        if (editingBlock) {
+            const { index, field } = editingBlock;
+            updateCamera(index, { [field]: result });
+            setEditorVisible(false);
+            setEditingBlock(null);
+        }
+    };
 
     const renderListItem = (item: any, index: number, isSelected: boolean) => (
-        <div
-            style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                color: isSelected ? '#fff' : '#b0b0b0',
-                fontSize: '13px',
-                padding: '4px 0'
-            }}
-        >
-            <span>{item.Name || `摄像机 ${index}`}</span>
+        <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            color: isSelected ? '#fff' : '#b0b0b0',
+            fontSize: '12px',
+            padding: '2px 0'
+        }}>
+            <span>{item.Name || `Camera ${index}`}</span>
         </div>
-    )
+    );
 
     const renderDetail = (item: any, index: number) => {
-        const cam = item as CameraNode
-        const isArrayLike = (v: any) => Array.isArray(v) || v instanceof Float32Array || ArrayBuffer.isView(v)
-        const toArray = (v: any) => (v instanceof Float32Array ? Array.from(v) : v)
+        const cam = item as CameraNode;
+        // Get position from camera - check multiple possible formats
+        // Note: Position may be Float32Array which fails Array.isArray()
+        const isArrayLike = (v: any) => Array.isArray(v) || v instanceof Float32Array || ArrayBuffer.isView(v);
+        const toArray = (v: any) => v instanceof Float32Array ? Array.from(v) : v;
 
         const getPos = (prop: any, directProp?: any) => {
-            if (directProp && isArrayLike(directProp)) return toArray(directProp)
-            if (isArrayLike(prop)) return toArray(prop)
+            if (directProp && isArrayLike(directProp)) return toArray(directProp);
+            if (isArrayLike(prop)) return toArray(prop);
             if (prop && prop.Keys && prop.Keys.length > 0) {
-                const v = prop.Keys[0].Vector
-                return v ? toArray(v) : [0, 0, 0]
+                const v = prop.Keys[0].Vector;
+                return v ? toArray(v) : [0, 0, 0];
             }
-            return [0, 0, 0]
-        }
+            return [0, 0, 0];
+        };
 
-        const pos = getPos(cam.Translation, (cam as any).Position)
-        const target = getPos(cam.TargetTranslation, (cam as any).TargetPosition)
+        // Use Position/TargetPosition first (raw parser format), 
+        // then Translation/TargetTranslation (animation format)
+        const pos = getPos(cam.Translation, (cam as any).Position);
+        const target = getPos(cam.TargetTranslation, (cam as any).TargetPosition);
 
         const VectorInputs = ({ value, onChange, label }: { value: number[], onChange: (val: number[]) => void, label: string }) => (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                {label && <div style={{ color: '#e8e8e8', fontSize: '11px', marginBottom: 2 }}>{label}</div>}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <div style={{ color: '#ccc', marginBottom: 2, fontSize: '11px' }}>{label}</div>
                 {['X', 'Y', 'Z'].map((axis, i) => (
-                    <div key={axis} style={{ display: 'flex', alignItems: 'center' }}>
-                        <span style={{ color: '#e8e8e8', width: 16, fontSize: '11px' }}>{axis}</span>
+                    <div key={axis} style={{ display: 'flex', alignItems: 'center', marginBottom: 2 }}>
+                        <span style={{ color: '#888', width: 16, fontSize: '11px' }}>{axis}</span>
                         <InputNumber
                             size="small"
-                            style={{ flex: 1, background: '#1a1a1a', borderColor: '#333', color: '#fff', fontSize: '11px', minWidth: '40px' }}
+                            style={{ flex: 1, background: '#222', borderColor: '#444', color: '#fff', fontSize: '11px' }}
                             value={value[i]}
                             onChange={(v) => {
-                                const newVal = [...value]
-                                newVal[i] = v || 0
-                                onChange(newVal)
+                                const newVal = [...value];
+                                newVal[i] = v || 0;
+                                onChange(newVal);
                             }}
                         />
                     </div>
                 ))}
             </div>
-        )
+        );
 
         const updateStaticPos = (key: 'Translation' | 'TargetTranslation', newVal: number[]) => {
-            const block = (cam as any)[key]
-            const newBlock = block ? { ...block } : { InterpolationType: 0, GlobalSeqId: null, Keys: [{ Frame: 0, Vector: newVal }] }
+            const block = (cam as any)[key];
+            const newBlock = block ? { ...block } : { InterpolationType: 0, GlobalSeqId: null, Keys: [{ Frame: 0, Vector: newVal }] };
             if (newBlock.Keys && newBlock.Keys.length > 0) {
-                newBlock.Keys[0].Vector = newVal
+                newBlock.Keys[0].Vector = newVal;
             } else {
-                newBlock.Keys = [{ Frame: 0, Vector: newVal }]
+                newBlock.Keys = [{ Frame: 0, Vector: newVal }];
             }
-            updateCamera(index, { [key]: newBlock })
-        }
+            updateCamera(index, { [key]: newBlock });
+        };
+
 
         return (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4, border: '1px solid #444', padding: '4px 8px', borderRadius: 4, background: '#222' }}>
-                    <span style={{ color: '#e8e8e8', marginRight: 8, fontSize: '12px' }}>名称:</span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {/* Name */}
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4, border: '1px solid #484848', padding: '6px 8px' }}>
+                    <span style={{ color: '#ccc', marginRight: 8, fontSize: '12px' }}>Name:</span>
                     <Input
                         size="small"
                         value={cam.Name}
                         onChange={(e) => updateCamera(index, { Name: e.target.value })}
-                        style={{ background: '#1a1a1a', borderColor: '#333', color: '#fff', fontSize: '13px' }}
+                        style={{ background: '#222', borderColor: '#444', color: '#fff', fontSize: '12px' }}
                     />
                 </div>
 
                 <div style={{ display: 'flex', gap: 8 }}>
-                    <Card size="small" title={<span style={{ fontSize: '12px', color: '#fff' }}>摄像机位置</span>} style={{ background: '#2d2d2d', borderColor: '#444', flex: 1 }} styles={{ header: { padding: '4px 8px', minHeight: '32px' }, body: { padding: '8px' } }}>
+                    {/* Position */}
+                    <Card size="small" title="镜头位置" style={{ background: '#333', borderColor: '#444', flex: 1 }} headStyle={{ color: '#ddd', padding: '4px 10px', minHeight: 30 }} bodyStyle={{ padding: 8 }}>
                         <VectorInputs value={pos} onChange={(v) => updateStaticPos('Translation', v)} label="" />
-                        <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <div style={{ marginTop: 6 }}>
                             <Checkbox
                                 checked={!!cam.Translation && (cam.Translation.Keys?.length > 1 || cam.Translation.GlobalSeqId !== null)}
                                 onChange={(e) => toggleBlock(index, 'Translation', e.target.checked)}
-                                style={{ color: '#ccc', fontSize: '12px' }}
-                            >
-                                动画
-                            </Checkbox>
-                            <Button size="small" type="link" style={{ padding: 0, height: 'auto', fontSize: '12px' }} onClick={() => openEditor(index, 'Translation')}>
-                                编辑关键帧
-                            </Button>
+                                style={{ color: '#ccc', fontSize: '12px' }}>动态移动</Checkbox>
+                            <Button size="small" style={{ width: '100%', marginTop: 4, fontSize: '12px' }} onClick={() => openEditor(index, 'Translation', '编辑位置')}>移动</Button>
                         </div>
                     </Card>
 
-                    <Card size="small" title={<span style={{ fontSize: '12px', color: '#fff' }}>目标位置</span>} style={{ background: '#2d2d2d', borderColor: '#444', flex: 1 }} styles={{ header: { padding: '4px 8px', minHeight: '32px' }, body: { padding: '8px' } }}>
+                    {/* Target */}
+                    <Card size="small" title="焦点位置" style={{ background: '#333', borderColor: '#444', flex: 1 }} headStyle={{ color: '#ddd', padding: '4px 10px', minHeight: 30 }} bodyStyle={{ padding: 8 }}>
                         <VectorInputs value={target} onChange={(v) => updateStaticPos('TargetTranslation', v)} label="" />
-                        <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <div style={{ marginTop: 6 }}>
                             <Checkbox
                                 checked={!!cam.TargetTranslation}
                                 onChange={(e) => toggleBlock(index, 'TargetTranslation', e.target.checked)}
-                                style={{ color: '#ccc', fontSize: '12px' }}
-                            >
-                                动画
-                            </Checkbox>
-                            <Button size="small" type="link" style={{ padding: 0, height: 'auto', fontSize: '12px' }} onClick={() => openEditor(index, 'TargetTranslation')}>
-                                编辑关键帧
-                            </Button>
+                                style={{ color: '#ccc', fontSize: '12px' }}>动态移动</Checkbox>
+                            <Button size="small" style={{ width: '100%', marginTop: 4, fontSize: '12px' }} onClick={() => openEditor(index, 'TargetTranslation', '编辑目标')}>移动</Button>
                         </div>
                     </Card>
                 </div>
 
-                <Card size="small" title={<span style={{ fontSize: '12px', color: '#fff' }}>裁剪与设置</span>} style={{ background: '#2d2d2d', borderColor: '#444' }} styles={{ header: { padding: '4px 8px', minHeight: '32px' }, body: { padding: '8px' } }}>
-                    <Row gutter={[8, 8]}>
-                        <Col span={8}>
-                            <div style={{ color: '#e8e8e8', marginBottom: 2, fontSize: '11px' }}>视场角:</div>
+                {/* Other */}
+                <Card size="small" title="其他" style={{ background: '#333', borderColor: '#444' }} headStyle={{ color: '#ddd', padding: '4px 10px', minHeight: 30 }} bodyStyle={{ padding: 8 }}>
+                    <Row gutter={8}>
+                        <Col span={12}>
+                            <div style={{ color: '#aaa', marginBottom: 2, fontSize: '11px' }}>视野范围:</div>
                             <InputNumber
                                 size="small"
-                                style={{ width: '60px', background: '#1a1a1a', borderColor: '#333', color: '#fff' }}
+                                style={{ width: '100%', background: '#222', borderColor: '#444', color: '#fff' }}
                                 value={cam.FieldOfView}
                                 onChange={(v) => updateCamera(index, { FieldOfView: v || 0 })}
                             />
                         </Col>
-                        <Col span={8}>
-                            <div style={{ color: '#e8e8e8', marginBottom: 2, fontSize: '11px' }}>近裁面:</div>
+                        <Col span={12}>
+                            <div style={{ color: '#aaa', marginBottom: 2, fontSize: '11px' }}>近景距离:</div>
                             <InputNumber
                                 size="small"
-                                style={{ width: '60px', background: '#1a1a1a', borderColor: '#333', color: '#fff' }}
+                                style={{ width: '100%', background: '#222', borderColor: '#444', color: '#fff' }}
                                 value={cam.NearClip}
                                 onChange={(v) => updateCamera(index, { NearClip: v || 0 })}
                             />
                         </Col>
-                        <Col span={8}>
-                            <div style={{ color: '#e8e8e8', marginBottom: 2, fontSize: '11px' }}>远裁面:</div>
+                    </Row>
+                    <Row gutter={8} style={{ marginTop: 6 }}>
+                        <Col span={12}>
+                            <div style={{ color: '#aaa', marginBottom: 2, fontSize: '11px' }}>远景距离:</div>
                             <InputNumber
                                 size="small"
-                                style={{ width: '60px', background: '#1a1a1a', borderColor: '#333', color: '#fff' }}
+                                style={{ width: '100%', background: '#222', borderColor: '#444', color: '#fff' }}
                                 value={cam.FarClip}
                                 onChange={(v) => updateCamera(index, { FarClip: v || 0 })}
                             />
                         </Col>
                     </Row>
-                    <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{ marginTop: 8 }}>
                         <Checkbox
                             checked={!!cam.Rotation}
                             onChange={(e) => toggleBlock(index, 'Rotation', e.target.checked)}
-                            style={{ color: '#ccc', fontSize: '12px' }}
-                        >
-                            旋转动画
-                        </Checkbox>
-                        <Button size="small" type="link" style={{ padding: 0, height: 'auto', fontSize: '12px' }} onClick={() => openEditor(index, 'Rotation')}>
-                            编辑旋转关键帧
-                        </Button>
+                            style={{ color: '#ccc', fontSize: '12px' }}>动画旋转</Checkbox>
+                        <Button size="small" style={{ marginLeft: 8, fontSize: '12px' }} onClick={() => openEditor(index, 'Rotation', '编辑旋转')}>旋转</Button>
                     </div>
                 </Card>
             </div>
-        )
-    }
+        );
+    };
 
     const getCurrentEditorData = () => {
-        if (!editingBlock || selectedIndex < 0) return null
-        const cam = cameras[editingBlock.index]
-        if (!cam) return null
-        return (cam as any)[editingBlock.field]
-    }
+        if (!editingBlock || selectedIndex < 0) return null;
+        const cam = cameras[editingBlock.index];
+        if (!cam) return null;
+        return (cam as any)[editingBlock.field];
+    };
 
     const extraButtons = (
         <Space size={4}>
-            <Tooltip title="从当前视角添加">
+            <Tooltip title="从当前视角新建">
                 <Button
                     type="text"
                     size="small"
@@ -304,7 +291,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({
                     style={{ color: '#1677ff' }}
                 />
             </Tooltip>
-            <Tooltip title="查看选中的摄像机">
+            <Tooltip title="查看选中相机 (View)">
                 <Button
                     type="text"
                     size="small"
@@ -312,71 +299,46 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({
                     disabled={selectedIndex < 0}
                     onClick={() => {
                         if (selectedIndex >= 0 && onViewCamera) {
-                            onViewCamera(cameras[selectedIndex])
+                            onViewCamera(cameras[selectedIndex]);
                         }
                     }}
                     style={{ color: selectedIndex < 0 ? '#666' : '#52c41a', opacity: selectedIndex < 0 ? 0.5 : 1 }}
                 />
             </Tooltip>
         </Space>
-    )
-
-    const renderManagerContent = (contentHeight: string | number = 650) => (
-        <div style={{ height: contentHeight, background: '#222', border: '1px solid #444' }}>
-            <MasterDetailLayout
-                items={cameras}
-                selectedIndex={selectedIndex}
-                onSelect={setSelectedIndex}
-                renderListItem={renderListItem}
-                renderDetail={renderDetail}
-                onAdd={handleAdd}
-                onDelete={handleDelete}
-                listTitle="摄像机列表"
-                detailTitle="摄像机属性"
-                listWidth={200}
-                extraButtons={extraButtons}
-            />
-        </div>
-    )
-
-    if (asWindow) {
-        if (!visible) return null
-        return (
-            <>
-                <div style={{ height: '100vh', padding: 8, backgroundColor: '#1f1f1f', overflow: 'hidden' }}>
-                    {renderManagerContent('calc(100vh - 16px)')}
-                </div>
-                {editorVisible && (
-                    <KeyframeEditor
-                        visible={editorVisible}
-                        onCancel={() => setEditorVisible(false)}
-                        onOk={handleEditorSave}
-                        initialData={getCurrentEditorData()}
-                        title={`编辑 ${editingBlock?.field}`}
-                        vectorSize={3}
-                        globalSequences={globalSequences}
-                    />
-                )}
-            </>
-        )
-    }
+    );
 
     return (
         <>
             <DraggableModal
-                title="摄像机管理器"
+                title="相机管理器 (Camera Manager)"
                 open={visible}
                 onCancel={onClose}
-                width={850}
+                width={700}
                 footer={null}
                 wrapClassName="dark-theme-modal"
             >
-                {renderManagerContent()}
-                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
-                    <Button type="primary" onClick={onClose} style={{ marginRight: 8 }}>确认</Button>
-                    <Button onClick={onClose}>取消</Button>
+                <div style={{ height: 520, background: '#222', border: '1px solid #444' }}
+                >
+                    <MasterDetailLayout
+                        items={cameras}
+                        selectedIndex={selectedIndex}
+                        onSelect={setSelectedIndex}
+                        renderListItem={renderListItem}
+                        renderDetail={renderDetail}
+                        onAdd={handleAdd}
+                        onDelete={handleDelete}
+                        listTitle="相机列表"
+                        detailTitle="相机属性"
+                        listWidth={170}
+                        extraButtons={extraButtons}
+                    />
                 </div>
-            </DraggableModal>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+                    <Button size="small" type="primary" onClick={onClose} style={{ marginRight: 8 }}>确定</Button>
+                    <Button size="small" onClick={onClose}>取消</Button>
+                </div>
+            </DraggableModal >
 
             {editorVisible && (
                 <KeyframeEditor
@@ -388,9 +350,10 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({
                     vectorSize={3}
                     globalSequences={globalSequences}
                 />
-            )}
+            )
+            }
         </>
-    )
-}
+    );
+};
 
-export default CameraManagerModal
+export default CameraManagerModal;

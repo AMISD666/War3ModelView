@@ -8,7 +8,7 @@ import { ModelData } from '../types/model';
 import { ModelNode, NodeType } from '../types/node';
 import { Tab, TabSnapshot } from '../types/store';
 import { useRendererStore } from './rendererStore';
-import { processDeathAnimation, processRemoveLights } from '../utils/modelUtils';
+import { processDeathAnimation, processRemoveLights, pruneModelKeyframes } from '../utils/modelUtils';
 
 type ClipboardPayload = {
     node: ModelNode;
@@ -27,60 +27,6 @@ const pickDefaultSequenceIndex = (sequences: any[]) => {
         return standRegex.test(name);
     });
     return standIndex >= 0 ? standIndex : 0;
-};
-
-const normalizeSequenceInterval = (interval: any): [number, number] => {
-    let start = 0;
-    let end = 1000;
-
-    if (ArrayBuffer.isView(interval) || Array.isArray(interval)) {
-        start = Number((interval as any)[0]);
-        end = Number((interval as any)[1]);
-    } else if (interval && typeof interval === 'object') {
-        start = Number((interval as any)[0] ?? (interval as any).start ?? (interval as any).Start ?? 0);
-        end = Number((interval as any)[1] ?? (interval as any).end ?? (interval as any).End ?? 1000);
-    }
-
-    if (!Number.isFinite(start)) start = 0;
-    if (!Number.isFinite(end)) end = start + 1000;
-    start = Math.floor(start);
-    end = Math.floor(end);
-    if (end < start) {
-        const t = start;
-        start = end;
-        end = t;
-    }
-    if (end === start) {
-        end = start + 1;
-    }
-    return [start, end];
-};
-
-const normalizeSequencesForStore = (sequences: any[]): any[] => {
-    if (!Array.isArray(sequences)) return [];
-    return sequences.map((seq: any, index: number) => {
-        const safeSeq = seq && typeof seq === 'object' ? seq : {};
-        const interval = normalizeSequenceInterval((safeSeq as any).Interval);
-        return {
-            ...safeSeq,
-            Name: (safeSeq as any).Name ?? `Sequence ${index}`,
-            Interval: interval
-        };
-    });
-};
-
-const shouldResyncRendererSequence = (
-    previousSequences: any[],
-    nextSequences: any[],
-    currentSequence: number
-): boolean => {
-    if (currentSequence < 0) return false;
-    const prev = previousSequences?.[currentSequence];
-    const next = nextSequences?.[currentSequence];
-    if (!prev || !next) return true;
-    const prevInterval = normalizeSequenceInterval((prev as any).Interval);
-    const nextInterval = normalizeSequenceInterval((next as any).Interval);
-    return prevInterval[0] !== nextInterval[0] || prevInterval[1] !== nextInterval[1];
 };
 
 
@@ -357,16 +303,7 @@ interface ModelState {
     resetPreviewTransform: () => void;
     reset: () => void;
 
-    setModelData: (
-        data: ModelData | null,
-        path: string | null,
-        options?: {
-            skipAutoRecalculate?: boolean
-            // Detached manager snapshots are already normalized in main window.
-            // Skip expensive rebuild passes to speed up detached window startup.
-            skipModelRebuild?: boolean
-        }
-    ) => void;
+    setModelData: (data: ModelData | null, path: string | null) => void;
     setLoading: (loading: boolean) => void;
     updateNode: (objectId: number, updates: Partial<ModelNode>) => void;
     // 静默更新节点 - 不触发 renderer reload（用于关键帧编辑等高频更新）
@@ -1152,46 +1089,39 @@ export const useModelStore = create<ModelState>((set, get) => ({
     isLooping: true,
     autoKeyframe: true,
 
-    setModelData: (data, path, options) => {
+    setModelData: (data, path) => {
         if (data && path) {
             (data as any).__modelPath = path;
         }
         const nodes = extractNodesFromModel(data);
         console.log('[ModelStore] Loaded model with', nodes.length, 'nodes');
 
-        const fastLoad = options?.skipModelRebuild === true
-
-        // FORCE NO REORDERING ON LOAD to prevent invalidating saved bone references.
-        // In detached fast-load mode, use snapshot data directly to reduce startup latency.
-        const correctedData = fastLoad ? data : updateModelDataWithNodes(data, nodes, false);
-        const activeData = correctedData ?? data;
+        // FORCE NO REORDERING ON LOAD to prevent invalidating saved bone references
+        const correctedData = updateModelDataWithNodes(data, nodes, false);
 
         // Auto recalculate extent and normals based on settings
-        if (!options?.skipAutoRecalculate && activeData) {
-            const rendererState = useRendererStore.getState();
-            if (rendererState.autoRecalculateExtent) {
-                recalculateModelExtent(activeData);
-            }
-            if (rendererState.autoRecalculateNormals) {
-                recalculateModelNormals(activeData);
-            }
+        const rendererState = useRendererStore.getState();
+        if (rendererState.autoRecalculateExtent) {
+            recalculateModelExtent(correctedData);
+        }
+        if (rendererState.autoRecalculateNormals) {
+            recalculateModelNormals(correctedData);
         }
 
         // Reset animation state on new model load
         // Initialize geosets as hidden (User request: default unchecked)
-        const geosetCount = (activeData as any)?.Geosets?.length || 0;
+        const geosetCount = (correctedData as any)?.Geosets?.length || 0;
         const allGeosetIds = Array.from({ length: geosetCount }, (_, i) => i);
 
-        // Extract nodes again from corrected data to get updated ObjectIds.
-        // Fast-load can safely reuse the first extraction.
-        const correctedNodes = fastLoad ? nodes : extractNodesFromModel(activeData);
+        // Extract nodes again from corrected data to get updated ObjectIds
+        const correctedNodes = extractNodesFromModel(correctedData);
 
-        const sequences = (activeData as any)?.Sequences || [];
+        const sequences = (correctedData as any)?.Sequences || [];
         const defaultSequenceIndex = pickDefaultSequenceIndex(sequences);
         const hasSequences = sequences.length > 0;
 
         set({
-            modelData: activeData,
+            modelData: correctedData,
             modelPath: path || (data as any)?.path || (data as any)?.__modelPath || null,
             nodes: correctedNodes,
             sequences,
@@ -1228,7 +1158,12 @@ export const useModelStore = create<ModelState>((set, get) => ({
             const modelData = { ...state.modelData };
             const sequences = [...modelData.Sequences];
             const seqToDelete = sequences[index];
-            const [start, end] = Array.isArray(seqToDelete.Interval) ? seqToDelete.Interval : seqToDelete.Interval || [0, 0];
+            if (!seqToDelete) return {};
+            const rawInterval = Array.isArray(seqToDelete.Interval)
+                ? seqToDelete.Interval
+                : (seqToDelete.Interval ? Array.from(seqToDelete.Interval as ArrayLike<number>) : [0, 0]);
+            const start = Number(rawInterval[0] ?? 0);
+            const end = Number(rawInterval[1] ?? 0);
 
             // 1. Remove the sequence itself
             sequences.splice(index, 1);
@@ -1236,7 +1171,6 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
             // 2. Prune keyframes if requested
             if (pruneKeyframes) {
-                const { pruneModelKeyframes } = require('../utils/modelUtils');
                 pruneModelKeyframes(modelData, start, end);
                 console.log(`[ModelStore] Pruned keyframes in range ${start}-${end}`);
             }
@@ -1262,11 +1196,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             }
 
             const newSequences = [...state.modelData.Sequences];
-            const nextSequence = { ...newSequences[index], ...updates };
-            if (Object.prototype.hasOwnProperty.call(updates || {}, 'Interval')) {
-                nextSequence.Interval = normalizeSequenceInterval((nextSequence as any).Interval);
-            }
-            newSequences[index] = nextSequence;
+            newSequences[index] = { ...newSequences[index], ...updates };
 
             // Also update the sequences array in store root if it exists distinct from modelData
             // (In this store structure, 'sequences' seems to be a derived reference or copy? 
@@ -1872,17 +1802,15 @@ export const useModelStore = create<ModelState>((set, get) => ({
     // Animation Actions Implementation
     // Animation Actions Implementation
     setSequences: (sequences) => {
-        const normalizedSequences = normalizeSequencesForStore(sequences as any[]);
-        const { sequences: previousSequences, currentSequence } = get();
-        const shouldResync = shouldResyncRendererSequence(previousSequences as any[], normalizedSequences, currentSequence);
         set((state) => {
-            const updatedModelData = state.modelData ? { ...state.modelData, Sequences: normalizedSequences } : state.modelData;
-            return { sequences: normalizedSequences, modelData: updatedModelData };
+            const updatedModelData = state.modelData ? { ...state.modelData, Sequences: sequences } : state.modelData;
+            return { sequences, modelData: updatedModelData };
         });
         const renderer = useRendererStore.getState().renderer;
         if (renderer?.model) {
-            renderer.model.Sequences = normalizedSequences;
-            if (shouldResync && currentSequence >= 0 && typeof (renderer as any).setSequence === 'function') {
+            renderer.model.Sequences = sequences;
+            const currentSequence = get().currentSequence;
+            if (currentSequence >= 0 && typeof (renderer as any).setSequence === 'function') {
                 (renderer as any).setSequence(currentSequence);
             }
         }
@@ -2614,4 +2542,3 @@ export const useModelStore = create<ModelState>((set, get) => ({
         });
     }
 }));
-

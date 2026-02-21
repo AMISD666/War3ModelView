@@ -213,6 +213,12 @@ const upsertScalarKey = (keys: any[], frame: number, value: number) => {
     return next
 }
 
+const ensureScalarDefaultZeroKey = (keys: any[]) => {
+    const next = normalizeScalarKeys(keys)
+    if (next.some((key) => key.Frame === 0)) return next
+    return upsertScalarKey(next, 0, 0)
+}
+
 const upsertColorKey = (keys: any[], frame: number, color: [number, number, number]) => {
     const next = normalizeColorKeys(keys)
     const f = Math.round(frame)
@@ -229,6 +235,28 @@ const removeKeyByFrame = (keys: any[], frame: number, size: 1 | 3) => {
     const f = Math.round(frame)
     return normalized.filter((key) => key.Frame !== f)
 }
+
+const PARTICLE_PANEL_TRACKS = [
+    { label: '可见度', propName: 'Visibility', fallback: 1, step: 0.05, precision: 5, min: 0, max: 1 },
+    { label: '放射速率', propName: 'EmissionRate', fallback: 0, step: 0.1, precision: 5 },
+    { label: '速度', propName: 'Speed', fallback: 0, step: 0.1, precision: 5 },
+    { label: '变化', propName: 'Variation', fallback: 0, step: 0.1, precision: 5 },
+    { label: '纬度', propName: 'Latitude', fallback: 0, step: 0.1, precision: 5 },
+    { label: '重力', propName: 'Gravity', fallback: 0, step: 0.1, precision: 5 }
+] as const
+
+type ParticlePanelTrackProp = typeof PARTICLE_PANEL_TRACKS[number]['propName']
+
+const DEFAULT_PARTICLE_PANEL_INPUTS: Record<ParticlePanelTrackProp, number> = {
+    Visibility: 1,
+    EmissionRate: 0,
+    Speed: 0,
+    Variation: 0,
+    Latitude: 0,
+    Gravity: 0
+}
+
+const isParticleEmitter2Node = (node: any): boolean => String(node?.type ?? '') === 'ParticleEmitter2'
 
 const sampleScalarTrack = (track: any, frame: number, fallback = 1) => {
     if (!isAnimTrack(track) || track.Keys.length === 0) return fallback
@@ -247,6 +275,19 @@ const sampleScalarTrack = (track: any, frame: number, fallback = 1) => {
             const rv = Number(right.Vector?.[0] ?? fallback)
             return lv + (rv - lv) * t
         }
+    }
+    return fallback
+}
+
+const readParticleScalarValueAtFrame = (node: any, propName: string, frame: number, fallback: number) => {
+    const prop = node?.[propName]
+    if (isAnimTrack(prop)) {
+        return Number(sampleScalarTrack(prop, frame, fallback))
+    }
+    if (typeof prop === 'number' && Number.isFinite(prop)) return Number(prop)
+    if (Array.isArray(prop) && prop.length > 0) {
+        const first = Number(prop[0])
+        return Number.isFinite(first) ? first : fallback
     }
     return fallback
 }
@@ -354,6 +395,7 @@ const BoneParameterPanel: React.FC = () => {
     const setSelectedGeosetIndex = useModelStore(state => state.setSelectedGeosetIndex)
     const setSelectedGeosetIndices = useModelStore(state => state.setSelectedGeosetIndices)
     const setGeosetAnims = useModelStore(state => state.setGeosetAnims)
+    const replaceNodes = useModelStore(state => state.replaceNodes)
 
     const renderer = useRendererStore(state => state.renderer)
     const { executeCommand } = useCommandManager()
@@ -363,6 +405,7 @@ const BoneParameterPanel: React.FC = () => {
     const [geosetColorInput, setGeosetColorInput] = useState<[number, number, number]>([1, 1, 1])
     const [editingGeosetField, setEditingGeosetField] = useState<'Alpha' | 'Color' | null>(null)
     const [isGeosetEditorOpen, setIsGeosetEditorOpen] = useState(false)
+    const [particlePanelInputs, setParticlePanelInputs] = useState<Record<ParticlePanelTrackProp, number>>(DEFAULT_PARTICLE_PANEL_INPUTS)
 
     // 选中的单个骨骼
     const selectedNode = selectedNodeIds.length === 1
@@ -417,6 +460,18 @@ const BoneParameterPanel: React.FC = () => {
         if (pickedGeosetIndex !== null && geosetIds.includes(pickedGeosetIndex)) return [pickedGeosetIndex]
         return geosetIds.length > 0 ? [geosetIds[0]] : []
     }, [selectedGeosetIndices, selectedGeosetIndex, pickedGeosetIndex, geosetIds])
+
+    const selectedParticleIds = useMemo(() => {
+        const particleIdSet = new Set<number>(
+            (nodes as any[])
+                .filter((node) => isParticleEmitter2Node(node))
+                .map((node: any) => Number(node.ObjectId))
+                .filter((id) => Number.isFinite(id))
+        )
+        return selectedNodeIds
+            .map((id) => Number(id))
+            .filter((id) => Number.isFinite(id) && particleIdSet.has(id))
+    }, [nodes, selectedNodeIds])
 
     useEffect(() => {
         if (animationSubMode !== 'keyframe') return
@@ -501,6 +556,29 @@ const BoneParameterPanel: React.FC = () => {
         return normalizeColorKeys(activeGeosetAnim.Color.Keys).some((key) => key.Frame === frame)
     }, [activeGeosetAnim, currentFrame])
 
+    const hasExactParticleKeyByProp = useMemo(() => {
+        const result: Record<ParticlePanelTrackProp, boolean> = {
+            Visibility: false,
+            EmissionRate: false,
+            Speed: false,
+            Variation: false,
+            Latitude: false,
+            Gravity: false
+        }
+        if (selectedParticleIds.length === 0) return result
+        const frame = Math.round(currentFrame)
+        PARTICLE_PANEL_TRACKS.forEach(({ propName }) => {
+            result[propName] = selectedParticleIds.some((id) => {
+                const node = nodes.find((n: any) => Number(n?.ObjectId) === Number(id))
+                if (!node) return false
+                const track = (node as any)[propName]
+                if (!isAnimTrack(track)) return false
+                return normalizeScalarKeys(track.Keys).some((key) => key.Frame === frame)
+            })
+        })
+        return result
+    }, [selectedParticleIds, currentFrame, nodes])
+
     useEffect(() => {
         setGeosetAlphaInput(Number(currentGeosetAlpha.toFixed(3)))
     }, [currentGeosetAlpha, activeGeosetId])
@@ -508,6 +586,22 @@ const BoneParameterPanel: React.FC = () => {
     useEffect(() => {
         setGeosetColorInput([currentGeosetColor[0], currentGeosetColor[1], currentGeosetColor[2]])
     }, [currentGeosetColor, activeGeosetId])
+
+    useEffect(() => {
+        if (selectedParticleIds.length === 0) {
+            setParticlePanelInputs(DEFAULT_PARTICLE_PANEL_INPUTS)
+            return
+        }
+        const firstParticleId = selectedParticleIds[0]
+        const node = nodes.find((n: any) => Number(n?.ObjectId) === Number(firstParticleId))
+        if (!node) return
+        const frame = Math.round(currentFrame)
+        const nextInputs = { ...DEFAULT_PARTICLE_PANEL_INPUTS }
+        PARTICLE_PANEL_TRACKS.forEach(({ propName, fallback }) => {
+            nextInputs[propName] = Number(readParticleScalarValueAtFrame(node, propName, frame, fallback))
+        })
+        setParticlePanelInputs(nextInputs)
+    }, [selectedParticleIds, nodes, currentFrame])
 
     // 插值数据
     const translationLocal = useMemo(() => {
@@ -698,6 +792,75 @@ const BoneParameterPanel: React.FC = () => {
 
         setGeosetAnims(nextAnims)
     }, [modelData, setGeosetAnims])
+
+    const commitParticleTracks = useCallback((historyName: string, updater: (nextNodes: any[]) => void) => {
+        const state = useModelStore.getState()
+        const oldNodes = deepClone(state.nodes || [])
+        const nextNodes = deepClone(oldNodes)
+        updater(nextNodes)
+
+        useHistoryStore.getState().push({
+            name: historyName,
+            undo: () => replaceNodes(deepClone(oldNodes), { triggerReload: false }),
+            redo: () => replaceNodes(deepClone(nextNodes), { triggerReload: false })
+        })
+
+        replaceNodes(nextNodes, { triggerReload: false })
+    }, [replaceNodes])
+
+    const handleParticleInputChange = useCallback((propName: ParticlePanelTrackProp, value: number | null) => {
+        const safeValue = Number.isFinite(Number(value)) ? Number(value) : DEFAULT_PARTICLE_PANEL_INPUTS[propName]
+        setParticlePanelInputs((prev) => ({ ...prev, [propName]: safeValue }))
+    }, [])
+
+    const handleInsertSingleParticleDynamicKey = useCallback((propName: ParticlePanelTrackProp) => {
+        if (selectedParticleIds.length === 0) return
+        const frame = Math.round(currentFrame)
+        const field = PARTICLE_PANEL_TRACKS.find((track) => track.propName === propName)
+        const fallback = field?.fallback ?? DEFAULT_PARTICLE_PANEL_INPUTS[propName]
+        const rawInput = particlePanelInputs[propName]
+        const keyValue = Number.isFinite(Number(rawInput)) ? Number(rawInput) : fallback
+
+        commitParticleTracks(`Particle ${propName} Key x${selectedParticleIds.length}`, (nextNodes) => {
+            selectedParticleIds.forEach((particleId) => {
+                const nodeIndex = nextNodes.findIndex((n: any) => Number(n?.ObjectId) === Number(particleId))
+                if (nodeIndex < 0) return
+                const nextNode = { ...nextNodes[nodeIndex] } as any
+                const track = isAnimTrack(nextNode[propName])
+                    ? { ...nextNode[propName], Keys: normalizeScalarKeys(nextNode[propName].Keys) }
+                    : { LineType: 1, GlobalSeqId: null, Keys: [] as any[] }
+                track.Keys = ensureScalarDefaultZeroKey(track.Keys)
+                track.Keys = upsertScalarKey(track.Keys, frame, keyValue)
+                nextNode[propName] = track
+                nextNodes[nodeIndex] = nextNode
+            })
+        })
+    }, [selectedParticleIds, currentFrame, particlePanelInputs, commitParticleTracks])
+
+    const handleInsertParticleDynamicKeys = useCallback(() => {
+        if (selectedParticleIds.length === 0) return
+        const frame = Math.round(currentFrame)
+        commitParticleTracks(`Particle Dynamic Key x${selectedParticleIds.length}`, (nextNodes) => {
+            selectedParticleIds.forEach((particleId) => {
+                const nodeIndex = nextNodes.findIndex((n: any) => Number(n?.ObjectId) === Number(particleId))
+                if (nodeIndex < 0) return
+                const nextNode = { ...nextNodes[nodeIndex] } as any
+                PARTICLE_PANEL_TRACKS.forEach(({ propName, fallback }) => {
+                    const inputValue = Number(particlePanelInputs[propName])
+                    const currentValue = Number.isFinite(inputValue)
+                        ? inputValue
+                        : readParticleScalarValueAtFrame(nextNode, propName, frame, fallback)
+                    const track = isAnimTrack(nextNode[propName])
+                        ? { ...nextNode[propName], Keys: normalizeScalarKeys(nextNode[propName].Keys) }
+                        : { LineType: 1, GlobalSeqId: null, Keys: [] as any[] }
+                    track.Keys = ensureScalarDefaultZeroKey(track.Keys)
+                    track.Keys = upsertScalarKey(track.Keys, frame, currentValue)
+                    nextNode[propName] = track
+                })
+                nextNodes[nodeIndex] = nextNode
+            })
+        })
+    }, [selectedParticleIds, currentFrame, particlePanelInputs, commitParticleTracks])
 
     const handleInsertGeosetAlphaKey = useCallback(() => {
         if (selectedGeosetIds.length === 0) return
@@ -1205,6 +1368,58 @@ const BoneParameterPanel: React.FC = () => {
                                 >
                                     编辑颜色轨道
                                 </Button>
+                            </div>
+
+                            <div style={{ marginTop: compactUi.geosetRowGap + 6, paddingTop: 6, borderTop: '1px dashed #3a3a3a' }}>
+                                <Text style={{ color: '#888', fontSize: compactUi.fieldFontSize }}>
+                                    粒子参数（已选 {selectedParticleIds.length}）
+                                </Text>
+                                {selectedParticleIds.length === 0 ? (
+                                    <div style={{ marginTop: compactUi.controlMarginTop }}>
+                                        <Text style={{ color: '#666', fontSize: compactUi.fieldFontSize }}>
+                                            请选择粒子发射器节点后再编辑参数关键帧
+                                        </Text>
+                                    </div>
+                                ) : (
+                                    <>
+                                        <div style={{ marginTop: compactUi.controlMarginTop, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                            {PARTICLE_PANEL_TRACKS.map((track) => (
+                                                <div key={track.propName} style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap' }}>
+                                                    <Text style={{ color: '#888', fontSize: compactUi.fieldFontSize, width: 56 }}>
+                                                        {track.label}
+                                                        {hasExactParticleKeyByProp[track.propName] && <span style={{ color: '#52c41a', marginLeft: 4 }}>●</span>}
+                                                    </Text>
+                                                    <InputNumber
+                                                        size="small"
+                                                        min={track.min}
+                                                        max={track.max}
+                                                        step={track.step}
+                                                        precision={track.precision}
+                                                        value={particlePanelInputs[track.propName]}
+                                                        onChange={(value) => handleParticleInputChange(track.propName, value)}
+                                                        style={{ width: 96 }}
+                                                    />
+                                                    <Button
+                                                        size="small"
+                                                        onClick={() => handleInsertSingleParticleDynamicKey(track.propName)}
+                                                        style={{ width: 50, minWidth: 50, padding: '0 6px', backgroundColor: '#333', borderColor: '#555', color: '#ddd' }}
+                                                    >
+                                                        K帧
+                                                    </Button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <div style={{ marginTop: compactUi.controlMarginTop, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                            <Button
+                                                size="small"
+                                                onClick={handleInsertParticleDynamicKeys}
+                                                style={{ backgroundColor: '#333', borderColor: '#555', color: '#ddd' }}
+                                            >
+                                                K粒子
+                                            </Button>
+                                        </div>
+                                    </>
+                                )}
                             </div>
                         </div>
                     )}

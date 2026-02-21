@@ -796,7 +796,10 @@ export class ParticlesController {
     }
 
     public render(mvMatrix: mat4, pMatrix: mat4): void {
-        this.gl.enable(this.gl.CULL_FACE);
+        // Particle quads/tails must be effectively double-sided.
+        // Negative TailLength (valid in Warcraft models) flips winding,
+        // so back-face culling would incorrectly hide them.
+        this.gl.disable(this.gl.CULL_FACE);
         this.gl.useProgram(this.shaderProgram);
 
         this.gl.uniformMatrix4fv(this.shaderProgramLocations.pMatrixUniform, false, pMatrix);
@@ -1481,4 +1484,3 @@ export class ParticlesController {
         this.gl.drawElements(this.gl.TRIANGLES, emitter.particles.length * 6, this.gl.UNSIGNED_SHORT, 0);
     }
 }
-

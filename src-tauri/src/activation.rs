@@ -62,65 +62,26 @@ fn level_to_name(level: u8) -> String {
 // ==========================
 // Machine ID
 // ==========================
-fn get_machine_guid() -> Option<String> {
-    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    let key = hklm
-        .open_subkey("SOFTWARE\\Microsoft\\Cryptography")
-        .ok()?;
-    let guid: String = key.get_value("MachineGuid").ok()?;
-    let trimmed = guid.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    Some(trimmed.to_uppercase())
-}
-
 fn get_wmi_uuid() -> Option<String> {
-    // Legacy machine-id source for backward-compatible license verification.
+    // Execute wmic to get motherboard UUID
     let output = Command::new("cmd")
         .args(["/C", "wmic csproduct get uuid"])
         .output()
         .ok()?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Parse output: first line is "UUID", second line is the actual UUID
     for line in stdout.lines() {
         let trimmed = line.trim();
-        if !trimmed.is_empty() && trimmed != "UUID" && trimmed.len() >= 30 && trimmed.contains('-') {
-            return Some(trimmed.to_uppercase());
+        if !trimmed.is_empty() && trimmed != "UUID" {
+            // Validate it looks like a UUID
+            if trimmed.len() >= 30 && trimmed.contains('-') {
+                return Some(trimmed.to_string());
+            }
         }
     }
     None
-}
-
-fn normalize_machine_id(value: &str) -> String {
-    value.trim().to_uppercase()
-}
-
-fn get_machine_id_candidates() -> Result<Vec<String>, String> {
-    let mut ids: Vec<String> = Vec::new();
-
-    if let Some(machine_guid) = get_machine_guid() {
-        let mid = normalize_machine_id(&machine_guid);
-        if !mid.is_empty() {
-            ids.push(mid);
-        }
-    }
-
-    if let Some(wmi_uuid) = get_wmi_uuid() {
-        let mid = normalize_machine_id(&wmi_uuid);
-        if !mid.is_empty() && !ids.iter().any(|id| id == &mid) {
-            ids.push(mid);
-        }
-    }
-
-    if ids.is_empty() {
-        let fallback = normalize_machine_id(&get_or_create_fallback_uuid()?);
-        if !fallback.is_empty() {
-            ids.push(fallback);
-        }
-    }
-
-    Ok(ids)
 }
 
 fn get_or_create_fallback_uuid() -> Result<String, String> {
@@ -147,9 +108,9 @@ fn get_or_create_fallback_uuid() -> Result<String, String> {
 }
 
 pub fn get_machine_id() -> Result<String, String> {
-    // Prefer MachineGuid from registry to avoid spawning external processes.
-    if let Some(machine_guid) = get_machine_guid() {
-        return Ok(machine_guid);
+    // Try WMI first
+    if let Some(uuid) = get_wmi_uuid() {
+        return Ok(uuid);
     }
 
     // Fallback to registry-persisted UUID
@@ -264,9 +225,8 @@ pub fn verify_license(license_code: &str) -> Result<LicensePayload, String> {
         serde_json::from_str(&payload_str).map_err(|_| "激活码数据解析失败".to_string())?;
 
     // Verify machine ID
-    let payload_mid = normalize_machine_id(&payload.mid);
-    let machine_ids = get_machine_id_candidates()?;
-    if !machine_ids.iter().any(|mid| mid == &payload_mid) {
+    let current_mid = get_machine_id()?;
+    if payload.mid != current_mid {
         return Err("激活码与本机不匹配".to_string());
     }
 

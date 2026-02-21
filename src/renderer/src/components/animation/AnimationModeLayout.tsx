@@ -24,7 +24,7 @@ const AnimationModeLayout: React.FC<AnimationModeLayoutProps> = ({
         }
     }, [isActive, isBindingMode, setPlaying])
 
-    const LEFT_PANEL_WIDTH = 250
+    const LEFT_PANEL_WIDTH = 300
     const BOTTOM_PANEL_HEIGHT = 180
 
     const actualBottomHeight = isBindingMode ? 0 : BOTTOM_PANEL_HEIGHT
@@ -75,11 +75,11 @@ const AnimationModeLayout: React.FC<AnimationModeLayoutProps> = ({
                         }}
                     >
                         {!isBindingMode && (
-                            <div style={{ flex: 0.75, overflow: 'auto', borderBottom: '1px solid #444' }}>
+                            <div style={{ flex: '0 0 132px', overflowY: 'auto', overflowX: 'hidden', borderBottom: '1px solid #444' }}>
                                 <SequenceManager />
                             </div>
                         )}
-                        <div style={{ flex: isBindingMode ? 1 : 1.75, overflow: 'auto' }}>
+                        <div style={{ flex: 1, overflow: 'hidden' }}>
                             <BoneParameterPanel />
                         </div>
                     </div>

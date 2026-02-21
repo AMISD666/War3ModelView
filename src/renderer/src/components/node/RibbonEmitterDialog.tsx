@@ -200,19 +200,40 @@ const RibbonEmitterDialog: React.FC<RibbonEmitterDialogProps> = ({ visible, node
             const values = await form.validateFields();
             if (!currentNode || nodeId === null) return;
 
+            const currentAny = currentNode as any;
+            const toFiniteNumber = (val: any, fallback: number): number =>
+                (typeof val === 'number' && Number.isFinite(val)) ? val : fallback;
+            const preserveAnimOrUseStatic = (prop: string, formVal: any, fallback: number): any => {
+                // This dialog currently has no curve editor for dynamic fields.
+                // If a field is marked dynamic and already stores an AnimVector, keep it unchanged.
+                if (dynamicProps[prop] && isAnimVector(currentAny[prop])) {
+                    return currentAny[prop];
+                }
+                return toFiniteNumber(formVal, fallback);
+            };
+
+            const rows = Math.max(1, Math.round(
+                toFiniteNumber(values.Rows, toFiniteNumber(currentAny.Rows, 1))
+            ));
+            const columns = Math.max(1, Math.round(
+                toFiniteNumber(values.Columns, toFiniteNumber(currentAny.Columns, 1))
+            ));
+            const materialIdRaw = toFiniteNumber(values.MaterialID, toFiniteNumber(currentAny.MaterialID, 0));
+
             const updatedNode: RibbonEmitterNode = {
                 ...currentNode,
-                HeightAbove: values.HeightAbove,
-                HeightBelow: values.HeightBelow,
-                Alpha: values.Alpha,
-                Color: fromAntdColor(values.Color),
-                TextureSlot: values.TextureSlot,
-                EmissionRate: values.EmissionRate,
-                MaterialID: values.MaterialID >= 0 ? values.MaterialID : undefined,
-                LifeSpan: values.LifeSpan,
-                Rows: values.Rows,
-                Columns: values.Columns,
-                Gravity: values.Gravity,
+                HeightAbove: preserveAnimOrUseStatic('HeightAbove', values.HeightAbove, getStaticOrDefault(currentAny.HeightAbove, 0)),
+                HeightBelow: preserveAnimOrUseStatic('HeightBelow', values.HeightBelow, getStaticOrDefault(currentAny.HeightBelow, 0)),
+                Alpha: preserveAnimOrUseStatic('Alpha', values.Alpha, getStaticOrDefault(currentAny.Alpha, 1)),
+                Visibility: preserveAnimOrUseStatic('Visibility', values.Visibility, getStaticOrDefault(currentAny.Visibility, 1)),
+                Color: (dynamicProps.Color && isAnimVector(currentAny.Color)) ? currentAny.Color : fromAntdColor(values.Color),
+                TextureSlot: preserveAnimOrUseStatic('TextureSlot', values.TextureSlot, getStaticOrDefault(currentAny.TextureSlot, 0)),
+                EmissionRate: toFiniteNumber(values.EmissionRate, toFiniteNumber(currentAny.EmissionRate, 10)),
+                MaterialID: materialIdRaw >= 0 ? materialIdRaw : undefined,
+                LifeSpan: toFiniteNumber(values.LifeSpan, toFiniteNumber(currentAny.LifeSpan, 1)),
+                Rows: rows,
+                Columns: columns,
+                Gravity: toFiniteNumber(values.Gravity, toFiniteNumber(currentAny.Gravity, 0)),
             };
 
             updateNode(nodeId, updatedNode);

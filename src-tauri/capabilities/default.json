@@ -3,15 +3,7 @@
     "identifier": "default",
     "description": "Capability for the main window",
     "windows": [
-        "main",
-        "texture_editor_window",
-        "manager_window_camera",
-        "manager_window_geoset",
-        "manager_window_geosetAnim",
-        "manager_window_textureAnim",
-        "manager_window_material",
-        "manager_window_sequence",
-        "manager_window_globalSequence"
+        "main"
     ],
     "permissions": [
         "fs:default",
@@ -40,18 +32,10 @@
             ]
         },
         "core:webview:allow-internal-toggle-devtools",
-        "core:webview:allow-create-webview-window",
-        "core:webview:allow-get-all-webviews",
         "core:event:default",
         "core:app:allow-version",
         "core:window:allow-close",
-        "core:window:allow-create",
         "core:window:allow-destroy",
-        "core:window:allow-get-all-windows",
-        "core:window:allow-set-focus",
-        "core:window:allow-hide",
-        "core:window:allow-show",
-        "core:window:allow-is-visible",
         "core:path:default",
         "process:allow-exit",
         {

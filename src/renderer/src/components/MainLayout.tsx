@@ -31,241 +31,7 @@ import { showMessage, showConfirm } from '../store/messageStore'
 import { registerShortcutHandler } from '../shortcuts/manager'
 import { checkGiteeUpdate, showChangelog as showUpdateLog, checkGiteeUpdateSilent } from '../services/updateService';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { emitTo, listen } from '@tauri-apps/api/event';
 import { Button, Modal } from 'antd';
-import {
-    DETACHED_CAMERA_EVENTS,
-    DETACHED_MANAGER_TYPES,
-    DETACHED_MANAGER_EVENTS,
-    DetachedCameraViewPayload,
-    DetachedManagerApplyPayload,
-    DetachedManagerLifecyclePayload,
-    DetachedManagerRequestSnapshotPayload,
-    DetachedManagerType,
-    DETACHED_TEXTURE_EDITOR_EVENTS,
-    DETACHED_TEXTURE_EDITOR_LABEL,
-    DETACHED_TEXTURE_EDITOR_QUERY,
-    DetachedTextureDeltaOp,
-    DetachedTextureEditorDeltaPayload,
-    DetachedTextureEditorApplyPayload,
-    getDetachedManagerLabel,
-    getDetachedManagerQuery
-} from '../constants/detachedWindows';
-
-type DetachedSnapshotField = {
-    key: string
-    aliases?: string[]
-}
-
-const readDetachedFieldValue = (source: any, field: DetachedSnapshotField): any => {
-    if (!source || typeof source !== 'object') return undefined
-    if (Object.prototype.hasOwnProperty.call(source, field.key)) {
-        return source[field.key]
-    }
-    for (const alias of field.aliases || []) {
-        if (Object.prototype.hasOwnProperty.call(source, alias)) {
-            return source[alias]
-        }
-    }
-    return undefined
-}
-
-const coerceDetachedArray = (value: any): any[] | null => {
-    if (Array.isArray(value)) return value
-    if (!value || typeof value !== 'object') return null
-    const numericKeys = Object.keys(value).filter((key) => /^\d+$/.test(key))
-    if (numericKeys.length === 0) return null
-    return numericKeys
-        .map((key) => Number(key))
-        .sort((a, b) => a - b)
-        .map((index) => value[index])
-}
-
-const toSlimGeoset = (geoset: any) => ({
-    MaterialID: typeof geoset?.MaterialID === 'number' ? geoset.MaterialID : 0,
-    SelectionGroup: typeof geoset?.SelectionGroup === 'number' ? geoset.SelectionGroup : 0,
-    VertexCount: ArrayBuffer.isView(geoset?.Vertices) || Array.isArray(geoset?.Vertices)
-        ? Math.floor((geoset.Vertices.length || 0) / 3)
-        : 0,
-    FaceCount: ArrayBuffer.isView(geoset?.Faces) || Array.isArray(geoset?.Faces)
-        ? Math.floor((geoset.Faces.length || 0) / 3)
-        : 0
-})
-
-const toSlimMaterialsForTextureAnim = (materials: any[]): any[] => {
-    if (!Array.isArray(materials)) return []
-    return materials.map((material) => ({
-        Layers: Array.isArray(material?.Layers)
-            ? material.Layers.map((layer: any) => ({
-                TVertexAnimId: layer?.TVertexAnimId ?? layer?.TextureAnimationId ?? layer?.TextureAnimId ?? null
-            }))
-            : []
-    }))
-}
-
-const DETACHED_MANAGER_SEQUENCE_FIELDS: DetachedSnapshotField[] = [
-    { key: 'Sequences', aliases: ['Sequence'] }
-]
-
-const buildDetachedManagerSnapshotModelData = (managerType: DetachedManagerType, source: any): any => {
-    if (!source || typeof source !== 'object') return null
-
-    switch (managerType) {
-        case 'camera':
-            return {
-                Cameras: readDetachedFieldValue(source, { key: 'Cameras', aliases: ['Camera'] }) || [],
-                GlobalSequences: readDetachedFieldValue(source, { key: 'GlobalSequences', aliases: ['GlobalSequence'] }) || []
-            }
-        case 'geoset': {
-            const geosets = readDetachedFieldValue(source, { key: 'Geosets', aliases: ['Geoset'] }) || []
-            const materials = readDetachedFieldValue(source, { key: 'Materials', aliases: ['Material'] }) || []
-            return {
-                Geosets: Array.isArray(geosets) ? geosets.map(toSlimGeoset) : [],
-                Materials: Array.isArray(materials) ? materials.map(() => ({})) : []
-            }
-        }
-        case 'geosetAnim': {
-            const geosetAnims = readDetachedFieldValue(source, { key: 'GeosetAnims', aliases: ['GeosetAnim'] }) || []
-            const geosets = readDetachedFieldValue(source, { key: 'Geosets', aliases: ['Geoset'] }) || []
-            const globalSequences = readDetachedFieldValue(source, { key: 'GlobalSequences', aliases: ['GlobalSequence'] }) || []
-            return {
-                GeosetAnims: Array.isArray(geosetAnims) ? geosetAnims : [],
-                Geosets: Array.isArray(geosets) ? geosets.map(toSlimGeoset) : [],
-                GlobalSequences: Array.isArray(globalSequences) ? globalSequences : []
-            }
-        }
-        case 'textureAnim': {
-            const textureAnims = readDetachedFieldValue(source, { key: 'TextureAnims', aliases: ['TextureAnim'] }) || []
-            const geosets = readDetachedFieldValue(source, { key: 'Geosets', aliases: ['Geoset'] }) || []
-            const materials = readDetachedFieldValue(source, { key: 'Materials', aliases: ['Material'] }) || []
-            const globalSequences = readDetachedFieldValue(source, { key: 'GlobalSequences', aliases: ['GlobalSequence'] }) || []
-            return {
-                TextureAnims: Array.isArray(textureAnims) ? textureAnims : [],
-                Geosets: Array.isArray(geosets) ? geosets.map(toSlimGeoset) : [],
-                Materials: toSlimMaterialsForTextureAnim(materials),
-                GlobalSequences: Array.isArray(globalSequences) ? globalSequences : []
-            }
-        }
-        case 'material': {
-            const materials = readDetachedFieldValue(source, { key: 'Materials', aliases: ['Material'] }) || []
-            const textures = readDetachedFieldValue(source, { key: 'Textures', aliases: ['Texture'] }) || []
-            const geosets = readDetachedFieldValue(source, { key: 'Geosets', aliases: ['Geoset'] }) || []
-            const textureAnims = readDetachedFieldValue(source, { key: 'TextureAnims', aliases: ['TextureAnim'] }) || []
-            const globalSequences = readDetachedFieldValue(source, { key: 'GlobalSequences', aliases: ['GlobalSequence'] }) || []
-            return {
-                Materials: Array.isArray(materials) ? materials : [],
-                Textures: Array.isArray(textures) ? textures : [],
-                Geosets: Array.isArray(geosets) ? geosets.map(toSlimGeoset) : [],
-                TextureAnims: Array.isArray(textureAnims) ? textureAnims : [],
-                GlobalSequences: Array.isArray(globalSequences) ? globalSequences : []
-            }
-        }
-        case 'sequence': {
-            const snapshot: any = {}
-            for (const field of DETACHED_MANAGER_SEQUENCE_FIELDS) {
-                const value = readDetachedFieldValue(source, field)
-                if (value !== undefined) {
-                    snapshot[field.key] = value
-                }
-            }
-            return snapshot
-        }
-        case 'globalSequence':
-            return {
-                GlobalSequences: readDetachedFieldValue(source, { key: 'GlobalSequences', aliases: ['GlobalSequence'] }) || []
-            }
-        default:
-            return null
-    }
-}
-
-const mergeGeosetBindings = (
-    baseGeosets: any[] | undefined,
-    incomingGeosets: any[] | undefined,
-    options: { includeSelectionGroup: boolean }
-): any[] => {
-    if (!Array.isArray(baseGeosets)) return Array.isArray(incomingGeosets) ? incomingGeosets : []
-    if (!Array.isArray(incomingGeosets)) return baseGeosets
-
-    const nextGeosets = [...baseGeosets]
-    const count = Math.min(nextGeosets.length, incomingGeosets.length)
-    for (let index = 0; index < count; index++) {
-        const incoming = incomingGeosets[index]
-        if (!incoming || typeof incoming !== 'object') continue
-        const patch: any = {}
-        if (typeof incoming.MaterialID === 'number') {
-            patch.MaterialID = incoming.MaterialID
-        }
-        if (options.includeSelectionGroup && typeof incoming.SelectionGroup === 'number') {
-            patch.SelectionGroup = incoming.SelectionGroup
-        }
-        if (Object.keys(patch).length > 0) {
-            nextGeosets[index] = { ...nextGeosets[index], ...patch }
-        }
-    }
-    return nextGeosets
-}
-
-const mergeDetachedManagerModelData = (
-    managerType: DetachedManagerType,
-    baseModelData: any,
-    incomingModelData: any
-): any => {
-    if (!incomingModelData) return baseModelData
-    if (!baseModelData) return incomingModelData
-
-    const merged = { ...baseModelData }
-
-    switch (managerType) {
-        case 'camera': {
-            const cameras = readDetachedFieldValue(incomingModelData, { key: 'Cameras', aliases: ['Camera'] })
-            if (cameras !== undefined) merged.Cameras = cameras
-            return merged
-        }
-        case 'geoset': {
-            const geosets = readDetachedFieldValue(incomingModelData, { key: 'Geosets', aliases: ['Geoset'] })
-            merged.Geosets = mergeGeosetBindings(baseModelData.Geosets, geosets, { includeSelectionGroup: true })
-            return merged
-        }
-        case 'geosetAnim': {
-            const geosetAnims = readDetachedFieldValue(incomingModelData, { key: 'GeosetAnims', aliases: ['GeosetAnim'] })
-            if (geosetAnims !== undefined) merged.GeosetAnims = geosetAnims
-            return merged
-        }
-        case 'textureAnim': {
-            const textureAnims = readDetachedFieldValue(incomingModelData, { key: 'TextureAnims', aliases: ['TextureAnim'] })
-            if (textureAnims !== undefined) merged.TextureAnims = textureAnims
-            return merged
-        }
-        case 'material': {
-            const materials = readDetachedFieldValue(incomingModelData, { key: 'Materials', aliases: ['Material'] })
-            const textures = readDetachedFieldValue(incomingModelData, { key: 'Textures', aliases: ['Texture'] })
-            const geosets = readDetachedFieldValue(incomingModelData, { key: 'Geosets', aliases: ['Geoset'] })
-
-            if (materials !== undefined) merged.Materials = materials
-            if (textures !== undefined) merged.Textures = textures
-            merged.Geosets = mergeGeosetBindings(baseModelData.Geosets, geosets, { includeSelectionGroup: false })
-            return merged
-        }
-        case 'sequence': {
-            for (const field of DETACHED_MANAGER_SEQUENCE_FIELDS) {
-                const value = readDetachedFieldValue(incomingModelData, field)
-                if (value !== undefined) {
-                    merged[field.key] = value
-                }
-            }
-            return merged
-        }
-        case 'globalSequence': {
-            const globalSequences = readDetachedFieldValue(incomingModelData, { key: 'GlobalSequences', aliases: ['GlobalSequence'] })
-            if (globalSequences !== undefined) merged.GlobalSequences = globalSequences
-            return merged
-        }
-        default:
-            return merged
-    }
-}
 
 /**
  * Normalize model data before saving to ensure typed arrays are correct.
@@ -1868,12 +1634,6 @@ const MainLayout: React.FC = () => {
     const handleSaveRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false))
     const handleSaveAsRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false))
     const handleCopyModelRef = useRef<() => void>(() => { })
-    const detachedTextureWindowPromiseRef = useRef<Promise<WebviewWindow> | null>(null)
-    const detachedManagerWindowPromiseRef = useRef<Partial<Record<DetachedManagerType, Promise<WebviewWindow> | null>>>({})
-    const detachedManagerHydratedRef = useRef<Partial<Record<DetachedManagerType, boolean>>>({})
-    const detachedTextureSyncRevisionRef = useRef(0)
-    const detachedTextureLastSyncedModelPathRef = useRef<string | undefined>(undefined)
-    const detachedTextureLastSyncedTexturesRef = useRef<any[]>([])
     const openModelAsTab = useCallback((filePath: string) => {
         console.log('[MainLayout] Opening model as tab:', filePath)
         setIsLoading(true)
@@ -1885,628 +1645,6 @@ const MainLayout: React.FC = () => {
         }
         return added
     }, [addTab])
-    const hasModelData = Boolean(modelData)
-
-    const cloneTexturesForSync = useCallback((textures: any[]): any[] => {
-        try {
-            if (typeof structuredClone === 'function') {
-                return structuredClone(textures)
-            }
-        } catch {
-            // Fallback to JSON clone.
-        }
-        return JSON.parse(JSON.stringify(textures))
-    }, [])
-
-    const getTextureSignature = useCallback((texture: any): string => {
-        if (texture === null || texture === undefined) return String(texture)
-        if (typeof texture !== 'object') return String(texture)
-        try {
-            return JSON.stringify(texture)
-        } catch {
-            return `${texture.Image ?? ''}|${texture.ReplaceableId ?? ''}|${texture.Flags ?? ''}`
-        }
-    }, [])
-
-    const buildTextureDeltaOps = useCallback((previousTextures: any[], nextTextures: any[]): DetachedTextureDeltaOp[] => {
-        const ops: DetachedTextureDeltaOp[] = []
-        const previousLength = previousTextures.length
-        const nextLength = nextTextures.length
-        const commonLength = Math.min(previousLength, nextLength)
-
-        for (let index = 0; index < commonLength; index++) {
-            if (getTextureSignature(previousTextures[index]) !== getTextureSignature(nextTextures[index])) {
-                ops.push({
-                    type: 'update',
-                    index,
-                    texture: nextTextures[index]
-                })
-            }
-        }
-
-        if (nextLength > previousLength) {
-            for (let index = previousLength; index < nextLength; index++) {
-                ops.push({
-                    type: 'add',
-                    index,
-                    texture: nextTextures[index]
-                })
-            }
-        } else if (nextLength < previousLength) {
-            for (let index = previousLength - 1; index >= nextLength; index--) {
-                ops.push({
-                    type: 'remove',
-                    index
-                })
-            }
-        }
-
-        return ops
-    }, [getTextureSignature])
-
-    const emitTextureSnapshotToDetachedWindow = useCallback(async (textures?: any[], path?: string) => {
-        const state = useModelStore.getState()
-        const syncTextures = Array.isArray(textures)
-            ? textures
-            : (Array.isArray(state.modelData?.Textures) ? state.modelData?.Textures : [])
-        const syncPath = path ?? state.modelPath ?? undefined
-        const revision = ++detachedTextureSyncRevisionRef.current
-
-        await emitTo(DETACHED_TEXTURE_EDITOR_LABEL, DETACHED_TEXTURE_EDITOR_EVENTS.snapshot, {
-            textures: syncTextures,
-            modelPath: syncPath,
-            revision
-        })
-
-        detachedTextureLastSyncedModelPathRef.current = syncPath
-        detachedTextureLastSyncedTexturesRef.current = cloneTexturesForSync(syncTextures)
-    }, [cloneTexturesForSync])
-
-    const emitTextureDeltaToDetachedWindow = useCallback(async (payload: DetachedTextureEditorDeltaPayload) => {
-        if (!Array.isArray(payload.ops) || payload.ops.length === 0) {
-            return
-        }
-        await emitTo(DETACHED_TEXTURE_EDITOR_LABEL, DETACHED_TEXTURE_EDITOR_EVENTS.delta, payload)
-    }, [])
-
-    const ensureDetachedTextureEditorWindow = useCallback(async (showOnReady: boolean) => {
-        let windowInstance = await WebviewWindow.getByLabel(DETACHED_TEXTURE_EDITOR_LABEL)
-
-        if (!windowInstance) {
-            if (!detachedTextureWindowPromiseRef.current) {
-                detachedTextureWindowPromiseRef.current = (async () => {
-                    const detachedWindow = new WebviewWindow(DETACHED_TEXTURE_EDITOR_LABEL, {
-                        title: '纹理管理器',
-                        url: `/?detached=${DETACHED_TEXTURE_EDITOR_QUERY}`,
-                        width: 820,
-                        height: 660,
-                        minWidth: 700,
-                        minHeight: 500,
-                        center: false,
-                        focus: false,
-                        visible: false,
-                        resizable: true
-                    })
-
-                    await new Promise<void>((resolve, reject) => {
-                        detachedWindow.once('tauri://created', () => resolve())
-                        detachedWindow.once('tauri://error', (error) => reject(error))
-                    })
-
-                    return detachedWindow
-                })().finally(() => {
-                    detachedTextureWindowPromiseRef.current = null
-                })
-            }
-
-            windowInstance = await detachedTextureWindowPromiseRef.current
-        }
-
-        if (!windowInstance) {
-            throw new Error('Failed to create detached texture window')
-        }
-
-        if (showOnReady) {
-            await windowInstance.show()
-            await windowInstance.setFocus()
-            emitTextureSnapshotToDetachedWindow().catch((error) => {
-                console.error('[MainLayout] detached texture snapshot failed:', error)
-            })
-        } else {
-            emitTextureSnapshotToDetachedWindow().catch((error) => {
-                console.error('[MainLayout] detached texture prewarm snapshot failed:', error)
-            })
-        }
-
-        return windowInstance
-    }, [emitTextureSnapshotToDetachedWindow])
-
-    const openDetachedTextureEditor = useCallback(async () => {
-        try {
-            setShowTextureModal(false)
-            await ensureDetachedTextureEditorWindow(true)
-        } catch (error) {
-            console.error('[MainLayout] openDetachedTextureEditor failed:', error)
-            showMessage('error', '错误', '无法打开独立纹理管理器窗口')
-        }
-    }, [ensureDetachedTextureEditorWindow])
-
-    const getDetachedManagerWindowTitle = useCallback((managerType: DetachedManagerType): string => {
-        const windowTitles: Record<DetachedManagerType, string> = {
-            camera: '镜头管理器',
-            geoset: '多边形管理器',
-            geosetAnim: '多边形动画管理器',
-            textureAnim: '贴图动画管理器',
-            material: '材质管理器',
-            sequence: '模型动作管理器',
-            globalSequence: '模型全局动作管理器'
-        }
-        return windowTitles[managerType]
-    }, [])
-
-    const ensureDetachedManagerWindow = useCallback(async (managerType: DetachedManagerType, showOnReady: boolean) => {
-        const MANAGER_WINDOW_DIMENSIONS: Record<string, { width: number; height: number; minWidth: number; minHeight: number }> = {
-            'material-editor': { width: 700, height: 520, minWidth: 600, minHeight: 400 },
-            'geoset-editor': { width: 580, height: 450, minWidth: 480, minHeight: 350 },
-            'sequence-editor': { width: 550, height: 450, minWidth: 450, minHeight: 350 },
-            'global-sequence': { width: 300, height: 240, minWidth: 260, minHeight: 180 },
-            'camera-manager': { width: 580, height: 450, minWidth: 480, minHeight: 350 },
-            'geoset-animation': { width: 580, height: 450, minWidth: 480, minHeight: 350 },
-            'texture-animation': { width: 550, height: 420, minWidth: 450, minHeight: 320 },
-        }
-
-        const dimensions = MANAGER_WINDOW_DIMENSIONS[managerType] || { width: 700, height: 520, minWidth: 600, minHeight: 400 }
-
-        const windowLabel = getDetachedManagerLabel(managerType)
-        const windowQuery = getDetachedManagerQuery(managerType)
-        const windowTitle = getDetachedManagerWindowTitle(managerType)
-
-        let windowInstance = await WebviewWindow.getByLabel(windowLabel)
-        const hadExistingWindow = Boolean(windowInstance)
-
-        if (!windowInstance) {
-            detachedManagerHydratedRef.current[managerType] = false
-            if (!detachedManagerWindowPromiseRef.current[managerType]) {
-                detachedManagerWindowPromiseRef.current[managerType] = (async () => {
-                    const windowOptions: any = {
-                        title: windowTitle,
-                        url: `/?detached=${windowQuery}`,
-                        width: dimensions.width,
-                        height: dimensions.height,
-                        minWidth: dimensions.minWidth,
-                        minHeight: dimensions.minHeight,
-                        center: false,
-                        focus: false,
-                        visible: false,
-                        resizable: true,
-                        backgroundColor: '#1f1f1f'
-                    }
-                    const detachedWindow = new WebviewWindow(windowLabel, windowOptions)
-
-                    await new Promise<void>((resolve, reject) => {
-                        detachedWindow.once('tauri://created', () => resolve())
-                        detachedWindow.once('tauri://error', (error) => reject(error))
-                    })
-
-                    return detachedWindow
-                })().finally(() => {
-                    detachedManagerWindowPromiseRef.current[managerType] = null
-                })
-            }
-
-            windowInstance = await detachedManagerWindowPromiseRef.current[managerType]
-        }
-
-        if (!windowInstance) {
-            throw new Error(`Failed to create detached manager window: ${managerType}`)
-        }
-
-        const pushSnapshot = async () => {
-            const { modelData: currentModelData, modelPath: currentModelPath } = useModelStore.getState()
-            if (!currentModelData) return
-            const snapshotModelData = buildDetachedManagerSnapshotModelData(managerType, currentModelData)
-            if (!snapshotModelData) return
-
-            try {
-                await emitTo(windowLabel, DETACHED_MANAGER_EVENTS.snapshot, {
-                    managerType,
-                    modelData: snapshotModelData,
-                    modelPath: currentModelPath || undefined
-                })
-                return
-            } catch {
-                // Fallback to serializable clone path.
-            }
-
-            let serializableModelData: any = null
-            try {
-                if (typeof structuredClone === 'function') {
-                    serializableModelData = structuredClone(snapshotModelData)
-                }
-            } catch {
-                // Fallback to JSON clone.
-            }
-            if (!serializableModelData) {
-                try {
-                    serializableModelData = JSON.parse(JSON.stringify(snapshotModelData))
-                } catch {
-                    serializableModelData = null
-                }
-            }
-            if (!serializableModelData) return
-
-            await emitTo(windowLabel, DETACHED_MANAGER_EVENTS.snapshot, {
-                managerType,
-                modelData: serializableModelData,
-                modelPath: currentModelPath || undefined
-            })
-        }
-
-        if (showOnReady) {
-            await windowInstance.show()
-            await windowInstance.setFocus()
-        }
-        // New windows receive snapshot via "ready" handshake from detached side.
-        // Existing hidden windows need an immediate refresh when reopened.
-        const shouldPushSnapshotNow =
-            (showOnReady && hadExistingWindow) ||
-            detachedManagerHydratedRef.current[managerType] === true
-        if (shouldPushSnapshotNow) {
-            pushSnapshot().catch((error) => {
-                console.warn(`[MainLayout] detached manager snapshot push failed (${managerType}):`, error)
-            })
-        }
-
-        return windowInstance
-    }, [getDetachedManagerWindowTitle])
-
-    const openDetachedManagerWindow = useCallback(async (managerType: DetachedManagerType) => {
-        try {
-            await ensureDetachedManagerWindow(managerType, true)
-        } catch (error) {
-            console.error(`[MainLayout] openDetachedManagerWindow failed (${managerType}):`, error)
-            showMessage('error', '错误', '无法打开独立管理器窗口')
-        }
-    }, [ensureDetachedManagerWindow])
-
-    const toDetachedSerializableModelData = useCallback((data: any) => {
-        if (!data) return null
-        try {
-            if (typeof structuredClone === 'function') {
-                return structuredClone(data)
-            }
-        } catch {
-            // Fallback to JSON clone.
-        }
-        try {
-            return JSON.parse(JSON.stringify(data))
-        } catch (error) {
-            console.error('[MainLayout] model snapshot serialization failed:', error)
-            return null
-        }
-    }, [])
-
-    const emitManagerSnapshot = useCallback(async (managerType: DetachedManagerType, targetLabel?: string) => {
-        const { modelData: currentModelData, modelPath: currentModelPath } = useModelStore.getState()
-        if (!currentModelData) return
-        const snapshotModelData = buildDetachedManagerSnapshotModelData(managerType, currentModelData)
-        if (!snapshotModelData) return
-
-        const label = targetLabel ?? getDetachedManagerLabel(managerType)
-        try {
-            await emitTo(label, DETACHED_MANAGER_EVENTS.snapshot, {
-                managerType,
-                modelData: snapshotModelData,
-                modelPath: currentModelPath || undefined
-            })
-            return
-        } catch (error) {
-            console.warn(`[MainLayout] manager raw snapshot failed, fallback clone (${managerType}):`, error)
-        }
-
-        const serializableModelData = toDetachedSerializableModelData(snapshotModelData)
-        if (!serializableModelData) return
-        await emitTo(label, DETACHED_MANAGER_EVENTS.snapshot, {
-            managerType,
-            modelData: serializableModelData,
-            modelPath: currentModelPath || undefined
-        })
-    }, [toDetachedSerializableModelData])
-
-    const closeAuxiliaryWindows = useCallback(async () => {
-        try {
-            const allWindows = await WebviewWindow.getAll()
-            const childWindows = allWindows.filter((window) => window.label !== 'main')
-            await Promise.all(
-                childWindows.map(async (window) => {
-                    try {
-                        await window.destroy()
-                    } catch (error) {
-                        console.warn(`[MainLayout] failed to destroy child window "${window.label}", fallback to close:`, error)
-                        try {
-                            await window.close()
-                        } catch (closeError) {
-                            console.warn(`[MainLayout] failed to close child window "${window.label}":`, closeError)
-                        }
-                    }
-                })
-            )
-            detachedManagerHydratedRef.current = {}
-        } catch (error) {
-            console.error('[MainLayout] closeAuxiliaryWindows failed:', error)
-        }
-    }, [])
-
-    useEffect(() => {
-        let unlistenSnapshotRequest: (() => void) | null = null
-        let unlistenApply: (() => void) | null = null
-
-        const setup = async () => {
-            unlistenSnapshotRequest = await listen(
-                DETACHED_TEXTURE_EDITOR_EVENTS.requestSnapshot,
-                async () => {
-                    await emitTextureSnapshotToDetachedWindow()
-                }
-            )
-
-            unlistenApply = await listen<DetachedTextureEditorApplyPayload>(
-                DETACHED_TEXTURE_EDITOR_EVENTS.apply,
-                async (event) => {
-                    const textures = Array.isArray(event.payload?.textures) ? event.payload.textures : []
-                    const { modelData, setTextures } = useModelStore.getState()
-                    if (!modelData) {
-                        showMessage('warning', '提示', '当前没有可编辑的模型')
-                        return
-                    }
-                    setTextures(textures)
-                    showMessage('success', '成功', '纹理修改已应用')
-                    await emitTextureSnapshotToDetachedWindow()
-                }
-            )
-        }
-
-        setup().catch((error) => {
-            console.error('[MainLayout] detached texture listeners setup failed:', error)
-        })
-
-        return () => {
-            unlistenSnapshotRequest?.()
-            unlistenApply?.()
-        }
-    }, [emitTextureSnapshotToDetachedWindow])
-
-    useEffect(() => {
-        let unlistenSnapshotRequest: (() => void) | null = null
-        let unlistenApply: (() => void) | null = null
-        let unlistenReady: (() => void) | null = null
-        let unlistenHydrated: (() => void) | null = null
-
-        const setup = async () => {
-            unlistenSnapshotRequest = await listen<DetachedManagerRequestSnapshotPayload>(
-                DETACHED_MANAGER_EVENTS.requestSnapshot,
-                async (event) => {
-                    const managerType = event.payload?.managerType
-                    if (!managerType) return
-                    const fallbackLabel = getDetachedManagerLabel(managerType)
-                    await emitManagerSnapshot(managerType, event.payload?.windowLabel || fallbackLabel)
-                }
-            )
-
-            unlistenApply = await listen<DetachedManagerApplyPayload>(
-                DETACHED_MANAGER_EVENTS.apply,
-                async (event) => {
-                    const managerType = event.payload?.managerType
-                    const nextModelData = event.payload?.modelData
-                    if (!managerType || !nextModelData) return
-
-                    // Sequence edits should only touch Sequences. Applying full model back can
-                    // trigger node rebuild paths and corrupt ObjectId mapping.
-                    if (managerType === 'sequence') {
-                        const sequencesRaw = readDetachedFieldValue(nextModelData, { key: 'Sequences', aliases: ['Sequence'] })
-                        const sequences = coerceDetachedArray(sequencesRaw)
-                        if (sequences) {
-                            const { setSequences } = useModelStore.getState()
-                            setSequences(sequences)
-                        }
-                        return
-                    }
-
-                    const { setModelData, modelPath: currentModelPath, modelData: currentModelData } = useModelStore.getState()
-                    const mergedModelData = mergeDetachedManagerModelData(
-                        managerType,
-                        currentModelData,
-                        nextModelData
-                    )
-                    if (!mergedModelData) return
-                    const shouldFastApply = managerType !== 'sequence'
-                    setModelData(mergedModelData, currentModelPath || event.payload?.modelPath || null, {
-                        skipAutoRecalculate: true,
-                        skipModelRebuild: shouldFastApply
-                    })
-                }
-            )
-
-            unlistenReady = await listen<DetachedManagerLifecyclePayload>(
-                DETACHED_MANAGER_EVENTS.ready,
-                async (event) => {
-                    const managerType = event.payload?.managerType
-                    if (!managerType) return
-                    if (detachedManagerHydratedRef.current[managerType] === undefined) {
-                        detachedManagerHydratedRef.current[managerType] = false
-                    }
-                    try {
-                        await emitManagerSnapshot(
-                            managerType,
-                            event.payload?.windowLabel || getDetachedManagerLabel(managerType)
-                        )
-                    } catch (error) {
-                        console.warn(`[MainLayout] detached manager ready snapshot failed (${managerType}):`, error)
-                    }
-                }
-            )
-
-            unlistenHydrated = await listen<DetachedManagerLifecyclePayload>(
-                DETACHED_MANAGER_EVENTS.hydrated,
-                (event) => {
-                    const managerType = event.payload?.managerType
-                    if (!managerType) return
-                    detachedManagerHydratedRef.current[managerType] = true
-                }
-            )
-        }
-
-        setup().catch((error) => {
-            console.error('[MainLayout] detached manager listeners setup failed:', error)
-        })
-
-        return () => {
-            unlistenSnapshotRequest?.()
-            unlistenApply?.()
-            unlistenReady?.()
-            unlistenHydrated?.()
-        }
-    }, [emitManagerSnapshot])
-
-    useEffect(() => {
-        const timer = window.setTimeout(() => {
-            const syncAllOpenManagerWindows = async () => {
-                await Promise.all(
-                    DETACHED_MANAGER_TYPES.map(async (managerType) => {
-                        const managerLabel = getDetachedManagerLabel(managerType)
-                        const managerWindow = await WebviewWindow.getByLabel(managerLabel)
-                        if (!managerWindow) return
-                        const isVisible = await managerWindow.isVisible()
-                        if (!isVisible) return
-                        await emitManagerSnapshot(managerType, managerLabel)
-                    })
-                )
-            }
-
-            syncAllOpenManagerWindows().catch((error) => {
-                console.error('[MainLayout] detached manager sync failed:', error)
-            })
-        }, 160)
-
-        return () => window.clearTimeout(timer)
-    }, [modelPath, modelData, emitManagerSnapshot])
-
-    useEffect(() => {
-        const timer = window.setTimeout(() => {
-            const syncIfOpen = async () => {
-                const detachedWindow = await WebviewWindow.getByLabel(DETACHED_TEXTURE_EDITOR_LABEL)
-                if (!detachedWindow) {
-                    return
-                }
-
-                const nextTextures = cloneTexturesForSync(Array.isArray(modelData?.Textures) ? modelData?.Textures : [])
-                const nextModelPath = modelPath || undefined
-                const previousTextures = detachedTextureLastSyncedTexturesRef.current
-                const previousModelPath = detachedTextureLastSyncedModelPathRef.current
-
-                if (nextModelPath !== previousModelPath || previousTextures.length === 0) {
-                    await emitTextureSnapshotToDetachedWindow(nextTextures, nextModelPath)
-                    return
-                }
-
-                const ops = buildTextureDeltaOps(previousTextures, nextTextures)
-                if (ops.length === 0) {
-                    return
-                }
-
-                const revision = ++detachedTextureSyncRevisionRef.current
-                await emitTextureDeltaToDetachedWindow({
-                    ops,
-                    modelPath: nextModelPath,
-                    revision
-                })
-                detachedTextureLastSyncedModelPathRef.current = nextModelPath
-                detachedTextureLastSyncedTexturesRef.current = nextTextures
-            }
-            syncIfOpen().catch((error) => {
-                console.error('[MainLayout] detached texture sync failed:', error)
-            })
-        }, 120)
-
-        return () => window.clearTimeout(timer)
-    }, [modelPath, modelData?.Textures, buildTextureDeltaOps, cloneTexturesForSync, emitTextureDeltaToDetachedWindow, emitTextureSnapshotToDetachedWindow])
-
-    useEffect(() => {
-        const win = window as any
-        let timeoutId: number | null = null
-        let idleId: number | null = null
-
-        const prewarm = () => {
-            ensureDetachedTextureEditorWindow(false).catch((error) => {
-                console.warn('[MainLayout] detached texture prewarm skipped:', error)
-            })
-        }
-
-        if (typeof win.requestIdleCallback === 'function') {
-            idleId = win.requestIdleCallback(() => prewarm())
-        } else {
-            timeoutId = window.setTimeout(() => prewarm(), 350)
-        }
-
-        return () => {
-            if (idleId !== null && typeof win.cancelIdleCallback === 'function') {
-                win.cancelIdleCallback(idleId)
-            }
-            if (timeoutId !== null) {
-                window.clearTimeout(timeoutId)
-            }
-        }
-    }, [ensureDetachedTextureEditorWindow])
-
-    useEffect(() => {
-        const win = window as any
-        let timeoutId: number | null = null
-        let idleId: number | null = null
-        let cancelled = false
-
-        const prewarmManagers = async () => {
-            const queue = [...DETACHED_MANAGER_TYPES]
-            const workerCount = 2
-            const workers = Array.from({ length: workerCount }, async () => {
-                while (!cancelled) {
-                    const managerType = queue.shift()
-                    if (!managerType) break
-                    try {
-                        await ensureDetachedManagerWindow(managerType, false)
-                        if (hasModelData) {
-                            await emitManagerSnapshot(managerType, getDetachedManagerLabel(managerType))
-                        }
-                    } catch (error) {
-                        console.warn(`[MainLayout] detached manager prewarm skipped (${managerType}):`, error)
-                    }
-                }
-            })
-            await Promise.all(workers)
-        }
-
-        if (typeof win.requestIdleCallback === 'function') {
-            idleId = win.requestIdleCallback(() => {
-                prewarmManagers().catch((error) => {
-                    console.warn('[MainLayout] detached manager prewarm failed:', error)
-                })
-            }, { timeout: hasModelData ? 800 : 1600 })
-        } else {
-            timeoutId = window.setTimeout(() => {
-                prewarmManagers().catch((error) => {
-                    console.warn('[MainLayout] detached manager prewarm failed:', error)
-                })
-            }, hasModelData ? 80 : 350)
-        }
-
-        return () => {
-            cancelled = true
-            if (idleId !== null && typeof win.cancelIdleCallback === 'function') {
-                win.cancelIdleCallback(idleId)
-            }
-            if (timeoutId !== null) {
-                window.clearTimeout(timeoutId)
-            }
-        }
-    }, [ensureDetachedManagerWindow, emitManagerSnapshot, hasModelData, modelPath])
 
     const hasResetStore = useRef(false);
     useEffect(() => {
@@ -2574,10 +1712,7 @@ const MainLayout: React.FC = () => {
         (async () => {
             const win = getCurrentWindow();
             unlisten = await win.onCloseRequested(async (event) => {
-                if (bypassClosePromptRef.current) {
-                    await closeAuxiliaryWindows();
-                    return;
-                }
+                if (bypassClosePromptRef.current) return;
                 if (isSavingRef.current) {
                     event.preventDefault();
                     showMessage('warning', '提示', '正在保存模型，请稍候再关闭...');
@@ -2588,15 +1723,13 @@ const MainLayout: React.FC = () => {
                 if (modelData && isDirty && !closeConfirmVisibleRef.current) {
                     event.preventDefault();
                     setCloseConfirmVisible(true);
-                    return;
                 }
-                await closeAuxiliaryWindows();
             });
         })();
         return () => {
             unlisten?.();
         };
-    }, [closeAuxiliaryWindows, openDetachedManagerWindow, openDetachedTextureEditor]);
+    }, []);
 
 
     // Check for copy-model context menu
@@ -2700,7 +1833,7 @@ const MainLayout: React.FC = () => {
         }
     }, [openModelAsTab]);
 
-    const handleAddCameraFromView = useCallback(() => {
+    const handleAddCameraFromView = () => {
         if (viewerRef.current) {
             const cam = viewerRef.current.getCamera()
             const { addNode, nodes } = useModelStore.getState()
@@ -2745,9 +1878,9 @@ const MainLayout: React.FC = () => {
 
             addNode(newCamera as any)
         }
-    }, [])
+    }
 
-    const handleViewCamera = useCallback((cameraNode: any) => {
+    const handleViewCamera = (cameraNode: any) => {
         if (viewerRef.current && cameraNode) {
             console.log('handleViewCamera', cameraNode)
 
@@ -2792,39 +1925,7 @@ const MainLayout: React.FC = () => {
                 target: [target[0], target[1], target[2]]
             })
         }
-    }, [])
-
-    useEffect(() => {
-        let unlistenAddFromView: (() => void) | null = null
-        let unlistenView: (() => void) | null = null
-
-        const setup = async () => {
-            unlistenAddFromView = await listen(
-                DETACHED_CAMERA_EVENTS.addFromView,
-                () => {
-                    handleAddCameraFromView()
-                }
-            )
-
-            unlistenView = await listen<DetachedCameraViewPayload>(
-                DETACHED_CAMERA_EVENTS.view,
-                (event) => {
-                    const camera = event.payload?.camera
-                    if (!camera) return
-                    handleViewCamera(camera)
-                }
-            )
-        }
-
-        setup().catch((error) => {
-            console.error('[MainLayout] detached camera listeners setup failed:', error)
-        })
-
-        return () => {
-            unlistenAddFromView?.()
-            unlistenView?.()
-        }
-    }, [handleAddCameraFromView, handleViewCamera])
+    }
 
     const handleEditorResizeStart = (e: React.MouseEvent) => {
         setIsResizingEditor(true)
@@ -3229,9 +2330,7 @@ const MainLayout: React.FC = () => {
                 showMessage('warning', '提示', '正在保存模型，请稍候再关闭...');
                 return true;
             }
-            closeAuxiliaryWindows().finally(() => {
-                getCurrentWindow().close();
-            });
+            getCurrentWindow().close();
             return true;
         };
 
@@ -3316,35 +2415,35 @@ const MainLayout: React.FC = () => {
                 return true;
             }),
             registerShortcutHandler('editor.cameraManager', () => {
-                openDetachedManagerWindow('camera');
+                setShowCameraModal(prev => !prev);
                 return true;
             }),
             registerShortcutHandler('editor.geosetManager', () => {
-                openDetachedManagerWindow('geoset');
+                setShowGeosetModal(prev => !prev);
                 return true;
             }),
             registerShortcutHandler('editor.geosetAnimManager', () => {
-                openDetachedManagerWindow('geosetAnim');
+                setShowGeosetAnimModal(prev => !prev);
                 return true;
             }),
             registerShortcutHandler('editor.textureManager', () => {
-                openDetachedTextureEditor();
+                setShowTextureModal(prev => !prev);
                 return true;
             }),
             registerShortcutHandler('editor.textureAnimManager', () => {
-                openDetachedManagerWindow('textureAnim');
+                setShowTextureAnimModal(prev => !prev);
                 return true;
             }),
             registerShortcutHandler('editor.materialManager', () => {
-                openDetachedManagerWindow('material');
+                setShowMaterialModal(prev => !prev);
                 return true;
             }),
             registerShortcutHandler('editor.sequenceManager', () => {
-                openDetachedManagerWindow('sequence');
+                setShowSequenceModal(prev => !prev);
                 return true;
             }),
             registerShortcutHandler('editor.globalSequenceManager', () => {
-                openDetachedManagerWindow('globalSequence');
+                setShowGlobalSeqModal(prev => !prev);
                 return true;
             }),
             registerShortcutHandler('view.perspective', () => {
@@ -3415,20 +2514,18 @@ const MainLayout: React.FC = () => {
         return () => {
             unsubscribeHandlers.forEach((unsubscribe) => unsubscribe());
         };
-    }, [closeAuxiliaryWindows]);
+    }, []);
 
     const handleCloseWithSave = async () => {
         setCloseConfirmVisible(false);
         const ok = modelPath ? await handleSave() : await handleSaveAs();
         if (!ok) return;
-        await closeAuxiliaryWindows();
         bypassClosePromptRef.current = true;
         getCurrentWindow().close();
     };
 
-    const handleCloseWithoutSave = async () => {
+    const handleCloseWithoutSave = () => {
         setCloseConfirmVisible(false);
-        await closeAuxiliaryWindows();
         bypassClosePromptRef.current = true;
         getCurrentWindow().close();
     };
@@ -3625,7 +2722,12 @@ const MainLayout: React.FC = () => {
     }
 
     // Debug Console State
-    const [showDebugConsole, setShowDebugConsole] = useState<boolean>(false)
+    const [showDebugConsole, setShowDebugConsole] = useState<boolean>(() => {
+        try {
+            const saved = localStorage.getItem('showDebugConsole');
+            return saved ? JSON.parse(saved) : false;
+        } catch { return false; }
+    })
     const [showChangelog, setShowChangelog] = useState<boolean>(false)
     const [activationStatus, setActivationStatus] = useState<{
         is_activated: boolean;
@@ -3801,24 +2903,24 @@ const MainLayout: React.FC = () => {
                     } else if (editor === 'modelInfo') {
                         toggleModelInfo()
                     } else if (editor === 'geosetAnim') {
-                        openDetachedManagerWindow('geosetAnim')
+                        setShowGeosetAnimModal(true)
                     } else if (editor === 'geosetVisibilityTool') {
                         setShowGeosetVisibilityToolModal(true)
                     } else if (editor === 'texture') {
-                        openDetachedTextureEditor()
+                        setShowTextureModal(true)
                     } else if (editor === 'textureAnim') {
-                        openDetachedManagerWindow('textureAnim')
+                        setShowTextureAnimModal(true)
                     } else if (editor === 'sequence') {
-                        openDetachedManagerWindow('sequence')
+                        setShowSequenceModal(true)
                     } else if (editor === 'camera') {
-                        openDetachedManagerWindow('camera')
+                        setShowCameraModal(true)
                     } else if (editor === 'material') {
 
-                        openDetachedManagerWindow('material')
+                        setShowMaterialModal(true)
                     } else if (editor === 'geoset') {
-                        openDetachedManagerWindow('geoset')
+                        setShowGeosetModal(true)
                     } else if (editor === 'globalSequence') {
-                        openDetachedManagerWindow('globalSequence')
+                        setShowGlobalSeqModal(true)
                     } else if (editor === 'geosetVisibility') {
                         setShowGeosetVisibility(!showGeosetVisibility)
                     } else {
@@ -4122,6 +3224,7 @@ const MainLayout: React.FC = () => {
                                 showFPS={mainMode !== 'uv' && showFPS}
                                 playbackSpeed={playbackSpeed}
                                 viewPreset={viewPreset}
+                                onAddCameraFromView={handleAddCameraFromView}
                             />
                         </UVModeLayout>
                     </AnimationModeLayout>
