@@ -127,7 +127,7 @@ const AnimationPanel: React.FC<AnimationPanelProps> = ({
             borderRight: '1px solid #444'
         }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
-                <h3 style={{ margin: 0 }}>动画控制</h3>
+                <h3 style={{ margin: 0, whiteSpace: 'nowrap' }}>动画控制</h3>
                 <button
                     onClick={onImport}
                     style={{

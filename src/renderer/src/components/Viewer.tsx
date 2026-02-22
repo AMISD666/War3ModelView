@@ -5714,11 +5714,32 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     }
 
     const isNotUvMode = () => useSelectionStore.getState().mainMode !== 'uv'
+    const switchSequence = (direction: -1 | 1) => {
+      const { sequences, currentSequence, setSequence } = useModelStore.getState()
+      if (!Array.isArray(sequences) || sequences.length === 0) return false
+
+      let nextIndex = 0
+      if (currentSequence >= 0 && currentSequence < sequences.length) {
+        nextIndex = (currentSequence + direction + sequences.length) % sequences.length
+      } else if (direction < 0) {
+        nextIndex = sequences.length - 1
+      }
+
+      setSequence(nextIndex)
+      window.dispatchEvent(new Event('timeline-fit-current-sequence'))
+      return true
+    }
 
     const unsubscribeHandlers = [
       registerShortcutHandler('animation.playPause', () => {
         onTogglePlay()
         return true
+      }),
+      registerShortcutHandler('animation.prevSequence', () => {
+        return switchSequence(-1)
+      }),
+      registerShortcutHandler('animation.nextSequence', () => {
+        return switchSequence(1)
       }),
       registerShortcutHandler('view.fitToView', () => {
         handleFitToView()

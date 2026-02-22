@@ -8,7 +8,8 @@
 import { parseMDX, parseMDL, decodeBLP, getBLPImageData } from 'war3-model';
 import { readFile } from '@tauri-apps/plugin-fs';
 import { invoke } from '@tauri-apps/api/core';
-import { decodeTexture, decodeTextureData, REPLACEABLE_TEXTURES, isMPQPath, normalizePath } from '../viewer/textureLoader';
+import { decodeTexture, REPLACEABLE_TEXTURES, isMPQPath, normalizePath } from '../viewer/textureLoader';
+import { getEnvironmentManager } from '../viewer/EnvironmentManager';
 import { useRendererStore } from '../../store/rendererStore';
 
 // We import the worker using Vite's ?worker suffix
@@ -29,7 +30,7 @@ interface CachedModelInfo {
 
 interface CachedResources {
     modelInfo: CachedModelInfo;
-    textureImages: Record<string, ImageData>;
+    textureImages: Record<string, ArrayBuffer>;
 }
 
 interface TextureLoadMetrics {
@@ -88,31 +89,40 @@ interface WorkerDonePayload {
     };
 }
 
-const MAX_BATCH_TEXTURES = 16;
-
 class ThumbnailService {
     private workers: Worker[] = [];
     private workerBusy: boolean[] = [];
     private callbacks: Map<string, (res: RenderResult) => void> = new Map();
     private modelCache: Map<string, CachedModelInfo> = new Map();
-    private textureCache: Map<string, Record<string, ImageData>> = new Map();
+    private textureCache: Map<string, Record<string, ArrayBuffer>> = new Map();
     private resourceLoading: Map<string, Promise<CachedResources>> = new Map();
-    private textureLoading: Map<string, Promise<Record<string, ImageData>>> = new Map();
-    private sharedTextureCache: Map<string, ImageData> = new Map();
-    private sharedTextureLoading: Map<string, Promise<ImageData | null>> = new Map();
+    private textureLoading: Map<string, Promise<Record<string, ArrayBuffer>>> = new Map();
+    private sharedTextureCache: Map<string, ArrayBuffer> = new Map();
+    private sharedTextureLoading: Map<string, Promise<ArrayBuffer | null>> = new Map();
     private textureTaskQueue: Array<() => void> = [];
     private textureTaskRunning = 0;
-    private readonly MAX_TEXTURE_TASK_CONCURRENCY = Math.max(3, Math.min(4, Math.floor((typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : 8) / 3)));
+    private readonly MAX_TEXTURE_TASK_CONCURRENCY = Math.max(
+        4,
+        Math.min(6, Math.floor((typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : 8) / 2))
+    );
     private workerModelCache: string[][] = []; // Per-worker LRU cache (array of paths)
     private workerTextureSync: Set<string>[] = [];
+    private workerTeamColorSync: Map<string, number>[] = [];
+    private modelWorkerAffinity: Map<string, number> = new Map();
     private workerCount = 12;
-    private readonly MAIN_CACHE_LIMIT = 100; // Main thread cache limit
+    private readonly MAIN_CACHE_LIMIT = 64; // Main thread cache entry limit
+    private readonly MAIN_MODEL_CACHE_MAX_BYTES = 96 * 1024 * 1024;
+    private modelCacheBytes: Map<string, number> = new Map();
+    private modelCacheTotalBytes = 0;
     private teamColorData: Record<number, ImageData> = {};
-    private teamColorsLoaded = false;
-    private teamColorsLoading: Promise<void> | null = null;
+    private teamColorDataByIndex: Map<number, Record<number, ImageData>> = new Map();
+    private teamColorsLoadingByIndex: Map<number, Promise<Record<number, ImageData>>> = new Map();
     private workerTimeouts: (ReturnType<typeof setTimeout> | null)[] = [];
-    private readonly CACHE_LIMIT = 64; // Increased limit for robust paging
+    private readonly CACHE_LIMIT = 24; // Per-worker tracked cache limit
     private readonly SHARED_TEXTURE_CACHE_LIMIT = 512;
+    private readonly SHARED_TEXTURE_CACHE_MAX_BYTES = 128 * 1024 * 1024;
+    private sharedTextureCacheBytes: Map<string, number> = new Map();
+    private sharedTextureTotalBytes = 0;
     private modelPerf: Map<string, ModelPerfRecord> = new Map();
     private readonly MODEL_PERF_LIMIT = 800;
     private renderRequestMetrics: Map<string, RenderRequestMetric> = new Map();
@@ -120,7 +130,7 @@ class ThumbnailService {
     constructor() {
         useRendererStore.subscribe((state) => {
             if (state.mpqLoaded) {
-                void this.ensureTeamColorsLoaded();
+                void this.ensureTeamColorsLoaded(state.teamColor);
             }
         });
         for (let i = 0; i < this.workerCount; i++) {
@@ -129,6 +139,7 @@ class ThumbnailService {
             this.workerBusy.push(false);
             this.workerModelCache.push([]);
             this.workerTextureSync.push(new Set());
+            this.workerTeamColorSync.push(new Map());
             this.workerTimeouts.push(null);
 
             worker.onmessage = (e: MessageEvent) => {
@@ -144,6 +155,7 @@ class ThumbnailService {
 
                 if (type === 'DONE') {
                     const { fullPath, bitmap, animations, texturePaths, metrics } = payload as WorkerDonePayload;
+                    this.modelWorkerAffinity.set(fullPath, i);
                     const existingModelInfo = this.modelCache.get(fullPath);
                     if (existingModelInfo) {
                         const nextAnimations = (animations && animations.length > 0) ? animations : existingModelInfo.animations;
@@ -209,21 +221,40 @@ class ThumbnailService {
                         const textureImages = this.textureCache.get(fullPath);
 
                         if (modelInfo) {
-                            worker.postMessage({
+                            const renderState = useRendererStore.getState();
+                            const envPayload = this.getEnvironmentLightPayload();
+                            const includeTeamColorPayload = Object.keys(this.teamColorData).length > 0;
+                            // Clone textures for transfer (originals stay in cache)
+                            const clonedTextures = textureImages && Object.keys(textureImages).length > 0
+                                ? Object.fromEntries(Object.entries(textureImages).map(([k, v]) => [k, v.slice(0)]))
+                                : undefined;
+                            const msg = {
                                 type: 'RENDER',
                                 payload: {
                                     fullPath,
                                     modelBuffer: modelInfo.buffer,
-                                    ...(textureImages ? { textureImages } : {}),
-                                    teamColorData: this.teamColorData,
+                                    ...(clonedTextures ? { textureRawData: clonedTextures, textureMaxDimension: this.getDecodeMaxDimension() } : {}),
+                                    ...(includeTeamColorPayload ? { teamColorData: this.teamColorData } : {}),
                                     frame: 0,
-                                    sequenceIndex: 0
+                                    sequenceIndex: 0,
+                                    backgroundColor: renderState.backgroundColor,
+                                    teamColor: renderState.teamColor,
+                                    enableLighting: renderState.enableLighting,
+                                    wireframe: renderState.renderMode === 'wireframe',
+                                    showParticles: renderState.showParticles ?? true,
+                                    showRibbons: renderState.showRibbons ?? true,
+                                    ...envPayload
                                 }
-                            });
+                            };
+                            const xfer = this.collectTransferables(msg.payload);
+                            worker.postMessage(msg, xfer);
                             if (textureImages && Object.keys(textureImages).length > 0) {
                                 this.workerTextureSync[i].add(fullPath);
                             } else {
                                 this.workerTextureSync[i].delete(fullPath);
+                            }
+                            if (includeTeamColorPayload) {
+                                this.workerTeamColorSync[i].set(fullPath, renderState.teamColor);
                             }
                             // Don't clear callback or reset busy yet, we are retrying
                             return;
@@ -231,6 +262,11 @@ class ThumbnailService {
                     }
 
                     console.warn(`[ThumbnailService] Worker ${i} reported error for ${fullPath}:`, error);
+                    if (this.modelWorkerAffinity.get(fullPath) === i) {
+                        this.modelWorkerAffinity.delete(fullPath);
+                    }
+                    this.workerTextureSync[i].delete(fullPath);
+                    this.workerTeamColorSync[i].delete(fullPath);
                     const cb = this.callbacks.get(fullPath);
                     if (cb) {
                         cb({ bitmap: null as any, status: 'error' });
@@ -242,62 +278,23 @@ class ThumbnailService {
                     this.workerBusy[i] = false;
                     this.workerModelCache[i] = [];
                     this.workerTextureSync[i].clear();
+                    this.workerTeamColorSync[i].clear();
+                }
+                else if (type === 'EVICTED') {
+                    const evictedPath = payload?.fullPath as string | undefined;
+                    if (!evictedPath) return;
+
+                    const cache = this.workerModelCache[i];
+                    const idx = cache.indexOf(evictedPath);
+                    if (idx > -1) cache.splice(idx, 1);
+                    this.workerTextureSync[i].delete(evictedPath);
+                    this.workerTeamColorSync[i].delete(evictedPath);
+                    if (this.modelWorkerAffinity.get(evictedPath) === i) {
+                        this.modelWorkerAffinity.delete(evictedPath);
+                    }
                 }
             };
         }
-    }
-
-    private collectTextureIdsFromAnimVector(value: any, ids: Set<number>) {
-        if (value === undefined || value === null) return;
-        if (typeof value === 'number') {
-            if (value >= 0) ids.add(value);
-            return;
-        }
-        if (value.Keys) {
-            // Thumbnail mode only needs the primary animated texture id.
-            const v0 = value.Keys?.[0]?.Vector?.[0];
-            if (typeof v0 === 'number' && v0 >= 0) {
-                ids.add(v0);
-            }
-        }
-    }
-
-    private getUsedTextureIds(model: any): Set<number> {
-        const usedIds = new Set<number>();
-
-        if (model.Materials) {
-            for (const material of model.Materials) {
-                if (material.Layers) {
-                    for (const layer of material.Layers) {
-                        this.collectTextureIdsFromAnimVector(layer.TextureID, usedIds);
-                        this.collectTextureIdsFromAnimVector(layer.NormalTextureID, usedIds);
-                        this.collectTextureIdsFromAnimVector(layer.ORMTextureID, usedIds);
-                        this.collectTextureIdsFromAnimVector(layer.EmissiveTextureID, usedIds);
-                        this.collectTextureIdsFromAnimVector(layer.TeamColorTextureID, usedIds);
-                        this.collectTextureIdsFromAnimVector(layer.ReflectionsTextureID, usedIds);
-                    }
-                }
-            }
-        }
-
-        if (model.ParticleEmitters2) {
-            for (const emitter of model.ParticleEmitters2) {
-                if (typeof emitter.TextureID === 'number' && emitter.TextureID >= 0) {
-                    usedIds.add(emitter.TextureID);
-                }
-            }
-        }
-
-        if (model.Textures) {
-            for (let i = 0; i < model.Textures.length; i++) {
-                const tex = model.Textures[i];
-                if (tex?.ReplaceableId && tex.ReplaceableId > 0) {
-                    usedIds.add(i);
-                }
-            }
-        }
-
-        return usedIds;
     }
 
     private createSolidImageData(r: number, g: number, b: number, a: number = 255, size: number = 64): ImageData {
@@ -311,53 +308,153 @@ class ThumbnailService {
         return new ImageData(data, size, size);
     }
 
-    private async ensureTeamColorsLoaded() {
-        if (this.teamColorsLoaded) return; // Sync check optimization
-        if (!useRendererStore.getState().mpqLoaded) return;
+    private normalizeTeamColorIndex(colorIndex: number): number {
+        const n = Math.floor(Number(colorIndex));
+        if (!Number.isFinite(n)) return 0;
+        return Math.max(0, Math.min(11, n));
+    }
 
-        if (this.teamColorsLoading) {
-            await this.teamColorsLoading;
-            return;
+    private getTeamColorFallbackRgb(colorIndex: number): [number, number, number] {
+        const palette: Array<[number, number, number]> = [
+            [220, 60, 60],   // red
+            [60, 130, 255],  // blue
+            [30, 200, 200],  // teal
+            [150, 95, 240],  // purple
+            [255, 220, 40],  // yellow
+            [255, 150, 20],  // orange
+            [40, 200, 40],   // green
+            [255, 110, 175], // pink
+            [170, 170, 170], // gray
+            [120, 175, 255], // light blue
+            [35, 140, 70],   // dark green
+            [165, 110, 60]   // brown
+        ];
+        return palette[this.normalizeTeamColorIndex(colorIndex)];
+    }
+
+    private createTeamColorFallbackSet(colorIndex: number): Record<number, ImageData> {
+        const [r, g, b] = this.getTeamColorFallbackRgb(colorIndex);
+        return {
+            1: this.createSolidImageData(r, g, b, 255),
+            2: this.createSolidImageData(r, g, b, 190)
+        };
+    }
+
+    private async ensureTeamColorsLoaded(colorIndex: number): Promise<Record<number, ImageData>> {
+        const normalizedIndex = this.normalizeTeamColorIndex(colorIndex);
+        const cached = this.teamColorDataByIndex.get(normalizedIndex);
+        if (cached) {
+            this.teamColorData = cached;
+            return cached;
         }
 
-        this.teamColorsLoading = this.initTeamColors();
+        if (!useRendererStore.getState().mpqLoaded) {
+            const fallback = this.createTeamColorFallbackSet(normalizedIndex);
+            this.teamColorDataByIndex.set(normalizedIndex, fallback);
+            this.teamColorData = fallback;
+            return fallback;
+        }
+
+        const inflight = this.teamColorsLoadingByIndex.get(normalizedIndex);
+        if (inflight) {
+            const loaded = await inflight;
+            this.teamColorData = loaded;
+            return loaded;
+        }
+
+        const loadPromise = this.initTeamColors(normalizedIndex);
+        this.teamColorsLoadingByIndex.set(normalizedIndex, loadPromise);
         try {
-            await this.teamColorsLoading;
-            this.teamColorsLoaded = true;
+            const loaded = await loadPromise;
+            this.teamColorDataByIndex.set(normalizedIndex, loaded);
+            this.teamColorData = loaded;
+            return loaded;
         } finally {
-            this.teamColorsLoading = null;
+            this.teamColorsLoadingByIndex.delete(normalizedIndex);
         }
     }
 
-    private async initTeamColors() {
+    private async initTeamColors(colorIndex: number): Promise<Record<number, ImageData>> {
+        const idStr = this.normalizeTeamColorIndex(colorIndex).toString().padStart(2, '0');
         const colors = [
-            { id: 1, path: 'ReplaceableTextures\\TeamColor\\TeamColor00.blp' },
-            { id: 2, path: 'ReplaceableTextures\\TeamGlow\\TeamGlow00.blp' }
+            { id: 1, path: `ReplaceableTextures\\TeamColor\\TeamColor${idStr}.blp` },
+            { id: 2, path: `ReplaceableTextures\\TeamGlow\\TeamGlow${idStr}.blp` }
         ];
+        const loaded: Record<number, ImageData> = {};
+        const fallback = this.createTeamColorFallbackSet(colorIndex);
+
         for (const col of colors) {
             try {
                 const data = await invoke<Uint8Array>('read_mpq_file', { path: col.path });
                 if (data && data.length > 0) {
                     const blp = decodeBLP(data.buffer as ArrayBuffer);
                     const mip = getBLPImageData(blp, 0);
-                    this.teamColorData[col.id] = new ImageData(
+                    loaded[col.id] = new ImageData(
                         new Uint8ClampedArray(mip.data),
                         mip.width,
                         mip.height
                     );
+                    continue;
                 }
             } catch (e) {
                 console.warn(`Failed to pre-load team color ${col.path}`, e);
-                if (!this.teamColorData[col.id]) {
-                    if (col.id === 1) this.teamColorData[col.id] = this.createSolidImageData(220, 60, 60);
-                    else this.teamColorData[col.id] = this.createSolidImageData(255, 210, 0);
-                }
             }
+            loaded[col.id] = fallback[col.id];
         }
+
+        return loaded;
     }
 
-    private getAvailableWorkerIndex(): number {
-        return this.workerBusy.findIndex(busy => !busy);
+    private getFreeWorkerIndices(): number[] {
+        const free: number[] = [];
+        for (let i = 0; i < this.workerCount; i++) {
+            if (!this.workerBusy[i]) free.push(i);
+        }
+        return free;
+    }
+
+    private chooseLeastLoadedWorker(indices: number[]): number {
+        let best = indices[0];
+        let bestScore = Number.POSITIVE_INFINITY;
+
+        for (const i of indices) {
+            // Prefer workers with lighter hot cache to reduce memory churn.
+            const score = this.workerModelCache[i].length * 2 + this.workerTextureSync[i].size;
+            if (score < bestScore) {
+                best = i;
+                bestScore = score;
+            }
+        }
+
+        return best;
+    }
+
+    private getAvailableWorkerIndex(fullPath: string, options?: { allowFallback?: boolean }): number {
+        const mapped = this.modelWorkerAffinity.get(fullPath);
+        if (mapped !== undefined) {
+            if (!this.workerBusy[mapped]) {
+                return mapped;
+            }
+            if (!options?.allowFallback) {
+                return -1;
+            }
+        }
+
+        const freeWorkers = this.getFreeWorkerIndices();
+        if (freeWorkers.length === 0) {
+            return -1;
+        }
+
+        // Cache-locality first: if any free worker already has this model, reuse it.
+        const cachedWorker = freeWorkers.find((idx) => this.workerModelCache[idx].includes(fullPath));
+        if (cachedWorker !== undefined) {
+            this.modelWorkerAffinity.set(fullPath, cachedWorker);
+            return cachedWorker;
+        }
+
+        const bestWorker = this.chooseLeastLoadedWorker(freeWorkers);
+        this.modelWorkerAffinity.set(fullPath, bestWorker);
+        return bestWorker;
     }
 
     private base64ToUint8Array(base64: string): Uint8Array {
@@ -432,17 +529,100 @@ class ThumbnailService {
         return `fs:${modelDir}|${normalizedTexture}`;
     }
 
-    private touchSharedTextureCache(key: string, image: ImageData) {
+    private getImageDataBytes(image: ImageData | ArrayBuffer): number {
+        if (image instanceof ArrayBuffer) return image.byteLength;
+        return image.width * image.height * 4;
+    }
+
+    private getEnvironmentLightPayload(): {
+        envLightingEnabled: boolean;
+        envLightDirection?: [number, number, number];
+        envLightColor?: [number, number, number];
+        envAmbientColor?: [number, number, number];
+    } {
+        const envManager = getEnvironmentManager();
+        if (!envManager.isEnabled()) {
+            return { envLightingEnabled: false };
+        }
+
+        const params = envManager.getLightParams();
+        const toVec3 = (v: any): [number, number, number] => ([
+            Number(v?.[0] ?? 0),
+            Number(v?.[1] ?? 0),
+            Number(v?.[2] ?? 0)
+        ]);
+
+        return {
+            envLightingEnabled: true,
+            envLightDirection: toVec3(params.lightDirection),
+            envLightColor: toVec3(params.lightColor),
+            envAmbientColor: toVec3(params.ambientColor)
+        };
+    }
+
+    private removeMainCacheEntry(fullPath: string) {
+        this.modelCache.delete(fullPath);
+        const modelBytes = this.modelCacheBytes.get(fullPath) || 0;
+        this.modelCacheBytes.delete(fullPath);
+        this.modelCacheTotalBytes = Math.max(0, this.modelCacheTotalBytes - modelBytes);
+        this.textureCache.delete(fullPath);
+        this.resourceLoading.delete(fullPath);
+        this.textureLoading.delete(fullPath);
+    }
+
+    private getDecodeMaxDimension(): number {
+        const sharedTextureMB = this.sharedTextureTotalBytes / (1024 * 1024);
+        // Keep thumbnail textures sharp: avoid low mips under heavy load.
+        if (sharedTextureMB > 120 || this.textureTaskQueue.length > 8) {
+            return 320;
+        }
+        if (
+            sharedTextureMB > 88 ||
+            this.textureTaskQueue.length > 4 ||
+            this.textureTaskRunning >= this.MAX_TEXTURE_TASK_CONCURRENCY
+        ) {
+            return 384;
+        }
+        return 512;
+    }
+
+    /**
+     * Collect all ArrayBuffer instances from a payload for Transferable postMessage.
+     */
+    private collectTransferables(payload: Record<string, any>): Transferable[] {
+        const buffers: Transferable[] = [];
+        // Only transfer textureRawData (cloned copies), never modelBuffer (shared via cache)
+        if (payload.textureRawData) {
+            for (const buf of Object.values(payload.textureRawData)) {
+                if (buf instanceof ArrayBuffer) buffers.push(buf);
+            }
+        }
+        return buffers;
+    }
+
+    private touchSharedTextureCache(key: string, image: ImageData | ArrayBuffer) {
         if (this.sharedTextureCache.has(key)) {
             this.sharedTextureCache.delete(key);
+            const oldBytes = this.sharedTextureCacheBytes.get(key) || 0;
+            this.sharedTextureCacheBytes.delete(key);
+            this.sharedTextureTotalBytes = Math.max(0, this.sharedTextureTotalBytes - oldBytes);
         }
         this.sharedTextureCache.set(key, image);
+        const newBytes = this.getImageDataBytes(image);
+        this.sharedTextureCacheBytes.set(key, newBytes);
+        this.sharedTextureTotalBytes += newBytes;
 
-        while (this.sharedTextureCache.size > this.SHARED_TEXTURE_CACHE_LIMIT) {
+        while (
+            this.sharedTextureCache.size > this.SHARED_TEXTURE_CACHE_LIMIT ||
+            this.sharedTextureTotalBytes > this.SHARED_TEXTURE_CACHE_MAX_BYTES
+        ) {
             const oldestKey = this.sharedTextureCache.keys().next().value as string | undefined;
             if (!oldestKey) break;
             this.sharedTextureCache.delete(oldestKey);
             this.sharedTextureLoading.delete(oldestKey);
+            const oldestBytes = this.sharedTextureCacheBytes.get(oldestKey) || 0;
+            this.sharedTextureCacheBytes.delete(oldestKey);
+            this.sharedTextureTotalBytes = Math.max(0, this.sharedTextureTotalBytes - oldestBytes);
         }
     }
 
@@ -516,11 +696,17 @@ class ThumbnailService {
         return decoded;
     }
 
-    private touchMainCache(fullPath: string, modelInfo: CachedModelInfo, textures?: Record<string, ImageData>) {
+    private touchMainCache(fullPath: string, modelInfo: CachedModelInfo, textures?: Record<string, ArrayBuffer>) {
         if (this.modelCache.has(fullPath)) {
             this.modelCache.delete(fullPath);
+            const oldBytes = this.modelCacheBytes.get(fullPath) || 0;
+            this.modelCacheBytes.delete(fullPath);
+            this.modelCacheTotalBytes = Math.max(0, this.modelCacheTotalBytes - oldBytes);
         }
         this.modelCache.set(fullPath, modelInfo);
+        const modelBytes = modelInfo.buffer?.byteLength || 0;
+        this.modelCacheBytes.set(fullPath, modelBytes);
+        this.modelCacheTotalBytes += modelBytes;
 
         if (textures) {
             if (this.textureCache.has(fullPath)) {
@@ -538,10 +724,13 @@ class ThumbnailService {
         while (this.modelCache.size > this.MAIN_CACHE_LIMIT) {
             const oldestKey = this.modelCache.keys().next().value as string | undefined;
             if (!oldestKey) break;
-            this.modelCache.delete(oldestKey);
-            this.textureCache.delete(oldestKey);
-            this.resourceLoading.delete(oldestKey);
-            this.textureLoading.delete(oldestKey);
+            this.removeMainCacheEntry(oldestKey);
+        }
+
+        while (this.modelCacheTotalBytes > this.MAIN_MODEL_CACHE_MAX_BYTES) {
+            const oldestKey = this.modelCache.keys().next().value as string | undefined;
+            if (!oldestKey) break;
+            this.removeMainCacheEntry(oldestKey);
         }
     }
 
@@ -611,21 +800,9 @@ class ThumbnailService {
                 }
             });
 
-            const usedIds = this.getUsedTextureIds(model);
             let textureEntries = model.Textures
-                .map((t: any, idx: number) => ({ idx, path: (t.Image || t.Path) as string }))
+                .map((t: any) => ({ path: (t.Image || t.Path) as string }))
                 .filter((t: any) => !!t.path);
-
-            if (usedIds.size > 0) {
-                const filtered = textureEntries.filter(t => usedIds.has(t.idx));
-                if (filtered.length > 0) {
-                    textureEntries = filtered;
-                }
-            }
-
-            if (textureEntries.length > MAX_BATCH_TEXTURES) {
-                textureEntries = textureEntries.slice(0, MAX_BATCH_TEXTURES);
-            }
 
             textureEntries.forEach((t) => texturePathSet.add(t.path));
         }
@@ -644,7 +821,7 @@ class ThumbnailService {
         };
     }
 
-    private async loadTextureImages(fullPath: string, texturePaths: string[]): Promise<Record<string, ImageData>> {
+    private async loadTextureImages(fullPath: string, texturePaths: string[]): Promise<Record<string, ArrayBuffer>> {
         const cached = this.textureCache.get(fullPath);
         if (texturePaths.length === 0) {
             if (cached) {
@@ -693,17 +870,14 @@ class ThumbnailService {
                 totalMs: 0
             };
             const totalStart = performance.now();
-            const textureImages: Record<string, ImageData> = {};
+            const textureImages: Record<string, ArrayBuffer> = {};
 
             let uniqueTexturePaths = Array.from(new Set(texturePaths.filter(Boolean)));
-            if (uniqueTexturePaths.length > MAX_BATCH_TEXTURES) {
-                uniqueTexturePaths = uniqueTexturePaths.slice(0, MAX_BATCH_TEXTURES);
-            }
             metrics.textureCount = uniqueTexturePaths.length;
             const pendingSharedPromises: Promise<void>[] = [];
             const loadTargets: string[] = [];
             const keyByPath = new Map<string, string>();
-            const resolverByKey = new Map<string, (value: ImageData | null) => void>();
+            const resolverByKey = new Map<string, (value: ArrayBuffer | null) => void>();
 
             uniqueTexturePaths.forEach((path) => {
                 const key = this.getTextureCacheKey(fullPath, path);
@@ -732,7 +906,7 @@ class ThumbnailService {
                 }
 
                 loadTargets.push(path);
-                const pending = new Promise<ImageData | null>((resolve) => {
+                const pending = new Promise<ArrayBuffer | null>((resolve) => {
                     resolverByKey.set(key, resolve);
                 });
                 this.sharedTextureLoading.set(key, pending);
@@ -754,34 +928,24 @@ class ThumbnailService {
 
                         const fallbackPaths: string[] = [];
 
-                        const processDecodedBinaryMap = (targets: string[], decodedBinaryMap: Map<string, Uint8Array>) => {
+                        // Worker-side decode: store raw bytes directly, skip main-thread decode
+                        const processRawBinaryMap = (targets: string[], rawBinaryMap: Map<string, Uint8Array>) => {
                             for (const path of targets) {
-                                const data = decodedBinaryMap.get(path);
-                                if (!data) {
+                                const data = rawBinaryMap.get(path);
+                                if (!data || data.byteLength === 0) {
                                     fallbackPaths.push(path);
                                     continue;
                                 }
-
-                                try {
-                                    const decodeStart = performance.now();
-                                    const buffer = (data.byteOffset === 0 && data.byteLength === data.buffer.byteLength)
-                                        ? data.buffer
-                                        : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-                                    const imageData = decodeTextureData(buffer, path, { maxDimension: 256 });
-                                    metrics.decodeMs += performance.now() - decodeStart;
-
-                                    if (imageData) {
-                                        textureImages[path] = imageData;
-                                        metrics.resolvedCount += 1;
-                                        const key = keyByPath.get(path)!;
-                                        this.touchSharedTextureCache(key, imageData);
-                                        resolverByKey.get(key)?.(imageData);
-                                    } else {
-                                        fallbackPaths.push(path);
-                                    }
-                                } catch {
-                                    fallbackPaths.push(path);
-                                }
+                                // Store raw bytes — worker will decode
+                                const buffer = (data.byteOffset === 0 && data.byteLength === data.buffer.byteLength)
+                                    ? data.buffer
+                                    : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+                                textureImages[path] = buffer;
+                                metrics.resolvedCount += 1;
+                                const key = keyByPath.get(path)!;
+                                // Clone for shared cache (originals will be transferred to worker)
+                                this.touchSharedTextureCache(key, buffer.slice(0));
+                                resolverByKey.get(key)?.(buffer.slice(0));
                             }
                         };
 
@@ -793,8 +957,8 @@ class ThumbnailService {
                                     modelPath: '',
                                     texturePaths: mpqTargets
                                 });
-                                const decodedBinaryMap = this.parseTextureBytesPayload(payload, mpqTargets);
-                                processDecodedBinaryMap(mpqTargets, decodedBinaryMap);
+                                const rawBinaryMap = this.parseTextureBytesPayload(payload, mpqTargets);
+                                processRawBinaryMap(mpqTargets, rawBinaryMap);
                             } catch (err) {
                                 console.warn('[ThumbnailService] Binary MPQ batch texture load failed:', err);
                                 fallbackPaths.push(...mpqTargets);
@@ -812,10 +976,10 @@ class ThumbnailService {
                                     modelPath: fullPath,
                                     texturePaths: fsTargets
                                 });
-                                const decodedBinaryMap = this.parseTextureBytesPayload(payload, fsTargets);
-                                processDecodedBinaryMap(fsTargets, decodedBinaryMap);
+                                const rawBinaryMap = this.parseTextureBytesPayload(payload, fsTargets);
+                                processRawBinaryMap(fsTargets, rawBinaryMap);
                             } catch (err) {
-                                console.warn('[ThumbnailService] Binary batch texture load failed, fallback to direct loader:', err);
+                                console.warn('[ThumbnailService] Binary FS batch texture load failed, fallback to direct loader:', err);
                                 fallbackPaths.push(...fsTargets);
                             } finally {
                                 const elapsed = performance.now() - fsBatchStart;
@@ -829,7 +993,7 @@ class ThumbnailService {
                             const fallbackResults = await Promise.all(
                                 fallbackPaths.map(async (path) => {
                                     try {
-                                        return await decodeTexture(path, fullPath);
+                                        return await decodeTexture(path, fullPath, {});
                                     } catch {
                                         return { path, imageData: null as ImageData | null };
                                     }
@@ -840,10 +1004,12 @@ class ThumbnailService {
                             fallbackResults.forEach((res) => {
                                 const key = keyByPath.get(res.path)!;
                                 if (res.imageData) {
-                                    textureImages[res.path] = res.imageData;
+                                    // Fallback still produces ImageData — extract raw pixel buffer
+                                    const rawBuf = res.imageData.data.buffer.slice(0);
+                                    textureImages[res.path] = rawBuf;
                                     metrics.resolvedCount += 1;
-                                    this.touchSharedTextureCache(key, res.imageData);
-                                    resolverByKey.get(key)?.(res.imageData);
+                                    this.touchSharedTextureCache(key, rawBuf);
+                                    resolverByKey.get(key)?.(rawBuf);
                                 } else {
                                     metrics.missCount += 1;
                                     resolverByKey.get(key)?.(null);
@@ -903,7 +1069,10 @@ class ThumbnailService {
         const unique = Array.from(new Set(fullPaths.filter(Boolean)));
         if (unique.length === 0) return;
 
-        const concurrency = Math.max(1, Math.min(maxConcurrent, unique.length));
+        // Scheme D: Higher concurrency for prefetch (up to 6 workers).
+        // Model read and texture load are pipelined: start texture load as fire-and-forget
+        // so the next model read can begin immediately.
+        const concurrency = Math.max(1, Math.min(Math.max(maxConcurrent, 6), unique.length));
         let cursor = 0;
 
         const worker = async () => {
@@ -911,8 +1080,8 @@ class ThumbnailService {
                 const index = cursor++;
                 const fullPath = unique[index];
                 try {
+                    const modelInfo = await this.loadModelInfo(fullPath);
                     if (options?.withTextures) {
-                        const modelInfo = await this.loadModelInfo(fullPath);
                         let texturePaths = modelInfo.texturePaths;
                         if (texturePaths.length === 0) {
                             const parseStart = performance.now();
@@ -927,9 +1096,8 @@ class ThumbnailService {
                                 texturePaths
                             });
                         }
-                        await this.loadTextureImages(fullPath, texturePaths);
-                    } else {
-                        await this.loadModelInfo(fullPath);
+                        // Fire-and-forget: don't await texture load before processing next model
+                        void this.loadTextureImages(fullPath, texturePaths);
                     }
                 } catch {
                     // Ignore prefetch failures; render path has its own error handling.
@@ -951,11 +1119,18 @@ class ThumbnailService {
         options?: {
             preferFastFirstFrame?: boolean;
             prioritize?: boolean;
+            spinEnabled?: boolean;
+            spinSpeed?: number;
         }
     ): Promise<RenderResult> {
-        await this.ensureTeamColorsLoaded();
-        const workerIndex = this.getAvailableWorkerIndex();
-        if (workerIndex === -1 || this.callbacks.has(fullPath)) return { bitmap: null as any, status: 'busy' };
+        const renderState = useRendererStore.getState();
+        const teamColorData = await this.ensureTeamColorsLoaded(renderState.teamColor);
+        const envPayload = this.getEnvironmentLightPayload();
+        if (this.callbacks.has(fullPath)) return { bitmap: null as any, status: 'busy' };
+        const workerIndex = this.getAvailableWorkerIndex(fullPath, {
+            allowFallback: !!options?.prioritize
+        });
+        if (workerIndex === -1) return { bitmap: null as any, status: 'busy' };
 
         this.workerBusy[workerIndex] = true;
 
@@ -978,8 +1153,22 @@ class ThumbnailService {
             let textureImages = texturesCached || {};
             const worker = this.workers[workerIndex];
             const isLoaded = this.workerModelCache[workerIndex].includes(fullPath);
+            const alreadyTextureSynced = this.workerTextureSync[workerIndex].has(fullPath);
+            const syncedTeamColor = this.workerTeamColorSync[workerIndex].get(fullPath);
+            const teamColorChangedForWorker = syncedTeamColor !== renderState.teamColor;
+            const renderPayload = {
+                backgroundColor: renderState.backgroundColor,
+                teamColor: renderState.teamColor,
+                enableLighting: renderState.enableLighting,
+                wireframe: renderState.renderMode === 'wireframe',
+                showParticles: renderState.showParticles ?? true,
+                showRibbons: renderState.showRibbons ?? true,
+                spinEnabled: options?.spinEnabled ?? false,
+                spinSpeed: options?.spinSpeed ?? 30,
+                ...envPayload
+            };
 
-            if (!texturesCached) {
+            if (!texturesCached && !alreadyTextureSynced) {
                 if (!isLoaded && !options?.preferFastFirstFrame) {
                     textureImages = await this.loadTextureImages(fullPath, modelInfo.texturePaths);
                 } else {
@@ -989,6 +1178,7 @@ class ThumbnailService {
 
             const shouldSyncTextures = Object.keys(textureImages).length > 0 && !this.workerTextureSync[workerIndex].has(fullPath);
             const includeTexturePayload = shouldSyncTextures;
+            const includeTeamColorPayload = Object.keys(teamColorData).length > 0 && (teamColorChangedForWorker || !isLoaded);
             const prepareMs = Math.max(0, performance.now() - requestStartMs);
 
             // 2. Send to Available Worker
@@ -1003,39 +1193,54 @@ class ThumbnailService {
                     if (includeTexturePayload) {
                         this.workerTextureSync[workerIndex].add(fullPath);
                     }
-                    worker.postMessage({
+                    // Clone textureRawData for Transferable (originals stay in textureCache)
+                    const clonedTexPayload = includeTexturePayload
+                        ? Object.fromEntries(Object.entries(textureImages).map(([k, v]) => [k, v instanceof ArrayBuffer ? v.slice(0) : v]))
+                        : undefined;
+                    const msg1 = {
                         type: 'RENDER',
                         payload: {
                             fullPath,
-                            ...(includeTexturePayload ? { textureImages } : {}),
+                            ...(clonedTexPayload ? { textureRawData: clonedTexPayload, textureMaxDimension: this.getDecodeMaxDimension() } : {}),
+                            ...(includeTeamColorPayload ? { teamColorData } : {}),
                             frame,
                             sequenceIndex,
                             freeze,
-                            backgroundColor: useRendererStore.getState().backgroundColor
+                            ...renderPayload
                         }
-                    });
+                    };
+                    const xfer1 = this.collectTransferables(msg1.payload);
+                    worker.postMessage(msg1, xfer1);
+                    if (includeTeamColorPayload) {
+                        this.workerTeamColorSync[workerIndex].set(fullPath, renderState.teamColor);
+                    }
                 } else {
-                    // Initial full payload
-                    const payload = {
+                    // Initial full payload — clone textureRawData for Transferable
+                    const clonedTexPayload2 = Object.keys(textureImages).length > 0
+                        ? Object.fromEntries(Object.entries(textureImages).map(([k, v]) => [k, v instanceof ArrayBuffer ? v.slice(0) : v]))
+                        : undefined;
+                    const payloadData = {
                         fullPath,
                         modelBuffer: modelInfo.buffer,
-                        ...(Object.keys(textureImages).length > 0 ? { textureImages } : {}),
-                        teamColorData: this.teamColorData, // Send pre-loaded team colors
+                        ...(clonedTexPayload2 ? { textureRawData: clonedTexPayload2, textureMaxDimension: this.getDecodeMaxDimension() } : {}),
+                        ...(includeTeamColorPayload ? { teamColorData } : {}),
                         frame,
                         sequenceIndex,
                         freeze,
-                        backgroundColor: useRendererStore.getState().backgroundColor
+                        ...renderPayload
                     };
 
-                    worker.postMessage({
-                        type: 'RENDER',
-                        payload
-                    });
+                    const msg2 = { type: 'RENDER', payload: payloadData };
+                    const xfer2 = this.collectTransferables(payloadData);
+                    worker.postMessage(msg2, xfer2);
 
                     if (Object.keys(textureImages).length > 0) {
                         this.workerTextureSync[workerIndex].add(fullPath);
                     } else {
                         this.workerTextureSync[workerIndex].delete(fullPath);
+                    }
+                    if (includeTeamColorPayload) {
+                        this.workerTeamColorSync[workerIndex].set(fullPath, renderState.teamColor);
                     }
                 }
             });
@@ -1055,6 +1260,46 @@ class ThumbnailService {
     public getWorkerStats(): { busy: number; total: number } {
         const busy = this.workerBusy.reduce((sum, cur) => sum + (cur ? 1 : 0), 0);
         return { busy, total: this.workerCount };
+    }
+
+    public pruneToActiveSet(activePaths: string[]) {
+        const keepSet = new Set(activePaths.filter(Boolean));
+        if (keepSet.size === 0) return;
+
+        const reserveCount = Math.max(24, keepSet.size * 2);
+        const keys = Array.from(this.modelCache.keys());
+        for (const key of keys) {
+            if (this.modelCache.size <= reserveCount && this.modelCacheTotalBytes <= this.MAIN_MODEL_CACHE_MAX_BYTES) {
+                break;
+            }
+            if (!keepSet.has(key)) {
+                this.removeMainCacheEntry(key);
+            }
+        }
+
+        const keepPaths = Array.from(keepSet);
+        for (const path of Array.from(this.modelWorkerAffinity.keys())) {
+            if (!keepSet.has(path)) {
+                this.modelWorkerAffinity.delete(path);
+            }
+        }
+        for (let i = 0; i < this.workerCount; i++) {
+            this.workerModelCache[i] = this.workerModelCache[i].filter((path) => keepSet.has(path));
+            for (const path of Array.from(this.workerTextureSync[i])) {
+                if (!keepSet.has(path)) {
+                    this.workerTextureSync[i].delete(path);
+                }
+            }
+            for (const path of Array.from(this.workerTeamColorSync[i].keys())) {
+                if (!keepSet.has(path)) {
+                    this.workerTeamColorSync[i].delete(path);
+                }
+            }
+            this.workers[i].postMessage({
+                type: 'PRUNE',
+                payload: { keepPaths }
+            });
+        }
     }
 
     public getPerfSnapshot() {
@@ -1138,12 +1383,15 @@ class ThumbnailService {
             workersBusy: worker.busy,
             workersTotal: worker.total,
             modelCache: this.modelCache.size,
+            modelCacheBytesMB: this.modelCacheTotalBytes / (1024 * 1024),
             textureCache: this.textureCache.size,
             sharedTextureCache: this.sharedTextureCache.size,
+            sharedTextureCacheBytesMB: this.sharedTextureTotalBytes / (1024 * 1024),
             modelLoading: this.resourceLoading.size,
             textureLoading: this.textureLoading.size,
             textureTaskRunning: this.textureTaskRunning,
             textureTaskPending: this.textureTaskQueue.length,
+            decodeDimension: this.getDecodeMaxDimension(),
             avgModelReadMs,
             avgModelParseMs,
             avgTextureMs,
@@ -1167,17 +1415,26 @@ class ThumbnailService {
 
     public clearAll() {
         this.modelCache.clear();
+        this.modelCacheBytes.clear();
+        this.modelCacheTotalBytes = 0;
         this.textureCache.clear();
         this.resourceLoading.clear();
         this.textureLoading.clear();
         this.sharedTextureCache.clear();
+        this.sharedTextureCacheBytes.clear();
+        this.sharedTextureTotalBytes = 0;
         this.sharedTextureLoading.clear();
         this.textureTaskQueue = [];
         this.textureTaskRunning = 0;
+        this.teamColorData = {};
+        this.teamColorDataByIndex.clear();
+        this.teamColorsLoadingByIndex.clear();
         this.modelPerf.clear();
         this.renderRequestMetrics.clear();
+        this.modelWorkerAffinity.clear();
         this.workerModelCache.forEach((_, i) => this.workerModelCache[i] = []);
         this.workerTextureSync.forEach(set => set.clear());
+        this.workerTeamColorSync.forEach(map => map.clear());
         this.workerBusy.fill(false);
         // Also clear workers' internal renderer cache
         this.workers.forEach(worker => worker.postMessage({ type: 'CLEAR' }));

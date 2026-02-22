@@ -2,11 +2,39 @@ import React, { useEffect, useRef } from 'react';
 import { thumbnailService } from './ThumbnailService';
 import { useSelectionStore } from '../../store/selectionStore';
 
+const BATCH_MAX_WORKER_FPS = 144;
+const BATCH_MAX_WORKER_FRAME_INTERVAL_MS = 1000 / BATCH_MAX_WORKER_FPS;
+
+function pickPreferredAnimation(animations: string[]): string | undefined {
+    if (animations.length === 0) return undefined;
+
+    const exactStand = animations.find((name) => name.trim().toLowerCase() === 'stand');
+    if (exactStand) return exactStand;
+
+    const standPrefix = animations.find((name) => /^stand(\b|[^a-z0-9_])/i.test(name.trim()));
+    if (standPrefix) return standPrefix;
+
+    const standContains = animations.find((name) => name.trim().toLowerCase().includes('stand'));
+    return standContains ?? animations[0];
+}
+
+function resolveAnimationIndex(animations: string[], selectedName?: string): number {
+    if (selectedName) {
+        const selectedIndex = animations.indexOf(selectedName);
+        if (selectedIndex >= 0) return selectedIndex;
+    }
+    const preferred = pickPreferredAnimation(animations);
+    if (!preferred) return 0;
+    return Math.max(0, animations.indexOf(preferred));
+}
+
 interface ThumbnailGeneratorProps {
     queue: { name: string; fullPath: string }[];
     onThumbnailReady: (fullPath: string, bitmap: ImageBitmap, animations?: string[]) => void;
     onItemProcessed: (fullPath: string) => void;
     isAnimating?: boolean;
+    selfSpinEnabled?: boolean;
+    selfSpinSpeed?: number;
     selectedAnimations?: Record<string, string>;
     modelAnimations?: Record<string, string[]>;
     visiblePaths?: Set<string>;
@@ -18,6 +46,8 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
     onThumbnailReady,
     onItemProcessed,
     isAnimating = true,
+    selfSpinEnabled = false,
+    selfSpinSpeed = 70,
     selectedAnimations = {},
     modelAnimations = {},
     visiblePaths = new Set(),
@@ -64,10 +94,17 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
             if (!active) return;
 
             const time = performance.now();
+            const shouldAnimateFrames = isAnimating || selfSpinEnabled;
 
             // 1. Process Initial Queue (Parallel Workers)
             if (queue.length > 0) {
-                const maxDispatch = 12;
+                const { busy, total } = thumbnailService.getWorkerStats();
+                const freeWorkers = Math.max(0, total - busy);
+                if (freeWorkers <= 0) {
+                    timerRef.current = setTimeout(loop, 2);
+                    return;
+                }
+                const maxDispatch = Math.max(1, Math.min(queue.length, freeWorkers));
                 const candidates = queue
                     .filter(item => !queueInFlightRef.current.has(item.fullPath))
                     .slice(0, maxDispatch);
@@ -75,14 +112,10 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
                 candidates.forEach((item) => {
                     queueInFlightRef.current.add(item.fullPath);
 
-                    let animName = selectedAnimationsRef.current[item.fullPath];
+                    const selectedAnimName = selectedAnimationsRef.current[item.fullPath];
                     const animList = modelAnimationsRef.current[item.fullPath] || thumbnailService.getCachedAnimations(item.fullPath) || [];
-                    if (!animName && animList.length > 0) {
-                        animName = animList[0];
-                    }
-
-                    const animIndex = isAnimating && animName ? Math.max(0, animList.indexOf(animName)) : 0;
-                    const frameTime = isAnimating ? performance.now() : 0;
+                    const animIndex = resolveAnimationIndex(animList, selectedAnimName);
+                    const frameTime = shouldAnimateFrames ? performance.now() : 0;
 
                     thumbnailService.renderFrame(
                         item.fullPath,
@@ -90,9 +123,11 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
                         animIndex,
                         !isAnimating,
                         {
-                            // Animate mode: prioritize first visual response, then stream textures in.
-                            preferFastFirstFrame: isAnimating,
-                            prioritize: selectedPath === item.fullPath
+                            // Always prioritize first visual response, then stream textures in.
+                            preferFastFirstFrame: true,
+                            prioritize: selectedPath === item.fullPath,
+                            spinEnabled: selfSpinEnabled,
+                            spinSpeed: selfSpinSpeed
                         }
                     )
                         .then((result) => {
@@ -115,15 +150,14 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
                         });
                 });
 
-                timerRef.current = setTimeout(loop, candidates.length > 0 ? 0 : 16);
+                timerRef.current = setTimeout(loop, candidates.length > 0 ? 0 : 8);
                 return;
             }
 
             // 2. Animation Loop for processed models
             const now = time;
 
-            const visibleCount = Math.max(1, visiblePaths.size);
-            const throttleLimit = visibleCount <= 3 ? 33 : visibleCount <= 6 ? 50 : 66;
+            const throttleLimit = BATCH_MAX_WORKER_FRAME_INTERVAL_MS;
 
             const timeSinceLastRender = now - lastRenderTimeRef.current;
             if (timeSinceLastRender < throttleLimit) {
@@ -142,9 +176,10 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
                     return;
                 }
 
-                if (isAnimating) {
+                if (shouldAnimateFrames) {
                     const itemsToAnimate = processedPaths.current.filter(p => visiblePaths.has(p));
-                    const selectedInView = selectedPath && itemsToAnimate.includes(selectedPath) ? selectedPath : null;
+                    const shouldPinSelected = itemsToAnimate.length <= 12;
+                    const selectedInView = shouldPinSelected && selectedPath && itemsToAnimate.includes(selectedPath) ? selectedPath : null;
 
                     // PERIODIC PRUNE: Relaxed to 10 seconds to prevent thrashing
                     if (now - lastPruneTimeRef.current > 10000) {
@@ -159,7 +194,12 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
                     if (itemsToAnimate.length > 0) {
                         const { busy, total } = thumbnailService.getWorkerStats();
                         const freeWorkers = Math.max(0, total - busy);
-                        const dynamicBudget = Math.max(1, Math.min(itemsToAnimate.length, freeWorkers * 2 + 2));
+                        if (freeWorkers <= 0) {
+                            if (active) timerRef.current = setTimeout(loop, 2);
+                            return;
+                        }
+                        // Avoid oversubscribing workers under high-card pages; this keeps frame pacing stable.
+                        const dynamicBudget = Math.max(1, Math.min(itemsToAnimate.length, freeWorkers));
 
                         const nonSelected = selectedInView
                             ? itemsToAnimate.filter(p => p !== selectedInView)
@@ -181,7 +221,9 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
                                 idx = (idx + 1) % nonSelected.length;
                                 if (idx === start) break;
                             }
-                            roundRobinCursorRef.current = (start + Math.max(1, dynamicBudget - (selectedInView ? 1 : 0))) % nonSelected.length;
+                            const requestedStep = Math.max(1, dynamicBudget - (selectedInView ? 1 : 0));
+                            const normalizedStep = requestedStep % nonSelected.length === 0 ? 1 : requestedStep;
+                            roundRobinCursorRef.current = (start + normalizedStep) % nonSelected.length;
                         }
 
                         targets.forEach((targetPath) => {
@@ -189,12 +231,14 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
 
                             const animName = selectedAnimationsRef.current[targetPath];
                             const animList = modelAnimationsRef.current[targetPath] || [];
-                            const animIndex = animName ? Math.max(0, animList.indexOf(animName)) : 0;
+                            const animIndex = resolveAnimationIndex(animList, animName);
 
                             pendingRequestsRef.current.add(targetPath);
 
-                            thumbnailService.renderFrame(targetPath, now, animIndex, false, {
-                                prioritize: selectedPath === targetPath
+                            thumbnailService.renderFrame(targetPath, now, animIndex, !isAnimating, {
+                                prioritize: !!selectedInView && selectedPath === targetPath,
+                                spinEnabled: selfSpinEnabled,
+                                spinSpeed: selfSpinSpeed
                             }).then(res => {
                                 pendingRequestsRef.current.delete(targetPath);
                                 if (res.status === 'success' && res.bitmap) {
@@ -217,7 +261,7 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
             active = false;
             if (timerRef.current) clearTimeout(timerRef.current);
         };
-    }, [queue, onThumbnailReady, onItemProcessed, isAnimating, visiblePaths, mainMode, selectedPath]);
+    }, [queue, onThumbnailReady, onItemProcessed, isAnimating, selfSpinEnabled, selfSpinSpeed, visiblePaths, mainMode, selectedPath]);
 
     return null;
 };

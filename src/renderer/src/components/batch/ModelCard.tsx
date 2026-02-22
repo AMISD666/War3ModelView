@@ -16,6 +16,7 @@ interface ModelCardProps {
     file: ModelFile;
     initialAnimations?: string[];
     initialSelectedAnimation?: string;
+    fixedSize?: number;
     isSelected?: boolean;
     showAnimationSelect?: boolean;
     onDelete: (file: ModelFile) => void;
@@ -27,10 +28,24 @@ interface ModelCardProps {
     onVisibilityChange?: (fullPath: string, isVisible: boolean) => void;
 }
 
+function pickPreferredAnimation(animations: string[]): string | undefined {
+    if (animations.length === 0) return undefined;
+
+    const exactStand = animations.find((name) => name.trim().toLowerCase() === 'stand');
+    if (exactStand) return exactStand;
+
+    const standPrefix = animations.find((name) => /^stand(\b|[^a-z0-9_])/i.test(name.trim()));
+    if (standPrefix) return standPrefix;
+
+    const standContains = animations.find((name) => name.trim().toLowerCase().includes('stand'));
+    return standContains ?? animations[0];
+}
+
 export const ModelCard: React.FC<ModelCardProps> = React.memo(({
     file,
     initialAnimations = [],
     initialSelectedAnimation,
+    fixedSize = 190,
     isSelected = false,
     showAnimationSelect = true,
     onDelete,
@@ -43,7 +58,9 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
 }) => {
     const [bitmap, setBitmap] = useState<ImageBitmap | null>(thumbnailEventBus.getBitmap(file.fullPath) || null);
     const [animations, setAnimations] = useState<string[]>(initialAnimations);
-    const [selectedAnimation, setSelectedAnimation] = useState<string | undefined>(initialSelectedAnimation);
+    const [selectedAnimation, setSelectedAnimation] = useState<string | undefined>(
+        () => initialSelectedAnimation ?? pickPreferredAnimation(initialAnimations)
+    );
     const cardRef = useRef<HTMLDivElement>(null);
 
     // 1. Subscribe to Thumbnail Updates (Bypass parent re-render)
@@ -54,7 +71,7 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
         const handleAnims = (newAnims: string[]) => {
             setAnimations(newAnims);
             if (!selectedAnimation && newAnims.length > 0) {
-                setSelectedAnimation(newAnims[0]);
+                setSelectedAnimation(pickPreferredAnimation(newAnims) ?? newAnims[0]);
             }
         };
 
@@ -93,11 +110,13 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
                 borderRadius: 8,
                 padding: 4,
                 transition: 'all 0.2s',
-                height: '100%',
-                minHeight: 0,
+                width: fixedSize,
+                height: fixedSize,
+                alignSelf: 'start',
                 boxSizing: 'border-box',
                 cursor: 'pointer',
-                overflow: 'hidden'
+                overflow: 'hidden',
+                flexShrink: 0
             }}
             className="model-card-hover"
             onClick={() => onSelect?.(file)}
@@ -128,7 +147,7 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
                     opacity: 0,
                     transition: 'opacity 0.2s'
                 }}>
-                    <Tooltip title="????">
+                    <Tooltip title="澶嶅埗妯″瀷">
                         <Button
                             type="text"
                             icon={<CopyOutlined style={{ color: '#fff' }} />}
@@ -138,7 +157,7 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
                         />
                     </Tooltip>
 
-                    <Tooltip title="??????">
+                    <Tooltip title="淇敼璐村浘璺緞">
                         <Button
                             type="text"
                             icon={<FileImageOutlined style={{ color: '#fff' }} />}
@@ -148,7 +167,7 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
                         />
                     </Tooltip>
 
-                    <Tooltip title="????">
+                    <Tooltip title="鍒犻櫎妯″瀷">
                         <Button
                             type="text"
                             danger
@@ -190,7 +209,7 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
                 {showAnimationSelect && animations.length > 0 && (
                     <Select
                         size="small"
-                        placeholder="????"
+                        placeholder="閫夋嫨鍔ㄧ敾"
                         value={selectedAnimation}
                         onChange={(value) => {
                             setSelectedAnimation(value);

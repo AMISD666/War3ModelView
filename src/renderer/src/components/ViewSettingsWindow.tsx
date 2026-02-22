@@ -487,6 +487,12 @@ export const ViewSettingsWindow: React.FC = () => {
                         width: 70px;
                         flex-shrink: 0;
                     }
+                    .dark-theme-modal .ant-tabs-tab .ant-tabs-tab-btn {
+                        color: #fff !important;
+                    }
+                    .dark-theme-modal .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn {
+                        color: #1677ff !important;
+                    }
                 `}</style>
                 <Tabs defaultActiveKey="general" size="small" tabBarStyle={{ marginBottom: 12 }}>
                     <Tabs.TabPane tab="常规设置" key="general">

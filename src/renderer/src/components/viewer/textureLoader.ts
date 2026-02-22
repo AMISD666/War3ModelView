@@ -17,6 +17,10 @@ export interface TextureLoadResult {
 export interface DecodeTextureOptions {
     // For thumbnail/batch use-cases: decode a smaller texture representation.
     maxDimension?: number
+    // Use BLP mip0 to avoid broken lower mips on some custom models.
+    preferBlpBaseMip?: boolean
+    // Ignore source alpha and force fully opaque pixels.
+    forceOpaqueAlpha?: boolean
 }
 
 /**
@@ -218,15 +222,92 @@ function downscaleImageDataIfNeeded(imageData: ImageData, maxDimension?: number)
     return imageData
 }
 
+function forceOpaqueAlphaIfNeeded(imageData: ImageData, forceOpaqueAlpha?: boolean): ImageData {
+    if (!forceOpaqueAlpha) return imageData
+    const data = imageData.data
+    for (let i = 3; i < data.length; i += 4) {
+        data[i] = 255
+    }
+    return imageData
+}
+
+interface ImageLumaStats {
+    alphaSampleCount: number
+    meanLuma: number
+    brightRatio: number
+}
+
+function getImageLumaStats(imageData: ImageData): ImageLumaStats {
+    const data = imageData.data
+    const pixelCount = data.length >> 2
+    if (pixelCount <= 0) {
+        return { alphaSampleCount: 0, meanLuma: 0, brightRatio: 0 }
+    }
+
+    const maxSamples = 4096
+    const step = Math.max(1, Math.floor(pixelCount / maxSamples))
+
+    let alphaSampleCount = 0
+    let lumaSum = 0
+    let brightCount = 0
+
+    for (let pixel = 0; pixel < pixelCount; pixel += step) {
+        const i = pixel * 4
+        const a = data[i + 3]
+        if (a <= 8) continue
+
+        const r = data[i]
+        const g = data[i + 1]
+        const b = data[i + 2]
+        const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+        alphaSampleCount += 1
+        lumaSum += luma
+        if (luma >= 48) brightCount += 1
+    }
+
+    if (alphaSampleCount <= 0) {
+        return { alphaSampleCount: 0, meanLuma: 0, brightRatio: 0 }
+    }
+
+    return {
+        alphaSampleCount,
+        meanLuma: lumaSum / alphaSampleCount,
+        brightRatio: brightCount / alphaSampleCount
+    }
+}
+
+function shouldTryBlpBaseMipFallback(imageData: ImageData): boolean {
+    const stats = getImageLumaStats(imageData)
+    if (stats.alphaSampleCount < 64) return false
+    // Broken low mips are often almost-black while still mostly opaque.
+    return stats.meanLuma < 22 && stats.brightRatio < 0.04
+}
+
+function shouldUseBlpBaseMip(preferred: ImageData, base: ImageData): boolean {
+    const preferredStats = getImageLumaStats(preferred)
+    const baseStats = getImageLumaStats(base)
+
+    if (preferredStats.alphaSampleCount < 64 || baseStats.alphaSampleCount < 64) {
+        return false
+    }
+
+    return (
+        baseStats.meanLuma >= preferredStats.meanLuma + 18 &&
+        baseStats.brightRatio >= preferredStats.brightRatio + 0.08
+    )
+}
+
 export function decodeTextureData(buffer: ArrayBuffer, path: string, options?: DecodeTextureOptions): ImageData | null {
     const isTga = path.toLowerCase().endsWith('.tga');
     try {
         if (isTga) {
             const decoded = decodeTGA(buffer);
-            return downscaleImageDataIfNeeded(decoded, options?.maxDimension);
+            const resized = downscaleImageDataIfNeeded(decoded, options?.maxDimension);
+            return forceOpaqueAlphaIfNeeded(resized, options?.forceOpaqueAlpha);
         } else {
             const blp = decodeBLP(buffer);
-            const preferredMip = chooseBlpMipLevel(blp, options?.maxDimension);
+            const preferredMip = options?.preferBlpBaseMip ? 0 : chooseBlpMipLevel(blp, options?.maxDimension);
 
             let mip: any;
             try {
@@ -235,12 +316,34 @@ export function decodeTextureData(buffer: ArrayBuffer, path: string, options?: D
                 mip = getBLPImageData(blp, 0);
             }
 
-            const decoded = new ImageData(
+            let decoded = new ImageData(
                 (mip.data instanceof Uint8ClampedArray ? mip.data : new Uint8ClampedArray(mip.data)) as any,
                 mip.width,
                 mip.height
             );
-            return downscaleImageDataIfNeeded(decoded, options?.maxDimension);
+
+            if (
+                preferredMip > 0 &&
+                !options?.preferBlpBaseMip &&
+                shouldTryBlpBaseMipFallback(decoded)
+            ) {
+                try {
+                    const baseMip = getBLPImageData(blp, 0);
+                    const baseDecoded = new ImageData(
+                        (baseMip.data instanceof Uint8ClampedArray ? baseMip.data : new Uint8ClampedArray(baseMip.data)) as any,
+                        baseMip.width,
+                        baseMip.height
+                    );
+                    if (shouldUseBlpBaseMip(decoded, baseDecoded)) {
+                        decoded = baseDecoded;
+                    }
+                } catch {
+                    // Keep preferred mip if fallback decoding fails.
+                }
+            }
+
+            const resized = downscaleImageDataIfNeeded(decoded, options?.maxDimension);
+            return forceOpaqueAlphaIfNeeded(resized, options?.forceOpaqueAlpha);
         }
     } catch (e) {
         console.warn(`[Texture] Failed to decode ${path}:`, e);
@@ -462,25 +565,14 @@ function decodeTGA(buffer: ArrayBuffer): ImageData {
  */
 export async function decodeTexture(
     texturePath: string,
-    modelPath: string
+    modelPath: string,
+    options?: DecodeTextureOptions
 ): Promise<{ path: string; imageData: ImageData | null; error?: string }> {
     const startTime = performance.now()
-    const isTga = texturePath.toLowerCase().endsWith('.tga')
 
     // Helper to decode buffer based on type
-    const decodeBuffer = (buffer: ArrayBuffer, isTgaFile: boolean) => {
-        if (isTgaFile) {
-            return decodeTGA(buffer)
-        } else {
-            const blp = decodeBLP(buffer)
-            const mipLevel0 = getBLPImageData(blp, 0)
-            return new ImageData(
-                new Uint8ClampedArray(mipLevel0.data),
-                mipLevel0.width,
-                mipLevel0.height
-            )
-        }
-    }
+    const decodeBuffer = (buffer: ArrayBuffer) =>
+        decodeTextureData(buffer, texturePath, options)
 
     // Strategy 1: Try local file system first (relative to model)
     if (modelPath && !modelPath.startsWith('dropped:')) {
@@ -489,7 +581,8 @@ export async function decodeTexture(
             const texBuffer = await readFile(candidate).catch(() => null)
             if (texBuffer) {
                 try {
-                    const imageData = decodeBuffer(texBuffer.buffer, isTga)
+                    const imageData = decodeBuffer(texBuffer.buffer)
+                    if (!imageData) continue
                     console.debug(`[Texture] ${texturePath}: Decoded from FS in ${(performance.now() - startTime).toFixed(1)}ms`)
                     return { path: texturePath, imageData }
                 } catch (e) {
@@ -503,7 +596,10 @@ export async function decodeTexture(
     try {
         const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: normalizePath(texturePath) })
         if (mpqData && mpqData.length > 0) {
-            const imageData = decodeBuffer(mpqData.buffer as ArrayBuffer, isTga)
+            const imageData = decodeBuffer(mpqData.buffer as ArrayBuffer)
+            if (!imageData) {
+                return { path: texturePath, imageData: null, error: 'Decode failed' }
+            }
             console.debug(`[Texture] ${texturePath}: Decoded from MPQ in ${(performance.now() - startTime).toFixed(1)}ms`)
             return { path: texturePath, imageData }
         }
@@ -515,7 +611,10 @@ export async function decodeTexture(
     try {
         const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: normalizePath(texturePath) })
         if (mpqData && mpqData.length > 0) {
-            const imageData = decodeBuffer(mpqData.buffer as ArrayBuffer, isTga)
+            const imageData = decodeBuffer(mpqData.buffer as ArrayBuffer)
+            if (!imageData) {
+                return { path: texturePath, imageData: null, error: 'Decode failed' }
+            }
             console.debug(`[Texture] ${texturePath}: Decoded from MPQ (fallback search) in ${(performance.now() - startTime).toFixed(1)}ms`)
             return { path: texturePath, imageData }
         }

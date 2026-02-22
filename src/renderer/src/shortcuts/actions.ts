@@ -277,6 +277,22 @@ export const shortcutActions: ShortcutAction[] = [
         preventDefault: true
     },
     {
+        id: 'animation.prevSequence',
+        label: '\u4e0a\u4e00\u4e2a\u64ad\u653e\u52a8\u4f5c',
+        category: '动画',
+        contexts: ['view', 'geometry', 'uv', 'animation'],
+        defaultBindings: ['ArrowUp'],
+        preventDefault: true
+    },
+    {
+        id: 'animation.nextSequence',
+        label: '\u4e0b\u4e00\u4e2a\u64ad\u653e\u52a8\u4f5c',
+        category: '动画',
+        contexts: ['view', 'geometry', 'uv', 'animation'],
+        defaultBindings: ['ArrowDown'],
+        preventDefault: true
+    },
+    {
         id: 'animation.selectParentNode',
         label: '选取父节点',
         category: '动画',

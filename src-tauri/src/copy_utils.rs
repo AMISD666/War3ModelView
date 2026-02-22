@@ -495,9 +495,9 @@ pub fn copy_models_with_textures(
 
     let total_textures = texture_count.load(Ordering::Relaxed);
     let message = if model_names.len() == 1 {
-        format!("Copied {} ({} textures)", model_names[0], total_textures)
+        format!("已复制 {} ({} 个贴图)", model_names[0], total_textures)
     } else {
-        format!("Copied {} models ({} textures)", model_names.len(), total_textures)
+        format!("已复制 {} 个模型 ({} 个贴图)", model_names.len(), total_textures)
     };
     Ok((message, files_to_copy.len()))
 }

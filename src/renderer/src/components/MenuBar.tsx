@@ -183,7 +183,8 @@ const MenuBar: React.FC<MenuBarProps> = ({
         padding: '5px 10px',
         cursor: 'pointer',
         userSelect: 'none',
-        color: '#eee'
+        color: '#eee',
+        whiteSpace: 'nowrap'
     }
 
     const dropdownStyle: React.CSSProperties = {
@@ -291,8 +292,8 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             <span>保存模型</span>
                             <span style={{ color: '#888', fontSize: '11px' }}>Ctrl+S</span>
                         </div>
-                        
-                        
+
+
                         <div
                             style={itemStyle}
                             onMouseEnter={hoverStyle}
@@ -302,7 +303,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             <span>{"\u590d\u5236\u6a21\u578b"}</span>
                             <span style={{ color: '#888', fontSize: '11px' }}>Shift+C</span>
                         </div>
-                        
+
                         <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
                         <div
                             style={itemStyle}
@@ -648,7 +649,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
                         >
                             删除所有光照
                         </div>
-                        
+
                         <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
                         <div
                             style={itemStyle}
@@ -734,7 +735,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
 
             <div style={{ width: 1, height: 18, backgroundColor: '#555', margin: '0 8px 0 6px' }} />
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingRight: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingRight: 8, flexShrink: 0 }}>
                 {quickToggleItems.map((item) => (
                     <Tooltip
                         key={item.key}

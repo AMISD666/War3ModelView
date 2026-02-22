@@ -94,6 +94,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
     const batchReset = useBatchStore(state => state.reset);
 
     // UI state
+    const FIXED_CARD_SIZE = 190;
     const [currentPage, setCurrentPage] = useState(1);
     const [pageSize, setPageSize] = useState(12);
     const [visiblePaths, setVisiblePaths] = useState<Set<string>>(new Set());
@@ -860,21 +861,22 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                     <>
                         <div style={{
                             display: 'grid',
-                            gridTemplateColumns: 'repeat(4, 1fr)',
-                            gridTemplateRows: 'repeat(3, minmax(0, 1fr))',
-                            gridAutoRows: 'minmax(0, 1fr)',
+                            gridTemplateColumns: `repeat(auto-fill, ${FIXED_CARD_SIZE}px)`,
+                            gridAutoRows: `${FIXED_CARD_SIZE}px`,
                             gap: 12,
-                            overflow: 'hidden',
+                            overflowY: 'auto',
+                            overflowX: 'hidden',
                             flex: 1,
                             minHeight: 0,
                             paddingRight: 8,
-                            alignItems: 'stretch',
-                            alignContent: 'stretch'
+                            alignItems: 'start',
+                            alignContent: 'start'
                         }}>
                             {files.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((file) => (
                                 <ModelCard
                                     key={file.fullPath}
                                     file={file}
+                                    fixedSize={FIXED_CARD_SIZE}
                                     initialAnimations={modelAnimations[file.fullPath]}
                                     initialSelectedAnimation={selectedAnimations[file.fullPath]}
                                     showAnimationSelect={!fastMode}

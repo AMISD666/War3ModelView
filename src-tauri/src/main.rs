@@ -10,12 +10,13 @@ mod texture_decode;
 
 use base64::Engine;
 use mpq_manager::MpqManager;
+use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{ipc::Response, Emitter, Manager, State};
-use texture_decode::{get_texture_candidate_paths, normalize_path};
+use texture_decode::{decode_texture_bytes_with_max_dimension, get_texture_candidate_paths, normalize_path};
 
 use winreg::enums::*;
 use winreg::RegKey;
@@ -29,6 +30,16 @@ const TEXTURE_PATH_CACHE_LIMIT: usize = 8192;
 const TEXTURE_RESULT_CACHE_LIMIT: usize = 1024;
 const TEXTURE_RESULT_CACHE_MAX_BYTES: usize = 192 * 1024 * 1024;
 const TEXTURE_RESULT_CACHE_MAX_ENTRY_BYTES: usize = 8 * 1024 * 1024;
+const TEXTURE_RGBA_CACHE_LIMIT: usize = 2048;
+const TEXTURE_RGBA_CACHE_MAX_BYTES: usize = 192 * 1024 * 1024;
+const TEXTURE_RGBA_CACHE_MAX_ENTRY_BYTES: usize = 2 * 1024 * 1024;
+
+#[derive(Clone)]
+struct CachedRgbaImage {
+    width: u32,
+    height: u32,
+    data: Arc<Vec<u8>>,
+}
 
 #[derive(Default)]
 struct TextureBatchCacheInner {
@@ -41,6 +52,11 @@ struct TextureBatchCacheInner {
     result_bytes: HashMap<String, Arc<Vec<u8>>>,
     result_lru: VecDeque<String>,
     result_total_bytes: usize,
+
+    // key: "{source_key}|{max_dimension}" where source_key is "fs:{path_lower}" / "mpq:{path_lower}"
+    rgba_images: HashMap<String, Arc<CachedRgbaImage>>,
+    rgba_lru: VecDeque<String>,
+    rgba_total_bytes: usize,
 }
 
 struct TextureBatchCache {
@@ -124,6 +140,42 @@ impl TextureBatchCache {
             };
             if let Some(old) = guard.result_bytes.remove(&old_key) {
                 guard.result_total_bytes = guard.result_total_bytes.saturating_sub(old.len());
+            }
+        }
+    }
+
+    fn get_rgba_image(&self, key: &str) -> Option<Arc<CachedRgbaImage>> {
+        let mut guard = self.inner.lock().unwrap();
+        let value = guard.rgba_images.get(key).cloned();
+        if value.is_some() {
+            Self::touch_lru(&mut guard.rgba_lru, key);
+        }
+        value
+    }
+
+    fn put_rgba_image(&self, key: String, image: Arc<CachedRgbaImage>) {
+        let entry_bytes = image.data.len();
+        if entry_bytes > TEXTURE_RGBA_CACHE_MAX_ENTRY_BYTES {
+            return;
+        }
+
+        let mut guard = self.inner.lock().unwrap();
+        if let Some(old) = guard.rgba_images.remove(&key) {
+            guard.rgba_total_bytes = guard.rgba_total_bytes.saturating_sub(old.data.len());
+        }
+        guard.rgba_total_bytes = guard.rgba_total_bytes.saturating_add(entry_bytes);
+        guard.rgba_images.insert(key.clone(), image);
+        Self::touch_lru(&mut guard.rgba_lru, &key);
+
+        while guard.rgba_images.len() > TEXTURE_RGBA_CACHE_LIMIT
+            || guard.rgba_total_bytes > TEXTURE_RGBA_CACHE_MAX_BYTES
+        {
+            let old_key = match guard.rgba_lru.pop_front() {
+                Some(k) => k,
+                None => break,
+            };
+            if let Some(old) = guard.rgba_images.remove(&old_key) {
+                guard.rgba_total_bytes = guard.rgba_total_bytes.saturating_sub(old.data.len());
             }
         }
     }
@@ -232,6 +284,73 @@ fn read_local_files_batch(paths: Vec<String>) -> Vec<Option<String>> {
         .collect()
 }
 
+fn load_texture_bytes_with_source_key(
+    normalized_model_path: &str,
+    normalized_model_path_lc: &str,
+    normalized_texture_path: &str,
+    normalized_texture_path_lc: &str,
+    skip_fs: bool,
+    state: &MpqManager,
+    cache: &TextureBatchCache,
+) -> Option<(Arc<Vec<u8>>, String)> {
+    let path_cache_key = format!(
+        "{}|{}",
+        normalized_model_path_lc,
+        normalized_texture_path_lc
+    );
+
+    if !skip_fs {
+        let mut cached_fs_path = cache.get_path_hit(&path_cache_key).unwrap_or(None);
+
+        if let Some(fs_path) = cached_fs_path.clone() {
+            let fs_key = format!("fs:{}", fs_path.to_lowercase());
+            if let Some(bytes) = cache.get_result_bytes(&fs_key) {
+                return Some((bytes, fs_key));
+            } else if let Ok(bytes) = std::fs::read(&fs_path) {
+                if bytes.len() <= 50 * 1024 * 1024 {
+                    let bytes_arc = Arc::new(bytes);
+                    cache.put_result_bytes(fs_key.clone(), bytes_arc.clone());
+                    return Some((bytes_arc, fs_key));
+                }
+            } else {
+                // Cached path became stale, force re-probe.
+                cache.invalidate_path_hit(&path_cache_key);
+                cached_fs_path = None;
+            }
+        }
+
+        if cached_fs_path.is_none() {
+            let candidates = get_texture_candidate_paths(normalized_model_path, normalized_texture_path);
+            let mut resolved_fs_path: Option<String> = None;
+            for candidate in candidates {
+                if let Ok(bytes) = std::fs::read(&candidate) {
+                    if bytes.len() <= 50 * 1024 * 1024 {
+                        let fs_key = format!("fs:{}", candidate.to_lowercase());
+                        let bytes_arc = Arc::new(bytes);
+                        cache.put_result_bytes(fs_key.clone(), bytes_arc.clone());
+                        resolved_fs_path = Some(candidate);
+                        cache.put_path_hit(path_cache_key.clone(), resolved_fs_path);
+                        return Some((bytes_arc, fs_key));
+                    }
+                }
+            }
+            cache.put_path_hit(path_cache_key.clone(), resolved_fs_path);
+        }
+    }
+
+    let mpq_key = format!("mpq:{}", normalized_texture_path_lc);
+    if let Some(bytes) = cache.get_result_bytes(&mpq_key) {
+        return Some((bytes, mpq_key));
+    }
+    if let Some(bytes) = state.read_file(normalized_texture_path) {
+        let bytes_arc = Arc::new(bytes);
+        cache.put_result_bytes(mpq_key.clone(), bytes_arc.clone());
+        return Some((bytes_arc, mpq_key));
+    }
+
+    None
+}
+
 #[tauri::command]
 fn load_textures_batch_bin(
     model_path: String,
@@ -246,67 +365,26 @@ fn load_textures_batch_bin(
     let normalized_model_path_lc = normalized_model_path.to_lowercase();
     let skip_fs = normalized_model_path.starts_with("dropped:") || normalized_model_path.is_empty();
 
-    for texture_path in texture_paths {
-        let normalized_texture_path = normalize_path(&texture_path);
-        let normalized_texture_path_lc = normalized_texture_path.to_lowercase();
-        let mut data: Option<Arc<Vec<u8>>> = None;
-        let path_cache_key = format!(
-            "{}|{}",
-            normalized_model_path_lc.as_str(),
-            normalized_texture_path_lc.as_str()
-        );
+    let resolved_bytes: Vec<Option<Arc<Vec<u8>>>> = texture_paths
+        .par_iter()
+        .map(|texture_path| {
+            let normalized_texture_path = normalize_path(texture_path);
+            let normalized_texture_path_lc = normalized_texture_path.to_lowercase();
+            load_texture_bytes_with_source_key(
+                &normalized_model_path,
+                &normalized_model_path_lc,
+                &normalized_texture_path,
+                &normalized_texture_path_lc,
+                skip_fs,
+                &state,
+                &cache,
+            )
+            .map(|(bytes, _source_key)| bytes)
+        })
+        .collect();
 
-        if !skip_fs {
-            let mut cached_fs_path = cache.get_path_hit(&path_cache_key).unwrap_or(None);
-
-            if let Some(fs_path) = cached_fs_path.clone() {
-                let fs_key = format!("fs:{}", fs_path.to_lowercase());
-                if let Some(bytes) = cache.get_result_bytes(&fs_key) {
-                    data = Some(bytes);
-                } else if let Ok(bytes) = std::fs::read(&fs_path) {
-                    if bytes.len() <= 50 * 1024 * 1024 {
-                        let bytes_arc = Arc::new(bytes);
-                        cache.put_result_bytes(fs_key, bytes_arc.clone());
-                        data = Some(bytes_arc);
-                    }
-                } else {
-                    // Cached path became stale, force re-probe.
-                    cache.invalidate_path_hit(&path_cache_key);
-                    cached_fs_path = None;
-                }
-            }
-
-            if data.is_none() && cached_fs_path.is_none() {
-                let candidates = get_texture_candidate_paths(&normalized_model_path, &normalized_texture_path);
-                let mut resolved_fs_path: Option<String> = None;
-                for candidate in candidates {
-                    if let Ok(bytes) = std::fs::read(&candidate) {
-                        if bytes.len() <= 50 * 1024 * 1024 {
-                            let fs_key = format!("fs:{}", candidate.to_lowercase());
-                            let bytes_arc = Arc::new(bytes);
-                            cache.put_result_bytes(fs_key, bytes_arc.clone());
-                            data = Some(bytes_arc);
-                            resolved_fs_path = Some(candidate);
-                            break;
-                        }
-                    }
-                }
-                cache.put_path_hit(path_cache_key.clone(), resolved_fs_path);
-            }
-        }
-
-        if data.is_none() {
-            let mpq_key = format!("mpq:{}", normalized_texture_path_lc.as_str());
-            if let Some(bytes) = cache.get_result_bytes(&mpq_key) {
-                data = Some(bytes);
-            } else if let Some(bytes) = state.read_file(&normalized_texture_path) {
-                let bytes_arc = Arc::new(bytes);
-                cache.put_result_bytes(mpq_key, bytes_arc.clone());
-                data = Some(bytes_arc);
-            }
-        }
-
-        if let Some(bytes) = data {
+    for maybe_bytes in resolved_bytes {
+        if let Some(bytes) = maybe_bytes {
             if bytes.len() <= 50 * 1024 * 1024 {
                 payload.push(1u8);
                 payload.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
@@ -317,6 +395,111 @@ fn load_textures_batch_bin(
             }
         } else {
             payload.push(0u8);
+            payload.extend_from_slice(&0u32.to_le_bytes());
+        }
+    }
+
+    Ok(Response::new(payload))
+}
+
+#[tauri::command]
+fn load_textures_batch_thumb_rgba(
+    model_path: String,
+    texture_paths: Vec<String>,
+    max_dimension: Option<u32>,
+    state: State<'_, MpqManager>,
+    cache: State<'_, TextureBatchCache>,
+) -> Result<Response, String> {
+    let mut payload: Vec<u8> = Vec::new();
+    let texture_count = texture_paths.len();
+    payload.extend_from_slice(&(texture_count as u32).to_le_bytes());
+
+    let normalized_model_path = normalize_path(&model_path);
+    let normalized_model_path_lc = normalized_model_path.to_lowercase();
+    let skip_fs = normalized_model_path.starts_with("dropped:") || normalized_model_path.is_empty();
+    let decode_max_dimension = max_dimension.unwrap_or(224).clamp(64, 512);
+
+    let mut decoded_images: Vec<Option<Arc<CachedRgbaImage>>> = vec![None; texture_count];
+    let mut decode_jobs: Vec<(usize, Arc<Vec<u8>>, String, String)> = Vec::new();
+
+    for (index, texture_path) in texture_paths.iter().enumerate() {
+        let normalized_texture_path = normalize_path(&texture_path);
+        let normalized_texture_path_lc = normalized_texture_path.to_lowercase();
+        if let Some((bytes, source_key)) = load_texture_bytes_with_source_key(
+            &normalized_model_path,
+            &normalized_model_path_lc,
+            &normalized_texture_path,
+            &normalized_texture_path_lc,
+            skip_fs,
+            &state,
+            &cache,
+        ) {
+            let decode_key = format!("{}|{}", source_key, decode_max_dimension);
+            if let Some(cached) = cache.get_rgba_image(&decode_key) {
+                decoded_images[index] = Some(cached);
+            } else {
+                decode_jobs.push((index, bytes, normalized_texture_path, decode_key));
+            }
+        }
+    }
+
+    let decoded_results: Vec<(usize, String, Option<Arc<CachedRgbaImage>>)> = decode_jobs
+        .into_par_iter()
+        .map(|(index, bytes, normalized_texture_path, decode_key)| {
+            let decoded_image = decode_texture_bytes_with_max_dimension(
+                bytes.as_slice(),
+                &normalized_texture_path,
+                Some(decode_max_dimension),
+            )
+            .ok()
+            .and_then(|decoded| {
+                let expected_len = (decoded.width as usize)
+                    .saturating_mul(decoded.height as usize)
+                    .saturating_mul(4);
+                if decoded.width > 0
+                    && decoded.height > 0
+                    && decoded.data.len() == expected_len
+                    && decoded.data.len() <= 50 * 1024 * 1024
+                {
+                    Some(Arc::new(CachedRgbaImage {
+                        width: decoded.width,
+                        height: decoded.height,
+                        data: Arc::new(decoded.data),
+                    }))
+                } else {
+                    None
+                }
+            });
+            (index, decode_key, decoded_image)
+        })
+        .collect();
+
+    for (index, decode_key, decoded_image) in decoded_results {
+        if let Some(image) = decoded_image {
+            cache.put_rgba_image(decode_key, image.clone());
+            decoded_images[index] = Some(image);
+        }
+    }
+
+    for decoded_image in decoded_images {
+        if let Some(image) = decoded_image {
+            let data_len = image.data.len();
+            if data_len <= 50 * 1024 * 1024 && data_len <= u32::MAX as usize {
+                payload.push(1u8);
+                payload.extend_from_slice(&image.width.to_le_bytes());
+                payload.extend_from_slice(&image.height.to_le_bytes());
+                payload.extend_from_slice(&(data_len as u32).to_le_bytes());
+                payload.extend_from_slice(image.data.as_slice());
+            } else {
+                payload.push(0u8);
+                payload.extend_from_slice(&0u32.to_le_bytes());
+                payload.extend_from_slice(&0u32.to_le_bytes());
+                payload.extend_from_slice(&0u32.to_le_bytes());
+            }
+        } else {
+            payload.push(0u8);
+            payload.extend_from_slice(&0u32.to_le_bytes());
+            payload.extend_from_slice(&0u32.to_le_bytes());
             payload.extend_from_slice(&0u32.to_le_bytes());
         }
     }
@@ -1180,6 +1363,7 @@ fn main() {
             debug_mpq_probe,
             read_local_files_batch,
             load_textures_batch_bin,
+            load_textures_batch_thumb_rgba,
             detect_warcraft_path,
             toggle_console,
             debug_log,

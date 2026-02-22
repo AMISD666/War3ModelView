@@ -6,7 +6,7 @@
  */
 
 // @ts-ignore
-import { parseMDX, parseMDL, ModelRenderer } from 'war3-model';
+import { parseMDX, parseMDL, ModelRenderer, decodeBLP, getBLPImageData } from 'war3-model';
 import { mat4, vec3, quat } from 'gl-matrix';
 
 const REPLACEABLE_TEXTURES: Record<number, string> = {
@@ -23,11 +23,176 @@ const REPLACEABLE_TEXTURES: Record<number, string> = {
     37: 'OutlandMushroomTree\\MushroomTree',
 }
 
-const THUMBNAIL_SIZE = 128;
-const MAX_BATCH_TEXTURES = 16;
+const THUMBNAIL_SIZE = 256;
+
+// --- TGA Constants ---
+const TGA_TYPE_RGB = 2;
+const TGA_TYPE_GREY = 3;
+const TGA_TYPE_RLE_RGB = 10;
+const TGA_TYPE_RLE_GREY = 11;
+const TGA_TYPE_RLE_INDEXED = 9;
+
+/**
+ * Decode raw BLP/TGA bytes into ImageData entirely within the worker thread.
+ * This eliminates main-thread decode blocking.
+ */
+function decodeRawTextureInWorker(buffer: ArrayBuffer, path: string, maxDimension?: number): ImageData | null {
+    try {
+        const lower = path.toLowerCase();
+        if (lower.endsWith('.tga')) {
+            return decodeTGAInWorker(buffer, maxDimension);
+        }
+        // Default: BLP
+        const blp = decodeBLP(buffer);
+        const width = Number(blp?.width ?? blp?.Width ?? 0);
+        const height = Number(blp?.height ?? blp?.Height ?? 0);
+        let mipLevel = 0;
+        if (maxDimension && maxDimension > 0 && width > 0 && height > 0) {
+            const maxSide = Math.max(width, height);
+            if (maxSide > maxDimension) {
+                mipLevel = Math.max(0, Math.floor(Math.log2(maxSide / maxDimension)));
+            }
+        }
+        let mip: any;
+        try {
+            mip = getBLPImageData(blp, mipLevel);
+        } catch {
+            mip = getBLPImageData(blp, 0);
+        }
+        const data = mip.data instanceof Uint8ClampedArray ? mip.data : new Uint8ClampedArray(mip.data);
+        let decoded = new ImageData(data as any, mip.width, mip.height);
+        return downscaleInWorker(decoded, maxDimension);
+    } catch (e) {
+        console.warn(`[Worker] Failed to decode texture ${path}:`, e);
+        return null;
+    }
+}
+
+function decodeTGAInWorker(buffer: ArrayBuffer, maxDimension?: number): ImageData | null {
+    const view = new DataView(buffer);
+    const header = {
+        idLength: view.getUint8(0),
+        colorMapType: view.getUint8(1),
+        imageType: view.getUint8(2),
+        colorMapIndex: view.getUint16(3, true),
+        colorMapLength: view.getUint16(5, true),
+        colorMapDepth: view.getUint8(7),
+        xOrigin: view.getUint16(8, true),
+        yOrigin: view.getUint16(10, true),
+        width: view.getUint16(12, true),
+        height: view.getUint16(14, true),
+        pixelDepth: view.getUint8(16),
+        imageDesc: view.getUint8(17)
+    };
+
+    if ((header.width <= 0 || header.height <= 0) ||
+        (header.pixelDepth !== 8 && header.pixelDepth !== 16 && header.pixelDepth !== 24 && header.pixelDepth !== 32)) {
+        return null;
+    }
+
+    const tgaData = new Uint8Array(buffer, 18 + header.idLength + (header.colorMapType === 1 ? header.colorMapLength * (header.colorMapDepth >> 3) : 0));
+    const pixelCount = header.width * header.height;
+    const bytesPerPixel = header.pixelDepth >> 3;
+    const outputData = new Uint8ClampedArray(pixelCount * 4);
+
+    let offset = 0;
+    let pixelIndex = 0;
+
+    const getPixel = (data: Uint8Array, idx: number, depth: number): number[] => {
+        if (depth === 24) return [data[idx + 2], data[idx + 1], data[idx], 255];
+        if (depth === 32) return [data[idx + 2], data[idx + 1], data[idx], data[idx + 3]];
+        if (depth === 8) { const v = data[idx]; return [v, v, v, 255]; }
+        if (depth === 16) {
+            const val = data[idx] | (data[idx + 1] << 8);
+            return [((val & 0x7C00) >> 10) * 255 / 31, ((val & 0x03E0) >> 5) * 255 / 31, (val & 0x001F) * 255 / 31, (val & 0x8000) ? 255 : 0];
+        }
+        return [0, 0, 0, 0];
+    };
+
+    const isRLE = header.imageType === TGA_TYPE_RLE_RGB || header.imageType === TGA_TYPE_RLE_GREY || header.imageType === TGA_TYPE_RLE_INDEXED;
+
+    if (isRLE) {
+        let pixelsProcessed = 0;
+        while (pixelsProcessed < pixelCount) {
+            const chunkHeader = tgaData[offset++];
+            const chunkPixelCount = (chunkHeader & 0x7F) + 1;
+            if ((chunkHeader & 0x80) !== 0) {
+                const pv = getPixel(tgaData, offset, header.pixelDepth);
+                offset += bytesPerPixel;
+                for (let i = 0; i < chunkPixelCount; i++) {
+                    outputData[pixelIndex * 4] = pv[0]; outputData[pixelIndex * 4 + 1] = pv[1];
+                    outputData[pixelIndex * 4 + 2] = pv[2]; outputData[pixelIndex * 4 + 3] = pv[3];
+                    pixelIndex++;
+                }
+            } else {
+                for (let i = 0; i < chunkPixelCount; i++) {
+                    const pv = getPixel(tgaData, offset, header.pixelDepth);
+                    outputData[pixelIndex * 4] = pv[0]; outputData[pixelIndex * 4 + 1] = pv[1];
+                    outputData[pixelIndex * 4 + 2] = pv[2]; outputData[pixelIndex * 4 + 3] = pv[3];
+                    offset += bytesPerPixel; pixelIndex++;
+                }
+            }
+            pixelsProcessed += chunkPixelCount;
+        }
+    } else {
+        for (let i = 0; i < pixelCount; i++) {
+            const pv = getPixel(tgaData, offset, header.pixelDepth);
+            outputData[i * 4] = pv[0]; outputData[i * 4 + 1] = pv[1];
+            outputData[i * 4 + 2] = pv[2]; outputData[i * 4 + 3] = pv[3];
+            offset += bytesPerPixel;
+        }
+    }
+
+    // Flip vertically if origin is bottom-left (default TGA)
+    const isTopLeft = (header.imageDesc & 0x20) !== 0;
+    if (!isTopLeft) {
+        const rowBytes = header.width * 4;
+        const tmp = new Uint8ClampedArray(rowBytes);
+        for (let y = 0; y < Math.floor(header.height / 2); y++) {
+            const topOff = y * rowBytes;
+            const botOff = (header.height - 1 - y) * rowBytes;
+            tmp.set(outputData.subarray(topOff, topOff + rowBytes));
+            outputData.copyWithin(topOff, botOff, botOff + rowBytes);
+            outputData.set(tmp, botOff);
+        }
+    }
+
+    const decoded = new ImageData(outputData, header.width, header.height);
+    return downscaleInWorker(decoded, maxDimension);
+}
+
+function downscaleInWorker(imageData: ImageData, maxDimension?: number): ImageData {
+    if (!maxDimension || maxDimension <= 0) return imageData;
+    if (imageData.width <= maxDimension && imageData.height <= maxDimension) return imageData;
+    const scale = maxDimension / Math.max(imageData.width, imageData.height);
+    const tw = Math.max(1, Math.round(imageData.width * scale));
+    const th = Math.max(1, Math.round(imageData.height * scale));
+    try {
+        const src = new OffscreenCanvas(imageData.width, imageData.height);
+        const sCtx = src.getContext('2d');
+        if (sCtx) {
+            sCtx.putImageData(imageData, 0, 0);
+            const dst = new OffscreenCanvas(tw, th);
+            const dCtx = dst.getContext('2d');
+            if (dCtx) {
+                dCtx.drawImage(src, 0, 0, tw, th);
+                return dCtx.getImageData(0, 0, tw, th);
+            }
+        }
+    } catch { /* fallthrough */ }
+    return imageData;
+}
 
 let canvas: OffscreenCanvas | null = null;
 let gl: WebGLRenderingContext | WebGL2RenderingContext | null = null;
+
+interface ThumbnailCameraFit {
+    target: [number, number, number];
+    distance: number;
+    fov: number;
+    baseTheta: number;
+    phi: number;
+}
 
 interface RendererCacheItem {
     renderer: any;
@@ -36,15 +201,17 @@ interface RendererCacheItem {
     lastTime: number;
     staticFrameTime?: number;
     aabb?: { min: any, max: any };
+    cameraFit?: ThumbnailCameraFit;
     textureImages?: Record<string, ImageData>;
     teamColorData?: Record<number, any>;
+    appliedTeamColor?: number;
     appliedTexturePaths: Set<string>;
     texturePaths: string[];
 }
 
 let renderers: Map<string, RendererCacheItem> = new Map();
 
-const CACHE_LIMIT = 64;
+const CACHE_LIMIT = 24;
 
 self.onmessage = async (e) => {
     const { type, payload } = e.data;
@@ -78,6 +245,17 @@ self.onmessage = async (e) => {
         renderers.clear();
 
         self.postMessage({ type: 'CLEARED' });
+    } else if (type === 'PRUNE') {
+        const keepPaths = new Set<string>((payload?.keepPaths || []) as string[]);
+        for (const [path, item] of renderers.entries()) {
+            if (!keepPaths.has(path)) {
+                if (item.renderer && typeof item.renderer.destroy === 'function') {
+                    try { item.renderer.destroy(); } catch (e) { }
+                }
+                renderers.delete(path);
+            }
+        }
+        self.postMessage({ type: 'PRUNED' });
     }
 };
 
@@ -117,78 +295,32 @@ function applyTextureImagesToRenderer(
     }
 }
 
-function collectTextureIdsFromAnimVector(value: any, ids: Set<number>) {
-    if (value === undefined || value === null) return;
-    if (typeof value === 'number') {
-        if (value >= 0) ids.add(value);
-        return;
-    }
-    if (value.Keys) {
-        // Thumbnail mode only needs the primary animated texture id.
-        const v0 = value.Keys?.[0]?.Vector?.[0];
-        if (typeof v0 === 'number' && v0 >= 0) {
-            ids.add(v0);
-        }
-    }
-}
-
-function getUsedTextureIds(model: any): Set<number> {
-    const usedIds = new Set<number>();
-
-    if (model.Materials) {
-        for (const material of model.Materials) {
-            if (material.Layers) {
-                for (const layer of material.Layers) {
-                    collectTextureIdsFromAnimVector(layer.TextureID, usedIds);
-                    collectTextureIdsFromAnimVector(layer.NormalTextureID, usedIds);
-                    collectTextureIdsFromAnimVector(layer.ORMTextureID, usedIds);
-                    collectTextureIdsFromAnimVector(layer.EmissiveTextureID, usedIds);
-                    collectTextureIdsFromAnimVector(layer.TeamColorTextureID, usedIds);
-                    collectTextureIdsFromAnimVector(layer.ReflectionsTextureID, usedIds);
-                }
+async function applyReplaceableTexturesToRenderer(
+    renderer: any,
+    teamColorData: Record<number, any> | undefined
+) {
+    if (!teamColorData || !renderer?.setReplaceableTexture) return;
+    for (const [id, img] of Object.entries(teamColorData)) {
+        try {
+            let source: any = img;
+            if (!(img instanceof ImageData) && (img as any)?.data) {
+                source = new ImageData(new Uint8ClampedArray((img as any).data), (img as any).width, (img as any).height);
             }
+            const bitmap = await createImageBitmap(source);
+            renderer.setReplaceableTexture(parseInt(id, 10), bitmap);
+        } catch (e) {
+            console.warn(`[Worker] Replaceable texture error ${id}:`, e);
         }
     }
-
-    if (model.ParticleEmitters2) {
-        for (const emitter of model.ParticleEmitters2) {
-            if (typeof emitter.TextureID === 'number' && emitter.TextureID >= 0) {
-                usedIds.add(emitter.TextureID);
-            }
-        }
-    }
-
-    if (model.Textures) {
-        for (let i = 0; i < model.Textures.length; i++) {
-            const tex = model.Textures[i];
-            if (tex?.ReplaceableId && tex.ReplaceableId > 0) {
-                usedIds.add(i);
-            }
-        }
-    }
-
-    return usedIds;
 }
 
 function collectTexturePaths(model: any): string[] {
     const texturePaths = new Set<string>();
 
     if (model.Textures) {
-        const usedIds = getUsedTextureIds(model);
         let entries = model.Textures
-            .map((texture: any, idx: number) => ({ idx, path: texture.Image || texture.Path }))
+            .map((texture: any) => ({ path: texture.Image || texture.Path }))
             .filter((entry: any) => !!entry.path);
-
-        if (usedIds.size > 0) {
-            const filtered = entries.filter((entry: any) => usedIds.has(entry.idx));
-            if (filtered.length > 0) {
-                entries = filtered;
-            }
-        }
-
-        if (entries.length > MAX_BATCH_TEXTURES) {
-            entries = entries.slice(0, MAX_BATCH_TEXTURES);
-        }
 
         entries.forEach((entry: any) => texturePaths.add(entry.path as string));
     }
@@ -209,14 +341,49 @@ async function render(
         fullPath: string,
         modelBuffer?: ArrayBuffer,
         textureImages?: Record<string, ImageData>,
+        textureRawData?: Record<string, ArrayBuffer>,
+        textureMaxDimension?: number,
         teamColorData?: Record<number, any>,
         frame?: number,
         sequenceIndex?: number,
         freeze?: boolean,
-        backgroundColor?: string
+        backgroundColor?: string,
+        teamColor?: number,
+        enableLighting?: boolean,
+        wireframe?: boolean,
+        showParticles?: boolean,
+        showRibbons?: boolean,
+        spinEnabled?: boolean,
+        spinSpeed?: number,
+        envLightingEnabled?: boolean,
+        envLightDirection?: [number, number, number],
+        envLightColor?: [number, number, number],
+        envAmbientColor?: [number, number, number]
     }
 ) {
-    const { fullPath, modelBuffer, textureImages, teamColorData, frame = 0, sequenceIndex = 0, freeze = false, backgroundColor = '#333333' } = payload;
+    const {
+        fullPath,
+        modelBuffer,
+        textureImages,
+        textureRawData,
+        textureMaxDimension,
+        teamColorData,
+        frame = 0,
+        sequenceIndex = 0,
+        freeze = false,
+        backgroundColor = '#333333',
+        teamColor = 0,
+        enableLighting = true,
+        wireframe = false,
+        showParticles = true,
+        showRibbons = true,
+        spinEnabled = false,
+        spinSpeed = 70,
+        envLightingEnabled = false,
+        envLightDirection,
+        envLightColor,
+        envAmbientColor
+    } = payload;
 
     await initGL();
     if (!gl) return null;
@@ -226,6 +393,11 @@ async function render(
     let drawMs = 0;
 
     let item = renderers.get(fullPath);
+    if (item) {
+        // Refresh insertion order so Map behaves like LRU for eviction.
+        renderers.delete(fullPath);
+        renderers.set(fullPath, item);
+    }
 
     if (!item) {
         const coldStartBegin = performance.now();
@@ -285,6 +457,7 @@ async function render(
                     try { oldestItem.renderer.destroy(); } catch (e) { }
                 }
                 renderers.delete(oldestKey);
+                self.postMessage({ type: 'EVICTED', payload: { fullPath: oldestKey } });
             }
         }
 
@@ -294,38 +467,26 @@ async function render(
         const appliedTexturePaths = new Set<string>();
         applyTextureImagesToRenderer(renderer, textureImages, appliedTexturePaths);
 
-        if (teamColorData && renderer.setReplaceableTexture) {
-            for (const [id, img] of Object.entries(teamColorData)) {
-                try {
-                    let source: any = img;
-                    if (!(img instanceof ImageData) && (img as any).data) {
-                        source = new ImageData(new Uint8ClampedArray((img as any).data), (img as any).width, (img as any).height);
-                    }
-                    const bitmap = await createImageBitmap(source);
-                    renderer.setReplaceableTexture(parseInt(id), bitmap);
-                } catch (e) {
-                    console.warn(`[Worker] Replaceable texture error ${id}:`, e);
-                }
-            }
-        }
-
         // --- PRE-CALCULATE AABB ONCE ---
         const min = vec3.fromValues(Infinity, Infinity, Infinity);
         const max = vec3.fromValues(-Infinity, -Infinity, -Infinity);
         let hasValidBounds = false;
 
-        if (model.Geosets) {
-            for (const g of model.Geosets) {
-                if (g.Vertices) {
-                    for (let i = 0; i < g.Vertices.length; i += 3) {
-                        const x = g.Vertices[i], y = g.Vertices[i + 1], z = g.Vertices[i + 2];
-                        if (x < min[0]) min[0] = x; if (x > max[0]) max[0] = x;
-                        if (y < min[1]) min[1] = y; if (y > max[1]) max[1] = y;
-                        if (z < min[2]) min[2] = z; if (z > max[2]) max[2] = z;
-                        hasValidBounds = true;
-                    }
-                }
-            }
+        const infoBounds = getModelMinMax(model?.Info);
+        const geosetBounds = getGeosetMinMax(model?.Geosets);
+
+        let chosenBounds = geosetBounds || infoBounds;
+        if (infoBounds && geosetBounds) {
+            // ALWAYS prefer geoset vertex bounds — model header extents often
+            // include particle emission radii or bone-reach that inflate the
+            // AABB far beyond the actual visible mesh.
+            chosenBounds = geosetBounds;
+        }
+
+        if (chosenBounds) {
+            vec3.set(min, chosenBounds.min[0], chosenBounds.min[1], chosenBounds.min[2]);
+            vec3.set(max, chosenBounds.max[0], chosenBounds.max[1], chosenBounds.max[2]);
+            hasValidBounds = true;
         }
 
         if (!hasValidBounds || vec3.distance(min, max) < 2.0) {
@@ -349,6 +510,7 @@ async function render(
             lastSequence: -1,
             lastTime: (frame !== undefined ? frame : performance.now()),
             aabb: { min, max },
+            cameraFit: computeThumbnailCameraFit(min, max),
             textureImages,
             teamColorData,
             appliedTexturePaths,
@@ -362,25 +524,42 @@ async function render(
     const cacheItem = item!;
     const { renderer, model } = cacheItem;
 
-    // Progressive texture streaming: allow texture sync after the model is already cached.
-    if (textureImages && Object.keys(textureImages).length > 0) {
-        applyTextureImagesToRenderer(renderer, textureImages, cacheItem.appliedTexturePaths);
+    // Decode raw texture bytes in the worker if provided (main thread sends compressed bytes)
+    let effectiveTextureImages = textureImages;
+    if (textureRawData && Object.keys(textureRawData).length > 0) {
+        const decoded: Record<string, ImageData> = { ...(textureImages || {}) };
+        for (const [path, buffer] of Object.entries(textureRawData)) {
+            if (decoded[path]) continue; // Already have decoded version
+            const img = decodeRawTextureInWorker(buffer, path, textureMaxDimension);
+            if (img) decoded[path] = img;
+        }
+        effectiveTextureImages = decoded;
     }
 
-    // === CRITICAL: Complete WebGL state reset for proper clearing ===
-    // When preserveDrawingBuffer=false (or even true), we must ensure all masks are enabled
-    // before gl.clear() or the clear won't affect masked channels, leading to residuals.
+    // Progressive texture streaming: allow texture sync after the model is already cached.
+    if (effectiveTextureImages && Object.keys(effectiveTextureImages).length > 0) {
+        applyTextureImagesToRenderer(renderer, effectiveTextureImages, cacheItem.appliedTexturePaths);
+    }
+    if (
+        teamColorData &&
+        Object.keys(teamColorData).length > 0 &&
+        cacheItem.appliedTeamColor !== teamColor
+    ) {
+        await applyReplaceableTexturesToRenderer(renderer, teamColorData);
+        cacheItem.teamColorData = teamColorData;
+        cacheItem.appliedTeamColor = teamColor;
+    }
+
+    // Reset key write masks before clear.
     gl.disable(gl.SCISSOR_TEST);
-    gl.colorMask(true, true, true, true);  // Enable all color channels
-    gl.depthMask(true);                     // Enable depth writes
-    gl.stencilMask(0xFFFFFFFF);            // Enable all stencil bits
+    gl.colorMask(true, true, true, true);
+    gl.depthMask(true);
 
     // Clear with user-specified background color
     const bgRgb = hexToRgb(backgroundColor);
     gl.clearColor(bgRgb[0], bgRgb[1], bgRgb[2], 1.0);
     gl.clearDepth(1.0);
-    gl.clearStencil(0);
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     // Set viewport
     gl.viewport(0, 0, THUMBNAIL_SIZE, THUMBNAIL_SIZE);
@@ -390,7 +569,6 @@ async function render(
     gl.depthFunc(gl.LEQUAL);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    gl.disable(gl.CULL_FACE);
 
     // Animation Update - only change sequence when needed
     if (model.Sequences && model.Sequences.length > 0) {
@@ -432,32 +610,42 @@ async function render(
     }
 
     // --- USE CACHED AABB ---
-    const { min, max } = cacheItem.aabb || { min: vec3.fromValues(-50, -50, -50), max: vec3.fromValues(50, 50, 50) };
+    const rawAabb = cacheItem.aabb || { min: vec3.fromValues(-50, -50, -50), max: vec3.fromValues(50, 50, 50) };
+    const min = vec3.clone(rawAabb.min);
+    const max = vec3.clone(rawAabb.max);
 
+    // --- ANIMATED SCALING COMPENSATION ---
+    // If the root node(s) are scaled (e.g. 0.5), we must adjust the AABB so the camera frames correctly.
+    if (model.Nodes && model.Nodes.length > 0) {
+        // We use the time we're about to render (cacheItem.lastTime or static target)
+        const activeTime = (freeze ? cacheItem.staticFrameTime : cacheItem.lastTime) || 0;
+        const rootScale = getRootScale(model.Nodes, activeTime);
+        if (Math.abs(rootScale - 1.0) > 0.001) {
+            vec3.scale(min, min, rootScale);
+            vec3.scale(max, max, rootScale);
+        }
+    }
 
-    // --- CAMERA SETUP (Front Portrait View) ---
-    const target = vec3.create();
-    vec3.add(target, min, max); vec3.scale(target, target, 0.5);
-    const size = vec3.distance(min, max);
-    const modelSize = Math.max(size, 80);
-    const fov = Math.PI / 4;
-    const finalDistance = Math.max((modelSize / 2) / Math.tan(fov / 2) / 0.95, 50);
+    // --- CAMERA SETUP ---
+    // Recalculate camera fit if scaling changed or not yet cached
+    const cameraFit = computeThumbnailCameraFit(min, max);
+    const target = vec3.fromValues(cameraFit.target[0], cameraFit.target[1], cameraFit.target[2]);
+    const distance = cameraFit.distance;
+    const phi = cameraFit.phi;
+    const nowForSpin = Number.isFinite(frame) && frame > 0 ? frame : performance.now();
+    const spinRadiansPerMs = (Math.max(0, Number(spinSpeed) || 0) * Math.PI) / 180 / 1000;
+    const spinOffset = spinEnabled ? ((nowForSpin * spinRadiansPerMs) % (Math.PI * 2)) : 0;
+    const theta = cameraFit.baseTheta + spinOffset;
 
-    // Elevated 45-degree-ish view with slightly closer framing
-    const baseOffsetX = finalDistance * 0.2;
-    const baseOffsetY = -finalDistance * 0.8;
-    const zRotate = 55 * Math.PI / 180;
-    const rotOffsetX = baseOffsetX * Math.cos(zRotate) - baseOffsetY * Math.sin(zRotate);
-    const rotOffsetY = baseOffsetX * Math.sin(zRotate) + baseOffsetY * Math.cos(zRotate);
     const cameraPos = vec3.fromValues(
-        target[0] + rotOffsetX,
-        target[1] + rotOffsetY,
-        target[2] + finalDistance * 0.8
+        target[0] + distance * Math.sin(phi) * Math.cos(theta),
+        target[1] + distance * Math.sin(phi) * Math.sin(theta),
+        target[2] + distance * Math.cos(phi)
     );
 
     const pMatrix = mat4.create();
     const mvMatrix = mat4.create();
-    mat4.perspective(pMatrix, fov, 1, 1, 100000);
+    mat4.perspective(pMatrix, cameraFit.fov, 1, 1, 100000);
     mat4.lookAt(mvMatrix, cameraPos, target, [0, 0, 1]);
 
     const cameraQuat = quat.create();
@@ -467,16 +655,55 @@ async function render(
 
     if (renderer.setCamera) renderer.setCamera(cameraPos, cameraQuat);
     if (renderer.update) renderer.update(delta);
-    if (renderer.setTeamColor) renderer.setTeamColor(0);
+    if (renderer.setCamera) renderer.setCamera(cameraPos, cameraQuat);
+    if (renderer.setTeamColor) renderer.setTeamColor(resolveTeamColorVec(teamColor));
     if (renderer.setEnvironmentLight) {
-        renderer.setEnvironmentLight([0.577, -0.577, 0.577], [1, 1, 1], [0.3, 0.3, 0.3]);
+        const lightDirection = normalizeVec3(envLightDirection, [0.577, -0.577, 0.577]);
+        const lightColor = normalizeVec3(envLightColor, [1, 1, 1]);
+        const ambientColor = normalizeVec3(envAmbientColor, [0.3, 0.3, 0.3]);
+
+        if (envLightingEnabled) {
+            renderer.setEnvironmentLight(lightDirection, lightColor, ambientColor);
+        } else {
+            renderer.setEnvironmentLight([0.577, -0.577, 0.577], [1, 1, 1], [0.3, 0.3, 0.3]);
+        }
     }
 
     try {
-        const drawStart = performance.now();
-        renderer.render(mvMatrix, pMatrix, { wireframe: false, enableLighting: true });
-        gl!.flush(); // Ensure GPU is done before transfer
-        drawMs = performance.now() - drawStart;
+        const modelInstance = (renderer as any)?.modelInstance;
+        const particlesController = modelInstance?.particlesController;
+        const ribbonsController = modelInstance?.ribbonsController;
+        const noopRender = () => { };
+
+        const originalParticleRender = particlesController?.render;
+        const originalParticleRenderGPU = particlesController?.renderGPU;
+        const originalRibbonRender = ribbonsController?.render;
+        const originalRibbonRenderGPU = ribbonsController?.renderGPU;
+
+        if (particlesController && !showParticles) {
+            particlesController.render = noopRender;
+            particlesController.renderGPU = noopRender;
+        }
+        if (ribbonsController && !showRibbons) {
+            ribbonsController.render = noopRender;
+            ribbonsController.renderGPU = noopRender;
+        }
+
+        try {
+            const drawStart = performance.now();
+            renderer.render(mvMatrix, pMatrix, { wireframe, enableLighting });
+            gl!.flush(); // Ensure GPU is done before transfer
+            drawMs = performance.now() - drawStart;
+        } finally {
+            if (particlesController) {
+                particlesController.render = originalParticleRender;
+                particlesController.renderGPU = originalParticleRenderGPU;
+            }
+            if (ribbonsController) {
+                ribbonsController.render = originalRibbonRender;
+                ribbonsController.renderGPU = originalRibbonRenderGPU;
+            }
+        }
     } catch (e) {
         console.error(`[Worker] WebGL Render failed for ${fullPath}:`, e);
         // FORCE RELOAD on next try to recover from poisoned State/Buffers
@@ -497,6 +724,355 @@ async function render(
         }
     };
 }
+
+function readVec3(v: any): [number, number, number] | null {
+    if (!v) return null;
+    const a0 = Number(v[0]);
+    const a1 = Number(v[1]);
+    const a2 = Number(v[2]);
+    if (!Number.isFinite(a0) || !Number.isFinite(a1) || !Number.isFinite(a2)) return null;
+    return [a0, a1, a2];
+}
+
+function getModelMinMax(info: any): { min: [number, number, number], max: [number, number, number] } | null {
+    const extentMin = readVec3(info?.Extent?.Min);
+    const extentMax = readVec3(info?.Extent?.Max);
+    if (extentMin && extentMax) return { min: extentMin, max: extentMax };
+
+    const min = readVec3(info?.MinimumExtent);
+    const max = readVec3(info?.MaximumExtent);
+    if (min && max) return { min, max };
+
+    const r = Number(info?.BoundsRadius);
+    if (Number.isFinite(r) && r > 0) {
+        return { min: [-r, -r, -r], max: [r, r, r] };
+    }
+    return null;
+}
+
+function getGeosetMinMax(geosets: any[] | undefined): { min: [number, number, number], max: [number, number, number] } | null {
+    if (!Array.isArray(geosets) || geosets.length === 0) return null;
+
+    // --- Per-geoset AABB analysis ---
+    interface GeosetBounds {
+        vertexCount: number;
+        min: [number, number, number];
+        max: [number, number, number];
+        center: [number, number, number];
+        diag: number;
+    }
+    const perGeoset: GeosetBounds[] = [];
+
+    for (const geoset of geosets) {
+        const vertices = geoset?.Vertices;
+        if (!vertices || vertices.length < 3) continue;
+        let gMinX = Infinity, gMinY = Infinity, gMinZ = Infinity;
+        let gMaxX = -Infinity, gMaxY = -Infinity, gMaxZ = -Infinity;
+        let count = 0;
+        for (let i = 0; i + 2 < vertices.length; i += 3) {
+            const x = Number(vertices[i]);
+            const y = Number(vertices[i + 1]);
+            const z = Number(vertices[i + 2]);
+            if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+            if (x < gMinX) gMinX = x; if (x > gMaxX) gMaxX = x;
+            if (y < gMinY) gMinY = y; if (y > gMaxY) gMaxY = y;
+            if (z < gMinZ) gMinZ = z; if (z > gMaxZ) gMaxZ = z;
+            count++;
+        }
+        if (count < 1) continue;
+        const cx = (gMinX + gMaxX) * 0.5;
+        const cy = (gMinY + gMaxY) * 0.5;
+        const cz = (gMinZ + gMaxZ) * 0.5;
+        const dx = gMaxX - gMinX, dy = gMaxY - gMinY, dz = gMaxZ - gMinZ;
+        const diag = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        perGeoset.push({
+            vertexCount: count,
+            min: [gMinX, gMinY, gMinZ],
+            max: [gMaxX, gMaxY, gMaxZ],
+            center: [cx, cy, cz],
+            diag
+        });
+    }
+
+    if (perGeoset.length === 0) return null;
+    if (perGeoset.length === 1) {
+        return { min: perGeoset[0].min, max: perGeoset[0].max };
+    }
+
+    // Sort by vertex count descending — primary body has the most vertices
+    const sorted = [...perGeoset].sort((a, b) => b.vertexCount - a.vertexCount);
+    const primary = sorted[0];
+
+    // Start with the primary geoset's bounds
+    let mergedMin: [number, number, number] = [...primary.min];
+    let mergedMax: [number, number, number] = [...primary.max];
+
+    // Merge secondary geosets only if they don't inflate the bounds excessively.
+    // Effect geosets (few vertices, large extent) are excluded.
+    const primaryDiag = primary.diag;
+
+    for (let i = 1; i < sorted.length; i++) {
+        const sec = sorted[i];
+
+        // Always include geosets with substantial vertex count (>25% of primary)
+        // — these are real geometry, not effects
+        const isSubstantial = sec.vertexCount > primary.vertexCount * 0.25;
+
+        if (!isSubstantial) {
+            // Check how much this geoset would inflate the current merged bounds
+            const testMin: [number, number, number] = [...mergedMin];
+            const testMax: [number, number, number] = [...mergedMax];
+            for (let a = 0; a < 3; a++) {
+                if (sec.min[a] < testMin[a]) testMin[a] = sec.min[a];
+                if (sec.max[a] > testMax[a]) testMax[a] = sec.max[a];
+            }
+            const testDx = testMax[0] - testMin[0];
+            const testDy = testMax[1] - testMin[1];
+            const testDz = testMax[2] - testMin[2];
+            const testDiag = Math.sqrt(testDx * testDx + testDy * testDy + testDz * testDz);
+            const currentDx = mergedMax[0] - mergedMin[0];
+            const currentDy = mergedMax[1] - mergedMin[1];
+            const currentDz = mergedMax[2] - mergedMin[2];
+            const currentDiag = Math.sqrt(currentDx * currentDx + currentDy * currentDy + currentDz * currentDz);
+
+            // If adding this geoset inflates the diagonal by >20%, skip it
+            if (currentDiag > 0 && testDiag / currentDiag > 1.2) {
+                continue;
+            }
+        }
+
+        for (let a = 0; a < 3; a++) {
+            if (sec.min[a] < mergedMin[a]) mergedMin[a] = sec.min[a];
+            if (sec.max[a] > mergedMax[a]) mergedMax[a] = sec.max[a];
+        }
+    }
+
+    return { min: mergedMin, max: mergedMax };
+}
+
+
+function getTrimmedBounds(
+    xs: number[],
+    ys: number[],
+    zs: number[],
+    lowQ: number,
+    highQ: number
+): { min: [number, number, number], max: [number, number, number] } | null {
+    if (xs.length === 0 || ys.length === 0 || zs.length === 0) return null;
+
+    const sx = [...xs].sort((a, b) => a - b);
+    const sy = [...ys].sort((a, b) => a - b);
+    const sz = [...zs].sort((a, b) => a - b);
+
+    const minX = quantileSorted(sx, lowQ);
+    const maxX = quantileSorted(sx, highQ);
+    const minY = quantileSorted(sy, lowQ);
+    const maxY = quantileSorted(sy, highQ);
+    const minZ = quantileSorted(sz, lowQ);
+    const maxZ = quantileSorted(sz, highQ);
+
+    if (
+        !Number.isFinite(minX) || !Number.isFinite(maxX) ||
+        !Number.isFinite(minY) || !Number.isFinite(maxY) ||
+        !Number.isFinite(minZ) || !Number.isFinite(maxZ)
+    ) {
+        return null;
+    }
+
+    if (maxX <= minX || maxY <= minY || maxZ <= minZ) {
+        return null;
+    }
+
+    return {
+        min: [minX, minY, minZ],
+        max: [maxX, maxY, maxZ]
+    };
+}
+
+function quantileSorted(sorted: number[], q: number): number {
+    if (sorted.length === 0) return NaN;
+    const qq = Math.max(0, Math.min(1, q));
+    const pos = (sorted.length - 1) * qq;
+    const lo = Math.floor(pos);
+    const hi = Math.min(sorted.length - 1, lo + 1);
+    const t = pos - lo;
+    return sorted[lo] * (1 - t) + sorted[hi] * t;
+}
+
+function padBounds(
+    min: [number, number, number],
+    max: [number, number, number],
+    factor: number
+): { min: [number, number, number], max: [number, number, number] } {
+    const cx = (min[0] + max[0]) * 0.5;
+    const cy = (min[1] + max[1]) * 0.5;
+    const cz = (min[2] + max[2]) * 0.5;
+
+    const hx = Math.max((max[0] - min[0]) * 0.5 * (1 + factor), 0.5);
+    const hy = Math.max((max[1] - min[1]) * 0.5 * (1 + factor), 0.5);
+    const hz = Math.max((max[2] - min[2]) * 0.5 * (1 + factor), 0.5);
+
+    return {
+        min: [cx - hx, cy - hy, cz - hz],
+        max: [cx + hx, cy + hy, cz + hz]
+    };
+}
+
+function computeThumbnailCameraFit(min: any, max: any): ThumbnailCameraFit {
+    const target = vec3.create();
+    vec3.add(target, min, max);
+    vec3.scale(target, target, 0.5);
+
+    const extents = vec3.create();
+    vec3.sub(extents, max, min);
+
+    // For ground-standing models (minZ near 0), bias target upward
+    // so the model doesn't appear to sink below center.
+    // For floating/underground models, keep geometric center.
+    if (Number.isFinite(extents[2]) && extents[2] > 0) {
+        const minZ = Number(min[2]);
+        const maxZ = Number(max[2]);
+        if (Number.isFinite(minZ) && Number.isFinite(maxZ)) {
+            // If the bottom is near ground (within 15% of height), use
+            // a weighted center biased 40% from the bottom.
+            if (Math.abs(minZ) < extents[2] * 0.15) {
+                target[2] = minZ + extents[2] * 0.40;
+            }
+            // Otherwise keep geometric center (already set)
+        }
+    }
+
+    const fov = Math.PI / 4;
+    const baseTheta = Math.PI / 4;
+    const phi = Math.PI / 3;
+    const desiredFill = 0.92;
+
+    const diagonal = Math.max(vec3.length(extents), 1);
+    const radius = Math.max(1, diagonal * 0.5);
+    let distance = radius / (Math.tan(fov * 0.5) * desiredFill);
+    if (!Number.isFinite(distance)) distance = 300;
+    distance = Math.max(30, Math.min(5000, distance));
+
+    // Iterative refinement: project AABB corners and adjust distance
+    const corners = getBoundsCorners(min, max);
+    for (let i = 0; i < 5; i++) {
+        const trialPos = vec3.fromValues(
+            target[0] + distance * Math.sin(phi) * Math.cos(baseTheta),
+            target[1] + distance * Math.sin(phi) * Math.sin(baseTheta),
+            target[2] + distance * Math.cos(phi)
+        );
+        const trialP = mat4.create();
+        const trialMv = mat4.create();
+        const trialMvp = mat4.create();
+        mat4.perspective(trialP, fov, 1, 1, 100000);
+        mat4.lookAt(trialMv, trialPos, target, [0, 0, 1]);
+        mat4.multiply(trialMvp, trialP, trialMv);
+        const extent = computeMaxNdcExtent(corners, trialMvp);
+        if (!Number.isFinite(extent) || extent <= 0.001) break;
+        const scale = extent / desiredFill;
+        const clampedScale = Math.max(0.5, Math.min(2.0, scale));
+        const nextDistance = Math.max(30, Math.min(5000, distance * clampedScale));
+        if (Math.abs(nextDistance - distance) < 0.5) break;
+        distance = nextDistance;
+    }
+
+    distance = Math.max(30, Math.min(5000, distance));
+
+    return {
+        target: [target[0], target[1], target[2]],
+        distance,
+        fov,
+        baseTheta,
+        phi
+    };
+}
+
+function getBoundsCorners(min: any, max: any): Array<[number, number, number]> {
+    return [
+        [min[0], min[1], min[2]],
+        [min[0], min[1], max[2]],
+        [min[0], max[1], min[2]],
+        [min[0], max[1], max[2]],
+        [max[0], min[1], min[2]],
+        [max[0], min[1], max[2]],
+        [max[0], max[1], min[2]],
+        [max[0], max[1], max[2]]
+    ];
+}
+
+/**
+ * Compute the actual projected bounding box half-size in NDC space.
+ * Returns max(half_width, half_height) of the projected AABB, which correctly
+ * measures how much screen space the model occupies regardless of where its
+ * center projects to.
+ */
+function computeMaxNdcExtent(corners: Array<[number, number, number]>, mvp: any): number {
+    let ndcMinX = Infinity, ndcMaxX = -Infinity;
+    let ndcMinY = Infinity, ndcMaxY = -Infinity;
+    let validCount = 0;
+    for (const [x, y, z] of corners) {
+        const cx = mvp[0] * x + mvp[4] * y + mvp[8] * z + mvp[12];
+        const cy = mvp[1] * x + mvp[5] * y + mvp[9] * z + mvp[13];
+        const cw = mvp[3] * x + mvp[7] * y + mvp[11] * z + mvp[15];
+        if (!Number.isFinite(cw) || Math.abs(cw) < 1e-5) continue;
+        const nx = cx / cw;
+        const ny = cy / cw;
+        if (!Number.isFinite(nx) || !Number.isFinite(ny)) continue;
+        if (nx < ndcMinX) ndcMinX = nx;
+        if (nx > ndcMaxX) ndcMaxX = nx;
+        if (ny < ndcMinY) ndcMinY = ny;
+        if (ny > ndcMaxY) ndcMaxY = ny;
+        validCount++;
+    }
+    if (validCount < 2) return 0;
+    const halfWidth = (ndcMaxX - ndcMinX) * 0.5;
+    const halfHeight = (ndcMaxY - ndcMinY) * 0.5;
+    return Math.max(halfWidth, halfHeight);
+}
+
+/**
+ * Detect the scaling of root nodes (Parent: -1) at a given time.
+ * Returns the maximum component of the scaling vector if strictly uniform-ish, 
+ * or just a heuristic average.
+ */
+function getRootScale(nodes: any[], time: number): number {
+    let maxScale = 1.0;
+    let found = false;
+
+    for (const node of nodes) {
+        if (node.Parent === -1) {
+            const scaling = node.Scaling;
+            if (scaling && scaling.Keys && scaling.Keys.length > 0) {
+                const s = interpolateScaling(scaling.Keys, time, [1, 1, 1]);
+                const nodeMax = Math.max(s[0], s[1], s[2]);
+                if (!found || nodeMax > maxScale) {
+                    maxScale = nodeMax;
+                }
+                found = true;
+            }
+        }
+    }
+    return maxScale;
+}
+
+function interpolateScaling(keys: any[], frame: number, defaultVal: number[]): number[] {
+    if (!keys || keys.length === 0) return defaultVal;
+    const sortedKeys = keys; // Usually sorted in MDX
+
+    if (frame <= sortedKeys[0].Frame) return toArray(sortedKeys[0].Vector);
+    if (frame >= sortedKeys[sortedKeys.length - 1].Frame) return toArray(sortedKeys[sortedKeys.length - 1].Vector);
+
+    for (let i = 0; i < sortedKeys.length - 1; i++) {
+        if (frame >= sortedKeys[i].Frame && frame <= sortedKeys[i + 1].Frame) {
+            const t = (frame - sortedKeys[i].Frame) / (sortedKeys[i + 1].Frame - sortedKeys[i].Frame);
+            const from = toArray(sortedKeys[i].Vector);
+            const to = toArray(sortedKeys[i + 1].Vector);
+            return from.map((v, idx) => v + (to[idx] - v) * t);
+        }
+    }
+    return defaultVal;
+}
+
 
 function validateAllParticleEmitters(model: any): void {
     if (!model.ParticleEmitters2) return;
@@ -601,4 +1177,38 @@ function hexToRgb(hex: string): [number, number, number] {
         ];
     }
     return [0.2, 0.2, 0.2]; // Default gray
+}
+
+function normalizeVec3(value: any, fallback: [number, number, number]): [number, number, number] {
+    if (!value || !Array.isArray(value) || value.length < 3) {
+        return fallback;
+    }
+
+    const x = Number(value[0]);
+    const y = Number(value[1]);
+    const z = Number(value[2]);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+        return fallback;
+    }
+    return [x, y, z];
+}
+
+function resolveTeamColorVec(teamColor: number): [number, number, number] {
+    const palette: Array<[number, number, number]> = [
+        [1.0, 0.0, 0.0], // red
+        [0.0, 0.45, 1.0], // blue
+        [0.0, 0.95, 0.95], // teal
+        [0.65, 0.35, 1.0], // purple
+        [1.0, 0.88, 0.0], // yellow
+        [1.0, 0.55, 0.0], // orange
+        [0.0, 0.85, 0.0], // green
+        [1.0, 0.45, 0.7], // pink
+        [0.7, 0.7, 0.7], // gray
+        [0.55, 0.75, 1.0], // light blue
+        [0.0, 0.6, 0.2], // dark green
+        [0.65, 0.42, 0.22] // brown
+    ];
+
+    const idx = Math.max(0, Math.min(palette.length - 1, Math.floor(Number(teamColor) || 0)));
+    return palette[idx];
 }

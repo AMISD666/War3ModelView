@@ -40,14 +40,18 @@ export const MainLayoutNew: React.FC = () => {
     const [isResizingNodeMgr, setIsResizingNodeMgr] = useState(false);
 
     // Batch mode panel resizing
-    const [batchPanelWidth, setBatchPanelWidth] = useState(50); // percentage (1:1 ratio)
+    const [batchPanelWidth, setBatchPanelWidth] = useState(56); // percentage
     const [isResizingBatch, setIsResizingBatch] = useState(false);
+    const [isBatchFullView, setIsBatchFullView] = useState<boolean>(() => {
+        if (typeof window === 'undefined') return false;
+        return window.localStorage.getItem('batch.fullView') === '1';
+    });
     const containerRef = useRef<HTMLDivElement>(null);
 
     // Batch mode state: track selected model for preview
     const [batchSelectedPath, setBatchSelectedPath] = useState<string | null>(null);
     const [batchSelectedAnimation, setBatchSelectedAnimation] = useState<number>(0);
-    const { setModelData: setZustandModelData, addTab } = useModelStore();
+    const { addTab } = useModelStore();
     const getNodeManagerBounds = useCallback(() => {
         const containerWidth = containerRef.current?.clientWidth ?? window.innerWidth;
         const minWidth = 180;
@@ -67,9 +71,9 @@ export const MainLayoutNew: React.FC = () => {
         console.log('[MainLayoutNew] Batch model selected:', path, 'animation:', animationIndex);
         setBatchSelectedPath(path);
         setBatchSelectedAnimation(animationIndex);
-        // Load the model into the main viewer
-        setZustandModelData(null, path);
-    }, [setZustandModelData]);
+        // Open through tab system so it is visible in main view tab bar.
+        addTab(path);
+    }, [addTab]);
 
     // Handle animation change from BatchManager
     const handleBatchAnimationChange = useCallback((animationIndex: number) => {
@@ -132,6 +136,10 @@ export const MainLayoutNew: React.FC = () => {
         window.addEventListener('resize', clampPanelSizes);
         return () => window.removeEventListener('resize', clampPanelSizes);
     }, [getNodeManagerBounds, getBatchPanelBounds]);
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        window.localStorage.setItem('batch.fullView', isBatchFullView ? '1' : '0');
+    }, [isBatchFullView]);
 
     // Listen for open-files events from single-instance plugin (handles multiple files)
     useEffect(() => {
@@ -175,7 +183,7 @@ export const MainLayoutNew: React.FC = () => {
                 {isBatchMode && (
                     <>
                         <div style={{
-                            width: `${batchPanelWidth}%`,
+                            width: isBatchFullView ? '100%' : `${batchPanelWidth}%`,
                             height: '100%',
                             overflow: 'hidden',
                             flexShrink: 0,
@@ -186,49 +194,53 @@ export const MainLayoutNew: React.FC = () => {
                                     onSelectModel={handleBatchSelectModel}
                                     onAnimationChange={handleBatchAnimationChange}
                                     selectedPath={batchSelectedPath}
+                                    isFullBatchView={isBatchFullView}
+                                    onToggleFullBatchView={() => setIsBatchFullView((prev) => !prev)}
                                 />
                             </ConfigProvider>
                         </div>
 
                         {/* Resizable Divider */}
-                        <div
-                            onMouseDown={handleBatchDividerMouseDown}
-                            style={{
-                                width: '6px',
-                                height: '100%',
-                                cursor: 'ew-resize',
-                                backgroundColor: isResizingBatch ? '#007acc' : '#333',
-                                transition: isResizingBatch ? 'none' : 'background-color 0.2s',
-                                flexShrink: 0,
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center'
-                            }}
-                            onMouseEnter={(e) => {
-                                if (!isResizingBatch) {
-                                    e.currentTarget.style.backgroundColor = '#007acc80';
-                                }
-                            }}
-                            onMouseLeave={(e) => {
-                                if (!isResizingBatch) {
-                                    e.currentTarget.style.backgroundColor = '#333';
-                                }
-                            }}
-                        >
-                            <div style={{
-                                width: '2px',
-                                height: '40px',
-                                backgroundColor: '#666',
-                                borderRadius: '1px'
-                            }} />
-                        </div>
+                        {!isBatchFullView && (
+                            <div
+                                onMouseDown={handleBatchDividerMouseDown}
+                                style={{
+                                    width: '6px',
+                                    height: '100%',
+                                    cursor: 'ew-resize',
+                                    backgroundColor: isResizingBatch ? '#007acc' : '#333',
+                                    transition: isResizingBatch ? 'none' : 'background-color 0.2s',
+                                    flexShrink: 0,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center'
+                                }}
+                                onMouseEnter={(e) => {
+                                    if (!isResizingBatch) {
+                                        e.currentTarget.style.backgroundColor = '#007acc80';
+                                    }
+                                }}
+                                onMouseLeave={(e) => {
+                                    if (!isResizingBatch) {
+                                        e.currentTarget.style.backgroundColor = '#333';
+                                    }
+                                }}
+                            >
+                                <div style={{
+                                    width: '2px',
+                                    height: '40px',
+                                    backgroundColor: '#666',
+                                    borderRadius: '1px'
+                                }} />
+                            </div>
+                        )}
                     </>
                 )}
 
-                {/* Main Content Area: Node Manager (non-batch) + MainLayoutOld */}
+                {/* Main Content Area: keep mounted to avoid renderer/context reset in full batch view */}
                 <div style={{
                     flex: 1,
-                    display: 'flex',
+                    display: isBatchMode && isBatchFullView ? 'none' : 'flex',
                     height: '100%',
                     overflow: 'hidden',
                     minWidth: 0
