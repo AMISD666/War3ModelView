@@ -4,6 +4,8 @@ import { useSelectionStore } from '../../store/selectionStore';
 
 const BATCH_MAX_WORKER_FPS = 144;
 const BATCH_MAX_WORKER_FRAME_INTERVAL_MS = 1000 / BATCH_MAX_WORKER_FPS;
+const INITIAL_RENDER_WORKER_LIMIT = 6;
+const TEXTURE_FIRST_FRAME_COUNT = 10;
 
 function pickPreferredAnimation(animations: string[]): string | undefined {
     if (animations.length === 0) return undefined;
@@ -64,6 +66,7 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
     const modelAnimationsRef = useRef(modelAnimations);
     const pendingRequestsRef = useRef<Set<string>>(new Set());
     const queueInFlightRef = useRef<Set<string>>(new Set());
+    const textureFirstFramePathsRef = useRef<Set<string>>(new Set());
     const lastPruneTimeRef = useRef<number>(0);
     const roundRobinCursorRef = useRef<number>(0);
 
@@ -84,6 +87,7 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
 
         if (queue.length > 0 && (queueWasEmpty || hasNewItems)) {
             processedPaths.current = [];
+            textureFirstFramePathsRef.current = new Set(currentQueuePaths.slice(0, TEXTURE_FIRST_FRAME_COUNT));
         }
 
         lastQueueRef.current = currentQueuePaths;
@@ -107,7 +111,10 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
                     return;
                 }
                 const perPageCap = workerLimit && workerLimit > 0 ? workerLimit : freeWorkers;
-                const maxDispatch = Math.max(1, Math.min(queue.length, freeWorkers, perPageCap));
+                const maxDispatch = Math.max(
+                    1,
+                    Math.min(queue.length, freeWorkers, perPageCap, INITIAL_RENDER_WORKER_LIMIT)
+                );
                 const candidates = queue
                     .filter(item => !queueInFlightRef.current.has(item.fullPath))
                     .slice(0, maxDispatch);
@@ -126,8 +133,8 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
                         animIndex,
                         !isAnimating,
                         {
-                            // Always prioritize first visual response, then stream textures in.
-                            preferFastFirstFrame: true,
+                            // The first N cards on each page wait for textures to avoid placeholder magenta.
+                            preferFastFirstFrame: !textureFirstFramePathsRef.current.has(item.fullPath),
                             prioritize: selectedPath === item.fullPath,
                             spinEnabled: selfSpinEnabled,
                             spinSpeed: selfSpinSpeed

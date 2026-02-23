@@ -171,8 +171,9 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
             // Only queue the current page
             const initialPageFiles = modelFiles.slice(0, pageSize);
             setQueue(initialPageFiles.map(f => ({ name: f.name, fullPath: f.fullPath })));
+            const currentPagePaths = initialPageFiles.map(f => f.fullPath);
             const warmupFiles = modelFiles.slice(pageSize, pageSize * 2).map(f => f.fullPath);
-            void thumbnailService.prefetch(warmupFiles, 4, { withTextures: false });
+            void thumbnailService.prefetch([...currentPagePaths, ...warmupFiles], 4, { withTextures: true });
 
             message.success(`找到 ${modelFiles.length} 个模型文件`);
         } catch (err) {
@@ -310,9 +311,10 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
         const start = (page - 1) * size;
         const pageFiles = files.slice(start, start + size);
         setQueue(pageFiles.map(f => ({ name: f.name, fullPath: f.fullPath })));
+        const currentPagePaths = pageFiles.map(f => f.fullPath);
         const warmupStart = start + size;
         const warmupFiles = files.slice(warmupStart, warmupStart + size).map(f => f.fullPath);
-        void thumbnailService.prefetch(warmupFiles, 4, { withTextures: false });
+        void thumbnailService.prefetch([...currentPagePaths, ...warmupFiles], 4, { withTextures: true });
     };
 
     const handlePageSizeChange = (size: number) => {
@@ -321,8 +323,9 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
 
         const pageFiles = files.slice(0, size);
         setQueue(pageFiles.map(f => ({ name: f.name, fullPath: f.fullPath })));
+        const currentPagePaths = pageFiles.map(f => f.fullPath);
         const warmupFiles = files.slice(size, size * 2).map(f => f.fullPath);
-        void thumbnailService.prefetch(warmupFiles, 4, { withTextures: false });
+        void thumbnailService.prefetch([...currentPagePaths, ...warmupFiles], 4, { withTextures: true });
     };
 
     const handleFastModeChange = (checked: boolean) => {

@@ -40,7 +40,7 @@ export const MainLayoutNew: React.FC = () => {
     const [isResizingNodeMgr, setIsResizingNodeMgr] = useState(false);
 
     // Batch mode panel resizing
-    const [batchPanelWidth, setBatchPanelWidth] = useState(56); // percentage
+    const [batchPanelWidth, setBatchPanelWidth] = useState(54); // percentage
     const [isResizingBatch, setIsResizingBatch] = useState(false);
     const [isBatchFullView, setIsBatchFullView] = useState<boolean>(() => {
         if (typeof window === 'undefined') return false;
