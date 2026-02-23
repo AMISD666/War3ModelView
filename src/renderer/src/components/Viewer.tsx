@@ -738,6 +738,44 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     await loadTexture(teamGlowPath, 2)
   }
 
+  // Render compatibility fix based on mdx-m3-viewer:
+  // Layer FilterMode.Additive should use SRC_ALPHA, ONE behavior.
+  // war3-model currently treats Additive as ONE, ONE, so remap Additive -> AddAlpha
+  // in renderer-side material copies to avoid over-bright/white and dark fringe artifacts.
+  const cloneMaterialsWithReferenceBlendCompat = (materials: any[] | undefined) => {
+    if (!Array.isArray(materials)) return materials
+
+    let hasChanges = false
+    const nextMaterials = materials.map((material: any) => {
+      if (!material || !Array.isArray(material.Layers)) return material
+
+      let materialChanged = false
+      const nextLayers = material.Layers.map((layer: any) => {
+        if (!layer || typeof layer !== 'object') return layer
+
+        const filterMode = typeof layer.FilterMode === 'number' ? layer.FilterMode : Number(layer.FilterMode)
+        if (filterMode === 3) {
+          materialChanged = true
+          hasChanges = true
+          return { ...layer, FilterMode: 4 }
+        }
+        return layer
+      })
+
+      if (!materialChanged) return material
+      return { ...material, Layers: nextLayers }
+    })
+
+    return hasChanges ? nextMaterials : materials
+  }
+
+  const createRendererBlendCompatibleModel = (model: any) => {
+    if (!model || !Array.isArray(model.Materials)) return model
+    const compatibleMaterials = cloneMaterialsWithReferenceBlendCompat(model.Materials)
+    if (compatibleMaterials === model.Materials) return model
+    return { ...model, Materials: compatibleMaterials }
+  }
+
   const mpqLoadedRef = useRef(mpqLoaded)
   useEffect(() => {
     const run = async () => {
@@ -1995,10 +2033,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         return
       }
 
-      // Create WebGL context with alpha channel enabled
+      // Align WebGL context behavior with mdx-m3-viewer:
+      // use an opaque backbuffer to avoid premultiplied compositing washout.
       const contextAttributes: WebGLContextAttributes = {
-        alpha: true,
-        premultipliedAlpha: true,
+        alpha: false,
+        premultipliedAlpha: false,
         preserveDrawingBuffer: false
       }
 
@@ -2015,7 +2054,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
       glRef.current = gl
 
-      gl.clearColor(0.2, 0.2, 0.2, 0)
+      gl.clearColor(0.2, 0.2, 0.2, 1)
       gl.enable(gl.DEPTH_TEST)
       gl.depthFunc(gl.LEQUAL)
       gl.enable(gl.BLEND)
@@ -2079,7 +2118,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       validateAllParticleEmitters(model)
 
       const rendererStart = performance.now()
-      const { model: rendererModelWithSequences, usedFallback } = ensureRendererSequences(model)
+      const blendCompatibleModel = createRendererBlendCompatibleModel(model)
+      const { model: rendererModelWithSequences, usedFallback } = ensureRendererSequences(blendCompatibleModel)
       const { model: rendererModel, defaultNodeId } = ensureRenderNodes(rendererModelWithSequences)
       ensureGeosetGroups(rendererModel, defaultNodeId)
       console.log('[Viewer] Initializing Renderer Backend (WebGL)... gl:', !!gl)
@@ -2226,7 +2266,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
       // CRITICAL FIX: Validate and fix ParticleEmitters2 before creating renderer
       // Same validation as in loadModel - prevents production-only rendering issues
-      const { model: rendererModelWithNodes, defaultNodeId } = ensureRenderNodes(model)
+      const blendCompatibleModel = createRendererBlendCompatibleModel(model)
+      const { model: rendererModelWithNodes, defaultNodeId } = ensureRenderNodes(blendCompatibleModel)
       ensureGeosetGroups(rendererModelWithNodes, defaultNodeId)
       console.log('[Viewer] Step 1: Validating particles...')
       validateAllParticleEmitters(model)
@@ -2413,7 +2454,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           if (modelData.Materials.length > 0) {
             console.log('[Viewer] Last Material:', JSON.stringify(modelData.Materials[modelData.Materials.length - 1]));
           }
-          renderer.model.Materials = modelData.Materials
+          renderer.model.Materials = cloneMaterialsWithReferenceBlendCompat(modelData.Materials)
           // Lightweight sync: rebuild materialLayerTextureID cache
           if ((renderer as any).modelInstance && typeof (renderer as any).modelInstance.syncMaterials === 'function') {
             (renderer as any).modelInstance.syncMaterials()
@@ -2575,8 +2616,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
     if (renderer && canvasRef.current) {
       const contextAttributes: WebGLContextAttributes = {
-        alpha: true,
-        premultipliedAlpha: true
+        alpha: false,
+        premultipliedAlpha: false
       }
       const gl =
         glRef.current ||

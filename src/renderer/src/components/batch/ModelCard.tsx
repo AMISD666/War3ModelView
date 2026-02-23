@@ -147,7 +147,7 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
                     opacity: 0,
                     transition: 'opacity 0.2s'
                 }}>
-                    <Tooltip title="澶嶅埗妯″瀷">
+                    <Tooltip title={'\u590d\u5236\u6a21\u578b'}>
                         <Button
                             type="text"
                             icon={<CopyOutlined style={{ color: '#fff' }} />}
@@ -157,7 +157,7 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
                         />
                     </Tooltip>
 
-                    <Tooltip title="淇敼璐村浘璺緞">
+                    <Tooltip title={'\u4fee\u6539\u8d34\u56fe\u8def\u5f84'}>
                         <Button
                             type="text"
                             icon={<FileImageOutlined style={{ color: '#fff' }} />}
@@ -167,7 +167,7 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
                         />
                     </Tooltip>
 
-                    <Tooltip title="鍒犻櫎妯″瀷">
+                    <Tooltip title={'\u5220\u9664\u6a21\u578b'}>
                         <Button
                             type="text"
                             danger

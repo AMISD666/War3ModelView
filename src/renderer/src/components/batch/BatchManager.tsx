@@ -1,15 +1,15 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Button, Empty, Layout, theme, Typography, Spin, message, Pagination, Tooltip, Space, Divider, Radio } from 'antd';
+import { Button, Empty, Layout, theme, Typography, Spin, message, Pagination, Tooltip, Space, Radio, Switch, Slider, Select } from 'antd';
 import {
     FolderOpenOutlined,
     ReloadOutlined,
     ClearOutlined,
     ArrowLeftOutlined,
-    UserDeleteOutlined,
-    GroupOutlined,
     AppstoreAddOutlined,
     BulbOutlined,
-    EditOutlined
+    EditOutlined,
+    ExpandOutlined,
+    CompressOutlined
 } from '@ant-design/icons';
 import { BatchTexturePrefixModal, PrefixOptions } from './BatchTexturePrefixModal';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -26,6 +26,7 @@ import { registerShortcutHandler } from '../../shortcuts/manager';
 
 const { Content, Header } = Layout;
 const { Text } = Typography;
+const PAGE_SIZE_OPTIONS = [5, 10, 15, 20, 25, 30];
 
 interface ModelFile {
     name: string;
@@ -37,42 +38,29 @@ interface BatchManagerProps {
     onSelectModel?: (path: string, animationIndex: number) => void;
     onAnimationChange?: (animationIndex: number) => void;
     selectedPath?: string | null;
+    isFullBatchView?: boolean;
+    onToggleFullBatchView?: () => void;
 }
 
-interface BatchPerfSnapshot {
-    workersBusy: number;
-    workersTotal: number;
-    modelCache: number;
-    textureCache: number;
-    sharedTextureCache: number;
-    modelLoading: number;
-    textureLoading: number;
-    textureTaskRunning: number;
-    textureTaskPending: number;
-    avgModelReadMs: number;
-    avgModelParseMs: number;
-    avgTextureMs: number;
-    avgTextureBatchMs: number;
-    avgTextureBatchMpqMs: number;
-    avgTextureBatchFsMs: number;
-    avgTextureQueueMs: number;
-    avgTextureDecodeMs: number;
-    avgTextureFallbackMs: number;
-    avgPrepareMs: number;
-    avgWorkerRenderMs: number;
-    avgEndToEndMs: number;
-    textureLoadRatioPct: number;
-    textureCoveragePct: number;
-    sharedTextureHitRatePct: number;
-    hotspotModelName: string;
-    hotspotStage: 'texture' | 'parse' | 'read' | 'worker' | 'none';
-    hotspotMs: number;
+function pickPreferredAnimation(animations: string[]): string | undefined {
+    if (animations.length === 0) return undefined;
+
+    const exactStand = animations.find((name) => name.trim().toLowerCase() === 'stand');
+    if (exactStand) return exactStand;
+
+    const standPrefix = animations.find((name) => /^stand(\b|[^a-z0-9_])/i.test(name.trim()));
+    if (standPrefix) return standPrefix;
+
+    const standContains = animations.find((name) => name.trim().toLowerCase().includes('stand'));
+    return standContains ?? animations[0];
 }
 
 export const BatchManager: React.FC<BatchManagerProps> = ({
     onSelectModel,
     onAnimationChange,
-    selectedPath
+    selectedPath,
+    isFullBatchView = false,
+    onToggleFullBatchView
 }) => {
     const { token } = theme.useToken();
     const setMainMode = useSelectionStore(state => state.setMainMode);
@@ -94,17 +82,27 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
     const batchReset = useBatchStore(state => state.reset);
 
     // UI state
-    const FIXED_CARD_SIZE = 190;
+    const FIXED_CARD_SIZE = 160;
+    const CARD_GAP = 12;
     const [currentPage, setCurrentPage] = useState(1);
-    const [pageSize, setPageSize] = useState(12);
+    const [pageSize, setPageSize] = useState<number>(() => {
+        if (typeof window === 'undefined') return 15;
+        const raw = window.localStorage.getItem('batch.pageSize');
+        const parsed = raw ? Number(raw) : NaN;
+        if (Number.isFinite(parsed) && PAGE_SIZE_OPTIONS.includes(parsed)) {
+            return parsed;
+        }
+        return 15;
+    });
     const [visiblePaths, setVisiblePaths] = useState<Set<string>>(new Set());
     const [fastMode, setFastMode] = useState(false);
     const fastModeLocked = loading || files.length > 0;
+    const [selfSpinEnabled, setSelfSpinEnabled] = useState(true);
+    const [selfSpinSpeed, setSelfSpinSpeed] = useState(70);
     const [selectedFile, setSelectedFile] = useState<string | null>(null);
     const [deathApplyLoading, setDeathApplyLoading] = useState(false);
     const [actionScope, setActionScope] = useState<'selected' | 'all'>('selected');
     const [isPrefixModalVisible, setIsPrefixModalVisible] = useState(false);
-    const [perfSnapshot, setPerfSnapshot] = useState<BatchPerfSnapshot>(() => thumbnailService.getPerfSnapshot());
 
 
     // Shared states for animations moved to store
@@ -286,10 +284,11 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
 
             thumbnailEventBus.emitAnimations(fullPath, animations);
 
-            // Default to the first animation if not set
+            // Default to Stand animation if available, otherwise fallback to first
             setSelectedAnimations(prev => {
                 if (prev[fullPath]) return prev;
-                return { ...prev, [fullPath]: animations[0] };
+                const preferred = pickPreferredAnimation(animations) ?? animations[0];
+                return { ...prev, [fullPath]: preferred };
             });
         }
     }, [setModelAnimations, setSelectedAnimations]);
@@ -313,6 +312,16 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
         setQueue(pageFiles.map(f => ({ name: f.name, fullPath: f.fullPath })));
         const warmupStart = start + size;
         const warmupFiles = files.slice(warmupStart, warmupStart + size).map(f => f.fullPath);
+        void thumbnailService.prefetch(warmupFiles, 4, { withTextures: false });
+    };
+
+    const handlePageSizeChange = (size: number) => {
+        setCurrentPage(1);
+        setPageSize(size);
+
+        const pageFiles = files.slice(0, size);
+        setQueue(pageFiles.map(f => ({ name: f.name, fullPath: f.fullPath })));
+        const warmupFiles = files.slice(size, size * 2).map(f => f.fullPath);
         void thumbnailService.prefetch(warmupFiles, 4, { withTextures: false });
     };
 
@@ -373,11 +382,9 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
     }, [selectedPath, selectedFile, files, handleCopyModel])
 
     useEffect(() => {
-        const timer = setInterval(() => {
-            setPerfSnapshot(thumbnailService.getPerfSnapshot());
-        }, 500);
-        return () => clearInterval(timer);
-    }, []);
+        if (typeof window === 'undefined') return;
+        window.localStorage.setItem('batch.pageSize', String(pageSize));
+    }, [pageSize]);
 
     const applyDeathAnimationToPath = async (targetPath: string): Promise<'added' | 'updated'> => {
         const buffer = await readFile(targetPath);
@@ -709,32 +716,64 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                                 {fastMode ? '\u9759\u6001\u6a21\u5f0f' : '\u52a8\u4f5c\u6a21\u5f0f'}
                             </Button>
                         </Tooltip>
+
+                        <Tooltip title={isFullBatchView ? '\u9000\u51fa\u6279\u91cf\u5168\u5c4f' : '\u8fdb\u5165\u6279\u91cf\u5168\u5c4f'}>
+                            <Button
+                                size="small"
+                                icon={isFullBatchView ? <CompressOutlined /> : <ExpandOutlined />}
+                                onClick={() => onToggleFullBatchView?.()}
+                                disabled={!onToggleFullBatchView}
+                                style={{ minWidth: 40 }}
+                            />
+                        </Tooltip>
+
+                        <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 4,
+                            padding: '0 8px',
+                            height: 24,
+                            border: '1px solid #333',
+                            borderRadius: 4,
+                            background: '#1a1a1a'
+                        }}>
+                            <Text style={{ color: '#aaa', fontSize: 11 }}>{'\u81ea\u65cb'}</Text>
+                            <Switch size="small" checked={selfSpinEnabled} onChange={setSelfSpinEnabled} />
+                            <Text style={{ color: '#888', fontSize: 11 }}>{'\u901f\u5ea6'}</Text>
+                            <Slider
+                                min={5}
+                                max={120}
+                                step={5}
+                                value={selfSpinSpeed}
+                                onChange={(value) => setSelfSpinSpeed(Array.isArray(value) ? value[0] : value)}
+                                disabled={!selfSpinEnabled}
+                                style={{ width: 70, margin: '0 4px' }}
+                            />
+                        </div>
+
+                        <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 4,
+                            padding: '0 8px',
+                            height: 24,
+                            border: '1px solid #333',
+                            borderRadius: 4,
+                            background: '#1a1a1a'
+                        }}>
+                            <Text style={{ color: '#aaa', fontSize: 11 }}>{'\u6bcf\u9875\u6570\u91cf'}</Text>
+                            <Select<number>
+                                size="small"
+                                value={pageSize}
+                                onChange={handlePageSizeChange}
+                                style={{ width: 74 }}
+                                options={PAGE_SIZE_OPTIONS.map((value) => ({ label: String(value), value }))}
+                            />
+                        </div>
                     </Space>
                 </Space>
 
                 <div style={{ flex: 1 }} />
-
-                {files.length > 0 && (
-                    <div style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 10,
-                        fontSize: 11,
-                        color: '#9fb3c8',
-                        background: 'rgba(255,255,255,0.06)',
-                        border: '1px solid rgba(120,140,160,0.25)',
-                        borderRadius: 6,
-                        padding: '3px 8px',
-                        marginRight: 8,
-                        whiteSpace: 'nowrap'
-                    }}>
-                        <span>{`W ${perfSnapshot.workersBusy}/${perfSnapshot.workersTotal}`}</span>
-                        <span>{`T ${perfSnapshot.textureCache}/${perfSnapshot.sharedTextureCache}`}</span>
-                        <span>{`L ${perfSnapshot.modelLoading + perfSnapshot.textureLoading}`}</span>
-                        <span>{`hit ${perfSnapshot.sharedTextureHitRatePct.toFixed(0)}%`}</span>
-                        <span>{`tex ${perfSnapshot.textureLoadRatioPct.toFixed(0)}%`}</span>
-                    </div>
-                )}
 
                 {currentPath && (
                     <div style={{
@@ -827,31 +866,6 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                         </span>
                     )}
                 </div>
-                {files.length > 0 && (
-                    <div style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 2,
-                        marginBottom: 8,
-                        padding: '6px 8px',
-                        border: '1px solid #2f3a42',
-                        borderRadius: 6,
-                        background: 'rgba(11,18,24,0.72)',
-                        overflowX: 'auto'
-                    }}>
-                        <div style={{ color: '#9ec9ff', fontSize: 10, whiteSpace: 'nowrap' }}>
-                            {`AVG read ${perfSnapshot.avgModelReadMs.toFixed(1)}ms | parse ${perfSnapshot.avgModelParseMs.toFixed(1)}ms | prep ${perfSnapshot.avgPrepareMs.toFixed(1)}ms | tex ${perfSnapshot.avgTextureMs.toFixed(1)}ms (${perfSnapshot.textureLoadRatioPct.toFixed(0)}%) | worker ${perfSnapshot.avgWorkerRenderMs.toFixed(1)}ms | e2e ${perfSnapshot.avgEndToEndMs.toFixed(1)}ms`}
-                        </div>
-                        <div style={{ color: '#8bd6be', fontSize: 10, whiteSpace: 'nowrap' }}>
-                            {`TEX hit ${perfSnapshot.sharedTextureHitRatePct.toFixed(0)}% | cover ${perfSnapshot.textureCoveragePct.toFixed(0)}% | batch ${perfSnapshot.avgTextureBatchMs.toFixed(1)}ms (mpq ${perfSnapshot.avgTextureBatchMpqMs.toFixed(1)}ms/fs ${perfSnapshot.avgTextureBatchFsMs.toFixed(1)}ms) | queue ${perfSnapshot.avgTextureQueueMs.toFixed(1)}ms | decode ${perfSnapshot.avgTextureDecodeMs.toFixed(1)}ms | fallback ${perfSnapshot.avgTextureFallbackMs.toFixed(1)}ms | task ${perfSnapshot.textureTaskRunning}/${perfSnapshot.textureTaskPending}`}
-                        </div>
-                        {perfSnapshot.hotspotModelName && perfSnapshot.hotspotStage !== 'none' && (
-                            <div style={{ color: '#ffd591', fontSize: 10, whiteSpace: 'nowrap' }}>
-                                {`HOT ${perfSnapshot.hotspotStage} ${perfSnapshot.hotspotMs.toFixed(1)}ms @ ${perfSnapshot.hotspotModelName}`}
-                            </div>
-                        )}
-                    </div>
-                )}
                 {loading ? (
                     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', flexDirection: 'column' }}>
                         <Spin size="large" />
@@ -863,7 +877,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                             display: 'grid',
                             gridTemplateColumns: `repeat(auto-fill, ${FIXED_CARD_SIZE}px)`,
                             gridAutoRows: `${FIXED_CARD_SIZE}px`,
-                            gap: 12,
+                            gap: CARD_GAP,
                             overflowY: 'auto',
                             overflowX: 'hidden',
                             flex: 1,
@@ -929,6 +943,8 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                     onItemProcessed={handleItemProcessed}
                     visiblePaths={visiblePaths}
                     isAnimating={!fastMode}
+                    selfSpinEnabled={selfSpinEnabled}
+                    selfSpinSpeed={selfSpinSpeed}
                     selectedAnimations={selectedAnimations}
                     modelAnimations={modelAnimations}
                     selectedPath={selectedPath ?? selectedFile}

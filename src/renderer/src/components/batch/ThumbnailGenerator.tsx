@@ -35,6 +35,7 @@ interface ThumbnailGeneratorProps {
     isAnimating?: boolean;
     selfSpinEnabled?: boolean;
     selfSpinSpeed?: number;
+    workerLimit?: number;
     selectedAnimations?: Record<string, string>;
     modelAnimations?: Record<string, string[]>;
     visiblePaths?: Set<string>;
@@ -48,6 +49,7 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
     isAnimating = true,
     selfSpinEnabled = false,
     selfSpinSpeed = 70,
+    workerLimit,
     selectedAnimations = {},
     modelAnimations = {},
     visiblePaths = new Set(),
@@ -104,7 +106,8 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
                     timerRef.current = setTimeout(loop, 2);
                     return;
                 }
-                const maxDispatch = Math.max(1, Math.min(queue.length, freeWorkers));
+                const perPageCap = workerLimit && workerLimit > 0 ? workerLimit : freeWorkers;
+                const maxDispatch = Math.max(1, Math.min(queue.length, freeWorkers, perPageCap));
                 const candidates = queue
                     .filter(item => !queueInFlightRef.current.has(item.fullPath))
                     .slice(0, maxDispatch);
@@ -198,8 +201,9 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
                             if (active) timerRef.current = setTimeout(loop, 2);
                             return;
                         }
+                        const perPageCap = workerLimit && workerLimit > 0 ? workerLimit : freeWorkers;
                         // Avoid oversubscribing workers under high-card pages; this keeps frame pacing stable.
-                        const dynamicBudget = Math.max(1, Math.min(itemsToAnimate.length, freeWorkers));
+                        const dynamicBudget = Math.max(1, Math.min(itemsToAnimate.length, freeWorkers, perPageCap));
 
                         const nonSelected = selectedInView
                             ? itemsToAnimate.filter(p => p !== selectedInView)
@@ -261,7 +265,7 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
             active = false;
             if (timerRef.current) clearTimeout(timerRef.current);
         };
-    }, [queue, onThumbnailReady, onItemProcessed, isAnimating, selfSpinEnabled, selfSpinSpeed, visiblePaths, mainMode, selectedPath]);
+    }, [queue, onThumbnailReady, onItemProcessed, isAnimating, selfSpinEnabled, selfSpinSpeed, workerLimit, visiblePaths, mainMode, selectedPath]);
 
     return null;
 };
