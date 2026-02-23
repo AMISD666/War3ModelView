@@ -1,17 +1,26 @@
 ﻿import React, { useState, useEffect, useRef } from 'react'
-import { List, Button, Input, Checkbox, Card, Typography, message, Dropdown } from 'antd'
+import { List, Button, Input, Checkbox, Card, Typography, message, Dropdown, Slider } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import type { MenuProps } from 'antd'
 import { DraggableModal } from '../DraggableModal';
-import { PlusOutlined, DeleteOutlined, FolderOpenOutlined, DatabaseOutlined } from '@ant-design/icons'
+import { PlusOutlined, DeleteOutlined, FolderOpenOutlined, DatabaseOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useSelectionStore } from '../../store/selectionStore'
 
 import { useModelStore } from '../../store/modelStore'
+import { useRendererStore } from '../../store/rendererStore'
 import { readFile } from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { decodeTextureData, getTextureCandidatePaths, isMPQPath, normalizePath } from '../viewer/textureLoader'
 import { setDraggedTextureIndex } from '../../utils/textureDragDrop'
+import {
+    applyTextureAdjustments,
+    DEFAULT_TEXTURE_ADJUSTMENTS,
+    TextureAdjustments,
+    normalizeTextureAdjustments,
+    isDefaultTextureAdjustments,
+    TEXTURE_ADJUSTMENTS_KEY
+} from '../../utils/textureAdjustments'
 
 const { Text } = Typography
 
@@ -21,16 +30,39 @@ interface TextureEditorModalProps {
     modelPath?: string
 }
 
+interface LocalTexture {
+    __editorId: string
+    Image?: string
+    ReplaceableId?: number
+    Flags?: number
+    [key: string]: any
+}
+
+const createEditorId = (): string => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID()
+    }
+    return `tex-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+const ensureLocalTexture = (texture: any): LocalTexture => ({
+    ...texture,
+    __editorId: typeof texture?.__editorId === 'string' ? texture.__editorId : createEditorId()
+})
+
 const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClose, modelPath: propModelPath }) => {
-    const { modelData, setTextures, modelPath: storeModelPath } = useModelStore()
-    const [localTextures, setLocalTextures] = useState<any[]>([])
+    const { modelData, setTextures, modelPath: storeModelPath, triggerRendererReload } = useModelStore()
+    const [localTextures, setLocalTextures] = useState<LocalTexture[]>([])
     const [selectedIndex, setSelectedIndex] = useState<number>(-1)
     const [previewUrl, setPreviewUrl] = useState<string | null>(null)
     const [isLoadingPreview, setIsLoadingPreview] = useState(false)
     const [previewError, setPreviewError] = useState<string | null>(null)
     const [previewSource, setPreviewSource] = useState<string | null>(null) // 'mpq' | 'file' | null
+    const [basePreviewImageData, setBasePreviewImageData] = useState<ImageData | null>(null)
+    const [adjustmentsByTextureId, setAdjustmentsByTextureId] = useState<Record<string, TextureAdjustments>>({})
     const listRef = useRef<HTMLDivElement>(null)
     const previewLoadIdRef = useRef(0)
+    const hasLiveTextureOverrideRef = useRef(false)
 
     // Helper to scroll to selected item
     const scrollToItem = (index: number) => {
@@ -60,21 +92,42 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
 
     // Use prop modelPath if provided, otherwise fall back to store
     const modelPath = propModelPath || storeModelPath
+    const selectedTexture = selectedIndex >= 0 ? localTextures[selectedIndex] : null
+    const selectedTextureId = selectedTexture?.__editorId || ''
+    const selectedAdjustments = selectedTextureId
+        ? (adjustmentsByTextureId[selectedTextureId] || DEFAULT_TEXTURE_ADJUSTMENTS)
+        : DEFAULT_TEXTURE_ADJUSTMENTS
 
     // Initialize local state
     useEffect(() => {
         if (visible && modelData && modelData.Textures) {
             const cloned = JSON.parse(JSON.stringify(modelData.Textures))
+            const nextAdjustments: Record<string, TextureAdjustments> = {}
             const withReplaceables = cloned.map((t: any) => {
                 if (!t?.Image && t?.ReplaceableId === 1) {
-                    return { ...t, Image: 'ReplaceableTextures\\TeamColor\\TeamColor00.blp' }
+                    const texture = ensureLocalTexture({ ...t, Image: 'ReplaceableTextures\\TeamColor\\TeamColor00.blp' })
+                    if (t?.[TEXTURE_ADJUSTMENTS_KEY]) {
+                        nextAdjustments[texture.__editorId] = normalizeTextureAdjustments(t[TEXTURE_ADJUSTMENTS_KEY])
+                    }
+                    return texture
                 }
                 if (!t?.Image && t?.ReplaceableId === 2) {
-                    return { ...t, Image: 'ReplaceableTextures\\TeamGlow\\TeamGlow00.blp' }
+                    const texture = ensureLocalTexture({ ...t, Image: 'ReplaceableTextures\\TeamGlow\\TeamGlow00.blp' })
+                    if (t?.[TEXTURE_ADJUSTMENTS_KEY]) {
+                        nextAdjustments[texture.__editorId] = normalizeTextureAdjustments(t[TEXTURE_ADJUSTMENTS_KEY])
+                    }
+                    return texture
                 }
-                return t
+                const texture = ensureLocalTexture(t)
+                if (t?.[TEXTURE_ADJUSTMENTS_KEY]) {
+                    nextAdjustments[texture.__editorId] = normalizeTextureAdjustments(t[TEXTURE_ADJUSTMENTS_KEY])
+                }
+                return texture
             })
             setLocalTextures(withReplaceables)
+            setAdjustmentsByTextureId(nextAdjustments)
+            setBasePreviewImageData(null)
+            hasLiveTextureOverrideRef.current = false
 
             // If no selection yet, try to select based on picked geoset
             const initialPickedIndex = useSelectionStore.getState().pickedGeosetIndex
@@ -103,6 +156,9 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         } else if (visible) {
             setLocalTextures([])
             setSelectedIndex(-1)
+            setAdjustmentsByTextureId({})
+            setBasePreviewImageData(null)
+            hasLiveTextureOverrideRef.current = false
         }
     }, [visible, modelData])
 
@@ -191,6 +247,90 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         return [normalized]
     }
 
+    const updateSelectedAdjustment = (patch: Partial<TextureAdjustments>) => {
+        if (!selectedTextureId) return
+        setAdjustmentsByTextureId((prev) => {
+            const merged = {
+                ...(prev[selectedTextureId] || DEFAULT_TEXTURE_ADJUSTMENTS),
+                ...patch
+            }
+            return {
+                ...prev,
+                [selectedTextureId]: normalizeTextureAdjustments(merged)
+            }
+        })
+    }
+
+    const resetAdjustmentField = (field: keyof TextureAdjustments) => {
+        updateSelectedAdjustment({ [field]: DEFAULT_TEXTURE_ADJUSTMENTS[field] })
+    }
+
+    const toPercent = (value: number) => `${Math.round(value)}%`
+    const toDegree = (value: number) => `${Math.round(value)}°`
+    const huePreviewColor = `hsl(${Math.round(selectedAdjustments.hue + 180)}, 100%, 50%)`
+
+    const applyTextureToRenderer = (imagePath: string | undefined, imageData: ImageData) => {
+        if (!imagePath) return
+        const renderer = useRendererStore.getState().renderer
+        if (renderer && typeof renderer.setTextureImageData === 'function') {
+            // Try both original and normalized paths to ensure matching
+            renderer.setTextureImageData(imagePath, [imageData])
+
+            const normalized = normalizePath(imagePath)
+            if (normalized !== imagePath) {
+                renderer.setTextureImageData(normalized, [imageData])
+            }
+
+            // Also try with forward slashes if normalized uses backslashes
+            const forwardSlash = normalized.replace(/\\/g, '/')
+            if (forwardSlash !== normalized) {
+                renderer.setTextureImageData(forwardSlash, [imageData])
+            }
+
+            // Note: We do not call renderer.render() manually here because it requires 
+            // matrix arguments (mvMatrix, pMatrix, etc.) and is already handled 
+            // by the requestAnimationFrame loop in Viewer.tsx.
+        }
+    }
+
+    const buildTexturesForSave = (): any[] => {
+        return localTextures.map((texture) => {
+            const { __editorId, ...rest } = texture
+            const raw = adjustmentsByTextureId[__editorId]
+            if (raw) {
+                const normalized = normalizeTextureAdjustments(raw)
+                if (!isDefaultTextureAdjustments(normalized)) {
+                    return {
+                        ...rest,
+                        [TEXTURE_ADJUSTMENTS_KEY]: normalized
+                    }
+                }
+            }
+            if (Object.prototype.hasOwnProperty.call(rest, TEXTURE_ADJUSTMENTS_KEY)) {
+                const cleaned = { ...rest }
+                delete cleaned[TEXTURE_ADJUSTMENTS_KEY]
+                return cleaned
+            }
+            return rest
+        })
+    }
+
+    const handleCancel = () => {
+        if (hasLiveTextureOverrideRef.current) {
+            triggerRendererReload()
+            hasLiveTextureOverrideRef.current = false
+        }
+        onClose()
+    }
+
+    const handleOk = () => {
+        const texturesForSave = buildTexturesForSave()
+        setTextures(texturesForSave)
+        message.success('纹理已保存')
+        hasLiveTextureOverrideRef.current = false
+        onClose()
+    }
+
     // Load preview when selection changes
     useEffect(() => {
         const loadId = ++previewLoadIdRef.current
@@ -201,11 +341,13 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                 setPreviewUrl(null)
                 setPreviewError(null)
                 setPreviewSource(null)
+                setBasePreviewImageData(null)
                 return
             }
 
             const texture = localTextures[selectedIndex]
             if (!texture.Image) {
+                setBasePreviewImageData(null)
                 const replaceableLabel = getReplaceableLabel(texture.ReplaceableId)
                 if (texture.ReplaceableId === 1) {
                     setPreviewUrl(makeSolidDataUrl(220, 60, 60))
@@ -238,6 +380,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
             setPreviewError(null)
             setPreviewUrl(null)
             setPreviewSource(null)
+            setBasePreviewImageData(null)
 
             let loaded = false
 
@@ -254,9 +397,8 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                     const mpqBuffer = toArrayBuffer(mpqData)
                     if (mpqBuffer && mpqBuffer.byteLength > 0) {
                         const imageData = decodeTextureData(mpqBuffer, imagePath)
-                        const dataUrl = imageData ? imageDataToDataUrl(imageData) : null
-                        if (dataUrl) {
-                            setPreviewUrl(dataUrl)
+                        if (imageData) {
+                            setBasePreviewImageData(imageData)
                             setPreviewSource('MPQ')
                             loaded = true
                             console.log('[TextureEditor] Loaded from MPQ successfully')
@@ -295,9 +437,8 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                             if (isStale()) return
                             if (buffer) {
                                 const imageData = decodeTextureData(buffer.buffer, imagePath)
-                                const dataUrl = imageData ? imageDataToDataUrl(imageData) : null
-                                if (dataUrl) {
-                                    setPreviewUrl(dataUrl)
+                                if (imageData) {
+                                    setBasePreviewImageData(imageData)
                                     setPreviewSource('文件')
                                     loaded = true
                                     console.log('[TextureEditor] Loaded from file system successfully')
@@ -335,9 +476,8 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                     const mpqBuffer = toArrayBuffer(mpqData)
                     if (mpqBuffer && mpqBuffer.byteLength > 0) {
                         const imageData = decodeTextureData(mpqBuffer, imagePath)
-                        const dataUrl = imageData ? imageDataToDataUrl(imageData) : null
-                        if (dataUrl) {
-                            setPreviewUrl(dataUrl)
+                        if (imageData) {
+                            setBasePreviewImageData(imageData)
                             setPreviewSource('MPQ')
                             loaded = true
                         }
@@ -363,6 +503,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                         // Try next candidate
                     }
                 }
+                setBasePreviewImageData(null)
                 setPreviewUrl(`file://${fullPath}`)
                 setPreviewSource('文件')
             }
@@ -373,11 +514,24 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         loadTexture()
     }, [selectedIndex, localTextures, modelPath])
 
-    const handleOk = () => {
-        setTextures(localTextures)
-        message.success('纹理已保存')
-        onClose()
-    }
+    const selectedImageLower = (selectedTexture?.Image || '').toLowerCase()
+    const isSelectedTextureBlpOrTga = selectedImageLower.endsWith('.blp') || selectedImageLower.endsWith('.tga')
+    const canAdjustSelectedTexture = isSelectedTextureBlpOrTga && !!basePreviewImageData && !isLoadingPreview
+
+    useEffect(() => {
+        if (!basePreviewImageData) return
+        const adjusted = applyTextureAdjustments(basePreviewImageData, selectedAdjustments)
+        const dataUrl = imageDataToDataUrl(adjusted)
+        if (dataUrl) {
+            setPreviewUrl(dataUrl)
+        }
+        if (isSelectedTextureBlpOrTga && selectedTexture?.Image) {
+            applyTextureToRenderer(selectedTexture.Image, adjusted)
+            if (!isDefaultTextureAdjustments(selectedAdjustments)) {
+                hasLiveTextureOverrideRef.current = true
+            }
+        }
+    }, [basePreviewImageData, selectedAdjustments, isSelectedTextureBlpOrTga, selectedTexture?.Image])
 
     const updateLocalTexture = (index: number, updates: any) => {
         const newTextures = [...localTextures]
@@ -398,15 +552,15 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         return ((localTextures[selectedIndex].Flags || 0) & flag) !== 0
     }
 
-    const selectedTexture = selectedIndex >= 0 ? localTextures[selectedIndex] : null
+
 
     return (
         <DraggableModal
             title="纹理管理器"
             open={visible}
             onOk={handleOk}
-            onCancel={onClose}
-            width={900}
+            onCancel={handleCancel}
+            width={1000}
             okText="确定"
             cancelText="取消"
             maskClosable={false}
@@ -418,7 +572,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                 footer: { borderTop: '1px solid #4a4a4a' }
             }}
         >
-            <div style={{ display: 'flex', height: '500px', border: '1px solid #4a4a4a', backgroundColor: '#252525' }}>
+            <div style={{ display: 'flex', height: '720px', border: '1px solid #4a4a4a', backgroundColor: '#252525' }}>
                 {/* List (Left) */}
                 <div ref={listRef} style={{ width: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', backgroundColor: '#333333', borderRight: '1px solid #4a4a4a' }}>
                     <div style={{ padding: '8px', borderBottom: '1px solid #4a4a4a' }}>
@@ -483,7 +637,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                                     // Also add to existing set to prevent duplicates within the batch
                                                     existingPaths.add(relativePath.toLowerCase())
 
-                                                    newTextures.push({ Image: relativePath, ReplaceableId: 0, Flags: 0 })
+                                                    newTextures.push(ensureLocalTexture({ Image: relativePath, ReplaceableId: 0, Flags: 0 }))
                                                     addedCount++
                                                 }
 
@@ -523,7 +677,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                         label: '新建空白纹理',
                                         icon: <PlusOutlined />,
                                         onClick: () => {
-                                            const newTexture = { Image: 'Textures\\white.blp', ReplaceableId: 0, Flags: 0 }
+                                            const newTexture = ensureLocalTexture({ Image: 'Textures\\white.blp', ReplaceableId: 0, Flags: 0 })
                                             setLocalTextures([...localTextures, newTexture])
                                             setSelectedIndex(localTextures.length)
                                             setTimeout(() => scrollToItem(localTextures.length), 0)
@@ -571,8 +725,16 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                     <DeleteOutlined
                                         onClick={(e) => {
                                             e.stopPropagation()
+                                            const removedId = localTextures[index]?.__editorId
                                             const newTextures = localTextures.filter((_, i) => i !== index)
                                             setLocalTextures(newTextures)
+                                            if (removedId) {
+                                                setAdjustmentsByTextureId((prev) => {
+                                                    const next = { ...prev }
+                                                    delete next[removedId]
+                                                    return next
+                                                })
+                                            }
                                             if (selectedIndex === index) setSelectedIndex(-1)
                                             else if (selectedIndex > index) setSelectedIndex(selectedIndex - 1)
                                         }}
@@ -589,7 +751,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                     {selectedTexture ? (
                         <>
                             {/* Preview */}
-                            <div style={{ height: '200px', border: '1px solid #4a4a4a', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', backgroundColor: '#1f1f1f', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
+                            <div style={{ height: '400px', border: '1px solid #4a4a4a', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', backgroundColor: '#1f1f1f', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
                                 {isLoadingPreview ? (
                                     <div style={{ color: '#5a9cff', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
                                         <div className="ant-spin ant-spin-spinning" style={{ fontSize: 24 }}>⏳</div>
@@ -632,7 +794,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                 style={{ background: '#333333', border: '1px solid #4a4a4a' }}
                                 headStyle={{ borderBottom: '1px solid #4a4a4a' }}
                             >
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                                     <div>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '4px' }}>
                                             <Text style={{ color: '#b0b0b0' }}>路径:</Text>
@@ -660,6 +822,125 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                         <Checkbox checked={isFlagSet(2)} onChange={(e) => handleFlagChange(2, e.target.checked)} style={{ color: '#e8e8e8' }}>
                                             笼罩高度 (Wrap Height)
                                         </Checkbox>
+                                    </div>
+                                    <div style={{ borderTop: '1px solid #4a4a4a', paddingTop: 8 }}>
+                                        <Text style={{ color: '#b0b0b0', fontSize: 12 }}>贴图调整（仅 BLP/TGA）</Text>
+                                        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                <Text style={{ color: '#999', fontSize: 12, width: 54, flexShrink: 0 }}>色相</Text>
+                                                <div style={{
+                                                    width: 20,
+                                                    height: 20,
+                                                    borderRadius: 4,
+                                                    border: '1px solid #666',
+                                                    backgroundColor: huePreviewColor,
+                                                    flexShrink: 0
+                                                }} />
+                                                <Text style={{ color: '#999', fontSize: 12, width: 46, flexShrink: 0 }}>{toDegree(selectedAdjustments.hue)}</Text>
+                                                <div style={{ flex: 1 }}>
+                                                    <div style={{
+                                                        height: 8,
+                                                        borderRadius: 4,
+                                                        marginBottom: 2,
+                                                        background: 'linear-gradient(90deg, #ff0000 0%, #ffff00 17%, #00ff00 33%, #00ffff 50%, #0000ff 67%, #ff00ff 83%, #ff0000 100%)'
+                                                    }} />
+                                                    <Slider
+                                                        min={-180}
+                                                        max={180}
+                                                        step={1}
+                                                        value={selectedAdjustments.hue}
+                                                        onChange={(value) => updateSelectedAdjustment({ hue: Number(value) })}
+                                                        disabled={!canAdjustSelectedTexture}
+                                                        tooltip={{ open: false }}
+                                                        style={{ margin: '2px 0 0 0' }}
+                                                    />
+                                                </div>
+                                                <Button
+                                                    size="small"
+                                                    icon={<ReloadOutlined />}
+                                                    onClick={() => resetAdjustmentField('hue')}
+                                                    disabled={!canAdjustSelectedTexture}
+                                                    style={{ width: 28, minWidth: 28, paddingInline: 0 }}
+                                                />
+                                            </div>
+
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                <Text style={{ color: '#999', fontSize: 12, width: 54, flexShrink: 0 }}>明暗度</Text>
+                                                <Text style={{ color: '#999', fontSize: 12, width: 46, flexShrink: 0 }}>{toPercent(selectedAdjustments.brightness)}</Text>
+                                                <div style={{ flex: 1 }}>
+                                                    <Slider
+                                                        min={0}
+                                                        max={200}
+                                                        step={1}
+                                                        value={selectedAdjustments.brightness}
+                                                        onChange={(value) => updateSelectedAdjustment({ brightness: Number(value) })}
+                                                        disabled={!canAdjustSelectedTexture}
+                                                        tooltip={{ open: false }}
+                                                        style={{ margin: 0 }}
+                                                    />
+                                                </div>
+                                                <Button
+                                                    size="small"
+                                                    icon={<ReloadOutlined />}
+                                                    onClick={() => resetAdjustmentField('brightness')}
+                                                    disabled={!canAdjustSelectedTexture}
+                                                    style={{ width: 28, minWidth: 28, paddingInline: 0 }}
+                                                />
+                                            </div>
+
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                <Text style={{ color: '#999', fontSize: 12, width: 54, flexShrink: 0 }}>饱和度</Text>
+                                                <Text style={{ color: '#999', fontSize: 12, width: 46, flexShrink: 0 }}>{toPercent(selectedAdjustments.saturation)}</Text>
+                                                <div style={{ flex: 1 }}>
+                                                    <Slider
+                                                        min={0}
+                                                        max={200}
+                                                        step={1}
+                                                        value={selectedAdjustments.saturation}
+                                                        onChange={(value) => updateSelectedAdjustment({ saturation: Number(value) })}
+                                                        disabled={!canAdjustSelectedTexture}
+                                                        tooltip={{ open: false }}
+                                                        style={{ margin: 0 }}
+                                                    />
+                                                </div>
+                                                <Button
+                                                    size="small"
+                                                    icon={<ReloadOutlined />}
+                                                    onClick={() => resetAdjustmentField('saturation')}
+                                                    disabled={!canAdjustSelectedTexture}
+                                                    style={{ width: 28, minWidth: 28, paddingInline: 0 }}
+                                                />
+                                            </div>
+
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                <Text style={{ color: '#999', fontSize: 12, width: 54, flexShrink: 0 }}>透明度</Text>
+                                                <Text style={{ color: '#999', fontSize: 12, width: 46, flexShrink: 0 }}>{toPercent(selectedAdjustments.opacity)}</Text>
+                                                <div style={{ flex: 1 }}>
+                                                    <Slider
+                                                        min={0}
+                                                        max={200}
+                                                        step={1}
+                                                        value={selectedAdjustments.opacity}
+                                                        onChange={(value) => updateSelectedAdjustment({ opacity: Number(value) })}
+                                                        disabled={!canAdjustSelectedTexture}
+                                                        tooltip={{ open: false }}
+                                                        style={{ margin: 0 }}
+                                                    />
+                                                </div>
+                                                <Button
+                                                    size="small"
+                                                    icon={<ReloadOutlined />}
+                                                    onClick={() => resetAdjustmentField('opacity')}
+                                                    disabled={!canAdjustSelectedTexture}
+                                                    style={{ width: 28, minWidth: 28, paddingInline: 0 }}
+                                                />
+                                            </div>
+                                        </div>
+                                        {!isSelectedTextureBlpOrTga && (
+                                            <Text style={{ color: '#808080', fontSize: 12 }}>
+                                                仅 blp/tga 贴图支持调整
+                                            </Text>
+                                        )}
                                     </div>
                                 </div>
                             </Card>

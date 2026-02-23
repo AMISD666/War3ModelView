@@ -7,6 +7,7 @@ mod copy_utils;
 mod delete_utils;
 mod mpq_manager;
 mod texture_decode;
+mod texture_encode;
 
 use base64::Engine;
 use mpq_manager::MpqManager;
@@ -17,6 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{ipc::Response, Emitter, Manager, State};
 use texture_decode::{decode_texture_bytes_with_max_dimension, get_texture_candidate_paths, normalize_path};
+use texture_encode::encode_texture_image;
 
 use winreg::enums::*;
 use winreg::RegKey;
@@ -1454,6 +1456,7 @@ fn main() {
             read_local_files_batch,
             load_textures_batch_bin,
             load_textures_batch_thumb_rgba,
+            encode_texture_image,
             detect_warcraft_path,
             toggle_console,
             debug_log,

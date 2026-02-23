@@ -7,6 +7,12 @@
 import { decodeBLP, getBLPImageData } from 'war3-model'
 import { readFile } from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'
+import {
+    applyTextureAdjustments,
+    normalizeTextureAdjustments,
+    TEXTURE_ADJUSTMENTS_KEY,
+    TextureAdjustments
+} from '../../utils/textureAdjustments'
 
 export interface TextureLoadResult {
     path: string
@@ -21,6 +27,7 @@ export interface DecodeTextureOptions {
     preferBlpBaseMip?: boolean
     // Ignore source alpha and force fully opaque pixels.
     forceOpaqueAlpha?: boolean
+    adjustments?: TextureAdjustments
 }
 
 /**
@@ -300,11 +307,17 @@ function shouldUseBlpBaseMip(preferred: ImageData, base: ImageData): boolean {
 
 export function decodeTextureData(buffer: ArrayBuffer, path: string, options?: DecodeTextureOptions): ImageData | null {
     const isTga = path.toLowerCase().endsWith('.tga');
+    const applyAdjustmentsIfNeeded = (imageData: ImageData): ImageData => {
+        if (!options?.adjustments) return imageData
+        const normalized = normalizeTextureAdjustments(options.adjustments)
+        return applyTextureAdjustments(imageData, normalized)
+    }
     try {
         if (isTga) {
             const decoded = decodeTGA(buffer);
             const resized = downscaleImageDataIfNeeded(decoded, options?.maxDimension);
-            return forceOpaqueAlphaIfNeeded(resized, options?.forceOpaqueAlpha);
+            const adjusted = applyAdjustmentsIfNeeded(resized)
+            return forceOpaqueAlphaIfNeeded(adjusted, options?.forceOpaqueAlpha);
         } else {
             const blp = decodeBLP(buffer);
             const preferredMip = options?.preferBlpBaseMip ? 0 : chooseBlpMipLevel(blp, options?.maxDimension);
@@ -343,7 +356,8 @@ export function decodeTextureData(buffer: ArrayBuffer, path: string, options?: D
             }
 
             const resized = downscaleImageDataIfNeeded(decoded, options?.maxDimension);
-            return forceOpaqueAlphaIfNeeded(resized, options?.forceOpaqueAlpha);
+            const adjusted = applyAdjustmentsIfNeeded(resized)
+            return forceOpaqueAlphaIfNeeded(adjusted, options?.forceOpaqueAlpha);
         }
     } catch (e) {
         console.warn(`[Texture] Failed to decode ${path}:`, e);
@@ -749,6 +763,17 @@ export async function loadAllTextures(
         return results
     }
 
+    const textureAdjustmentsByPath = new Map<string, TextureAdjustments>()
+    if (Array.isArray(model.Textures)) {
+        for (const texture of model.Textures) {
+            const texturePath = texture?.Image
+            if (!texturePath || textureAdjustmentsByPath.has(texturePath)) continue
+            const raw = texture?.[TEXTURE_ADJUSTMENTS_KEY]
+            if (!raw) continue
+            textureAdjustmentsByPath.set(texturePath, normalizeTextureAdjustments(raw))
+        }
+    }
+
     const decodedTextures = new Map<string, ImageData>()
 
     try {
@@ -759,7 +784,9 @@ export async function loadAllTextures(
         const decodedBatch = parseTextureBytesPayload(payload, uniqueTexturePaths)
         decodedBatch.forEach((bytes, path) => {
             const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
-            const imageData = decodeTextureData(buffer, path)
+            const imageData = decodeTextureData(buffer, path, {
+                adjustments: textureAdjustmentsByPath.get(path)
+            })
             if (imageData) {
                 decodedTextures.set(path, imageData)
             }
@@ -777,7 +804,9 @@ export async function loadAllTextures(
                     for (const candidate of candidates) {
                         const buffer = await readFile(candidate).catch(() => null)
                         if (buffer) {
-                            const imageData = decodeTextureData(buffer.buffer, path)
+                            const imageData = decodeTextureData(buffer.buffer, path, {
+                                adjustments: textureAdjustmentsByPath.get(path)
+                            })
                             if (imageData) {
                                 return { path, imageData }
                             }
@@ -788,7 +817,9 @@ export async function loadAllTextures(
                 try {
                     const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: normalizePath(path) })
                     if (mpqData && mpqData.length > 0) {
-                        const imageData = decodeTextureData(mpqData.buffer as ArrayBuffer, path)
+                        const imageData = decodeTextureData(mpqData.buffer as ArrayBuffer, path, {
+                            adjustments: textureAdjustmentsByPath.get(path)
+                        })
                         if (imageData) {
                             return { path, imageData }
                         }

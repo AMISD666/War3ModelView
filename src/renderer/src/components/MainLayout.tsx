@@ -32,6 +32,13 @@ import { registerShortcutHandler } from '../shortcuts/manager'
 import { checkGiteeUpdate, showChangelog as showUpdateLog, checkGiteeUpdateSilent } from '../services/updateService';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Button, Modal } from 'antd';
+import { decodeTexture } from './viewer/textureLoader'
+import {
+    applyTextureAdjustments,
+    normalizeTextureAdjustments,
+    isDefaultTextureAdjustments,
+    TEXTURE_ADJUSTMENTS_KEY
+} from '../utils/textureAdjustments'
 
 /**
  * Normalize model data before saving to ensure typed arrays are correct.
@@ -2226,6 +2233,127 @@ const MainLayout: React.FC = () => {
 
 
 
+    const toUint8ArrayPayload = (payload: any): Uint8Array | null => {
+        if (!payload) return null;
+        if (payload instanceof Uint8Array) return payload;
+        if (payload instanceof ArrayBuffer) return new Uint8Array(payload);
+        if (ArrayBuffer.isView(payload)) {
+            return new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength);
+        }
+        if (Array.isArray(payload)) {
+            return new Uint8Array(payload);
+        }
+        if (typeof payload === 'string') {
+            try {
+                const binary = atob(payload);
+                const bytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) {
+                    bytes[i] = binary.charCodeAt(i);
+                }
+                return bytes;
+            } catch {
+                return null;
+            }
+        }
+        return null;
+    };
+
+    const normalizeWindowsPath = (path: string): string => path.replace(/\//g, '\\');
+    const isAbsoluteWindowsPath = (path: string): boolean =>
+        /^[a-zA-Z]:[\\/]/.test(path) || path.startsWith('\\\\');
+    const getDirname = (path: string): string => {
+        const normalized = normalizeWindowsPath(path);
+        const idx = normalized.lastIndexOf('\\');
+        return idx >= 0 ? normalized.slice(0, idx) : normalized;
+    };
+
+    const clearAdjustmentKeysInStoreTextures = () => {
+        const state = useModelStore.getState();
+        const textures = state.modelData?.Textures;
+        if (!Array.isArray(textures)) return;
+        textures.forEach((texture: any) => {
+            if (texture && Object.prototype.hasOwnProperty.call(texture, TEXTURE_ADJUSTMENTS_KEY)) {
+                delete texture[TEXTURE_ADJUSTMENTS_KEY];
+            }
+        });
+    };
+
+    const encodeAdjustedTexturesOnSave = async (
+        preparedData: any,
+        sourceModelPath: string | null,
+        targetModelPath: string
+    ): Promise<{ encodedCount: number; failed: string[] }> => {
+        const textures = preparedData?.Textures;
+        if (!Array.isArray(textures) || textures.length === 0) {
+            return { encodedCount: 0, failed: [] };
+        }
+
+        const { writeFile, mkdir } = await import('@tauri-apps/plugin-fs');
+        const { invoke } = await import('@tauri-apps/api/core');
+        const targetModelDir = getDirname(targetModelPath);
+
+        let encodedCount = 0;
+        const failed: string[] = [];
+
+        for (const texture of textures) {
+            const imagePathRaw = texture?.Image;
+            const adjustmentsRaw = texture?.[TEXTURE_ADJUSTMENTS_KEY];
+
+            if (typeof imagePathRaw !== 'string' || !imagePathRaw || !adjustmentsRaw) {
+                if (texture && Object.prototype.hasOwnProperty.call(texture, TEXTURE_ADJUSTMENTS_KEY)) {
+                    delete texture[TEXTURE_ADJUSTMENTS_KEY];
+                }
+                continue;
+            }
+
+            const normalizedAdjustments = normalizeTextureAdjustments(adjustmentsRaw);
+            const ext = imagePathRaw.toLowerCase().split('.').pop();
+            if (isDefaultTextureAdjustments(normalizedAdjustments) || (ext !== 'blp' && ext !== 'tga')) {
+                delete texture[TEXTURE_ADJUSTMENTS_KEY];
+                continue;
+            }
+
+            const decodeModelPath = sourceModelPath || targetModelPath;
+            const decodeResult = await decodeTexture(imagePathRaw, decodeModelPath);
+            if (!decodeResult.imageData) {
+                failed.push(`${imagePathRaw} (解码失败)`);
+                continue;
+            }
+
+            try {
+                const adjusted = applyTextureAdjustments(decodeResult.imageData, normalizedAdjustments);
+                const payload = await invoke<any>('encode_texture_image', {
+                    rgba: Array.from(adjusted.data),
+                    width: adjusted.width,
+                    height: adjusted.height,
+                    format: ext,
+                    blpQuality: 90
+                });
+                const bytes = toUint8ArrayPayload(payload);
+                if (!bytes || bytes.byteLength === 0) {
+                    failed.push(`${imagePathRaw} (编码失败)`);
+                    continue;
+                }
+
+                const normalizedImagePath = normalizeWindowsPath(imagePathRaw);
+                const outputPath = isAbsoluteWindowsPath(normalizedImagePath)
+                    ? normalizedImagePath
+                    : `${targetModelDir}\\${normalizedImagePath}`;
+                const outputDir = getDirname(outputPath);
+                if (outputDir) {
+                    await mkdir(outputDir, { recursive: true });
+                }
+                await writeFile(outputPath, bytes);
+                delete texture[TEXTURE_ADJUSTMENTS_KEY];
+                encodedCount += 1;
+            } catch (error: any) {
+                failed.push(`${imagePathRaw} (${error?.message || String(error)})`);
+            }
+        }
+
+        return { encodedCount, failed };
+    };
+
     const handleSave = async (): Promise<boolean> => {
         if (!modelPath || !modelData) return false
 
@@ -2256,6 +2384,8 @@ const MainLayout: React.FC = () => {
 
             console.timeEnd('[MainLayout] SavePrep')
 
+            const textureEncodeResult = await encodeAdjustedTexturesOnSave(preparedData, modelPath, modelPath);
+
             if (modelPath.toLowerCase().endsWith('.mdl')) {
                 cleanupInvalidGeosets(preparedData)
                 console.time('[MainLayout] GenMDL')
@@ -2274,6 +2404,18 @@ const MainLayout: React.FC = () => {
                 console.time('[MainLayout] FileWrite')
                 await writeFile(modelPath, new Uint8Array(buffer))
                 console.timeEnd('[MainLayout] FileWrite')
+            }
+
+            if (textureEncodeResult.failed.length > 0) {
+                const lines = textureEncodeResult.failed.slice(0, 3).join('\n');
+                showMessage(
+                    'warning',
+                    '部分贴图写出失败',
+                    `${textureEncodeResult.failed.length} 个贴图写出失败：\n${lines}${textureEncodeResult.failed.length > 3 ? '\n...' : ''}`
+                );
+            }
+            if (textureEncodeResult.encodedCount > 0) {
+                clearAdjustmentKeysInStoreTextures();
             }
 
             useHistoryStore.getState().markSaved();
@@ -2330,6 +2472,7 @@ const MainLayout: React.FC = () => {
                     if (!proceed) return false;
                 }
 
+                const textureEncodeResult = await encodeAdjustedTexturesOnSave(preparedData, modelPath, selected);
 
                 if (selected.toLowerCase().endsWith('.mdl')) {
                     cleanupInvalidGeosets(preparedData)
@@ -2339,6 +2482,14 @@ const MainLayout: React.FC = () => {
                     cleanupInvalidGeosets(preparedData)
                     const buffer = generateMDX(preparedData)
                     await writeFile(selected, new Uint8Array(buffer))
+                }
+                if (textureEncodeResult.failed.length > 0) {
+                    const lines = textureEncodeResult.failed.slice(0, 3).join('\n');
+                    showMessage(
+                        'warning',
+                        '部分贴图写出失败',
+                        `${textureEncodeResult.failed.length} 个贴图写出失败：\n${lines}${textureEncodeResult.failed.length > 3 ? '\n...' : ''}`
+                    );
                 }
                 // Update store with new path if needed, but for now just alert
                 useHistoryStore.getState().markSaved();
