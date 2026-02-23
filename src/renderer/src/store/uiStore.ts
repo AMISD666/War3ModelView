@@ -11,6 +11,7 @@ interface UIState {
     // ... (rest of interface remains same)
     // 窗口显示状态
     showNodeManager: boolean;
+    showMpqBrowser: boolean;
     showModelInfo: boolean;
     showVertexEditor: boolean;
     showFaceEditor: boolean;
@@ -31,6 +32,7 @@ interface UIState {
 
     // UI 切换方法
     toggleNodeManager: () => void;
+    toggleMpqBrowser: () => void;
     toggleModelInfo: () => void;
     toggleVertexEditor: () => void;
     toggleFaceEditor: () => void;
@@ -44,6 +46,7 @@ interface UIState {
     setEditMode: (mode: EditMode) => void;
     setToolMode: (mode: ToolMode) => void;
     setShowNodeManager: (visible: boolean) => void;
+    setShowMpqBrowser: (visible: boolean) => void;
     reset: () => void;
 }
 
@@ -52,6 +55,7 @@ export const useUIStore = create<UIState>()(
         (set) => ({
             // 初始窗口状态 - 默认隐藏
             showNodeManager: false,
+            showMpqBrowser: false,
             showModelInfo: false,
             showVertexEditor: false,
             showFaceEditor: false,
@@ -72,6 +76,10 @@ export const useUIStore = create<UIState>()(
             // 切换方法实现
             toggleNodeManager: () => {
                 set((state) => ({ showNodeManager: !state.showNodeManager }));
+            },
+
+            toggleMpqBrowser: () => {
+                set((state) => ({ showMpqBrowser: !state.showMpqBrowser }));
             },
 
             toggleModelInfo: () => {
@@ -117,9 +125,14 @@ export const useUIStore = create<UIState>()(
                 set({ showNodeManager: visible });
             },
 
+            setShowMpqBrowser: (visible: boolean) => {
+                set({ showMpqBrowser: visible });
+            },
+
             reset: () => {
                 set({
                     showNodeManager: false,
+                    showMpqBrowser: false,
                     showModelInfo: false,
                     showVertexEditor: false,
                     showFaceEditor: false,
@@ -137,6 +150,7 @@ export const useUIStore = create<UIState>()(
             storage: appDirStorage,
             partialize: (state) => ({
                 showNodeManager: state.showNodeManager,
+                showMpqBrowser: state.showMpqBrowser,
                 leftSiderCollapsed: state.leftSiderCollapsed,
                 rightSiderCollapsed: state.rightSiderCollapsed
             }),

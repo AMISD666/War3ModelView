@@ -18,6 +18,7 @@ import { CreateNodeDialog } from './node/CreateNodeDialog';
 import { ViewSettingsWindow } from './ViewSettingsWindow';
 import { BatchManager } from './batch/BatchManager';
 import { TabBar } from './TabBar';
+import { MpqBrowserPanel } from './mpq/MpqBrowserPanel';
 import { listen } from '@tauri-apps/api/event';
 import { handleGlobalShortcutKeyDown } from '../shortcuts/manager';
 
@@ -27,10 +28,12 @@ const clamp = (value: number, min: number, max: number) => Math.max(min, Math.mi
 export const MainLayoutNew: React.FC = () => {
     const {
         showNodeManager,
+        showMpqBrowser,
         showNodeDialog,
         editingNodeId,
         setNodeDialogVisible,
-        setShowNodeManager
+        setShowNodeManager,
+        setShowMpqBrowser
     } = useUIStore();
 
     const mainMode = useSelectionStore(state => state.mainMode);
@@ -42,6 +45,8 @@ export const MainLayoutNew: React.FC = () => {
     // Batch mode panel resizing
     const [batchPanelWidth, setBatchPanelWidth] = useState(54); // percentage
     const [isResizingBatch, setIsResizingBatch] = useState(false);
+    const [mpqPanelWidth, setMpqPanelWidth] = useState(360);
+    const [isResizingMpqPanel, setIsResizingMpqPanel] = useState(false);
     const [isBatchFullView, setIsBatchFullView] = useState<boolean>(() => {
         if (typeof window === 'undefined') return false;
         return window.localStorage.getItem('batch.fullView') === '1';
@@ -64,6 +69,12 @@ export const MainLayoutNew: React.FC = () => {
         const minPercent = Math.min(48, Math.max(20, minPercentByPx));
         const maxPercent = Math.max(52, Math.min(80, 100 - minPercent));
         return { minPercent, maxPercent };
+    }, []);
+    const getMpqPanelBounds = useCallback(() => {
+        const containerWidth = containerRef.current?.clientWidth ?? window.innerWidth;
+        const minWidth = 260;
+        const maxWidth = Math.max(minWidth, Math.min(760, containerWidth - 420));
+        return { minWidth, maxWidth };
     }, []);
 
     // Handle model selection from BatchManager
@@ -91,6 +102,10 @@ export const MainLayoutNew: React.FC = () => {
         setIsResizingBatch(true);
         e.preventDefault();
     };
+    const handleMpqDividerMouseDown = (e: React.MouseEvent) => {
+        setIsResizingMpqPanel(true);
+        e.preventDefault();
+    };
 
     useEffect(() => {
         const handleMouseMove = (e: MouseEvent) => {
@@ -107,14 +122,21 @@ export const MainLayoutNew: React.FC = () => {
                 const { minPercent, maxPercent } = getBatchPanelBounds();
                 setBatchPanelWidth(clamp(newWidthPercent, minPercent, maxPercent));
             }
+            if (isResizingMpqPanel && containerRef.current) {
+                const containerRect = containerRef.current.getBoundingClientRect();
+                const newWidth = containerRect.right - e.clientX;
+                const { minWidth, maxWidth } = getMpqPanelBounds();
+                setMpqPanelWidth(clamp(newWidth, minWidth, maxWidth));
+            }
         };
 
         const handleMouseUp = () => {
             setIsResizingNodeMgr(false);
             setIsResizingBatch(false);
+            setIsResizingMpqPanel(false);
         };
 
-        if (isResizingNodeMgr || isResizingBatch) {
+        if (isResizingNodeMgr || isResizingBatch || isResizingMpqPanel) {
             document.addEventListener('mousemove', handleMouseMove);
             document.addEventListener('mouseup', handleMouseUp);
         }
@@ -123,19 +145,21 @@ export const MainLayoutNew: React.FC = () => {
             document.removeEventListener('mousemove', handleMouseMove);
             document.removeEventListener('mouseup', handleMouseUp);
         };
-    }, [isResizingNodeMgr, isResizingBatch, getNodeManagerBounds, getBatchPanelBounds]);
+    }, [isResizingNodeMgr, isResizingBatch, isResizingMpqPanel, getNodeManagerBounds, getBatchPanelBounds, getMpqPanelBounds]);
 
     useEffect(() => {
         const clampPanelSizes = () => {
             const { minWidth, maxWidth } = getNodeManagerBounds();
             const { minPercent, maxPercent } = getBatchPanelBounds();
+            const mpqBounds = getMpqPanelBounds();
             setNodeManagerWidth((prev) => clamp(prev, minWidth, maxWidth));
             setBatchPanelWidth((prev) => clamp(prev, minPercent, maxPercent));
+            setMpqPanelWidth((prev) => clamp(prev, mpqBounds.minWidth, mpqBounds.maxWidth));
         };
         clampPanelSizes();
         window.addEventListener('resize', clampPanelSizes);
         return () => window.removeEventListener('resize', clampPanelSizes);
-    }, [getNodeManagerBounds, getBatchPanelBounds]);
+    }, [getNodeManagerBounds, getBatchPanelBounds, getMpqPanelBounds]);
     useEffect(() => {
         if (typeof window === 'undefined') return;
         window.localStorage.setItem('batch.fullView', isBatchFullView ? '1' : '0');
@@ -349,6 +373,51 @@ export const MainLayoutNew: React.FC = () => {
                             <MainLayoutOld />
                         </Content>
                     </div>
+
+                    {showMpqBrowser && (
+                        <div
+                            style={{
+                                width: mpqPanelWidth,
+                                borderLeft: '1px solid #303030',
+                                backgroundColor: '#1e1e1e',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                position: 'relative',
+                                flexShrink: 0,
+                                minWidth: 0
+                            }}
+                        >
+                            <div
+                                onMouseDown={handleMpqDividerMouseDown}
+                                style={{
+                                    position: 'absolute',
+                                    left: 0,
+                                    top: 0,
+                                    bottom: 0,
+                                    width: '4px',
+                                    cursor: 'ew-resize',
+                                    backgroundColor: isResizingMpqPanel ? '#007acc' : 'transparent',
+                                    transition: 'background-color 0.2s',
+                                    zIndex: 2
+                                }}
+                                onMouseEnter={(e) => {
+                                    if (!isResizingMpqPanel) {
+                                        e.currentTarget.style.backgroundColor = '#007acc40';
+                                    }
+                                }}
+                                onMouseLeave={(e) => {
+                                    if (!isResizingMpqPanel) {
+                                        e.currentTarget.style.backgroundColor = 'transparent';
+                                    }
+                                }}
+                            />
+                            <div style={{ flex: 1, overflow: 'hidden' }}>
+                                <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
+                                    <MpqBrowserPanel onClose={() => setShowMpqBrowser(false)} />
+                                </ConfigProvider>
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
 

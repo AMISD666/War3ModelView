@@ -247,6 +247,21 @@ fn read_mpq_files_batch(paths: Vec<String>, state: State<'_, MpqManager>) -> Vec
         .collect()
 }
 
+#[tauri::command]
+fn get_loaded_mpq_paths(state: State<'_, MpqManager>) -> Vec<String> {
+    state.archive_paths()
+}
+
+#[tauri::command]
+fn list_mpq_files(mpq_path: String, state: State<'_, MpqManager>) -> Result<Vec<String>, String> {
+    state.list_files_for_archive(&mpq_path)
+}
+
+#[tauri::command]
+fn set_mpq_priority(mpq_path: String, state: State<'_, MpqManager>) -> Result<(), String> {
+    state.prioritize_archive(&mpq_path)
+}
+
 #[derive(Serialize)]
 struct MpqProbeResult {
     input: String,
@@ -1432,6 +1447,9 @@ fn main() {
             load_mpq,
             read_mpq_file,
             read_mpq_files_batch,
+            get_loaded_mpq_paths,
+            list_mpq_files,
+            set_mpq_priority,
             debug_mpq_probe,
             read_local_files_batch,
             load_textures_batch_bin,

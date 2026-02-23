@@ -30,6 +30,10 @@ fn normalize_mpq_path(path: &str) -> String {
     normalized
 }
 
+fn normalize_archive_fs_path(path: &str) -> String {
+    path.replace('/', "\\").trim().to_lowercase()
+}
+
 fn build_mpq_candidates(path: &str) -> Vec<String> {
     let mut candidates = Vec::new();
     let normalized = normalize_mpq_path(path);
@@ -121,6 +125,45 @@ impl MpqManager {
     pub fn archive_paths(&self) -> Vec<String> {
         let archives = self.archives.lock().unwrap();
         archives.iter().map(|a| a.path.clone()).collect()
+    }
+
+    pub fn list_files_for_archive(&self, archive_path: &str) -> Result<Vec<String>, String> {
+        let target = normalize_archive_fs_path(archive_path);
+        let mut archives = self.archives.lock().unwrap();
+
+        let archive = archives
+            .iter_mut()
+            .find(|item| normalize_archive_fs_path(&item.path) == target)
+            .ok_or_else(|| format!("MPQ not loaded: {}", archive_path))?;
+
+        let mut entries = archive
+            .archive
+            .list()
+            .map_err(|e| format!("Failed to list MPQ files: {:?}", e))?
+            .into_iter()
+            .map(|entry| normalize_mpq_path(&entry.name))
+            .collect::<Vec<_>>();
+
+        entries.sort_unstable();
+        entries.dedup();
+        Ok(entries)
+    }
+
+    pub fn prioritize_archive(&self, archive_path: &str) -> Result<(), String> {
+        let target = normalize_archive_fs_path(archive_path);
+        let mut archives = self.archives.lock().unwrap();
+        let index = archives
+            .iter()
+            .position(|item| normalize_archive_fs_path(&item.path) == target)
+            .ok_or_else(|| format!("MPQ not loaded: {}", archive_path))?;
+
+        if index + 1 == archives.len() {
+            return Ok(());
+        }
+
+        let archive = archives.remove(index);
+        archives.push(archive);
+        Ok(())
     }
 
     pub fn probe_file(&self, filename: &str) -> (String, Vec<String>, Option<usize>, usize) {

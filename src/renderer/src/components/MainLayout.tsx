@@ -2088,8 +2088,8 @@ const MainLayout: React.FC = () => {
             const selected = await open({
                 multiple: false,
                 filters: [{
-                    name: '魔兽争霸3模型',
-                    extensions: ['mdx', 'mdl']
+                    name: '魔兽争霸3资源',
+                    extensions: ['mdx', 'mdl', 'blp', 'tga']
                 }]
             })
 
@@ -2160,9 +2160,9 @@ const MainLayout: React.FC = () => {
         let unlistenDrop: (() => void) | undefined
         let unlistenEnter: (() => void) | undefined
         let unlistenLeave: (() => void) | undefined
-        const isSupportedModelFile = (filePath: string): boolean => {
+        const isSupportedAssetFile = (filePath: string): boolean => {
             const ext = filePath.toLowerCase().split('.').pop()
-            return ext === 'mdx' || ext === 'mdl'
+            return ext === 'mdx' || ext === 'mdl' || ext === 'blp' || ext === 'tga'
         }
 
         const setupDragDropListeners = async () => {
@@ -2176,7 +2176,7 @@ const MainLayout: React.FC = () => {
                     const paths = Array.isArray(event.payload?.paths) ? event.payload.paths : []
                     if (!paths || paths.length === 0) return
 
-                    const filePath = paths.find(isSupportedModelFile)
+                    const filePath = paths.find(isSupportedAssetFile)
                     if (!filePath) {
                         // Forward non-model external drops to feature-specific handlers (e.g. texture drop zones)
                         window.dispatchEvent(new CustomEvent('war3-external-file-drop', {
@@ -2195,9 +2195,9 @@ const MainLayout: React.FC = () => {
                 // Listen for drag enter
                 unlistenEnter = await listen<{ paths?: string[] }>('tauri://drag-enter', (event) => {
                     const paths = Array.isArray(event.payload?.paths) ? event.payload.paths : []
-                    const hasSupportedModel = paths.some(isSupportedModelFile)
-                    isExternalModelDragRef.current = hasSupportedModel
-                    if (hasSupportedModel) {
+                    const hasSupportedAsset = paths.some(isSupportedAssetFile)
+                    isExternalModelDragRef.current = hasSupportedAsset
+                    if (hasSupportedAsset) {
                         setIsDragging(true)
                     }
                 })
@@ -2874,7 +2874,7 @@ const MainLayout: React.FC = () => {
                         fontWeight: 'bold',
                         color: '#fff'
                     }}>
-                        拖放 MDX/MDL 文件以导入模型
+                        拖放 MDX/MDL/BLP/TGA 文件以打开资源
                     </div>
                 </div>
             )}

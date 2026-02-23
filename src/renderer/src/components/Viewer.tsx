@@ -2,7 +2,7 @@
 // @ts-ignore
 import { decodeBLP, getBLPImageData, parseMDX, parseMDL, ModelRenderer } from 'war3-model'
 import { SimpleOrbitCamera } from '../utils/SimpleOrbitCamera'
-import { loadAllTextures } from './viewer/textureLoader'
+import { decodeTextureData, loadAllTextures } from './viewer/textureLoader'
 import { validateAllParticleEmitters } from './viewer/particleValidator'
 import { checkForStructuralChanges } from './viewer/modelSync'
 import { getEnvironmentManager } from './viewer/EnvironmentManager'
@@ -78,6 +78,64 @@ interface ViewerProps {
   onAddCameraFromView?: () => void
 }
 
+const toUint8Array = (payload: any): Uint8Array | null => {
+  if (!payload) return null
+  if (payload instanceof Uint8Array) return payload
+  if (payload instanceof ArrayBuffer) return new Uint8Array(payload)
+  if (ArrayBuffer.isView(payload)) {
+    return new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength)
+  }
+  if (Array.isArray(payload)) {
+    return new Uint8Array(payload)
+  }
+  if (typeof payload === 'string') {
+    try {
+      const binary = atob(payload)
+      const bytes = new Uint8Array(binary.length)
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i)
+      }
+      return bytes
+    } catch {
+      return null
+    }
+  }
+  if (typeof payload === 'object') {
+    const candidate = (payload as any).data ?? (payload as any).bytes ?? (payload as any).payload
+    if (candidate !== undefined) {
+      return toUint8Array(candidate)
+    }
+    const numericKeys = Object.keys(payload)
+      .filter((k) => /^\d+$/.test(k))
+      .sort((a, b) => Number(a) - Number(b))
+    if (numericKeys.length > 0) {
+      const bytes = new Uint8Array(numericKeys.length)
+      for (let i = 0; i < numericKeys.length; i++) {
+        bytes[i] = Number((payload as any)[numericKeys[i]]) & 0xff
+      }
+      return bytes
+    }
+  }
+  return null
+}
+
+const toTightArrayBuffer = (bytes: Uint8Array): ArrayBuffer => {
+  if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
+    return bytes.buffer
+  }
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+}
+
+const TEXTURE_PREVIEW_EXTENSIONS = new Set(['blp', 'tga'])
+
+const isTexturePreviewPath = (path: string): boolean => {
+  const lower = path.toLowerCase()
+  const dotIndex = lower.lastIndexOf('.')
+  if (dotIndex < 0) return false
+  const ext = lower.substring(dotIndex + 1)
+  return TEXTURE_PREVIEW_EXTENSIONS.has(ext)
+}
+
 const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   modelPath,
   animationIndex,
@@ -128,6 +186,12 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const cameraUpRef = useRef(vec3.fromValues(0, 0, 1))
   const cameraQuatRef = useRef(quat.create())
   const { showModelInfo } = useUIStore()
+  const [texturePreview, setTexturePreview] = useState<{
+    url: string
+    width: number
+    height: number
+    path: string
+  } | null>(null)
 
   const formatCameraValue = (value: number): string => {
     if (!Number.isFinite(value)) return '0'
@@ -708,10 +772,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
     const loadTexture = async (path: string, id: number) => {
       try {
-        const mpqData = await invoke<Uint8Array>('read_mpq_file', { path }).catch(() => null)
+        const mpqPayload = await invoke<any>('read_mpq_file', { path }).catch(() => null)
+        const mpqData = toUint8Array(mpqPayload)
 
         if (mpqData && mpqData.length > 0) {
-          const blp = decodeBLP(mpqData.buffer as any)
+          const blp = decodeBLP(toTightArrayBuffer(mpqData) as any)
           const imageData = getBLPImageData(blp, 0)
 
           const texCanvas = document.createElement('canvas')
@@ -1091,6 +1156,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           canvas.height = h
         }
       }
+      setTexturePreview(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelPath])
@@ -2025,6 +2091,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       canvas.width = w
       canvas.height = h
     }
+    setTexturePreview(null)
 
     try {
       console.time('[Viewer] FullModelLoad')
@@ -2032,6 +2099,52 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         console.error('[Viewer] Canvas reference is null')
         return
       }
+
+      const readPathBytes = async (assetPath: string): Promise<Uint8Array> => {
+        try {
+          return await readFile(assetPath)
+        } catch {
+          const mpqPayload = await invoke<any>('read_mpq_file', { path: assetPath }).catch(() => null)
+          const mpqBytes = toUint8Array(mpqPayload)
+          if (!mpqBytes || mpqBytes.byteLength === 0) {
+            throw new Error(`无法读取资源文件: ${assetPath}`)
+          }
+          return mpqBytes
+        }
+      }
+
+      // Texture preview mode (.blp/.tga): show in main viewer area as 2D preview.
+      if (isTexturePreviewPath(path)) {
+        const bytes = await readPathBytes(path)
+        const imageData = decodeTextureData(toTightArrayBuffer(bytes), path, { preferredBLPMip: 0 })
+        if (!imageData) {
+          throw new Error(`无法解码贴图文件: ${path}`)
+        }
+
+        const previewCanvas = document.createElement('canvas')
+        previewCanvas.width = imageData.width
+        previewCanvas.height = imageData.height
+        const previewCtx = previewCanvas.getContext('2d')
+        if (!previewCtx) {
+          throw new Error('无法创建贴图预览上下文')
+        }
+        previewCtx.putImageData(imageData, 0, 0)
+
+        const previewUrl = previewCanvas.toDataURL('image/png')
+        setTexturePreview({
+          path,
+          width: imageData.width,
+          height: imageData.height,
+          url: previewUrl
+        })
+
+        // Keep MainLayout loading state in sync even for non-model assets.
+        onModelLoaded({ path, Textures: [], Geosets: [], Nodes: [], Sequences: [] } as any)
+        console.timeEnd('[Viewer] FullModelLoad')
+        return
+      }
+
+      setTexturePreview(null)
 
       // Align WebGL context behavior with mdx-m3-viewer:
       // use an opaque backbuffer to avoid premultiplied compositing washout.
@@ -2075,7 +2188,18 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         model = inMemoryData
       } else {
         console.time('[Viewer] FileRead')
-        const buffer = await readFile(path)
+        let buffer: Uint8Array
+        try {
+          buffer = await readFile(path)
+        } catch {
+          // If this is an MPQ-internal path, fall back to MPQ reader.
+          const mpqPayload = await invoke<any>('read_mpq_file', { path }).catch(() => null)
+          const mpqData = toUint8Array(mpqPayload)
+          if (!mpqData || mpqData.byteLength === 0) {
+            throw new Error(`无法读取模型文件: ${path}`)
+          }
+          buffer = mpqData
+        }
         console.timeEnd('[Viewer] FileRead')
 
         console.time('[Viewer] ParseOnly')
@@ -2083,7 +2207,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           const text = new TextDecoder().decode(buffer)
           model = parseMDL(text)
         } else {
-          model = parseMDX(buffer.buffer)
+          model = parseMDX(toTightArrayBuffer(buffer))
         }
         console.timeEnd('[Viewer] ParseOnly')
       }
@@ -5856,11 +5980,13 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     selectParentNode
   ])
 
+  const isTexturePreviewMode = texturePreview !== null
+
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
       <canvas
         ref={canvasRef}
-        style={{ width: '100%', height: '100%', display: 'block' }}
+        style={{ width: '100%', height: '100%', display: isTexturePreviewMode ? 'none' : 'block' }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
@@ -5891,8 +6017,46 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         onWheel={handleWheel}
       />
 
+      {texturePreview && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'repeating-conic-gradient(#2a2a2a 0% 25%, #1f1f1f 0% 50%) 50% / 24px 24px'
+          }}
+        >
+          <img
+            src={texturePreview.url}
+            alt={texturePreview.path}
+            style={{
+              maxWidth: '100%',
+              maxHeight: '100%',
+              objectFit: 'contain',
+              imageRendering: 'pixelated'
+            }}
+          />
+          <div
+            style={{
+              position: 'absolute',
+              left: 12,
+              top: 12,
+              padding: '4px 8px',
+              borderRadius: 4,
+              fontSize: 12,
+              color: '#ddd',
+              background: 'rgba(0, 0, 0, 0.55)'
+            }}
+          >
+            {texturePreview.path.split(/[/\\]/).pop()} ({texturePreview.width}x{texturePreview.height})
+          </div>
+        </div>
+      )}
+
       {/* Progress bar - hidden in animation mode (has its own timeline) */}
-      {appMainMode !== 'animation' && (
+      {!isTexturePreviewMode && appMainMode !== 'animation' && (
         <div style={{
           position: 'absolute',
           bottom: '20px',
@@ -5937,7 +6101,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           </div>
         </div>
       )}
-      {showFPS && (
+      {!isTexturePreviewMode && showFPS && (
         <div style={{
           position: 'absolute',
           top: '10px',
@@ -5962,7 +6126,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       )}
 
       {/* Camera Selector Dropdown */}
-      {(() => {
+      {!isTexturePreviewMode && (() => {
         const { nodes: storeNodes } = useModelStore.getState();
         const cameraList = storeNodes.filter((n: any) => n.type === 'Camera');
         if (cameraList.length === 0) return null;
@@ -6048,7 +6212,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       })()}
 
       {/* Missing Texture Warning - Absolute positioned on the left as requested */}
-      <div style={{
+      {!isTexturePreviewMode && <div style={{
         position: 'absolute',
         top: '55px',
         left: '15px',
@@ -6056,9 +6220,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         pointerEvents: 'none'
       }}>
         <MissingTextureWarning />
-      </div>
+      </div>}
 
-      {selectionBox && (
+      {!isTexturePreviewMode && selectionBox && (
         <div
           style={{
             position: 'absolute',
@@ -6073,7 +6237,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           }}
         />
       )}
-      {gizmoHud && (
+      {!isTexturePreviewMode && gizmoHud && (
         <div
           style={{
             position: 'fixed',
@@ -6094,7 +6258,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         </div>
       )}
 
-      {showModelInfo && (
+      {!isTexturePreviewMode && showModelInfo && (
         <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
           <div
             style={{
@@ -6136,20 +6300,20 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         </ConfigProvider>
       )}
 
-      <ViewerToolbar
+      {!isTexturePreviewMode && <ViewerToolbar
         // Remount toolbar if needed
         key="viewer-toolbar"
         onRecalculateNormals={handleRecalculateNormals}
         onSplitVertices={handleSplitVertices}
         onWeldVertices={handleWeldVertices}
         onFitToView={handleFitToView}
-      />
+      />}
 
 
-      {appMainMode === 'geometry' && <VertexEditor renderer={renderer} onBeginUpdate={() => { ignoreNextModelDataUpdate.current = true }} />}
+      {!isTexturePreviewMode && appMainMode === 'geometry' && <VertexEditor renderer={renderer} onBeginUpdate={() => { ignoreNextModelDataUpdate.current = true }} />}
 
       {/* Context Menu for Vertex Operations */}
-      {contextMenu && (
+      {!isTexturePreviewMode && contextMenu && (
         <div
           style={{
             position: 'fixed',
@@ -6221,7 +6385,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       )}
 
       {/* Context Menu for Bone Operations */}
-      {nodeContextMenu && (() => {
+      {!isTexturePreviewMode && nodeContextMenu && (() => {
         const node = nodeContextMenu.nodeId !== null
           ? storeNodes.find((n) => n.ObjectId === nodeContextMenu.nodeId) ?? null
           : null
@@ -6355,7 +6519,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       })()}
 
       {/* Click outside to close context menu */}
-      {(contextMenu || nodeContextMenu) && (
+      {!isTexturePreviewMode && (contextMenu || nodeContextMenu) && (
         <div
           style={{
             position: 'fixed',

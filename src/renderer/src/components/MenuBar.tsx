@@ -12,6 +12,7 @@ import {
     ToolOutlined
 } from '@ant-design/icons'
 import { useRendererStore } from '../store/rendererStore'
+import { useUIStore } from '../store/uiStore'
 
 
 interface MenuBarProps {
@@ -122,6 +123,8 @@ const MenuBar: React.FC<MenuBarProps> = ({
     const [activeMenu, setActiveMenu] = useState<string | null>(null)
     const [settingsSubMenu, setSettingsSubMenu] = useState<string | null>(null)
     const menuRef = useRef<HTMLDivElement>(null)
+    const showMpqBrowser = useUIStore(state => state.showMpqBrowser)
+    const toggleMpqBrowser = useUIStore(state => state.toggleMpqBrowser)
     const {
         showGridXY: quickShowGridXY, setShowGridXY: setQuickShowGridXY,
         showGridXZ: quickShowGridXZ, setShowGridXZ: setQuickShowGridXZ,
@@ -721,6 +724,16 @@ const MenuBar: React.FC<MenuBarProps> = ({
                         </div>
                     </div>
                 )}
+            </div>
+
+            {/* MPQ Browser Button - Direct Action */}
+            <div
+                style={{ ...menuStyle, backgroundColor: showMpqBrowser ? '#444' : 'transparent' }}
+                onClick={toggleMpqBrowser}
+                onMouseEnter={hoverStyle}
+                onMouseLeave={!showMpqBrowser ? unhoverStyle : undefined}
+            >
+                MPQ浏览
             </div>
 
             {/* Batch Button - Direct Action */}
