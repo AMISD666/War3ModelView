@@ -526,6 +526,77 @@ fn activate_software(license_code: String) -> Result<activation::ActivationStatu
 }
 
 #[tauri::command]
+async fn open_qq_verification_window(app: tauri::AppHandle) -> Result<(), String> {
+    let label = "qq_verification";
+
+    // If an old window exists, destroy it (not close — destroy is synchronous and
+    // immediately frees the label so we can re-create without a race condition).
+    if let Some(window) = app.get_webview_window(label) {
+        let _ = window.destroy();
+        // Small yield to let the event loop clean up.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+
+    // Keep the same entry URL as the known-working implementation.
+    let url = "https://xui.ptlogin2.qq.com/cgi-bin/xlogin?pt_disable_pwd=1&appid=715030901&daid=73&hide_close_icon=1&pt_no_auth=1&s_url=https%3A%2F%2Fqun.qq.com%2Fmember.html%23";
+    let script = format!(
+        r##"
+        (function() {{
+            const targetId = "{0}";
+            const successHash = "#verified_ok_{0}";
+            setInterval(() => {{
+                try {{
+                    const html = document.documentElement ? document.documentElement.innerHTML : "";
+                    if (!html) return;
+                    if (html.includes(targetId) || html.includes('data-id="' + targetId + '"')) {{
+                        if (window.location.hash !== successHash) {{
+                            window.location.hash = successHash;
+                        }}
+                    }}
+                }} catch (_) {{}}
+            }}, 1000);
+        }})();
+        "##,
+        activation::QQ_TARGET_GROUP_ID
+    );
+
+    let external_url =
+        tauri::WebviewUrl::External(tauri::Url::parse(url).map_err(|e| e.to_string())?);
+    tauri::WebviewWindowBuilder::new(&app, label, external_url)
+        .title("QQ群成员验证")
+        .inner_size(1024.0, 768.0)
+        .resizable(true)
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+        .initialization_script(&script)
+        .build()
+        .map_err(|e| format!("打开QQ群验证窗口失败: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn check_qq_verification_window_status(app: tauri::AppHandle) -> Result<bool, String> {
+    let success_flag = format!("verified_ok_{}", activation::QQ_TARGET_GROUP_ID);
+    if let Some(window) = app.get_webview_window("qq_verification") {
+        let current_url = window.url().map_err(|e| e.to_string())?.to_string();
+        if current_url.contains(&success_flag) {
+            activation::save_qq_verification_now()?;
+            let _ = window.destroy();
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+#[tauri::command]
+fn close_qq_verification_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("qq_verification") {
+        let _ = window.destroy();
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn get_cli_copy_path() -> Option<String> {
     let args: Vec<String> = std::env::args().collect();
     let mut has_copy_flag = false;
@@ -1318,7 +1389,8 @@ fn main() {
         return;
     }
 
-    cleanup_temp_cache();
+    // Run temp-cache cleanup in the background so it doesn't delay window creation
+    std::thread::spawn(|| cleanup_temp_cache());
 
     tauri::Builder::default()
         .manage(MpqManager::new())
@@ -1371,6 +1443,9 @@ fn main() {
             get_machine_id,
             get_activation_status,
             activate_software,
+            open_qq_verification_window,
+            check_qq_verification_window_status,
+            close_qq_verification_window,
             // Context Menu Commands
             register_context_menu,
             unregister_context_menu,

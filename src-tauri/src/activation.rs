@@ -17,6 +17,9 @@ const REG_PATH: &str = "SOFTWARE\\GGWar3ModelEditor";
 const LICENSE_KEY: &str = "License";
 const MACHINE_ID_KEY: &str = "MachineId";
 const LAST_CHECK_TIME_KEY: &str = "LastCheckTime";
+const QQ_VERIFICATION_TIME_KEY: &str = "QQVerif";
+const QQ_REVERIFY_SECONDS: i64 = 180 * 24 * 60 * 60;
+pub const QQ_TARGET_GROUP_ID: &str = "168886891";
 
 // Ed25519 Public Key (Base64 encoded)
 const PUBLIC_KEY_B64: &str = "Z2CL61ogkw4qYkEOfz0+aOa0gyST1h3F319IbHqsixE=";
@@ -42,7 +45,7 @@ fn default_level() -> u8 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActivationStatus {
     pub is_activated: bool,
-    pub license_type: String,            // "NONE", "PERM", "TIME"
+    pub license_type: String,            // "NONE", "PERM", "TIME", "QQ"
     pub expiration_date: Option<String>, // ISO format or null
     pub days_remaining: Option<i64>,
     pub error: Option<String>,
@@ -107,13 +110,29 @@ fn get_or_create_fallback_uuid() -> Result<String, String> {
     Ok(new_uuid)
 }
 
+const WMI_UUID_CACHE_KEY: &str = "WmiUuidCache";
+
 pub fn get_machine_id() -> Result<String, String> {
-    // Try WMI first
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (key, _) = hkcu
+        .create_subkey(REG_PATH)
+        .map_err(|e| format!("Registry error: {}", e))?;
+
+    // 1) Try cached WMI UUID (instant — no process spawn)
+    if let Ok(cached) = key.get_value::<String, _>(WMI_UUID_CACHE_KEY) {
+        if !cached.is_empty() && cached.len() >= 30 && cached.contains('-') {
+            return Ok(cached);
+        }
+    }
+
+    // 2) Cache miss — run wmic (slow, 1-3s cold start)
     if let Some(uuid) = get_wmi_uuid() {
+        // Persist to registry for next launch
+        let _ = key.set_value(WMI_UUID_CACHE_KEY, &uuid);
         return Ok(uuid);
     }
 
-    // Fallback to registry-persisted UUID
+    // 3) Fallback to registry-persisted random UUID
     get_or_create_fallback_uuid()
 }
 
@@ -138,6 +157,39 @@ pub fn load_license() -> Option<String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let key = hkcu.open_subkey(REG_PATH).ok()?;
     key.get_value(LICENSE_KEY).ok()
+}
+
+pub fn save_qq_verification_now() -> Result<(), String> {
+    let key = get_registry_key()?;
+    let now = Utc::now().timestamp().max(0) as u64;
+    key.set_value(QQ_VERIFICATION_TIME_KEY, &now)
+        .map_err(|e| format!("Failed to save QQ verification time: {}", e))?;
+    update_last_check_time()?;
+    Ok(())
+}
+
+pub fn load_qq_verification_time() -> Option<i64> {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let key = hkcu.open_subkey(REG_PATH).ok()?;
+    let ts: u64 = key.get_value(QQ_VERIFICATION_TIME_KEY).ok()?;
+    Some(ts as i64)
+}
+
+fn get_valid_qq_verification_expiration() -> Option<i64> {
+    let verified_at = load_qq_verification_time()?;
+    let now = Utc::now().timestamp();
+
+    // Ignore malformed future timestamps.
+    if verified_at > now + 3600 || verified_at <= 0 {
+        return None;
+    }
+
+    let expires_at = verified_at + QQ_REVERIFY_SECONDS;
+    if now >= expires_at {
+        return None;
+    }
+
+    Some(expires_at)
 }
 
 pub fn update_last_check_time() -> Result<(), String> {
@@ -260,59 +312,71 @@ pub fn get_activation_status() -> ActivationStatus {
         };
     }
 
-    // Load and verify license
-    let license_code = match load_license() {
-        Some(code) => code,
-        None => {
-            return ActivationStatus {
-                is_activated: false,
-                license_type: "NONE".to_string(),
-                expiration_date: None,
-                days_remaining: None,
-                error: None,
-                level: 0,
-                level_name: level_to_name(0),
-            };
-        }
-    };
+    // 1) License has higher priority (can be Basic or Pro).
+    let mut license_error: Option<String> = None;
+    if let Some(license_code) = load_license() {
+        match verify_license(&license_code) {
+            Ok(payload) => {
+                // Update last check time on successful verification
+                let _ = update_last_check_time();
 
-    match verify_license(&license_code) {
-        Ok(payload) => {
-            // Update last check time on successful verification
-            let _ = update_last_check_time();
+                let (exp_date, days_rem) = if payload.typ == "TIME" && payload.exp > 0 {
+                    let now = Utc::now().timestamp();
+                    let remaining_seconds = payload.exp - now;
+                    let remaining_days = remaining_seconds / 86400;
 
-            let (exp_date, days_rem) = if payload.typ == "TIME" && payload.exp > 0 {
-                let now = Utc::now().timestamp();
-                let remaining_seconds = payload.exp - now;
-                let remaining_days = remaining_seconds / 86400;
+                    let exp_datetime = chrono::DateTime::from_timestamp(payload.exp, 0);
+                    let exp_str = exp_datetime.map(|dt| dt.format("%Y-%m-%d").to_string());
 
-                let exp_datetime = chrono::DateTime::from_timestamp(payload.exp, 0);
-                let exp_str = exp_datetime.map(|dt| dt.format("%Y-%m-%d").to_string());
+                    (exp_str, Some(remaining_days))
+                } else {
+                    (None, None)
+                };
 
-                (exp_str, Some(remaining_days))
-            } else {
-                (None, None)
-            };
-
-            ActivationStatus {
-                is_activated: true,
-                license_type: payload.typ,
-                expiration_date: exp_date,
-                days_remaining: days_rem,
-                error: None,
-                level: payload.lvl,
-                level_name: level_to_name(payload.lvl),
+                return ActivationStatus {
+                    is_activated: true,
+                    license_type: payload.typ,
+                    expiration_date: exp_date,
+                    days_remaining: days_rem,
+                    error: None,
+                    level: payload.lvl,
+                    level_name: level_to_name(payload.lvl),
+                };
+            }
+            Err(e) => {
+                license_error = Some(e);
             }
         }
-        Err(e) => ActivationStatus {
-            is_activated: false,
-            license_type: "NONE".to_string(),
-            expiration_date: None,
-            days_remaining: None,
-            error: Some(e),
-            level: 0,
-            level_name: level_to_name(0),
-        },
+    }
+
+    // 2) QQ group verification unlocks Basic level and expires every 180 days.
+    if let Some(expires_at) = get_valid_qq_verification_expiration() {
+        let now = Utc::now().timestamp();
+        let remaining_seconds = expires_at - now;
+        let remaining_days = remaining_seconds / 86400;
+        let exp_datetime = chrono::DateTime::from_timestamp(expires_at, 0);
+        let exp_str = exp_datetime.map(|dt| dt.format("%Y-%m-%d").to_string());
+        let _ = update_last_check_time();
+
+        return ActivationStatus {
+            is_activated: true,
+            license_type: "QQ".to_string(),
+            expiration_date: exp_str,
+            days_remaining: Some(remaining_days),
+            error: None,
+            level: 1,
+            level_name: level_to_name(1),
+        };
+    }
+
+    ActivationStatus {
+        is_activated: false,
+        license_type: "NONE".to_string(),
+        expiration_date: None,
+        days_remaining: None,
+        error: license_error,
+        level: 0,
+        level_name: level_to_name(0),
     }
 }
 

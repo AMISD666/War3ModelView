@@ -4,6 +4,7 @@ import 'antd/dist/reset.css'
 import App from './App'
 import './assets/index.css'
 import { parseMDX } from 'war3-model'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 
 // Tauri webview still has some "browser" accelerators (find/refresh/print, etc.).
 // We disable those so function keys (e.g. F3/F5) and app shortcuts aren't hijacked.
@@ -69,3 +70,13 @@ installBrowserGuards()
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
     <App />
 )
+
+// Show the window now that React has mounted (window starts hidden via visible:false)
+// Also remove the inline skeleton that was visible during JS loading
+requestAnimationFrame(() => {
+    const skeleton = document.getElementById('app-skeleton')
+    if (skeleton) skeleton.remove()
+
+    getCurrentWindow().show().catch(() => { })
+})
+

@@ -3076,12 +3076,16 @@ const MainLayout: React.FC = () => {
                                                 borderRadius: '3px',
                                                 color: activationStatus.level >= 2 ? '#ffc53d' : '#52c41a'
                                             }}>
-                                                {activationStatus.license_type === 'PERM' ? '永久' : '时限'}
+                                                {activationStatus.license_type === 'PERM'
+                                                    ? '永久'
+                                                    : activationStatus.license_type === 'QQ'
+                                                        ? 'QQ群验证'
+                                                        : '时限'}
                                             </span>
                                         </div>
-                                        {activationStatus.license_type === 'TIME' && activationStatus.days_remaining !== null && (
+                                        {(activationStatus.license_type === 'TIME' || activationStatus.license_type === 'QQ') && activationStatus.days_remaining !== null && (
                                             <div style={{ color: activationStatus.days_remaining <= 7 ? '#ff7875' : '#eee', fontSize: '13px' }}>
-                                                到期日期: {activationStatus.expiration_date} (剩余 {activationStatus.days_remaining} 天)
+                                                {activationStatus.license_type === 'QQ' ? '复验日期' : '到期日期'}: {activationStatus.expiration_date} (剩余 {activationStatus.days_remaining} 天)
                                             </div>
                                         )}
                                         {activationStatus.level < 2 && (

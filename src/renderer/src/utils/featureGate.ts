@@ -10,7 +10,7 @@
 
 export interface ActivationStatus {
     is_activated: boolean;
-    license_type: string;        // "NONE", "PERM", "TIME"
+    license_type: string;        // "NONE", "PERM", "TIME", "QQ"
     expiration_date: string | null;
     days_remaining: number | null;
     error: string | null;
@@ -96,7 +96,7 @@ export async function requireProFeature(featureName: string): Promise<boolean> {
 
     const status = await getActivationStatus();
     if (status.level === 0) {
-        alert(`"${featureName}" 需要激活软件才能使用。\n\n请在 帮助 → 关于 中输入激活码。`);
+        alert(`"${featureName}" 需要激活软件才能使用。\n\n请在 启动弹窗 或 帮助 → 关于 中输入激活码，或完成QQ群成员验证。`);
     } else {
         alert(`"${featureName}" 是高级版功能。\n\n当前版本: ${status.level_name}\n请升级到高级版以使用此功能。`);
     }
@@ -113,7 +113,7 @@ export async function requireBasicFeature(featureName: string): Promise<boolean>
         return true;
     }
 
-    alert(`"${featureName}" 需要激活软件才能使用。\n\n请在 帮助 → 关于 中输入激活码。`);
+    alert(`"${featureName}" 需要激活软件才能使用。\n\n请在 启动弹窗 或 帮助 → 关于 中输入激活码，或完成QQ群成员验证。`);
     return false;
 }
 

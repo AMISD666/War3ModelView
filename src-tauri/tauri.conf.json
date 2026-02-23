@@ -14,11 +14,12 @@
                 "title": "咕咕War3模型编辑器 测试版1.2.2",
                 "width": 1200,
                 "height": 800,
+                "visible": false,
                 "dragDropEnabled": true
             }
         ],
         "security": {
-            "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: asset: https:; connect-src 'self' ipc: http://ipc.localhost;"
+            "csp": null
         }
     },
     "bundle": {
