@@ -1,4 +1,4 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![windows_subsystem = "windows"]
 
 mod activation;
 mod app_paths;
@@ -1323,7 +1323,7 @@ fn main() {
         let lock_path = log_root.join("copy_queue.lock");
 
         let result = if copy_paths.len() > 1 {
-            copy_utils::copy_models_with_textures(&copy_paths, &temp_root).map(|(msg, _)| msg)
+            copy_utils::copy_models_with_textures(&copy_paths, &temp_root, true).map(|(msg, _)| msg)
         } else {
             if !copy_paths.is_empty() {
                 let _ = std::fs::OpenOptions::new()
@@ -1350,7 +1350,7 @@ fn main() {
 
             let mut queued_paths: Vec<String> = Vec::new();
             let mut stable_waits = 0;
-            let max_waits = 4;
+            let max_waits = 2; // 2 stable reads = 100ms
             let mut last_len: Option<u64> = None;
             while stable_waits < max_waits {
                 let len = std::fs::metadata(&queue_path).map(|m| m.len()).unwrap_or(0);
@@ -1362,7 +1362,7 @@ fn main() {
                     }
                 }
                 last_len = Some(len);
-                std::thread::sleep(std::time::Duration::from_millis(200));
+                std::thread::sleep(std::time::Duration::from_millis(50));
             }
 
             if let Ok(content) = std::fs::read_to_string(&queue_path) {
@@ -1383,7 +1383,7 @@ fn main() {
             if queued_paths.is_empty() {
                 Err("No model paths provided".to_string())
             } else {
-                copy_utils::copy_models_with_textures(&queued_paths, &temp_root).map(|(msg, _)| msg)
+                copy_utils::copy_models_with_textures(&queued_paths, &temp_root, true).map(|(msg, _)| msg)
             }
         };
         let verify: Result<usize, String> = (|| {
@@ -1417,7 +1417,6 @@ fn main() {
             .append(true)
             .open(&log_path)
             .and_then(|mut f| std::io::Write::write_all(&mut f, log_line.as_bytes()));
-        std::thread::sleep(std::time::Duration::from_millis(300));
         return;
     }
 

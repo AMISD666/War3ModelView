@@ -630,6 +630,14 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             style={itemStyle}
                             onMouseEnter={hoverStyle}
                             onMouseLeave={unhoverStyle}
+                            onClick={() => { onToggleEditor('modelOptimize'); closeMenu() }}
+                        >
+                            模型优化
+                        </div>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
                             onClick={() => { onToggleEditor('geosetVisibilityTool'); closeMenu() }}
                         >
                             多边形动作显隐工具

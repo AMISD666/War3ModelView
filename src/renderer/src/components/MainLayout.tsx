@@ -16,6 +16,7 @@ const MaterialEditorModal = React.lazy(() => import('./modals/MaterialEditorModa
 const GeosetEditorModal = React.lazy(() => import('./modals/GeosetEditorModal'))
 const GlobalSequenceModal = React.lazy(() => import('./modals/GlobalSequenceModal'))
 const TransformModelDialog = React.lazy(() => import('./node/TransformModelDialog').then(m => ({ default: m.TransformModelDialog })))
+const ModelOptimizeModal = React.lazy(() => import('./modals/ModelOptimizeModal'))
 
 import { GeosetVisibilityPanel } from './GeosetVisibilityPanel'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -1598,6 +1599,7 @@ const MainLayout: React.FC = () => {
     const [showMaterialModal, setShowMaterialModal] = useState<boolean>(false)
     const [showGeosetModal, setShowGeosetModal] = useState<boolean>(false)
     const [showGlobalSeqModal, setShowGlobalSeqModal] = useState<boolean>(false)
+    const [showModelOptimizeModal, setShowModelOptimizeModal] = useState<boolean>(false)
     const [showAbout, setShowAbout] = useState<boolean>(false)
 
 
@@ -3118,6 +3120,8 @@ const MainLayout: React.FC = () => {
                         setShowGeosetModal(true)
                     } else if (editor === 'globalSequence') {
                         setShowGlobalSeqModal(true)
+                    } else if (editor === 'modelOptimize') {
+                        setShowModelOptimizeModal(true)
                     } else if (editor === 'geosetVisibility') {
                         setShowGeosetVisibility(!showGeosetVisibility)
                     } else {
@@ -3493,6 +3497,13 @@ const MainLayout: React.FC = () => {
                     </div>
                 )}
             </div>
+            <Suspense fallback={null}>
+                <ModelOptimizeModal
+                    visible={showModelOptimizeModal}
+                    onClose={() => setShowModelOptimizeModal(false)}
+                    modelData={modelData}
+                />
+            </Suspense>
             <Modal
                 open={closeConfirmVisible}
                 onCancel={handleCloseCancel}

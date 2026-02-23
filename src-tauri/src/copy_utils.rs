@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::mem::size_of;
+use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -17,14 +17,12 @@ use windows_sys::Win32::System::DataExchange::{
 };
 use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 
-struct TextureIndex {
-    by_rel: HashMap<String, PathBuf>,
-    by_name: HashMap<String, PathBuf>,
-}
-
 fn to_wide(path: &Path) -> Vec<u16> {
     use std::os::windows::ffi::OsStrExt;
-    path.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
+    path.as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
 }
 
 fn try_hardlink(src: &Path, dst: &Path) -> bool {
@@ -34,46 +32,6 @@ fn try_hardlink(src: &Path, dst: &Path) -> bool {
     let wide_dst = to_wide(dst);
     let wide_src = to_wide(src);
     unsafe { CreateHardLinkW(wide_dst.as_ptr(), wide_src.as_ptr(), std::ptr::null()) != 0 }
-}
-
-fn build_texture_index(base: &Path, ext_candidates: &[&str]) -> TextureIndex {
-    let mut by_rel: HashMap<String, PathBuf> = HashMap::new();
-    let mut by_name: HashMap<String, PathBuf> = HashMap::new();
-    let mut stack: Vec<PathBuf> = vec![base.to_path_buf()];
-
-    while let Some(dir) = stack.pop() {
-        let entries = match fs::read_dir(&dir) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            let ext = match path.extension().and_then(|e| e.to_str()) {
-                Some(e) => e,
-                None => continue,
-            };
-            if !ext_candidates.iter().any(|c| c.eq_ignore_ascii_case(ext)) {
-                continue;
-            }
-            let rel = match path.strip_prefix(base) {
-                Ok(r) => r,
-                Err(_) => continue,
-            };
-            let rel_key = rel.to_string_lossy().replace("/", "\\").to_lowercase();
-            by_rel.entry(rel_key).or_insert_with(|| path.clone());
-
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                let name_key = name.to_lowercase();
-                by_name.entry(name_key).or_insert_with(|| path.clone());
-            }
-        }
-    }
-
-    TextureIndex { by_rel, by_name }
 }
 
 pub fn cleanup_temp_root(temp_root: &Path) {
@@ -124,24 +82,23 @@ pub fn cleanup_temp_root(temp_root: &Path) {
 
 pub fn copy_model_with_textures(model_path: &str, temp_root: &Path) -> Result<String, String> {
     let paths = vec![model_path.to_string()];
-    let (message, _) = copy_models_with_textures(&paths, temp_root)?;
+    let (message, _) = copy_models_with_textures(&paths, temp_root, false)?;
     Ok(message)
 }
 
 pub fn copy_models_with_textures(
     model_paths: &[String],
     temp_root: &Path,
+    skip_mpq: bool,
 ) -> Result<(String, usize), String> {
     if model_paths.is_empty() {
         return Err("No model paths provided".to_string());
     }
 
-    fs::create_dir_all(&temp_root)
-        .map_err(|e| format!("Failed to create temp dir: {}", e))?;
+    fs::create_dir_all(&temp_root).map_err(|e| format!("Failed to create temp dir: {}", e))?;
     cleanup_temp_root(temp_root);
     let temp_base = temp_root.join(format!("war3copy_{}", uuid::Uuid::new_v4()));
-    fs::create_dir_all(&temp_base)
-        .map_err(|e| format!("Failed to create temp dir: {}", e))?;
+    fs::create_dir_all(&temp_base).map_err(|e| format!("Failed to create temp dir: {}", e))?;
     println!("[Copy] Temp dir: {:?}", temp_base);
 
     let mut files_to_copy: Vec<String> = Vec::new();
@@ -174,13 +131,12 @@ pub fn copy_models_with_textures(
     let texture_count = Arc::new(AtomicUsize::new(0));
     let mut resolve_cache: HashMap<String, Option<(PathBuf, String)>> = HashMap::new();
     let mut search_bases_cache: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
-    let mut index_cache: HashMap<PathBuf, TextureIndex> = HashMap::new();
-    let use_index_cache = model_paths.len() > 1;
+
     let ext_candidates = ["blp", "tga", "dds", "png", "BLP", "TGA", "DDS", "PNG"];
 
     let settings = app_settings::load_settings();
     let mut mpq_paths: Vec<String> = Vec::new();
-    if settings.copy_mpq_textures && !settings.mpq_paths.is_empty() {
+    if !skip_mpq && settings.copy_mpq_textures && !settings.mpq_paths.is_empty() {
         mpq_paths = settings.mpq_paths;
     }
     let mut mpq_archives: Option<Vec<Archive>> = None;
@@ -297,41 +253,23 @@ pub fn copy_models_with_textures(
                     })
                     .clone();
 
-                if use_index_cache {
-                    let rel_key = tex_rel_path.replace("/", "\\").to_lowercase();
-                    let name_key = tex_filename.to_string_lossy().to_lowercase();
+                let tex_filename = Path::new(tex_rel_path).file_name().unwrap_or_default();
+                'search: for base in &search_bases {
+                    for candidate in &[base.join(tex_rel_path), base.join(&tex_filename)] {
+                        if candidate.exists() {
+                            source_found = Some(candidate.clone());
+                            break 'search;
+                        }
 
-                    'search: for base in &search_bases {
-                        let index = index_cache.entry(base.to_path_buf()).or_insert_with(|| {
-                            build_texture_index(base, &ext_candidates)
-                        });
-                        if let Some(found) = index.by_rel.get(&rel_key) {
-                            source_found = Some(found.clone());
-                            break 'search;
-                        }
-                        if let Some(found) = index.by_name.get(&name_key) {
-                            source_found = Some(found.clone());
-                            break 'search;
-                        }
-                    }
-                } else {
-                    'search: for base in &search_bases {
-                        for candidate in &[base.join(tex_rel_path), base.join(&tex_filename)] {
-                            if candidate.exists() {
-                                source_found = Some(candidate.clone());
+                        let stem = candidate.with_extension("");
+                        for ext in &ext_candidates {
+                            let alt = stem.with_extension(ext);
+                            if alt.exists() {
+                                source_found = Some(alt);
+                                let rel_stem = Path::new(tex_rel_path).with_extension("");
+                                actual_rel_path =
+                                    rel_stem.with_extension(ext).to_string_lossy().to_string();
                                 break 'search;
-                            }
-
-                            let stem = candidate.with_extension("");
-                            for ext in &ext_candidates {
-                                let alt = stem.with_extension(ext);
-                                if alt.exists() {
-                                    source_found = Some(alt);
-                                    let rel_stem = Path::new(tex_rel_path).with_extension("");
-                                    actual_rel_path =
-                                        rel_stem.with_extension(ext).to_string_lossy().to_string();
-                                    break 'search;
-                                }
                             }
                         }
                     }
@@ -497,7 +435,11 @@ pub fn copy_models_with_textures(
     let message = if model_names.len() == 1 {
         format!("已复制 {} ({} 个贴图)", model_names[0], total_textures)
     } else {
-        format!("已复制 {} 个模型 ({} 个贴图)", model_names.len(), total_textures)
+        format!(
+            "已复制 {} 个模型 ({} 个贴图)",
+            model_names.len(),
+            total_textures
+        )
     };
     Ok((message, files_to_copy.len()))
 }
@@ -643,7 +585,9 @@ fn extract_texture_paths(data: &[u8], model_path: &Path) -> Vec<String> {
                             if end > start {
                                 let path_str = &line[start + 1..end];
                                 if !path_str.is_empty() {
-                                    paths.push(path_str.replace("\\", std::path::MAIN_SEPARATOR_STR));
+                                    paths.push(
+                                        path_str.replace("\\", std::path::MAIN_SEPARATOR_STR),
+                                    );
                                 }
                             }
                         }
