@@ -342,6 +342,7 @@ interface ModelState {
     setLooping: (looping: boolean) => void;
     setAutoKeyframe: (enabled: boolean) => void;
     updateSequence: (index: number, updates: any) => void; // New action
+    shiftSequenceDuration: (index: number, newDurationMs: number) => void;
     setTextures: (textures: any[]) => void;
     setGeosets: (geosets: any[]) => void;
     setMaterials: (materials: any[]) => void;
@@ -1825,6 +1826,54 @@ export const useModelStore = create<ModelState>((set, get) => ({
     setPlaybackSpeed: (speed) => set({ playbackSpeed: speed }),
     setLooping: (looping) => set({ isLooping: looping }),
     setAutoKeyframe: () => set({ autoKeyframe: true }),
+
+    shiftSequenceDuration: async (index: number, newDurationMs: number) => {
+        const state = get()
+        const sequences = state.sequences
+        const modelData = state.modelData
+        if (!modelData || !sequences || index < 0 || index >= sequences.length) return
+
+        const oldSeq = sequences[index]
+        const oldDuration = oldSeq.Interval[1] - oldSeq.Interval[0]
+        const deltaMs = newDurationMs - oldDuration
+        if (deltaMs === 0) return
+
+        // Use external service to recursively shift modelData keyframes
+        const { shiftModelKeyframes } = await import('../services/timeShiftService')
+        const newModelData = shiftModelKeyframes(modelData, index, deltaMs)
+
+        // Shift is applied to sequences inside the service, but we also update the sequences state
+        const newSequences = newModelData.Sequences || sequences
+
+        // CRITICAL FIX: We MUST extract the new nodes from the newModelData and update state.nodes 
+        // Otherwise the KeyframeTimeline UI and logic will use the old non-scaled ghost nodes.
+        const correctedNodes = extractNodesFromModel(newModelData)
+
+        // CRITICAL: Force the viewer to reload the GPU buffers and animation tracks
+        newModelData.__forceFullReload = true
+
+        set({
+            sequences: newSequences,
+            modelData: newModelData,
+            nodes: correctedNodes,
+            rendererReloadTrigger: state.rendererReloadTrigger + 1
+        })
+
+        // Sync with renderer
+        const renderer = useRendererStore.getState().renderer
+        if (renderer?.model) {
+            renderer.model.Sequences = newSequences
+            try {
+                // If it exposes reload method, call it to reconstruct animation tracks
+                if (typeof (renderer as any).reloadModelData === 'function') {
+                    // We don't have a direct reloadModelData, we use the store trigger. The store trigger will cause Viewer.tsx to reconstruct.
+                }
+            } catch (e) {
+                console.error('Failed to sync sequence duration shift with renderer', e)
+            }
+        }
+    },
+
     setTextures: (textures) => set((state) => {
         const updatedModelData = state.modelData ? { ...state.modelData, Textures: textures } : state.modelData;
         return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };

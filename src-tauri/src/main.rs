@@ -420,6 +420,21 @@ fn load_textures_batch_bin(
 }
 
 #[tauri::command]
+fn clear_texture_batch_cache(cache: State<'_, TextureBatchCache>) {
+    let mut guard = cache.inner.lock().unwrap();
+    guard.path_hits.clear();
+    guard.path_lru.clear();
+    
+    guard.result_bytes.clear();
+    guard.result_lru.clear();
+    guard.result_total_bytes = 0;
+    
+    guard.rgba_images.clear();
+    guard.rgba_lru.clear();
+    guard.rgba_total_bytes = 0;
+}
+
+#[tauri::command]
 fn load_textures_batch_thumb_rgba(
     model_path: String,
     texture_paths: Vec<String>,
@@ -1456,6 +1471,7 @@ fn main() {
             read_local_files_batch,
             load_textures_batch_bin,
             load_textures_batch_thumb_rgba,
+            clear_texture_batch_cache,
             encode_texture_image,
             detect_warcraft_path,
             toggle_console,

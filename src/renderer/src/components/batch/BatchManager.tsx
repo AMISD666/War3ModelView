@@ -665,7 +665,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                             onClick={() => setMainMode('view')}
                         />
                     </Tooltip>
-                    <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold', marginRight: 8 }}>批量预览</Text>
+                    <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold', marginRight: 8, whiteSpace: 'nowrap' }}>批量预览</Text>
 
                     <Space size={8} style={{ marginLeft: 16 }}>
                         <Tooltip title="导入包含多个模型的文件夹">

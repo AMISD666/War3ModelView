@@ -926,55 +926,59 @@ export class ModelRenderer {
                     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
                     mipLevelCount: count
                 });
-                for (let i = 0; i < count; ++i) {
-                    // WebGPU requires bytesPerRow alignment (typically 256 bytes).
-                    // ImageData is tightly packed (width*4), so we must pad rows when not aligned.
-                    const w = imageData[i].width;
-                    const h = imageData[i].height;
-                    const tightBytesPerRow = w * 4;
-                    const alignedBytesPerRow = Math.ceil(tightBytesPerRow / 256) * 256;
-
-                    let src = imageData[i].data as unknown as Uint8Array;
-                    let data: Uint8Array;
-                    if (alignedBytesPerRow === tightBytesPerRow) {
-                        data = src;
-                    } else {
-                        data = new Uint8Array(alignedBytesPerRow * h);
-                        for (let y = 0; y < h; y++) {
-                            const srcOffset = y * tightBytesPerRow;
-                            const dstOffset = y * alignedBytesPerRow;
-                            data.set(src.subarray(srcOffset, srcOffset + tightBytesPerRow), dstOffset);
-                        }
-                    }
-
-                    this.device.queue.writeTexture(
-                        {
-                            texture,
-                            mipLevel: i
-                        },
-                        data,
-                        { bytesPerRow: alignedBytesPerRow, rowsPerImage: h },
-                        { width: w, height: h },
-                    );
-                }
                 ModelResourceManager.getInstance().setGPUTexture(path, texture);
+            }
+            for (let i = 0; i < count; ++i) {
+                // WebGPU requires bytesPerRow alignment (typically 256 bytes).
+                // ImageData is tightly packed (width*4), so we must pad rows when not aligned.
+                const w = imageData[i].width;
+                const h = imageData[i].height;
+                const tightBytesPerRow = w * 4;
+                const alignedBytesPerRow = Math.ceil(tightBytesPerRow / 256) * 256;
+
+                let src = imageData[i].data as unknown as Uint8Array;
+                let data: Uint8Array;
+                if (alignedBytesPerRow === tightBytesPerRow) {
+                    data = src;
+                } else {
+                    data = new Uint8Array(alignedBytesPerRow * h);
+                    for (let y = 0; y < h; y++) {
+                        const srcOffset = y * tightBytesPerRow;
+                        const dstOffset = y * alignedBytesPerRow;
+                        data.set(src.subarray(srcOffset, srcOffset + tightBytesPerRow), dstOffset);
+                    }
+                }
+
+                this.device.queue.writeTexture(
+                    {
+                        texture,
+                        mipLevel: i
+                    },
+                    data,
+                    { bytesPerRow: alignedBytesPerRow, rowsPerImage: h },
+                    { width: w, height: h },
+                );
             }
             this.rendererData.gpuTextures[path] = texture;
             this.processEnvMaps(path);
         } else {
             let texture = ModelResourceManager.getInstance().getTexture(path);
+            let isNew = false;
             if (!texture) {
                 texture = this.gl.createTexture();
-                this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
-                // this.gl.pixelStorei(this.gl.UNPACK_FLIP_Y_WEBGL, true);
-                for (let i = 0; i < count; ++i) {
-                    this.gl.texImage2D(this.gl.TEXTURE_2D, i, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, imageData[i]);
-                }
-                const flags = this.model.Textures.find(it => it.Image === path)?.Flags || 0;
-                this.setTextureParameters(flags, false);
-                this.gl.bindTexture(this.gl.TEXTURE_2D, null);
+                isNew = true;
                 ModelResourceManager.getInstance().setTexture(path, texture);
             }
+            this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
+            // this.gl.pixelStorei(this.gl.UNPACK_FLIP_Y_WEBGL, true);
+            for (let i = 0; i < count; ++i) {
+                this.gl.texImage2D(this.gl.TEXTURE_2D, i, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, imageData[i]);
+            }
+            if (isNew) {
+                const flags = this.model.Textures.find(it => it.Image === path)?.Flags || 0;
+                this.setTextureParameters(flags, false);
+            }
+            this.gl.bindTexture(this.gl.TEXTURE_2D, null);
             this.rendererData.textures[path] = texture;
             this.processEnvMaps(path);
         }
@@ -1013,80 +1017,84 @@ export class ModelRenderer {
                     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
                     mipLevelCount: count
                 });
-
-                const isBC1 = format === 'bc1';
-                const isBC2 = format === 'bc2';
-                const isBC3 = format === 'bc3';
-
-                for (let i = 0; i < count; ++i) {
-                    const mipW = Math.max(1, width >> i);
-                    const mipH = Math.max(1, height >> i);
-
-                    // WebGPU BC formats require bytesPerRow to be multiple of 256 for some copyBufferToTexture 
-                    // but for writeTexture it just needs to match the data layout.
-                    // For BC1/BC3, block size is 4x4. BC1 is 8 bytes per block, BC3 is 16 bytes per block.
-                    let bytesPerRow = 0;
-                    if (isBC1) {
-                        bytesPerRow = Math.max(1, Math.ceil(mipW / 4)) * 8;
-                    } else if (isBC2 || isBC3) {
-                        bytesPerRow = Math.max(1, Math.ceil(mipW / 4)) * 16;
-                    } else {
-                        bytesPerRow = mipW * 4;
-                    }
-
-                    this.device.queue.writeTexture(
-                        { texture, mipLevel: i },
-                        mipmaps[i] as any,
-                        { bytesPerRow },
-                        { width: mipW, height: mipH }
-                    );
-                }
                 ModelResourceManager.getInstance().setGPUTexture(path, texture);
+            }
+
+            const isBC1 = format === 'bc1';
+            const isBC2 = format === 'bc2';
+            const isBC3 = format === 'bc3';
+
+            for (let i = 0; i < count; ++i) {
+                const mipW = Math.max(1, width >> i);
+                const mipH = Math.max(1, height >> i);
+
+                // WebGPU BC formats require bytesPerRow to be multiple of 256 for some copyBufferToTexture 
+                // but for writeTexture it just needs to match the data layout.
+                // For BC1/BC3, block size is 4x4. BC1 is 8 bytes per block, BC3 is 16 bytes per block.
+                let bytesPerRow = 0;
+                if (isBC1) {
+                    bytesPerRow = Math.max(1, Math.ceil(mipW / 4)) * 8;
+                } else if (isBC2 || isBC3) {
+                    bytesPerRow = Math.max(1, Math.ceil(mipW / 4)) * 16;
+                } else {
+                    bytesPerRow = mipW * 4;
+                }
+
+                this.device.queue.writeTexture(
+                    { texture, mipLevel: i },
+                    mipmaps[i] as any,
+                    { bytesPerRow },
+                    { width: mipW, height: mipH }
+                );
             }
             this.rendererData.gpuTextures[path] = texture;
             this.processEnvMaps(path);
         } else {
             let texture = ModelResourceManager.getInstance().getTexture(path);
+            let isNew = false;
             if (!texture) {
                 texture = this.gl.createTexture();
-                this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
-
-                let testIsCompressed = false;
-                let internalFormat: number = this.gl.RGBA;
-
-                if (this.s3tcExt) {
-                    if (format === 'bc1') {
-                        internalFormat = this.s3tcExt.COMPRESSED_RGBA_S3TC_DXT1_EXT;
-                        testIsCompressed = true;
-                    } else if (format === 'bc2') {
-                        internalFormat = this.s3tcExt.COMPRESSED_RGBA_S3TC_DXT3_EXT;
-                        testIsCompressed = true;
-                    } else if (format === 'bc3') {
-                        internalFormat = this.s3tcExt.COMPRESSED_RGBA_S3TC_DXT5_EXT;
-                        testIsCompressed = true;
-                    }
-                }
-
-                for (let i = 0; i < count; ++i) {
-                    const mipW = Math.max(1, width >> i);
-                    const mipH = Math.max(1, height >> i);
-
-                    if (testIsCompressed) {
-                        this.gl.compressedTexImage2D(this.gl.TEXTURE_2D, i, internalFormat, mipW, mipH, 0, mipmaps[i]);
-                    } else {
-                        this.gl.texImage2D(this.gl.TEXTURE_2D, i, this.gl.RGBA, mipW, mipH, 0, this.gl.RGBA, this.gl.UNSIGNED_BYTE, mipmaps[i]);
-                    }
-                }
-
-                if (count === 1 && !testIsCompressed) {
-                    this.gl.generateMipmap(this.gl.TEXTURE_2D);
-                }
-
-                const flags = this.model.Textures.find(it => it.Image === path)?.Flags || 0;
-                this.setTextureParameters(flags, isWebGL2(this.gl));
-                this.gl.bindTexture(this.gl.TEXTURE_2D, null);
+                isNew = true;
                 ModelResourceManager.getInstance().setTexture(path, texture);
             }
+            this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
+
+            let testIsCompressed = false;
+            let internalFormat: number = this.gl.RGBA;
+
+            if (this.s3tcExt) {
+                if (format === 'bc1') {
+                    internalFormat = this.s3tcExt.COMPRESSED_RGBA_S3TC_DXT1_EXT;
+                    testIsCompressed = true;
+                } else if (format === 'bc2') {
+                    internalFormat = this.s3tcExt.COMPRESSED_RGBA_S3TC_DXT3_EXT;
+                    testIsCompressed = true;
+                } else if (format === 'bc3') {
+                    internalFormat = this.s3tcExt.COMPRESSED_RGBA_S3TC_DXT5_EXT;
+                    testIsCompressed = true;
+                }
+            }
+
+            for (let i = 0; i < count; ++i) {
+                const mipW = Math.max(1, width >> i);
+                const mipH = Math.max(1, height >> i);
+
+                if (testIsCompressed) {
+                    this.gl.compressedTexImage2D(this.gl.TEXTURE_2D, i, internalFormat, mipW, mipH, 0, mipmaps[i]);
+                } else {
+                    this.gl.texImage2D(this.gl.TEXTURE_2D, i, this.gl.RGBA, mipW, mipH, 0, this.gl.RGBA, this.gl.UNSIGNED_BYTE, mipmaps[i]);
+                }
+            }
+
+            if (count === 1 && !testIsCompressed) {
+                this.gl.generateMipmap(this.gl.TEXTURE_2D);
+            }
+
+            if (isNew) {
+                const flags = this.model.Textures.find(it => it.Image === path)?.Flags || 0;
+                this.setTextureParameters(flags, isWebGL2(this.gl));
+            }
+            this.gl.bindTexture(this.gl.TEXTURE_2D, null);
             this.rendererData.textures[path] = texture;
             this.processEnvMaps(path);
         }
@@ -1938,19 +1946,19 @@ export class ModelRenderer {
                     const tVetexAnim = this.modelInstance.getTexCoordMatrix(baseLayer);
 
                     const FSUniformsValues = new ArrayBuffer(192);
-                const FSUniformsViews = {
-                    replaceableColor: new Float32Array(FSUniformsValues, 0, 3),
-                    discardAlphaLevel: new Float32Array(FSUniformsValues, 12, 1),
-                    tVertexAnim: new Float32Array(FSUniformsValues, 16, 12),
-                    lightPos: new Float32Array(FSUniformsValues, 64, 3),
-                    hasEnv: new Uint32Array(FSUniformsValues, 76, 1),
-                    lightColor: new Float32Array(FSUniformsValues, 80, 3),
-                    wireframe: new Uint32Array(FSUniformsValues, 92, 1),
-                    cameraPos: new Float32Array(FSUniformsValues, 96, 3),
-                    shadowParams: new Float32Array(FSUniformsValues, 112, 3),
-                    layerAlpha: new Float32Array(FSUniformsValues, 124, 1),
-                    shadowMapLightMatrix: new Float32Array(FSUniformsValues, 128, 16),
-                };
+                    const FSUniformsViews = {
+                        replaceableColor: new Float32Array(FSUniformsValues, 0, 3),
+                        discardAlphaLevel: new Float32Array(FSUniformsValues, 12, 1),
+                        tVertexAnim: new Float32Array(FSUniformsValues, 16, 12),
+                        lightPos: new Float32Array(FSUniformsValues, 64, 3),
+                        hasEnv: new Uint32Array(FSUniformsValues, 76, 1),
+                        lightColor: new Float32Array(FSUniformsValues, 80, 3),
+                        wireframe: new Uint32Array(FSUniformsValues, 92, 1),
+                        cameraPos: new Float32Array(FSUniformsValues, 96, 3),
+                        shadowParams: new Float32Array(FSUniformsValues, 112, 3),
+                        layerAlpha: new Float32Array(FSUniformsValues, 124, 1),
+                        shadowMapLightMatrix: new Float32Array(FSUniformsValues, 128, 16),
+                    };
                     FSUniformsViews.replaceableColor.set(this.rendererData.teamColor);
                     // FSUniformsViews.replaceableType.set([texture.ReplaceableId || 0]);
                     FSUniformsViews.discardAlphaLevel.set([this.getDiscardAlphaLevel(baseLayer.FilterMode)]);
@@ -1960,17 +1968,17 @@ export class ModelRenderer {
                     FSUniformsViews.lightPos.set(this.rendererData.lightPos);
                     FSUniformsViews.lightColor.set(this.rendererData.lightColor);
                     FSUniformsViews.cameraPos.set(this.rendererData.cameraPos);
-                if (shadowMapTexture && shadowMapMatrix) {
-                    FSUniformsViews.shadowParams.set([1, shadowBias ?? 1e-6, shadowSmoothingStep ?? 1 / 1024]);
-                    FSUniformsViews.shadowMapLightMatrix.set(shadowMapMatrix);
-                } else {
-                    FSUniformsViews.shadowParams.set([0, 0, 0]);
-                    FSUniformsViews.shadowMapLightMatrix.set([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
-                }
-                FSUniformsViews.layerAlpha.set([baseLayerAlpha]);
-                FSUniformsViews.hasEnv.set([hasEnv ? 1 : 0]);
-                FSUniformsViews.wireframe.set([wireframe ? 1 : 0]);
-                this.device.queue.writeBuffer(gpuFSUniformsBuffer, 0, FSUniformsValues);
+                    if (shadowMapTexture && shadowMapMatrix) {
+                        FSUniformsViews.shadowParams.set([1, shadowBias ?? 1e-6, shadowSmoothingStep ?? 1 / 1024]);
+                        FSUniformsViews.shadowMapLightMatrix.set(shadowMapMatrix);
+                    } else {
+                        FSUniformsViews.shadowParams.set([0, 0, 0]);
+                        FSUniformsViews.shadowMapLightMatrix.set([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+                    }
+                    FSUniformsViews.layerAlpha.set([baseLayerAlpha]);
+                    FSUniformsViews.hasEnv.set([hasEnv ? 1 : 0]);
+                    FSUniformsViews.wireframe.set([wireframe ? 1 : 0]);
+                    this.device.queue.writeBuffer(gpuFSUniformsBuffer, 0, FSUniformsValues);
 
                     const fsBindGroup = this.device.createBindGroup({
                         label: `fs uniforms ${materialID}`,
@@ -2364,11 +2372,11 @@ export class ModelRenderer {
                     FSUniformsViews.shadowParams.set([0, 0, 0]);
                     FSUniformsViews.shadowMapLightMatrix.set([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
                 }
-                    // HD: apply layer/geoset alpha via a single scalar, like WebGL.
-                    FSUniformsViews.layerAlpha.set([baseLayerAlpha]);
-                    FSUniformsViews.hasEnv.set([hasEnv ? 1 : 0]);
-                    FSUniformsViews.wireframe.set([wireframe ? 1 : 0]);
-                    this.device.queue.writeBuffer(gpuFSUniformsBuffer, 0, FSUniformsValues);
+                // HD: apply layer/geoset alpha via a single scalar, like WebGL.
+                FSUniformsViews.layerAlpha.set([baseLayerAlpha]);
+                FSUniformsViews.hasEnv.set([hasEnv ? 1 : 0]);
+                FSUniformsViews.wireframe.set([wireframe ? 1 : 0]);
+                this.device.queue.writeBuffer(gpuFSUniformsBuffer, 0, FSUniformsValues);
 
                 const fsBindGroup = this.device.createBindGroup({
                     label: `fs uniforms ${materialID}`,

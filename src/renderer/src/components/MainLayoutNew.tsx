@@ -360,7 +360,10 @@ export const MainLayoutNew: React.FC = () => {
                                 fontWeight: 'bold',
                                 fontSize: 13,
                                 backgroundColor: '#252525',
-                                flexShrink: 0
+                                flexShrink: 0,
+                                whiteSpace: 'nowrap',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis'
                             }}>
                                 {batchSelectedPath
                                     ? `预览: ${batchSelectedPath.split(/[/\\]/).pop()}`

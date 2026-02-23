@@ -2416,6 +2416,12 @@ const MainLayout: React.FC = () => {
             }
             if (textureEncodeResult.encodedCount > 0) {
                 clearAdjustmentKeysInStoreTextures();
+                try {
+                    const { invoke } = await import('@tauri-apps/api/core');
+                    await invoke('clear_texture_batch_cache');
+                } catch (e) {
+                    console.error('Failed to clear texture cache:', e);
+                }
             }
 
             useHistoryStore.getState().markSaved();
@@ -2490,6 +2496,14 @@ const MainLayout: React.FC = () => {
                         '部分贴图写出失败',
                         `${textureEncodeResult.failed.length} 个贴图写出失败：\n${lines}${textureEncodeResult.failed.length > 3 ? '\n...' : ''}`
                     );
+                }
+                if (textureEncodeResult.encodedCount > 0) {
+                    try {
+                        const { invoke } = await import('@tauri-apps/api/core');
+                        await invoke('clear_texture_batch_cache');
+                    } catch (e) {
+                        console.error('Failed to clear texture cache:', e);
+                    }
                 }
                 // Update store with new path if needed, but for now just alert
                 useHistoryStore.getState().markSaved();

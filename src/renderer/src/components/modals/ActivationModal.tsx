@@ -90,7 +90,7 @@ const ActivationModal: React.FC<ActivationModalProps> = ({ open, onActivated }) 
                 const verified = await invoke<boolean>('check_qq_verification_window_status')
                 if (verified) {
                     stopPolling(false)
-                    message.success('\u0051\u0051\u7fa4\u6210\u5458\u9a8c\u8bc1\u6210\u529f\uff0c\u5df2\u6fc0\u6d3b\u57fa\u7840\u7248\uff08180\u5929\u6709\u6548\uff09')
+                    message.success('\u9a8c\u8bc1\u6210\u529f')
                     onActivated()
                 }
             } catch (e: any) {
@@ -208,8 +208,6 @@ const ActivationModal: React.FC<ActivationModalProps> = ({ open, onActivated }) 
                 </div>
                 <div style={{ color: '#999', fontSize: '12px', lineHeight: 1.6, marginBottom: 10 }}>
                     {'\u6307\u5b9a\u7fa4\u53f7\uff1a'}{QQ_GROUP_ID}
-                    <br />
-                    {'\u901a\u8fc7\u9a8c\u8bc1\u540e\u53ef\u6fc0\u6d3b\u57fa\u7840\u7248\uff0c\u9700\u6bcf\u534a\u5e74\u91cd\u65b0\u9a8c\u8bc1\u4e00\u6b21\u3002'}
                 </div>
                 <Button
                     block

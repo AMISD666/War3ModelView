@@ -125,6 +125,8 @@ const MenuBar: React.FC<MenuBarProps> = ({
     const menuRef = useRef<HTMLDivElement>(null)
     const showMpqBrowser = useUIStore(state => state.showMpqBrowser)
     const toggleMpqBrowser = useUIStore(state => state.toggleMpqBrowser)
+    const showSettingsPanel = useRendererStore(state => state.showSettingsPanel)
+    const setShowSettingsPanel = useRendererStore(state => state.setShowSettingsPanel)
     const {
         showGridXY: quickShowGridXY, setShowGridXY: setQuickShowGridXY,
         showGridXZ: quickShowGridXZ, setShowGridXZ: setQuickShowGridXZ,
@@ -587,14 +589,10 @@ const MenuBar: React.FC<MenuBarProps> = ({
 
             {/* Settings Menu Button - Direct Action */}
             <div
-                style={{ ...menuStyle, backgroundColor: activeMenu === 'settings' ? '#444' : 'transparent' }}
-                onClick={() => {
-                    import('../store/rendererStore').then(({ useRendererStore }) => {
-                        useRendererStore.getState().setShowSettingsPanel(true);
-                    });
-                }}
+                style={{ ...menuStyle, backgroundColor: showSettingsPanel ? '#444' : 'transparent' }}
+                onClick={() => setShowSettingsPanel(!showSettingsPanel)}
                 onMouseEnter={hoverStyle}
-                onMouseLeave={activeMenu !== 'settings' ? unhoverStyle : undefined}
+                onMouseLeave={!showSettingsPanel ? unhoverStyle : undefined}
             >
                 设置
             </div>

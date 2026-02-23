@@ -33,10 +33,15 @@ const AnimationPanel: React.FC<AnimationPanelProps> = ({
 
     const { push } = useHistoryStore()
 
-    // State for inline editing
+    // State for inline editing name
     const [editingIndex, setEditingIndex] = useState<number | null>(null)
     const [editingName, setEditingName] = useState('')
     const inputRef = useRef<any>(null)
+
+    // State for inline editing duration (seconds)
+    const [editingDurationIndex, setEditingDurationIndex] = useState<number | null>(null)
+    const [editingDuration, setEditingDuration] = useState('')
+    const durationInputRef = useRef<any>(null)
 
     // Focus input when editing starts
     useEffect(() => {
@@ -46,9 +51,16 @@ const AnimationPanel: React.FC<AnimationPanelProps> = ({
         }
     }, [editingIndex])
 
+    useEffect(() => {
+        if (editingDurationIndex !== null && durationInputRef.current) {
+            durationInputRef.current.focus()
+            durationInputRef.current.select()
+        }
+    }, [editingDurationIndex])
+
     const handleSequenceSelect = (index: number) => {
         // Don't select if currently editing
-        if (editingIndex !== null) return
+        if (editingIndex !== null || editingDurationIndex !== null) return
 
         // Check if sequence is valid before allowing selection
         if (index >= 0 && index < sequences.length) {
@@ -104,11 +116,59 @@ const AnimationPanel: React.FC<AnimationPanelProps> = ({
         message.success('名称已修改')
     }
 
+    const handleDurationDoubleClick = (index: number, e: React.MouseEvent) => {
+        e.stopPropagation()
+        const anim = sequences[index]
+        if (!isValidSequence(anim)) return
+        const durationMs = anim.Interval[1] - anim.Interval[0]
+        setEditingDurationIndex(index)
+        setEditingDuration((durationMs / 1000).toFixed(2))
+    }
+
+    const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        setEditingDuration(e.target.value)
+    }
+
+    const handleDurationConfirm = () => {
+        if (editingDurationIndex === null) return
+
+        const val = parseFloat(editingDuration)
+        if (isNaN(val) || val <= 0) {
+            message.warning('请输入有效的时间 (秒)')
+            setEditingDurationIndex(null)
+            return
+        }
+
+        const newDurationMs = Math.round(val * 1000)
+        const anim = sequences[editingDurationIndex]
+        const oldDurationMs = anim.Interval[1] - anim.Interval[0]
+
+        if (newDurationMs !== oldDurationMs) {
+            // Note: We are missing history for this complex time shift right now. 
+            // Proper undo would require storing entire massive modelData snapshots.
+            const shiftSequenceDuration = useModelStore.getState().shiftSequenceDuration
+            if (shiftSequenceDuration) {
+                shiftSequenceDuration(editingDurationIndex, newDurationMs)
+                message.success('动画时间已更新')
+            }
+        }
+
+        setEditingDurationIndex(null)
+    }
+
     const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
         if (e.key === 'Enter') {
             handleNameConfirm()
         } else if (e.key === 'Escape') {
             setEditingIndex(null)
+        }
+    }
+
+    const handleDurationKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (e.key === 'Enter') {
+            handleDurationConfirm()
+        } else if (e.key === 'Escape') {
+            setEditingDurationIndex(null)
         }
     }
 
@@ -181,7 +241,7 @@ const AnimationPanel: React.FC<AnimationPanelProps> = ({
 
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
                 <div style={{ marginBottom: '10px', borderBottom: '1px solid #444', paddingBottom: '5px' }}>
-                    <h4 style={{ margin: 0 }}>动画序列 <span style={{ fontSize: '10px', color: '#888', fontWeight: 'normal' }}>(双击名称可编辑)</span></h4>
+                    <h4 style={{ margin: 0 }}>动画序列 <span style={{ fontSize: '10px', color: '#888', fontWeight: 'normal' }}>(双击名称或时间可修改)</span></h4>
                 </div>
                 <div style={{ flex: 1, overflowY: 'auto', border: '1px solid #444', borderRadius: '4px', background: '#333' }}>
                     <div
@@ -250,9 +310,45 @@ const AnimationPanel: React.FC<AnimationPanelProps> = ({
                                     </span>
                                 )}
                                 {isValid && !isEditing && (
-                                    <span style={{ fontSize: '10px', color: currentSequence === index ? '#ddd' : '#888' }}>
-                                        ({(anim.Interval[1] - anim.Interval[0]).toFixed(0)}ms)
-                                    </span>
+                                    <>
+                                        {editingDurationIndex === index ? (
+                                            <Input
+                                                ref={durationInputRef}
+                                                size="small"
+                                                value={editingDuration}
+                                                onChange={handleDurationChange}
+                                                onBlur={handleDurationConfirm}
+                                                onKeyDown={handleDurationKeyDown}
+                                                onClick={(e) => e.stopPropagation()}
+                                                style={{
+                                                    width: 60,
+                                                    backgroundColor: '#222',
+                                                    border: '1px solid #52c41a',
+                                                    color: '#fff',
+                                                    fontSize: '11px',
+                                                    padding: '0 4px',
+                                                    textAlign: 'center'
+                                                }}
+                                                suffix="s"
+                                            />
+                                        ) : (
+                                            <Tooltip title="双击修改动画时间">
+                                                <span
+                                                    style={{
+                                                        fontSize: '10px',
+                                                        color: currentSequence === index ? '#ddd' : '#888',
+                                                        cursor: 'text',
+                                                        padding: '2px 4px',
+                                                        borderRadius: '2px',
+                                                        backgroundColor: 'rgba(255,255,255,0.05)'
+                                                    }}
+                                                    onDoubleClick={(e) => handleDurationDoubleClick(index, e)}
+                                                >
+                                                    {((anim.Interval[1] - anim.Interval[0]) / 1000).toFixed(2)}s
+                                                </span>
+                                            </Tooltip>
+                                        )}
+                                    </>
                                 )}
                             </div>
                         )
