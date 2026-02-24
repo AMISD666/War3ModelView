@@ -9,11 +9,19 @@
   <meta http-equiv="Content-Security-Policy"
     content="default-src 'self' ipc: http://ipc.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' ipc: http://ipc.localhost;" />
   <!-- Async font loading — no render-blocking network request -->
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap"
-        rel="stylesheet" media="print" onload="this.media='all'" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"
+    media="print" onload="this.media='all'" />
   <noscript>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet" />
   </noscript>
+  <style>
+    body {
+      background-color: #1e1e1e;
+      margin: 0;
+      overflow: hidden;
+    }
+  </style>
 </head>
 
 <body>
@@ -25,6 +33,11 @@
       display:flex;align-items:center;justify-content:center;
       z-index:99999;
     ">
+      <script>
+        if (window.location.search.includes('window=')) {
+          document.getElementById('app-skeleton').style.display = 'none';
+        }
+      </script>
       <div style="text-align:center">
         <div style="
           width:36px;height:36px;margin:0 auto 12px;
@@ -34,10 +47,15 @@
         <div style="color:#888;font-size:12px;font-family:system-ui,sans-serif">加载中...</div>
       </div>
     </div>
-    <style>@keyframes sk-spin{to{transform:rotate(360deg)}}</style>
+    <style>
+      @keyframes sk-spin {
+        to {
+          transform: rotate(360deg)
+        }
+      }
+    </style>
   </div>
   <script type="module" src="/src/main.tsx"></script>
 </body>
 
 </html>
-

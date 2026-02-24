@@ -1,0 +1,13 @@
+{
+  "hooks": {
+    "beforeSubmitPrompt": {
+      "command": "memorix hook"
+    },
+    "afterFileEdit": {
+      "command": "memorix hook"
+    },
+    "stop": {
+      "command": "memorix hook"
+    }
+  }
+}

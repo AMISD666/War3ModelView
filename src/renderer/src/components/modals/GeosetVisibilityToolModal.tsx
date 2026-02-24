@@ -1,10 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Checkbox, Dropdown, Input, message, Typography, type MenuProps } from 'antd'
+import { Checkbox, Dropdown, Input, message, Typography, Button, type MenuProps } from 'antd'
+import { CloseOutlined } from '@ant-design/icons'
 import { DraggableModal } from '../DraggableModal'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useHistoryStore } from '../../store/historyStore'
 import KeyframeEditor from '../editors/KeyframeEditor'
+import { getCurrentWindow } from '@tauri-apps/api/window'
+import { useRpcClient } from '../../hooks/useRpc'
 
 const { Text } = Typography
 
@@ -18,6 +21,7 @@ type SequenceItem = {
 interface GeosetVisibilityToolModalProps {
     visible: boolean
     onClose: () => void
+    isStandalone?: boolean
 }
 
 const deepClone = <T,>(value: T): T => {
@@ -131,13 +135,53 @@ const parseSequenceInterval = (interval: any): [number, number] => {
     return [start, end]
 }
 
-const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ visible, onClose }) => {
-    const modelData = useModelStore((state) => state.modelData) as any
-    const setGeosetAnims = useModelStore((state) => state.setGeosetAnims)
-    const setSequence = useModelStore((state) => state.setSequence)
-    const setFrame = useModelStore((state) => state.setFrame)
+const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ visible, onClose, isStandalone }) => {
+    // Non-standalone direct store access
+    const directModelData = useModelStore((state) => state.modelData) as any
+    const directSetGeosetAnims = useModelStore((state) => state.setGeosetAnims)
+    const directSetSequence = useModelStore((state) => state.setSequence)
+    const directSetFrame = useModelStore((state) => state.setFrame)
+
+    const { state: rpcState, emitCommand } = useRpcClient<any>('geosetVisibilityTool', {
+        geosets: [],
+        sequences: [],
+        geosetAnims: [],
+        globalSequences: [],
+    })
+
+    const modelData = isStandalone ? {
+        Geosets: rpcState.geosets,
+        Sequences: rpcState.sequences,
+        GeosetAnims: rpcState.geosetsAnims, // To correctly match state
+        GlobalSequences: rpcState.globalSequences
+    } : directModelData
+
+    const setGeosetAnims = (anims: any[]) => {
+        if (isStandalone) {
+            emitCommand('EXECUTE_VISIBILITY_ACTION', { action: 'SAVE_ANIMS', payload: anims })
+        } else {
+            directSetGeosetAnims(anims)
+        }
+    }
+
+    const setSequence = (seqId: number | null) => {
+        if (isStandalone) {
+            emitCommand('EXECUTE_VISIBILITY_ACTION', { action: 'SET_SEQUENCE', payload: seqId })
+        } else {
+            directSetSequence(seqId)
+        }
+    }
+
+    const setFrame = (frame: number) => {
+        if (isStandalone) {
+            emitCommand('EXECUTE_VISIBILITY_ACTION', { action: 'SET_FRAME', payload: frame })
+        } else {
+            directSetFrame(frame)
+        }
+    }
 
     const [localAnims, setLocalAnims] = useState<any[]>([])
+    const [hasChanges, setHasChanges] = useState(false)
     const [selectedGeosetIds, setSelectedGeosetIds] = useState<number[]>([])
     const [lastSelectedGeosetId, setLastSelectedGeosetId] = useState<number | null>(null)
     const [geosetFilter, setGeosetFilter] = useState('')
@@ -257,6 +301,13 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
         onClose()
     }
 
+    const handleApply = () => {
+        const newAnims = deepClone(localAnims)
+        setGeosetAnims(newAnims)
+        message.success('多边形动作显隐修改已应用')
+        setHasChanges(false)
+    }
+
     const handleToggleAction = (sequence: SequenceItem) => {
         if (selectedGeosetIds.length === 0) {
             message.warning('请先在左侧选择至少一个多边形组')
@@ -304,6 +355,7 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
             return
         }
         setLocalAnims(nextAnims)
+        setHasChanges(true)
         message.success(shouldClear ? `已清理 ${changed} 个多边形组在该动作范围内的关键帧` : `已写入 ${changed} 个多边形组的首尾帧透明度0`)
     }
 
@@ -329,6 +381,7 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
         }
         nextAnims[animIndex] = currentAnim
         setLocalAnims(nextAnims)
+        setHasChanges(true)
     }
 
     const openAlphaTextEditor = (sequence: SequenceItem) => {
@@ -370,6 +423,7 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
             }
         }
         setLocalAnims(nextAnims)
+        setHasChanges(true)
         setIsKeyframeEditorOpen(false)
     }
 
@@ -413,6 +467,196 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
 
     const globalSequences = (modelData as any)?.GlobalSequences || []
 
+    const innerContent = (
+        <div style={{ display: 'flex', gap: 10, height: 520 }}>
+            <div style={{ width: 320, border: '1px solid #4a4a4a', backgroundColor: '#252525', display: 'flex', flexDirection: 'column' }}>
+                <div style={{ padding: '6px 8px', borderBottom: '1px solid #3f3f3f' }}>
+                    <Text style={{ color: '#d0d0d0', fontSize: 12 }}>多边形组 ID</Text>
+                    <Input
+                        size="small"
+                        value={geosetFilter}
+                        onChange={(event) => setGeosetFilter(event.target.value)}
+                        placeholder="搜索ID"
+                        style={{ marginTop: 4 }}
+                    />
+                </div>
+                <div style={{ padding: '4px 8px', borderBottom: '1px solid #3f3f3f', color: '#8f8f8f', fontSize: 11 }}>
+                    选中 {selectedGeosetIds.length} / 总计 {geosetIds.length}
+                </div>
+                <div style={{ flex: 1, overflowY: 'auto', padding: 6 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 4 }}>
+                        {filteredGeosetIds.map((geosetId) => {
+                            const selected = selectedGeosetIds.includes(geosetId)
+                            return (
+                                <button
+                                    key={`geoset-${geosetId}`}
+                                    type="button"
+                                    onClick={(event) => handleGeosetClick(geosetId, event)}
+                                    style={{
+                                        cursor: 'pointer',
+                                        height: 26,
+                                        padding: '0 4px',
+                                        backgroundColor: selected ? '#214f87' : 'transparent',
+                                        color: selected ? '#ffffff' : '#d0d0d0',
+                                        border: '1px solid #3a3a3a',
+                                        borderRadius: 2,
+                                        userSelect: 'none',
+                                        fontSize: 12,
+                                        fontWeight: 500
+                                    }}
+                                >
+                                    {geosetId}
+                                </button>
+                            )
+                        })}
+                    </div>
+                </div>
+            </div>
+
+            <div style={{ flex: 1, border: '1px solid #4a4a4a', backgroundColor: '#252525', display: 'flex', flexDirection: 'column' }}>
+                <div style={{ padding: '6px 8px', borderBottom: '1px solid #3f3f3f', display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <Text style={{ color: '#d0d0d0', fontSize: 12, minWidth: 84 }}>动作列表</Text>
+                    <Input
+                        size="small"
+                        value={sequenceFilter}
+                        onChange={(event) => setSequenceFilter(event.target.value)}
+                        placeholder="搜索动作名"
+                        style={{ width: 200 }}
+                    />
+                    <Checkbox
+                        checked={showHighlightedOnly}
+                        onChange={(event) => setShowHighlightedOnly(event.target.checked)}
+                        style={{ color: '#b0b0b0' }}
+                    >
+                        <span style={{ color: '#b0b0b0', fontSize: 12 }}>仅显示高亮</span>
+                    </Checkbox>
+                    <Text style={{ color: '#8f8f8f', fontSize: 12, marginLeft: 'auto' }}>
+                        左键切换显隐，右键编辑透明度txt
+                    </Text>
+                </div>
+
+                <div style={{ padding: '4px 8px', borderBottom: '1px solid #3f3f3f', color: '#8f8f8f', fontSize: 11 }}>
+                    动作总计 {sequences.length}，当前显示 {filteredSequences.length}
+                </div>
+
+                <div style={{ flex: 1, overflowY: 'auto', padding: 6 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 5 }}>
+                        {filteredSequences.map((sequence) => {
+                            const highlighted = highlightedSequenceSet.has(sequence.index)
+                            const label = sequence.name || `Sequence ${sequence.index}`
+                            return (
+                                <Dropdown key={`seq-${sequence.index}`} menu={getSequenceMenu(sequence)} trigger={['contextMenu']}>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleToggleAction(sequence)}
+                                        title={label}
+                                        style={{
+                                            cursor: 'pointer',
+                                            height: 28,
+                                            padding: '0 8px',
+                                            backgroundColor: highlighted ? '#22432c' : 'transparent',
+                                            border: highlighted ? '1px solid #3f7151' : '1px solid #3a3a3a',
+                                            borderRadius: 2,
+                                            userSelect: 'none',
+                                            color: highlighted ? '#d8ffd8' : '#d0d0d0',
+                                            fontSize: 12,
+                                            fontWeight: 500,
+                                            whiteSpace: 'nowrap',
+                                            overflow: 'hidden',
+                                            textOverflow: 'ellipsis'
+                                        }}
+                                    >
+                                        {label}
+                                    </button>
+                                </Dropdown>
+                            )
+                        })}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+
+    if (isStandalone) {
+        return (
+            <>
+                <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', backgroundColor: '#1e1e1e', overflow: 'hidden' }}>
+                    <div
+                        data-tauri-drag-region
+                        style={{
+                            height: 32,
+                            background: '#2d2d2d',
+                            borderBottom: '1px solid #3d3d3d',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            padding: '0 12px',
+                            userSelect: 'none'
+                        }}
+                    >
+                        <span data-tauri-drag-region style={{ color: '#e0e0e0', fontSize: 12, fontWeight: 500 }}>
+                            多边形动作显隐工具
+                        </span>
+                        <div style={{ display: 'flex', gap: 8, zIndex: 10 }}>
+                            <Button
+                                size="small"
+                                type="text"
+                                icon={<CloseOutlined style={{ color: '#888' }} />}
+                                onClick={onClose}
+                            />
+                        </div>
+                    </div>
+                    {/* Bottom Toolbar for Standalone mode */}
+                    <div style={{
+                        display: 'flex',
+                        justifyContent: 'flex-end',
+                        padding: '8px 16px',
+                        borderBottom: '1px solid #333',
+                        backgroundColor: '#252525'
+                    }}>
+                        <Button
+                            size="small"
+                            type="primary"
+                            onClick={handleApply}
+                            style={{ marginRight: 8 }}
+                            disabled={!hasChanges}
+                        >
+                            应用修改
+                        </Button>
+                        <Button
+                            size="small"
+                            onClick={() => {
+                                const clonedAnims = (modelData?.GeosetAnims || []).map((anim: any) => {
+                                    const cloned = { ...anim }
+                                    if (isAnimVector(anim?.Alpha)) cloned.Alpha = cloneAnimVector(anim.Alpha, 1)
+                                    if (isAnimVector(anim?.Color)) cloned.Color = cloneAnimVector(anim.Color, 3)
+                                    return cloned
+                                })
+                                setLocalAnims(clonedAnims)
+                                setHasChanges(false)
+                            }}
+                        >
+                            重置
+                        </Button>
+                    </div>
+                    <div style={{ flex: 1, padding: 10, overflow: 'auto' }}>
+                        {innerContent}
+                    </div>
+                </div>
+                <KeyframeEditor
+                    visible={isKeyframeEditorOpen}
+                    onCancel={() => setIsKeyframeEditorOpen(false)}
+                    onOk={handleAlphaEditorSave}
+                    initialData={editingAlphaData}
+                    title="透明度动态txt编辑器"
+                    vectorSize={1}
+                    globalSequences={globalSequences}
+                    fieldName="Alpha"
+                />
+            </>
+        )
+    }
+
     return (
         <>
             <DraggableModal
@@ -432,113 +676,7 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
                     footer: { borderTop: '1px solid #4a4a4a' }
                 }}
             >
-                <div style={{ display: 'flex', gap: 10, height: 520 }}>
-                    <div style={{ width: 320, border: '1px solid #4a4a4a', backgroundColor: '#252525', display: 'flex', flexDirection: 'column' }}>
-                        <div style={{ padding: '6px 8px', borderBottom: '1px solid #3f3f3f' }}>
-                            <Text style={{ color: '#d0d0d0', fontSize: 12 }}>多边形组 ID</Text>
-                            <Input
-                                size="small"
-                                value={geosetFilter}
-                                onChange={(event) => setGeosetFilter(event.target.value)}
-                                placeholder="搜索ID"
-                                style={{ marginTop: 4 }}
-                            />
-                        </div>
-                        <div style={{ padding: '4px 8px', borderBottom: '1px solid #3f3f3f', color: '#8f8f8f', fontSize: 11 }}>
-                            选中 {selectedGeosetIds.length} / 总计 {geosetIds.length}
-                        </div>
-                        <div style={{ flex: 1, overflowY: 'auto', padding: 6 }}>
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 4 }}>
-                                {filteredGeosetIds.map((geosetId) => {
-                                    const selected = selectedGeosetIds.includes(geosetId)
-                                    return (
-                                        <button
-                                            key={`geoset-${geosetId}`}
-                                            type="button"
-                                            onClick={(event) => handleGeosetClick(geosetId, event)}
-                                            style={{
-                                                cursor: 'pointer',
-                                                height: 26,
-                                                padding: '0 4px',
-                                                backgroundColor: selected ? '#214f87' : 'transparent',
-                                                color: selected ? '#ffffff' : '#d0d0d0',
-                                                border: '1px solid #3a3a3a',
-                                                borderRadius: 2,
-                                                userSelect: 'none',
-                                                fontSize: 12,
-                                                fontWeight: 500
-                                            }}
-                                        >
-                                            {geosetId}
-                                        </button>
-                                    )
-                                })}
-                            </div>
-                        </div>
-                    </div>
-
-                    <div style={{ flex: 1, border: '1px solid #4a4a4a', backgroundColor: '#252525', display: 'flex', flexDirection: 'column' }}>
-                        <div style={{ padding: '6px 8px', borderBottom: '1px solid #3f3f3f', display: 'flex', gap: 8, alignItems: 'center' }}>
-                            <Text style={{ color: '#d0d0d0', fontSize: 12, minWidth: 84 }}>动作列表</Text>
-                            <Input
-                                size="small"
-                                value={sequenceFilter}
-                                onChange={(event) => setSequenceFilter(event.target.value)}
-                                placeholder="搜索动作名"
-                                style={{ width: 200 }}
-                            />
-                            <Checkbox
-                                checked={showHighlightedOnly}
-                                onChange={(event) => setShowHighlightedOnly(event.target.checked)}
-                                style={{ color: '#b0b0b0' }}
-                            >
-                                <span style={{ color: '#b0b0b0', fontSize: 12 }}>仅显示高亮</span>
-                            </Checkbox>
-                            <Text style={{ color: '#8f8f8f', fontSize: 12, marginLeft: 'auto' }}>
-                                左键切换显隐，右键编辑透明度txt
-                            </Text>
-                        </div>
-
-                        <div style={{ padding: '4px 8px', borderBottom: '1px solid #3f3f3f', color: '#8f8f8f', fontSize: 11 }}>
-                            动作总计 {sequences.length}，当前显示 {filteredSequences.length}
-                        </div>
-
-                        <div style={{ flex: 1, overflowY: 'auto', padding: 6 }}>
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 5 }}>
-                                {filteredSequences.map((sequence) => {
-                                    const highlighted = highlightedSequenceSet.has(sequence.index)
-                                    const label = sequence.name || `Sequence ${sequence.index}`
-                                    return (
-                                        <Dropdown key={`seq-${sequence.index}`} menu={getSequenceMenu(sequence)} trigger={['contextMenu']}>
-                                            <button
-                                                type="button"
-                                                onClick={() => handleToggleAction(sequence)}
-                                                title={label}
-                                                style={{
-                                                    cursor: 'pointer',
-                                                    height: 28,
-                                                    padding: '0 8px',
-                                                    backgroundColor: highlighted ? '#22432c' : 'transparent',
-                                                    border: highlighted ? '1px solid #3f7151' : '1px solid #3a3a3a',
-                                                    borderRadius: 2,
-                                                    userSelect: 'none',
-                                                    color: highlighted ? '#d8ffd8' : '#d0d0d0',
-                                                    fontSize: 12,
-                                                    fontWeight: 500,
-                                                    whiteSpace: 'nowrap',
-                                                    overflow: 'hidden',
-                                                    textOverflow: 'ellipsis'
-                                                }}
-                                            >
-                                                {label}
-                                            </button>
-                                        </Dropdown>
-                                    )
-                                })}
-                            </div>
-                        </div>
-                    </div>
-                </div>
+                {innerContent}
             </DraggableModal>
 
             <KeyframeEditor

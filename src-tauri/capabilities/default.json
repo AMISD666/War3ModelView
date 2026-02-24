@@ -3,7 +3,8 @@
     "identifier": "default",
     "description": "Capability for the main window",
     "windows": [
-        "main"
+        "main",
+        "*"
     ],
     "permissions": [
         "fs:default",
@@ -36,7 +37,15 @@
         "core:app:allow-version",
         "core:window:allow-close",
         "core:window:allow-show",
+        "core:window:allow-hide",
         "core:window:allow-destroy",
+        "core:window:allow-create",
+        "core:window:allow-center",
+        "core:window:allow-set-focus",
+        "core:window:allow-set-size",
+        "core:window:allow-start-dragging",
+        "core:window:allow-get-all-windows",
+        "core:webview:allow-create-webview-window",
         "core:path:default",
         "process:allow-exit",
         {

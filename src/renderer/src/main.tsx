@@ -2,6 +2,10 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import 'antd/dist/reset.css'
 import App from './App'
+import ModelOptimizeModal from './components/modals/ModelOptimizeModal'
+import CameraManagerModal from './components/modals/CameraManagerModal'
+import GeosetEditorModal from './components/modals/GeosetEditorModal'
+import GeosetVisibilityToolModal from './components/modals/GeosetVisibilityToolModal'
 import './assets/index.css'
 import { parseMDX } from 'war3-model'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -65,18 +69,76 @@ console.warn = (...args: any[]) => {
 
 console.log('war3-model loaded:', parseMDX)
 
+console.log('war3-model loaded:', parseMDX)
+
 installBrowserGuards()
 
+// Simple Router based on Tauri Window URL
+const searchParams = new URLSearchParams(window.location.search);
+const targetWindow = searchParams.get('window');
+
+let RootComponent = <App />;
+
+if (targetWindow === 'modelOptimize') {
+    RootComponent = (
+        <React.Suspense fallback={null}>
+            <ModelOptimizeModal
+                visible={true}
+                onClose={() => getCurrentWindow().hide()}
+                modelData={null}
+                isStandalone={true}
+            />
+        </React.Suspense>
+    );
+} else if (targetWindow === 'cameraManager') {
+    RootComponent = (
+        <React.Suspense fallback={null}>
+            <CameraManagerModal
+                visible={true}
+                onClose={() => getCurrentWindow().hide()}
+                isStandalone={true}
+            />
+        </React.Suspense>
+    );
+} else if (targetWindow === 'geosetEditor') {
+    RootComponent = (
+        <React.Suspense fallback={null}>
+            <GeosetEditorModal
+                visible={true}
+                onClose={() => getCurrentWindow().hide()}
+                isStandalone={true}
+            />
+        </React.Suspense>
+    );
+} else if (targetWindow === 'geosetVisibilityTool') {
+    RootComponent = (
+        <React.Suspense fallback={null}>
+            <GeosetVisibilityToolModal
+                visible={true}
+                onClose={() => getCurrentWindow().hide()}
+                isStandalone={true}
+            />
+        </React.Suspense>
+    );
+}
+
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
-    <App />
+    RootComponent
 )
 
 // Show the window now that React has mounted (window starts hidden via visible:false)
 // Also remove the inline skeleton that was visible during JS loading
-requestAnimationFrame(() => {
+if (targetWindow) {
+    // Standalone windows: just remove skeleton, do NOT `.show()` it here! 
+    // It is a preloaded window that should stay hidden until `WindowManager.openToolWindow()` is called.
     const skeleton = document.getElementById('app-skeleton')
     if (skeleton) skeleton.remove()
-
-    getCurrentWindow().show().catch(() => { })
-})
+} else {
+    // Main window: slightly delay show to hide heavy 3D engine initialization
+    requestAnimationFrame(() => {
+        const skeleton = document.getElementById('app-skeleton')
+        if (skeleton) skeleton.remove()
+        getCurrentWindow().show().catch(() => { })
+    })
+}
 

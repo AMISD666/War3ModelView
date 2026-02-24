@@ -3,6 +3,8 @@ import MainLayoutNew from './components/MainLayoutNew'
 import ActivationModal from './components/modals/ActivationModal'
 import { initDebugLogging } from './utils/debugLog'
 import { invoke } from '@tauri-apps/api/core'
+import { getCurrentWindow } from '@tauri-apps/api/window'
+import { exit } from '@tauri-apps/plugin-process'
 
 interface ActivationStatus {
     is_activated: boolean
@@ -19,6 +21,16 @@ function App(): JSX.Element {
     useEffect(() => {
         initDebugLogging()
         checkActivation()
+
+        // When the main window closes, forcefully exit the entire application 
+        // to prevent preloaded background windows from keeping the process alive.
+        const unlistenPromise = getCurrentWindow().onCloseRequested(async () => {
+            await exit(0);
+        });
+
+        return () => {
+            unlistenPromise.then(unlisten => unlisten()).catch(console.error);
+        }
     }, [])
 
     const checkActivation = async () => {

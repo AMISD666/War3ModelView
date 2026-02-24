@@ -1,17 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Modal, Checkbox, Slider, InputNumber, Button, Row, Col, Typography, Divider } from 'antd';
+import { CloseOutlined } from '@ant-design/icons';
 import Draggable, { DraggableData, DraggableEvent } from 'react-draggable';
 import { clearAndFixModel, IClearConfig } from '../../utils/modelUtils';
+import { useRpcClient } from '../../hooks/useRpc';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
 const { Text, Title } = Typography;
 
 interface ModelOptimizeModalProps {
     visible: boolean;
     onClose: () => void;
-    modelData: any | null; // We might need this for actual operations later
+    modelData: any | null; // Used in embedded mode
+    isStandalone?: boolean; // Set to true when loaded via router as native window
 }
 
-const ModelOptimizeModal: React.FC<ModelOptimizeModalProps> = ({ visible, onClose, modelData }) => {
+const ModelOptimizeModal: React.FC<ModelOptimizeModalProps> = ({ visible, onClose, modelData, isStandalone = false }) => {
     // Polygon Optimization State
     const [removeRedundantVertices, setRemoveRedundantVertices] = useState(true);
     const [decimateModel, setDecimateModel] = useState(true);
@@ -25,7 +29,10 @@ const ModelOptimizeModal: React.FC<ModelOptimizeModalProps> = ({ visible, onClos
     const [originalFaces, setOriginalFaces] = useState(0);
     const [estimatedFaces, setEstimatedFaces] = useState(0);
 
-    // Draggable state
+    // RPC Sync for standalone mode
+    const { state: rpcState, emitCommand } = useRpcClient<{ originalFaces: number }>('modelOptimize', { originalFaces: 0 });
+
+    // Draggable state (only relevant if not standalone window since desktop window has its own OS drag)
     const [disabled, setDisabled] = useState(false);
     const [bounds, setBounds] = useState({ left: 0, top: 0, bottom: 0, right: 0 });
     const draggleRef = useRef<HTMLDivElement>(null);
@@ -44,24 +51,24 @@ const ModelOptimizeModal: React.FC<ModelOptimizeModalProps> = ({ visible, onClos
         });
     };
 
-    // Calculate faces mock logic whenever modelData or decimateRatio changes
+    // Calculate faces logic (either directly from modelData or synced from RPC)
     useEffect(() => {
-        if (modelData) {
-            // Simplified sum: iterate over geosets and count faces
+        if (isStandalone) {
+            setOriginalFaces(rpcState.originalFaces);
+        } else if (modelData) {
             let total = 0;
             if (modelData.Geosets && Array.isArray(modelData.Geosets)) {
                 modelData.Geosets.forEach((g: any) => {
                     if (g.Faces && Array.isArray(g.Faces)) {
-                        total += g.Faces.length / 3; // Typically represented as array of vertex indices, every 3 is a triangle
+                        total += g.Faces.length / 3;
                     }
                 });
             }
-            // If the format is different, we handle it
             setOriginalFaces(Math.floor(total));
         } else {
             setOriginalFaces(0);
         }
-    }, [modelData]);
+    }, [modelData, isStandalone, rpcState.originalFaces]);
 
     useEffect(() => {
         if (decimateModel) {
@@ -72,21 +79,221 @@ const ModelOptimizeModal: React.FC<ModelOptimizeModalProps> = ({ visible, onClos
     }, [originalFaces, decimateRatio, decimateModel]);
 
     const handleExecutePolygonOpt = () => {
-        // Implementation will go here
-        console.log('Execute Polygon Optimization', {
-            removeRedundantVertices,
-            decimateModel,
-            decimateRatio
-        });
+        const payload = { removeRedundantVertices, decimateModel, decimateRatio };
+        if (isStandalone) {
+            emitCommand('EXECUTE_POLYGON_OPT', payload);
+        } else {
+            console.log('Embedded execution:', payload);
+        }
     };
 
     const handleExecuteKeyframeOpt = () => {
-        // Implementation will go here
-        console.log('Execute Keyframe Optimization', {
-            removeRedundantFrames,
-            optimizeKeyframes
-        });
+        const payload = { removeRedundantFrames, optimizeKeyframes };
+        if (isStandalone) {
+            emitCommand('EXECUTE_KEYFRAME_OPT', payload);
+        } else {
+            console.log('Embedded execution:', payload);
+        }
     };
+
+    const innerContent = (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+
+            {/* --- Polygon Optimization Section --- */}
+            <Text style={{ color: '#aaa', fontSize: 13, fontWeight: 500, marginBottom: 4 }}>多边形优化</Text>
+
+            <Row wrap={false} style={{ marginBottom: 4 }}>
+                <Col span={12}>
+                    <Checkbox
+                        checked={removeRedundantVertices}
+                        onChange={(e) => setRemoveRedundantVertices(e.target.checked)}
+                        style={{ color: '#ccc', fontSize: 13 }}
+                    >
+                        删除多余顶点
+                    </Checkbox>
+                </Col>
+                <Col span={12}>
+                    <Checkbox
+                        checked={decimateModel}
+                        onChange={(e) => setDecimateModel(e.target.checked)}
+                        style={{ color: '#ccc', fontSize: 13 }}
+                    >
+                        模型减面
+                    </Checkbox>
+                </Col>
+            </Row>
+
+            <div style={{
+                opacity: decimateModel ? 1 : 0.4,
+                pointerEvents: decimateModel ? 'auto' : 'none',
+                transition: 'opacity 0.2s',
+                padding: '8px 12px',
+                backgroundColor: '#252525',
+                borderRadius: 6,
+                border: '1px solid #2f2f2f'
+            }}>
+                <Row align="middle" gutter={12}>
+                    <Col flex="auto">
+                        <Slider
+                            min={0}
+                            max={100}
+                            step={1}
+                            value={decimateRatio}
+                            onChange={setDecimateRatio}
+                            tooltip={{ formatter: (val) => `${val}%` }}
+                            styles={{
+                                track: { backgroundColor: '#1890ff' },
+                                handle: { borderColor: '#1890ff', backgroundColor: '#1e1e1e' }
+                            }}
+                        />
+                    </Col>
+                    <Col>
+                        <InputNumber
+                            min={0}
+                            max={100}
+                            value={decimateRatio}
+                            onChange={(val) => setDecimateRatio(val || 0)}
+                            addonAfter="%"
+                            size="small"
+                            style={{ width: 70 }}
+                            className="dark-input-number"
+                        />
+                    </Col>
+                </Row>
+                <Row justify="space-between" style={{ marginTop: 4, fontSize: 12 }}>
+                    <Text style={{ color: '#888' }}>模型原面数: <span style={{ color: '#ccc' }}>{originalFaces}</span></Text>
+                    <Text style={{ color: '#888' }}>预计面数: <span style={{ color: '#1890ff' }}>{estimatedFaces}</span></Text>
+                </Row>
+            </div>
+
+            <Button
+                type="primary"
+                block
+                onClick={handleExecutePolygonOpt}
+                style={{
+                    marginTop: 4,
+                    height: 32,
+                    borderRadius: 4,
+                    fontSize: 13,
+                    fontWeight: 500,
+                    backgroundColor: '#1890ff',
+                    borderColor: '#1890ff'
+                }}
+            >
+                执行多边形优化
+            </Button>
+
+            <Divider style={{ margin: '10px 0', borderColor: '#333' }} />
+
+            {/* --- Keyframe Optimization Section --- */}
+            <Text style={{ color: '#aaa', fontSize: 13, fontWeight: 500, marginBottom: 4 }}>关键帧优化</Text>
+
+            <Row wrap={false} style={{ marginBottom: 4 }}>
+                <Col span={12}>
+                    <Checkbox
+                        checked={removeRedundantFrames}
+                        onChange={(e) => setRemoveRedundantFrames(e.target.checked)}
+                        style={{ color: '#ccc', fontSize: 13 }}
+                    >
+                        多余帧删除
+                    </Checkbox>
+                </Col>
+                <Col span={12}>
+                    <Checkbox
+                        checked={optimizeKeyframes}
+                        onChange={(e) => setOptimizeKeyframes(e.target.checked)}
+                        style={{ color: '#ccc', fontSize: 13 }}
+                    >
+                        关键帧优化
+                    </Checkbox>
+                </Col>
+            </Row>
+
+            <Button
+                type="default"
+                block
+                onClick={handleExecuteKeyframeOpt}
+                style={{
+                    marginTop: 4,
+                    height: 32,
+                    borderRadius: 4,
+                    fontSize: 13,
+                    fontWeight: 500,
+                    backgroundColor: '#2a2a2a',
+                    borderColor: '#444',
+                    color: '#eee'
+                }}
+            >
+                执行关键帧优化
+            </Button>
+
+            {/* Minimal inline CSS for dark mode inputs if not globally defined */}
+            <style dangerouslySetInnerHTML={{
+                __html: `
+                .dark-input-number .ant-input-number-input {
+                    background-color: #1e1e1e !important;
+                    color: #ccc !important;
+                }
+                .dark-input-number .ant-input-number-group-addon {
+                    background-color: #2a2a2a !important;
+                    border-color: #444 !important;
+                    color: #888 !important;
+                }
+                .dark-input-number {
+                    background-color: #1e1e1e !important;
+                    border-color: #444 !important;
+                }
+                .dark-input-number:hover {
+                    border-color: #1890ff !important;
+                }
+            `}} />
+        </div>
+    );
+
+    if (isStandalone) {
+        return (
+            <div style={{
+                width: '100vw',
+                height: '100vh',
+                backgroundColor: '#1e1e1e',
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden'
+            }}>
+                {/* Native Window Custom Title Bar Wrapper */}
+                <div
+                    style={{
+                        height: '32px',
+                        minHeight: '32px',
+                        backgroundColor: '#222',
+                        borderBottom: '1px solid #333',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '0 16px',
+                        userSelect: 'none',
+                    }}
+                >
+                    <div
+                        data-tauri-drag-region
+                        style={{ flex: 1, height: '100%', display: 'flex', alignItems: 'center', cursor: 'default' }}
+                    >
+                        <Title level={5} data-tauri-drag-region style={{ margin: 0, color: '#e0e0e0', fontWeight: 600, fontSize: 14 }}>模型优化</Title>
+                    </div>
+                    <CloseOutlined
+                        onClick={onClose}
+                        style={{ color: '#888', cursor: 'pointer', fontSize: 14, padding: '2px', zIndex: 10 }}
+                        onMouseEnter={(e) => (e.currentTarget.style.color = '#fff')}
+                        onMouseLeave={(e) => (e.currentTarget.style.color = '#888')}
+                    />
+                </div>
+                {/* Scrollable Content Wrapper */}
+                <div style={{ padding: '12px 16px', flex: 1, overflowY: 'auto' }}>
+                    {innerContent}
+                </div>
+            </div>
+        );
+    }
 
     return (
         <Modal
@@ -116,7 +323,7 @@ const ModelOptimizeModal: React.FC<ModelOptimizeModalProps> = ({ visible, onClos
             onCancel={onClose}
             footer={null}
             width={320}
-            centered={false} // Turn off centered so dragging feels more stable naturally, or leave it.
+            centered={false}
             mask={false}
             wrapClassName="dark-modal-wrap"
             modalRender={(modal) => (
@@ -141,157 +348,7 @@ const ModelOptimizeModal: React.FC<ModelOptimizeModalProps> = ({ visible, onClos
             }}
             closeIcon={<span style={{ color: '#888', marginTop: 12, marginRight: 16 }}>✕</span>}
         >
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-
-                {/* --- Polygon Optimization Section --- */}
-                <Text style={{ color: '#aaa', fontSize: 13, fontWeight: 500, marginBottom: 4 }}>多边形优化</Text>
-
-                <Row wrap={false} style={{ marginBottom: 4 }}>
-                    <Col span={12}>
-                        <Checkbox
-                            checked={removeRedundantVertices}
-                            onChange={(e) => setRemoveRedundantVertices(e.target.checked)}
-                            style={{ color: '#ccc', fontSize: 13 }}
-                        >
-                            删除多余顶点
-                        </Checkbox>
-                    </Col>
-                    <Col span={12}>
-                        <Checkbox
-                            checked={decimateModel}
-                            onChange={(e) => setDecimateModel(e.target.checked)}
-                            style={{ color: '#ccc', fontSize: 13 }}
-                        >
-                            模型减面
-                        </Checkbox>
-                    </Col>
-                </Row>
-
-                <div style={{
-                    opacity: decimateModel ? 1 : 0.4,
-                    pointerEvents: decimateModel ? 'auto' : 'none',
-                    transition: 'opacity 0.2s',
-                    padding: '8px 12px',
-                    backgroundColor: '#252525',
-                    borderRadius: 6,
-                    border: '1px solid #2f2f2f'
-                }}>
-                    <Row align="middle" gutter={12}>
-                        <Col flex="auto">
-                            <Slider
-                                min={0}
-                                max={100}
-                                step={1}
-                                value={decimateRatio}
-                                onChange={setDecimateRatio}
-                                tooltip={{ formatter: (val) => `${val}%` }}
-                                styles={{
-                                    track: { backgroundColor: '#1890ff' },
-                                    handle: { borderColor: '#1890ff', backgroundColor: '#1e1e1e' }
-                                }}
-                            />
-                        </Col>
-                        <Col>
-                            <InputNumber
-                                min={0}
-                                max={100}
-                                value={decimateRatio}
-                                onChange={(val) => setDecimateRatio(val || 0)}
-                                addonAfter="%"
-                                size="small"
-                                style={{ width: 70 }}
-                                className="dark-input-number"
-                            />
-                        </Col>
-                    </Row>
-                    <Row justify="space-between" style={{ marginTop: 4, fontSize: 12 }}>
-                        <Text style={{ color: '#888' }}>模型原面数: <span style={{ color: '#ccc' }}>{originalFaces}</span></Text>
-                        <Text style={{ color: '#888' }}>预计面数: <span style={{ color: '#1890ff' }}>{estimatedFaces}</span></Text>
-                    </Row>
-                </div>
-
-                <Button
-                    type="primary"
-                    block
-                    onClick={handleExecutePolygonOpt}
-                    style={{
-                        marginTop: 4,
-                        height: 32,
-                        borderRadius: 4,
-                        fontSize: 13,
-                        fontWeight: 500,
-                        backgroundColor: '#1890ff',
-                        borderColor: '#1890ff'
-                    }}
-                >
-                    执行多边形优化
-                </Button>
-
-                <Divider style={{ margin: '10px 0', borderColor: '#333' }} />
-
-                {/* --- Keyframe Optimization Section --- */}
-                <Text style={{ color: '#aaa', fontSize: 13, fontWeight: 500, marginBottom: 4 }}>关键帧优化</Text>
-
-                <Row wrap={false} style={{ marginBottom: 4 }}>
-                    <Col span={12}>
-                        <Checkbox
-                            checked={removeRedundantFrames}
-                            onChange={(e) => setRemoveRedundantFrames(e.target.checked)}
-                            style={{ color: '#ccc', fontSize: 13 }}
-                        >
-                            多余帧删除
-                        </Checkbox>
-                    </Col>
-                    <Col span={12}>
-                        <Checkbox
-                            checked={optimizeKeyframes}
-                            onChange={(e) => setOptimizeKeyframes(e.target.checked)}
-                            style={{ color: '#ccc', fontSize: 13 }}
-                        >
-                            关键帧优化
-                        </Checkbox>
-                    </Col>
-                </Row>
-
-                <Button
-                    type="default"
-                    block
-                    onClick={handleExecuteKeyframeOpt}
-                    style={{
-                        marginTop: 4,
-                        height: 32,
-                        borderRadius: 4,
-                        fontSize: 13,
-                        fontWeight: 500,
-                        backgroundColor: '#2a2a2a',
-                        borderColor: '#444',
-                        color: '#eee'
-                    }}
-                >
-                    执行关键帧优化
-                </Button>
-
-            </div>
-            {/* Minimal inline CSS for dark mode inputs if not globally defined */}
-            <style dangerouslySetInnerHTML={{
-                __html: `
-                .dark-input-number .ant-input-number-input {
-                    background-color: #1e1e1e !important;
-                    color: #ccc !important;
-                }
-                .dark-input-number .ant-input-number-group-addon {
-                    background-color: #2a2a2a !important;
-                    border-color: #444 !important;
-                    color: #888 !important;
-                }
-                .dark-input-number {
-                    background-color: #1e1e1e !important;
-                    border-color: #444 !important;
-                }
-                .dark-input-number:hover {
-                    border-color: #1890ff !important;
-                }
-            `}} />
+            {innerContent}
         </Modal>
     );
 };

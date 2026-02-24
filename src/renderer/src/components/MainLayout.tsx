@@ -4,7 +4,6 @@ import MenuBar from './MenuBar'
 import EditorPanel from './EditorPanel'
 // Lazy load modal components for faster startup
 const GeosetAnimationModal = React.lazy(() => import('./modals/GeosetAnimationModal'))
-const GeosetVisibilityToolModal = React.lazy(() => import('./modals/GeosetVisibilityToolModal'))
 const TextureEditorModal = React.lazy(() => import('./modals/TextureEditorModal'))
 const TextureAnimationManagerModal = React.lazy(() => import('./modals/TextureAnimationManagerModal'))
 const SequenceEditorModal = React.lazy(() => import('./modals/SequenceEditorModal'))
@@ -40,6 +39,8 @@ import {
     isDefaultTextureAdjustments,
     TEXTURE_ADJUSTMENTS_KEY
 } from '../utils/textureAdjustments'
+import { windowManager } from '../utils/WindowManager'
+import { useRpcServer } from '../hooks/useRpc'
 
 /**
  * Normalize model data before saving to ensure typed arrays are correct.
@@ -1594,7 +1595,6 @@ const MainLayout: React.FC = () => {
     const [showTextureModal, setShowTextureModal] = useState<boolean>(false)
     const [showTextureAnimModal, setShowTextureAnimModal] = useState<boolean>(false)
     const [showSequenceModal, setShowSequenceModal] = useState<boolean>(false)
-    const [showCameraModal, setShowCameraModal] = useState<boolean>(false)
 
     const [showMaterialModal, setShowMaterialModal] = useState<boolean>(false)
     const [showGeosetModal, setShowGeosetModal] = useState<boolean>(false)
@@ -1606,6 +1606,72 @@ const MainLayout: React.FC = () => {
     // Use modelData directly from store to ensure updates from NodeManager are reflected
     const modelData = useModelStore(state => state.modelData)
 
+    // RPC Server for modelOptimize standalone window
+    const getModelOptimizeState = useCallback(() => {
+        let total = 0;
+        if (modelData?.Geosets && Array.isArray(modelData.Geosets)) {
+            modelData.Geosets.forEach((g: any) => {
+                if (g.Faces && Array.isArray(g.Faces)) {
+                    total += g.Faces.length / 3;
+                }
+            });
+        }
+        return { originalFaces: Math.floor(total) };
+    }, [modelData]);
+
+    const handleModelOptimizeCommand = useCallback((command: string, payload: any) => {
+        console.log('[RPC COMMAND RECEIVED]', command, payload);
+        if (command === 'EXECUTE_POLYGON_OPT') {
+            showMessage('info', 'IPC 调用', `多边形优化: 减面比例 ${payload.decimateRatio}%`);
+        } else if (command === 'EXECUTE_KEYFRAME_OPT') {
+            showMessage('info', 'IPC 调用', `关键帧优化: ${payload.optimizeKeyframes}`);
+        }
+    }, [showMessage]);
+
+    const { broadcastSync: broadcastModelOptimize } = useRpcServer(
+        'modelOptimize',
+        getModelOptimizeState,
+        handleModelOptimizeCommand
+    );
+
+    useEffect(() => {
+        let prevModelData = useModelStore.getState().modelData;
+        let prevNodes = useModelStore.getState().nodes;
+
+        const unsubscribe = useModelStore.subscribe((state) => {
+            if (state.modelData !== prevModelData || state.nodes !== prevNodes) {
+                prevModelData = state.modelData;
+                prevNodes = state.nodes;
+
+                const originalFaces = state.modelData
+                    ? state.modelData.Geosets.reduce((acc: number, g: any) => acc + (g.Faces?.length || 0), 0) / 3
+                    : 0;
+                broadcastModelOptimize({ originalFaces });
+            }
+        });
+
+        broadcastModelOptimize(getModelOptimizeState());
+
+        return () => unsubscribe();
+    }, [getModelOptimizeState, broadcastModelOptimize]);
+
+
+    // Preload standalone tool windows silently in the background
+    useEffect(() => {
+        const windows = [
+            { id: 'modelOptimize', title: '模型优化', w: 320, h: 380 },
+            { id: 'cameraManager', title: '相机管理器', w: 700, h: 520 },
+            { id: 'geosetVisibilityTool', title: '多边形动作显隐工具', w: 980, h: 560 },
+            { id: 'geosetEditor', title: '多边形编辑器', w: 640, h: 480 }
+        ];
+
+        windows.forEach(win => {
+            windowManager.preloadToolWindow(win.id, win.title, win.w as number || 800, win.h as number || 600).catch(e => {
+                console.error(`Failed to preload ${win.id} window:`, e);
+                // We keep errors silent during preload to not annoy the user on startup
+            });
+        });
+    }, []);
 
     // Persistent settings
     // Persistent settings replaced by store
@@ -1654,7 +1720,6 @@ const MainLayout: React.FC = () => {
     const panelStateRef = useRef({
         activeEditor: null as string | null,
         showGeosetAnimModal: false,
-        showGeosetVisibilityToolModal: false,
         showTextureModal: false,
         showTextureAnimModal: false,
         showSequenceModal: false,
@@ -1689,11 +1754,9 @@ const MainLayout: React.FC = () => {
         panelStateRef.current = {
             activeEditor,
             showGeosetAnimModal,
-            showGeosetVisibilityToolModal,
             showTextureModal,
             showTextureAnimModal,
             showSequenceModal,
-            showCameraModal,
             showMaterialModal,
             showGeosetModal,
             showGlobalSeqModal,
@@ -1702,11 +1765,9 @@ const MainLayout: React.FC = () => {
     }, [
         activeEditor,
         showGeosetAnimModal,
-        showGeosetVisibilityToolModal,
         showTextureModal,
         showTextureAnimModal,
         showSequenceModal,
-        showCameraModal,
         showMaterialModal,
         showGeosetModal,
         showGlobalSeqModal,
@@ -1960,6 +2021,222 @@ const MainLayout: React.FC = () => {
             })
         }
     }
+
+    // RPC Server for Camera Manager (moved here to avoid ReferenceError on handleAddCameraFromView)
+    const nodes = useModelStore(state => state.nodes);
+    const getCameraManagerState = useCallback(() => {
+        return {
+            cameras: nodes.filter(n => n.type === NodeType.CAMERA),
+            globalSequences: (modelData?.GlobalSequences || []) as number[]
+        };
+    }, [nodes, modelData]);
+
+    const handleCameraCommand = useCallback((command: string, payload: any) => {
+        if (command === 'EXECUTE_CAMERA_ACTION') {
+            const { action, payload: actionPayload } = payload;
+            const modelStore = useModelStore.getState();
+            const historyStore = useHistoryStore.getState();
+
+            if (action === 'ADD') {
+                const currentNodes = modelStore.nodes;
+                const maxObjectId = currentNodes.reduce((max, n) => Math.max(max, n.ObjectId), -1);
+                const newObjectId = maxObjectId + 1;
+                const newNode = { ...actionPayload, ObjectId: newObjectId };
+
+                historyStore.push({
+                    name: 'Add Camera',
+                    undo: () => modelStore.deleteNode(newObjectId),
+                    redo: () => modelStore.addNode(newNode)
+                });
+                modelStore.addNode(newNode);
+            } else if (action === 'DELETE') {
+                const objectId = actionPayload.objectId;
+                const nodeToDelete = modelStore.nodes.find(n => n.ObjectId === objectId);
+                if (nodeToDelete) {
+                    const nodeClone = JSON.parse(JSON.stringify(nodeToDelete));
+                    historyStore.push({
+                        name: 'Delete Camera',
+                        undo: () => modelStore.addNode(nodeClone),
+                        redo: () => modelStore.deleteNode(objectId)
+                    });
+                    modelStore.deleteNode(objectId);
+                }
+            } else if (action === 'UPDATE') {
+                const { objectId, data: updates } = actionPayload;
+                const nodeToUpdate = modelStore.nodes.find(n => n.ObjectId === objectId);
+                if (nodeToUpdate) {
+                    const oldData: any = {};
+                    Object.keys(updates).forEach(key => {
+                        oldData[key] = (nodeToUpdate as any)[key];
+                    });
+                    historyStore.push({
+                        name: 'Update Camera',
+                        undo: () => modelStore.updateNodes([{ objectId, data: oldData }]),
+                        redo: () => modelStore.updateNodes([{ objectId, data: updates }])
+                    });
+                    modelStore.updateNodes([{ objectId, data: updates }]);
+                }
+            } else if (action === 'ADD_FROM_VIEW') {
+                handleAddCameraFromView();
+            } else if (action === 'VIEW_CAMERA') {
+                const objectId = actionPayload.objectId;
+                const cameraNode = modelStore.nodes.find(n => n.ObjectId === objectId);
+                if (cameraNode) {
+                    handleViewCamera(cameraNode as any);
+                }
+            }
+        }
+    }, [handleAddCameraFromView, handleViewCamera]);
+
+    const { broadcastSync: broadcastCameraManager } = useRpcServer(
+        'cameraManager',
+        getCameraManagerState,
+        handleCameraCommand
+    );
+
+    // RPC Server for Geoset Editor
+    const getGeosetManagerState = useCallback(() => {
+        const _modelData = useModelStore.getState().modelData;
+        const geosets = (_modelData?.Geosets || []).map((g: any, index: number) => ({
+            index,
+            MaterialID: g.MaterialID,
+            SelectionGroup: g.SelectionGroup,
+            vertexCount: g.Vertices ? g.Vertices.length / 3 : 0,
+            faceCount: g.Faces ? g.Faces.length / 3 : 0
+        }));
+
+        return {
+            geosets,
+            materialsCount: _modelData?.Materials?.length || 0,
+            selectedIndex: useModelStore.getState().selectedGeosetIndex || 0,
+        };
+    }, []);
+
+    const handleGeosetCommand = useCallback((command: string, payload: any) => {
+        if (command === 'EXECUTE_GEOSET_ACTION') {
+            const { action, payload: actionPayload } = payload;
+            if (action === 'SAVE_ALL') {
+                // Property Merging: NEVER replace the entire Geoset array with stripped metadata
+                const _currentGeosets = useModelStore.getState().modelData?.Geosets;
+                if (!_currentGeosets) return;
+
+                const newGeosets = [..._currentGeosets];
+                actionPayload.forEach((strippedGeoset: any) => {
+                    const idx = strippedGeoset.index;
+                    if (newGeosets[idx]) {
+                        newGeosets[idx] = {
+                            ...newGeosets[idx],
+                            MaterialID: strippedGeoset.MaterialID,
+                            SelectionGroup: strippedGeoset.SelectionGroup
+                        };
+                    }
+                });
+
+                useModelStore.getState().setGeosets(newGeosets);
+            }
+        }
+    }, []);
+
+    const { broadcastSync: broadcastGeosetEditor } = useRpcServer(
+        'geosetEditor',
+        getGeosetManagerState,
+        handleGeosetCommand
+    );
+
+    // RPC Server for Geoset Visibility Tool
+    const getGeosetVisibilityState = useCallback(() => {
+        const _modelData = useModelStore.getState().modelData;
+        const geosets = (_modelData?.Geosets || []).map((g: any, index: number) => ({
+            index,
+            MaterialID: g.MaterialID,
+            vertexCount: g.Vertices ? g.Vertices.length / 3 : 0,
+            faceCount: g.Faces ? g.Faces.length / 3 : 0
+        }));
+
+        return {
+            geosets,
+            sequences: _modelData?.Sequences || [],
+            geosetsAnims: _modelData?.GeosetAnims || [],
+            globalSequences: _modelData?.GlobalSequences || [],
+        };
+    }, []);
+
+    const handleGeosetVisibilityCommand = useCallback((command: string, payload: any) => {
+        if (command === 'EXECUTE_VISIBILITY_ACTION') {
+            const { action, payload: actionPayload } = payload;
+            if (action === 'SAVE_ANIMS') {
+                useModelStore.getState().setGeosetAnims(actionPayload);
+            } else if (action === 'SET_SEQUENCE') {
+                useModelStore.getState().setSequence(actionPayload);
+            } else if (action === 'SET_FRAME') {
+                useModelStore.getState().setFrame(actionPayload);
+            }
+        }
+    }, [useModelStore]);
+
+    const { broadcastSync: broadcastGeosetVisibilityTool } = useRpcServer(
+        'geosetVisibilityTool',
+        getGeosetVisibilityState,
+        handleGeosetVisibilityCommand
+    );
+
+    // Push state to the standalone window whenever the model changes
+    useEffect(() => {
+        let prevModelData = useModelStore.getState().modelData;
+        let prevNodes = useModelStore.getState().nodes;
+
+        // Subscribe directly to Zustand to avoid putting heavy objects in React dependency arrays
+        const unsubscribe = useModelStore.subscribe((state) => {
+            if (state.nodes !== prevNodes || state.modelData !== prevModelData) {
+                prevNodes = state.nodes;
+                prevModelData = state.modelData;
+
+                // Manually construct the state projection since getCameraManagerState uses React state
+                const cameraState = {
+                    cameras: state.nodes.filter(n => n.type === NodeType.CAMERA),
+                    globalSequences: (state.modelData?.GlobalSequences || []) as number[]
+                };
+                broadcastCameraManager(cameraState);
+
+                const geosetState = {
+                    geosets: (state.modelData?.Geosets || []).map((g: any, index: number) => ({
+                        index,
+                        MaterialID: g.MaterialID,
+                        SelectionGroup: g.SelectionGroup,
+                        vertexCount: g.Vertices ? g.Vertices.length / 3 : 0,
+                        faceCount: g.Faces ? g.Faces.length / 3 : 0
+                    })),
+                    materialsCount: state.modelData?.Materials?.length || 0,
+                    selectedIndex: state.selectedGeosetIndex || 0,
+                };
+                broadcastGeosetEditor(geosetState);
+
+                const visibilityState = {
+                    geosets: (state.modelData?.Geosets || []).map((g: any, index: number) => ({
+                        index,
+                        MaterialID: g.MaterialID,
+                        vertexCount: g.Vertices ? g.Vertices.length / 3 : 0,
+                        faceCount: g.Faces ? g.Faces.length / 3 : 0
+                    })),
+                    sequences: state.modelData?.Sequences || [],
+                    geosetsAnims: state.modelData?.GeosetAnims || [],
+                    globalSequences: state.modelData?.GlobalSequences || [],
+                };
+                broadcastGeosetVisibilityTool(visibilityState);
+            }
+        });
+
+        // Initial broadcast
+        broadcastCameraManager(getCameraManagerState());
+        broadcastGeosetEditor(getGeosetManagerState());
+        broadcastGeosetVisibilityTool(getGeosetVisibilityState());
+
+        return () => unsubscribe();
+    }, [
+        broadcastCameraManager, getCameraManagerState,
+        broadcastGeosetEditor, getGeosetManagerState,
+        broadcastGeosetVisibilityTool, getGeosetVisibilityState
+    ]);
 
     const handleEditorResizeStart = (e: React.MouseEvent) => {
         setIsResizingEditor(true)
@@ -2539,7 +2816,6 @@ const MainLayout: React.FC = () => {
             const panelState = panelStateRef.current;
             const hasPanels = !!panelState.activeEditor
                 || panelState.showGeosetAnimModal
-                || panelState.showGeosetVisibilityToolModal
                 || panelState.showTextureModal
                 || panelState.showTextureAnimModal
                 || panelState.showSequenceModal
@@ -2614,15 +2890,15 @@ const MainLayout: React.FC = () => {
                 return true;
             }),
             registerShortcutHandler('editor.cameraManager', () => {
-                setShowCameraModal(prev => !prev);
+                windowManager.openToolWindow('cameraManager', '相机管理器', 680, 520);
                 return true;
             }),
             registerShortcutHandler('editor.geosetManager', () => {
-                setShowGeosetModal(prev => !prev);
+                windowManager.openToolWindow('geosetEditor', '多边形编辑器', 850, 480);
                 return true;
             }),
             registerShortcutHandler('editor.geosetAnimManager', () => {
-                setShowGeosetAnimModal(prev => !prev);
+                windowManager.openToolWindow('geosetVisibilityTool', '多边形动作显隐工具', 980, 560);
                 return true;
             }),
             registerShortcutHandler('editor.textureManager', () => {
@@ -2917,6 +3193,25 @@ const MainLayout: React.FC = () => {
     }
 
     const toggleEditor = (editor: string) => {
+        if (editor === 'camera') {
+            windowManager.openToolWindow('cameraManager', '相机管理器', 680, 520).catch(e => {
+                showMessage(`无法打开相机管理器: ${e.message || e}`, 'error');
+            });
+            return;
+        }
+        if (editor === 'geoset') {
+            windowManager.openToolWindow('geosetEditor', '多边形编辑器', 850, 480).catch(e => {
+                showMessage(`无法打开多边形编辑器: ${e.message || e}`, 'error');
+            });
+            return;
+        }
+        if (editor === 'geosetVisibilityTool') {
+            windowManager.openToolWindow('geosetVisibilityTool', '多边形动作显隐工具', 980, 560).catch(e => {
+                showMessage(`无法打开多边形显隐工具: ${e.message || e}`, 'error');
+            });
+            return;
+        }
+
         setActiveEditor(activeEditor === editor ? null : editor)
     }
 
@@ -3104,7 +3399,7 @@ const MainLayout: React.FC = () => {
                     } else if (editor === 'geosetAnim') {
                         setShowGeosetAnimModal(true)
                     } else if (editor === 'geosetVisibilityTool') {
-                        setShowGeosetVisibilityToolModal(true)
+                        windowManager.openToolWindow('geosetVisibilityTool', '多边形动作显隐工具', 980, 560);
                     } else if (editor === 'texture') {
                         setShowTextureModal(true)
                     } else if (editor === 'textureAnim') {
@@ -3112,16 +3407,17 @@ const MainLayout: React.FC = () => {
                     } else if (editor === 'sequence') {
                         setShowSequenceModal(true)
                     } else if (editor === 'camera') {
-                        setShowCameraModal(true)
+                        windowManager.openToolWindow('cameraManager', '相机管理器', 700, 520);
                     } else if (editor === 'material') {
 
                         setShowMaterialModal(true)
                     } else if (editor === 'geoset') {
-                        setShowGeosetModal(true)
+                        windowManager.openToolWindow('geosetEditor', '多边形编辑器', 640, 480);
                     } else if (editor === 'globalSequence') {
                         setShowGlobalSeqModal(true)
                     } else if (editor === 'modelOptimize') {
-                        setShowModelOptimizeModal(true)
+                        // Open as native window using the WindowManager
+                        windowManager.openToolWindow('modelOptimize', '模型优化', 320, 380);
                     } else if (editor === 'geosetVisibility') {
                         setShowGeosetVisibility(!showGeosetVisibility)
                     } else {
@@ -3348,10 +3644,6 @@ const MainLayout: React.FC = () => {
                 visible={showGeosetAnimModal}
                 onClose={() => setShowGeosetAnimModal(false)}
             />
-            <GeosetVisibilityToolModal
-                visible={showGeosetVisibilityToolModal}
-                onClose={() => setShowGeosetVisibilityToolModal(false)}
-            />
             <TextureEditorModal
                 visible={showTextureModal}
                 onClose={() => setShowTextureModal(false)}
@@ -3361,12 +3653,6 @@ const MainLayout: React.FC = () => {
                 visible={showTextureAnimModal}
                 onClose={() => setShowTextureAnimModal(false)}
             />
-            <CameraManagerModal
-                visible={showCameraModal}
-                onClose={() => setShowCameraModal(false)}
-                onAddFromView={handleAddCameraFromView}
-                onViewCamera={handleViewCamera}
-            />
             <SequenceEditorModal
                 visible={showSequenceModal}
                 onClose={() => setShowSequenceModal(false)}
@@ -3374,10 +3660,6 @@ const MainLayout: React.FC = () => {
             <MaterialEditorModal
                 visible={showMaterialModal}
                 onClose={() => setShowMaterialModal(false)}
-            />
-            <GeosetEditorModal
-                visible={showGeosetModal}
-                onClose={() => setShowGeosetModal(false)}
             />
             <GlobalSequenceModal
                 visible={showGlobalSeqModal}
@@ -3497,13 +3779,7 @@ const MainLayout: React.FC = () => {
                     </div>
                 )}
             </div>
-            <Suspense fallback={null}>
-                <ModelOptimizeModal
-                    visible={showModelOptimizeModal}
-                    onClose={() => setShowModelOptimizeModal(false)}
-                    modelData={modelData}
-                />
-            </Suspense>
+            {/* ModelOptimizeModal relies on native OS window now, no local render needed unless reverting to wrapper mode */}
             <Modal
                 open={closeConfirmVisible}
                 onCancel={handleCloseCancel}
