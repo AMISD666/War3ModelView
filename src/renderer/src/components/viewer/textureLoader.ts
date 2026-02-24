@@ -714,7 +714,9 @@ function parseTextureBytesPayload(payload: any, texturePaths: string[]): Map<str
 export async function loadAllTextures(
     model: any,
     renderer: any,
-    modelPath: string
+    modelPath: string,
+    worker?: any,
+    maxDimension?: number
 ): Promise<TextureLoadResult[]> {
     const results: TextureLoadResult[] = []
 
@@ -782,15 +784,47 @@ export async function loadAllTextures(
             texturePaths: uniqueTexturePaths
         })
         const decodedBatch = parseTextureBytesPayload(payload, uniqueTexturePaths)
-        decodedBatch.forEach((bytes, path) => {
+
+        const decodePromises = Array.from(decodedBatch.entries()).map(async ([path, bytes]) => {
             const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
-            const imageData = decodeTextureData(buffer, path, {
-                adjustments: textureAdjustmentsByPath.get(path)
-            })
+
+            let imageData: ImageData | null = null
+            if (worker) {
+                imageData = await new Promise((resolve) => {
+                    const timer = setTimeout(() => resolve(null), 10000)
+                    const id = Math.random().toString(36).substring(2)
+                    const handler = (e: any) => {
+                        const { type, payload: resPayload } = e.data
+                        if ((type === 'DECODE_SUCCESS' || type === 'ERROR') && resPayload.path === path) {
+                            clearTimeout(timer)
+                            worker.removeEventListener('message', handler)
+                            if (type === 'DECODE_SUCCESS') {
+                                // ImageBitmap to ImageData conversion if needed, 
+                                // though renderer usually expects ImageData or ImageBitmap
+                                resolve(resPayload.bitmap)
+                            } else {
+                                resolve(null)
+                            }
+                        }
+                    }
+                    worker.addEventListener('message', handler)
+                    worker.postMessage({
+                        type: 'DECODE_TEXTURE',
+                        payload: { buffer, path, id, adjustments: textureAdjustmentsByPath.get(path), maxDimension }
+                    }, [buffer])
+                })
+            } else {
+                imageData = decodeTextureData(buffer, path, {
+                    adjustments: textureAdjustmentsByPath.get(path),
+                    maxDimension
+                })
+            }
+
             if (imageData) {
                 decodedTextures.set(path, imageData)
             }
         })
+        await Promise.all(decodePromises)
     } catch (e) {
         console.error('[Viewer] Texture batch load failed:', e)
     }

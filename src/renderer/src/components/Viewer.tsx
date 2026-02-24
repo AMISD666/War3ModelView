@@ -1,6 +1,7 @@
 ﻿import React, { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react'
-// @ts-ignore
 import { decodeBLP, getBLPImageData, parseMDX, parseMDL, ModelRenderer } from 'war3-model'
+// @ts-ignore
+import ModelWorker from '../workers/model-worker.worker?worker'
 import { SimpleOrbitCamera } from '../utils/SimpleOrbitCamera'
 import { decodeTextureData, loadAllTextures } from './viewer/textureLoader'
 import { validateAllParticleEmitters } from './viewer/particleValidator'
@@ -160,6 +161,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   modelData,
   onAddCameraFromView
 }, ref) => {
+  const [modelWorker] = useState(() => new ModelWorker())
+  const [loading, setLoading] = useState(false)
+  const [loadingStatus, setLoadingStatus] = useState('')
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [renderer, setRenderer] = useState<ModelRenderer | null>(null)
   const [fps, setFps] = useState<number>(0)
@@ -2100,26 +2104,17 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   }, [])
 
   const loadModel = async (path: string, inMemoryData?: any) => {
-    // Cleanup old renderer and animation frames
-    if (animationFrameId.current !== null) {
-      cancelAnimationFrame(animationFrameId.current)
-      animationFrameId.current = null
-    }
-
-    // Reset lastFrameTime to prevent large delta on first frame after model reload
-    // This fixes animation jumping past interval bounds when reloading models
     lastFrameTime.current = performance.now()
 
-    // Destroy old renderer to prevent memory leaks and clear the scene
+    // IMMEDIATE CLEAR: Remove old renderer and clear canvas
     if (renderer) {
-      console.log('[Viewer] Destroying old renderer')
-      try {
-        renderer.destroy()
-      } catch (e) {
-        console.warn('[Viewer] Error destroying renderer:', e)
-      }
+      console.log('[Viewer] Clearing old renderer immediately')
+      try { renderer.destroy() } catch (e) { }
       setRenderer(null)
     }
+
+    setLoading(true)
+    setLoadingStatus('读取模型文件...')
 
     // Clear the canvas without creating a context.
     const canvas = canvasRef.current
@@ -2134,9 +2129,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
     try {
       console.time('[Viewer] FullModelLoad')
-      if (!canvas) {
-        console.error('[Viewer] Canvas reference is null')
-        return
+      if (canvasRef.current) {
+        canvasRef.current.focus()
       }
 
       const readPathBytes = async (assetPath: string): Promise<Uint8Array> => {
@@ -2152,7 +2146,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         }
       }
 
-      // Texture preview mode (.blp/.tga): show in main viewer area as 2D preview.
+      // Texture preview mode (.blp/.tga)
       if (isTexturePreviewPath(path)) {
         const bytes = await readPathBytes(path)
         const imageData = decodeTextureData(toTightArrayBuffer(bytes), path, { preferredBLPMip: 0 })
@@ -2177,8 +2171,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           url: previewUrl
         })
 
-        // Keep MainLayout loading state in sync even for non-model assets.
         onModelLoaded({ path, Textures: [], Geosets: [], Nodes: [], Sequences: [] } as any)
+        setLoading(false)
         console.timeEnd('[Viewer] FullModelLoad')
         return
       }
@@ -2196,11 +2190,13 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       glRef.current = null
 
       const gl =
-        (canvas.getContext('webgl2', contextAttributes) as WebGL2RenderingContext | null) ||
-        (canvas.getContext('webgl', contextAttributes) as WebGLRenderingContext | null)
+        glRef.current ||
+        (canvasRef.current!.getContext('webgl2', contextAttributes) as WebGL2RenderingContext | null) ||
+        (canvasRef.current!.getContext('webgl', contextAttributes) as WebGLRenderingContext | null)
 
       if (!gl) {
         console.error('[Viewer] WebGL not supported')
+        setLoading(false)
         return
       }
 
@@ -2226,29 +2222,33 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         console.log('[Viewer] Loading model from in-memory data')
         model = inMemoryData
       } else {
-        console.time('[Viewer] FileRead')
-        let buffer: Uint8Array
-        try {
-          buffer = await readFile(path)
-        } catch {
-          // If this is an MPQ-internal path, fall back to MPQ reader.
-          const mpqPayload = await invoke<any>('read_mpq_file', { path }).catch(() => null)
-          const mpqData = toUint8Array(mpqPayload)
-          if (!mpqData || mpqData.byteLength === 0) {
-            throw new Error(`无法读取模型文件: ${path}`)
-          }
-          buffer = mpqData
-        }
-        console.timeEnd('[Viewer] FileRead')
+        setLoadingStatus('正在解析模型...')
+        const buffer = await readPathBytes(path)
 
-        console.time('[Viewer] ParseOnly')
-        if (path.toLowerCase().endsWith('.mdl')) {
-          const text = new TextDecoder().decode(buffer)
-          model = parseMDL(text)
-        } else {
-          model = parseMDX(toTightArrayBuffer(buffer))
-        }
-        console.timeEnd('[Viewer] ParseOnly')
+        // WORKER-BASED PARSING
+        const parseStart = performance.now()
+        model = await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('Model parsing timeout')), 30000)
+          const oldOnMessage = modelWorker.onmessage
+          modelWorker.onmessage = (e: any) => {
+            const { type, payload } = e.data
+            if (type === 'PARSE_SUCCESS') {
+              clearTimeout(timer)
+              modelWorker.onmessage = oldOnMessage
+              resolve(payload.model)
+            } else if (type === 'ERROR') {
+              clearTimeout(timer)
+              modelWorker.onmessage = oldOnMessage
+              reject(new Error(payload.error))
+            }
+          }
+          const tightBuffer = toTightArrayBuffer(buffer)
+          modelWorker.postMessage({
+            type: 'PARSE_MODEL',
+            payload: { buffer: tightBuffer, path }
+          }, [tightBuffer])
+        })
+        console.log(`[Viewer] Async parsing took ${(performance.now() - parseStart).toFixed(1)}ms`)
       }
       console.timeEnd('[Viewer] MDX Parse')
       console.log(`[Viewer] Model Parsing took ${(performance.now() - parseStart).toFixed(1)}ms`)
@@ -2294,17 +2294,13 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       resetCamera()
       console.log(`[Viewer] Renderer Init took ${(performance.now() - rendererStart).toFixed(1)}ms`)
 
-      // Load textures using concurrent loader
-      const textureResults = await loadAllTextures(model, newRenderer, path)
+      setLoadingStatus('加载贴图资源...')
+      // Load textures using concurrent loader with mipmap optimization (max 512px)
+      const textureResults = await loadAllTextures(model, newRenderer, path, modelWorker, 512)
 
       // Track missing textures or unsupported formats for warning UI
       const missingPaths = textureResults
-        .filter(r => {
-          if (!r.loaded) return true;
-          // Even if loaded, check for unsupported formats (non-BLP/TGA)
-          const ext = r.path.split('.').pop()?.toLowerCase();
-          return ext !== 'blp' && ext !== 'tga';
-        })
+        .filter(r => !r.loaded)
         .map(r => r.path)
       useRendererStore.getState().setMissingTextures(missingPaths)
 
@@ -2314,12 +2310,12 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         ; (newRenderer as any).setSequence(0)
       }
 
-      // Set renderer AFTER textures are loaded to avoid race condition
-      console.log('[Viewer] loadModel: All textures loaded, setting renderer')
       setRenderer(newRenderer)
+      setLoading(false)
       console.timeEnd('[Viewer] FullModelLoad')
     } catch (error) {
       console.error('[Viewer] Error loading model:', error)
+      setLoading(false)
     }
   }
 
@@ -2336,6 +2332,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       Sequences: model.Sequences?.length || 0
     })
     console.time('[Viewer] ReloadModel')
+    setLoading(true)
+    setLoadingStatus('同步模型数据...')
     // CRITICAL: Capture old renderer's Geoset geometry BEFORE destroying
     // The TypedArrays (Vertices, Faces, Normals) are lost in store's spread operations
     // NOTE: This logic is currently disabled, see commented block below
@@ -2455,9 +2453,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       resetCamera()
       console.log(`[Viewer] reloadRendererWithData: Renderer Init took ${(performance.now() - rendererStart).toFixed(1)}ms`)
 
-      // Load textures using concurrent loader
+      // Load textures using concurrent loader with mipmap optimization
       console.log('[Viewer] Step 6: Loading textures...')
-      const textureResults = await loadAllTextures(model, newRenderer, safeModelPath)
+      const textureResults = await loadAllTextures(model, newRenderer, safeModelPath, modelWorker, 512)
       console.log('[Viewer] Step 6: Textures loaded')
 
       // Keep missing texture warning in sync after a full reload
@@ -2494,6 +2492,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       setRenderer(newRenderer)
       console.log('[Viewer] ========== FULL RELOAD COMPLETE ==========')
       console.timeEnd('[Viewer] ReloadModel')
+      setLoading(false)
     } catch (error) {
       console.error('[Viewer] ========== FULL RELOAD CRASHED ==========')
       console.error('[Viewer] Error reloading renderer with data:', error)
@@ -2659,7 +2658,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             })
           }
         }
-        if (modelData.TextureAnims) {
+        if (modelData.TextureAnims && Array.isArray(modelData.TextureAnims)) {
           renderer.model.TextureAnims = modelData.TextureAnims
           console.log('[Viewer] Synced TextureAnims:', modelData.TextureAnims.length, 'anims')
           // Debug: log GlobalSeqId for each anim's Translation
@@ -6587,6 +6586,49 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         onCancel={() => setSeparateDialogVisible(false)}
         onConfirm={handleSeparateConfirm}
       />
+
+      {loading && (
+        <div style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.4)',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 10000,
+          backdropFilter: 'blur(2px)',
+          color: 'white',
+          pointerEvents: 'none'
+        }}>
+          <div style={{
+            width: '40px',
+            height: '40px',
+            border: '3px solid rgba(255,255,255,0.2)',
+            borderTop: '3px solid #1890ff',
+            borderRadius: '50%',
+            animation: 'viewer-spin 1s linear infinite',
+            marginBottom: '12px'
+          }} />
+          <div style={{
+            fontSize: '14px',
+            fontWeight: 500,
+            textShadow: '0 1px 4px rgba(0,0,0,0.8)',
+            letterSpacing: '0.05em'
+          }}>
+            {loadingStatus}
+          </div>
+          <style>{`
+            @keyframes viewer-spin {
+              0% { transform: rotate(0deg); }
+              100% { transform: rotate(360deg); }
+            }
+          `}</style>
+        </div>
+      )}
     </div>
   )
 })

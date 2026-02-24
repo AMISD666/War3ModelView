@@ -1597,6 +1597,19 @@ const MainLayout: React.FC = () => {
     const [showSequenceModal, setShowSequenceModal] = useState<boolean>(false)
 
     const [showMaterialModal, setShowMaterialModal] = useState<boolean>(false)
+    // Utility to strip heavy typed arrays from geosets before RPC broadcast
+    const stripGeosetData = (geosets: any[] | undefined) => {
+        if (!geosets || !Array.isArray(geosets)) return [];
+        return geosets.map((g, index) => ({
+            index,
+            MaterialID: g.MaterialID,
+            SelectionGroup: g.SelectionGroup,
+            vertexCount: g.Vertices ? g.Vertices.length / 3 : 0,
+            faceCount: g.Faces ? g.Faces.length / 3 : 0,
+            // Exclude huge arrays: Vertices, Faces, Normals, TVertices, Tangents
+        }));
+    };
+
     const [showGeosetModal, setShowGeosetModal] = useState<boolean>(false)
     const [showGlobalSeqModal, setShowGlobalSeqModal] = useState<boolean>(false)
     const [showModelOptimizeModal, setShowModelOptimizeModal] = useState<boolean>(false)
@@ -1658,6 +1671,7 @@ const MainLayout: React.FC = () => {
 
 
     // Preload standalone tool windows silently in the background
+    // Staggered to avoid blocking the main thread during startup
     useEffect(() => {
         const windows = [
             { id: 'modelOptimize', title: '模型优化', w: 320, h: 380 },
@@ -1666,7 +1680,7 @@ const MainLayout: React.FC = () => {
             { id: 'geosetEditor', title: '多边形编辑器', w: 640, h: 480 },
             { id: 'geosetAnimManager', title: '多边形动画管理器', w: 800, h: 480 },
             { id: 'textureManager', title: '贴图管理器', w: 920, h: 480 },
-            // Preload a pool of 8 keyframe editors to eliminate flickering during property switching
+            { id: 'textureAnimManager', title: '贴图动画管理器', w: 800, h: 480 },
             ...Array.from({ length: 8 }).map((_, i) => ({
                 id: `keyframeEditor_${i}`,
                 title: '关键帧编辑器',
@@ -1675,12 +1689,21 @@ const MainLayout: React.FC = () => {
             }))
         ];
 
-        windows.forEach(win => {
-            windowManager.preloadToolWindow(win.id, win.title, win.w as number || 800, win.h as number || 600).catch(e => {
-                console.error(`Failed to preload ${win.id} window:`, e);
-                // We keep errors silent during preload to not annoy the user on startup
-            });
-        });
+        let timer: any;
+        // Delay preloading start by 1.5s to let the main UI breathe first
+        timer = setTimeout(async () => {
+            for (const win of windows) {
+                try {
+                    await windowManager.preloadToolWindow(win.id, win.title, win.w as number || 800, win.h as number || 600);
+                    // Wait 300ms between each window to keep the event loop responsive
+                    await new Promise(resolve => setTimeout(resolve, 300));
+                } catch (e) {
+                    console.warn(`[MainLayout] Failed to preload ${win.id}:`, e);
+                }
+            }
+        }, 1500);
+
+        return () => clearTimeout(timer);
     }, []);
 
     // Persistent settings
@@ -2258,85 +2281,164 @@ const MainLayout: React.FC = () => {
     );
 
 
+
+    // RPC Server for Texture Anim Manager
+    const getTextureAnimManagerState = useCallback(() => {
+        const _modelData = useModelStore.getState().modelData;
+        const _pickedGeosetIndex = useSelectionStore.getState().pickedGeosetIndex;
+
+        return {
+            textureAnims: _modelData?.TextureAnims || [],
+            globalSequences: _modelData?.GlobalSequences || [],
+            sequences: _modelData?.Sequences || [],
+            materials: _modelData?.Materials || [],
+            geosets: _modelData?.Geosets || [],
+            pickedGeosetIndex: _pickedGeosetIndex
+        };
+    }, []);
+
+    const handleTextureAnimCommand = useCallback((command: string, payload: any) => {
+        if (command === 'EXECUTE_TEXTURE_ANIM_ACTION') {
+            const { action, payload: actionPayload } = payload;
+            if (action === 'ADD' || action === 'DELETE' || action === 'UPDATE' || action === 'TOGGLE_BLOCK' || action === 'SAVE_ALL') {
+                // Robustness: if actionPayload is an object with newAnims, use that, otherwise use it directly
+                const anims = (actionPayload && typeof actionPayload === 'object' && !Array.isArray(actionPayload) && actionPayload.newAnims)
+                    ? actionPayload.newAnims
+                    : actionPayload;
+
+                if (Array.isArray(anims)) {
+                    useModelStore.getState().setTextureAnims(anims);
+                } else {
+                    console.error('[MainLayout] Received invalid TextureAnims payload (not an array):', actionPayload);
+                }
+            }
+        }
+    }, []);
+
+    const { broadcastSync: broadcastTextureAnimManager } = useRpcServer(
+        'textureAnimManager',
+        getTextureAnimManagerState,
+        handleTextureAnimCommand
+    );
+
+
+    // Stable refs for RPC handlers to prevent effect re-mounting
+    const rpcRefs = useRef({
+        broadcastCameraManager, getCameraManagerState,
+        broadcastGeosetEditor, getGeosetManagerState,
+        broadcastGeosetVisibilityTool, getGeosetVisibilityState,
+        broadcastGeosetAnimManager, getGeosetAnimManagerState,
+        broadcastTextureManager, getTextureManagerState,
+        broadcastTextureAnimManager, getTextureAnimManagerState,
+        lastBroadcastTime: 0
+    });
+
+    useEffect(() => {
+        rpcRefs.current = {
+            broadcastCameraManager, getCameraManagerState,
+            broadcastGeosetEditor, getGeosetManagerState,
+            broadcastGeosetVisibilityTool, getGeosetVisibilityState,
+            broadcastGeosetAnimManager, getGeosetAnimManagerState,
+            broadcastTextureManager, getTextureManagerState,
+            broadcastTextureAnimManager, getTextureAnimManagerState,
+            lastBroadcastTime: rpcRefs.current.lastBroadcastTime
+        };
+    });
+
     // Push state to the standalone window whenever the model changes
+    // Optimized with throttling and data stripping
     useEffect(() => {
         let prevModelData = useModelStore.getState().modelData;
         let prevNodes = useModelStore.getState().nodes;
+        let throttleTimer: any = null;
 
-        // Subscribe directly to Zustand to avoid putting heavy objects in React dependency arrays
+        const performBroadcast = (state: any) => {
+            const {
+                broadcastCameraManager,
+                broadcastGeosetEditor,
+                broadcastGeosetVisibilityTool,
+                broadcastGeosetAnimManager,
+                broadcastTextureManager,
+                broadcastTextureAnimManager
+            } = rpcRefs.current;
+
+            const strippedGeosets = stripGeosetData(state.modelData?.Geosets);
+            const modelData = state.modelData;
+
+            // 1. Camera Sync
+            broadcastCameraManager({
+                cameras: state.nodes.filter(n => n.type === NodeType.CAMERA),
+                globalSequences: (modelData?.GlobalSequences || []) as number[]
+            });
+
+            // 2. Geoset Editor Sync (Stripped)
+            broadcastGeosetEditor({
+                geosets: strippedGeosets,
+                materialsCount: modelData?.Materials?.length || 0,
+                selectedIndex: state.selectedGeosetIndex || 0,
+            });
+
+            // 3. Visibility Tool Sync (Stripped)
+            broadcastGeosetVisibilityTool({
+                geosets: strippedGeosets,
+                sequences: modelData?.Sequences || [],
+                geosetsAnims: modelData?.GeosetAnims || [],
+                globalSequences: modelData?.GlobalSequences || [],
+            });
+
+            // 4. Anim Manager Sync (Stripped)
+            broadcastGeosetAnimManager({
+                geosets: strippedGeosets.map(g => ({ index: g.index })),
+                geosetAnims: modelData?.GeosetAnims || [],
+                globalSequences: modelData?.GlobalSequences || [],
+            });
+
+            // 5. Texture Manager Sync (Stripped Geosets)
+            broadcastTextureManager({
+                textures: modelData?.Textures || [],
+                globalSequences: modelData?.GlobalSequences || [],
+                materials: modelData?.Materials || [],
+                geosets: strippedGeosets,
+                modelPath: state.modelPath,
+                pickedGeosetIndex: useSelectionStore.getState().pickedGeosetIndex
+            });
+
+            // 6. Texture Anim Manager Sync (Stripped Geosets)
+            broadcastTextureAnimManager({
+                textureAnims: modelData?.TextureAnims || [],
+                globalSequences: modelData?.GlobalSequences || [],
+                sequences: modelData?.Sequences || [],
+                materials: modelData?.Materials || [],
+                geosets: strippedGeosets,
+                pickedGeosetIndex: useSelectionStore.getState().pickedGeosetIndex
+            });
+        };
+
+        // Subscribe directly to Zustand
         const unsubscribe = useModelStore.subscribe((state) => {
             if (state.nodes !== prevNodes || state.modelData !== prevModelData) {
                 prevNodes = state.nodes;
                 prevModelData = state.modelData;
 
-                // Manually construct the state projection since getCameraManagerState uses React state
-                const cameraState = {
-                    cameras: state.nodes.filter(n => n.type === NodeType.CAMERA),
-                    globalSequences: (state.modelData?.GlobalSequences || []) as number[]
-                };
-                broadcastCameraManager(cameraState);
-
-                const geosetState = {
-                    geosets: (state.modelData?.Geosets || []).map((g: any, index: number) => ({
-                        index,
-                        MaterialID: g.MaterialID,
-                        SelectionGroup: g.SelectionGroup,
-                        vertexCount: g.Vertices ? g.Vertices.length / 3 : 0,
-                        faceCount: g.Faces ? g.Faces.length / 3 : 0
-                    })),
-                    materialsCount: state.modelData?.Materials?.length || 0,
-                    selectedIndex: state.selectedGeosetIndex || 0,
-                };
-                broadcastGeosetEditor(geosetState);
-
-                const visibilityState = {
-                    geosets: (state.modelData?.Geosets || []).map((g: any, index: number) => ({
-                        index,
-                        MaterialID: g.MaterialID,
-                        vertexCount: g.Vertices ? g.Vertices.length / 3 : 0,
-                        faceCount: g.Faces ? g.Faces.length / 3 : 0
-                    })),
-                    sequences: state.modelData?.Sequences || [],
-                    geosetsAnims: state.modelData?.GeosetAnims || [],
-                    globalSequences: state.modelData?.GlobalSequences || [],
-                };
-                broadcastGeosetVisibilityTool(visibilityState);
-
-                const animManagerState = {
-                    geosets: (state.modelData?.Geosets || []).map((_, index: number) => ({
-                        index
-                    })),
-                    geosetAnims: state.modelData?.GeosetAnims || [],
-                    globalSequences: state.modelData?.GlobalSequences || [],
-                };
-                broadcastGeosetAnimManager(animManagerState);
-
-                const textureManagerState = {
-                    textures: state.modelData?.Textures || [],
-                    globalSequences: state.modelData?.GlobalSequences || [],
-                    materials: state.modelData?.Materials || [],
-                    geosets: state.modelData?.Geosets || [],
-                    modelPath: state.modelPath,
-                    pickedGeosetIndex: useSelectionStore.getState().pickedGeosetIndex
-                };
-                broadcastTextureManager(textureManagerState);
+                // Throttle: only broadcast every 100ms
+                if (throttleTimer) return;
+                throttleTimer = setTimeout(() => {
+                    throttleTimer = null;
+                    performBroadcast(useModelStore.getState());
+                }, 100);
             }
         });
 
-        // Initial broadcast
-        broadcastCameraManager(getCameraManagerState());
-        broadcastGeosetEditor(getGeosetManagerState());
-        broadcastGeosetVisibilityTool(getGeosetVisibilityState());
-        broadcastGeosetAnimManager(getGeosetAnimManagerState());
-        broadcastTextureManager(getTextureManagerState());
+        // Initial broadcast after a short delay to ensure preloading started
+        setTimeout(() => {
+            performBroadcast(useModelStore.getState());
+        }, 500);
 
-        return () => unsubscribe();
-    }, [
-        broadcastCameraManager, getCameraManagerState,
-        broadcastGeosetEditor, getGeosetManagerState,
-        broadcastGeosetVisibilityTool, getGeosetVisibilityState,
-        broadcastGeosetAnimManager, getGeosetAnimManagerState
-    ]);
+        return () => {
+            unsubscribe();
+            if (throttleTimer) clearTimeout(throttleTimer);
+        };
+    }, []); // Zero dependencies: stable throughout lifecycle
 
     const handleEditorResizeStart = (e: React.MouseEvent) => {
         setIsResizingEditor(true)
@@ -3006,7 +3108,7 @@ const MainLayout: React.FC = () => {
                 return true;
             }),
             registerShortcutHandler('editor.textureAnimManager', () => {
-                setShowTextureAnimModal(prev => !prev);
+                windowManager.openToolWindow('textureAnimManager', '贴图动画管理器', 800, 480);
                 return true;
             }),
             registerShortcutHandler('editor.materialManager', () => {
@@ -3501,7 +3603,7 @@ const MainLayout: React.FC = () => {
                     } else if (editor === 'texture') {
                         windowManager.openToolWindow('textureManager', '贴图管理器', 920, 480);
                     } else if (editor === 'textureAnim') {
-                        setShowTextureAnimModal(true)
+                        windowManager.openToolWindow('textureAnimManager', '贴图动画管理器', 800, 480);
                     } else if (editor === 'sequence') {
                         setShowSequenceModal(true)
                     } else if (editor === 'camera') {

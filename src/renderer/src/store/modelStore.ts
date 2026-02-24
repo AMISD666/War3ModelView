@@ -1908,6 +1908,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
         });
     },
 
+
+
     removeTextureAnim: (index) => {
         set((state) => {
             if (!state.modelData || !state.modelData.TextureAnims) return {};

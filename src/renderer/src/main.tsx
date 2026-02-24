@@ -8,6 +8,7 @@ import GeosetEditorModal from './components/modals/GeosetEditorModal'
 import GeosetVisibilityToolModal from './components/modals/GeosetVisibilityToolModal'
 import GeosetAnimationModal from './components/modals/GeosetAnimationModal'
 import TextureEditorModal from './components/modals/TextureEditorModal'
+import TextureAnimationManagerModal from './components/modals/TextureAnimationManagerModal'
 import KeyframeEditor from './components/editors/KeyframeEditor'
 import './assets/index.css'
 import { parseMDX } from 'war3-model'
@@ -69,8 +70,6 @@ console.warn = (...args: any[]) => {
     }
     originalWarn(...args);
 };
-
-console.log('war3-model loaded:', parseMDX)
 
 console.log('war3-model loaded:', parseMDX)
 
@@ -137,6 +136,16 @@ if (targetWindow === 'modelOptimize') {
     RootComponent = (
         <React.Suspense fallback={null}>
             <TextureEditorModal
+                visible={true}
+                onClose={() => getCurrentWindow().hide()}
+                isStandalone={true}
+            />
+        </React.Suspense>
+    );
+} else if (targetWindow === 'textureAnimManager') {
+    RootComponent = (
+        <React.Suspense fallback={null}>
+            <TextureAnimationManagerModal
                 visible={true}
                 onClose={() => getCurrentWindow().hide()}
                 isStandalone={true}

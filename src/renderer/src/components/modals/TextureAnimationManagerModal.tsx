@@ -9,36 +9,94 @@ import DynamicField from '../node/DynamicField';
 import { emit, listen } from '@tauri-apps/api/event';
 import { windowManager } from '../../utils/windowManager';
 
+import { useRpcClient } from '../../hooks/useRpc';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { CloseOutlined } from '@ant-design/icons';
+
 interface TextureAnimationManagerModalProps {
     visible: boolean;
     onClose: () => void;
+    isStandalone?: boolean;
 }
 
-const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> = ({ visible, onClose }) => {
+const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> = ({ visible, onClose, isStandalone }) => {
     const { modelData, setTextureAnims } = useModelStore();
+    const rpcClient = useRpcClient<any>('textureAnimManager', {
+        textureAnims: [],
+        globalSequences: [],
+        sequences: [],
+        materials: [],
+        geosets: [],
+        pickedGeosetIndex: null
+    });
+    const rpcState = rpcClient.state;
+
     const [selectedIndex, setSelectedIndex] = useState<number>(-1);
+    const [localAnims, setLocalAnims] = useState<any[]>([]);
 
     // Editor State
     const [editingBlock, setEditingBlock] = useState<{ index: number, field: string } | null>(null);
 
-    const textureAnims = modelData?.TextureAnims || [];
-    const globalSequences = (modelData?.GlobalSequences || []) as unknown as number[];
+    const sourceAnims = isStandalone ? rpcState.textureAnims : modelData?.TextureAnims;
+    const globalSequences = isStandalone ? rpcState.globalSequences : (modelData?.GlobalSequences || []) as unknown as number[];
+    const currentGeosets = isStandalone ? rpcState.geosets : modelData?.Geosets;
+    const currentMaterials = isStandalone ? rpcState.materials : modelData?.Materials;
+    const sequences = isStandalone ? rpcState.sequences : modelData?.Sequences || [];
+
+    useEffect(() => {
+        if (visible && Array.isArray(sourceAnims)) {
+            setLocalAnims([...sourceAnims]);
+        } else if (visible) {
+            setLocalAnims([]);
+        }
+    }, [visible, sourceAnims]);
+
+    const saveToBackend = (action: string, payload: any, newAnims: any[]) => {
+        setLocalAnims(newAnims);
+        if (isStandalone) {
+            rpcClient.emitCommand('EXECUTE_TEXTURE_ANIM_ACTION', { action, payload });
+        } else {
+            // Apply history and state locally
+            if (action === 'ADD') {
+                const oldAnims = [...(modelData?.TextureAnims || [])];
+                useHistoryStore.getState().push({
+                    name: 'Add Texture Animation',
+                    undo: () => setTextureAnims(oldAnims),
+                    redo: () => setTextureAnims(newAnims)
+                });
+            } else if (action === 'DELETE') {
+                const oldAnims = [...(modelData?.TextureAnims || [])];
+                useHistoryStore.getState().push({
+                    name: `Delete Texture Animation`,
+                    undo: () => setTextureAnims(oldAnims),
+                    redo: () => setTextureAnims(newAnims)
+                });
+            } else if (action === 'UPDATE' || action === 'TOGGLE_BLOCK') {
+                const oldAnims = [...(modelData?.TextureAnims || [])];
+                useHistoryStore.getState().push({
+                    name: `Update Texture Animation`,
+                    undo: () => setTextureAnims(oldAnims),
+                    redo: () => setTextureAnims(newAnims)
+                });
+            }
+            setTextureAnims(newAnims);
+        }
+    };
 
     // Subscribe to Ctrl+Click geoset picking - auto-select texture animation
     useEffect(() => {
-        if (!visible || !modelData) return
+        if (!visible) return;
 
         const trySelect = (pickedGeosetIndex: number | null) => {
-            if (pickedGeosetIndex !== null && modelData.Geosets && modelData.Geosets[pickedGeosetIndex]) {
-                const materialId = modelData.Geosets[pickedGeosetIndex].MaterialID
-                if (materialId !== undefined && modelData.Materials && modelData.Materials[materialId]) {
-                    const material = modelData.Materials[materialId]
+            if (pickedGeosetIndex !== null && currentGeosets && currentGeosets[pickedGeosetIndex]) {
+                const materialId = currentGeosets[pickedGeosetIndex].MaterialID
+                if (materialId !== undefined && currentMaterials && currentMaterials[materialId]) {
+                    const material = currentMaterials[materialId]
                     if (material.Layers && material.Layers.length > 0) {
                         const layer = material.Layers[0] as any
                         const animId = layer.TVertexAnimId
-                        if (typeof animId === 'number' && animId >= 0 && animId < textureAnims.length) {
+                        if (typeof animId === 'number' && animId >= 0 && animId < localAnims.length) {
                             setSelectedIndex(animId)
-                            console.log('[TextureAnimManager] Auto-selected animation', animId, 'for geoset', pickedGeosetIndex)
                             return true
                         }
                     }
@@ -48,95 +106,62 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
         }
 
         // Initial check
-        const initialPickedIndex = useSelectionStore.getState().pickedGeosetIndex
+        const initialPickedIndex = isStandalone ? rpcState.pickedGeosetIndex : useSelectionStore.getState().pickedGeosetIndex;
         if (selectedIndex === -1) {
             trySelect(initialPickedIndex)
         }
 
-        // Subscribe
-        let lastPickedIndex: number | null = initialPickedIndex
-        const unsubscribe = useSelectionStore.subscribe((state) => {
-            const pickedGeosetIndex = state.pickedGeosetIndex
-            if (pickedGeosetIndex !== lastPickedIndex) {
-                lastPickedIndex = pickedGeosetIndex
-                trySelect(pickedGeosetIndex)
-            }
-        })
-        return unsubscribe
-    }, [visible, modelData, textureAnims.length])
+        // Subscribe (Standlaone uses RPC state prop)
+        if (isStandalone) {
+            trySelect(rpcState.pickedGeosetIndex);
+        } else {
+            let lastPickedIndex: number | null = initialPickedIndex
+            const unsubscribe = useSelectionStore.subscribe((state) => {
+                const pickedGeosetIndex = state.pickedGeosetIndex
+                if (pickedGeosetIndex !== lastPickedIndex) {
+                    lastPickedIndex = pickedGeosetIndex
+                    trySelect(pickedGeosetIndex)
+                }
+            })
+            return unsubscribe
+        }
+    }, [visible, currentGeosets, currentMaterials, rpcState.pickedGeosetIndex, localAnims.length, isStandalone])
 
     const handleAdd = () => {
-        // Create an empty texture animation - do NOT add empty {} as blocks
-        // The renderer will crash if it finds a block without Keys array
-        const newAnim = {
-            // No Translation, Rotation, or Scaling by default
-            // User can enable them via the checkboxes which will create valid blocks
-        };
-        const newAnims = [...textureAnims, newAnim];
-        const oldAnims = [...textureAnims];
-
-        useHistoryStore.getState().push({
-            name: 'Add Texture Animation',
-            undo: () => setTextureAnims(oldAnims),
-            redo: () => setTextureAnims(newAnims)
-        });
-
-        setTextureAnims(newAnims);
+        const newAnim = {};
+        const newAnims = [...localAnims, newAnim];
+        saveToBackend('ADD', newAnims, newAnims);
         setSelectedIndex(newAnims.length - 1);
     };
 
     const handleDelete = (index: number) => {
-        const newAnims = textureAnims.filter((_, i) => i !== index);
-        const oldAnims = [...textureAnims];
-
-        useHistoryStore.getState().push({
-            name: `Delete Texture Animation ${index}`,
-            undo: () => setTextureAnims(oldAnims),
-            redo: () => setTextureAnims(newAnims)
-        });
-
-        setTextureAnims(newAnims);
+        const newAnims = localAnims.filter((_, i) => i !== index);
+        saveToBackend('DELETE', newAnims, newAnims);
         if (selectedIndex >= newAnims.length) {
             setSelectedIndex(newAnims.length - 1);
         }
     };
 
     const updateAnim = (index: number, updates: any) => {
-        const newAnims = [...textureAnims];
+        const newAnims = [...localAnims];
         newAnims[index] = { ...newAnims[index], ...updates };
-        const oldAnims = [...textureAnims];
-
-        useHistoryStore.getState().push({
-            name: `Update Texture Animation ${index}`,
-            undo: () => setTextureAnims(oldAnims),
-            redo: () => setTextureAnims(newAnims)
-        });
-
-        setTextureAnims(newAnims);
+        saveToBackend('UPDATE', newAnims, newAnims);
     };
 
     const toggleBlock = (index: number, key: string, checked: boolean) => {
-        const currentAnim = textureAnims[index];
-        const newAnims = [...textureAnims];
+        const currentAnim = localAnims[index];
+        const newAnims = [...localAnims];
 
         if (checked) {
-            // Add the block if it doesn't exist
             newAnims[index] = {
                 ...currentAnim,
                 [key]: (currentAnim as any)[key] || { InterpolationType: 0, GlobalSeqId: null, Keys: [] }
             };
         } else {
-            // Remove the block
             const { [key]: _, ...rest } = currentAnim as any;
             newAnims[index] = rest;
         }
-        const oldAnims = [...textureAnims];
-        useHistoryStore.getState().push({
-            name: `Toggle Texture Animation Block ${key}`,
-            undo: () => setTextureAnims(oldAnims),
-            redo: () => setTextureAnims(newAnims)
-        });
-        setTextureAnims(newAnims);
+        saveToBackend('TOGGLE_BLOCK', newAnims, newAnims);
     };
 
     useEffect(() => {
@@ -159,11 +184,11 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
                 if (typeof f === 'function') f();
             });
         };
-    }, [editingBlock, textureAnims]);
+    }, [editingBlock, localAnims]);
 
     const getCurrentEditorData = (index: number, field: string) => {
         if (index < 0) return null;
-        const anim = textureAnims[index] as any;
+        const anim = localAnims[index] as any;
         return anim ? anim[field] : null;
     };
 
@@ -175,14 +200,14 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
     const openEditor = (index: number, field: string, label: string) => {
         setEditingBlock({ index, field });
 
-        const payload = {
+        const payload: any = {
             callerId: 'TextureAnimationManagerModal',
             initialData: getCurrentEditorData(index, field),
             title: `编辑 ${field}`,
             vectorSize: getVectorSize(field),
             globalSequences: globalSequences,
             fieldName: 'TextureAnimation',
-            sequences: modelData?.Sequences || []
+            sequences: sequences
         };
 
         const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
@@ -233,35 +258,46 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
         );
     };
 
+    const Wrapper = isStandalone ? 'div' : DraggableModal as any;
+    const wrapperProps = isStandalone
+        ? { style: { display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: '#252525', overflow: 'hidden' } }
+        : {
+            title: "纹理动画管理器",
+            open: visible,
+            onCancel: onClose,
+            width: 800,
+            footer: null,
+            wrapClassName: "dark-theme-modal"
+        };
+
     return (
-        <>
-            <DraggableModal
-                title="纹理动画管理器"
-                open={visible}
-                onCancel={onClose}
-                width={800}
-                footer={null}
-                wrapClassName="dark-theme-modal"
-            >
-                <div style={{ height: 500, background: '#222', border: '1px solid #444' }}>
-                    <MasterDetailLayout
-                        items={textureAnims}
-                        selectedIndex={selectedIndex}
-                        onSelect={setSelectedIndex}
-                        renderListItem={renderListItem}
-                        renderDetail={renderDetail}
-                        onAdd={handleAdd}
-                        onDelete={handleDelete}
-                        listTitle="动画列表"
-                        detailTitle="动画详情"
-                        listWidth={200}
-                    />
+        <Wrapper {...wrapperProps}>
+            {isStandalone && (
+                <div data-tauri-drag-region style={{ height: 32, flexShrink: 0, backgroundColor: '#333333', borderBottom: '1px solid #4a4a4a', display: 'flex', alignItems: 'center', padding: '0 16px', justifyContent: 'space-between', userSelect: 'none' }}>
+                    <span data-tauri-drag-region style={{ color: '#e8e8e8', fontSize: 13, fontWeight: 'bold' }}>纹理动画管理器</span>
+                    <Button type="text" size="small" icon={<CloseOutlined />} onClick={() => getCurrentWindow().hide()} style={{ color: '#b0b0b0' }} />
                 </div>
+            )}
+            <div style={{ flex: 1, background: '#222', border: isStandalone ? 'none' : '1px solid #444', overflow: 'hidden', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                <MasterDetailLayout
+                    items={localAnims}
+                    selectedIndex={selectedIndex}
+                    onSelect={setSelectedIndex}
+                    renderListItem={renderListItem}
+                    renderDetail={renderDetail}
+                    onAdd={handleAdd}
+                    onDelete={handleDelete}
+                    listTitle="动画列表"
+                    detailTitle="动画详情"
+                    listWidth={200}
+                />
+            </div>
+            {!isStandalone && (
                 <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
                     <Button onClick={onClose}>关闭</Button>
                 </div>
-            </DraggableModal>
-        </>
+            )}
+        </Wrapper>
     );
 };
 
