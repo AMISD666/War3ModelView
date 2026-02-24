@@ -38,7 +38,7 @@ class WindowManager {
         console.log(`[WindowManager] Creating new window: ${windowId} (${title})`);
         try {
             const win = new WebviewWindow(windowId, {
-                url: `index.html?window=${windowId}`,
+                url: `/?window=${windowId}`,
                 title: title,
                 width: width,
                 height: height,
@@ -114,6 +114,34 @@ class WindowManager {
         if (win) {
             await win.hide();
         }
+    }
+
+    /**
+     * Window Pooling Logic for Keyframe Editor
+     * Maps a field name to a stable window instance ID from the pool.
+     */
+    private keyframeMap: Map<string, string> = new Map();
+    private nextPoolIndex = 0;
+    private readonly POOL_SIZE = 8;
+
+    getKeyframeWindowId(fieldName: string): string {
+        // Safety guard: if fieldName is missing, default to a generic key
+        const safeFieldName = fieldName || 'default';
+
+        // Normalize field name to stay consistent (case-insensitive)
+        const key = safeFieldName.toLowerCase().trim();
+
+        if (this.keyframeMap.has(key)) {
+            return this.keyframeMap.get(key)!;
+        }
+
+        // Assign to a new window in the pool round-robin style
+        const windowId = `keyframeEditor_${this.nextPoolIndex}`;
+        this.keyframeMap.set(key, windowId);
+
+        this.nextPoolIndex = (this.nextPoolIndex + 1) % this.POOL_SIZE;
+        console.log(`[WindowManager] Mapped field "${safeFieldName}" to pooled window "${windowId}"`);
+        return windowId;
     }
 }
 

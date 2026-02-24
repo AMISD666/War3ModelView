@@ -5,7 +5,8 @@ import { DraggableModal } from '../DraggableModal'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useHistoryStore } from '../../store/historyStore'
-import KeyframeEditor from '../editors/KeyframeEditor'
+import { emit, listen } from '@tauri-apps/api/event'
+import { windowManager } from '../../utils/windowManager'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useRpcClient } from '../../hooks/useRpc'
 
@@ -188,7 +189,6 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
     const [sequenceFilter, setSequenceFilter] = useState('')
     const [showHighlightedOnly, setShowHighlightedOnly] = useState(false)
 
-    const [isKeyframeEditorOpen, setIsKeyframeEditorOpen] = useState(false)
     const [editingGeosetId, setEditingGeosetId] = useState<number | null>(null)
 
     const geosetIds = useMemo(() => {
@@ -384,6 +384,37 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
         setHasChanges(true)
     }
 
+    useEffect(() => {
+        const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
+            const payload = event.payload as any;
+            if (payload && payload.callerId === 'GeosetVisibilityToolModal') {
+                if (editingGeosetId === null) return;
+
+                const nextAnims = [...localAnims]
+                let animIndex = getAnimIndexByGeosetId(nextAnims, editingGeosetId)
+                if (animIndex < 0) {
+                    nextAnims.push(createDefaultGeosetAnim(editingGeosetId))
+                    animIndex = nextAnims.length - 1
+                }
+
+                nextAnims[animIndex] = {
+                    ...nextAnims[animIndex],
+                    Alpha: {
+                        ...payload.data,
+                        Keys: ensureDefaultVisibleKey(normalizeAlphaKeys(payload.data?.Keys || []))
+                    }
+                }
+                setLocalAnims(nextAnims)
+                setHasChanges(true)
+                setEditingGeosetId(null)
+            }
+        });
+
+        return () => {
+            unlisten.then(f => f());
+        };
+    }, [editingGeosetId, localAnims]);
+
     const openAlphaTextEditor = (sequence: SequenceItem) => {
         if (selectedGeosetIds.length === 0) {
             message.warning('请先在左侧选择至少一个多边形组')
@@ -395,36 +426,46 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
         setSequence(sequence.index)
         setFrame(sequence.start)
         setEditingGeosetId(targetGeosetId)
-        setIsKeyframeEditorOpen(true)
 
         if (selectedGeosetIds.length > 1) {
             message.info('已打开第一个选中多边形组的透明度动态文本编辑器')
         }
-    }
 
-    const handleAlphaEditorSave = (animVector: any) => {
-        if (editingGeosetId === null) {
-            setIsKeyframeEditorOpen(false)
-            return
-        }
-
+        // We must delay the IPC call slightly so that ensureEditableAlphaTrack has time to update localAnims state
+        // and editingAlphaData (which depends on localAnims) gets the new default track.
+        // Actually, since we're generating the default track right now, let's just generate the payload directly:
         const nextAnims = [...localAnims]
-        let animIndex = getAnimIndexByGeosetId(nextAnims, editingGeosetId)
-        if (animIndex < 0) {
-            nextAnims.push(createDefaultGeosetAnim(editingGeosetId))
-            animIndex = nextAnims.length - 1
-        }
+        let animIndex = getAnimIndexByGeosetId(nextAnims, targetGeosetId)
 
-        nextAnims[animIndex] = {
-            ...nextAnims[animIndex],
-            Alpha: {
-                ...animVector,
-                Keys: ensureDefaultVisibleKey(normalizeAlphaKeys(animVector?.Keys || []))
+        let initialData = null
+        if (animIndex >= 0 && isAnimVector(nextAnims[animIndex].Alpha)) {
+            initialData = nextAnims[animIndex].Alpha
+        } else {
+            // If missing, construct default track explicitly (as ensureEditableAlphaTrack will do)
+            initialData = {
+                LineType: 1,
+                GlobalSeqId: null,
+                Keys: ensureDefaultVisibleKey([{ Frame: sequence.start, Vector: [1], InTan: [0], OutTan: [0] }])
             }
         }
-        setLocalAnims(nextAnims)
-        setHasChanges(true)
-        setIsKeyframeEditorOpen(false)
+
+        const payload = {
+            callerId: 'GeosetVisibilityToolModal',
+            initialData,
+            title: "透明度动态txt编辑器",
+            vectorSize: 1,
+            globalSequences: (modelData?.GlobalSequences || [])
+                .map((g: any) => (typeof g === 'number' ? g : g?.Duration))
+                .filter((v: any) => typeof v === 'number'),
+            sequences: modelData?.Sequences || [],
+            fieldName: 'Alpha'
+        };
+
+        const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
+        payload.targetWindowId = windowId;
+
+        emit('IPC_KEYFRAME_INIT', payload);
+        windowManager.openToolWindow(windowId, payload.title, 600, 480);
     }
 
     const handleGeosetClick = (geosetId: number, event: React.MouseEvent<HTMLElement>) => {
@@ -643,16 +684,6 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
                         {innerContent}
                     </div>
                 </div>
-                <KeyframeEditor
-                    visible={isKeyframeEditorOpen}
-                    onCancel={() => setIsKeyframeEditorOpen(false)}
-                    onOk={handleAlphaEditorSave}
-                    initialData={editingAlphaData}
-                    title="透明度动态txt编辑器"
-                    vectorSize={1}
-                    globalSequences={globalSequences}
-                    fieldName="Alpha"
-                />
             </>
         )
     }
@@ -678,17 +709,6 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
             >
                 {innerContent}
             </DraggableModal>
-
-            <KeyframeEditor
-                visible={isKeyframeEditorOpen}
-                onCancel={() => setIsKeyframeEditorOpen(false)}
-                onOk={handleAlphaEditorSave}
-                initialData={editingAlphaData}
-                title="透明度动态txt编辑器"
-                vectorSize={1}
-                globalSequences={globalSequences}
-                fieldName="Alpha"
-            />
         </>
     )
 }

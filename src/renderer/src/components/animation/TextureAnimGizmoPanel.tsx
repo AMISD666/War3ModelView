@@ -13,8 +13,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useHistoryStore } from '../../store/historyStore'
-import { decodeTextureData, getTextureCandidatePaths, normalizePath } from '../viewer/textureLoader'
-import KeyframeEditor from '../editors/KeyframeEditor'
+import { emit, listen } from '@tauri-apps/api/event'
+import { windowManager } from '../../utils/windowManager'
 import RightFloatingPanelShell from './RightFloatingPanelShell'
 
 const { Text } = Typography
@@ -191,7 +191,6 @@ const TextureAnimGizmoPanel: React.FC = () => {
     const [activeAxis, setActiveAxis] = useState<GizmoAxis>(null)
     const [liveDelta, setLiveDelta] = useState({ x: 0, y: 0 })
     const [dragHud, setDragHud] = useState<DragHud | null>(null)
-    const [trackEditorVisible, setTrackEditorVisible] = useState(false)
     const [panelCollapsed, setPanelCollapsed] = useState(false)
     const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
@@ -867,8 +866,25 @@ const TextureAnimGizmoPanel: React.FC = () => {
 
     const openTrackEditorFromGlobalSeq = useCallback(() => {
         if (!ensureSelection()) return
-        setTrackEditorVisible(true)
-    }, [ensureSelection])
+
+        const payload = {
+            callerId: 'TextureAnimGizmoPanel',
+            initialData: currentTrackEditorData,
+            title: `编辑关键帧: ${activeTrackMeta.trackName}`,
+            vectorSize: trackEditorVectorSize,
+            globalSequences: Array.isArray((modelData as any)?.GlobalSequences)
+                ? (modelData as any).GlobalSequences.map((g: any) => (typeof g === 'number' ? g : g?.Duration)).filter((v: any) => typeof v === 'number')
+                : [],
+            sequences: (modelData as any)?.Sequences || [],
+            fieldName: activeTrackMeta.trackName
+        };
+
+        const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
+        payload.targetWindowId = windowId;
+
+        emit('IPC_KEYFRAME_INIT', payload);
+        windowManager.openToolWindow(windowId, payload.title, 600, 480);
+    }, [ensureSelection, currentTrackEditorData, activeTrackMeta, trackEditorVectorSize, modelData])
 
     const handleSaveTrackEditor = useCallback((animVector: any) => {
         if (
@@ -907,8 +923,20 @@ const TextureAnimGizmoPanel: React.FC = () => {
             redo: () => setTextureAnims(deepClone(newAnims))
         })
         setTextureAnims(newAnims)
-        setTrackEditorVisible(false)
     }, [selectedTextureAnimIndex, textureAnims, activeTrackMeta.trackName, activeTrackMeta.modeLabel, setTextureAnims])
+
+    useEffect(() => {
+        const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
+            const payload = event.payload as any;
+            if (payload && payload.callerId === 'TextureAnimGizmoPanel') {
+                handleSaveTrackEditor(payload.data);
+            }
+        });
+
+        return () => {
+            unlisten.then(f => f());
+        };
+    }, [handleSaveTrackEditor]);
 
     const inputX = useMemo(() => {
         if (gizmoMode === 'translate') return form.tx
@@ -1055,7 +1083,7 @@ const TextureAnimGizmoPanel: React.FC = () => {
                         />
                         <Button
                             size="small"
-                            onClick={() => setTrackEditorVisible(true)}
+                            onClick={openTrackEditorFromGlobalSeq}
                             style={{ background: '#333', borderColor: '#444', color: '#ddd', fontSize: 11 }}
                         >
                             TXT
@@ -1063,17 +1091,6 @@ const TextureAnimGizmoPanel: React.FC = () => {
                     </div>
                 </div>
             </div>
-
-            <KeyframeEditor
-                visible={trackEditorVisible}
-                onCancel={() => setTrackEditorVisible(false)}
-                onOk={handleSaveTrackEditor}
-                initialData={currentTrackEditorData}
-                title={`${activeTrackMeta.modeLabel}动态数据编辑器`}
-                vectorSize={trackEditorVectorSize}
-                globalSequences={Array.isArray((modelData as any)?.GlobalSequences) ? (modelData as any).GlobalSequences : []}
-                fieldName={activeTrackMeta.trackName}
-            />
         </RightFloatingPanelShell>
     )
 }

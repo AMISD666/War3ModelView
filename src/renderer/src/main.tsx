@@ -6,6 +6,8 @@ import ModelOptimizeModal from './components/modals/ModelOptimizeModal'
 import CameraManagerModal from './components/modals/CameraManagerModal'
 import GeosetEditorModal from './components/modals/GeosetEditorModal'
 import GeosetVisibilityToolModal from './components/modals/GeosetVisibilityToolModal'
+import GeosetAnimationModal from './components/modals/GeosetAnimationModal'
+import KeyframeEditor from './components/editors/KeyframeEditor'
 import './assets/index.css'
 import { parseMDX } from 'war3-model'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -116,6 +118,28 @@ if (targetWindow === 'modelOptimize') {
             <GeosetVisibilityToolModal
                 visible={true}
                 onClose={() => getCurrentWindow().hide()}
+                isStandalone={true}
+            />
+        </React.Suspense>
+    );
+} else if (targetWindow === 'geosetAnimManager') {
+    RootComponent = (
+        <React.Suspense fallback={null}>
+            <GeosetAnimationModal
+                visible={true}
+                onClose={() => getCurrentWindow().hide()}
+                isStandalone={true}
+            />
+        </React.Suspense>
+    );
+} else if (targetWindow?.startsWith('keyframeEditor')) {
+    RootComponent = (
+        <React.Suspense fallback={null}>
+            <KeyframeEditor
+                visible={true}
+                onCancel={() => getCurrentWindow().hide()}
+                onOk={() => { }}
+                initialData={null}
                 isStandalone={true}
             />
         </React.Suspense>

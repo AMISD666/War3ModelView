@@ -1662,7 +1662,15 @@ const MainLayout: React.FC = () => {
             { id: 'modelOptimize', title: '模型优化', w: 320, h: 380 },
             { id: 'cameraManager', title: '相机管理器', w: 700, h: 520 },
             { id: 'geosetVisibilityTool', title: '多边形动作显隐工具', w: 980, h: 560 },
-            { id: 'geosetEditor', title: '多边形编辑器', w: 640, h: 480 }
+            { id: 'geosetEditor', title: '多边形编辑器', w: 640, h: 480 },
+            { id: 'geosetAnimManager', title: '多边形动画管理器', w: 800, h: 480 },
+            // Preload a pool of 8 keyframe editors to eliminate flickering during property switching
+            ...Array.from({ length: 8 }).map((_, i) => ({
+                id: `keyframeEditor_${i}`,
+                title: '关键帧编辑器',
+                w: 600,
+                h: 480
+            }))
         ];
 
         windows.forEach(win => {
@@ -2180,6 +2188,36 @@ const MainLayout: React.FC = () => {
         handleGeosetVisibilityCommand
     );
 
+    // RPC Server for Geoset Anim Manager
+    const getGeosetAnimManagerState = useCallback(() => {
+        const _modelData = useModelStore.getState().modelData;
+        const geosets = (_modelData?.Geosets || []).map((_, index: number) => ({
+            index
+        }));
+
+        return {
+            geosets,
+            geosetAnims: _modelData?.GeosetAnims || [],
+            globalSequences: _modelData?.GlobalSequences || [],
+        };
+    }, []);
+
+    const handleGeosetAnimCommand = useCallback((command: string, payload: any) => {
+        if (command === 'EXECUTE_ANIM_ACTION') {
+            const { action, payload: actionPayload } = payload;
+            if (action === 'UPDATE_GEOSET_ANIMS') {
+                useModelStore.getState().setGeosetAnims(actionPayload);
+            }
+        }
+    }, []);
+
+    const { broadcastSync: broadcastGeosetAnimManager } = useRpcServer(
+        'geosetAnimManager',
+        getGeosetAnimManagerState,
+        handleGeosetAnimCommand
+    );
+
+
     // Push state to the standalone window whenever the model changes
     useEffect(() => {
         let prevModelData = useModelStore.getState().modelData;
@@ -2223,6 +2261,15 @@ const MainLayout: React.FC = () => {
                     globalSequences: state.modelData?.GlobalSequences || [],
                 };
                 broadcastGeosetVisibilityTool(visibilityState);
+
+                const animManagerState = {
+                    geosets: (state.modelData?.Geosets || []).map((_, index: number) => ({
+                        index
+                    })),
+                    geosetAnims: state.modelData?.GeosetAnims || [],
+                    globalSequences: state.modelData?.GlobalSequences || [],
+                };
+                broadcastGeosetAnimManager(animManagerState);
             }
         });
 
@@ -2230,12 +2277,14 @@ const MainLayout: React.FC = () => {
         broadcastCameraManager(getCameraManagerState());
         broadcastGeosetEditor(getGeosetManagerState());
         broadcastGeosetVisibilityTool(getGeosetVisibilityState());
+        broadcastGeosetAnimManager(getGeosetAnimManagerState());
 
         return () => unsubscribe();
     }, [
         broadcastCameraManager, getCameraManagerState,
         broadcastGeosetEditor, getGeosetManagerState,
-        broadcastGeosetVisibilityTool, getGeosetVisibilityState
+        broadcastGeosetVisibilityTool, getGeosetVisibilityState,
+        broadcastGeosetAnimManager, getGeosetAnimManagerState
     ]);
 
     const handleEditorResizeStart = (e: React.MouseEvent) => {
@@ -3396,8 +3445,6 @@ const MainLayout: React.FC = () => {
                         toggleNodeManager()
                     } else if (editor === 'modelInfo') {
                         toggleModelInfo()
-                    } else if (editor === 'geosetAnim') {
-                        setShowGeosetAnimModal(true)
                     } else if (editor === 'geosetVisibilityTool') {
                         windowManager.openToolWindow('geosetVisibilityTool', '多边形动作显隐工具', 980, 560);
                     } else if (editor === 'texture') {
@@ -3413,6 +3460,8 @@ const MainLayout: React.FC = () => {
                         setShowMaterialModal(true)
                     } else if (editor === 'geoset') {
                         windowManager.openToolWindow('geosetEditor', '多边形编辑器', 640, 480);
+                    } else if (editor === 'geosetAnim') {
+                        windowManager.openToolWindow('geosetAnimManager', '多边形动画管理器', 800, 480);
                     } else if (editor === 'globalSequence') {
                         setShowGlobalSeqModal(true)
                     } else if (editor === 'modelOptimize') {
@@ -3640,10 +3689,6 @@ const MainLayout: React.FC = () => {
                 </div>
             )}
 
-            <GeosetAnimationModal
-                visible={showGeosetAnimModal}
-                onClose={() => setShowGeosetAnimModal(false)}
-            />
             <TextureEditorModal
                 visible={showTextureModal}
                 onClose={() => setShowTextureModal(false)}

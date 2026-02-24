@@ -6,7 +6,8 @@ import { useHistoryStore } from '../../store/historyStore';
 import { useSelectionStore } from '../../store/selectionStore';
 import { DraggableModal } from '../DraggableModal';
 import DynamicField from '../node/DynamicField';
-import KeyframeEditor from '../editors/KeyframeEditor';
+import { emit, listen } from '@tauri-apps/api/event';
+import { windowManager } from '../../utils/windowManager';
 
 interface TextureAnimationManagerModalProps {
     visible: boolean;
@@ -18,7 +19,6 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
     const [selectedIndex, setSelectedIndex] = useState<number>(-1);
 
     // Editor State
-    const [editorVisible, setEditorVisible] = useState(false);
     const [editingBlock, setEditingBlock] = useState<{ index: number, field: string } | null>(null);
 
     const textureAnims = modelData?.TextureAnims || [];
@@ -139,18 +139,52 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
         setTextureAnims(newAnims);
     };
 
-    const openEditor = (index: number, field: string, _label: string) => {
-        setEditingBlock({ index, field });
-        setEditorVisible(true);
+    useEffect(() => {
+        const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
+            const payload = event.payload as any;
+            if (payload && payload.callerId === 'TextureAnimationManagerModal') {
+                if (editingBlock) {
+                    const { index, field } = editingBlock;
+                    updateAnim(index, { [field]: payload.data });
+                    setEditingBlock(null);
+                }
+            }
+        });
+
+        return () => {
+            unlisten.then(f => f());
+        };
+    }, [editingBlock, textureAnims]);
+
+    const getCurrentEditorData = (index: number, field: string) => {
+        if (index < 0) return null;
+        const anim = textureAnims[index] as any;
+        return anim ? anim[field] : null;
     };
 
-    const handleEditorSave = (result: any) => {
-        if (editingBlock) {
-            const { index, field } = editingBlock;
-            updateAnim(index, { [field]: result });
-            setEditorVisible(false);
-            setEditingBlock(null);
-        }
+    const getVectorSize = (field: string) => {
+        if (field === 'Rotation') return 4;
+        return 3;
+    };
+
+    const openEditor = (index: number, field: string, label: string) => {
+        setEditingBlock({ index, field });
+
+        const payload = {
+            callerId: 'TextureAnimationManagerModal',
+            initialData: getCurrentEditorData(index, field),
+            title: `编辑 ${field}`,
+            vectorSize: getVectorSize(field),
+            globalSequences: globalSequences,
+            fieldName: 'TextureAnimation',
+            sequences: modelData?.Sequences || []
+        };
+
+        const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
+        payload.targetWindowId = windowId;
+
+        emit('IPC_KEYFRAME_INIT', payload);
+        windowManager.openToolWindow(windowId, payload.title, 600, 480);
     };
 
     const renderListItem = (_item: any, index: number, isSelected: boolean) => (
@@ -194,18 +228,6 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
         );
     };
 
-    const getCurrentEditorData = () => {
-        if (!editingBlock || selectedIndex < 0) return null;
-        const anim = textureAnims[editingBlock.index] as any;
-        return anim ? anim[editingBlock.field] : null;
-    };
-
-    const getVectorSize = () => {
-        if (!editingBlock) return 3;
-        if (editingBlock.field === 'Rotation') return 4; // Rotations are usually quaternions (4)
-        return 3; // Translation and Scaling are vector3
-    };
-
     return (
         <>
             <DraggableModal
@@ -234,18 +256,6 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
                     <Button onClick={onClose}>关闭</Button>
                 </div>
             </DraggableModal>
-
-            {editorVisible && (
-                <KeyframeEditor
-                    visible={editorVisible}
-                    onCancel={() => setEditorVisible(false)}
-                    onOk={handleEditorSave}
-                    initialData={getCurrentEditorData()}
-                    title={`编辑 ${editingBlock?.field}`}
-                    vectorSize={getVectorSize()}
-                    globalSequences={globalSequences}
-                />
-            )}
         </>
     );
 };

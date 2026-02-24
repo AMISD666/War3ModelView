@@ -7,7 +7,7 @@ import { useRendererStore } from '../../store/rendererStore'
 import { useHistoryStore } from '../../store/historyStore'
 import { SetNodeParentCommand } from '../../commands/SetNodeParentCommand'
 import { useCommandManager } from '../../utils/CommandManager'
-import KeyframeEditor from '../editors/KeyframeEditor'
+
 
 const { Text } = Typography
 

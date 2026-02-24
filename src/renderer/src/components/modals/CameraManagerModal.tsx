@@ -6,12 +6,9 @@ import { MasterDetailLayout } from '../MasterDetailLayout';
 import { useModelStore } from '../../store/modelStore';
 import { DraggableModal } from '../DraggableModal';
 import { useHistoryStore } from '../../store/historyStore';
-
-import KeyframeEditor from '../editors/KeyframeEditor';
 import { CameraNode, NodeType } from '../../types/node';
-
-
-
+import { emit, listen } from '@tauri-apps/api/event';
+import { windowManager } from '../../utils/windowManager';
 import { useRpcClient } from '../../hooks/useRpc';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 
@@ -28,7 +25,6 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
     const [selectedIndex, setSelectedIndex] = useState<number>(-1);
 
     // Editor State
-    const [editorVisible, setEditorVisible] = useState(false);
     const [editingBlock, setEditingBlock] = useState<{ index: number, field: string } | null>(null);
 
     // RPC Sync for standalone mode
@@ -134,18 +130,46 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
         }
     };
 
+    React.useEffect(() => {
+        const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
+            const payload = event.payload as any;
+            if (payload && payload.callerId === 'CameraManagerModal') {
+                if (editingBlock) {
+                    const { index, field } = editingBlock;
+                    updateCamera(index, { [field]: payload.data });
+                    setEditingBlock(null);
+                }
+            }
+        });
+
+        return () => {
+            unlisten.then(f => f());
+        };
+    }, [editingBlock, cameras]);
+
     const openEditor = (index: number, field: string, _label: string) => {
         setEditingBlock({ index, field });
-        setEditorVisible(true);
-    };
 
-    const handleEditorSave = (result: any) => {
-        if (editingBlock) {
-            const { index, field } = editingBlock;
-            updateCamera(index, { [field]: result });
-            setEditorVisible(false);
-            setEditingBlock(null);
-        }
+        const cam = cameras[index];
+        const initialData = cam ? (cam as any)[field] : null;
+
+        const payload = {
+            callerId: 'CameraManagerModal',
+            initialData,
+            title: `编辑 ${field}`,
+            vectorSize: 3,
+            fieldName: field,
+            globalSequences: (modelData?.GlobalSequences || [])
+                .map((g: any) => (typeof g === 'number' ? g : g?.Duration))
+                .filter((v: any) => typeof v === 'number'),
+            sequences: modelData?.Sequences || []
+        };
+
+        const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
+        payload.targetWindowId = windowId;
+
+        emit('IPC_KEYFRAME_INIT', payload);
+        windowManager.openToolWindow(windowId, payload.title, 600, 480);
     };
 
     const renderListItem = (item: any, index: number, isSelected: boolean) => (
@@ -298,13 +322,6 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
         );
     };
 
-    const getCurrentEditorData = () => {
-        if (!editingBlock || selectedIndex < 0) return null;
-        const cam = cameras[editingBlock.index];
-        if (!cam) return null;
-        return (cam as any)[editingBlock.field];
-    };
-
     const extraButtons = (
         <Space size={4}>
             <Tooltip title="从当前视角新建">
@@ -406,17 +423,6 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
                     {innerContent}
                 </div>
 
-                {editorVisible && (
-                    <KeyframeEditor
-                        visible={editorVisible}
-                        onCancel={() => setEditorVisible(false)}
-                        onOk={handleEditorSave}
-                        initialData={getCurrentEditorData()}
-                        title={`编辑 ${editingBlock?.field}`}
-                        vectorSize={3}
-                        globalSequences={globalSequences}
-                    />
-                )}
             </div>
         );
     }
@@ -433,19 +439,6 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
             >
                 {innerContent}
             </DraggableModal >
-
-            {editorVisible && (
-                <KeyframeEditor
-                    visible={editorVisible}
-                    onCancel={() => setEditorVisible(false)}
-                    onOk={handleEditorSave}
-                    initialData={getCurrentEditorData()}
-                    title={`编辑 ${editingBlock?.field}`}
-                    vectorSize={3}
-                    globalSequences={globalSequences}
-                />
-            )
-            }
         </>
     );
 };

@@ -7,7 +7,8 @@ import React, { useEffect, useState } from 'react'
 import { Form, Input, Select, Checkbox, Row, Col, Card, Button } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { DraggableModal } from '../DraggableModal'
-import KeyframeEditor from '../editors/KeyframeEditor'
+import { emit, listen } from '@tauri-apps/api/event'
+import { windowManager } from '../../utils/windowManager'
 import type { ModelNode } from '../../types/node'
 import { useModelStore } from '../../store/modelStore'
 import { useHistoryStore } from '../../store/historyStore'
@@ -38,10 +39,6 @@ const NodeDialog: React.FC<NodeDialogProps> = ({ visible, nodeId, onClose }) => 
     const [scalingAnim, setScalingAnim] = useState<any>(null)
 
     // Keyframe editor state
-    const [keyframeEditorVisible, setKeyframeEditorVisible] = useState(false)
-    const [keyframeEditorTitle, setKeyframeEditorTitle] = useState('')
-    const [keyframeEditorData, setKeyframeEditorData] = useState<any>(null)
-    const [keyframeEditorVectorSize, setKeyframeEditorVectorSize] = useState(3)
     const [currentEditingProp, setCurrentEditingProp] = useState<string>('')
 
     // 当节点改变时，更新表单值
@@ -128,10 +125,23 @@ const NodeDialog: React.FC<NodeDialogProps> = ({ visible, nodeId, onClose }) => 
     }
 
     // Keyframe editor handlers
+    useEffect(() => {
+        const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
+            const payload = event.payload as any;
+            if (payload && payload.callerId === 'NodeDialog') {
+                if (currentEditingProp === 'Translation') setTranslationAnim(payload.data)
+                else if (currentEditingProp === 'Rotation') setRotationAnim(payload.data)
+                else if (currentEditingProp === 'Scaling') setScalingAnim(payload.data)
+            }
+        });
+
+        return () => {
+            unlisten.then(f => f());
+        };
+    }, [currentEditingProp]);
+
     const handleOpenKeyframeEditor = (propName: string, title: string, vectorSize: number) => {
         setCurrentEditingProp(propName)
-        setKeyframeEditorTitle(title)
-        setKeyframeEditorVectorSize(vectorSize)
 
         // Get current animation data
         let data = null
@@ -139,15 +149,21 @@ const NodeDialog: React.FC<NodeDialogProps> = ({ visible, nodeId, onClose }) => 
         else if (propName === 'Rotation') data = rotationAnim
         else if (propName === 'Scaling') data = scalingAnim
 
-        setKeyframeEditorData(data)
-        setKeyframeEditorVisible(true)
-    }
+        const payload = {
+            callerId: 'NodeDialog',
+            initialData: data,
+            title: `编辑: ${title}`,
+            vectorSize,
+            fieldName: propName,
+            sequences: modelData?.Sequences || [],
+            globalSequences: globalSequences
+        };
 
-    const handleKeyframeSave = (animVector: any) => {
-        if (currentEditingProp === 'Translation') setTranslationAnim(animVector)
-        else if (currentEditingProp === 'Rotation') setRotationAnim(animVector)
-        else if (currentEditingProp === 'Scaling') setScalingAnim(animVector)
-        setKeyframeEditorVisible(false)
+        const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
+        payload.targetWindowId = windowId;
+
+        emit('IPC_KEYFRAME_INIT', payload);
+        windowManager.openToolWindow(windowId, payload.title, 600, 480);
     }
 
     const handleDynamicToggle = (propName: string, checked: boolean) => {
@@ -375,17 +391,6 @@ const NodeDialog: React.FC<NodeDialogProps> = ({ visible, nodeId, onClose }) => 
                     </Col>
                 </Row>
             </Form>
-
-            {/* Keyframe Editor Modal */}
-            <KeyframeEditor
-                visible={keyframeEditorVisible}
-                onCancel={() => setKeyframeEditorVisible(false)}
-                onOk={handleKeyframeSave}
-                initialData={keyframeEditorData}
-                title={keyframeEditorTitle}
-                vectorSize={keyframeEditorVectorSize}
-                globalSequences={globalSequences}
-            />
         </DraggableModal>
     )
 }

@@ -4,7 +4,8 @@ import { SmartInputNumber as InputNumber } from '@renderer/components/common/Sma
 import { useSelectionStore } from '../../store/selectionStore'
 import { useModelStore } from '../../store/modelStore'
 import { useHistoryStore } from '../../store/historyStore'
-import KeyframeEditor from '../editors/KeyframeEditor'
+import { emit, listen } from '@tauri-apps/api/event'
+import { windowManager } from '../../utils/windowManager'
 import RightFloatingPanelShell from './RightFloatingPanelShell'
 
 const { Text } = Typography
@@ -196,7 +197,6 @@ const GeosetAnimPanel: React.FC = () => {
     const [geosetColorInput, setGeosetColorInput] = useState<[number, number, number]>([1, 1, 1])
     const [geosetColorText, setGeosetColorText] = useState<string>('rgb(255, 255, 255)')
     const [editingGeosetField, setEditingGeosetField] = useState<'Alpha' | 'Color' | null>(null)
-    const [isGeosetEditorOpen, setIsGeosetEditorOpen] = useState(false)
     const [collapsed, setCollapsed] = useState(false)
 
     const geosetIds = useMemo(() => {
@@ -398,7 +398,7 @@ const GeosetAnimPanel: React.FC = () => {
     }, [selectedGeosetIds, commitGeosetAnims])
 
     const handleSaveKeyframeEditor = useCallback((animVector: any) => {
-        if (!editingGeosetField || activeGeosetId === null) return setIsGeosetEditorOpen(false)
+        if (!editingGeosetField || activeGeosetId === null) return
         commitGeosetAnims(`Edit Geoset ${editingGeosetField}`, (nextAnims) => {
             let index = nextAnims.findIndex((anim: any) => Number(anim?.GeosetId) === Number(activeGeosetId))
             if (index < 0) return
@@ -412,18 +412,49 @@ const GeosetAnimPanel: React.FC = () => {
             }
             nextAnims[index] = currentAnim
         })
-        setIsGeosetEditorOpen(false)
     }, [editingGeosetField, activeGeosetId, commitGeosetAnims])
 
-    const editorData = useMemo(() => {
-        if (!editingGeosetField) return null
-        if (editingGeosetField === 'Alpha') {
-            if (isAnimTrack(activeGeosetAnim?.Alpha)) return activeGeosetAnim?.Alpha
-            return { LineType: 1, GlobalSeqId: null, Keys: [{ Frame: 0, Vector: [currentGeosetAlpha] }] }
+    const openEditor = useCallback((field: 'Alpha' | 'Color') => {
+        setEditingGeosetField(field);
+
+        let data = null;
+        if (field === 'Alpha') {
+            if (isAnimTrack(activeGeosetAnim?.Alpha)) data = activeGeosetAnim?.Alpha;
+            else data = { LineType: 1, GlobalSeqId: null, Keys: [{ Frame: 0, Vector: [currentGeosetAlpha] }] };
+        } else {
+            if (isAnimTrack(activeGeosetAnim?.Color)) data = activeGeosetAnim?.Color;
+            else data = { LineType: 1, GlobalSeqId: null, Keys: [{ Frame: 0, Vector: [...currentGeosetColor] }] };
         }
-        if (isAnimTrack(activeGeosetAnim?.Color)) return activeGeosetAnim?.Color
-        return { LineType: 1, GlobalSeqId: null, Keys: [{ Frame: 0, Vector: [...currentGeosetColor] }] }
-    }, [editingGeosetField, activeGeosetAnim, currentGeosetAlpha, currentGeosetColor])
+
+        const payload = {
+            callerId: 'GeosetAnimPanel',
+            initialData: data,
+            title: field === 'Color' ? '编辑颜色关键帧' : '编辑透明度关键帧',
+            vectorSize: field === 'Color' ? 3 : 1,
+            globalSequences: (modelData as any)?.GlobalSequences || [],
+            sequences: (modelData as any)?.Sequences || [],
+            fieldName: field
+        };
+
+        const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
+        payload.targetWindowId = windowId;
+
+        emit('IPC_KEYFRAME_INIT', payload);
+        windowManager.openToolWindow(windowId, payload.title, 600, 480);
+    }, [activeGeosetAnim, currentGeosetAlpha, currentGeosetColor, modelData]);
+
+    useEffect(() => {
+        const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
+            const payload = event.payload as any;
+            if (payload && payload.callerId === 'GeosetAnimPanel') {
+                handleSaveKeyframeEditor(payload.data);
+            }
+        });
+
+        return () => {
+            unlisten.then(f => f());
+        };
+    }, [handleSaveKeyframeEditor]);
 
     return (
         <RightFloatingPanelShell
@@ -452,7 +483,7 @@ const GeosetAnimPanel: React.FC = () => {
                 <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <Text style={{ color: '#888', fontSize: 11 }}>透明度 {hasExactGeosetAlphaKey && <span style={{ color: '#52c41a' }}>●</span>}</Text>
-                        <Button size="small" type="text" onClick={() => { setEditingGeosetField('Alpha'); setIsGeosetEditorOpen(true) }} disabled={selectedGeosetIds.length !== 1} style={{ fontSize: 10, color: '#1890ff', padding: 0, height: 18 }}>轨道编辑</Button>
+                        <Button size="small" type="text" onClick={() => openEditor('Alpha')} disabled={selectedGeosetIds.length !== 1} style={{ fontSize: 10, color: '#1890ff', padding: 0, height: 18 }}>轨道编辑</Button>
                     </div>
                     <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
                         <InputNumber size="small" min={0} max={1} step={0.05} value={geosetAlphaInput} onChange={(v) => { setGeosetAlphaInput(v ?? 1); applyStaticAlpha(v ?? 1) }} style={{ flex: 1 }} />
@@ -465,7 +496,7 @@ const GeosetAnimPanel: React.FC = () => {
                 <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <Text style={{ color: '#888', fontSize: 11 }}>颜色 {hasExactGeosetColorKey && <span style={{ color: '#52c41a' }}>●</span>}</Text>
-                        <Button size="small" type="text" onClick={() => { setEditingGeosetField('Color'); setIsGeosetEditorOpen(true) }} disabled={selectedGeosetIds.length !== 1} style={{ fontSize: 10, color: '#1890ff', padding: 0, height: 18 }}>轨道编辑</Button>
+                        <Button size="small" type="text" onClick={() => openEditor('Color')} disabled={selectedGeosetIds.length !== 1} style={{ fontSize: 10, color: '#1890ff', padding: 0, height: 18 }}>轨道编辑</Button>
                     </div>
                     <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
                         <ColorPicker size="small" format="rgb" value={geosetColorText} onChange={(c) => setGeosetColorInput(parseColorToNormalized(c, [1, 1, 1]))} onChangeComplete={(c) => applyStaticColor(parseColorToNormalized(c, [1, 1, 1]))} />
@@ -475,16 +506,6 @@ const GeosetAnimPanel: React.FC = () => {
                 </div>
             </div>
 
-            <KeyframeEditor
-                visible={isGeosetEditorOpen}
-                onCancel={() => setIsGeosetEditorOpen(false)}
-                onOk={handleSaveKeyframeEditor}
-                initialData={editorData}
-                title={editingGeosetField === 'Color' ? '多边形组颜色' : '多边形组透明度'}
-                vectorSize={editingGeosetField === 'Color' ? 3 : 1}
-                globalSequences={(modelData as any)?.GlobalSequences || []}
-                fieldName={editingGeosetField || undefined}
-            />
         </RightFloatingPanelShell>
     )
 }

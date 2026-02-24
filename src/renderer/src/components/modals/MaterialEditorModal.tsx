@@ -3,7 +3,8 @@ import { Button, List, Card, Checkbox, Select, Typography, message } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { DraggableModal } from '../DraggableModal'
-import KeyframeEditor from '../editors/KeyframeEditor'
+import { emit, listen } from '@tauri-apps/api/event'
+import { windowManager } from '../../utils/windowManager'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useHistoryStore } from '../../store/historyStore'
@@ -87,7 +88,6 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const [isTextureDropActive, setIsTextureDropActive] = useState(false)
 
     // Keyframe Editor State
-    const [isKeyframeEditorOpen, setIsKeyframeEditorOpen] = useState(false)
     const [editingField, setEditingField] = useState<string | null>(null)
     const [editingVectorSize, setEditingVectorSize] = useState(1)
 
@@ -392,17 +392,42 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     }
 
     // Keyframe Logic
+    useEffect(() => {
+        const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
+            const payload = event.payload as any;
+            if (payload && payload.callerId === 'MaterialEditorModal') {
+                if (editingField && selectedMaterialIndex >= 0 && selectedLayerIndex >= 0) {
+                    updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { [editingField]: payload.data })
+                }
+            }
+        });
+
+        return () => {
+            unlisten.then(f => f());
+        };
+    }, [editingField, selectedMaterialIndex, selectedLayerIndex]);
+
     const openKeyframeEditor = (field: string, vectorSize: number) => {
         setEditingField(field)
         setEditingVectorSize(vectorSize)
-        setIsKeyframeEditorOpen(true)
-    }
 
-    const handleKeyframeSave = (animVector: any) => {
-        if (editingField && selectedMaterialIndex >= 0 && selectedLayerIndex >= 0) {
-            updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { [editingField]: animVector })
-        }
-        setIsKeyframeEditorOpen(false)
+        const payload = {
+            callerId: 'MaterialEditorModal',
+            initialData: selectedLayer ? selectedLayer[field] : null,
+            title: `编辑 ${field}`,
+            vectorSize,
+            fieldName: field,
+            globalSequences: (modelData?.GlobalSequences || [])
+                .map((g: any) => (typeof g === 'number' ? g : g?.Duration))
+                .filter((v: any) => typeof v === 'number'),
+            sequences: modelData?.Sequences || []
+        };
+
+        const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
+        payload.targetWindowId = windowId;
+
+        emit('IPC_KEYFRAME_INIT', payload);
+        windowManager.openToolWindow(windowId, payload.title, 600, 480);
     }
 
     const handleAnimToggle = (field: string, checked: boolean, vectorSize: number = 1) => {
@@ -1025,18 +1050,6 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                 </div>
             </div>
 
-            {isKeyframeEditorOpen && editingField && (
-                <KeyframeEditor
-                    visible={isKeyframeEditorOpen}
-                    onCancel={() => setIsKeyframeEditorOpen(false)}
-                    onOk={handleKeyframeSave}
-                    initialData={selectedLayer ? selectedLayer[editingField] : null}
-                    title={`编辑 ${editingField}`}
-                    vectorSize={editingVectorSize}
-                    globalSequences={(modelData as any)?.GlobalSequences || []}
-                    fieldName={editingField || ''}
-                />
-            )}
         </DraggableModal>
     )
 }

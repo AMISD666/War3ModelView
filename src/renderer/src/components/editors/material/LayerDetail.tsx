@@ -2,7 +2,8 @@
 import { Checkbox, Button, Select, Space } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { EditOutlined } from '@ant-design/icons'
-import KeyframeEditor from '../KeyframeEditor'
+import { emit, listen } from '@tauri-apps/api/event'
+import { windowManager } from '../../../utils/windowManager'
 import { useModelStore } from '../../../store/modelStore'
 import TextureAnimationManagerModal from '../../modals/TextureAnimationManagerModal'
 
@@ -14,7 +15,6 @@ interface LayerDetailProps {
 
 const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
     const modelData = useModelStore(state => state.modelData)
-    const [isKeyframeEditorOpen, setIsKeyframeEditorOpen] = useState(false)
     const [isAnimManagerOpen, setIsAnimManagerOpen] = useState(false)
     const [editingField, setEditingField] = useState<string | null>(null)
     const [editingVectorSize, setEditingVectorSize] = useState(1)
@@ -52,17 +52,42 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
         }
     }
 
+    React.useEffect(() => {
+        const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
+            const payload = event.payload as any;
+            if (payload && payload.callerId === 'LayerDetail') {
+                if (editingField) {
+                    handleChange(editingField, payload.data)
+                }
+            }
+        });
+
+        return () => {
+            unlisten.then(f => f());
+        };
+    }, [editingField, layer]);
+
     const openKeyframeEditor = (field: string, vectorSize: number) => {
         setEditingField(field)
         setEditingVectorSize(vectorSize)
-        setIsKeyframeEditorOpen(true)
-    }
 
-    const handleKeyframeSave = (animVector: any) => {
-        if (editingField) {
-            handleChange(editingField, animVector)
-        }
-        setIsKeyframeEditorOpen(false)
+        const payload = {
+            callerId: 'LayerDetail',
+            initialData: layer[field],
+            title: `编辑 ${field}`,
+            vectorSize,
+            globalSequences: (modelData?.GlobalSequences || [])
+                .map((g: any) => (typeof g === 'number' ? g : g?.Duration))
+                .filter((v: any) => typeof v === 'number'),
+            sequences: modelData?.Sequences || [],
+            fieldName: field
+        };
+
+        const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
+        payload.targetWindowId = windowId;
+
+        emit('IPC_KEYFRAME_INIT', payload);
+        windowManager.openToolWindow(windowId, payload.title, 600, 480);
     }
 
     const filterModeOptions = [
@@ -206,20 +231,6 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
                     <Checkbox checked={layer.NoDepthSet} onChange={(e) => handleChange('NoDepthSet', e.target.checked)}>无深度设置</Checkbox>
                 </div>
             </div>
-
-            {/* Keyframe Editor Modal */}
-            {editingField && (
-                <KeyframeEditor
-                    visible={isKeyframeEditorOpen}
-                    onCancel={() => setIsKeyframeEditorOpen(false)}
-                    onOk={handleKeyframeSave}
-                    initialData={layer[editingField]}
-                    title={`Edit ${editingField}`}
-                    vectorSize={editingVectorSize}
-                    globalSequences={(modelData as any)?.GlobalSequences || []}
-                    fieldName={editingField || ''}
-                />
-            )}
 
             {/* Texture Animation Manager Modal */}
             <TextureAnimationManagerModal

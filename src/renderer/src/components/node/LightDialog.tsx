@@ -4,7 +4,8 @@ import { Form, Select, Button, Row, Col, Checkbox, ColorPicker } from 'antd';
 import { DraggableModal } from '../DraggableModal';
 import { useModelStore } from '../../store/modelStore';
 import { useHistoryStore } from '../../store/historyStore';
-import KeyframeEditor from '../editors/KeyframeEditor';
+import { emit, listen } from '@tauri-apps/api/event';
+import { windowManager } from '../../utils/windowManager';
 import type { LightNode } from '../../types/node';
 import type { Color } from 'antd/es/color-picker';
 
@@ -57,10 +58,7 @@ const LightDialog: React.FC<LightDialogProps> = ({ visible, nodeId, onClose }) =
 
     // Animation State (same pattern as ParticleEmitter2Dialog)
     const [animDataMap, setAnimDataMap] = useState<Record<string, any>>({});
-    const [keyframeEditorVisible, setKeyframeEditorVisible] = useState(false);
     const [currentEditingProp, setCurrentEditingProp] = useState<string | null>(null);
-    const [currentEditingTitle, setCurrentEditingTitle] = useState<string>('');
-    const [currentVectorSize, setCurrentVectorSize] = useState<number>(1);
 
     // Helper to convert array [r, g, b] (0-1) to Antd Color
     const toAntdColor = (rgb?: [number, number, number] | any) => {
@@ -217,22 +215,45 @@ const LightDialog: React.FC<LightDialogProps> = ({ visible, nodeId, onClose }) =
         }
     };
 
+    useEffect(() => {
+        const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
+            const payload = event.payload as any;
+            if (payload && payload.callerId === 'LightDialog') {
+                if (currentEditingProp) {
+                    setAnimDataMap(prev => ({
+                        ...prev,
+                        [currentEditingProp]: payload.data
+                    }));
+                    setCurrentEditingProp(null);
+                }
+            }
+        });
+
+        return () => {
+            unlisten.then(f => f());
+        };
+    }, [currentEditingProp]);
+
     const handleOpenKeyframeEditor = (propName: string, title: string, vectorSize: number = 1) => {
         setCurrentEditingProp(propName);
-        setCurrentEditingTitle(title);
-        setCurrentVectorSize(vectorSize);
-        setKeyframeEditorVisible(true);
-    };
 
-    const handleKeyframeSave = (animVector: any) => {
-        if (currentEditingProp) {
-            setAnimDataMap(prev => ({
-                ...prev,
-                [currentEditingProp]: animVector
-            }));
-            setKeyframeEditorVisible(false);
-            setCurrentEditingProp(null);
-        }
+        const payload = {
+            callerId: 'LightDialog',
+            initialData: animDataMap[propName] || null,
+            title: `编辑: ${title}`,
+            vectorSize,
+            fieldName: propName,
+            globalSequences: (modelData?.GlobalSequences || [])
+                .map((g: any) => (typeof g === 'number' ? g : g?.Duration))
+                .filter((v: any) => typeof v === 'number'),
+            sequences: modelData?.Sequences || []
+        };
+
+        const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
+        payload.targetWindowId = windowId;
+
+        emit('IPC_KEYFRAME_INIT', payload);
+        windowManager.openToolWindow(windowId, payload.title, 600, 480);
     };
 
     const handleDynamicChange = (propName: string, checked: boolean) => {
@@ -445,24 +466,6 @@ const LightDialog: React.FC<LightDialogProps> = ({ visible, nodeId, onClose }) =
                     </div>
                 </div>
             </Form>
-
-            {keyframeEditorVisible && (
-                <KeyframeEditor
-                    visible={keyframeEditorVisible}
-                    onCancel={() => {
-                        setKeyframeEditorVisible(false);
-                        setCurrentEditingProp(null);
-                    }}
-                    onOk={handleKeyframeSave}
-                    initialData={currentEditingProp ? animDataMap[currentEditingProp] : null}
-                    title={`编辑: ${currentEditingTitle}`}
-                    vectorSize={currentVectorSize}
-                    globalSequences={(modelData?.GlobalSequences || [])
-                        .map((g: any) => (typeof g === 'number' ? g : g?.Duration))
-                        .filter((v: any) => typeof v === 'number')}
-                    sequences={modelData?.Sequences || []}
-                />
-            )}
         </DraggableModal>
     );
 };

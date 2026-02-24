@@ -3,7 +3,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Button, Checkbox, Form, Input } from 'antd';
 
 import { DraggableModal } from '../DraggableModal';
-import KeyframeEditor from '../editors/KeyframeEditor';
+import { emit, listen } from '@tauri-apps/api/event';
+import { windowManager } from '../../utils/windowManager';
 import { useHistoryStore } from '../../store/historyStore';
 import { useModelStore } from '../../store/modelStore';
 import type { ParticleEmitterNode } from '../../types/node';
@@ -49,7 +50,6 @@ const ParticleEmitterDialog: React.FC<ParticleEmitterDialogProps> = ({ visible, 
     const currentNode = nodeId !== null ? (getNodeById(nodeId) as ParticleEmitterNode) : null;
 
     const [animDataMap, setAnimDataMap] = useState<Record<string, any>>({});
-    const [keyframeEditorVisible, setKeyframeEditorVisible] = useState(false);
     const [currentEditingProp, setCurrentEditingProp] = useState<string | null>(null);
     const [currentEditingTitle, setCurrentEditingTitle] = useState<string>('');
 
@@ -66,20 +66,49 @@ const ParticleEmitterDialog: React.FC<ParticleEmitterDialogProps> = ({ visible, 
         []
     );
 
+    const globalSequences = useMemo(() => {
+        return (modelData?.GlobalSequences || [])
+            .map((g: any) => (typeof g === 'number' ? g : g?.Duration))
+            .filter((v: any) => typeof v === 'number');
+    }, [modelData?.GlobalSequences]);
+
+    useEffect(() => {
+        const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
+            const payload = event.payload as any;
+            if (payload && payload.callerId === 'ParticleEmitterDialog') {
+                if (currentEditingProp) {
+                    setAnimDataMap((prev) => ({
+                        ...prev,
+                        [currentEditingProp]: payload.data,
+                    }));
+                    setCurrentEditingProp(null);
+                }
+            }
+        });
+
+        return () => {
+            unlisten.then(f => f());
+        };
+    }, [currentEditingProp]);
+
     const handleOpenKeyframeEditor = (propName: string, title: string) => {
         setCurrentEditingProp(propName);
-        setCurrentEditingTitle(title);
-        setKeyframeEditorVisible(true);
-    };
 
-    const handleKeyframeSave = (animVector: any) => {
-        if (!currentEditingProp) return;
-        setAnimDataMap((prev) => ({
-            ...prev,
-            [currentEditingProp]: animVector,
-        }));
-        setKeyframeEditorVisible(false);
-        setCurrentEditingProp(null);
+        const payload = {
+            callerId: 'ParticleEmitterDialog',
+            initialData: animDataMap[propName] || null,
+            title: `编辑: ${title}`,
+            vectorSize: 1,
+            fieldName: propName,
+            sequences: modelData?.Sequences || [],
+            globalSequences: globalSequences as any
+        };
+
+        const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
+        payload.targetWindowId = windowId;
+
+        emit('IPC_KEYFRAME_INIT', payload);
+        windowManager.openToolWindow(windowId, payload.title, 600, 480);
     };
 
     const handleDynamicChange = (propName: string, checked: boolean) => {
@@ -184,11 +213,7 @@ const ParticleEmitterDialog: React.FC<ParticleEmitterDialogProps> = ({ visible, 
         } catch (e) {
             console.error('Validation failed', e);
         }
-    };
-
-    const globalSequences = (modelData?.GlobalSequences || [])
-        .map((g: any) => (typeof g === 'number' ? g : g?.Duration))
-        .filter((v: any) => typeof v === 'number');
+    }; // End of handleOk
 
     const NumericGroup: React.FC<{ field: NumericField }> = ({ field }) => {
         const isDynamic = !!animDataMap[field.name];
@@ -286,25 +311,9 @@ const ParticleEmitterDialog: React.FC<ParticleEmitterDialogProps> = ({ visible, 
                     </div>
                 </Form>
             </DraggableModal>
-
-            {keyframeEditorVisible && (
-                <KeyframeEditor
-                    visible={keyframeEditorVisible}
-                    onCancel={() => {
-                        setKeyframeEditorVisible(false);
-                        setCurrentEditingProp(null);
-                    }}
-                    onOk={handleKeyframeSave}
-                    initialData={currentEditingProp ? animDataMap[currentEditingProp] : null}
-                    title={`编辑: ${currentEditingTitle}`}
-                    vectorSize={1}
-                    globalSequences={globalSequences as any}
-                    sequences={modelData?.Sequences || []}
-                />
-            )}
         </>
     );
-};
+}; // End of ParticleEmitterDialog
 
 export default ParticleEmitterDialog;
 

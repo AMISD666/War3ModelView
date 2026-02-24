@@ -3,7 +3,8 @@ import React, { useEffect, useState } from 'react';
 import { Form, Checkbox, Select, ColorPicker, Button, Input } from 'antd';
 
 import { DraggableModal } from '../DraggableModal';
-import KeyframeEditor from '../editors/KeyframeEditor';
+import { emit, listen } from '@tauri-apps/api/event';
+import { windowManager } from '../../utils/windowManager';
 import type { Color } from 'antd/es/color-picker';
 import type { ParticleEmitter2Node } from '../../types/node';
 import { useModelStore } from '../../store/modelStore';
@@ -57,7 +58,6 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
 
     // Animation State
     const [animDataMap, setAnimDataMap] = useState<Record<string, any>>({});
-    const [keyframeEditorVisible, setKeyframeEditorVisible] = useState(false);
     const [currentEditingProp, setCurrentEditingProp] = useState<string | null>(null);
 
     // Helper to convert array [r, g, b] (0-1) to Antd Color
@@ -367,21 +367,46 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
 
     const [currentEditingTitle, setCurrentEditingTitle] = useState<string>('');
 
+    useEffect(() => {
+        const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
+            const payload = event.payload as any;
+            if (payload && payload.callerId === 'ParticleEmitter2Dialog') {
+                if (currentEditingProp) {
+                    setAnimDataMap((prev) => ({
+                        ...prev,
+                        [currentEditingProp]: payload.data,
+                    }));
+                    setCurrentEditingProp(null);
+                }
+            }
+        });
+
+        return () => {
+            unlisten.then(f => f());
+        };
+    }, [currentEditingProp]);
+
     const handleOpenKeyframeEditor = (propName: string, title: string) => {
         setCurrentEditingProp(propName);
         setCurrentEditingTitle(title);
-        setKeyframeEditorVisible(true);
-    };
 
-    const handleKeyframeSave = (animVector: any) => {
-        if (currentEditingProp) {
-            setAnimDataMap(prev => ({
-                ...prev,
-                [currentEditingProp]: animVector
-            }));
-            setKeyframeEditorVisible(false);
-            setCurrentEditingProp(null);
-        }
+        const payload = {
+            callerId: 'ParticleEmitter2Dialog',
+            initialData: animDataMap[propName] || null,
+            title: `编辑: ${title}`,
+            vectorSize: 1,
+            fieldName: propName, // Assuming propName is the field name
+            globalSequences: (modelData?.GlobalSequences || [])
+                .map((g: any) => (typeof g === 'number' ? g : g?.Duration))
+                .filter((v: any) => typeof v === 'number'),
+            sequences: modelData?.Sequences || []
+        };
+
+        const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
+        payload.targetWindowId = windowId;
+
+        emit('IPC_KEYFRAME_INIT', payload);
+        windowManager.openToolWindow(windowId, payload.title, 600, 480);
     };
 
     const handleDynamicChange = (propName: string, checked: boolean) => {
@@ -502,33 +527,33 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
                     <span style={{ color: '#7f7f7f', fontSize: 12 }}>可拖动替换贴图</span>
                 </div>
                 <div
-                        style={{
-                            border: isTextureDropActive ? '1px dashed #5a9cff' : '1px dashed transparent',
-                            borderRadius: 4,
-                            padding: 2,
-                            transition: 'border-color 0.15s ease'
-                        }}
-                        onDragOver={(e) => {
-                            const draggedIndex = getDraggedTextureIndex(e.dataTransfer);
-                            if (draggedIndex === null) return;
-                            e.preventDefault();
-                            e.dataTransfer.dropEffect = 'copy';
-                            setIsTextureDropActive(true);
-                        }}
-                        onDragEnter={(e) => {
-                            const draggedIndex = getDraggedTextureIndex(e.dataTransfer);
-                            if (draggedIndex === null) return;
-                            e.preventDefault();
-                            setIsTextureDropActive(true);
-                        }}
-                        onDragLeave={() => setIsTextureDropActive(false)}
-                        onDrop={(e) => {
-                            setIsTextureDropActive(false);
-                            const draggedIndex = getDraggedTextureIndex(e.dataTransfer);
-                            if (draggedIndex === null) return;
-                            e.preventDefault();
-                            applyRealtimeTexture(draggedIndex);
-                        }}
+                    style={{
+                        border: isTextureDropActive ? '1px dashed #5a9cff' : '1px dashed transparent',
+                        borderRadius: 4,
+                        padding: 2,
+                        transition: 'border-color 0.15s ease'
+                    }}
+                    onDragOver={(e) => {
+                        const draggedIndex = getDraggedTextureIndex(e.dataTransfer);
+                        if (draggedIndex === null) return;
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = 'copy';
+                        setIsTextureDropActive(true);
+                    }}
+                    onDragEnter={(e) => {
+                        const draggedIndex = getDraggedTextureIndex(e.dataTransfer);
+                        if (draggedIndex === null) return;
+                        e.preventDefault();
+                        setIsTextureDropActive(true);
+                    }}
+                    onDragLeave={() => setIsTextureDropActive(false)}
+                    onDrop={(e) => {
+                        setIsTextureDropActive(false);
+                        const draggedIndex = getDraggedTextureIndex(e.dataTransfer);
+                        if (draggedIndex === null) return;
+                        e.preventDefault();
+                        applyRealtimeTexture(draggedIndex);
+                    }}
                 >
                     <Form.Item name="TextureID" noStyle>
                         <Select
@@ -806,23 +831,6 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
                 </div>
             </Form>
 
-            {keyframeEditorVisible && (
-                <KeyframeEditor
-                    visible={keyframeEditorVisible}
-                    onCancel={() => {
-                        setKeyframeEditorVisible(false);
-                        setCurrentEditingProp(null);
-                    }}
-                    onOk={handleKeyframeSave}
-                    initialData={currentEditingProp ? animDataMap[currentEditingProp] : null}
-                    title={`编辑: ${currentEditingTitle}`}
-                    vectorSize={1}
-                    globalSequences={(modelData?.GlobalSequences || [])
-                        .map((g: any) => (typeof g === 'number' ? g : g?.Duration))
-                        .filter((v: any) => typeof v === 'number')}
-                    sequences={modelData?.Sequences || []}
-                />
-            )}
         </DraggableModal>
     );
 };
