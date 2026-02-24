@@ -7,6 +7,7 @@ import CameraManagerModal from './components/modals/CameraManagerModal'
 import GeosetEditorModal from './components/modals/GeosetEditorModal'
 import GeosetVisibilityToolModal from './components/modals/GeosetVisibilityToolModal'
 import GeosetAnimationModal from './components/modals/GeosetAnimationModal'
+import TextureEditorModal from './components/modals/TextureEditorModal'
 import KeyframeEditor from './components/editors/KeyframeEditor'
 import './assets/index.css'
 import { parseMDX } from 'war3-model'
@@ -126,6 +127,16 @@ if (targetWindow === 'modelOptimize') {
     RootComponent = (
         <React.Suspense fallback={null}>
             <GeosetAnimationModal
+                visible={true}
+                onClose={() => getCurrentWindow().hide()}
+                isStandalone={true}
+            />
+        </React.Suspense>
+    );
+} else if (targetWindow === 'textureManager') {
+    RootComponent = (
+        <React.Suspense fallback={null}>
+            <TextureEditorModal
                 visible={true}
                 onClose={() => getCurrentWindow().hide()}
                 isStandalone={true}

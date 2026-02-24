@@ -15,6 +15,7 @@ import { GizmoRenderer, GizmoAxis } from './GizmoRenderer'
 import { AxisIndicator } from './AxisIndicator'
 import { readFile } from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { useUIStore } from '../store/uiStore'
 import { useSelectionStore } from '../store/selectionStore'
 import { useModelStore } from '../store/modelStore'
@@ -347,6 +348,44 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   useEffect(() => {
     setGlobalRenderer(renderer)
   }, [renderer, setGlobalRenderer])
+
+  // Live Texture Preview from Standalone Texture Manager
+  useEffect(() => {
+    const unlisten = listen('IPC_LIVE_TEXTURE_UPDATE', (event) => {
+      const payload: any = event.payload;
+      if (payload && payload.imagePath && payload.dataUrl) {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0);
+            const imageData = ctx.getImageData(0, 0, img.width, img.height);
+
+            const currentRenderer = rendererRef.current;
+            if (currentRenderer && typeof currentRenderer.setTextureImageData === 'function') {
+              currentRenderer.setTextureImageData(payload.imagePath, [imageData]);
+              const normalized = normalizePath(payload.imagePath);
+              if (normalized !== payload.imagePath) {
+                currentRenderer.setTextureImageData(normalized, [imageData]);
+              }
+              const forwardSlash = normalized.replace(/\\/g, '/');
+              if (forwardSlash !== normalized) {
+                currentRenderer.setTextureImageData(forwardSlash, [imageData]);
+              }
+            }
+          }
+        };
+        img.src = payload.dataUrl;
+      }
+    });
+
+    return () => {
+      unlisten.then(f => f());
+    };
+  }, []);
 
   const readVec3 = (v: any): [number, number, number] | null => {
     if (!v) return null
@@ -3461,121 +3500,121 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                       const id = Number(pe?.ObjectId)
                       if (Number.isFinite(id)) pe2ById.set(id, pe)
                     }
-                  const frameForParticleBox = Number(mdlRenderer.rendererData?.frame ?? useModelStore.getState().currentFrame ?? 0)
-                  const toScalar = (raw: any, fallback: number): number => {
-                    if (typeof raw === 'number') return Number.isFinite(raw) ? raw : fallback
-                    if (Array.isArray(raw) || ArrayBuffer.isView(raw)) {
-                      const n = Number((raw as any)[0])
+                    const frameForParticleBox = Number(mdlRenderer.rendererData?.frame ?? useModelStore.getState().currentFrame ?? 0)
+                    const toScalar = (raw: any, fallback: number): number => {
+                      if (typeof raw === 'number') return Number.isFinite(raw) ? raw : fallback
+                      if (Array.isArray(raw) || ArrayBuffer.isView(raw)) {
+                        const n = Number((raw as any)[0])
+                        return Number.isFinite(n) ? n : fallback
+                      }
+                      if (raw && typeof raw === 'object') {
+                        const direct = Number(raw.Value ?? raw.value)
+                        if (Number.isFinite(direct)) return direct
+                      }
+                      const n = Number(raw)
                       return Number.isFinite(n) ? n : fallback
                     }
-                    if (raw && typeof raw === 'object') {
-                      const direct = Number(raw.Value ?? raw.value)
-                      if (Number.isFinite(direct)) return direct
+                    const resolveScalarAtFrame = (prop: any, frame: number, fallback: number): number => {
+                      if (!prop) return fallback
+                      if (typeof prop === 'number' || Array.isArray(prop) || ArrayBuffer.isView(prop)) {
+                        return toScalar(prop, fallback)
+                      }
+                      const keysRaw = prop?.Keys
+                      if (!Array.isArray(keysRaw) || keysRaw.length === 0) {
+                        return toScalar(prop, fallback)
+                      }
+                      const keys = keysRaw
+                        .filter((k: any) => k && !k._isPreviewKey && Number.isFinite(Number(k.Frame)))
+                        .sort((a: any, b: any) => Number(a.Frame) - Number(b.Frame))
+                      if (keys.length === 0) return fallback
+                      const keyScalar = (k: any) => {
+                        const vec = k?.Vector ?? k?.Value
+                        return toScalar(vec, fallback)
+                      }
+                      const target = Number.isFinite(frame) ? frame : Number(keys[0].Frame)
+                      if (target <= Number(keys[0].Frame)) return keyScalar(keys[0])
+                      const last = keys[keys.length - 1]
+                      if (target >= Number(last.Frame)) return keyScalar(last)
+                      for (let i = 0; i < keys.length - 1; i++) {
+                        const k0 = keys[i]
+                        const k1 = keys[i + 1]
+                        const f0 = Number(k0.Frame)
+                        const f1 = Number(k1.Frame)
+                        if (target < f0 || target > f1) continue
+                        const span = f1 - f0
+                        if (!Number.isFinite(span) || Math.abs(span) < 1e-8) return keyScalar(k1)
+                        const t = (target - f0) / span
+                        const v0 = keyScalar(k0)
+                        const v1 = keyScalar(k1)
+                        return v0 + (v1 - v0) * Math.max(0, Math.min(1, t))
+                      }
+                      return keyScalar(last)
                     }
-                    const n = Number(raw)
-                    return Number.isFinite(n) ? n : fallback
-                  }
-                  const resolveScalarAtFrame = (prop: any, frame: number, fallback: number): number => {
-                    if (!prop) return fallback
-                    if (typeof prop === 'number' || Array.isArray(prop) || ArrayBuffer.isView(prop)) {
-                      return toScalar(prop, fallback)
-                    }
-                    const keysRaw = prop?.Keys
-                    if (!Array.isArray(keysRaw) || keysRaw.length === 0) {
-                      return toScalar(prop, fallback)
-                    }
-                    const keys = keysRaw
-                      .filter((k: any) => k && !k._isPreviewKey && Number.isFinite(Number(k.Frame)))
-                      .sort((a: any, b: any) => Number(a.Frame) - Number(b.Frame))
-                    if (keys.length === 0) return fallback
-                    const keyScalar = (k: any) => {
-                      const vec = k?.Vector ?? k?.Value
-                      return toScalar(vec, fallback)
-                    }
-                    const target = Number.isFinite(frame) ? frame : Number(keys[0].Frame)
-                    if (target <= Number(keys[0].Frame)) return keyScalar(keys[0])
-                    const last = keys[keys.length - 1]
-                    if (target >= Number(last.Frame)) return keyScalar(last)
-                    for (let i = 0; i < keys.length - 1; i++) {
-                      const k0 = keys[i]
-                      const k1 = keys[i + 1]
-                      const f0 = Number(k0.Frame)
-                      const f1 = Number(k1.Frame)
-                      if (target < f0 || target > f1) continue
-                      const span = f1 - f0
-                      if (!Number.isFinite(span) || Math.abs(span) < 1e-8) return keyScalar(k1)
-                      const t = (target - f0) / span
-                      const v0 = keyScalar(k0)
-                      const v1 = keyScalar(k1)
-                      return v0 + (v1 - v0) * Math.max(0, Math.min(1, t))
-                    }
-                    return keyScalar(last)
-                  }
 
-                  const tempCorner = vec3.create()
-                  const linePositions: number[] = []
+                    const tempCorner = vec3.create()
+                    const linePositions: number[] = []
                     const minVisualAxis = 2 // Keep tiny Width/Length still visible.
-                  for (const nodeId of selectedIdNums) {
-                    const nodeWrapper = (mdlRenderer.rendererData.nodes as any[]).find((n: any) => Number(n?.node?.ObjectId) === nodeId)
-                    const storeNode = storeNodeById.get(nodeId)
-                    const pe2Node = pe2ById.get(nodeId)
-                    const nodeData = (nodeWrapper?.node || storeNode) as any
-                    const nodeType = nodeData?.type || storeNode?.type
-                    const isPe2Type = nodeType === NodeType.PARTICLE_EMITTER_2 || nodeType === 'ParticleEmitter2'
-                    if (!isPe2Type && !pe2Node) continue
+                    for (const nodeId of selectedIdNums) {
+                      const nodeWrapper = (mdlRenderer.rendererData.nodes as any[]).find((n: any) => Number(n?.node?.ObjectId) === nodeId)
+                      const storeNode = storeNodeById.get(nodeId)
+                      const pe2Node = pe2ById.get(nodeId)
+                      const nodeData = (nodeWrapper?.node || storeNode) as any
+                      const nodeType = nodeData?.type || storeNode?.type
+                      const isPe2Type = nodeType === NodeType.PARTICLE_EMITTER_2 || nodeType === 'ParticleEmitter2'
+                      if (!isPe2Type && !pe2Node) continue
 
-                    const widthProp =
-                      pe2Node?.Width ?? pe2Node?.WidthAnim ?? pe2Node?.props?.Width ??
-                      nodeData?.Width ?? nodeData?.WidthAnim ?? storeNode?.Width ?? storeNode?.WidthAnim
-                    const lengthProp =
-                      pe2Node?.Length ?? pe2Node?.LengthAnim ?? pe2Node?.props?.Length ??
-                      nodeData?.Length ?? nodeData?.LengthAnim ?? storeNode?.Length ?? storeNode?.LengthAnim
-                    const width = Math.abs(resolveScalarAtFrame(widthProp, frameForParticleBox, 0))
-                    const length = Math.abs(resolveScalarAtFrame(lengthProp, frameForParticleBox, 0))
-                    const halfW = Math.max(width, minVisualAxis) * 0.5
-                    const halfL = Math.max(length, minVisualAxis) * 0.5
+                      const widthProp =
+                        pe2Node?.Width ?? pe2Node?.WidthAnim ?? pe2Node?.props?.Width ??
+                        nodeData?.Width ?? nodeData?.WidthAnim ?? storeNode?.Width ?? storeNode?.WidthAnim
+                      const lengthProp =
+                        pe2Node?.Length ?? pe2Node?.LengthAnim ?? pe2Node?.props?.Length ??
+                        nodeData?.Length ?? nodeData?.LengthAnim ?? storeNode?.Length ?? storeNode?.LengthAnim
+                      const width = Math.abs(resolveScalarAtFrame(widthProp, frameForParticleBox, 0))
+                      const length = Math.abs(resolveScalarAtFrame(lengthProp, frameForParticleBox, 0))
+                      const halfW = Math.max(width, minVisualAxis) * 0.5
+                      const halfL = Math.max(length, minVisualAxis) * 0.5
 
-                    const pivot =
-                      nodeData?.PivotPoint ||
-                      pe2Node?.PivotPoint ||
-                      storeNode?.PivotPoint ||
-                      [0, 0, 0]
-                    // Match particles.ts: emission uses rendererData.nodes[ObjectId].matrix.
-                    const nodeMatrix = (nodeWrapper as any)?.matrix || (nodeWrapper as any)?.worldMatrix
-                    if (!nodeMatrix) continue
+                      const pivot =
+                        nodeData?.PivotPoint ||
+                        pe2Node?.PivotPoint ||
+                        storeNode?.PivotPoint ||
+                        [0, 0, 0]
+                      // Match particles.ts: emission uses rendererData.nodes[ObjectId].matrix.
+                      const nodeMatrix = (nodeWrapper as any)?.matrix || (nodeWrapper as any)?.worldMatrix
+                      if (!nodeMatrix) continue
 
-                    const localCorners: Array<[number, number, number]> = [
-                      [pivot[0] - halfW, pivot[1] - halfL, pivot[2]],
-                      [pivot[0] + halfW, pivot[1] - halfL, pivot[2]],
-                      [pivot[0] + halfW, pivot[1] + halfL, pivot[2]],
-                      [pivot[0] - halfW, pivot[1] + halfL, pivot[2]]
-                    ]
-                    const worldCorners = localCorners.map((c) => {
-                      vec3.set(tempCorner, c[0], c[1], c[2])
-                      vec3.transformMat4(tempCorner, tempCorner, nodeMatrix)
-                      return [tempCorner[0], tempCorner[1], tempCorner[2]] as [number, number, number]
-                    })
-                    const pushLine = (a: [number, number, number], b: [number, number, number]) => {
-                      linePositions.push(a[0], a[1], a[2], b[0], b[1], b[2])
+                      const localCorners: Array<[number, number, number]> = [
+                        [pivot[0] - halfW, pivot[1] - halfL, pivot[2]],
+                        [pivot[0] + halfW, pivot[1] - halfL, pivot[2]],
+                        [pivot[0] + halfW, pivot[1] + halfL, pivot[2]],
+                        [pivot[0] - halfW, pivot[1] + halfL, pivot[2]]
+                      ]
+                      const worldCorners = localCorners.map((c) => {
+                        vec3.set(tempCorner, c[0], c[1], c[2])
+                        vec3.transformMat4(tempCorner, tempCorner, nodeMatrix)
+                        return [tempCorner[0], tempCorner[1], tempCorner[2]] as [number, number, number]
+                      })
+                      const pushLine = (a: [number, number, number], b: [number, number, number]) => {
+                        linePositions.push(a[0], a[1], a[2], b[0], b[1], b[2])
+                      }
+                      pushLine(worldCorners[0], worldCorners[1])
+                      pushLine(worldCorners[1], worldCorners[2])
+                      pushLine(worldCorners[2], worldCorners[3])
+                      pushLine(worldCorners[3], worldCorners[0])
+                      // Cross lines help visibility when the rectangle is small or edge-on.
+                      pushLine(worldCorners[0], worldCorners[2])
+                      pushLine(worldCorners[1], worldCorners[3])
                     }
-                    pushLine(worldCorners[0], worldCorners[1])
-                    pushLine(worldCorners[1], worldCorners[2])
-                    pushLine(worldCorners[2], worldCorners[3])
-                    pushLine(worldCorners[3], worldCorners[0])
-                    // Cross lines help visibility when the rectangle is small or edge-on.
-                    pushLine(worldCorners[0], worldCorners[2])
-                    pushLine(worldCorners[1], worldCorners[3])
-                  }
 
-                  if (linePositions.length > 0) {
-                    debugRenderer.current.renderLines(
-                      gl as WebGLRenderingContext,
-                      mvMatrix,
-                      pMatrix,
-                      linePositions,
-                      [1, 0.35, 0.8, 1]
-                    )
-                  }
+                    if (linePositions.length > 0) {
+                      debugRenderer.current.renderLines(
+                        gl as WebGLRenderingContext,
+                        mvMatrix,
+                        pMatrix,
+                        linePositions,
+                        [1, 0.35, 0.8, 1]
+                      )
+                    }
                   }
                 } catch (err) {
                   console.error('[Viewer] ParticleEmitter2 gizmo box render failed:', err)

@@ -45,6 +45,18 @@ export interface ModelState {
     getNodeById: (objectId: number) => ModelNode | undefined;
     getNodeChildren: (objectId: number) => ModelNode[];
     getAllNodes: () => ModelNode[];
+
+    // Data processing and repair
+    recalculateExtents: () => void;
+    recalculateNormals: () => void;
+    repairModel: () => void;
+    triggerRendererReload: () => void;
+    removeLights: () => void;
+    addDeathAnimation: () => void;
+
+    // Visibility
+    hiddenGeosetIds: number[];
+    toggleGeosetVisibility: (id: number) => void;
 }
 
 // 选择状态

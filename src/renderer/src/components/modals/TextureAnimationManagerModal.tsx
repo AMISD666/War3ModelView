@@ -140,7 +140,9 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
     };
 
     useEffect(() => {
-        const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
+        let active = true;
+        const unlistenPromise = listen('IPC_KEYFRAME_SAVE', (event) => {
+            if (!active) return;
             const payload = event.payload as any;
             if (payload && payload.callerId === 'TextureAnimationManagerModal') {
                 if (editingBlock) {
@@ -152,7 +154,10 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
         });
 
         return () => {
-            unlisten.then(f => f());
+            active = false;
+            unlistenPromise.then(f => {
+                if (typeof f === 'function') f();
+            });
         };
     }, [editingBlock, textureAnims]);
 

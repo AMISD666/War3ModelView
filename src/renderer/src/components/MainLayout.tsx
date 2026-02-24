@@ -1606,6 +1606,7 @@ const MainLayout: React.FC = () => {
     // Use modelData directly from store to ensure updates from NodeManager are reflected
     const modelData = useModelStore(state => state.modelData)
 
+
     // RPC Server for modelOptimize standalone window
     const getModelOptimizeState = useCallback(() => {
         let total = 0;
@@ -1664,6 +1665,7 @@ const MainLayout: React.FC = () => {
             { id: 'geosetVisibilityTool', title: '多边形动作显隐工具', w: 980, h: 560 },
             { id: 'geosetEditor', title: '多边形编辑器', w: 640, h: 480 },
             { id: 'geosetAnimManager', title: '多边形动画管理器', w: 800, h: 480 },
+            { id: 'textureManager', title: '贴图管理器', w: 920, h: 480 },
             // Preload a pool of 8 keyframe editors to eliminate flickering during property switching
             ...Array.from({ length: 8 }).map((_, i) => ({
                 id: `keyframeEditor_${i}`,
@@ -2151,6 +2153,43 @@ const MainLayout: React.FC = () => {
         handleGeosetCommand
     );
 
+    // RPC Server for Texture Manager 
+    const getTextureManagerState = useCallback(() => {
+        const _modelData = useModelStore.getState().modelData;
+        const _modelPath = useModelStore.getState().modelPath;
+        const _pickedGeosetIndex = useSelectionStore.getState().pickedGeosetIndex;
+
+        return {
+            textures: _modelData?.Textures || [],
+            globalSequences: _modelData?.GlobalSequences || [],
+            materials: _modelData?.Materials || [],
+            geosets: _modelData?.Geosets || [],
+            modelPath: _modelPath,
+            pickedGeosetIndex: _pickedGeosetIndex
+        };
+    }, []);
+
+    const handleTextureCommand = useCallback((command: string, payload: any) => {
+        if (command === 'SAVE_TEXTURES' && payload.textures) {
+            console.log('[RPC COMMAND: SAVE_TEXTURES]', payload.textures);
+            useModelStore.getState().updateModelDataSilent({ Textures: payload.textures });
+            showMessage('success', '纹理已更新', '贴图修改已同步到模型');
+        } else if (command === 'EXECUTE_TEXTURE_ACTION') {
+            const { action, payload: actionPayload } = payload;
+            if (action === 'SAVE_TEXTURES') {
+                useModelStore.getState().setTextures(actionPayload);
+            } else if (action === 'RELOAD_RENDERER') {
+                useModelStore.getState().triggerRendererReload();
+            }
+        }
+    }, [showMessage]);
+
+    const { broadcastSync: broadcastTextureManager } = useRpcServer(
+        'textureManager',
+        getTextureManagerState,
+        handleTextureCommand
+    );
+
     // RPC Server for Geoset Visibility Tool
     const getGeosetVisibilityState = useCallback(() => {
         const _modelData = useModelStore.getState().modelData;
@@ -2158,6 +2197,7 @@ const MainLayout: React.FC = () => {
             index,
             MaterialID: g.MaterialID,
             vertexCount: g.Vertices ? g.Vertices.length / 3 : 0,
+
             faceCount: g.Faces ? g.Faces.length / 3 : 0
         }));
 
@@ -2270,6 +2310,16 @@ const MainLayout: React.FC = () => {
                     globalSequences: state.modelData?.GlobalSequences || [],
                 };
                 broadcastGeosetAnimManager(animManagerState);
+
+                const textureManagerState = {
+                    textures: state.modelData?.Textures || [],
+                    globalSequences: state.modelData?.GlobalSequences || [],
+                    materials: state.modelData?.Materials || [],
+                    geosets: state.modelData?.Geosets || [],
+                    modelPath: state.modelPath,
+                    pickedGeosetIndex: useSelectionStore.getState().pickedGeosetIndex
+                };
+                broadcastTextureManager(textureManagerState);
             }
         });
 
@@ -2278,6 +2328,7 @@ const MainLayout: React.FC = () => {
         broadcastGeosetEditor(getGeosetManagerState());
         broadcastGeosetVisibilityTool(getGeosetVisibilityState());
         broadcastGeosetAnimManager(getGeosetAnimManagerState());
+        broadcastTextureManager(getTextureManagerState());
 
         return () => unsubscribe();
     }, [
@@ -2951,7 +3002,7 @@ const MainLayout: React.FC = () => {
                 return true;
             }),
             registerShortcutHandler('editor.textureManager', () => {
-                setShowTextureModal(prev => !prev);
+                windowManager.openToolWindow('textureManager', '贴图管理器', 920, 480);
                 return true;
             }),
             registerShortcutHandler('editor.textureAnimManager', () => {
@@ -3448,7 +3499,7 @@ const MainLayout: React.FC = () => {
                     } else if (editor === 'geosetVisibilityTool') {
                         windowManager.openToolWindow('geosetVisibilityTool', '多边形动作显隐工具', 980, 560);
                     } else if (editor === 'texture') {
-                        setShowTextureModal(true)
+                        windowManager.openToolWindow('textureManager', '贴图管理器', 920, 480);
                     } else if (editor === 'textureAnim') {
                         setShowTextureAnimModal(true)
                     } else if (editor === 'sequence') {
@@ -3680,7 +3731,6 @@ const MainLayout: React.FC = () => {
                                 color: 'white',
                                 border: 'none',
                                 borderRadius: '4px',
-                                cursor: 'pointer'
                             }}
                         >
                             确定
@@ -3689,11 +3739,7 @@ const MainLayout: React.FC = () => {
                 </div>
             )}
 
-            <TextureEditorModal
-                visible={showTextureModal}
-                onClose={() => setShowTextureModal(false)}
-                modelPath={modelPath || undefined}
-            />
+
             <TextureAnimationManagerModal
                 visible={showTextureAnimModal}
                 onClose={() => setShowTextureAnimModal(false)}
