@@ -246,7 +246,7 @@ const DetachedManagerWindow: React.FC<DetachedManagerWindowProps> = ({ detachedM
         return <SequenceEditorModal visible={true} asWindow={true} onClose={handleClose} />
     }
     if (managerType === 'globalSequence') {
-        return <GlobalSequenceModal visible={true} asWindow={true} onClose={handleClose} />
+        return <GlobalSequenceModal visible={true} isStandalone={true} onClose={handleClose} />
     }
 
     return (

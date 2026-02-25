@@ -1682,6 +1682,7 @@ const MainLayout: React.FC = () => {
             { id: 'textureAnimManager', title: '贴图动画管理器', w: 800, h: 480 },
             { id: 'materialManager', title: '材质管理器', w: 740, h: 450 },
             { id: 'sequenceManager', title: '动画管理器', w: 600, h: 450 },
+            { id: 'globalSequenceManager', title: '全局动作管理器', w: 300, h: 360 },
             ...Array.from({ length: 8 }).map((_, i) => ({
                 id: `keyframeEditor_${i}`,
                 title: '关键帧编辑器',

@@ -924,6 +924,10 @@ export async function loadAllTextures(
         if (imageData && renderer.setTextureImageData) {
             renderer.setTextureImageData(path, [imageData])
             results.push({ path, loaded: true })
+
+            // YIELD: Prevent blocking the main thread during heavy GPU uploads
+            // This maintains UI responsiveness while textures are being transferred
+            await new Promise(r => requestAnimationFrame(r))
         } else {
             results.push({ path, loaded: false, error: 'Not found in FS or MPQ' })
         }
