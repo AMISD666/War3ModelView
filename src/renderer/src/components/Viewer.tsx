@@ -820,19 +820,13 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
         if (mpqData && mpqData.length > 0) {
           const blp = decodeBLP(toTightArrayBuffer(mpqData) as any)
-          const imageData = getBLPImageData(blp, 0)
+          const blpMip = getBLPImageData(blp, 0)
 
-          const texCanvas = document.createElement('canvas')
-          texCanvas.width = imageData.width
-          texCanvas.height = imageData.height
-          const ctx = texCanvas.getContext('2d')
-          if (ctx) {
-            const idata = new ImageData(new Uint8ClampedArray(imageData.data), imageData.width, imageData.height)
-            ctx.putImageData(idata, 0, 0)
-            const img = await createImageBitmap(texCanvas)
-            if (renderer.setReplaceableTexture) {
-              renderer.setReplaceableTexture(id, img)
-            }
+          // CRITICAL: Use premultiplyAlpha:'none' — Canvas or default createImageBitmap destroys RGB on transparent pixels
+          const idata = new ImageData(new Uint8ClampedArray(blpMip.data), blpMip.width, blpMip.height)
+          const img = await createImageBitmap(idata, { premultiplyAlpha: 'none' })
+          if (renderer.setReplaceableTexture) {
+            renderer.setReplaceableTexture(id, img)
           }
         } else {
           console.warn(`[Viewer] Failed to load replaceable texture: ${path}`)

@@ -893,6 +893,9 @@ export class ModelRenderer {
                 texture = this.gl.createTexture();
                 this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
                 // this.gl.pixelStorei(this.gl.UNPACK_FLIP_Y_WEBGL, true);
+                // CRITICAL: Textures contain straight (non-premultiplied) alpha. Tell WebGL NOT to premultiply during upload.
+                // The default UNPACK_PREMULTIPLY_ALPHA_WEBGL=true destroys RGB on transparent pixels, making them render black.
+                this.gl.pixelStorei(this.gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
                 this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, img);
                 const flags = this.model.Textures.find(it => it.Image === path)?.Flags || 0;
                 this.setTextureParameters(flags, true);
@@ -971,6 +974,9 @@ export class ModelRenderer {
             }
             this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
             // this.gl.pixelStorei(this.gl.UNPACK_FLIP_Y_WEBGL, true);
+            // CRITICAL: Textures contain straight (non-premultiplied) alpha. Tell WebGL NOT to premultiply during upload.
+            // The default UNPACK_PREMULTIPLY_ALPHA_WEBGL=true destroys RGB on transparent pixels, making them render black.
+            this.gl.pixelStorei(this.gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
             for (let i = 0; i < count; ++i) {
                 this.gl.texImage2D(this.gl.TEXTURE_2D, i, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, imageData[i]);
             }
@@ -4972,6 +4978,8 @@ export class ModelRenderer {
         } else {
             const texture = this.rendererData.replaceableTextures[id] = this.gl.createTexture();
             this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
+            // CRITICAL: img is ImageBitmap with straight alpha (premultiplyAlpha:'none'). Tell WebGL NOT to premultiply during upload.
+            this.gl.pixelStorei(this.gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
             this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, img);
 
             this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);

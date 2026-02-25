@@ -86,7 +86,7 @@ self.onmessage = async (e) => {
             self.postMessage({ type: 'PARSE_SUCCESS', payload: { model } });
         }
         else if (type === 'DECODE_TEXTURE') {
-            const { buffer, path, id, maxDimension } = payload;
+            const { buffer, path, id, maxDimension, preferBlpBaseMip } = payload;
             let imageData: ImageData | null = null;
 
             if (path.toLowerCase().endsWith('.tga')) {
@@ -98,7 +98,7 @@ self.onmessage = async (e) => {
 
                 // Choose optimal mip level based on maxDimension
                 let mipLevel = 0;
-                if (maxDimension > 0) {
+                if (!preferBlpBaseMip && maxDimension > 0) {
                     const width = blp.width || 0;
                     const height = blp.height || 0;
                     const maxSide = Math.max(width, height);
@@ -121,8 +121,9 @@ self.onmessage = async (e) => {
 
             if (!imageData) throw new Error('Failed to decode texture');
 
-            // Convert to ImageBitmap for faster transfer
-            const bitmap = await createImageBitmap(imageData);
+            // Convert to ImageBitmap for faster transfer.
+            // CRITICAL: MUST set premultiplyAlpha to 'none' otherwise WebGL loses RGB data on transparent pixels, rendering them black!
+            const bitmap = await createImageBitmap(imageData, { premultiplyAlpha: 'none' });
 
             // @ts-ignore
             self.postMessage({

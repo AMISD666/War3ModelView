@@ -36,7 +36,7 @@ const TGA_TYPE_RLE_INDEXED = 9;
  * Decode raw BLP/TGA bytes into ImageData entirely within the worker thread.
  * This eliminates main-thread decode blocking.
  */
-function decodeRawTextureInWorker(buffer: ArrayBuffer, path: string, maxDimension?: number): ImageData | null {
+function decodeRawTextureInWorker(buffer: ArrayBuffer, path: string, maxDimension?: number, preferBlpBaseMip?: boolean): ImageData | null {
     try {
         const lower = path.toLowerCase();
         if (lower.endsWith('.tga')) {
@@ -47,7 +47,7 @@ function decodeRawTextureInWorker(buffer: ArrayBuffer, path: string, maxDimensio
         const width = Number(blp?.width ?? blp?.Width ?? 0);
         const height = Number(blp?.height ?? blp?.Height ?? 0);
         let mipLevel = 0;
-        if (maxDimension && maxDimension > 0 && width > 0 && height > 0) {
+        if (!preferBlpBaseMip && maxDimension && maxDimension > 0 && width > 0 && height > 0) {
             const maxSide = Math.max(width, height);
             if (maxSide > maxDimension) {
                 mipLevel = Math.max(0, Math.floor(Math.log2(maxSide / maxDimension)));
@@ -61,7 +61,9 @@ function decodeRawTextureInWorker(buffer: ArrayBuffer, path: string, maxDimensio
         }
         const data = mip.data instanceof Uint8ClampedArray ? mip.data : new Uint8ClampedArray(mip.data);
         let decoded = new ImageData(data as any, mip.width, mip.height);
-        return downscaleInWorker(decoded, maxDimension);
+
+        // BYPASS Canvas downscaling completely for alpha-dependent textures because Canvas 2D always premultiplies alpha, destroying RGB data.
+        return preferBlpBaseMip ? decoded : downscaleInWorker(decoded, maxDimension);
     } catch (e) {
         console.warn(`[Worker] Failed to decode texture ${path}:`, e);
         return null;
@@ -307,7 +309,8 @@ async function applyReplaceableTexturesToRenderer(
             if (!(img instanceof ImageData) && (img as any)?.data) {
                 source = new ImageData(new Uint8ClampedArray((img as any).data), (img as any).width, (img as any).height);
             }
-            const bitmap = await createImageBitmap(source);
+            // CRITICAL: MUST set premultiplyAlpha to 'none' otherwise WebGL loses RGB data on transparent pixels, rendering them black!
+            const bitmap = await createImageBitmap(source, { premultiplyAlpha: 'none' });
             renderer.setReplaceableTexture(parseInt(id, 10), bitmap);
         } catch (e) {
             console.warn(`[Worker] Replaceable texture error ${id}:`, e);
@@ -528,10 +531,40 @@ async function render(
     // Decode raw texture bytes in the worker if provided (main thread sends compressed bytes)
     let effectiveTextureImages = textureImages;
     if (textureRawData && Object.keys(textureRawData).length > 0) {
+        const alphaRequiredTexturePaths = new Set<string>();
+        if (model.Materials) {
+            model.Materials.forEach((material: any) => {
+                if (material.Layers) {
+                    material.Layers.forEach((layer: any) => {
+                        if (layer.FilterMode > 0 && layer.TextureID !== undefined && model.Textures[layer.TextureID]) {
+                            const img = model.Textures[layer.TextureID].Image;
+                            if (img) alphaRequiredTexturePaths.add(img);
+                        }
+                    });
+                }
+            });
+        }
+        if (model.ParticleEmitters2) {
+            model.ParticleEmitters2.forEach((emitter: any) => {
+                if (emitter.TextureID !== undefined && model.Textures[emitter.TextureID]) {
+                    const img = model.Textures[emitter.TextureID].Image;
+                    if (img) alphaRequiredTexturePaths.add(img);
+                }
+            });
+        }
+        if (model.ParticleEmitters) {
+            model.ParticleEmitters.forEach((emitter: any) => {
+                if (emitter.FileName && typeof emitter.FileName === 'string') {
+                    alphaRequiredTexturePaths.add(emitter.FileName);
+                }
+            });
+        }
+
         const decoded: Record<string, ImageData> = { ...(textureImages || {}) };
         for (const [path, buffer] of Object.entries(textureRawData)) {
             if (decoded[path]) continue; // Already have decoded version
-            const img = decodeRawTextureInWorker(buffer, path, textureMaxDimension);
+            const preferBlpBaseMip = alphaRequiredTexturePaths.has(path);
+            const img = decodeRawTextureInWorker(buffer, path, textureMaxDimension, preferBlpBaseMip);
             if (img) decoded[path] = img;
         }
         effectiveTextureImages = decoded;

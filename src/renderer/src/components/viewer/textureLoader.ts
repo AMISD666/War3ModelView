@@ -357,7 +357,8 @@ export function decodeTextureData(buffer: ArrayBuffer, path: string, options?: D
                 }
             }
 
-            const resized = downscaleImageDataIfNeeded(decoded, options?.maxDimension);
+            // BYPASS Canvas downscaling completely for alpha-dependent textures because Canvas 2D always premultiplies alpha, destroying RGB data.
+            const resized = options?.preferBlpBaseMip ? decoded : downscaleImageDataIfNeeded(decoded, options?.maxDimension);
             const adjusted = applyAdjustmentsIfNeeded(resized)
             return forceOpaqueAlphaIfNeeded(adjusted, options?.forceOpaqueAlpha);
         }
@@ -767,6 +768,40 @@ export async function loadAllTextures(
         return results
     }
 
+    const alphaRequiredTexturePaths = new Set<string>();
+
+    if (model.Materials) {
+        model.Materials.forEach((material: any) => {
+            if (material.Layers) {
+                material.Layers.forEach((layer: any) => {
+                    // FilterMode > 0 indicates transparency/blending (e.g., Transparent, Blend, Additive)
+                    if (layer.FilterMode > 0 && layer.TextureID !== undefined && model.Textures[layer.TextureID]) {
+                        const img = model.Textures[layer.TextureID].Image;
+                        if (img) alphaRequiredTexturePaths.add(img);
+                    }
+                });
+            }
+        });
+    }
+
+    if (model.ParticleEmitters2) {
+        model.ParticleEmitters2.forEach((emitter: any) => {
+            if (emitter.TextureID !== undefined && model.Textures[emitter.TextureID]) {
+                const img = model.Textures[emitter.TextureID].Image;
+                if (img) alphaRequiredTexturePaths.add(img);
+            }
+        });
+    }
+
+    // Include v1 Particle Emitters as they also rely heavily on alpha
+    if (model.ParticleEmitters) {
+        model.ParticleEmitters.forEach((emitter: any) => {
+            if (emitter.FileName && typeof emitter.FileName === 'string') {
+                alphaRequiredTexturePaths.add(emitter.FileName);
+            }
+        });
+    }
+
     const textureAdjustmentsByPath = new Map<string, TextureAdjustments>()
     if (Array.isArray(model.Textures)) {
         for (const texture of model.Textures) {
@@ -812,13 +847,21 @@ export async function loadAllTextures(
                     worker.addEventListener('message', handler)
                     worker.postMessage({
                         type: 'DECODE_TEXTURE',
-                        payload: { buffer, path, id, adjustments: textureAdjustmentsByPath.get(path), maxDimension }
+                        payload: {
+                            buffer,
+                            path,
+                            id,
+                            adjustments: textureAdjustmentsByPath.get(path),
+                            maxDimension,
+                            preferBlpBaseMip: alphaRequiredTexturePaths.has(path)
+                        }
                     }, [buffer])
                 })
             } else {
                 imageData = decodeTextureData(buffer, path, {
                     adjustments: textureAdjustmentsByPath.get(path),
-                    maxDimension
+                    maxDimension,
+                    preferBlpBaseMip: alphaRequiredTexturePaths.has(path)
                 })
             }
 
@@ -904,17 +947,10 @@ export async function loadTeamColorTextures(
     const loadReplaceable = async (path: string, id: number) => {
         const imageData = await loadTextureFromMPQ(path)
         if (imageData) {
-            // Create a canvas to get ImageBitmap
-            const texCanvas = document.createElement('canvas')
-            texCanvas.width = imageData.width
-            texCanvas.height = imageData.height
-            const ctx = texCanvas.getContext('2d')
-            if (ctx) {
-                ctx.putImageData(imageData, 0, 0)
-                const img = await createImageBitmap(texCanvas)
-                if (renderer.setReplaceableTexture) {
-                    renderer.setReplaceableTexture(id, img)
-                }
+            // CRITICAL: Directly use imageData with premultiplyAlpha='none' to avoid Canvas API destroying RGB data on transparent pixels
+            const img = await createImageBitmap(imageData, { premultiplyAlpha: 'none' })
+            if (renderer.setReplaceableTexture) {
+                renderer.setReplaceableTexture(id, img)
             }
         }
     }
