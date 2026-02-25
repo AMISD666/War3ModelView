@@ -23,6 +23,7 @@ import {
 } from '../../utils/textureAdjustments'
 import { useRpcClient } from '../../hooks/useRpc'
 import { emit, listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
 const { Text } = Typography
 

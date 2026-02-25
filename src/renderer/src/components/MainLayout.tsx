@@ -1570,6 +1570,81 @@ function validateModelData(data: any): string[] {
 
 
 
+/**
+ * Utility to strip heavy typed arrays (Vertices, Faces, Normals) from model data
+ * to reduce IPC overhead when tool windows only need metadata/structure.
+ */
+function stripHeavyModelData(model: any) {
+    if (!model) return null;
+    try {
+        const stripped: any = { ...model };
+        if (model.Geosets) {
+            stripped.Geosets = model.Geosets.map((g: any) => ({
+                ...g,
+                Vertices: undefined,
+                Faces: undefined,
+                Normals: undefined,
+                TVertices: undefined,
+                VertexGroups: undefined,
+                MatrixGroups: undefined,
+                MatrixIndices: undefined
+            }));
+        }
+        return stripped;
+    } catch (e) {
+        console.error('[MainLayout] Failed to strip model data', e);
+        return model;
+    }
+}
+
+/**
+ * Utility to strip heavy typed arrays (Vertices, Faces, Normals) from geoset data
+ */
+function stripGeosetData(geosets: any[]) {
+    if (!geosets) return [];
+    try {
+        return geosets.map((g: any, index: number) => ({
+            ...g,
+            index, // Keep track of original index
+            Vertices: undefined,
+            Faces: undefined,
+            Normals: undefined,
+            TVertices: undefined,
+            VertexGroups: undefined,
+            MatrixGroups: undefined,
+            MatrixIndices: undefined
+        }));
+    } catch (e) {
+        console.error('[MainLayout] Failed to strip geoset data', e);
+        return geosets;
+    }
+}
+
+/**
+ * Utility to strip heavy keyframe data from nodes to reduce IPC overhead.
+ * Useful for tools that only need node hierarchy, names, and ObjectIds.
+ */
+function stripNodeData(nodes: any[]) {
+    if (!nodes) return [];
+    try {
+        return nodes.map((n: any) => ({
+            ...n,
+            Translation: undefined,
+            Rotation: undefined,
+            Scaling: undefined,
+            Visibility: undefined,
+            // Keep essential metadata
+            ObjectId: n.ObjectId,
+            Parent: n.Parent,
+            Name: n.Name,
+            type: n.type
+        }));
+    } catch (e) {
+        console.error('[MainLayout] Failed to strip node data', e);
+        return nodes;
+    }
+}
+
 const MainLayout: React.FC = () => {
     // Zustand stores
     const modelPath = useModelStore(state => state.modelPath)
@@ -2438,11 +2513,10 @@ const MainLayout: React.FC = () => {
     });
 
     // Push state to the standalone window whenever the model changes
-    // Optimized with throttling and data stripping
+    // Optimized with selective synchronization (Data Stripping)
     useEffect(() => {
         let prevModelData = useModelStore.getState().modelData;
         let prevNodes = useModelStore.getState().nodes;
-        let throttleTimer: any = null;
 
         const performBroadcast = (state: any) => {
             const {
@@ -2458,9 +2532,10 @@ const MainLayout: React.FC = () => {
             } = rpcRefs.current;
 
             const strippedGeosets = stripGeosetData(state.modelData?.Geosets);
+            const strippedNodes = stripNodeData(state.nodes);
             const modelData = state.modelData;
 
-            // 1. Camera Sync
+            // 1. Camera Sync (Minimal Nodes)
             broadcastCameraManager({
                 cameras: state.nodes.filter(n => n.type === NodeType.CAMERA),
                 globalSequences: (modelData?.GlobalSequences || []) as number[]
@@ -2483,12 +2558,12 @@ const MainLayout: React.FC = () => {
 
             // 4. Anim Manager Sync (Stripped)
             broadcastGeosetAnimManager({
-                geosets: strippedGeosets.map(g => ({ index: g.index })),
+                geosets: strippedGeosets.map(g => ({ index: (g as any).index })),
                 geosetAnims: modelData?.GeosetAnims || [],
                 globalSequences: modelData?.GlobalSequences || [],
             });
 
-            // 5. Texture Manager Sync (Stripped Geosets)
+            // 5. Texture Manager Sync (Stripped Geosets & Nodes)
             broadcastTextureManager({
                 textures: modelData?.Textures || [],
                 globalSequences: modelData?.GlobalSequences || [],
@@ -2531,17 +2606,19 @@ const MainLayout: React.FC = () => {
         };
 
         // Subscribe directly to Zustand
+        // Use a slight delay for initial model load (prevModelData is null) to allow main thread to prioritize WebGL/MPQ work
         const unsubscribe = useModelStore.subscribe((state) => {
             if (state.nodes !== prevNodes || state.modelData !== prevModelData) {
+                const isInitialLoad = !prevModelData && state.modelData;
                 prevNodes = state.nodes;
                 prevModelData = state.modelData;
 
-                // Throttle: only broadcast every 100ms
-                if (throttleTimer) return;
-                throttleTimer = setTimeout(() => {
-                    throttleTimer = null;
-                    performBroadcast(useModelStore.getState());
-                }, 100);
+                if (isInitialLoad) {
+                    console.log('[MainLayout] Initial model load detected, deferring IPC broadcast for smoothness');
+                    setTimeout(() => performBroadcast(useModelStore.getState()), 250);
+                } else {
+                    performBroadcast(state);
+                }
             }
         });
 
@@ -2552,7 +2629,6 @@ const MainLayout: React.FC = () => {
 
         return () => {
             unsubscribe();
-            if (throttleTimer) clearTimeout(throttleTimer);
         };
     }, []); // Zero dependencies: stable throughout lifecycle
 
