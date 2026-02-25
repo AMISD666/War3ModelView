@@ -196,12 +196,13 @@ function downscaleImageDataIfNeeded(imageData: ImageData, maxDimension?: number)
 
     if (typeof OffscreenCanvas !== 'undefined') {
         const sourceCanvas = new OffscreenCanvas(imageData.width, imageData.height)
-        const sourceCtx = sourceCanvas.getContext('2d')
+        const sourceCtx = sourceCanvas.getContext('2d', { alpha: true, willReadFrequently: true })
         if (sourceCtx) {
             sourceCtx.putImageData(imageData, 0, 0)
             const targetCanvas = new OffscreenCanvas(targetWidth, targetHeight)
-            const targetCtx = targetCanvas.getContext('2d')
+            const targetCtx = targetCanvas.getContext('2d', { alpha: true, willReadFrequently: true })
             if (targetCtx) {
+                targetCtx.clearRect(0, 0, targetWidth, targetHeight)
                 targetCtx.drawImage(sourceCanvas, 0, 0, targetWidth, targetHeight)
                 return targetCtx.getImageData(0, 0, targetWidth, targetHeight)
             }
@@ -212,14 +213,15 @@ function downscaleImageDataIfNeeded(imageData: ImageData, maxDimension?: number)
         const sourceCanvas = document.createElement('canvas')
         sourceCanvas.width = imageData.width
         sourceCanvas.height = imageData.height
-        const sourceCtx = sourceCanvas.getContext('2d')
+        const sourceCtx = sourceCanvas.getContext('2d', { alpha: true, willReadFrequently: true })
         if (sourceCtx) {
             sourceCtx.putImageData(imageData, 0, 0)
             const targetCanvas = document.createElement('canvas')
             targetCanvas.width = targetWidth
             targetCanvas.height = targetHeight
-            const targetCtx = targetCanvas.getContext('2d')
+            const targetCtx = targetCanvas.getContext('2d', { alpha: true, willReadFrequently: true })
             if (targetCtx) {
+                targetCtx.clearRect(0, 0, targetWidth, targetHeight)
                 targetCtx.drawImage(sourceCanvas, 0, 0, targetWidth, targetHeight)
                 return targetCtx.getImageData(0, 0, targetWidth, targetHeight)
             }

@@ -169,12 +169,13 @@ function downscaleInWorker(imageData: ImageData, maxDimension?: number): ImageDa
     const th = Math.max(1, Math.round(imageData.height * scale));
     try {
         const src = new OffscreenCanvas(imageData.width, imageData.height);
-        const sCtx = src.getContext('2d');
+        const sCtx = src.getContext('2d', { alpha: true, willReadFrequently: true });
         if (sCtx) {
             sCtx.putImageData(imageData, 0, 0);
             const dst = new OffscreenCanvas(tw, th);
-            const dCtx = dst.getContext('2d');
+            const dCtx = dst.getContext('2d', { alpha: true, willReadFrequently: true });
             if (dCtx) {
+                dCtx.clearRect(0, 0, tw, th);
                 dCtx.drawImage(src, 0, 0, tw, th);
                 return dCtx.getImageData(0, 0, tw, th);
             }
