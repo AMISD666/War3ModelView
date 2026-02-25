@@ -984,6 +984,12 @@ export class ModelRenderer {
                 const flags = this.model.Textures.find(it => it.Image === path)?.Flags || 0;
                 this.setTextureParameters(flags, false);
             }
+            // CRITICAL: Always regenerate mipmaps when uploading a single base level.
+            // If this is an existing (shared) texture that was previously set up with a different size
+            // or mip count, skipping generateMipmap leaves it in an INCOMPLETE state → renders black.
+            if (count === 1) {
+                this.gl.generateMipmap(this.gl.TEXTURE_2D);
+            }
             this.gl.bindTexture(this.gl.TEXTURE_2D, null);
             this.rendererData.textures[path] = texture;
             this.processEnvMaps(path);

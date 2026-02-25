@@ -248,6 +248,18 @@ export class ModelResourceManager {
         this.textures.set(path, texture);
     }
 
+    /**
+     * Delete a WebGL texture from GPU memory and remove it from the cache.
+     * Must be called when no models are using a texture to prevent GPU VRAM exhaustion.
+     */
+    public removeTexture(path: string): void {
+        const texture = this.textures.get(path);
+        if (texture && this.gl) {
+            this.gl.deleteTexture(texture);
+        }
+        this.textures.delete(path);
+    }
+
     public getGPUTexture(path: string): GPUTexture | undefined {
         return this.gpuTextures.get(path);
     }

@@ -6,7 +6,7 @@
  */
 
 // @ts-ignore
-import { parseMDX, parseMDL, ModelRenderer, decodeBLP, getBLPImageData } from 'war3-model';
+import { parseMDX, parseMDL, ModelRenderer, ModelResourceManager, decodeBLP, getBLPImageData } from 'war3-model';
 import { mat4, vec3, quat } from 'gl-matrix';
 
 const REPLACEABLE_TEXTURES: Record<number, string> = {
@@ -214,6 +214,34 @@ interface RendererCacheItem {
 
 let renderers: Map<string, RendererCacheItem> = new Map();
 
+/**
+ * Reference count map: texture path → number of cached models using it.
+ * When a model is evicted (PRUNE/CLEAR), decrement counts.
+ * When count hits 0, delete the texture from WebGL to free GPU VRAM.
+ */
+const textureRefCount: Map<string, number> = new Map();
+
+function retainTexturePaths(paths: string[]): void {
+    for (const p of paths) {
+        textureRefCount.set(p, (textureRefCount.get(p) ?? 0) + 1);
+    }
+}
+
+function releaseTexturePaths(paths: string[]): void {
+    for (const p of paths) {
+        const count = (textureRefCount.get(p) ?? 1) - 1;
+        if (count <= 0) {
+            textureRefCount.delete(p);
+            // Free the GPU texture from VRAM
+            try {
+                ModelResourceManager.getInstance().removeTexture(p);
+            } catch (_) { }
+        } else {
+            textureRefCount.set(p, count);
+        }
+    }
+}
+
 const CACHE_LIMIT = 24;
 
 self.onmessage = async (e) => {
@@ -244,8 +272,11 @@ self.onmessage = async (e) => {
             if (item.renderer && typeof item.renderer.destroy === 'function') {
                 try { item.renderer.destroy(); } catch (e) { }
             }
+            // Release all textures held by this model
+            releaseTexturePaths(item.texturePaths || []);
         });
         renderers.clear();
+        textureRefCount.clear();
 
         self.postMessage({ type: 'CLEARED' });
     } else if (type === 'PRUNE') {
@@ -255,6 +286,8 @@ self.onmessage = async (e) => {
                 if (item.renderer && typeof item.renderer.destroy === 'function') {
                     try { item.renderer.destroy(); } catch (e) { }
                 }
+                // Decrement ref-counts; textures reaching 0 are freed from GPU VRAM
+                releaseTexturePaths(item.texturePaths || []);
                 renderers.delete(path);
             }
         }
@@ -460,6 +493,8 @@ async function render(
                 if (oldestItem?.renderer?.destroy) {
                     try { oldestItem.renderer.destroy(); } catch (e) { }
                 }
+                // Release GPU textures for the evicted model
+                releaseTexturePaths(oldestItem?.texturePaths || []);
                 renderers.delete(oldestKey);
                 self.postMessage({ type: 'EVICTED', payload: { fullPath: oldestKey } });
             }
@@ -521,6 +556,8 @@ async function render(
             texturePaths: collectTexturePaths(model)
         };
         renderers.set(fullPath, item);
+        // Retain a GPU reference for each texture path this model uses
+        retainTexturePaths(item.texturePaths);
         coldStartMs = performance.now() - coldStartBegin;
     }
 
@@ -572,7 +609,18 @@ async function render(
 
     // Progressive texture streaming: allow texture sync after the model is already cached.
     if (effectiveTextureImages && Object.keys(effectiveTextureImages).length > 0) {
+        const prevApplied = new Set(cacheItem.appliedTexturePaths);
         applyTextureImagesToRenderer(renderer, effectiveTextureImages, cacheItem.appliedTexturePaths);
+        // Retain newly applied texture paths that weren't in the cache yet
+        const newPaths: string[] = [];
+        for (const p of cacheItem.appliedTexturePaths) {
+            if (!prevApplied.has(p)) newPaths.push(p);
+        }
+        if (newPaths.length > 0) {
+            retainTexturePaths(newPaths);
+            // Add them to the model's tracked texturePaths for PRUNE cleanup
+            cacheItem.texturePaths = [...new Set([...cacheItem.texturePaths, ...newPaths])];
+        }
     }
     if (
         teamColorData &&
@@ -745,6 +793,7 @@ async function render(
     }
 
     const bitmap = canvas!.transferToImageBitmap();
+
     const renderMs = performance.now() - renderStartMs;
     return {
         bitmap,

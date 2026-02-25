@@ -2385,6 +2385,28 @@ const MainLayout: React.FC = () => {
         handleSequenceCommand
     );
 
+    const getGlobalSeqManagerState = useCallback(() => {
+        const state = useModelStore.getState();
+        return {
+            globalSequences: (state.modelData?.GlobalSequences || []) as number[]
+        };
+    }, []);
+
+    const handleGlobalSeqCommand = useCallback((command: string, payload: any) => {
+        if (command === 'EXECUTE_GLOBAL_SEQ_ACTION' && payload?.action === 'SAVE') {
+            const { modelData, setModelData, modelPath } = useModelStore.getState();
+            if (modelData) {
+                setModelData({ ...modelData, GlobalSequences: payload.globalSequences }, modelPath);
+            }
+        }
+    }, []);
+
+    const { broadcastSync: broadcastGlobalSeqManager } = useRpcServer(
+        'globalSequenceManager',
+        getGlobalSeqManagerState,
+        handleGlobalSeqCommand
+    );
+
     // Stable refs for RPC handlers to prevent effect re-mounting
     const rpcRefs = useRef({
         broadcastCameraManager, getCameraManagerState,
@@ -2395,6 +2417,7 @@ const MainLayout: React.FC = () => {
         broadcastTextureAnimManager, getTextureAnimManagerState,
         broadcastMaterialManager, getMaterialManagerState,
         broadcastSequenceManager, getSequenceManagerState,
+        broadcastGlobalSeqManager, getGlobalSeqManagerState,
         lastBroadcastTime: 0
     });
 
@@ -2408,6 +2431,7 @@ const MainLayout: React.FC = () => {
             broadcastTextureAnimManager, getTextureAnimManagerState,
             broadcastMaterialManager, getMaterialManagerState,
             broadcastSequenceManager, getSequenceManagerState,
+            broadcastGlobalSeqManager, getGlobalSeqManagerState,
             lastBroadcastTime: rpcRefs.current.lastBroadcastTime
         };
     });
@@ -2428,7 +2452,8 @@ const MainLayout: React.FC = () => {
                 broadcastTextureManager,
                 broadcastTextureAnimManager,
                 broadcastMaterialManager,
-                broadcastSequenceManager
+                broadcastSequenceManager,
+                broadcastGlobalSeqManager,
             } = rpcRefs.current;
 
             const strippedGeosets = stripGeosetData(state.modelData?.Geosets);
@@ -2496,6 +2521,11 @@ const MainLayout: React.FC = () => {
             // 8. Sequence Manager Sync
             broadcastSequenceManager({
                 sequences: modelData?.Sequences || []
+            });
+
+            // 9. Global Sequence Manager Sync
+            broadcastGlobalSeqManager({
+                globalSequences: (modelData?.GlobalSequences || []) as number[]
             });
         };
 
@@ -3208,7 +3238,7 @@ const MainLayout: React.FC = () => {
                 return true;
             }),
             registerShortcutHandler('editor.globalSequenceManager', () => {
-                setShowGlobalSeqModal(prev => !prev);
+                windowManager.openToolWindow('globalSequenceManager', '全局动作管理器', 300, 360);
                 return true;
             }),
             registerShortcutHandler('view.perspective', () => {
@@ -3705,7 +3735,7 @@ const MainLayout: React.FC = () => {
                     } else if (editor === 'geosetAnim') {
                         windowManager.openToolWindow('geosetAnimManager', '多边形动画管理器', 800, 480);
                     } else if (editor === 'globalSequence') {
-                        setShowGlobalSeqModal(true)
+                        windowManager.openToolWindow('globalSequenceManager', '全局动作管理器', 300, 360);
                     } else if (editor === 'modelOptimize') {
                         // Open as native window using the WindowManager
                         windowManager.openToolWindow('modelOptimize', '模型优化', 320, 380);
@@ -3938,10 +3968,6 @@ const MainLayout: React.FC = () => {
             <SequenceEditorModal
                 visible={showSequenceModal}
                 onClose={() => setShowSequenceModal(false)}
-            />
-            <GlobalSequenceModal
-                visible={showGlobalSeqModal}
-                onClose={() => setShowGlobalSeqModal(false)}
             />
 
             <Suspense fallback={null}>

@@ -11,6 +11,7 @@ import TextureEditorModal from './components/modals/TextureEditorModal'
 import TextureAnimationManagerModal from './components/modals/TextureAnimationManagerModal'
 import MaterialEditorModal from './components/modals/MaterialEditorModal'
 import SequenceEditorModal from './components/modals/SequenceEditorModal'
+import GlobalSequenceModal from './components/modals/GlobalSequenceModal'
 import KeyframeEditor from './components/editors/KeyframeEditor'
 import './assets/index.css'
 import { parseMDX } from 'war3-model'
@@ -168,6 +169,16 @@ if (targetWindow === 'modelOptimize') {
     RootComponent = (
         <React.Suspense fallback={null}>
             <SequenceEditorModal
+                visible={true}
+                onClose={() => getCurrentWindow().hide()}
+                isStandalone={true}
+            />
+        </React.Suspense>
+    );
+} else if (targetWindow === 'globalSequenceManager') {
+    RootComponent = (
+        <React.Suspense fallback={null}>
+            <GlobalSequenceModal
                 visible={true}
                 onClose={() => getCurrentWindow().hide()}
                 isStandalone={true}
