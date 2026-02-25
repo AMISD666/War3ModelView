@@ -1596,7 +1596,7 @@ const MainLayout: React.FC = () => {
     const [showTextureAnimModal, setShowTextureAnimModal] = useState<boolean>(false)
     const [showSequenceModal, setShowSequenceModal] = useState<boolean>(false)
 
-    const [showMaterialModal, setShowMaterialModal] = useState<boolean>(false)
+    const [showGlobalSeqModal, setShowGlobalSeqModal] = useState<boolean>(false)
     // Utility to strip heavy typed arrays from geosets before RPC broadcast
     const stripGeosetData = (geosets: any[] | undefined) => {
         if (!geosets || !Array.isArray(geosets)) return [];
@@ -1611,7 +1611,6 @@ const MainLayout: React.FC = () => {
     };
 
     const [showGeosetModal, setShowGeosetModal] = useState<boolean>(false)
-    const [showGlobalSeqModal, setShowGlobalSeqModal] = useState<boolean>(false)
     const [showModelOptimizeModal, setShowModelOptimizeModal] = useState<boolean>(false)
     const [showAbout, setShowAbout] = useState<boolean>(false)
 
@@ -1681,6 +1680,8 @@ const MainLayout: React.FC = () => {
             { id: 'geosetAnimManager', title: '多边形动画管理器', w: 800, h: 480 },
             { id: 'textureManager', title: '贴图管理器', w: 920, h: 480 },
             { id: 'textureAnimManager', title: '贴图动画管理器', w: 800, h: 480 },
+            { id: 'materialManager', title: '材质管理器', w: 740, h: 450 },
+            { id: 'sequenceManager', title: '动画管理器', w: 600, h: 450 },
             ...Array.from({ length: 8 }).map((_, i) => ({
                 id: `keyframeEditor_${i}`,
                 title: '关键帧编辑器',
@@ -1790,7 +1791,7 @@ const MainLayout: React.FC = () => {
             showTextureModal,
             showTextureAnimModal,
             showSequenceModal,
-            showMaterialModal,
+            showMaterialModal: false, // Material manager is now a tool window
             showGeosetModal,
             showGlobalSeqModal,
             showAbout
@@ -1801,7 +1802,6 @@ const MainLayout: React.FC = () => {
         showTextureModal,
         showTextureAnimModal,
         showSequenceModal,
-        showMaterialModal,
         showGeosetModal,
         showGlobalSeqModal,
         showAbout
@@ -2321,6 +2321,69 @@ const MainLayout: React.FC = () => {
         handleTextureAnimCommand
     );
 
+    // RPC Server for Material Manager
+    const getMaterialManagerState = useCallback(() => {
+        const _modelData = useModelStore.getState().modelData;
+        const _modelPath = useModelStore.getState().modelPath;
+        const _pickedGeosetIndex = useSelectionStore.getState().pickedGeosetIndex;
+
+        return {
+            materials: _modelData?.Materials || [],
+            textures: _modelData?.Textures || [],
+            geosets: _modelData?.Geosets || [],
+            globalSequences: _modelData?.GlobalSequences || [],
+            sequences: _modelData?.Sequences || [],
+            modelPath: _modelPath,
+            pickedGeosetIndex: _pickedGeosetIndex
+        };
+    }, []);
+
+    const handleMaterialCommand = useCallback((command: string, payload: any) => {
+        if (command === 'EXECUTE_MATERIAL_ACTION') {
+            const { action, payload: actionPayload } = payload;
+            if (action === 'SAVE_MATERIALS') {
+                useModelStore.getState().setMaterials(actionPayload.materials);
+                useModelStore.getState().setTextures(actionPayload.textures);
+                if (actionPayload.geosets) {
+                    useModelStore.getState().setGeosets(actionPayload.geosets);
+                }
+            } else if (action === 'RELOAD_RENDERER') {
+                useModelStore.getState().triggerRendererReload();
+            }
+        }
+    }, []);
+
+    const { broadcastSync: broadcastMaterialManager } = useRpcServer(
+        'materialManager',
+        getMaterialManagerState,
+        handleMaterialCommand
+    );
+
+    const getSequenceManagerState = useCallback(() => {
+        const state = useModelStore.getState();
+        return {
+            sequences: state.modelData?.Sequences || []
+        };
+    }, []);
+
+    const handleSequenceCommand = useCallback((command: string, payload: any) => {
+        if (command === 'SAVE_SEQUENCES') {
+            useModelStore.getState().setSequences(payload);
+        } else if (command === 'PRUNE_KEYFRAMES') {
+            const { modelData } = useModelStore.getState();
+            if (modelData) {
+                payload.forEach(([start, end]: [number, number]) => {
+                    pruneModelKeyframes(modelData, start, end);
+                });
+            }
+        }
+    }, []);
+
+    const { broadcastSync: broadcastSequenceManager } = useRpcServer(
+        'sequenceManager',
+        getSequenceManagerState,
+        handleSequenceCommand
+    );
 
     // Stable refs for RPC handlers to prevent effect re-mounting
     const rpcRefs = useRef({
@@ -2330,6 +2393,8 @@ const MainLayout: React.FC = () => {
         broadcastGeosetAnimManager, getGeosetAnimManagerState,
         broadcastTextureManager, getTextureManagerState,
         broadcastTextureAnimManager, getTextureAnimManagerState,
+        broadcastMaterialManager, getMaterialManagerState,
+        broadcastSequenceManager, getSequenceManagerState,
         lastBroadcastTime: 0
     });
 
@@ -2341,6 +2406,8 @@ const MainLayout: React.FC = () => {
             broadcastGeosetAnimManager, getGeosetAnimManagerState,
             broadcastTextureManager, getTextureManagerState,
             broadcastTextureAnimManager, getTextureAnimManagerState,
+            broadcastMaterialManager, getMaterialManagerState,
+            broadcastSequenceManager, getSequenceManagerState,
             lastBroadcastTime: rpcRefs.current.lastBroadcastTime
         };
     });
@@ -2359,7 +2426,9 @@ const MainLayout: React.FC = () => {
                 broadcastGeosetVisibilityTool,
                 broadcastGeosetAnimManager,
                 broadcastTextureManager,
-                broadcastTextureAnimManager
+                broadcastTextureAnimManager,
+                broadcastMaterialManager,
+                broadcastSequenceManager
             } = rpcRefs.current;
 
             const strippedGeosets = stripGeosetData(state.modelData?.Geosets);
@@ -2411,6 +2480,22 @@ const MainLayout: React.FC = () => {
                 materials: modelData?.Materials || [],
                 geosets: strippedGeosets,
                 pickedGeosetIndex: useSelectionStore.getState().pickedGeosetIndex
+            });
+
+            // 7. Material Manager Sync
+            broadcastMaterialManager({
+                materials: modelData?.Materials || [],
+                textures: modelData?.Textures || [],
+                geosets: strippedGeosets,
+                globalSequences: modelData?.GlobalSequences || [],
+                sequences: modelData?.Sequences || [],
+                modelPath: state.modelPath,
+                pickedGeosetIndex: useSelectionStore.getState().pickedGeosetIndex
+            });
+
+            // 8. Sequence Manager Sync
+            broadcastSequenceManager({
+                sequences: modelData?.Sequences || []
             });
         };
 
@@ -3112,11 +3197,14 @@ const MainLayout: React.FC = () => {
                 return true;
             }),
             registerShortcutHandler('editor.materialManager', () => {
-                setShowMaterialModal(prev => !prev);
+                // Not rendering inline material modal anymore
+                // setShowMaterialModal(prev => !prev);
+                windowManager.openToolWindow('materialManager', '材质管理器', 650, 380);
                 return true;
             }),
             registerShortcutHandler('editor.sequenceManager', () => {
-                setShowSequenceModal(prev => !prev);
+                // setShowSequenceModal(prev => !prev);
+                windowManager.openToolWindow('sequenceManager', '动画管理器', 600, 450);
                 return true;
             }),
             registerShortcutHandler('editor.globalSequenceManager', () => {
@@ -3605,12 +3693,13 @@ const MainLayout: React.FC = () => {
                     } else if (editor === 'textureAnim') {
                         windowManager.openToolWindow('textureAnimManager', '贴图动画管理器', 800, 480);
                     } else if (editor === 'sequence') {
-                        setShowSequenceModal(true)
+                        // setShowSequenceModal(true)
+                        windowManager.openToolWindow('sequenceManager', '动画管理器', 600, 450)
                     } else if (editor === 'camera') {
                         windowManager.openToolWindow('cameraManager', '相机管理器', 700, 520);
                     } else if (editor === 'material') {
 
-                        setShowMaterialModal(true)
+                        windowManager.openToolWindow('materialManager', '材质管理器', 650, 380)
                     } else if (editor === 'geoset') {
                         windowManager.openToolWindow('geosetEditor', '多边形编辑器', 640, 480);
                     } else if (editor === 'geosetAnim') {
@@ -3849,10 +3938,6 @@ const MainLayout: React.FC = () => {
             <SequenceEditorModal
                 visible={showSequenceModal}
                 onClose={() => setShowSequenceModal(false)}
-            />
-            <MaterialEditorModal
-                visible={showMaterialModal}
-                onClose={() => setShowMaterialModal(false)}
             />
             <GlobalSequenceModal
                 visible={showGlobalSeqModal}

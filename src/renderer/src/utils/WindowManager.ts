@@ -38,7 +38,7 @@ class WindowManager {
         console.log(`[WindowManager] Creating new window: ${windowId} (${title})`);
         try {
             const win = new WebviewWindow(windowId, {
-                url: `/?window=${windowId}`,
+                url: `${window.location.origin}/?window=${windowId}`,
                 title: title,
                 width: width,
                 height: height,
