@@ -7,6 +7,7 @@ import { useModelStore } from '../../store/modelStore'
 import { pruneModelKeyframes } from '../../utils/modelUtils'
 import { useRpcClient } from '../../hooks/useRpc'
 
+import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame';
 const { Text } = Typography
 
 interface SequenceEditorModalProps {
@@ -168,20 +169,6 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
 
     const innerContent = (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: '#252525' }}>
-            {isStandalone && (
-                <div data-tauri-drag-region className="titlebar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#1e1e1e', borderBottom: '1px solid #4a4a4a', padding: '4px 12px' }}>
-                    <div data-tauri-drag-region style={{ flex: 1, display: 'flex', alignItems: 'center', pointerEvents: 'none' }}>
-                        <span style={{ color: '#e8e8e8', fontSize: '11px', fontWeight: 'bold' }}>动画管理器</span>
-                    </div>
-                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                        <CloseOutlined
-                            onClick={handleOk}
-                            style={{ color: '#aaa', cursor: 'pointer', fontSize: '12px', padding: '4px' }}
-                            className="hover:text-white"
-                        />
-                    </div>
-                </div>
-            )}
             <div style={{ display: 'flex', flex: 1, border: isStandalone ? 'none' : '1px solid #4a4a4a', overflow: 'hidden' }}>
                 {/* List (Left) */}
                 <div ref={listRef} style={{ width: '180px', minWidth: '180px', overflowY: 'auto', display: 'flex', flexDirection: 'column', backgroundColor: '#333333', borderRight: '1px solid #4a4a4a' }}>
@@ -353,9 +340,11 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
 
     if (isStandalone) {
         return (
-            <div style={{ height: '100vh', width: '100vw', backgroundColor: '#252525' }}>
-                {innerContent}
-            </div>
+            <StandaloneWindowFrame title="序列编辑器" onClose={onClose}>
+                <div style={{ height: '100%', width: '100%', backgroundColor: '#252525' }}>
+                    {innerContent}
+                </div>
+            </StandaloneWindowFrame>
         )
     }
 

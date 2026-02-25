@@ -3,6 +3,7 @@ import { Button, InputNumber } from 'antd'
 import { PlusOutlined, DeleteOutlined, CheckOutlined } from '@ant-design/icons'
 import { useModelStore } from '../../store/modelStore'
 import { useRpcClient } from '../../hooks/useRpc'
+import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 
 interface GlobalSequenceModalProps {
@@ -33,7 +34,7 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({
 
     useEffect(() => {
         setLocalSeqs([...globalSequences])
-    }, [JSON.stringify(globalSequences)])
+    }, [globalSequences])
 
     const saveChanges = (newSeqs: number[]) => {
         if (isStandalone) {
@@ -74,11 +75,11 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({
     const TEXT = '#e0e0e0'
     const MUTED = '#888'
 
-    return (
+    const innerContent = (
         <div style={{
             display: 'flex',
             flexDirection: 'column',
-            height: '100vh',
+            height: isStandalone ? '100%' : '100vh',
             backgroundColor: BASE,
             color: TEXT,
             fontFamily: 'Segoe UI, sans-serif',
@@ -86,32 +87,6 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({
             overflow: 'hidden',
             userSelect: 'none',
         }}>
-            {/* Header / Titlebar */}
-            <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '0 12px',
-                height: '36px',
-                minHeight: '36px',
-                backgroundColor: PANEL,
-                borderBottom: `1px solid ${BORDER}`,
-                flexShrink: 0,
-            }}>
-                <div data-tauri-drag-region style={{ flex: 1, height: '100%', display: 'flex', alignItems: 'center' }}>
-                    <span data-tauri-drag-region style={{ fontWeight: 600, fontSize: '13px', letterSpacing: '0.3px' }}>
-                        全局动作管理器
-                    </span>
-                </div>
-                <Button
-                    type="text"
-                    size="small"
-                    icon={<span style={{ fontSize: 14 }}>✕</span>}
-                    onClick={() => isStandalone ? getCurrentWindow().hide() : onClose()}
-                    style={{ color: '#888', width: 24, height: 24, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                />
-            </div>
-
             {/* List Header: Add button */}
             <div style={{ padding: '8px 12px', borderBottom: `1px solid ${BORDER}`, flexShrink: 0, display: 'flex', justifyContent: 'flex-start' }}>
                 <Button
@@ -209,6 +184,16 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({
             </div>
         </div>
     )
+
+    if (isStandalone) {
+        return (
+            <StandaloneWindowFrame title="全局动作管理器" onClose={() => getCurrentWindow().hide()}>
+                {innerContent}
+            </StandaloneWindowFrame>
+        );
+    }
+
+    return innerContent;
 }
 
 export default GlobalSequenceModal

@@ -4,9 +4,10 @@ import { SmartInputNumber as InputNumber } from '@renderer/components/common/Sma
 import { DraggableModal } from '../DraggableModal';
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
-import { ReloadOutlined, CloseOutlined } from '@ant-design/icons'
-import { getCurrentWindow } from '@tauri-apps/api/window'
+import { ReloadOutlined } from '@ant-design/icons'
+import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
 import { useRpcClient } from '../../hooks/useRpc'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 
 const { Text } = Typography
 
@@ -90,16 +91,21 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
             emitCommand('EXECUTE_GEOSET_ACTION', { action: 'SAVE_ALL', payload: localGeosets });
             message.success('多边形设置已保存')
             setHasChanges(false)
+            getCurrentWindow().hide()
         } else if (setGeosets) {
             setGeosets(localGeosets)
             message.success('多边形设置已保存')
             setHasChanges(false)
+            onClose()
         }
-        if (!isStandalone) onClose()
     }
 
     const handleCancel = () => {
-        if (!isStandalone) onClose()
+        if (isStandalone) {
+            getCurrentWindow().hide()
+        } else {
+            onClose()
+        }
     }
 
     const updateLocalGeoset = (index: number, updates: any) => {
@@ -216,23 +222,11 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
     );
     if (isStandalone) {
         return (
-            <div style={{ width: '100vw', height: '100vh', backgroundColor: '#1e1e1e', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                <div style={{ height: '32px', minHeight: '32px', backgroundColor: '#222', display: 'flex', alignItems: 'center', padding: '0 16px', borderBottom: '1px solid #333' }}>
-                    <div data-tauri-drag-region style={{ flex: 1, height: '100%', display: 'flex', alignItems: 'center', cursor: 'default' }}>
-                        <span data-tauri-drag-region style={{ color: '#e0e0e0', fontWeight: 600, fontSize: 13 }}>多边形编辑器</span>
-                    </div>
-                    <Button
-                        type="text"
-                        size="small"
-                        icon={<CloseOutlined style={{ fontSize: 14 }} />}
-                        onClick={() => getCurrentWindow().hide()}
-                        style={{ color: '#888', zIndex: 10, width: 24, height: 24, minWidth: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}
-                    />
-                </div>
+            <StandaloneWindowFrame title="多边形编辑器" onClose={() => getCurrentWindow().hide()}>
                 <div style={{ flex: 1, overflowY: 'auto' }}>
                     {innerContent}
                 </div>
-            </div>
+            </StandaloneWindowFrame>
         );
     }
     return (

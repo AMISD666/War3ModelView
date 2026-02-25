@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Modal, Checkbox, Slider, InputNumber, Button, Row, Col, Typography, Divider } from 'antd';
-import { CloseOutlined } from '@ant-design/icons';
 import Draggable, { DraggableData, DraggableEvent } from 'react-draggable';
 import { clearAndFixModel, IClearConfig } from '../../utils/modelUtils';
 import { useRpcClient } from '../../hooks/useRpc';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame';
 
 const { Text, Title } = Typography;
 
@@ -252,46 +251,12 @@ const ModelOptimizeModal: React.FC<ModelOptimizeModalProps> = ({ visible, onClos
 
     if (isStandalone) {
         return (
-            <div style={{
-                width: '100vw',
-                height: '100vh',
-                backgroundColor: '#1e1e1e',
-                display: 'flex',
-                flexDirection: 'column',
-                overflow: 'hidden'
-            }}>
-                {/* Native Window Custom Title Bar Wrapper */}
-                <div
-                    style={{
-                        height: '32px',
-                        minHeight: '32px',
-                        backgroundColor: '#222',
-                        borderBottom: '1px solid #333',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        padding: '0 16px',
-                        userSelect: 'none',
-                    }}
-                >
-                    <div
-                        data-tauri-drag-region
-                        style={{ flex: 1, height: '100%', display: 'flex', alignItems: 'center', cursor: 'default' }}
-                    >
-                        <Title level={5} data-tauri-drag-region style={{ margin: 0, color: '#e0e0e0', fontWeight: 600, fontSize: 14 }}>模型优化</Title>
-                    </div>
-                    <CloseOutlined
-                        onClick={onClose}
-                        style={{ color: '#888', cursor: 'pointer', fontSize: 14, padding: '2px', zIndex: 10 }}
-                        onMouseEnter={(e) => (e.currentTarget.style.color = '#fff')}
-                        onMouseLeave={(e) => (e.currentTarget.style.color = '#888')}
-                    />
-                </div>
+            <StandaloneWindowFrame title="模型优化" onClose={onClose}>
                 {/* Scrollable Content Wrapper */}
                 <div style={{ padding: '12px 16px', flex: 1, overflowY: 'auto' }}>
                     {innerContent}
                 </div>
-            </div>
+            </StandaloneWindowFrame>
         );
     }
 

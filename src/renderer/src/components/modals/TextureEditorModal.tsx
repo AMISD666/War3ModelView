@@ -1,9 +1,9 @@
-﻿import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { List, Button, Input, Checkbox, Card, Typography, message, Dropdown, Slider } from 'antd'
 import { SmartInputNumber as InputNumber } from '../common/SmartInputNumber'
 import type { MenuProps } from 'antd'
-import { PlusOutlined, DeleteOutlined, FolderOpenOutlined, DatabaseOutlined, ReloadOutlined, CloseOutlined } from '@ant-design/icons'
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { PlusOutlined, DeleteOutlined, FolderOpenOutlined, DatabaseOutlined, ReloadOutlined } from '@ant-design/icons'
+import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame';
 import { useSelectionStore } from '../../store/selectionStore'
 
 import { useModelStore } from '../../store/modelStore'
@@ -638,318 +638,296 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
             styles: {
                 content: { backgroundColor: '#333333', border: '1px solid #4a4a4a' },
                 header: { backgroundColor: '#333333', borderBottom: '1px solid #4a4a4a' },
-                body: { backgroundColor: '#2d2d2d', padding: isStandalone ? 0 : undefined },
+                body: { backgroundColor: '#2d2d2d', padding: 0 },
                 footer: { borderTop: '1px solid #4a4a4a' }
             }
         };
 
-    return (
-        <Wrapper {...wrapperProps}>
-            {isStandalone && (
-                <div
-                    data-tauri-drag-region
-                    style={{
-                        height: 32,
-                        minHeight: 32,
-                        backgroundColor: '#333333',
-                        display: 'flex',
-                        alignItems: 'center',
-                        padding: '0 16px',
-                        borderBottom: '1px solid #1a1a1a',
-                        userSelect: 'none'
-                    }}
-                >
-                    <div data-tauri-drag-region style={{ color: '#e8e8e8', fontSize: 12, fontWeight: 'bold', flex: 1 }}>纹理管理器</div>
-                    <Button
-                        type="text"
-                        icon={<CloseOutlined />}
-                        onClick={() => getCurrentWindow().close()}
-                        style={{ color: '#888', width: 24, height: 24, padding: 0, display: 'flex', justifyContent: 'center', alignItems: 'center', marginLeft: 8 }}
-                        className="hover:!text-white hover:!bg-[#e81123]"
-                    />
-                </div>
-            )}
-            <div style={{ display: 'flex', flex: isStandalone ? 1 : 'none', height: isStandalone ? 'unset' : '480px', border: isStandalone ? 'none' : '1px solid #4a4a4a', backgroundColor: '#252525', width: '100%', overflow: 'hidden' }}>
-                {/* List (Left) */}
-                <div ref={listRef} style={{ width: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', backgroundColor: '#333333', borderRight: '1px solid #4a4a4a' }}>
-                    <div style={{ padding: '8px', borderBottom: '1px solid #4a4a4a' }}>
-                        <Dropdown
-                            menu={{
-                                items: [
-                                    {
-                                        key: 'file',
-                                        label: '从文件导入',
-                                        icon: <FolderOpenOutlined />,
-                                        onClick: async () => {
-                                            try {
-                                                const selected = await open({
-                                                    multiple: true,
-                                                    filters: [{
-                                                        name: '纹理文件',
-                                                        extensions: ['blp', 'png', 'tga', 'jpg', 'jpeg']
-                                                    }]
-                                                })
+    if (isStandalone) {
+        return (
+            <StandaloneWindowFrame title="贴图管理器" onClose={() => getCurrentWindow().hide()}>
+                <div style={{ display: 'flex', flex: 1, backgroundColor: '#252525', width: '100%', overflow: 'hidden' }}>
+                    {/* List (Left) */}
+                    <div ref={listRef} style={{ width: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', backgroundColor: '#333333', borderRight: '1px solid #4a4a4a' }}>
+                        <div style={{ padding: '8px', borderBottom: '1px solid #4a4a4a' }}>
+                            <Dropdown
+                                menu={{
+                                    items: [
+                                        {
+                                            key: 'file',
+                                            label: '从文件导入',
+                                            icon: <FolderOpenOutlined />,
+                                            onClick: async () => {
+                                                try {
+                                                    const selected = await open({
+                                                        multiple: true,
+                                                        filters: [{
+                                                            name: '纹理文件',
+                                                            extensions: ['blp', 'png', 'tga', 'jpg', 'jpeg']
+                                                        }]
+                                                    })
 
-                                                // Handle both single and multiple selection
-                                                const paths = Array.isArray(selected) ? selected : (selected ? [selected] : [])
+                                                    // Handle both single and multiple selection
+                                                    const paths = Array.isArray(selected) ? selected : (selected ? [selected] : [])
 
-                                                if (paths.length === 0) return
+                                                    if (paths.length === 0) return
 
-                                                // Get existing texture paths for duplicate detection
-                                                const existingPaths = new Set(
-                                                    localTextures.map(t => (t.Image || '').toLowerCase())
-                                                )
+                                                    // Get existing texture paths for duplicate detection
+                                                    const existingPaths = new Set(
+                                                        localTextures.map(t => (t.Image || '').toLowerCase())
+                                                    )
 
-                                                const newTextures: any[] = []
-                                                let addedCount = 0
-                                                let skippedCount = 0
+                                                    const newTextures: any[] = []
+                                                    let addedCount = 0
+                                                    let skippedCount = 0
 
-                                                for (const filePath of paths) {
-                                                    // 计算相对路径
-                                                    let relativePath = filePath
+                                                    for (const filePath of paths) {
+                                                        // 计算相对路径
+                                                        let relativePath = filePath
 
-                                                    if (modelPath) {
-                                                        // 获取模型所在目录
-                                                        const modelDir = modelPath.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
-                                                        const selectedNormalized = filePath.replace(/\\/g, '/')
+                                                        if (modelPath) {
+                                                            // 获取模型所在目录
+                                                            const modelDir = modelPath.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
+                                                            const selectedNormalized = filePath.replace(/\\/g, '/')
 
-                                                        // 检查是否在模型目录下
-                                                        if (selectedNormalized.toLowerCase().startsWith(modelDir.toLowerCase())) {
-                                                            // 提取相对路径
-                                                            relativePath = selectedNormalized.substring(modelDir.length + 1)
-                                                            // 转换为反斜杠（MDX 标准格式）
-                                                            relativePath = relativePath.replace(/\//g, '\\')
-                                                        } else {
-                                                            // 不在模型目录下，使用文件名
-                                                            relativePath = filePath.replace(/\\/g, '/').split('/').pop() || filePath
+                                                            // 检查是否在模型目录下
+                                                            if (selectedNormalized.toLowerCase().startsWith(modelDir.toLowerCase())) {
+                                                                // 提取相对路径
+                                                                relativePath = selectedNormalized.substring(modelDir.length + 1)
+                                                                // 转换为反斜杠（MDX 标准格式）
+                                                                relativePath = relativePath.replace(/\//g, '\\')
+                                                            } else {
+                                                                // 不在模型目录下，使用文件名
+                                                                relativePath = filePath.replace(/\\/g, '/').split('/').pop() || filePath
+                                                            }
                                                         }
+
+                                                        // Check for duplicate (same path)
+                                                        if (existingPaths.has(relativePath.toLowerCase())) {
+                                                            skippedCount++
+                                                            continue
+                                                        }
+
+                                                        // Also add to existing set to prevent duplicates within the batch
+                                                        existingPaths.add(relativePath.toLowerCase())
+
+                                                        newTextures.push(ensureLocalTexture({ Image: relativePath, ReplaceableId: 0, Flags: 0 }))
+                                                        addedCount++
                                                     }
 
-                                                    // Check for duplicate (same path)
-                                                    if (existingPaths.has(relativePath.toLowerCase())) {
-                                                        skippedCount++
-                                                        continue
-                                                    }
+                                                    if (newTextures.length > 0) {
+                                                        const updatedTextures = [...localTextures, ...newTextures]
+                                                        setLocalTextures(updatedTextures)
+                                                        setSelectedIndex(updatedTextures.length - 1) // Select the last added texture
+                                                        setTimeout(() => scrollToItem(updatedTextures.length - 1), 0)
 
-                                                    // Also add to existing set to prevent duplicates within the batch
-                                                    existingPaths.add(relativePath.toLowerCase())
-
-                                                    newTextures.push(ensureLocalTexture({ Image: relativePath, ReplaceableId: 0, Flags: 0 }))
-                                                    addedCount++
-                                                }
-
-                                                if (newTextures.length > 0) {
-                                                    const updatedTextures = [...localTextures, ...newTextures]
-                                                    setLocalTextures(updatedTextures)
-                                                    setSelectedIndex(updatedTextures.length - 1) // Select the last added texture
-                                                    setTimeout(() => scrollToItem(updatedTextures.length - 1), 0)
-
-                                                    if (addedCount === 1 && skippedCount === 0) {
-                                                        message.success(`已添加纹理: ${newTextures[0].Image}`)
+                                                        if (addedCount === 1 && skippedCount === 0) {
+                                                            message.success(`已添加纹理: ${newTextures[0].Image}`)
+                                                        } else if (skippedCount > 0) {
+                                                            message.success(`已添加 ${addedCount} 个纹理，跳过 ${skippedCount} 个重复`)
+                                                        } else {
+                                                            message.success(`已批量添加 ${addedCount} 个纹理`)
+                                                        }
                                                     } else if (skippedCount > 0) {
-                                                        message.success(`已添加 ${addedCount} 个纹理，跳过 ${skippedCount} 个重复`)
-                                                    } else {
-                                                        message.success(`已批量添加 ${addedCount} 个纹理`)
+                                                        message.warning(`所有选择的纹理都已存在，跳过 ${skippedCount} 个重复`)
                                                     }
-                                                } else if (skippedCount > 0) {
-                                                    message.warning(`所有选择的纹理都已存在，跳过 ${skippedCount} 个重复`)
+                                                } catch (e) {
+                                                    console.error('Failed to open file dialog:', e)
                                                 }
-                                            } catch (e) {
-                                                console.error('Failed to open file dialog:', e)
+                                            }
+                                        },
+                                        {
+                                            key: 'mpq',
+                                            label: '从 MPQ 选择',
+                                            icon: <DatabaseOutlined />,
+                                            disabled: true,  // 暂时禁用
+                                            onClick: () => {
+                                                message.info('MPQ 纹理选择功能即将推出')
+                                            }
+                                        },
+                                        { type: 'divider' },
+                                        {
+                                            key: 'blank',
+                                            label: '新建空白纹理',
+                                            icon: <PlusOutlined />,
+                                            onClick: () => {
+                                                const newTexture = ensureLocalTexture({ Image: 'Textures\\white.blp', ReplaceableId: 0, Flags: 0 })
+                                                setLocalTextures([...localTextures, newTexture])
+                                                setSelectedIndex(localTextures.length)
+                                                setTimeout(() => scrollToItem(localTextures.length), 0)
                                             }
                                         }
-                                    },
-                                    {
-                                        key: 'mpq',
-                                        label: '从 MPQ 选择',
-                                        icon: <DatabaseOutlined />,
-                                        disabled: true,  // 暂时禁用
-                                        onClick: () => {
-                                            message.info('MPQ 纹理选择功能即将推出')
-                                        }
-                                    },
-                                    { type: 'divider' },
-                                    {
-                                        key: 'blank',
-                                        label: '新建空白纹理',
-                                        icon: <PlusOutlined />,
-                                        onClick: () => {
-                                            const newTexture = ensureLocalTexture({ Image: 'Textures\\white.blp', ReplaceableId: 0, Flags: 0 })
-                                            setLocalTextures([...localTextures, newTexture])
-                                            setSelectedIndex(localTextures.length)
-                                            setTimeout(() => scrollToItem(localTextures.length), 0)
-                                        }
-                                    }
-                                ] as MenuProps['items']
-                            }}
-                            trigger={['click']}
-                        >
-                            <Button
-                                type="primary"
-                                icon={<PlusOutlined />}
-                                block
-                                style={{ backgroundColor: '#5a9cff', borderColor: '#5a9cff' }}
+                                    ] as MenuProps['items']
+                                }}
+                                trigger={['click']}
                             >
-                                添加 ▼
-                            </Button>
-                        </Dropdown>
+                                <Button
+                                    type="primary"
+                                    icon={<PlusOutlined />}
+                                    block
+                                    style={{ backgroundColor: '#5a9cff', borderColor: '#5a9cff' }}
+                                >
+                                    添加 ▼
+                                </Button>
+                            </Dropdown>
+                        </div>
+                        <List
+                            dataSource={localTextures}
+                            renderItem={(item, index) => (
+                                <List.Item
+                                    onClick={() => setSelectedIndex(index)}
+                                    draggable
+                                    onDragStart={(e) => {
+                                        setDraggedTextureIndex(e.dataTransfer, index)
+                                        e.dataTransfer.effectAllowed = 'copy'
+                                    }}
+                                    style={{
+                                        cursor: 'pointer',
+                                        padding: '8px 12px',
+                                        backgroundColor: selectedIndex === index ? '#5a9cff' : 'transparent',
+                                        color: selectedIndex === index ? '#fff' : '#b0b0b0',
+                                        transition: 'background 0.2s',
+                                        borderBottom: '1px solid #3a3a3a'
+                                    }}
+                                    className="hover:bg-[#454545]"
+                                >
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px' }}>
+                                            <span style={{ marginRight: '8px', opacity: 0.7 }}>{index}:</span>
+                                            {item.Image || getReplaceableLabel(item.ReplaceableId) || '无法加载贴图'}
+                                        </div>
+                                        <DeleteOutlined
+                                            onClick={(e) => {
+                                                e.stopPropagation()
+                                                const removedId = localTextures[index]?.__editorId
+                                                const newTextures = localTextures.filter((_, i) => i !== index)
+                                                setLocalTextures(newTextures)
+                                                if (removedId) {
+                                                    setAdjustmentsByTextureId((prev) => {
+                                                        const next = { ...prev }
+                                                        delete next[removedId]
+                                                        return next
+                                                    })
+                                                }
+                                                if (selectedIndex === index) setSelectedIndex(-1)
+                                                else if (selectedIndex > index) setSelectedIndex(selectedIndex - 1)
+                                            }}
+                                            style={{ color: '#ff4d4f' }}
+                                        />
+                                    </div>
+                                </List.Item>
+                            )}
+                        />
                     </div>
-                    <List
-                        dataSource={localTextures}
-                        renderItem={(item, index) => (
-                            <List.Item
-                                onClick={() => setSelectedIndex(index)}
-                                draggable
-                                onDragStart={(e) => {
-                                    setDraggedTextureIndex(e.dataTransfer, index)
-                                    e.dataTransfer.effectAllowed = 'copy'
-                                }}
-                                style={{
-                                    cursor: 'pointer',
-                                    padding: '8px 12px',
-                                    backgroundColor: selectedIndex === index ? '#5a9cff' : 'transparent',
-                                    color: selectedIndex === index ? '#fff' : '#b0b0b0',
-                                    transition: 'background 0.2s',
-                                    borderBottom: '1px solid #3a3a3a'
-                                }}
-                                className="hover:bg-[#454545]"
-                            >
-                                <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px' }}>
-                                        <span style={{ marginRight: '8px', opacity: 0.7 }}>{index}:</span>
-                                        {item.Image || getReplaceableLabel(item.ReplaceableId) || '无法加载贴图'}
-                                    </div>
-                                    <DeleteOutlined
-                                        onClick={(e) => {
-                                            e.stopPropagation()
-                                            const removedId = localTextures[index]?.__editorId
-                                            const newTextures = localTextures.filter((_, i) => i !== index)
-                                            setLocalTextures(newTextures)
-                                            if (removedId) {
-                                                setAdjustmentsByTextureId((prev) => {
-                                                    const next = { ...prev }
-                                                    delete next[removedId]
-                                                    return next
-                                                })
-                                            }
-                                            if (selectedIndex === index) setSelectedIndex(-1)
-                                            else if (selectedIndex > index) setSelectedIndex(selectedIndex - 1)
-                                        }}
-                                        style={{ color: '#ff4d4f' }}
-                                    />
-                                </div>
-                            </List.Item>
-                        )}
-                    />
-                </div>
 
-                {/* Details (Right) */}
-                <div style={{ flex: 1, padding: '16px', overflow: 'hidden', backgroundColor: '#252525', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                    {selectedTexture ? (
-                        <>
-                            {/* Top Section: Settings (Left) & Preview (Right) */}
-                            <div style={{ flex: 1, display: 'flex', gap: '16px', minHeight: 0 }}>
-                                {/* Left Settings (Inputs, Checkboxes & Adjustments) */}
-                                <div style={{ width: '272px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                    <div style={{ flexShrink: 0 }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '4px' }}>
-                                            <Typography.Text style={{ color: '#b0b0b0' }}>路径:</Typography.Text>
-                                        </div>
-                                        <Input
-                                            value={selectedTexture.Image}
-                                            onChange={(e) => updateLocalTexture(selectedIndex, { Image: e.target.value })}
-                                            style={{ backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
-                                        />
-                                    </div>
-                                    <div style={{ flexShrink: 0 }}>
-                                        <Typography.Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>可替换 ID:</Typography.Text>
-                                        <InputNumber
-                                            value={selectedTexture.ReplaceableId}
-                                            onChange={(v) => updateLocalTexture(selectedIndex, { ReplaceableId: v })}
-                                            style={{ width: '100%', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
-                                        />
-                                        <Typography.Text style={{ fontSize: '10px', color: '#808080' }}>0:无 1:队色 2:光晕 31+:树</Typography.Text>
-                                    </div>
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px', flexShrink: 0 }}>
-                                        <Checkbox checked={isFlagSet(1)} onChange={(e) => handleFlagChange(1, e.target.checked)} style={{ color: '#e8e8e8' }}>
-                                            笼罩宽度 (Wrap Width)
-                                        </Checkbox>
-                                        <Checkbox checked={isFlagSet(2)} onChange={(e) => handleFlagChange(2, e.target.checked)} style={{ color: '#e8e8e8' }}>
-                                            笼罩高度 (Wrap Height)
-                                        </Checkbox>
-                                    </div>
-
-                                    {/* Bottom Section: Adjustments (Moved to left column) */}
-                                    <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px', flexShrink: 0 }}>
-                                        <Typography.Text style={{ color: '#b0b0b0', fontSize: 12, display: 'block', marginBottom: 4 }}>贴图调整（保存后生效）</Typography.Text>
-
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                            <Typography.Text style={{ color: '#999', fontSize: 12, width: 44, flexShrink: 0 }}>色相</Typography.Text>
-                                            <div style={{ width: 16, height: 16, borderRadius: 4, border: '1px solid #666', backgroundColor: huePreviewColor, flexShrink: 0 }} />
-                                            <Typography.Text style={{ color: '#999', fontSize: 12, width: 36, flexShrink: 0 }}>{toDegree(selectedAdjustments.hue)}</Typography.Text>
-                                            <div style={{ flex: 1, width: '140px', maxWidth: '140px' }}>
-                                                <div style={{ height: 4, borderRadius: 2, marginBottom: 2, background: 'linear-gradient(90deg, #ff0000 0%, #ffff00 17%, #00ff00 33%, #00ffff 50%, #0000ff 67%, #ff00ff 83%, #ff0000 100%)' }} />
-                                                <Slider
-                                                    min={-180} max={180} step={1}
-                                                    value={selectedAdjustments.hue}
-                                                    onChange={(value) => updateSelectedAdjustment({ hue: Number(value) })}
-                                                    disabled={!canAdjustSelectedTexture}
-                                                    tooltip={{ open: false }}
-                                                    style={{ margin: 0 }}
-                                                />
+                    {/* Details (Right) */}
+                    <div style={{ flex: 1, padding: '16px', overflow: 'hidden', backgroundColor: '#252525', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                        {selectedTexture ? (
+                            <>
+                                {/* Top Section: Settings (Left) & Preview (Right) */}
+                                <div style={{ flex: 1, display: 'flex', gap: '16px', minHeight: 0 }}>
+                                    {/* Left Settings (Inputs, Checkboxes & Adjustments) */}
+                                    <div style={{ width: '272px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                        <div style={{ flexShrink: 0 }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '4px' }}>
+                                                <Typography.Text style={{ color: '#b0b0b0' }}>路径:</Typography.Text>
                                             </div>
-                                            <Button size="small" icon={<ReloadOutlined />} onClick={() => resetAdjustmentField('hue')} disabled={!canAdjustSelectedTexture} style={{ width: 24, minWidth: 24, paddingInline: 0 }} />
+                                            <Input
+                                                value={selectedTexture.Image}
+                                                onChange={(e) => updateLocalTexture(selectedIndex, { Image: e.target.value })}
+                                                style={{ backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
+                                            />
+                                        </div>
+                                        <div style={{ flexShrink: 0 }}>
+                                            <Typography.Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>可替换 ID:</Typography.Text>
+                                            <InputNumber
+                                                value={selectedTexture.ReplaceableId}
+                                                onChange={(v) => updateLocalTexture(selectedIndex, { ReplaceableId: v })}
+                                                style={{ width: '100%', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
+                                            />
+                                            <Typography.Text style={{ fontSize: '10px', color: '#808080' }}>0:无 1:队色 2:光晕 31+:树</Typography.Text>
+                                        </div>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px', flexShrink: 0 }}>
+                                            <Checkbox checked={isFlagSet(1)} onChange={(e) => handleFlagChange(1, e.target.checked)} style={{ color: '#e8e8e8' }}>
+                                                笼罩宽度 (Wrap Width)
+                                            </Checkbox>
+                                            <Checkbox checked={isFlagSet(2)} onChange={(e) => handleFlagChange(2, e.target.checked)} style={{ color: '#e8e8e8' }}>
+                                                笼罩高度 (Wrap Height)
+                                            </Checkbox>
                                         </div>
 
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                            <Typography.Text style={{ color: '#999', fontSize: 12, width: 44, flexShrink: 0 }}>明暗度</Typography.Text>
-                                            <div style={{ width: 16, height: 16, visibility: 'hidden', flexShrink: 0 }} />
-                                            <Typography.Text style={{ color: '#999', fontSize: 12, width: 36, flexShrink: 0 }}>{toPercent(selectedAdjustments.brightness)}</Typography.Text>
-                                            <div style={{ flex: 1, width: '140px', maxWidth: '140px' }}>
-                                                <Slider
-                                                    min={0} max={200} step={1}
-                                                    value={selectedAdjustments.brightness}
-                                                    onChange={(value) => updateSelectedAdjustment({ brightness: Number(value) })}
-                                                    disabled={!canAdjustSelectedTexture}
-                                                    tooltip={{ open: false }}
-                                                    style={{ margin: 0 }}
-                                                />
-                                            </div>
-                                            <Button size="small" icon={<ReloadOutlined />} onClick={() => resetAdjustmentField('brightness')} disabled={!canAdjustSelectedTexture} style={{ width: 24, minWidth: 24, paddingInline: 0 }} />
-                                        </div>
+                                        {/* Bottom Section: Adjustments (Moved to left column) */}
+                                        <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px', flexShrink: 0 }}>
+                                            <Typography.Text style={{ color: '#b0b0b0', fontSize: 12, display: 'block', marginBottom: 4 }}>贴图调整（保存后生效）</Typography.Text>
 
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                            <Typography.Text style={{ color: '#999', fontSize: 12, width: 44, flexShrink: 0 }}>饱和度</Typography.Text>
-                                            <div style={{ width: 16, height: 16, visibility: 'hidden', flexShrink: 0 }} />
-                                            <Typography.Text style={{ color: '#999', fontSize: 12, width: 36, flexShrink: 0 }}>{toPercent(selectedAdjustments.saturation)}</Typography.Text>
-                                            <div style={{ flex: 1, width: '140px', maxWidth: '140px' }}>
-                                                <Slider
-                                                    min={0} max={200} step={1}
-                                                    value={selectedAdjustments.saturation}
-                                                    onChange={(value) => updateSelectedAdjustment({ saturation: Number(value) })}
-                                                    disabled={!canAdjustSelectedTexture}
-                                                    tooltip={{ open: false }}
-                                                    style={{ margin: 0 }}
-                                                />
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                <Typography.Text style={{ color: '#999', fontSize: 12, width: 44, flexShrink: 0 }}>色相</Typography.Text>
+                                                <div style={{ width: 16, height: 16, borderRadius: 4, border: '1px solid #666', backgroundColor: huePreviewColor, flexShrink: 0 }} />
+                                                <Typography.Text style={{ color: '#999', fontSize: 12, width: 36, flexShrink: 0 }}>{toDegree(selectedAdjustments.hue)}</Typography.Text>
+                                                <div style={{ flex: 1, width: '140px', maxWidth: '140px' }}>
+                                                    <div style={{ height: 4, borderRadius: 2, marginBottom: 2, background: 'linear-gradient(90deg, #ff0000 0%, #ffff00 17%, #00ff00 33%, #00ffff 50%, #0000ff 67%, #ff00ff 83%, #ff0000 100%)' }} />
+                                                    <Slider
+                                                        min={-180} max={180} step={1}
+                                                        value={selectedAdjustments.hue}
+                                                        onChange={(value) => updateSelectedAdjustment({ hue: Number(value) })}
+                                                        disabled={!canAdjustSelectedTexture}
+                                                        tooltip={{ open: false }}
+                                                        style={{ margin: 0 }}
+                                                    />
+                                                </div>
+                                                <Button size="small" icon={<ReloadOutlined />} onClick={() => resetAdjustmentField('hue')} disabled={!canAdjustSelectedTexture} style={{ width: 24, minWidth: 24, paddingInline: 0 }} />
                                             </div>
-                                            <Button size="small" icon={<ReloadOutlined />} onClick={() => resetAdjustmentField('saturation')} disabled={!canAdjustSelectedTexture} style={{ width: 24, minWidth: 24, paddingInline: 0 }} />
-                                        </div>
 
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                            <Typography.Text style={{ color: '#999', fontSize: 12, width: 44, flexShrink: 0 }}>透明度</Typography.Text>
-                                            <div style={{ width: 16, height: 16, visibility: 'hidden', flexShrink: 0 }} />
-                                            <Typography.Text style={{ color: '#999', fontSize: 12, width: 36, flexShrink: 0 }}>{toPercent(selectedAdjustments.opacity)}</Typography.Text>
-                                            <div style={{ flex: 1, width: '140px', maxWidth: '140px' }}>
-                                                <Slider
-                                                    min={0} max={200} step={1}
-                                                    value={selectedAdjustments.opacity}
-                                                    onChange={(value) => updateSelectedAdjustment({ opacity: Number(value) })}
-                                                    disabled={!canAdjustSelectedTexture}
-                                                    tooltip={{ open: false }}
-                                                    style={{ margin: 0 }}
-                                                />
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                <Typography.Text style={{ color: '#999', fontSize: 12, width: 44, flexShrink: 0 }}>明暗度</Typography.Text>
+                                                <div style={{ width: 16, height: 16, visibility: 'hidden', flexShrink: 0 }} />
+                                                <Typography.Text style={{ color: '#999', fontSize: 12, width: 36, flexShrink: 0 }}>{toPercent(selectedAdjustments.brightness)}</Typography.Text>
+                                                <div style={{ flex: 1, width: '140px', maxWidth: '140px' }}>
+                                                    <Slider
+                                                        min={0} max={200} step={1}
+                                                        value={selectedAdjustments.brightness}
+                                                        onChange={(value) => updateSelectedAdjustment({ brightness: Number(value) })}
+                                                        disabled={!canAdjustSelectedTexture}
+                                                        tooltip={{ open: false }}
+                                                        style={{ margin: 0 }}
+                                                    />
+                                                </div>
+                                                <Button size="small" icon={<ReloadOutlined />} onClick={() => resetAdjustmentField('brightness')} disabled={!canAdjustSelectedTexture} style={{ width: 24, minWidth: 24, paddingInline: 0 }} />
                                             </div>
-                                            <Button size="small" icon={<ReloadOutlined />} onClick={() => resetAdjustmentField('opacity')} disabled={!canAdjustSelectedTexture} style={{ width: 24, minWidth: 24, paddingInline: 0 }} />
+
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                <Typography.Text style={{ color: '#999', fontSize: 12, width: 44, flexShrink: 0 }}>饱和度</Typography.Text>
+                                                <div style={{ width: 16, height: 16, visibility: 'hidden', flexShrink: 0 }} />
+                                                <Typography.Text style={{ color: '#999', fontSize: 12, width: 36, flexShrink: 0 }}>{toPercent(selectedAdjustments.saturation)}</Typography.Text>
+                                                <div style={{ flex: 1, width: '140px', maxWidth: '140px' }}>
+                                                    <Slider
+                                                        min={0} max={200} step={1}
+                                                        value={selectedAdjustments.saturation}
+                                                        onChange={(value) => updateSelectedAdjustment({ saturation: Number(value) })}
+                                                        disabled={!canAdjustSelectedTexture}
+                                                        tooltip={{ open: false }}
+                                                        style={{ margin: 0 }}
+                                                    />
+                                                </div>
+                                                <Button size="small" icon={<ReloadOutlined />} onClick={() => resetAdjustmentField('saturation')} disabled={!canAdjustSelectedTexture} style={{ width: 24, minWidth: 24, paddingInline: 0 }} />
+                                            </div>
+
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                <Typography.Text style={{ color: '#999', fontSize: 12, width: 44, flexShrink: 0 }}>透明度</Typography.Text>
+                                                <div style={{ width: 16, height: 16, visibility: 'hidden', flexShrink: 0 }} />
+                                                <Typography.Text style={{ color: '#999', fontSize: 12, width: 36, flexShrink: 0 }}>{toPercent(selectedAdjustments.opacity)}</Typography.Text>
+                                                <div style={{ flex: 1, width: '140px', maxWidth: '140px' }}>
+                                                    <Slider
+                                                        min={0} max={200} step={1}
+                                                        value={selectedAdjustments.opacity}
+                                                        onChange={(value) => updateSelectedAdjustment({ opacity: Number(value) })}
+                                                        disabled={!canAdjustSelectedTexture}
+                                                        tooltip={{ open: false }}
+                                                        style={{ margin: 0 }}
+                                                    />
+                                                </div>
+                                                <Button size="small" icon={<ReloadOutlined />} onClick={() => resetAdjustmentField('opacity')} disabled={!canAdjustSelectedTexture} style={{ width: 24, minWidth: 24, paddingInline: 0 }} />
+                                            </div>
                                         </div>
 
                                         {!isSelectedTextureBlpOrTga && (
@@ -958,54 +936,55 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                             </Typography.Text>
                                         )}
                                     </div>
-                                </div>
 
-                                {/* Right Preview (Square, fixed size) */}
-                                <div style={{ width: '380px', flexShrink: 0, height: '380px', border: '1px solid #4a4a4a', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', backgroundColor: '#1f1f1f', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
-                                    {isLoadingPreview ? (
-                                        <div style={{ color: '#5a9cff', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-                                            <div className="ant-spin ant-spin-spinning" style={{ fontSize: 24 }}>⏳</div>
-                                            <span>加载中...</span>
-                                        </div>
-                                    ) : previewUrl ? (
-                                        <>
-                                            <img src={previewUrl} alt="Preview" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
-                                            {previewSource && (
-                                                <div style={{
-                                                    position: 'absolute',
-                                                    bottom: 4,
-                                                    right: 4,
-                                                    backgroundColor: previewSource === 'MPQ' ? '#52c41a' : '#1677ff',
-                                                    color: '#fff',
-                                                    padding: '2px 6px',
-                                                    borderRadius: 3,
-                                                    fontSize: 10,
-                                                    fontWeight: 'bold'
-                                                }}>
-                                                    {previewSource}
-                                                </div>
-                                            )}
-                                        </>
-                                    ) : previewError ? (
-                                        <div style={{ color: '#ff4d4f', textAlign: 'center', padding: 8 }}>
-                                            <div>⚠️ {previewError}</div>
-                                            <div style={{ fontSize: 11, color: '#888', marginTop: 4, wordBreak: 'break-all' }}>{selectedTexture?.Image}</div>
-                                        </div>
-                                    ) : (
-                                        <span style={{ color: '#666' }}>无预览</span>
-                                    )}
+                                    {/* Right Preview (Square, fixed size) */}
+                                    <div style={{ width: '380px', flexShrink: 0, height: '380px', border: '1px solid #4a4a4a', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', backgroundColor: '#1f1f1f', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
+                                        {isLoadingPreview ? (
+                                            <div style={{ color: '#5a9cff', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                                                <div className="ant-spin ant-spin-spinning" style={{ fontSize: 24 }}>?</div>
+                                                <span>加载中...</span>
+                                            </div>
+                                        ) : previewUrl ? (
+                                            <>
+                                                <img src={previewUrl} alt="Preview" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+                                                {previewSource && (
+                                                    <div style={{
+                                                        position: 'absolute',
+                                                        bottom: 4,
+                                                        right: 4,
+                                                        backgroundColor: previewSource === 'MPQ' ? '#52c41a' : '#1677ff',
+                                                        color: '#fff',
+                                                        padding: '2px 6px',
+                                                        borderRadius: 3,
+                                                        fontSize: 10,
+                                                        fontWeight: 'bold'
+                                                    }}>
+                                                        {previewSource}
+                                                    </div>
+                                                )}
+                                            </>
+                                        ) : previewError ? (
+                                            <div style={{ color: '#ff4d4f', textAlign: 'center', padding: 8 }}>
+                                                <div>?? {previewError}</div>
+                                                <div style={{ fontSize: 11, color: '#888', marginTop: 4, wordBreak: 'break-all' }}>{selectedTexture?.Image}</div>
+                                            </div>
+                                        ) : (
+                                            <span style={{ color: '#666' }}>无预览</span>
+                                        )}
+                                    </div>
                                 </div>
+                            </>
+                        ) : (
+                            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#808080' }}>
+                                请从左侧列表选择一个纹理
                             </div>
-                        </>
-                    ) : (
-                        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#808080' }}>
-                            请从左侧列表选择一个纹理
-                        </div>
-                    )}
-                </div >
-            </div >
-        </Wrapper >
-    )
+                        )}
+                    </div>
+                </div>
+            </StandaloneWindowFrame >
+        )
+    }
+
 }
 
 export default TextureEditorModal

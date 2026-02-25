@@ -47,7 +47,7 @@ class WindowManager {
                 resizable: false,
                 transparent: false,
                 decorations: false,
-                alwaysOnTop: true,
+                alwaysOnTop: false,
                 center: true,
                 visible: false // Crucial: spawn invisibly
             });

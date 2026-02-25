@@ -10,7 +10,7 @@ import { useSelectionStore } from '../../store/selectionStore'
 import { useHistoryStore } from '../../store/historyStore'
 import { getDraggedTextureIndex } from '../../utils/textureDragDrop'
 import { useRpcClient } from '../../hooks/useRpc'
-import { CloseOutlined } from '@ant-design/icons'
+import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
 
 const { Text } = Typography
 
@@ -1124,36 +1124,11 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 
     if (isStandalone) {
         return (
-            <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', backgroundColor: '#1e1e1e', overflow: 'hidden' }}>
-                <div
-                    data-tauri-drag-region
-                    style={{
-                        height: 32,
-                        background: '#2d2d2d',
-                        borderBottom: '1px solid #3d3d3d',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        padding: '0 12px',
-                        userSelect: 'none'
-                    }}
-                >
-                    <span data-tauri-drag-region style={{ color: '#e0e0e0', fontSize: 12, fontWeight: 500 }}>
-                        材质编辑器
-                    </span>
-                    <div style={{ display: 'flex', gap: 8, zIndex: 10 }}>
-                        <Button
-                            size="small"
-                            type="text"
-                            icon={<CloseOutlined style={{ color: '#888' }} />}
-                            onClick={handleCancel}
-                        />
-                    </div>
-                </div>
+            <StandaloneWindowFrame title="材质编辑器" onClose={handleCancel}>
                 <div style={{ flex: 1, padding: 0, overflow: 'hidden' }}>
                     {innerContent}
                 </div>
-            </div>
+            </StandaloneWindowFrame>
         )
     }
 

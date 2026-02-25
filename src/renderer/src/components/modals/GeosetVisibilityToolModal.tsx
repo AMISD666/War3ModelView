@@ -9,6 +9,7 @@ import { emit, listen } from '@tauri-apps/api/event'
 import { windowManager } from '../../utils/windowManager'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useRpcClient } from '../../hooks/useRpc'
+import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
 
 const { Text } = Typography
 
@@ -620,33 +621,8 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
 
     if (isStandalone) {
         return (
-            <>
-                <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', backgroundColor: '#1e1e1e', overflow: 'hidden' }}>
-                    <div
-                        data-tauri-drag-region
-                        style={{
-                            height: 32,
-                            background: '#2d2d2d',
-                            borderBottom: '1px solid #3d3d3d',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            padding: '0 12px',
-                            userSelect: 'none'
-                        }}
-                    >
-                        <span data-tauri-drag-region style={{ color: '#e0e0e0', fontSize: 12, fontWeight: 500 }}>
-                            多边形动作显隐工具
-                        </span>
-                        <div style={{ display: 'flex', gap: 8, zIndex: 10 }}>
-                            <Button
-                                size="small"
-                                type="text"
-                                icon={<CloseOutlined style={{ color: '#888' }} />}
-                                onClick={onClose}
-                            />
-                        </div>
-                    </div>
+            <StandaloneWindowFrame title="多边形动作显隐工具" onClose={() => getCurrentWindow().hide()}>
+                <div style={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: '#1e1e1e' }}>
                     {/* Bottom Toolbar for Standalone mode */}
                     <div style={{
                         display: 'flex',
@@ -684,7 +660,7 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
                         {innerContent}
                     </div>
                 </div>
-            </>
+            </StandaloneWindowFrame>
         )
     }
 
