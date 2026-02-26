@@ -132,6 +132,9 @@ export interface TabSnapshot {
         phi: number;
         target: [number, number, number];
     } | null;
+    // Cache for optimized tab switching
+    renderer?: any;
+    lastActive?: number;
 }
 
 // Tab definition

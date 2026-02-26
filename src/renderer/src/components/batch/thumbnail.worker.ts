@@ -100,18 +100,24 @@ function decodeTGAInWorker(buffer: ArrayBuffer, maxDimension?: number): ImageDat
     let offset = 0;
     let pixelIndex = 0;
 
-    const getPixel = (data: Uint8Array, idx: number, depth: number): number[] => {
-        if (depth === 24) return [data[idx + 2], data[idx + 1], data[idx], 255];
-        if (depth === 32) return [data[idx + 2], data[idx + 1], data[idx], data[idx + 3]];
-        if (depth === 8) { const v = data[idx]; return [v, v, v, 255]; }
+
+    const data32 = new Uint32Array(outputData.buffer);
+    const isRLE = header.imageType === TGA_TYPE_RLE_RGB || header.imageType === TGA_TYPE_RLE_GREY || header.imageType === TGA_TYPE_RLE_INDEXED;
+
+    const getPixel32 = (data: Uint8Array, idx: number, depth: number): number => {
+        if (depth === 24) return (255 << 24) | (data[idx + 2] << 16) | (data[idx + 1] << 8) | data[idx];
+        if (depth === 32) return (data[idx + 3] << 24) | (data[idx + 2] << 16) | (data[idx + 1] << 8) | data[idx];
+        if (depth === 8) { const v = data[idx]; return (255 << 24) | (v << 16) | (v << 8) | v; }
         if (depth === 16) {
             const val = data[idx] | (data[idx + 1] << 8);
-            return [((val & 0x7C00) >> 10) * 255 / 31, ((val & 0x03E0) >> 5) * 255 / 31, (val & 0x001F) * 255 / 31, (val & 0x8000) ? 255 : 0];
+            const r = ((val & 0x7C00) >> 10) * 255 / 31;
+            const g = ((val & 0x03E0) >> 5) * 255 / 31;
+            const b = (val & 0x001F) * 255 / 31;
+            const a = (val & 0x8000) ? 255 : 0;
+            return (a << 24) | (b << 16) | (g << 8) | r;
         }
-        return [0, 0, 0, 0];
+        return 0;
     };
-
-    const isRLE = header.imageType === TGA_TYPE_RLE_RGB || header.imageType === TGA_TYPE_RLE_GREY || header.imageType === TGA_TYPE_RLE_INDEXED;
 
     if (isRLE) {
         let pixelsProcessed = 0;
@@ -119,28 +125,22 @@ function decodeTGAInWorker(buffer: ArrayBuffer, maxDimension?: number): ImageDat
             const chunkHeader = tgaData[offset++];
             const chunkPixelCount = (chunkHeader & 0x7F) + 1;
             if ((chunkHeader & 0x80) !== 0) {
-                const pv = getPixel(tgaData, offset, header.pixelDepth);
+                const pv32 = getPixel32(tgaData, offset, header.pixelDepth);
                 offset += bytesPerPixel;
                 for (let i = 0; i < chunkPixelCount; i++) {
-                    outputData[pixelIndex * 4] = pv[0]; outputData[pixelIndex * 4 + 1] = pv[1];
-                    outputData[pixelIndex * 4 + 2] = pv[2]; outputData[pixelIndex * 4 + 3] = pv[3];
-                    pixelIndex++;
+                    data32[pixelIndex++] = pv32;
                 }
             } else {
                 for (let i = 0; i < chunkPixelCount; i++) {
-                    const pv = getPixel(tgaData, offset, header.pixelDepth);
-                    outputData[pixelIndex * 4] = pv[0]; outputData[pixelIndex * 4 + 1] = pv[1];
-                    outputData[pixelIndex * 4 + 2] = pv[2]; outputData[pixelIndex * 4 + 3] = pv[3];
-                    offset += bytesPerPixel; pixelIndex++;
+                    data32[pixelIndex++] = getPixel32(tgaData, offset, header.pixelDepth);
+                    offset += bytesPerPixel;
                 }
             }
             pixelsProcessed += chunkPixelCount;
         }
     } else {
         for (let i = 0; i < pixelCount; i++) {
-            const pv = getPixel(tgaData, offset, header.pixelDepth);
-            outputData[i * 4] = pv[0]; outputData[i * 4 + 1] = pv[1];
-            outputData[i * 4 + 2] = pv[2]; outputData[i * 4 + 3] = pv[3];
+            data32[i] = getPixel32(tgaData, offset, header.pixelDepth);
             offset += bytesPerPixel;
         }
     }
@@ -148,14 +148,14 @@ function decodeTGAInWorker(buffer: ArrayBuffer, maxDimension?: number): ImageDat
     // Flip vertically if origin is bottom-left (default TGA)
     const isTopLeft = (header.imageDesc & 0x20) !== 0;
     if (!isTopLeft) {
-        const rowBytes = header.width * 4;
-        const tmp = new Uint8ClampedArray(rowBytes);
+        const rowPixels = header.width;
+        const tmp = new Uint32Array(rowPixels);
         for (let y = 0; y < Math.floor(header.height / 2); y++) {
-            const topOff = y * rowBytes;
-            const botOff = (header.height - 1 - y) * rowBytes;
-            tmp.set(outputData.subarray(topOff, topOff + rowBytes));
-            outputData.copyWithin(topOff, botOff, botOff + rowBytes);
-            outputData.set(tmp, botOff);
+            const topOff = y * rowPixels;
+            const botOff = (header.height - 1 - y) * rowPixels;
+            tmp.set(data32.subarray(topOff, topOff + rowPixels));
+            data32.copyWithin(topOff, botOff, botOff + rowPixels);
+            data32.set(tmp, botOff);
         }
     }
 
@@ -313,7 +313,9 @@ async function initGL() {
     gl.enable(gl.DEPTH_TEST);
 }
 
-function applyTextureImagesToRenderer(
+// Assuming ModelRenderer is a class defined elsewhere, this is how its method would look.
+// This function is a helper that calls the renderer's method.
+async function applyTextureImagesToRenderer(
     renderer: any,
     textureImages: Record<string, ImageData> | undefined,
     appliedTexturePaths: Set<string>
@@ -323,7 +325,9 @@ function applyTextureImagesToRenderer(
     for (const [path, img] of Object.entries(textureImages)) {
         if (appliedTexturePaths.has(path)) continue;
         try {
-            renderer.setTextureImageData(path, [img]);
+            // CRITICAL: MUST set premultiplyAlpha to 'none' otherwise WebGL loses RGB data on transparent pixels!
+            const bitmap = await createImageBitmap(img, { premultiplyAlpha: 'none' });
+            renderer.setTextureImageData(path, [bitmap]);
             appliedTexturePaths.add(path);
         } catch (e) {
             console.warn(`[Worker] Failed to apply texture ${path}:`, e);
@@ -504,7 +508,7 @@ async function render(
         renderer.initGL(gl);
 
         const appliedTexturePaths = new Set<string>();
-        applyTextureImagesToRenderer(renderer, textureImages, appliedTexturePaths);
+        await applyTextureImagesToRenderer(renderer, textureImages, appliedTexturePaths);
 
         // --- PRE-CALCULATE AABB ONCE ---
         const min = vec3.fromValues(Infinity, Infinity, Infinity);
@@ -610,7 +614,7 @@ async function render(
     // Progressive texture streaming: allow texture sync after the model is already cached.
     if (effectiveTextureImages && Object.keys(effectiveTextureImages).length > 0) {
         const prevApplied = new Set(cacheItem.appliedTexturePaths);
-        applyTextureImagesToRenderer(renderer, effectiveTextureImages, cacheItem.appliedTexturePaths);
+        await applyTextureImagesToRenderer(renderer, effectiveTextureImages, cacheItem.appliedTexturePaths);
         // Retain newly applied texture paths that weren't in the cache yet
         const newPaths: string[] = [];
         for (const p of cacheItem.appliedTexturePaths) {

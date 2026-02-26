@@ -1,7 +1,7 @@
 import decodeJPEG from '../third_party/decoder';
-import {BLPImage, BLPContent, BLPType} from './blpimage';
+import { BLPImage, BLPContent, BLPType } from './blpimage';
 
-function keyword (view: DataView, offset: number): string {
+function keyword(view: DataView, offset: number): string {
     return String.fromCharCode(
         view.getUint8(offset),
         view.getUint8(offset + 1),
@@ -10,11 +10,11 @@ function keyword (view: DataView, offset: number): string {
     );
 }
 
-function uint32 (view: DataView, offset: number): number {
+function uint32(view: DataView, offset: number): number {
     return view.getUint32(offset * 4, true);
 }
 
-function bitVal (data: Uint8Array, bitCount: number, index: number): number {
+function bitVal(data: Uint8Array, bitCount: number, index: number): number {
     // only 1, 4 or 8 bits
     const byte = data[Math.floor(index * bitCount / 8)],
         valsPerByte = 8 / bitCount;
@@ -30,7 +30,7 @@ interface ImageDataLike {
 }
 
 // node.js have no native ImageData
-function createImageData (width: number, height: number): ImageDataLike {
+function createImageData(width: number, height: number): ImageDataLike {
     if (typeof ImageData !== 'undefined') {
         return new ImageData(width, height);
     } else {
@@ -43,7 +43,7 @@ function createImageData (width: number, height: number): ImageDataLike {
     }
 }
 
-export function decode (arrayBuffer: ArrayBuffer): BLPImage {
+export function decode(arrayBuffer: ArrayBuffer): BLPImage {
     const view = new DataView(arrayBuffer);
 
     const image: BLPImage = {
@@ -91,7 +91,7 @@ export function decode (arrayBuffer: ArrayBuffer): BLPImage {
     return image;
 }
 
-export function getImageData (blp: BLPImage, mipmapLevel: number): ImageDataLike {
+export function getImageData(blp: BLPImage, mipmapLevel: number): ImageDataLike {
     const view = new DataView(blp.data),
         uint8Data = new Uint8Array(blp.data),
         mipmap = blp.mipmaps[mipmapLevel];
@@ -113,17 +113,39 @@ export function getImageData (blp: BLPImage, mipmapLevel: number): ImageDataLike
             imageData = createImageData(width, height),
             valPerAlphaBit = 255 / ((1 << blp.alphaBits) - 1);
 
-        for (let i = 0; i < size; ++i) {
-            const paletteIndex = view.getUint8(mipmap.offset + i) * 4;
-            // BGRA order
-            imageData.data[i * 4]     = palette[paletteIndex + 2];
-            imageData.data[i * 4 + 1] = palette[paletteIndex + 1];
-            imageData.data[i * 4 + 2] = palette[paletteIndex];
+        // Optimization: Use Uint32Array view for 4x faster writes
+        const data32 = new Uint32Array(imageData.data.buffer);
+        const palette32 = new Uint32Array(256);
 
-            if (blp.alphaBits > 0) {
-                imageData.data[i * 4 + 3] = bitVal(alphaData, blp.alphaBits, i) * valPerAlphaBit;
-            } else {
-                imageData.data[i * 4 + 3] = 255;
+        // Pre-build 32-bit palette (Host order: ABGR for Little Endian)
+        for (let i = 0; i < 256; i++) {
+            const p = i * 4;
+            // Native ImageData order is RGBA (bytes 0,1,2,3)
+            // On Little Endian: 0xAA BB GG RR -> [RR, GG, BB, AA]
+            palette32[i] = (255 << 24) | (palette[p] << 16) | (palette[p + 1] << 8) | palette[p + 2];
+        }
+
+        if (blp.alphaBits === 8) {
+            // Fast path for 8-bit alpha
+            for (let i = 0; i < size; i++) {
+                const paletteIndex = uint8Data[mipmap.offset + i];
+                const color = palette32[paletteIndex];
+                const alpha = alphaData[i];
+                // Overwrite alpha byte in the 32-bit word
+                data32[i] = (color & 0x00FFFFFF) | (alpha << 24);
+            }
+        } else if (blp.alphaBits === 0) {
+            // Fast path for no alpha
+            for (let i = 0; i < size; i++) {
+                data32[i] = palette32[uint8Data[mipmap.offset + i]];
+            }
+        } else {
+            // Slower path for 1-bit or 4-bit alpha
+            for (let i = 0; i < size; i++) {
+                const paletteIndex = uint8Data[mipmap.offset + i];
+                const color = palette32[paletteIndex];
+                const alpha = bitVal(alphaData, blp.alphaBits, i) * valPerAlphaBit;
+                data32[i] = (color & 0x00FFFFFF) | (alpha << 24);
             }
         }
 

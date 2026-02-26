@@ -11,6 +11,8 @@ import { useRendererStore } from './rendererStore';
 import { processDeathAnimation, processRemoveLights, pruneModelKeyframes } from '../utils/modelUtils';
 import { calculateModelExtent, calculateModelNormals } from '../utils/geometryUtils';
 
+const MAX_CACHED_RENDERERS = 5;
+
 type ClipboardPayload = {
     node: ModelNode;
     sourceModelPath: string | null;
@@ -114,6 +116,9 @@ interface ModelState {
     isLoading: boolean;
     clipboardNode: ModelNode | null;
     clipboardPayload: ClipboardPayload | null;
+
+    // Cached renderer for the current active tab
+    cachedRenderer: any | null;
 
     // Renderer reload trigger - increment to force Viewer to reload
     rendererReloadTrigger: number;
@@ -2237,19 +2242,28 @@ export const useModelStore = create<ModelState>((set, get) => ({
         // If there's an active tab, save its current state to its snapshot
         const updatedTabs = state.tabs.map(tab => {
             if (tab.id === state.activeTabId) {
-                // Capture current camera state from ref
-                const cameraState = state.cameraStateRef?.current || null;
+                // Capture current camera state from ref and CLONE it
+                const cam = state.cameraStateRef?.current;
+                const cameraState = cam ? {
+                    distance: cam.distance,
+                    theta: cam.theta,
+                    phi: cam.phi,
+                    target: vec3.clone(cam.target as vec3)
+                } : null;
+
                 return {
                     ...tab,
                     snapshot: {
                         modelData: state.modelData,
                         modelPath: state.modelPath,
-                        nodes: state.nodes,
-                        sequences: state.sequences,
+                        nodes: [...state.nodes],
+                        sequences: [...state.sequences],
                         currentSequence: state.currentSequence,
                         currentFrame: state.currentFrame,
-                        hiddenGeosetIds: state.hiddenGeosetIds,
-                        cameraState
+                        hiddenGeosetIds: [...state.hiddenGeosetIds],
+                        cameraState,
+                        renderer: useRendererStore.getState().renderer,
+                        lastActive: Date.now()
                     }
                 };
             }
@@ -2269,7 +2283,9 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 currentSequence: -1,
                 currentFrame: 0,
                 hiddenGeosetIds: [],
-                cameraState: null
+                cameraState: null,
+                renderer: modelData ? null : null, // Initial tab has no renderer yet
+                lastActive: Date.now()
             }
         };
 
@@ -2284,7 +2300,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
             currentSequence: -1,
             currentFrame: 0,
             hiddenGeosetIds: [],
-            forceShowAllGeosets: true
+            forceShowAllGeosets: true,
+            cachedRenderer: null // Reset cached renderer when adding new tab
         });
 
         console.log('[ModelStore] Added new tab:', name, 'id:', id);
@@ -2293,10 +2310,17 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
     closeTab: (tabId) => {
         const state = get();
-        const tabIndex = state.tabs.findIndex(t => t.id === tabId);
-        if (tabIndex === -1) return;
+        const tab = state.tabs.find(t => t.id === tabId);
+        if (!tab) return;
 
+        const tabIndex = state.tabs.findIndex(t => t.id === tabId);
         const newTabs = state.tabs.filter(t => t.id !== tabId);
+
+        // CLEANUP: Destroy renderer resources if cached
+        if (tab.snapshot.renderer) {
+            console.log(`[ModelStore] Destroying renderer for closed tab: ${tab.name}`);
+            try { (tab.snapshot.renderer as any).destroy(); } catch (e) { }
+        }
 
         if (state.activeTabId === tabId) {
             // Need to switch to another tab
@@ -2325,21 +2349,29 @@ export const useModelStore = create<ModelState>((set, get) => ({
                     activeTabId: newActiveTab.id,
                     modelData: snapshot.modelData,
                     modelPath: snapshot.modelPath,
-                    nodes: snapshot.nodes,
-                    sequences: snapshot.sequences,
+                    nodes: [...snapshot.nodes],
+                    sequences: [...snapshot.sequences],
                     currentSequence: snapshot.currentSequence,
                     currentFrame: snapshot.currentFrame,
-                    hiddenGeosetIds: snapshot.hiddenGeosetIds,
-                    forceShowAllGeosets: true,
+                    hiddenGeosetIds: [...snapshot.hiddenGeosetIds],
+                    forceShowAllGeosets: false,
                     rendererReloadTrigger: state.rendererReloadTrigger + 1
                 });
 
                 // Restore camera if ref is available
                 if (state.cameraStateRef && snapshot.cameraState) {
-                    state.cameraStateRef.current = snapshot.cameraState;
+                    const currentCam = state.cameraStateRef.current;
+                    const snap = snapshot.cameraState;
+                    if (currentCam) {
+                        currentCam.distance = snap.distance;
+                        currentCam.theta = snap.theta;
+                        currentCam.phi = snap.phi;
+                        vec3.copy(currentCam.target, snap.target as vec3);
+                    }
                 }
             }
-        } else {
+        }
+        else {
             // Just remove the tab, no state switch needed
             set({ tabs: newTabs });
         }
@@ -2355,52 +2387,101 @@ export const useModelStore = create<ModelState>((set, get) => ({
         if (!newActiveTab) return;
 
         // Capture current state to outgoing tab's snapshot
-        const cameraState = state.cameraStateRef?.current || null;
-        const updatedTabs = state.tabs.map(tab => {
+        const cam = state.cameraStateRef?.current;
+        const cameraState = cam ? {
+            distance: cam.distance,
+            theta: cam.theta,
+            phi: cam.phi,
+            target: vec3.clone(cam.target as vec3)
+        } : null;
+
+        const currentRenderer = useRendererStore.getState().renderer;
+
+        let updatedTabs = state.tabs.map(tab => {
             if (tab.id === state.activeTabId) {
                 return {
                     ...tab,
                     snapshot: {
+                        ...tab.snapshot,
                         modelData: state.modelData,
                         modelPath: state.modelPath,
-                        nodes: state.nodes,
-                        sequences: state.sequences,
+                        nodes: [...state.nodes],
+                        sequences: [...state.sequences],
                         currentSequence: state.currentSequence,
                         currentFrame: state.currentFrame,
-                        hiddenGeosetIds: state.hiddenGeosetIds,
-                        cameraState
+                        hiddenGeosetIds: [...state.hiddenGeosetIds],
+                        cameraState,
+                        renderer: currentRenderer,
+                        lastActive: Date.now()
                     }
                 };
             }
             return tab;
         });
 
+        // LRU Eviction: Limit number of cached renderers to prevent VRAM explosion
+        const tabsWithRenderer = updatedTabs
+            .filter(t => t.snapshot.renderer)
+            .sort((a, b) => (a.snapshot.lastActive || 0) - (b.snapshot.lastActive || 0));
+
+        if (tabsWithRenderer.length > MAX_CACHED_RENDERERS) {
+            const tabToEvict = tabsWithRenderer[0];
+            updatedTabs = updatedTabs.map(t => {
+                if (t.id === tabToEvict.id) {
+                    console.log(`[ModelStore] LRU Evicting and DESTROYING renderer for tab: ${t.name}`);
+                    // CLEANUP: Actually destroy evicted renderer
+                    if (t.snapshot.renderer) {
+                        try { (t.snapshot.renderer as any).destroy(); } catch (e) { }
+                    }
+                    return { ...t, snapshot: { ...t.snapshot, renderer: null } };
+                }
+                return t;
+            });
+        }
+
         // Restore state from new active tab
         const snapshot = newActiveTab.snapshot;
+
+        // If we have a cached renderer, we can skip the full reload trigger
+        const hasCachedRenderer = !!snapshot.renderer;
 
         set({
             tabs: updatedTabs,
             activeTabId: tabId,
             modelData: snapshot.modelData,
             modelPath: snapshot.modelPath,
-            nodes: snapshot.nodes,
-            sequences: snapshot.sequences,
+            nodes: [...snapshot.nodes],
+            sequences: [...snapshot.sequences],
             currentSequence: snapshot.currentSequence,
             currentFrame: snapshot.currentFrame,
-            hiddenGeosetIds: snapshot.hiddenGeosetIds,
-            forceShowAllGeosets: true,
-            rendererReloadTrigger: state.rendererReloadTrigger + 1
+            hiddenGeosetIds: [...snapshot.hiddenGeosetIds],
+            forceShowAllGeosets: false, // Respect hiddenGeosetIds during restoration
+            cachedRenderer: snapshot.renderer || null,
+            rendererReloadTrigger: hasCachedRenderer ? state.rendererReloadTrigger : state.rendererReloadTrigger + 1
         });
 
         // Restore camera
         if (state.cameraStateRef && snapshot.cameraState) {
-            state.cameraStateRef.current = snapshot.cameraState;
+            const currentCam = state.cameraStateRef.current;
+            const snap = snapshot.cameraState;
+            currentCam.distance = snap.distance;
+            currentCam.theta = snap.theta;
+            currentCam.phi = snap.phi;
+            vec3.copy(currentCam.target, snap.target as vec3);
         }
 
-        console.log('[ModelStore] Switched to tab:', newActiveTab.name);
+        console.log('[ModelStore] Switched to tab:', newActiveTab.name, hasCachedRenderer ? '(Cached)' : '(Reload)');
     },
 
     reset: () => {
+        const state = get();
+        // CLEANUP: Destroy all cached renderers
+        state.tabs.forEach(tab => {
+            if (tab.snapshot.renderer) {
+                try { (tab.snapshot.renderer as any).destroy(); } catch (e) { }
+            }
+        });
+
         set({
             modelData: null,
             modelPath: null,
@@ -2415,6 +2496,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             hoveredGeosetId: null,
             selectedGeosetIndex: null,
             selectedGeosetIndices: [],
+            cachedRenderer: null,
             rendererReloadTrigger: 0,
             previewTransform: {
                 translation: [0, 0, 0],

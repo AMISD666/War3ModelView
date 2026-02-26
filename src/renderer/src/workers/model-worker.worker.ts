@@ -29,37 +29,43 @@ function decodeTGA(buffer: ArrayBuffer): ImageData {
     const bytesPerPixel = header.pixelDepth >> 3;
     const outputData = new Uint8ClampedArray(pixelCount * 4);
 
+    const data32 = new Uint32Array(outputData.buffer);
+
     let offset = 0;
-    let pixelIndex = 0;
-
-    const getPixel = (data: Uint8Array, idx: number, depth: number): number[] => {
-        if (depth === 24) return [data[idx + 2], data[idx + 1], data[idx], 255];
-        if (depth === 32) return [data[idx + 2], data[idx + 1], data[idx], data[idx + 3]];
-        if (depth === 8) { const v = data[idx]; return [v, v, v, 255]; }
-        return [0, 0, 0, 0];
-    };
-
-    // simplified uncompressed reader for now
-    for (let i = 0; i < pixelCount; i++) {
-        const pv = getPixel(tgaData, offset, header.pixelDepth);
-        outputData[i * 4] = pv[0];
-        outputData[i * 4 + 1] = pv[1];
-        outputData[i * 4 + 2] = pv[2];
-        outputData[i * 4 + 3] = pv[3];
-        offset += bytesPerPixel;
+    if (header.pixelDepth === 24) {
+        for (let i = 0; i < pixelCount; i++) {
+            data32[i] = (255 << 24) | (tgaData[offset + 2] << 16) | (tgaData[offset + 1] << 8) | tgaData[offset];
+            offset += bytesPerPixel;
+        }
+    } else if (header.pixelDepth === 32) {
+        for (let i = 0; i < pixelCount; i++) {
+            data32[i] = (tgaData[offset + 3] << 24) | (tgaData[offset + 2] << 16) | (tgaData[offset + 1] << 8) | tgaData[offset];
+            offset += bytesPerPixel;
+        }
+    } else if (header.pixelDepth === 8) {
+        for (let i = 0; i < pixelCount; i++) {
+            const v = tgaData[offset];
+            data32[i] = (255 << 24) | (v << 16) | (v << 8) | v;
+            offset += bytesPerPixel;
+        }
+    } else {
+        // Unsupported pixel depth, fill with black or throw error
+        for (let i = 0; i < pixelCount; i++) {
+            data32[i] = 0xFF000000; // Opaque black
+        }
     }
 
     // Flip vertically if origin is bottom-left
     const isTopLeft = (header.imageDesc & 0x20) !== 0;
     if (!isTopLeft) {
-        const rowBytes = header.width * 4;
-        const tmp = new Uint8ClampedArray(rowBytes);
+        const rowPixels = header.width;
+        const tmp = new Uint32Array(rowPixels);
         for (let y = 0; y < Math.floor(header.height / 2); y++) {
-            const topOff = y * rowBytes;
-            const botOff = (header.height - 1 - y) * rowBytes;
-            tmp.set(outputData.subarray(topOff, topOff + rowBytes));
-            outputData.copyWithin(topOff, botOff, botOff + rowBytes);
-            outputData.set(tmp, botOff);
+            const topOff = y * rowPixels;
+            const botOff = (header.height - 1 - y) * rowPixels;
+            tmp.set(data32.subarray(topOff, topOff + rowPixels));
+            data32.copyWithin(topOff, botOff, botOff + rowPixels);
+            data32.set(tmp, botOff);
         }
     }
 

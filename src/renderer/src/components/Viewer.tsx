@@ -3,7 +3,7 @@ import { decodeBLP, getBLPImageData, parseMDX, parseMDL, ModelRenderer } from 'w
 // @ts-ignore
 import ModelWorker from '../workers/model-worker.worker?worker'
 import { SimpleOrbitCamera } from '../utils/SimpleOrbitCamera'
-import { decodeTextureData, loadAllTextures } from './viewer/textureLoader'
+import { decodeTextureData, loadAllTextures, normalizePath } from './viewer/textureLoader'
 import { validateAllParticleEmitters } from './viewer/particleValidator'
 import { checkForStructuralChanges } from './viewer/modelSync'
 import { getEnvironmentManager } from './viewer/EnvironmentManager'
@@ -177,8 +177,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const appMainMode = useSelectionStore((state) => state.mainMode)
   const animationSubMode = useSelectionStore((state) => state.animationSubMode)
   const rendererReloadTrigger = useModelStore((state) => state.rendererReloadTrigger)
+  const cachedRenderer = useModelStore((state) => state.cachedRenderer)
   const mpqLoaded = useRendererStore((state) => state.mpqLoaded)
   const glRef = useRef<WebGL2RenderingContext | WebGLRenderingContext | null>(null)
+  const needsRendererUpdateRef = useRef(false)
   const animationFrameId = useRef<number | null>(null)
   const shouldRunRenderLoop = useRef<boolean>(true) // Flag to stop RAF loop on cleanup
   const lastFpsTime = useRef<number>(performance.now())
@@ -244,6 +246,64 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
     navigator.clipboard.writeText(text).catch(() => { })
   }
+
+  // Mount/Unmount tracking
+  useEffect(() => {
+    console.log('[Viewer] Component mounted');
+    return () => console.log('[Viewer] Component unmounted');
+  }, []);
+
+  // Hot-swap cached renderer when it changes (tab switch)
+  useEffect(() => {
+    if (cachedRenderer && cachedRenderer.model) {
+      const modelPathStr = (cachedRenderer as any).__modelPath || cachedRenderer.model.path || 'unknown';
+      console.log('[Viewer] Hot-swapping to cached renderer:', modelPathStr)
+      // Update local state
+      setRenderer(cachedRenderer)
+      rendererRef.current = cachedRenderer
+
+      // Update global renderer store if needed
+      useRendererStore.getState().setRenderer(cachedRenderer)
+
+      // Sync frame from store to renderer to avoid jump
+      const currentFrame = useModelStore.getState().currentFrame
+      if (cachedRenderer.rendererData) {
+        cachedRenderer.rendererData.frame = currentFrame
+      }
+
+      // Clear loading state since we are hot-swapping
+      setLoading(false)
+      setLoadingStatus('')
+
+      // Restore camera visually
+      syncCameraToOrbit()
+
+      // Notify parent components so UI updates (nodes, animations list)
+      onModelLoaded(cachedRenderer.model)
+
+      // Ensure viewport and renderer size are correct
+      if (canvasRef.current) {
+        const width = canvasRef.current.width;
+        const height = canvasRef.current.height;
+        console.log('[Viewer] Syncing viewport and renderer resize:', width, height);
+
+        if (glRef.current) {
+          glRef.current.viewport(0, 0, width, height);
+        }
+
+        if (typeof (cachedRenderer as any).resize === 'function') {
+          (cachedRenderer as any).resize(width, height);
+        }
+      }
+
+      // Force-trigger a re-render in the loop to show the model immediately
+      needsRendererUpdateRef.current = true
+      console.log('[Viewer] Hot-swap complete, re-render triggered');
+
+      // Reset time tracking to prevent delta spike
+      lastFrameTime.current = performance.now()
+    }
+  }, [cachedRenderer])
 
   // Refs for props to be accessible in render loop
   const showGridRef = useRef(showGrid)
@@ -698,7 +758,6 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     initialValues: Map<number, { rotation: Float32Array, scaling: Float32Array }> // NodeId -> { rotation, scaling } (snapshot at drag start)
   } | null>(null)
   const keyframeTransformDirty = useRef(false)
-  const needsRendererUpdateRef = useRef(false)
   const previewTransformRef = useRef({
     translation: [0, 0, 0] as [number, number, number],
     rotation: [0, 0, 0] as [number, number, number],
@@ -1168,11 +1227,18 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           loadModel(modelPath, storeModelData)
         }
       } else if (didModelPathChange) {
-        // Switching tabs should reload from disk for a clean renderer state
-        loadModel(modelPath)
+        // Switching tabs: only reload if no cached renderer is available
+        // The hot-swap effect will handle restoring the cached renderer.
+        if (!cachedRenderer) {
+          loadModel(modelPath)
+        } else {
+          console.log('[Viewer] Switching tab with cached renderer, skipping full disk reload.')
+        }
       } else {
-        // Normal file open - parse from disk
-        loadModel(modelPath)
+        // Normal file open - only reload if no cached renderer
+        if (!cachedRenderer) {
+          loadModel(modelPath)
+        }
       }
     } else {
       // If modelPath is null, it means no models are loaded
@@ -2100,10 +2166,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const loadModel = async (path: string, inMemoryData?: any) => {
     lastFrameTime.current = performance.now()
 
-    // IMMEDIATE CLEAR: Remove old renderer and clear canvas
+    // IMMEDIATE CLEAR: Remove old renderer reference
     if (renderer) {
-      console.log('[Viewer] Clearing old renderer immediately')
-      try { renderer.destroy() } catch (e) { }
+      console.log('[Viewer] Detaching old renderer (lifecycle managed by store)')
       setRenderer(null)
     }
 

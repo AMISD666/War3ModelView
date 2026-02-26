@@ -909,7 +909,7 @@ export class ModelRenderer {
         }
     }
 
-    public setTextureImageData(path: string, imageData: ImageData[]): void {
+    public setTextureImageData(path: string, imageData: (ImageData | ImageBitmap)[]): void {
         let count = 1;
         for (let i = 1; i < imageData.length; ++i, ++count) {
             if (

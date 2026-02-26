@@ -91,20 +91,67 @@ class State {
     public float32Array(len: number): Float32Array {
         const res = new Float32Array(len);
 
-        for (let i = 0; i < len; ++i) {
-            res[i] = this.float32();
+        if (this.pos % 4 === 0) {
+            res.set(new Float32Array(this.ab, this.pos, len));
+            this.pos += len * 4;
+        } else {
+            for (let i = 0; i < len; ++i) {
+                res[i] = this.float32();
+            }
+        }
+
+        return res;
+    }
+
+    public uint32Array(len: number): Uint32Array {
+        const res = new Uint32Array(len);
+
+        if (this.pos % 4 === 0) {
+            res.set(new Uint32Array(this.ab, this.pos, len));
+            this.pos += len * 4;
+        } else {
+            for (let i = 0; i < len; ++i) {
+                res[i] = this.view.getUint32(this.pos, BIG_ENDIAN);
+                this.pos += 4;
+            }
+        }
+
+        return res;
+    }
+
+    public int32Array(len: number): Int32Array {
+        const res = new Int32Array(len);
+
+        if (this.pos % 4 === 0) {
+            res.set(new Int32Array(this.ab, this.pos, len));
+            this.pos += len * 4;
+        } else {
+            for (let i = 0; i < len; ++i) {
+                res[i] = this.int32();
+            }
+        }
+
+        return res;
+    }
+
+    public uint16Array(len: number): Uint16Array {
+        const res = new Uint16Array(len);
+
+        if (this.pos % 2 === 0) {
+            res.set(new Uint16Array(this.ab, this.pos, len));
+            this.pos += len * 2;
+        } else {
+            for (let i = 0; i < len; ++i) {
+                res[i] = this.uint16();
+            }
         }
 
         return res;
     }
 
     public uint8Array(len: number): Uint8Array {
-        const res = new Uint8Array(len);
-
-        for (let i = 0; i < len; ++i) {
-            res[i] = this.uint8();
-        }
-
+        const res = this.uint.slice(this.pos, this.pos + len);
+        this.pos += len;
         return res;
     }
 
@@ -384,45 +431,27 @@ function parseGeosets(model: Model, state: State, size: number) {
 
         state.expectKeyword('VRTX', 'Incorrect geosets format');
         const verticesCount = state.int32();
-        geoset.Vertices = new Float32Array(verticesCount * 3);
-        for (let i = 0; i < verticesCount * 3; ++i) {
-            geoset.Vertices[i] = state.float32();
-        }
+        geoset.Vertices = state.float32Array(verticesCount * 3);
 
         state.expectKeyword('NRMS', 'Incorrect geosets format');
         const normalsCount = state.int32();
-        geoset.Normals = new Float32Array(normalsCount * 3);
-        for (let i = 0; i < normalsCount * 3; ++i) {
-            geoset.Normals[i] = state.float32();
-        }
+        geoset.Normals = state.float32Array(normalsCount * 3);
 
         state.expectKeyword('PTYP', 'Incorrect geosets format');
         const primitiveCount = state.int32();
-        for (let i = 0; i < primitiveCount; ++i) {
-            if (state.int32() !== 4) {
-                throw new Error('Incorrect geosets format');
-            }
-        }
+        state.pos += primitiveCount * 4; // Skip PTYP values (Warcraft 3 always uses 4 for triangles)
 
         state.expectKeyword('PCNT', 'Incorrect geosets format');
         const faceGroupCount = state.int32();
-        for (let i = 0; i < faceGroupCount; ++i) {
-            state.int32();
-        }
+        state.pos += faceGroupCount * 4;
 
         state.expectKeyword('PVTX', 'Incorrect geosets format');
         const indicesCount = state.int32();
-        geoset.Faces = new Uint16Array(indicesCount);
-        for (let i = 0; i < indicesCount; ++i) {
-            geoset.Faces[i] = state.uint16();
-        }
+        geoset.Faces = state.uint16Array(indicesCount);
 
         state.expectKeyword('GNDX', 'Incorrect geosets format');
         const verticesGroupCount = state.int32();
-        geoset.VertexGroup = new Uint8Array(verticesGroupCount);
-        for (let i = 0; i < verticesGroupCount; ++i) {
-            geoset.VertexGroup[i] = state.uint8();
-        }
+        geoset.VertexGroup = state.uint8Array(verticesGroupCount);
 
         state.expectKeyword('MTGC', 'Incorrect geosets format');
         const groupsCount = state.int32();
@@ -434,14 +463,14 @@ function parseGeosets(model: Model, state: State, size: number) {
 
         state.expectKeyword('MATS', 'Incorrect geosets format');
         geoset.TotalGroupsCount = state.int32();
-        let groupIndex = 0;
-        let groupCounter = 0;
-        for (let i = 0; i < geoset.TotalGroupsCount; ++i) {
-            if (groupIndex >= geoset.Groups[groupCounter].length) {
-                groupIndex = 0;
-                groupCounter++;
+        const mats = state.int32Array(geoset.TotalGroupsCount);
+
+        let flatIdx = 0;
+        for (let i = 0; i < groupsCount; ++i) {
+            const groupLen = geoset.Groups[i].length;
+            for (let j = 0; j < groupLen; ++j) {
+                geoset.Groups[i][j] = mats[flatIdx++];
             }
-            geoset.Groups[groupCounter][groupIndex++] = state.int32();
         }
 
         geoset.MaterialID = state.int32();
@@ -501,10 +530,7 @@ function parseGeosets(model: Model, state: State, size: number) {
             state.expectKeyword('UVBS', 'Incorrect geosets format');
             const textureCoordsCount = state.int32();
 
-            const tvertices = new Float32Array(textureCoordsCount * 2);
-            for (let j = 0; j < textureCoordsCount * 2; ++j) {
-                tvertices[j] = state.float32();
-            }
+            const tvertices = state.float32Array(textureCoordsCount * 2);
 
             geoset.TVertices.push(tvertices);
         }
