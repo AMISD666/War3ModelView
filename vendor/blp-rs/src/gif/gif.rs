@@ -1,8 +1,8 @@
-use crate::error::error::BlpError;
 use crate::blp::Frame;
-use image::{RgbaImage, AnimationDecoder};
-use std::io::Cursor;
+use crate::error::error::BlpError;
 use crate::traits::FormatDetector;
+use image::{AnimationDecoder, RgbaImage};
+use std::io::Cursor;
 
 /// Small header-only structure for GIFs. GIFs are multi-frame, so we produce
 /// one `Frame` metadata per frame to align with the rest of the codebase.
@@ -22,14 +22,27 @@ impl Gif {
             .iter()
             .map(|f| {
                 let (w, h) = f.buffer().dimensions();
-                Frame { width: w, height: h, offset: 0, length: buf.len() }
+                Frame {
+                    width: w,
+                    height: h,
+                    offset: 0,
+                    length: buf.len(),
+                }
             })
             .collect();
         let (w, h) = if let Some(first) = collected.get(0) {
             let (w, h) = first.buffer().dimensions();
             (w, h)
-        } else { (0, 0) };
-        Ok((Gif { width: w, height: h }, meta))
+        } else {
+            (0, 0)
+        };
+        Ok((
+            Gif {
+                width: w,
+                height: h,
+            },
+            meta,
+        ))
     }
 
     /// Fully decode all frames in the GIF payload into owned RGBA images.
@@ -40,6 +53,7 @@ impl Gif {
     }
 
     /// Decode one frame index.
+    #[allow(dead_code)]
     pub(crate) fn decode_frame(buf: &[u8], idx: usize) -> Result<RgbaImage, BlpError> {
         let decoder = image::codecs::gif::GifDecoder::new(Cursor::new(buf))?;
         let frames = decoder.into_frames().collect_frames()?;

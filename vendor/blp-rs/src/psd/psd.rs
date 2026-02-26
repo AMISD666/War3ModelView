@@ -15,15 +15,29 @@ pub struct PsdImage {
 
 impl PsdImage {
     pub(crate) fn parse_header(buf: &[u8]) -> Result<(Self, Vec<Frame>), BlpError> {
-        let psd = Psd::from_bytes(buf).map_err(|e| BlpError::new("psd-parse").with_arg("error", e.to_string()))?;
+        let psd = Psd::from_bytes(buf)
+            .map_err(|e| BlpError::new("psd-parse").with_arg("error", e.to_string()))?;
         let w = psd.width();
         let h = psd.height();
-        let frames = vec![Frame { width: w, height: h, offset: 0, length: buf.len() }];
-        Ok((PsdImage { width: w, height: h }, frames))
+        let frames = vec![Frame {
+            width: w,
+            height: h,
+            offset: 0,
+            length: buf.len(),
+        }];
+        Ok((
+            PsdImage {
+                width: w,
+                height: h,
+            },
+            frames,
+        ))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn decode_frames(buf: &[u8]) -> Result<Vec<RgbaImage>, BlpError> {
-        let psd = Psd::from_bytes(buf).map_err(|e| BlpError::new("psd-parse").with_arg("error", e.to_string()))?;
+        let psd = Psd::from_bytes(buf)
+            .map_err(|e| BlpError::new("psd-parse").with_arg("error", e.to_string()))?;
         let rgba = psd.rgba();
         let (w, h) = (psd.width(), psd.height());
         let img = image::ImageBuffer::from_raw(w, h, rgba).ok_or_else(|| {
@@ -36,7 +50,8 @@ impl PsdImage {
 
     /// Decode the PSD into a `DynamicImage` (composited RGBA).
     pub(crate) fn decode_as_dynamic(buf: &[u8]) -> Result<image::DynamicImage, BlpError> {
-        let psd = Psd::from_bytes(buf).map_err(|e| BlpError::new("psd-parse").with_arg("error", e.to_string()))?;
+        let psd = Psd::from_bytes(buf)
+            .map_err(|e| BlpError::new("psd-parse").with_arg("error", e.to_string()))?;
         let rgba = psd.rgba();
         let (w, h) = (psd.width(), psd.height());
         let img = image::ImageBuffer::from_raw(w, h, rgba).ok_or_else(|| {
@@ -47,14 +62,12 @@ impl PsdImage {
         Ok(image::DynamicImage::ImageRgba8(img))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn decode_frame(buf: &[u8], idx: usize) -> Result<RgbaImage, BlpError> {
         if idx > 0 {
             return Err(BlpError::new("error-frame-oob").with_arg("idx", idx as u32));
         }
-        Ok(Self::decode_frames(buf)?
-            .into_iter()
-            .next()
-            .unwrap())
+        Ok(Self::decode_frames(buf)?.into_iter().next().unwrap())
     }
 }
 

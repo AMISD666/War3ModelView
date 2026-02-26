@@ -23,7 +23,11 @@ impl BlpError {
 
     #[inline]
     pub fn new(key: &'static str) -> Self {
-        Self { key, args: BTreeMap::new(), causes: Vec::new() }
+        Self {
+            key,
+            args: BTreeMap::new(),
+            causes: Vec::new(),
+        }
     }
 
     #[inline]
@@ -33,6 +37,7 @@ impl BlpError {
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub(crate) fn with_args(mut self, args: impl IntoIterator<Item = (&'static str, Arg)>) -> Self {
         for (k, v) in args {
             self.args.insert(k, v);
@@ -48,8 +53,7 @@ impl BlpError {
 
     #[inline]
     pub fn push_std(mut self, cause: impl std::error::Error + Send + Sync + 'static) -> Self {
-        self.causes
-            .push(Cause::Std(Arc::new(cause)));
+        self.causes.push(Cause::Std(Arc::new(cause)));
         self
     }
 }
@@ -71,12 +75,10 @@ impl fmt::Display for BlpError {
 
 impl std::error::Error for BlpError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.causes
-            .iter()
-            .find_map(|c| match c {
-                Cause::Blp(e) => Some(e as &dyn std::error::Error),
-                Cause::Std(e) => Some(e.as_ref()),
-            })
+        self.causes.iter().find_map(|c| match c {
+            Cause::Blp(e) => Some(e as &dyn std::error::Error),
+            Cause::Std(e) => Some(e.as_ref()),
+        })
     }
 }
 

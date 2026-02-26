@@ -1,4 +1,4 @@
-use crate::blp::{Blp, Frame, TextureType, Version, HEADER_SIZE, MAX_MIPS};
+use crate::blp::{Blp, Frame, HEADER_SIZE, MAX_MIPS, TextureType, Version};
 use crate::error::error::BlpError;
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
 use std::io::Cursor;
@@ -17,7 +17,12 @@ pub(crate) fn parse_header(buf: &[u8]) -> Result<(Blp, Vec<Frame>), BlpError> {
     let texture_type = TextureType::try_from(texture_type_raw)?;
 
     let (compression, alpha_bits, alpha_type, has_mips) = if version >= Version::BLP2 {
-        (cursor.read_u8()?, cursor.read_u8()? as u32, cursor.read_u8()?, cursor.read_u8()?)
+        (
+            cursor.read_u8()?,
+            cursor.read_u8()? as u32,
+            cursor.read_u8()?,
+            cursor.read_u8()?,
+        )
     } else {
         (0u8, cursor.read_u32::<LittleEndian>()?, 0u8, 0u8)
     };
@@ -26,7 +31,10 @@ pub(crate) fn parse_header(buf: &[u8]) -> Result<(Blp, Vec<Frame>), BlpError> {
     let height = cursor.read_u32::<LittleEndian>()?;
 
     let (extra, has_mipmaps) = if version <= Version::BLP1 {
-        (cursor.read_u32::<LittleEndian>()?, cursor.read_u32::<LittleEndian>()?)
+        (
+            cursor.read_u32::<LittleEndian>()?,
+            cursor.read_u32::<LittleEndian>()?,
+        )
     } else {
         (0u32, has_mips as u32)
     };
@@ -103,11 +111,34 @@ pub(crate) fn parse_header(buf: &[u8]) -> Result<(Blp, Vec<Frame>), BlpError> {
 
     let frames = frames_arr
         .into_iter()
-        .map(|f| Frame { width: f.width, height: f.height, offset: f.offset, length: f.length })
+        .map(|f| Frame {
+            width: f.width,
+            height: f.height,
+            offset: f.offset,
+            length: f.length,
+        })
         .collect();
-    let header = Frame { width: 0, height: 0, offset: header_offset, length: header_length };
+    let header = Frame {
+        width: 0,
+        height: 0,
+        offset: header_offset,
+        length: header_length,
+    };
 
-    let blp = Blp { version, texture_type, compression, alpha_bits, alpha_type, has_mips, width, height, extra, has_mipmaps, holes, header };
+    let blp = Blp {
+        version,
+        texture_type,
+        compression,
+        alpha_bits,
+        alpha_type,
+        has_mips,
+        width,
+        height,
+        extra,
+        has_mipmaps,
+        holes,
+        header,
+    };
     Ok((blp, frames))
 }
 
@@ -115,6 +146,7 @@ pub(crate) fn parse_header(buf: &[u8]) -> Result<(Blp, Vec<Frame>), BlpError> {
 ///
 /// For JPEG textures, returns the shared JPEG header.
 /// For palette textures, returns the 256-color RGBA palette (1024 bytes).
+#[allow(dead_code)]
 pub(crate) fn header_data_with_blp<'a>(blp: &Blp, buf: &'a [u8]) -> Result<&'a [u8], BlpError> {
     let off = blp.header.offset;
     let len = blp.header.length;
@@ -144,6 +176,7 @@ pub(crate) fn header_data(buf: &[u8]) -> Option<&[u8]> {
 ///
 /// For JPEG textures, this is the JPEG frame data (without the shared header).
 /// For palette textures, this is the indexed pixel data.
+#[allow(dead_code)]
 pub(crate) fn mip_raw_with_frame<'a>(frame: &Frame, buf: &'a [u8]) -> Result<&'a [u8], BlpError> {
     let off = frame.offset;
     let len = frame.length;

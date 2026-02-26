@@ -235,7 +235,6 @@ pub fn copy_models_with_textures(
                     actual_rel_path = rel;
                 }
             } else {
-                let tex_filename = Path::new(tex_rel_path).file_name().unwrap_or_default();
                 let search_bases = search_bases_cache
                     .entry(info.dir.to_path_buf())
                     .or_insert_with(|| {

@@ -5,6 +5,7 @@ use crate::traits::{FormatDetector, ImageDecoder};
 use image::GenericImageView;
 
 /// Options for JPEG encoding/extraction.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum JpgOptions {
     Raw,
@@ -31,33 +32,44 @@ impl FormatDetector for Jpg {
         // Parse JPEG to get dimensions
         let img = image::load_from_memory(buf)
             .map_err(|e| BlpError::new("jpg.parse_failed").push_std(e))?;
-        
+
         let (width, height) = img.dimensions();
         let jpg = Jpg { width, height };
-        
+
         // JPEG is single-frame
-        let frames = vec![Frame { width, height, offset: 0, length: buf.len() }];
-        
+        let frames = vec![Frame {
+            width,
+            height,
+            offset: 0,
+            length: buf.len(),
+        }];
+
         Ok((jpg, frames))
     }
 }
 
 impl ImageDecoder for Jpg {
     fn into_dynamic(buf: &[u8]) -> Result<image::DynamicImage, BlpError> {
-        image::load_from_memory(buf)
-            .map_err(|e| BlpError::new("jpg.decode_failed").push_std(e))
+        image::load_from_memory(buf).map_err(|e| BlpError::new("jpg.decode_failed").push_std(e))
     }
 }
 
 impl Jpg {
-    pub(crate) fn encode(buf: &[u8], frame_idx: usize, opts: JpgOptions) -> Result<Vec<u8>, BlpError> {
+    #[allow(dead_code)]
+    pub(crate) fn encode(
+        buf: &[u8],
+        frame_idx: usize,
+        opts: JpgOptions,
+    ) -> Result<Vec<u8>, BlpError> {
         match opts {
             JpgOptions::Raw => {
                 let (h, _frames) = blp::parse_header(buf)?;
                 match h.texture_type {
                     blp::TextureType::JPEG => {
-                        let hdr = blp::header_data(buf).ok_or_else(|| BlpError::new("jpeg.shared_header_missing"))?;
-                        let mip = blp::mip_raw(buf, frame_idx).ok_or_else(|| BlpError::new("jpeg.mip_missing"))?;
+                        let hdr = blp::header_data(buf)
+                            .ok_or_else(|| BlpError::new("jpeg.shared_header_missing"))?;
+                        let mip = blp::mip_raw(buf, frame_idx)
+                            .ok_or_else(|| BlpError::new("jpeg.mip_missing"))?;
                         let mut out = Vec::with_capacity(hdr.len() + mip.len());
                         out.extend_from_slice(hdr);
                         out.extend_from_slice(mip);
@@ -80,12 +92,19 @@ impl Jpg {
                     }
                     let img = match header.texture_type {
                         TextureType::JPEG => blp::decode::decode_jpeg_frame(&header, frame, buf)?,
-                        TextureType::PALETTE => blp::decode::decode_palette_frame(&header, frame, buf)?,
+                        TextureType::PALETTE => {
+                            blp::decode::decode_palette_frame(&header, frame, buf)?
+                        }
                     };
                     let mut out = Vec::new();
                     let rgb = image::DynamicImage::ImageRgba8(img).to_rgb8();
                     let mut enc = JpegEncoder::new_with_quality(&mut out, quality as u8);
-                    enc.encode(rgb.as_raw(), rgb.width(), rgb.height(), image::ColorType::Rgb8.into())?;
+                    enc.encode(
+                        rgb.as_raw(),
+                        rgb.width(),
+                        rgb.height(),
+                        image::ColorType::Rgb8.into(),
+                    )?;
                     Ok(out)
                 } else {
                     // No quality arg — detect the external format and convert.
@@ -96,14 +115,20 @@ impl Jpg {
                     } else if crate::psd::PsdImage::detect(buf) {
                         crate::psd::PsdImage::into_dynamic(buf)?
                     } else {
-                        image::load_from_memory(buf).map_err(|_| BlpError::new("error-image-load"))?
+                        image::load_from_memory(buf)
+                            .map_err(|_| BlpError::new("error-image-load"))?
                     };
 
                     let img = dynimg.to_rgba8();
                     let mut out = Vec::new();
                     let rgb = image::DynamicImage::ImageRgba8(img.clone()).to_rgb8();
                     let mut enc = JpegEncoder::new_with_quality(&mut out, quality as u8);
-                    enc.encode(rgb.as_raw(), rgb.width(), rgb.height(), image::ColorType::Rgb8.into())?;
+                    enc.encode(
+                        rgb.as_raw(),
+                        rgb.width(),
+                        rgb.height(),
+                        image::ColorType::Rgb8.into(),
+                    )?;
                     Ok(out)
                 }
             }

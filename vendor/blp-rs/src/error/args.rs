@@ -5,8 +5,11 @@ use std::{fmt, fmt::Display, sync::Arc};
 pub(crate) enum Arg {
     Str(Arc<str>),
     Int(i64),
+    #[allow(dead_code)]
     F64(f64),
+    #[allow(dead_code)]
     Bool(bool),
+    #[allow(dead_code)]
     Display(Arc<dyn Display + Send + Sync>),
 }
 
@@ -19,9 +22,7 @@ impl Debug for Arg {
             Arg::Bool(b) => f.debug_tuple("Bool").field(b).finish(),
             Arg::Display(d) => {
                 let s = format!("{d}");
-                f.debug_tuple("Display")
-                    .field(&s)
-                    .finish()
+                f.debug_tuple("Display").field(&s).finish()
             }
         }
     }

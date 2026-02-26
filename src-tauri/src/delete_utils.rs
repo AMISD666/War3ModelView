@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[allow(dead_code)]
 pub fn delete_model_with_shared_textures(model_path: &str) -> Result<String, String> {
     let paths = vec![model_path.to_string()];
     delete_models_with_shared_textures(&paths)
@@ -95,9 +96,7 @@ pub fn delete_models_with_shared_textures(model_paths: &[String]) -> Result<Stri
 fn resolve_model_textures(model_path: &Path) -> Result<Vec<String>, String> {
     let data = fs::read(model_path).map_err(|e| format!("Failed to read model: {}", e))?;
     let texture_paths = extract_texture_paths(&data, model_path);
-    let model_dir = model_path
-        .parent()
-        .ok_or("Invalid model path")?;
+    let model_dir = model_path.parent().ok_or("Invalid model path")?;
 
     let mut resolved: Vec<String> = Vec::new();
     for tex_rel in texture_paths {
@@ -193,7 +192,9 @@ fn extract_texture_paths(data: &[u8], model_path: &Path) -> Vec<String> {
                             if end > start {
                                 let path_str = &line[start + 1..end];
                                 if !path_str.is_empty() {
-                                    paths.push(path_str.replace("\\", std::path::MAIN_SEPARATOR_STR));
+                                    paths.push(
+                                        path_str.replace("\\", std::path::MAIN_SEPARATOR_STR),
+                                    );
                                 }
                             }
                         }

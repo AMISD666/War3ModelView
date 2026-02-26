@@ -6,7 +6,11 @@ use jpeg_decoder::{Decoder, PixelFormat};
 use std::io::Cursor;
 
 /// Decode a single JPEG-based BLP frame.
-pub(crate) fn decode_jpeg_frame(img: &Blp, frame: &Frame, buf: &[u8]) -> Result<RgbaImage, BlpError> {
+pub(crate) fn decode_jpeg_frame(
+    img: &Blp,
+    frame: &Frame,
+    buf: &[u8],
+) -> Result<RgbaImage, BlpError> {
     // --- Validate header range and slice it out ---
     let h_off = img.header.offset;
     let h_len = img.header.length;
@@ -52,8 +56,17 @@ pub(crate) fn decode_jpeg_frame(img: &Blp, frame: &Frame, buf: &[u8]) -> Result<
                 let m = pixels[idx + 1];
                 let y = pixels[idx + 2];
                 let k = pixels[idx + 3];
-                let a = if force_opaque { 255 } else { 255u8.saturating_sub(k) };
-                *px = image::Rgba([255u8.saturating_sub(y), 255u8.saturating_sub(m), 255u8.saturating_sub(c), a]);
+                let a = if force_opaque {
+                    255
+                } else {
+                    255u8.saturating_sub(k)
+                };
+                *px = image::Rgba([
+                    255u8.saturating_sub(y),
+                    255u8.saturating_sub(m),
+                    255u8.saturating_sub(c),
+                    a,
+                ]);
             }
         }
         PixelFormat::RGB24 => {
@@ -69,10 +82,7 @@ pub(crate) fn decode_jpeg_frame(img: &Blp, frame: &Frame, buf: &[u8]) -> Result<
             }
         }
         PixelFormat::L16 => {
-            for (chunk, px) in pixels
-                .chunks_exact(2)
-                .zip(imgbuf.pixels_mut())
-            {
+            for (chunk, px) in pixels.chunks_exact(2).zip(imgbuf.pixels_mut()) {
                 let l16 = u16::from_be_bytes([chunk[0], chunk[1]]);
                 let l8 = (l16 / 257) as u8;
                 *px = image::Rgba([l8, l8, l8, 255]);
@@ -84,7 +94,11 @@ pub(crate) fn decode_jpeg_frame(img: &Blp, frame: &Frame, buf: &[u8]) -> Result<
 }
 
 /// Decode a single PALETTE BLP frame.
-pub(crate) fn decode_palette_frame(img: &Blp, frame: &Frame, buf: &[u8]) -> Result<RgbaImage, BlpError> {
+pub(crate) fn decode_palette_frame(
+    img: &Blp,
+    frame: &Frame,
+    buf: &[u8],
+) -> Result<RgbaImage, BlpError> {
     use std::io::Read;
 
     if img.header.offset + img.header.length > buf.len() {
@@ -126,7 +140,11 @@ pub(crate) fn decode_palette_frame(img: &Blp, frame: &Frame, buf: &[u8]) -> Resu
         1 => (pixel_count + 7) / 8,
         4 => (pixel_count + 1) / 2,
         8 => pixel_count,
-        _ => return Err(BlpError::new("blp.version.invalid").with_arg("msg", "unsupported alpha bits")),
+        _ => {
+            return Err(
+                BlpError::new("blp.version.invalid").with_arg("msg", "unsupported alpha bits")
+            );
+        }
     };
 
     let mut alpha_raw = vec![0u8; alpha_bytes];
@@ -154,9 +172,7 @@ pub(crate) fn decode_palette_frame(img: &Blp, frame: &Frame, buf: &[u8]) -> Resu
             8 => alpha_raw[p],
             _ => 255,
         };
-        out_img
-            .get_pixel_mut((p as u32) % w, (p as u32) / w)
-            .0 = [r, g, b, a];
+        out_img.get_pixel_mut((p as u32) % w, (p as u32) / w).0 = [r, g, b, a];
     }
 
     Ok(out_img)
@@ -166,13 +182,16 @@ pub(crate) fn decode_palette_frame(img: &Blp, frame: &Frame, buf: &[u8]) -> Resu
 ///
 /// Returns a vector of Option<RgbaImage>, where None indicates
 /// the mipmap was not decoded (either missing or mip_visible was false).
-pub(crate) fn open_mipmaps_filtered(blp: &Blp, frames: &[Frame], buf: &[u8], mip_visible: &[bool]) -> Result<Vec<Option<RgbaImage>>, BlpError> {
+#[allow(dead_code)]
+pub(crate) fn open_mipmaps_filtered(
+    blp: &Blp,
+    frames: &[Frame],
+    buf: &[u8],
+    mip_visible: &[bool],
+) -> Result<Vec<Option<RgbaImage>>, BlpError> {
     let mut out = Vec::with_capacity(frames.len());
     for (i, frame) in frames.iter().enumerate() {
-        let visible = mip_visible
-            .get(i)
-            .copied()
-            .unwrap_or(true);
+        let visible = mip_visible.get(i).copied().unwrap_or(true);
         if !visible || frame.length == 0 {
             out.push(None);
             continue;
@@ -193,6 +212,7 @@ pub(crate) fn open_mipmaps_filtered(blp: &Blp, frames: &[Frame], buf: &[u8], mip
 ///
 /// This is a convenience function that returns all non-empty mipmaps
 /// as RgbaImage instances (skipping empty frames).
+#[allow(dead_code)]
 pub(crate) fn open_mipmaps(buf: &[u8]) -> Result<Vec<RgbaImage>, BlpError> {
     use crate::blp::MAX_MIPS;
     use crate::blp::parse::parse_header;
@@ -215,7 +235,12 @@ pub(crate) fn open_mipmaps(buf: &[u8]) -> Result<Vec<RgbaImage>, BlpError> {
 impl Blp {
     /// Decode an external image (PNG/JPG/PSD/etc.) into power-of-two mip images
     /// and fill `frames[*]` dimensions accordingly.
-    pub fn decode_image(&self, frames: &mut [Frame], buf: &[u8], mip_visible: &[bool]) -> Result<Vec<Option<RgbaImage>>, BlpError> {
+    pub fn decode_image(
+        &self,
+        frames: &mut [Frame],
+        buf: &[u8],
+        mip_visible: &[bool],
+    ) -> Result<Vec<Option<RgbaImage>>, BlpError> {
         // --- Decode source into RGBA8 ---
         use crate::traits::{FormatDetector, ImageDecoder};
 
@@ -263,10 +288,7 @@ impl Blp {
             frames[i].height = h;
 
             // Visibility gate: missing entry → treated as `true`.
-            let visible = mip_visible
-                .get(i)
-                .copied()
-                .unwrap_or(true);
+            let visible = mip_visible.get(i).copied().unwrap_or(true);
             if visible {
                 out.push(Some(prev.clone()));
             } else {
@@ -283,7 +305,12 @@ impl Blp {
             let next_h = (h / 2).max(1);
 
             // Downscale current level into the next.
-            let next_img = image::imageops::resize(&prev, next_w, next_h, image::imageops::FilterType::Lanczos3);
+            let next_img = image::imageops::resize(
+                &prev,
+                next_w,
+                next_h,
+                image::imageops::FilterType::Lanczos3,
+            );
 
             prev = next_img;
             w = next_w;

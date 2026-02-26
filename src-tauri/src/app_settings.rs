@@ -49,6 +49,7 @@ pub fn get_copy_mpq_textures() -> bool {
     load_settings().copy_mpq_textures
 }
 
+#[allow(dead_code)]
 pub fn get_mpq_paths() -> Vec<String> {
     load_settings().mpq_paths
 }

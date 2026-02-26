@@ -93,7 +93,7 @@ impl MpqManager {
     pub fn read_files_batch(&self, filenames: &[String]) -> Vec<Option<Vec<u8>>> {
         let mut archives = self.archives.lock().unwrap();
         let mut results = Vec::with_capacity(filenames.len());
-        
+
         for filename in filenames {
             let mut found = None;
             let candidates = build_mpq_candidates(filename);
@@ -117,6 +117,7 @@ impl MpqManager {
         results
     }
 
+    #[allow(dead_code)]
     pub fn archive_count(&self) -> usize {
         let archives = self.archives.lock().unwrap();
         archives.len()
