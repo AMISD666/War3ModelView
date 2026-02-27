@@ -2317,7 +2317,9 @@ export const useModelStore = create<ModelState>((set, get) => ({
         const newTabs = state.tabs.filter(t => t.id !== tabId);
 
         // CLEANUP: Destroy renderer resources if cached
-        if (tab.snapshot.renderer) {
+        // Safety: Only destroy if it's not the currently active renderer in the store
+        const currentActiveRenderer = state.cachedRenderer;
+        if (tab.snapshot.renderer && tab.snapshot.renderer !== currentActiveRenderer) {
             console.log(`[ModelStore] Destroying renderer for closed tab: ${tab.name}`);
             try { (tab.snapshot.renderer as any).destroy(); } catch (e) { }
         }
@@ -2336,13 +2338,16 @@ export const useModelStore = create<ModelState>((set, get) => ({
                     currentSequence: -1,
                     currentFrame: 0,
                     hiddenGeosetIds: [],
-                    forceShowAllGeosets: true
+                    forceShowAllGeosets: true,
+                    cachedRenderer: null
                 });
             } else {
                 // Switch to adjacent tab
                 const newActiveIndex = Math.min(tabIndex, newTabs.length - 1);
                 const newActiveTab = newTabs[newActiveIndex];
                 const snapshot = newActiveTab.snapshot;
+
+                console.log(`[ModelStore] Closing active tab, switching to: ${newActiveTab.name}`);
 
                 set({
                     tabs: newTabs,
@@ -2355,7 +2360,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
                     currentFrame: snapshot.currentFrame,
                     hiddenGeosetIds: [...snapshot.hiddenGeosetIds],
                     forceShowAllGeosets: false,
-                    rendererReloadTrigger: state.rendererReloadTrigger + 1
+                    cachedRenderer: snapshot.renderer || null, // CRITICAL FIX: Restore cached renderer
+                    rendererReloadTrigger: snapshot.renderer ? state.rendererReloadTrigger : state.rendererReloadTrigger + 1
                 });
 
                 // Restore camera if ref is available
