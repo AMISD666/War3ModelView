@@ -1721,10 +1721,9 @@ const MainLayout: React.FC = () => {
             return;
         }
 
-        const store = useModelStore.getState();
-        const currentPath = store.modelPath;
-        const normalizedModel = store.getModelDataForSave?.(false) ?? store.modelData;
-        if (!normalizedModel) {
+        const currentModel = useModelStore.getState().modelData;
+        const currentPath = useModelStore.getState().modelPath;
+        if (!currentModel) {
             showMessage('warning', '模型优化', '当前没有可优化的模型。');
             return;
         }
@@ -1733,8 +1732,8 @@ const MainLayout: React.FC = () => {
             modelOptimizeRunningRef.current = true;
             setModelOptimizeRunning(true);
             try {
-                const snapshotBefore = structuredClone(normalizedModel);
-                const workingCopy = structuredClone(normalizedModel);
+                const snapshotBefore = structuredClone(currentModel);
+                const workingCopy = structuredClone(currentModel);
                 const startedAt = performance.now();
 
                 if (command === 'EXECUTE_POLYGON_OPT') {
@@ -1745,8 +1744,8 @@ const MainLayout: React.FC = () => {
                     });
 
                     if (!result.changed) {
-                        setModelOptimizeLastResult('多边形优化完成：没有可安全优化的数据。');
-                        showMessage('info', '模型优化', '多边形优化完成，未检测到可安全优化项。');
+                        setModelOptimizeLastResult('多边形优化完成');
+                        showMessage('info', '模型优化', '多边形优化完成');
                         return;
                     }
 
