@@ -25,7 +25,7 @@ import { useHistoryStore } from '../store/historyStore'
 import { ModelInfoPanel } from './info/ModelInfoPanel'
 import { ViewerToolbar } from './ViewerToolbar'
 import { ConfigProvider, theme } from 'antd'
-import { CameraOutlined, CopyOutlined } from '@ant-design/icons'
+import { CameraOutlined, CopyOutlined, SyncOutlined } from '@ant-design/icons'
 import { commandManager } from '../utils/CommandManager'
 import { MoveVerticesCommand, VertexChange } from '../commands/MoveVerticesCommand'
 import { MoveNodesCommand, NodeChange } from '../commands/MoveNodesCommand'
@@ -205,6 +205,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const cameraUpRef = useRef(vec3.fromValues(0, 0, 1))
   const cameraQuatRef = useRef(quat.create())
   const { showModelInfo } = useUIStore()
+  const { isLooping, setLooping } = useModelStore()
   const [texturePreview, setTexturePreview] = useState<{
     url: string
     width: number
@@ -239,6 +240,13 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     }
     return [0, 0, 0]
   }
+
+  // Sync isLooping to renderer
+  useEffect(() => {
+    if (renderer && renderer.rendererData) {
+      renderer.rendererData.loop = isLooping
+    }
+  }, [renderer, isLooping])
 
   const copySelectedCameraParams = () => {
     const { nodes } = useModelStore.getState()
@@ -3093,6 +3101,13 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           if (isPlayingRef.current && !isBindPoseMode) {
             mdlRenderer.update(delta * playbackSpeedRef.current)
             needsRendererUpdateRef.current = false
+
+            // Auto-pause if not looping and reached end
+            if (!isLooping && mdlRenderer.rendererData &&
+              mdlRenderer.rendererData.animationInfo &&
+              mdlRenderer.rendererData.frame >= mdlRenderer.rendererData.animationInfo.Interval[1] - 0.1) {
+              onTogglePlay()
+            }
 
             // Sync frame to store for Timeline (Animation Mode only)
             // PERFORMANCE: Throttle to 200ms to avoid excessive React re-renders
@@ -6275,30 +6290,37 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       {!isTexturePreviewMode && appMainMode !== 'animation' && (
         <div style={{
           position: 'absolute',
-          bottom: '20px',
+          bottom: '15px',
           left: '50%',
           transform: 'translateX(-50%)',
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
-          gap: '5px',
+          gap: '4px',
           width: '60%',
           maxWidth: '600px',
-          backgroundColor: 'rgba(0, 0, 0, 0.5)',
-          padding: '10px',
-          borderRadius: '8px',
-          pointerEvents: 'auto'
+          backgroundColor: 'rgba(0, 0, 0, 0.45)', // Slightly more transparent
+          padding: '4px 12px', // Significantly reduced vertical padding
+          borderRadius: '20px', // More pill-like
+          pointerEvents: 'auto',
+          backdropFilter: 'blur(8px)',
+          border: '1px solid rgba(255, 255, 255, 0.1)'
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', width: '100%' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', width: '100%' }}>
             <button
               onClick={onTogglePlay}
+              title={isPlaying ? '暂停' : '播放'}
               style={{
                 background: 'none',
                 border: 'none',
-                color: 'white',
+                color: isPlaying ? '#1890ff' : 'white',
                 cursor: 'pointer',
-                fontSize: '20px',
-                width: '30px'
+                fontSize: '18px',
+                width: '28px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transition: 'all 0.2s'
               }}
             >
               {isPlaying ? '⏸' : '▶'}
@@ -6309,11 +6331,40 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               max={renderer?.rendererData?.animationInfo?.Interval[1] || 100}
               value={progress}
               onChange={handleSeek}
-              style={{ flex: 1, cursor: 'pointer' }}
+              style={{
+                flex: 1,
+                cursor: 'pointer',
+                height: '4px',
+                accentColor: '#1890ff'
+              }}
             />
-            <span style={{ color: 'white', fontSize: '12px', minWidth: '80px', textAlign: 'right' }}>
+            <span style={{
+              color: 'rgba(255, 255, 255, 0.85)',
+              fontSize: '11px',
+              fontFamily: 'monospace',
+              minWidth: '70px',
+              textAlign: 'center'
+            }}>
               {Math.round(progress)} / {Math.round(duration)}
             </span>
+            <button
+              onClick={() => setLooping(!isLooping)}
+              title={isLooping ? '循环: 开启' : '循环: 关闭'}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: isLooping ? '#52c41a' : 'rgba(255, 255, 255, 0.45)',
+                cursor: 'pointer',
+                fontSize: '16px',
+                width: '24px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transition: 'all 0.2s'
+              }}
+            >
+              <SyncOutlined spin={isPlaying && isLooping && !!renderer} />
+            </button>
           </div>
         </div>
       )}

@@ -12,6 +12,7 @@ export interface RendererData {
     frame: number;
     animation: number;
     animationInfo: Sequence | null;
+    loop: boolean;
     globalSequencesFrames: number[];
 
     rootNode: NodeWrapper | null;

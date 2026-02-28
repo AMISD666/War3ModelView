@@ -65,6 +65,7 @@ export class ModelInstance {
             frame: 0,
             animation: 0,
             animationInfo: null,
+            loop: true,
             globalSequencesFrames: [],
             rootNode: null,
             nodes: [],
@@ -269,7 +270,11 @@ export class ModelInstance {
         this.rendererData.frame += delta;
         if (this.rendererData.animationInfo) {
             if (this.rendererData.frame > this.rendererData.animationInfo.Interval[1]) {
-                this.rendererData.frame = this.rendererData.animationInfo.Interval[0];
+                if (this.rendererData.loop) {
+                    this.rendererData.frame = this.rendererData.animationInfo.Interval[0];
+                } else {
+                    this.rendererData.frame = this.rendererData.animationInfo.Interval[1];
+                }
             }
         }
         this.updateGlobalSequences(delta);
