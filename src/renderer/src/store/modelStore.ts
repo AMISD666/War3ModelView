@@ -22,6 +22,11 @@ type ClipboardPayload = {
     textureAnims?: Record<number, any>;
 };
 
+type SetModelDataOptions = {
+    skipAutoRecalculate?: boolean;
+    skipModelRebuild?: boolean;
+};
+
 const pickDefaultSequenceIndex = (sequences: any[]) => {
     if (!Array.isArray(sequences) || sequences.length === 0) return -1;
     const standRegex = /stand/i;
@@ -40,6 +45,11 @@ function deepClone<T>(value: T): T {
     const sc = (globalThis as any).structuredClone;
     if (typeof sc === 'function') return sc(value);
     return JSON.parse(JSON.stringify(value));
+}
+
+function sanitizeNodesArray(nodes: any): ModelNode[] {
+    if (!Array.isArray(nodes)) return [];
+    return nodes.filter((n: any) => n && typeof n.ObjectId === 'number') as ModelNode[];
 }
 
 function collectTextureIdsFromAnimVector(value: any, ids: Set<number>): void {
@@ -140,7 +150,7 @@ interface ModelState {
     resetPreviewTransform: () => void;
     reset: () => void;
 
-    setModelData: (data: ModelData | null, path: string | null) => void;
+    setModelData: (data: ModelData | null, path: string | null, options?: SetModelDataOptions) => void;
     setLoading: (loading: boolean) => void;
     updateNode: (objectId: number, updates: Partial<ModelNode>) => void;
     // 静默更新节点 - 不触发 renderer reload（用于关键帧编辑等高频更新）
@@ -927,22 +937,25 @@ export const useModelStore = create<ModelState>((set, get) => ({
     isLooping: true,
     autoKeyframe: true,
 
-    setModelData: (data, path) => {
+    setModelData: (data, path, options = {}) => {
         if (data && path) {
             (data as any).__modelPath = path;
         }
+        const skipAutoRecalculate = !!options.skipAutoRecalculate;
+        const skipModelRebuild = !!options.skipModelRebuild;
+
         let nodes = extractNodesFromModel(data);
         console.log('[ModelStore] Loaded model with', nodes.length, 'nodes');
 
         // FORCE NO REORDERING ON LOAD to prevent invalidating saved bone references
-        const correctedData = updateModelDataWithNodes(data, nodes, false);
+        const correctedData = skipModelRebuild ? data : updateModelDataWithNodes(data, nodes, false);
 
         // Auto recalculate extent and normals using optimized unified utilities
         const rendererState = useRendererStore.getState();
-        if (rendererState.autoRecalculateExtent) {
+        if (!skipAutoRecalculate && rendererState.autoRecalculateExtent) {
             calculateModelExtent(correctedData);
         }
-        if (rendererState.autoRecalculateNormals) {
+        if (!skipAutoRecalculate && rendererState.autoRecalculateNormals) {
             calculateModelNormals(correctedData);
         }
 
@@ -951,7 +964,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
         const allGeosetIds = Array.from({ length: geosetCount }, (_, i) => i);
 
         // Reuse nodes from correctedData if available, otherwise use initial extract
-        const correctedNodes = (correctedData as any)?.Nodes || nodes;
+        const correctedNodes = Array.isArray((correctedData as any)?.Nodes) ? (correctedData as any).Nodes : nodes;
 
         const sequences = (correctedData as any)?.Sequences || [];
         const defaultSequenceIndex = pickDefaultSequenceIndex(sequences);
@@ -976,11 +989,20 @@ export const useModelStore = create<ModelState>((set, get) => ({
         const state = get();
         if (!state.modelData) return null;
 
-        const base = updateModelDataWithNodes(state.modelData, state.nodes as any[], false);
+        let nodesForSave = sanitizeNodesArray(state.nodes);
+        if (nodesForSave.length === 0) {
+            const recovered = extractNodesFromModel(state.modelData);
+            if (recovered.length > 0) {
+                console.warn('[ModelStore] getModelDataForSave recovered nodes from modelData because store.nodes was empty');
+                nodesForSave = recovered;
+            }
+        }
+
+        const base = updateModelDataWithNodes(state.modelData, nodesForSave as any[], false);
         if (!base) return null;
 
         if (forceReorder || needsReorderForSave(base)) {
-            return updateModelDataWithNodes(state.modelData, state.nodes as any[], true);
+            return updateModelDataWithNodes(state.modelData, nodesForSave as any[], true);
         }
 
         return base;
@@ -2256,7 +2278,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                     snapshot: {
                         modelData: state.modelData,
                         modelPath: state.modelPath,
-                        nodes: [...state.nodes],
+                        nodes: sanitizeNodesArray(state.nodes),
                         sequences: [...state.sequences],
                         currentSequence: state.currentSequence,
                         currentFrame: state.currentFrame,
@@ -2354,7 +2376,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                     activeTabId: newActiveTab.id,
                     modelData: snapshot.modelData,
                     modelPath: snapshot.modelPath,
-                    nodes: [...snapshot.nodes],
+                    nodes: sanitizeNodesArray(snapshot.nodes),
                     sequences: [...snapshot.sequences],
                     currentSequence: snapshot.currentSequence,
                     currentFrame: snapshot.currentFrame,
@@ -2411,7 +2433,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                         ...tab.snapshot,
                         modelData: state.modelData,
                         modelPath: state.modelPath,
-                        nodes: [...state.nodes],
+                        nodes: sanitizeNodesArray(state.nodes),
                         sequences: [...state.sequences],
                         currentSequence: state.currentSequence,
                         currentFrame: state.currentFrame,
@@ -2456,7 +2478,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             activeTabId: tabId,
             modelData: snapshot.modelData,
             modelPath: snapshot.modelPath,
-            nodes: [...snapshot.nodes],
+            nodes: sanitizeNodesArray(snapshot.nodes),
             sequences: [...snapshot.sequences],
             currentSequence: snapshot.currentSequence,
             currentFrame: snapshot.currentFrame,

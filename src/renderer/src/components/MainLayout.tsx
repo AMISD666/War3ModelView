@@ -39,6 +39,7 @@ import {
     isDefaultTextureAdjustments,
     TEXTURE_ADJUSTMENTS_KEY
 } from '../utils/textureAdjustments'
+import { optimizeModelKeyframes, optimizeModelPolygons } from '../utils/modelOptimization'
 import { windowManager } from '../utils/WindowManager'
 import { useRpcServer } from '../hooks/useRpc'
 
@@ -1688,6 +1689,9 @@ const MainLayout: React.FC = () => {
     const [showGeosetModal, setShowGeosetModal] = useState<boolean>(false)
     const [showModelOptimizeModal, setShowModelOptimizeModal] = useState<boolean>(false)
     const [showAbout, setShowAbout] = useState<boolean>(false)
+    const [modelOptimizeRunning, setModelOptimizeRunning] = useState<boolean>(false)
+    const [modelOptimizeLastResult, setModelOptimizeLastResult] = useState<string>('')
+    const modelOptimizeRunningRef = useRef(false)
 
 
     // Use modelData directly from store to ensure updates from NodeManager are reflected
@@ -1699,22 +1703,106 @@ const MainLayout: React.FC = () => {
         let total = 0;
         if (modelData?.Geosets && Array.isArray(modelData.Geosets)) {
             modelData.Geosets.forEach((g: any) => {
-                if (g.Faces && Array.isArray(g.Faces)) {
+                if (g.Faces && typeof g.Faces.length === 'number') {
                     total += g.Faces.length / 3;
                 }
             });
         }
-        return { originalFaces: Math.floor(total) };
-    }, [modelData]);
+        return {
+            originalFaces: Math.floor(total),
+            isOptimizing: modelOptimizeRunning,
+            lastResult: modelOptimizeLastResult
+        };
+    }, [modelData, modelOptimizeRunning, modelOptimizeLastResult]);
 
     const handleModelOptimizeCommand = useCallback((command: string, payload: any) => {
-        console.log('[RPC COMMAND RECEIVED]', command, payload);
-        if (command === 'EXECUTE_POLYGON_OPT') {
-            showMessage('info', 'IPC 调用', `多边形优化: 减面比例 ${payload.decimateRatio}%`);
-        } else if (command === 'EXECUTE_KEYFRAME_OPT') {
-            showMessage('info', 'IPC 调用', `关键帧优化: ${payload.optimizeKeyframes}`);
+        if (modelOptimizeRunningRef.current) {
+            showMessage('warning', '模型优化', '已有优化任务正在执行，请等待完成。');
+            return;
         }
-    }, [showMessage]);
+
+        const store = useModelStore.getState();
+        const currentPath = store.modelPath;
+        const normalizedModel = store.getModelDataForSave?.(false) ?? store.modelData;
+        if (!normalizedModel) {
+            showMessage('warning', '模型优化', '当前没有可优化的模型。');
+            return;
+        }
+
+        const run = async () => {
+            modelOptimizeRunningRef.current = true;
+            setModelOptimizeRunning(true);
+            try {
+                const snapshotBefore = structuredClone(normalizedModel);
+                const workingCopy = structuredClone(normalizedModel);
+                const startedAt = performance.now();
+
+                if (command === 'EXECUTE_POLYGON_OPT') {
+                    const result = await optimizeModelPolygons(workingCopy, {
+                        removeRedundantVertices: payload?.removeRedundantVertices !== false,
+                        decimateModel: payload?.decimateModel !== false,
+                        decimateRatio: Number(payload?.decimateRatio ?? 75)
+                    });
+
+                    if (!result.changed) {
+                        setModelOptimizeLastResult('多边形优化完成：没有可安全优化的数据。');
+                        showMessage('info', '模型优化', '多边形优化完成，未检测到可安全优化项。');
+                        return;
+                    }
+
+                    const snapshotAfter = result.model;
+                    setZustandModelData(snapshotAfter, currentPath || null);
+                    useHistoryStore.getState().push({
+                        name: '模型多边形优化',
+                        undo: () => setZustandModelData(structuredClone(snapshotBefore), currentPath || null),
+                        redo: () => setZustandModelData(structuredClone(snapshotAfter), currentPath || null)
+                    });
+
+                    const elapsed = Math.round(performance.now() - startedAt);
+                    const summary = `面数 ${result.stats.facesBefore} -> ${result.stats.facesAfter}，顶点 ${result.stats.verticesBefore} -> ${result.stats.verticesAfter}，耗时 ${elapsed}ms`;
+                    setModelOptimizeLastResult(`多边形优化：${summary}`);
+                    showMessage('success', '模型优化', `多边形优化完成：${summary}`);
+                    return;
+                }
+
+                if (command === 'EXECUTE_KEYFRAME_OPT') {
+                    const result = await optimizeModelKeyframes(workingCopy, {
+                        removeRedundantFrames: payload?.removeRedundantFrames !== false,
+                        optimizeKeyframes: payload?.optimizeKeyframes !== false
+                    });
+
+                    if (!result.changed) {
+                        setModelOptimizeLastResult('关键帧优化完成：没有可安全优化的数据。');
+                        showMessage('info', '模型优化', '关键帧优化完成，未检测到可优化项。');
+                        return;
+                    }
+
+                    const snapshotAfter = result.model;
+                    setZustandModelData(snapshotAfter, currentPath || null, { skipAutoRecalculate: true });
+                    useHistoryStore.getState().push({
+                        name: '模型关键帧优化',
+                        undo: () => setZustandModelData(structuredClone(snapshotBefore), currentPath || null, { skipAutoRecalculate: true }),
+                        redo: () => setZustandModelData(structuredClone(snapshotAfter), currentPath || null, { skipAutoRecalculate: true })
+                    });
+
+                    const elapsed = Math.round(performance.now() - startedAt);
+                    const summary = `关键帧 ${result.stats.keysBefore} -> ${result.stats.keysAfter}，轨道 ${result.stats.tracksProcessed}，耗时 ${elapsed}ms`;
+                    setModelOptimizeLastResult(`关键帧优化：${summary}`);
+                    showMessage('success', '模型优化', `关键帧优化完成：${summary}`);
+                }
+            } catch (error: any) {
+                console.error('[ModelOptimize] Failed:', error);
+                const message = error?.message || String(error);
+                setModelOptimizeLastResult(`优化失败：${message}`);
+                showMessage('error', '模型优化', `优化失败：${message}`);
+            } finally {
+                setModelOptimizeRunning(false);
+                modelOptimizeRunningRef.current = false;
+            }
+        };
+
+        void run();
+    }, [setZustandModelData]);
 
     const { broadcastSync: broadcastModelOptimize } = useRpcServer(
         'modelOptimize',
@@ -1730,11 +1818,7 @@ const MainLayout: React.FC = () => {
             if (state.modelData !== prevModelData || state.nodes !== prevNodes) {
                 prevModelData = state.modelData;
                 prevNodes = state.nodes;
-
-                const originalFaces = state.modelData
-                    ? state.modelData.Geosets.reduce((acc: number, g: any) => acc + (g.Faces?.length || 0), 0) / 3
-                    : 0;
-                broadcastModelOptimize({ originalFaces });
+                broadcastModelOptimize(getModelOptimizeState());
             }
         });
 
@@ -1742,6 +1826,10 @@ const MainLayout: React.FC = () => {
 
         return () => unsubscribe();
     }, [getModelOptimizeState, broadcastModelOptimize]);
+
+    useEffect(() => {
+        broadcastModelOptimize(getModelOptimizeState());
+    }, [modelOptimizeRunning, modelOptimizeLastResult, getModelOptimizeState, broadcastModelOptimize]);
 
 
     // Preload standalone tool windows silently in the background
@@ -2787,7 +2875,10 @@ const MainLayout: React.FC = () => {
     const handleModelLoaded = useCallback((data: any) => {
         console.log('Model loaded:', data)
         // setModelData(data) // No longer needed as we use store
-        setZustandModelData(data, data.path || modelPath) // Ensure store is updated
+        setZustandModelData(data, data.path || modelPath, {
+            skipAutoRecalculate: true,
+            skipModelRebuild: true
+        }) // Ensure store is updated while keeping first-frame latency low
         setIsLoading(false)
         setZustandLoading(false)
 

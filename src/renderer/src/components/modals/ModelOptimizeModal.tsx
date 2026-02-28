@@ -29,7 +29,10 @@ const ModelOptimizeModal: React.FC<ModelOptimizeModalProps> = ({ visible, onClos
     const [estimatedFaces, setEstimatedFaces] = useState(0);
 
     // RPC Sync for standalone mode
-    const { state: rpcState, emitCommand } = useRpcClient<{ originalFaces: number }>('modelOptimize', { originalFaces: 0 });
+    const { state: rpcState, emitCommand } = useRpcClient<{ originalFaces: number; isOptimizing?: boolean; lastResult?: string }>(
+        'modelOptimize',
+        { originalFaces: 0, isOptimizing: false, lastResult: '' }
+    );
 
     // Draggable state (only relevant if not standalone window since desktop window has its own OS drag)
     const [disabled, setDisabled] = useState(false);
@@ -58,7 +61,7 @@ const ModelOptimizeModal: React.FC<ModelOptimizeModalProps> = ({ visible, onClos
             let total = 0;
             if (modelData.Geosets && Array.isArray(modelData.Geosets)) {
                 modelData.Geosets.forEach((g: any) => {
-                    if (g.Faces && Array.isArray(g.Faces)) {
+                    if (g.Faces && typeof g.Faces.length === 'number') {
                         total += g.Faces.length / 3;
                     }
                 });
@@ -78,6 +81,7 @@ const ModelOptimizeModal: React.FC<ModelOptimizeModalProps> = ({ visible, onClos
     }, [originalFaces, decimateRatio, decimateModel]);
 
     const handleExecutePolygonOpt = () => {
+        if (isStandalone && rpcState.isOptimizing) return;
         const payload = { removeRedundantVertices, decimateModel, decimateRatio };
         if (isStandalone) {
             emitCommand('EXECUTE_POLYGON_OPT', payload);
@@ -87,6 +91,7 @@ const ModelOptimizeModal: React.FC<ModelOptimizeModalProps> = ({ visible, onClos
     };
 
     const handleExecuteKeyframeOpt = () => {
+        if (isStandalone && rpcState.isOptimizing) return;
         const payload = { removeRedundantFrames, optimizeKeyframes };
         if (isStandalone) {
             emitCommand('EXECUTE_KEYFRAME_OPT', payload);
@@ -161,14 +166,18 @@ const ModelOptimizeModal: React.FC<ModelOptimizeModalProps> = ({ visible, onClos
                 </Row>
                 <Row justify="space-between" style={{ marginTop: 4, fontSize: 12 }}>
                     <Text style={{ color: '#888' }}>模型原面数: <span style={{ color: '#ccc' }}>{originalFaces}</span></Text>
-                    <Text style={{ color: '#888' }}>预计面数: <span style={{ color: '#1890ff' }}>{estimatedFaces}</span></Text>
+                    <Text style={{ color: '#888' }}>目标面数: <span style={{ color: '#1890ff' }}>{estimatedFaces}</span></Text>
                 </Row>
+                <Text style={{ color: '#666', fontSize: 11 }}>
+                    实际面数受 UV/骨骼保护约束，可能高于目标值
+                </Text>
             </div>
 
             <Button
                 type="primary"
                 block
                 onClick={handleExecutePolygonOpt}
+                disabled={!!rpcState.isOptimizing}
                 style={{
                     marginTop: 4,
                     height: 32,
@@ -212,6 +221,7 @@ const ModelOptimizeModal: React.FC<ModelOptimizeModalProps> = ({ visible, onClos
                 type="default"
                 block
                 onClick={handleExecuteKeyframeOpt}
+                disabled={!!rpcState.isOptimizing}
                 style={{
                     marginTop: 4,
                     height: 32,
@@ -225,6 +235,12 @@ const ModelOptimizeModal: React.FC<ModelOptimizeModalProps> = ({ visible, onClos
             >
                 执行关键帧优化
             </Button>
+
+            {isStandalone && (
+                <Text style={{ color: rpcState.isOptimizing ? '#faad14' : '#777', fontSize: 12 }}>
+                    {rpcState.isOptimizing ? '优化执行中，请稍候...' : (rpcState.lastResult || '准备就绪')}
+                </Text>
+            )}
 
             {/* Minimal inline CSS for dark mode inputs if not globally defined */}
             <style dangerouslySetInnerHTML={{

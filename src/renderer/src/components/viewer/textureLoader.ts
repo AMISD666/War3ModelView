@@ -30,6 +30,36 @@ export interface DecodeTextureOptions {
     adjustments?: TextureAdjustments
 }
 
+type WorkerLike = {
+    addEventListener: (type: 'message', listener: (event: any) => void) => void
+    removeEventListener: (type: 'message', listener: (event: any) => void) => void
+    postMessage: (message: any, transferOrOptions?: Transferable[] | StructuredSerializeOptions) => void
+}
+
+type DecodedTextureImage = ImageData | ImageBitmap
+
+interface WorkerRpcState {
+    pendingSingle: Map<string, (image: DecodedTextureImage | null) => void>
+    pendingBatch: Map<string, (result: WorkerBatchResultMap | null) => void>
+    listener: (event: any) => void
+}
+
+interface WorkerBatchDecodeTask {
+    id: string
+    path: string
+    bytes: Uint8Array
+    maxDimension?: number
+    preferBlpBaseMip: boolean
+}
+
+interface WorkerBatchResultMap {
+    decoded: Map<string, DecodedTextureImage>
+    failedPaths: Set<string>
+}
+
+const workerRpcMap = new WeakMap<WorkerLike, WorkerRpcState>()
+let decodeRequestCounter = 0
+
 /**
  * Normalize path separators to backslashes
  */
@@ -714,12 +744,279 @@ function parseTextureBytesPayload(payload: any, texturePaths: string[]): Map<str
     return decoded
 }
 
+function normalizeWorkers(worker?: WorkerLike | WorkerLike[]): WorkerLike[] {
+    if (!worker) return []
+    return Array.isArray(worker) ? worker.filter(Boolean) : [worker]
+}
+
+function toTightArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+    if (
+        bytes.byteOffset === 0 &&
+        bytes.byteLength === bytes.buffer.byteLength &&
+        bytes.buffer instanceof ArrayBuffer
+    ) {
+        return bytes.buffer
+    }
+    const copy = new Uint8Array(bytes.byteLength)
+    copy.set(bytes)
+    return copy.buffer
+}
+
+function ensureWorkerRpcState(worker: WorkerLike): WorkerRpcState {
+    const cached = workerRpcMap.get(worker)
+    if (cached) return cached
+
+    const pendingSingle = new Map<string, (image: DecodedTextureImage | null) => void>()
+    const pendingBatch = new Map<string, (result: WorkerBatchResultMap | null) => void>()
+    const listener = (event: any) => {
+        const type = event?.data?.type
+        const payload = event?.data?.payload
+        const id = payload?.id
+
+        if (type === 'DECODE_BATCH_SUCCESS') {
+            if (!id || !pendingBatch.has(id)) return
+            const resolve = pendingBatch.get(id)!
+            pendingBatch.delete(id)
+
+            const decoded = new Map<string, DecodedTextureImage>()
+            const failedPaths = new Set<string>()
+            const resultList = Array.isArray(payload?.results) ? payload.results : []
+            const errorList = Array.isArray(payload?.errors) ? payload.errors : []
+
+            for (const item of resultList) {
+                if (item?.path && item?.bitmap) {
+                    decoded.set(item.path, item.bitmap as DecodedTextureImage)
+                }
+            }
+            for (const item of errorList) {
+                if (item?.path) {
+                    failedPaths.add(item.path)
+                }
+            }
+
+            resolve({ decoded, failedPaths })
+            return
+        }
+
+        if (!id) return
+
+        if (type === 'DECODE_SUCCESS' && pendingSingle.has(id)) {
+            const resolve = pendingSingle.get(id)!
+            pendingSingle.delete(id)
+            resolve(payload.bitmap ?? null)
+            return
+        }
+
+        if (type === 'ERROR') {
+            if (pendingSingle.has(id)) {
+                const resolve = pendingSingle.get(id)!
+                pendingSingle.delete(id)
+                resolve(null)
+                return
+            }
+            if (pendingBatch.has(id)) {
+                const resolve = pendingBatch.get(id)!
+                pendingBatch.delete(id)
+                resolve(null)
+            }
+        }
+    }
+
+    worker.addEventListener('message', listener)
+    const state: WorkerRpcState = { pendingSingle, pendingBatch, listener }
+    workerRpcMap.set(worker, state)
+    return state
+}
+
+async function decodeBatchChunkWithWorker(
+    worker: WorkerLike,
+    tasks: WorkerBatchDecodeTask[]
+): Promise<WorkerBatchResultMap | null> {
+    if (tasks.length === 0) return { decoded: new Map(), failedPaths: new Set() }
+
+    const rpc = ensureWorkerRpcState(worker)
+    const id = `decode_batch_${++decodeRequestCounter}`
+    const transfer: Transferable[] = []
+    const payloadTasks = tasks.map((task) => {
+        const tightBuffer = toTightArrayBuffer(task.bytes)
+        transfer.push(tightBuffer)
+        return {
+            id: task.id,
+            path: task.path,
+            buffer: tightBuffer,
+            maxDimension: task.maxDimension,
+            preferBlpBaseMip: task.preferBlpBaseMip
+        }
+    })
+
+    return await new Promise((resolve) => {
+        const timeoutMs = Math.max(12000, 2500 * tasks.length)
+        const timer = setTimeout(() => {
+            rpc.pendingBatch.delete(id)
+            resolve(null)
+        }, timeoutMs)
+
+        rpc.pendingBatch.set(id, (result) => {
+            clearTimeout(timer)
+            resolve(result)
+        })
+
+        worker.postMessage({
+            type: 'DECODE_TEXTURE_BATCH',
+            payload: {
+                id,
+                tasks: payloadTasks
+            }
+        }, transfer)
+    })
+}
+
+function buildWorkerTaskQueues(
+    tasks: WorkerBatchDecodeTask[],
+    workerCount: number
+): WorkerBatchDecodeTask[][] {
+    const queues = Array.from({ length: workerCount }, () => [] as WorkerBatchDecodeTask[])
+    const workerLoadBytes = Array.from({ length: workerCount }, () => 0)
+    const sorted = [...tasks].sort((a, b) => b.bytes.byteLength - a.bytes.byteLength)
+
+    for (const task of sorted) {
+        let targetWorker = 0
+        let minLoad = workerLoadBytes[0]
+        for (let i = 1; i < workerLoadBytes.length; i++) {
+            if (workerLoadBytes[i] < minLoad) {
+                minLoad = workerLoadBytes[i]
+                targetWorker = i
+            }
+        }
+        queues[targetWorker].push(task)
+        workerLoadBytes[targetWorker] += task.bytes.byteLength
+    }
+
+    return queues
+}
+
+function splitWorkerTaskChunks(
+    queue: WorkerBatchDecodeTask[],
+    maxChunkItems: number,
+    maxChunkBytes: number
+): WorkerBatchDecodeTask[][] {
+    if (queue.length === 0) return []
+
+    const chunks: WorkerBatchDecodeTask[][] = []
+    let current: WorkerBatchDecodeTask[] = []
+    let currentBytes = 0
+
+    for (const task of queue) {
+        const taskBytes = task.bytes.byteLength
+        const shouldStartNewChunk =
+            current.length > 0 &&
+            (current.length >= maxChunkItems || currentBytes + taskBytes > maxChunkBytes)
+
+        if (shouldStartNewChunk) {
+            chunks.push(current)
+            current = []
+            currentBytes = 0
+        }
+
+        current.push(task)
+        currentBytes += taskBytes
+    }
+
+    if (current.length > 0) {
+        chunks.push(current)
+    }
+
+    return chunks
+}
+
+async function decodeBatchWithWorkerPool(
+    entries: Array<[string, Uint8Array]>,
+    workers: WorkerLike[],
+    textureAdjustmentsByPath: Map<string, TextureAdjustments>,
+    alphaRequiredTexturePaths: Set<string>,
+    maxDimension?: number
+): Promise<Map<string, DecodedTextureImage>> {
+    const decoded = new Map<string, DecodedTextureImage>()
+    if (entries.length === 0 || workers.length === 0) {
+        return decoded
+    }
+
+    const workerEligibleTasks: WorkerBatchDecodeTask[] = []
+    const workerByteMap = new Map<string, Uint8Array>()
+    const mainThreadOnly = new Set<string>()
+
+    for (const [path, bytes] of entries) {
+        if (textureAdjustmentsByPath.has(path)) {
+            mainThreadOnly.add(path)
+            continue
+        }
+        workerByteMap.set(path, bytes)
+        workerEligibleTasks.push({
+            id: `task_${++decodeRequestCounter}`,
+            path,
+            bytes,
+            maxDimension,
+            preferBlpBaseMip: alphaRequiredTexturePaths.has(path)
+        })
+    }
+
+    const workerChunkMaxItems = 8
+    const workerChunkMaxBytes = 12 * 1024 * 1024
+    const failedPaths = new Set<string>(mainThreadOnly)
+
+    if (workerEligibleTasks.length > 0) {
+        const queues = buildWorkerTaskQueues(workerEligibleTasks, workers.length)
+
+        await Promise.all(workers.map(async (worker, workerIndex) => {
+            const chunks = splitWorkerTaskChunks(
+                queues[workerIndex],
+                workerChunkMaxItems,
+                workerChunkMaxBytes
+            )
+            for (const chunk of chunks) {
+                const chunkResult = await decodeBatchChunkWithWorker(worker, chunk)
+                if (!chunkResult) {
+                    chunk.forEach((task) => failedPaths.add(task.path))
+                    continue
+                }
+                chunkResult.decoded.forEach((image, path) => decoded.set(path, image))
+                chunk.forEach((task) => {
+                    if (!chunkResult.decoded.has(task.path) || chunkResult.failedPaths.has(task.path)) {
+                        failedPaths.add(task.path)
+                    }
+                })
+            }
+        }))
+    }
+
+    for (const path of failedPaths) {
+        const bytes = workerByteMap.get(path) || entries.find(([entryPath]) => entryPath === path)?.[1]
+        if (!bytes) continue
+        const imageData = decodeTextureData(toTightArrayBuffer(bytes), path, {
+            adjustments: textureAdjustmentsByPath.get(path),
+            maxDimension,
+            preferBlpBaseMip: alphaRequiredTexturePaths.has(path)
+        })
+        if (imageData) {
+            decoded.set(path, imageData)
+        }
+    }
+
+    return decoded
+}
+
 export async function loadAllTextures(
     model: any,
     renderer: any,
     modelPath: string,
-    worker?: any,
-    maxDimension?: number
+    worker?: WorkerLike | WorkerLike[],
+    maxDimension?: number,
+    options?: {
+        yieldUploads?: boolean
+        workerDecodeMinTextures?: number
+        workerDecodeMinBytes?: number
+        targetPaths?: string[]
+    }
 ): Promise<TextureLoadResult[]> {
     const results: TextureLoadResult[] = []
 
@@ -737,7 +1034,7 @@ export async function loadAllTextures(
         }
     });
 
-    const texturePaths = new Set(model.Textures
+    const texturePaths = new Set<string>(model.Textures
         .map((texture: any) => texture.Image as string)
         .filter((path: string) => !!path));
 
@@ -763,8 +1060,20 @@ export async function loadAllTextures(
         });
     }
 
-    const uniqueTexturePaths = Array.from(texturePaths);
+    const uniqueTexturePaths: string[] = Array.from(texturePaths);
     if (uniqueTexturePaths.length === 0) {
+        return results
+    }
+
+    const targetPathSet = new Set((options?.targetPaths || []).filter(Boolean))
+    const hasTargetPaths = targetPathSet.size > 0
+    let effectiveTexturePaths: string[] = uniqueTexturePaths
+    if (hasTargetPaths) {
+        const fromModel = uniqueTexturePaths.filter((path) => targetPathSet.has(path))
+        const extras = Array.from(targetPathSet).filter((path) => !fromModel.includes(path))
+        effectiveTexturePaths = [...fromModel, ...extras]
+    }
+    if (effectiveTexturePaths.length === 0) {
         return results
     }
 
@@ -813,68 +1122,53 @@ export async function loadAllTextures(
         }
     }
 
-    const decodedTextures = new Map<string, ImageData>()
+    const decodedTextures = new Map<string, DecodedTextureImage>()
+    const workers = normalizeWorkers(worker)
 
     try {
         const payload = await invoke<Uint8Array>('load_textures_batch_bin', {
             modelPath,
-            texturePaths: uniqueTexturePaths
+            texturePaths: effectiveTexturePaths
         })
-        const decodedBatch = parseTextureBytesPayload(payload, uniqueTexturePaths)
+        const decodedBatch = parseTextureBytesPayload(payload, effectiveTexturePaths)
+        const entries = Array.from(decodedBatch.entries())
+        const totalBytes = entries.reduce((sum, [, bytes]) => sum + bytes.byteLength, 0)
+        const workerDecodeMinTextures = options?.workerDecodeMinTextures ?? 6
+        const workerDecodeMinBytes = options?.workerDecodeMinBytes ?? (5 * 1024 * 1024)
+        const useWorkerPool =
+            workers.length > 0 &&
+            entries.length >= workerDecodeMinTextures &&
+            totalBytes >= workerDecodeMinBytes
 
-        const decodePromises = Array.from(decodedBatch.entries()).map(async ([path, bytes]) => {
-            const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
-
-            let imageData: ImageData | null = null
-            if (worker) {
-                imageData = await new Promise((resolve) => {
-                    const timer = setTimeout(() => resolve(null), 10000)
-                    const id = Math.random().toString(36).substring(2)
-                    const handler = (e: any) => {
-                        const { type, payload: resPayload } = e.data
-                        if ((type === 'DECODE_SUCCESS' || type === 'ERROR') && resPayload.path === path) {
-                            clearTimeout(timer)
-                            worker.removeEventListener('message', handler)
-                            if (type === 'DECODE_SUCCESS') {
-                                // ImageBitmap to ImageData conversion if needed, 
-                                // though renderer usually expects ImageData or ImageBitmap
-                                resolve(resPayload.bitmap)
-                            } else {
-                                resolve(null)
-                            }
-                        }
-                    }
-                    worker.addEventListener('message', handler)
-                    worker.postMessage({
-                        type: 'DECODE_TEXTURE',
-                        payload: {
-                            buffer,
-                            path,
-                            id,
-                            adjustments: textureAdjustmentsByPath.get(path),
-                            maxDimension,
-                            preferBlpBaseMip: alphaRequiredTexturePaths.has(path)
-                        }
-                    }, [buffer])
-                })
-            } else {
-                imageData = decodeTextureData(buffer, path, {
+        if (useWorkerPool) {
+            const pooled = await decodeBatchWithWorkerPool(
+                entries,
+                workers,
+                textureAdjustmentsByPath,
+                alphaRequiredTexturePaths,
+                maxDimension
+            )
+            for (const [path, image] of pooled.entries()) {
+                decodedTextures.set(path, image)
+            }
+        } else {
+            for (const [path, bytes] of entries) {
+                const buffer = toTightArrayBuffer(bytes)
+                const imageData = decodeTextureData(buffer, path, {
                     adjustments: textureAdjustmentsByPath.get(path),
                     maxDimension,
                     preferBlpBaseMip: alphaRequiredTexturePaths.has(path)
                 })
+                if (imageData) {
+                    decodedTextures.set(path, imageData)
+                }
             }
-
-            if (imageData) {
-                decodedTextures.set(path, imageData)
-            }
-        })
-        await Promise.all(decodePromises)
+        }
     } catch (e) {
         console.error('[Viewer] Texture batch load failed:', e)
     }
 
-    const missingPaths = uniqueTexturePaths.filter(path => !decodedTextures.has(path))
+    const missingPaths = effectiveTexturePaths.filter(path => !decodedTextures.has(path))
     if (missingPaths.length > 0) {
         const fallbackResults = await Promise.all(
             missingPaths.map(async (path) => {
@@ -884,7 +1178,9 @@ export async function loadAllTextures(
                         const buffer = await readFile(candidate).catch(() => null)
                         if (buffer) {
                             const imageData = decodeTextureData(buffer.buffer, path, {
-                                adjustments: textureAdjustmentsByPath.get(path)
+                                adjustments: textureAdjustmentsByPath.get(path),
+                                maxDimension,
+                                preferBlpBaseMip: alphaRequiredTexturePaths.has(path)
                             })
                             if (imageData) {
                                 return { path, imageData }
@@ -897,7 +1193,9 @@ export async function loadAllTextures(
                     const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: normalizePath(path) })
                     if (mpqData && mpqData.length > 0) {
                         const imageData = decodeTextureData(mpqData.buffer as ArrayBuffer, path, {
-                            adjustments: textureAdjustmentsByPath.get(path)
+                            adjustments: textureAdjustmentsByPath.get(path),
+                            maxDimension,
+                            preferBlpBaseMip: alphaRequiredTexturePaths.has(path)
                         })
                         if (imageData) {
                             return { path, imageData }
@@ -907,7 +1205,7 @@ export async function loadAllTextures(
                     // ignore fallback failure
                 }
 
-                return { path, imageData: null as ImageData | null }
+                return { path, imageData: null as DecodedTextureImage | null }
             })
         )
 
@@ -918,16 +1216,21 @@ export async function loadAllTextures(
         })
     }
 
-    // Final Upload to WebGL SEQUENTIALLY
-    for (const path of uniqueTexturePaths) {
+    const shouldYieldUploads = !!options?.yieldUploads
+    const uploadYieldBatch = 4
+    let uploadedSinceYield = 0
+    for (const path of effectiveTexturePaths) {
         const imageData = decodedTextures.get(path)
         if (imageData && renderer.setTextureImageData) {
             renderer.setTextureImageData(path, [imageData])
             results.push({ path, loaded: true })
-
-            // YIELD: Prevent blocking the main thread during heavy GPU uploads
-            // This maintains UI responsiveness while textures are being transferred
-            await new Promise(r => requestAnimationFrame(r))
+            if (shouldYieldUploads) {
+                uploadedSinceYield++
+            }
+            if (shouldYieldUploads && uploadedSinceYield >= uploadYieldBatch) {
+                uploadedSinceYield = 0
+                await new Promise(r => requestAnimationFrame(r))
+            }
         } else {
             results.push({ path, loaded: false, error: 'Not found in FS or MPQ' })
         }

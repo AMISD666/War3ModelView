@@ -9,6 +9,14 @@
 // @ts-ignore
 import { parseMDX, parseMDL, decodeBLP, getBLPImageData } from 'war3-model';
 
+interface DecodeTextureTaskPayload {
+    id: string;
+    path: string;
+    buffer: ArrayBuffer;
+    maxDimension?: number;
+    preferBlpBaseMip?: boolean;
+}
+
 /**
  * TGA Decoding logic (similar to thumbnail.worker.ts)
  */
@@ -72,6 +80,50 @@ function decodeTGA(buffer: ArrayBuffer): ImageData {
     return new ImageData(outputData, header.width, header.height);
 }
 
+function chooseBlpMipLevel(blp: any, maxDimension?: number, preferBlpBaseMip?: boolean): number {
+    if (preferBlpBaseMip) return 0;
+    if (!maxDimension || maxDimension <= 0) return 0;
+
+    const width = Number(blp?.width ?? blp?.Width ?? 0);
+    const height = Number(blp?.height ?? blp?.Height ?? 0);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        return 0;
+    }
+
+    const maxSide = Math.max(width, height);
+    if (maxSide <= maxDimension) return 0;
+    return Math.max(0, Math.floor(Math.log2(maxSide / maxDimension)));
+}
+
+async function decodeTextureToBitmap(task: DecodeTextureTaskPayload): Promise<ImageBitmap> {
+    const { buffer, path, maxDimension, preferBlpBaseMip } = task;
+    let imageData: ImageData | null = null;
+
+    if (path.toLowerCase().endsWith('.tga')) {
+        imageData = decodeTGA(buffer);
+    } else {
+        const blp = decodeBLP(buffer);
+        const mipLevel = chooseBlpMipLevel(blp, maxDimension, preferBlpBaseMip);
+
+        let mip;
+        try {
+            mip = getBLPImageData(blp, mipLevel);
+        } catch (e) {
+            mip = getBLPImageData(blp, 0);
+        }
+
+        const data = mip.data instanceof Uint8ClampedArray ? mip.data : new Uint8ClampedArray(mip.data);
+        imageData = new ImageData(data, mip.width, mip.height);
+    }
+
+    if (!imageData) {
+        throw new Error('Failed to decode texture');
+    }
+
+    // CRITICAL: MUST set premultiplyAlpha to 'none' otherwise WebGL loses RGB data on transparent pixels.
+    return await createImageBitmap(imageData, { premultiplyAlpha: 'none' });
+}
+
 self.onmessage = async (e) => {
     const { type, payload } = e.data;
 
@@ -88,58 +140,47 @@ self.onmessage = async (e) => {
 
             if (!model) throw new Error('Failed to parse model');
 
-            // @ts-ignore
-            self.postMessage({ type: 'PARSE_SUCCESS', payload: { model } });
+            (self as any).postMessage({ type: 'PARSE_SUCCESS', payload: { model } });
         }
         else if (type === 'DECODE_TEXTURE') {
-            const { buffer, path, id, maxDimension, preferBlpBaseMip } = payload;
-            let imageData: ImageData | null = null;
-
-            if (path.toLowerCase().endsWith('.tga')) {
-                imageData = decodeTGA(buffer);
-                // TGA doesn't have mips, but we could downscale here if needed.
-                // However, for speed, BLP mips are the priority.
-            } else {
-                const blp = decodeBLP(buffer);
-
-                // Choose optimal mip level based on maxDimension
-                let mipLevel = 0;
-                if (!preferBlpBaseMip && maxDimension > 0) {
-                    const width = blp.width || 0;
-                    const height = blp.height || 0;
-                    const maxSide = Math.max(width, height);
-                    if (maxSide > maxDimension) {
-                        mipLevel = Math.max(0, Math.floor(Math.log2(maxSide / maxDimension)));
-                    }
-                }
-
-                // Get selected mip
-                let mip;
-                try {
-                    mip = getBLPImageData(blp, mipLevel);
-                } catch (e) {
-                    mip = getBLPImageData(blp, 0); // Fallback to base mip
-                }
-
-                const data = mip.data instanceof Uint8ClampedArray ? mip.data : new Uint8ClampedArray(mip.data);
-                imageData = new ImageData(data, mip.width, mip.height);
-            }
-
-            if (!imageData) throw new Error('Failed to decode texture');
-
-            // Convert to ImageBitmap for faster transfer.
-            // CRITICAL: MUST set premultiplyAlpha to 'none' otherwise WebGL loses RGB data on transparent pixels, rendering them black!
-            const bitmap = await createImageBitmap(imageData, { premultiplyAlpha: 'none' });
-
-            // @ts-ignore
-            self.postMessage({
+            const { id, path } = payload as DecodeTextureTaskPayload;
+            const bitmap = await decodeTextureToBitmap(payload as DecodeTextureTaskPayload);
+            (self as any).postMessage({
                 type: 'DECODE_SUCCESS',
                 payload: { bitmap, id, path }
             }, [bitmap]);
         }
+        else if (type === 'DECODE_TEXTURE_BATCH') {
+            const { id, tasks } = payload as { id: string; tasks: DecodeTextureTaskPayload[] };
+            if (!id || !Array.isArray(tasks)) {
+                throw new Error('Invalid texture batch payload');
+            }
+
+            const results: Array<{ id: string; path: string; bitmap: ImageBitmap }> = [];
+            const errors: Array<{ id: string; path: string; error: string }> = [];
+            const transfer: Transferable[] = [];
+
+            for (const task of tasks) {
+                try {
+                    const bitmap = await decodeTextureToBitmap(task);
+                    results.push({ id: task.id, path: task.path, bitmap });
+                    transfer.push(bitmap);
+                } catch (taskErr: any) {
+                    errors.push({
+                        id: task.id,
+                        path: task.path,
+                        error: taskErr?.message ? String(taskErr.message) : 'Texture decode failed'
+                    });
+                }
+            }
+
+            (self as any).postMessage({
+                type: 'DECODE_BATCH_SUCCESS',
+                payload: { id, results, errors }
+            }, transfer);
+        }
     } catch (err: any) {
-        // @ts-ignore
-        self.postMessage({
+        (self as any).postMessage({
             type: 'ERROR',
             payload: { error: err.message, stack: err.stack, id: payload?.id }
         });

@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react'
+﻿import React, { useEffect, useRef, useState, forwardRef, useImperativeHandle, useMemo } from 'react'
 import { decodeBLP, getBLPImageData, parseMDX, parseMDL, ModelRenderer } from 'war3-model'
 // @ts-ignore
 import ModelWorker from '../workers/model-worker.worker?worker'
@@ -138,6 +138,13 @@ const isTexturePreviewPath = (path: string): boolean => {
   return TEXTURE_PREVIEW_EXTENSIONS.has(ext)
 }
 
+const getTextureDecodeWorkerCount = (): number => {
+  if (typeof navigator === 'undefined') return 2
+  const cores = Number(navigator.hardwareConcurrency || 4)
+  if (!Number.isFinite(cores) || cores <= 2) return 2
+  return Math.max(2, Math.min(4, Math.floor(cores / 2)))
+}
+
 const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   modelPath,
   animationIndex,
@@ -161,7 +168,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   modelData,
   onAddCameraFromView
 }, ref) => {
-  const [modelWorker] = useState(() => new ModelWorker())
+  const [parseWorker] = useState(() => new ModelWorker())
+  const [textureWorkers] = useState(() => {
+    const count = getTextureDecodeWorkerCount()
+    return Array.from({ length: count }, () => new ModelWorker())
+  })
   const [loading, setLoading] = useState(false)
   const [loadingStatus, setLoadingStatus] = useState('')
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -179,6 +190,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const rendererReloadTrigger = useModelStore((state) => state.rendererReloadTrigger)
   const cachedRenderer = useModelStore((state) => state.cachedRenderer)
   const mpqLoaded = useRendererStore((state) => state.mpqLoaded)
+  const missingTextures = useRendererStore((state) => state.missingTextures)
   const glRef = useRef<WebGL2RenderingContext | WebGLRenderingContext | null>(null)
   const needsRendererUpdateRef = useRef(false)
   const animationFrameId = useRef<number | null>(null)
@@ -199,6 +211,15 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     height: number
     path: string
   } | null>(null)
+  const backgroundTextureResolveRunningRef = useRef(false)
+  const attemptedMissingTexturePathsRef = useRef<Set<string>>(new Set())
+
+  useEffect(() => {
+    return () => {
+      parseWorker.terminate()
+      textureWorkers.forEach((worker) => worker.terminate())
+    }
+  }, [parseWorker, textureWorkers])
 
   const formatCameraValue = (value: number): string => {
     if (!Number.isFinite(value)) return '0'
@@ -222,7 +243,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const copySelectedCameraParams = () => {
     const { nodes } = useModelStore.getState()
     const { selectedNodeIds } = useSelectionStore.getState()
-    const cameraList = nodes.filter((n: any) => n.type === 'Camera')
+    const cameraList = nodes.filter((n: any) => n && n.type === 'Camera')
 
     if (cameraList.length === 0) return
 
@@ -579,8 +600,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
     const selector = document.getElementById('camera-selector') as HTMLSelectElement
     if (selector && selector.value !== '-1') {
-      const { nodes: storeNodes } = useModelStore.getState()
-      const cameraList = storeNodes.filter((n: any) => n.type === 'Camera')
+      const rawNodes = useModelStore.getState().nodes
+      const cameraList = (Array.isArray(rawNodes) ? rawNodes : [])
+        .filter((n: any) => n && n.type === 'Camera')
       const idx = parseInt(selector.value)
       if (idx >= 0 && idx < cameraList.length) {
         const cam = cameraList[idx] as any
@@ -937,35 +959,80 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     return { ...model, Materials: compatibleMaterials }
   }
 
-  const mpqLoadedRef = useRef(mpqLoaded)
   useEffect(() => {
-    const run = async () => {
-      if (!renderer) return
-      const sourceModel = renderer.model || modelData
-      if (!sourceModel) return
-      const activePath = modelPath || (modelData as any)?.path || ''
+    attemptedMissingTexturePathsRef.current.clear()
+  }, [renderer, modelPath])
 
+  const isResolvableTexturePath = (path: string): boolean => {
+    const lower = path.toLowerCase()
+    return lower.endsWith('.blp') || lower.endsWith('.tga')
+  }
+
+  useEffect(() => {
+    if (!mpqLoaded || backgroundTextureResolveRunningRef.current) return
+    if (!renderer) return
+
+    const sourceModel = renderer.model || modelData
+    if (!sourceModel) return
+
+    const activePath = modelPath || (modelData as any)?.path || ''
+    const pending = (missingTextures || []).filter((path) => isResolvableTexturePath(path))
+    if (pending.length === 0) return
+
+    const rendererData = (renderer as any)?.rendererData
+    const loadedPaths = new Set<string>([
+      ...Object.keys(rendererData?.textures || {}),
+      ...Object.keys(rendererData?.gpuTextures || {})
+    ])
+
+    const unresolved = pending.filter((path) =>
+      !loadedPaths.has(path) && !attemptedMissingTexturePathsRef.current.has(path)
+    )
+
+    if (unresolved.length === 0) return
+
+    unresolved.forEach((path) => attemptedMissingTexturePathsRef.current.add(path))
+    backgroundTextureResolveRunningRef.current = true
+
+    const run = async () => {
+      const resolveStart = performance.now()
       try {
-        const textureResults = await loadAllTextures(sourceModel, renderer, activePath)
-        const missingPaths = textureResults
-          .filter(r => {
-            if (!r.loaded) return true
-            const ext = r.path.split('.').pop()?.toLowerCase()
-            return ext !== 'blp' && ext !== 'tga'
-          })
-          .map(r => r.path)
-        useRendererStore.getState().setMissingTextures(missingPaths)
-        await loadTeamColorTextures(teamColor)
+        console.log(`[Viewer] Resolving ${unresolved.length} missing textures after MPQ ready`)
+        const textureResults = await loadAllTextures(
+          sourceModel,
+          renderer,
+          activePath,
+          textureWorkers,
+          undefined,
+          {
+            yieldUploads: true,
+            targetPaths: unresolved,
+            workerDecodeMinTextures: 10,
+            workerDecodeMinBytes: 8 * 1024 * 1024
+          }
+        )
+        const resolved = new Set(
+          textureResults.filter((result) => result.loaded).map((result) => result.path)
+        )
+        if (resolved.size > 0) {
+          resolved.forEach((path) => attemptedMissingTexturePathsRef.current.delete(path))
+          const currentMissing = useRendererStore.getState().missingTextures
+          const nextMissing = currentMissing.filter((path) => !resolved.has(path))
+          useRendererStore.getState().setMissingTextures(nextMissing)
+          await loadTeamColorTextures(teamColor)
+        }
+        console.log(
+          `[Viewer] Missing texture resolve finished in ${(performance.now() - resolveStart).toFixed(1)}ms, resolved=${resolved.size}/${unresolved.length}`
+        )
       } catch (e) {
-        console.warn('[Viewer] Reload textures after MPQ load failed:', e)
+        console.warn('[Viewer] Resolve missing textures after MPQ load failed:', e)
+      } finally {
+        backgroundTextureResolveRunningRef.current = false
       }
     }
 
-    if (mpqLoaded && !mpqLoadedRef.current) {
-      run()
-    }
-    mpqLoadedRef.current = mpqLoaded
-  }, [mpqLoaded, renderer, modelData, modelPath, teamColor])
+    run()
+  }, [mpqLoaded, renderer, modelData, modelPath, teamColor, missingTextures, textureWorkers])
 
   const ensureRendererSequences = (model: any) => {
     if (model?.Sequences && model.Sequences.length > 0) {
@@ -1139,18 +1206,27 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   // Sync Store Changes to Renderer (Hot Patching)
   // Use proper Zustand subscription to detect nodes changes
   const storeNodes = useModelStore(state => state.nodes)
+  const stableStoreNodes = useMemo(
+    () => (Array.isArray(storeNodes) ? storeNodes.filter((n: any) => n && typeof n.ObjectId === 'number') : []),
+    [storeNodes]
+  )
 
   useEffect(() => {
     if (rendererRef.current && rendererRef.current.model) {
       // Patch the model data in the renderer with the latest from store
       // This is crucial for "Lightweight Reload" and seeing changes like PivotPoint (Position) updates instantly.
 
+      const safeStoreNodes = Array.isArray(storeNodes)
+        ? storeNodes.filter((n: any) => n && typeof n.ObjectId === 'number')
+        : [];
+      const storeNodeMap = new Map<number, any>(safeStoreNodes.map((n: any) => [n.ObjectId, n]));
+
       // 1. Update full Nodes list (contains structure and hierarchy info)
-      rendererRef.current.model.Nodes = storeNodes;
+      rendererRef.current.model.Nodes = safeStoreNodes;
 
       // 2. Update specific lists used by renderer (Lights, etc.)
       // Note: war3-model might cache these, so we update them explicitly.
-      rendererRef.current.model.Lights = storeNodes.filter((n: any) => n.type === 'Light');
+      rendererRef.current.model.Lights = safeStoreNodes.filter((n: any) => n && n.type === 'Light');
       // Update other types if necessary (cameras, emitters, etc.)
 
       // 3. Force caching/update if possible. 
@@ -1159,14 +1235,30 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       if (rendererRef.current.rendererData && rendererRef.current.rendererData.nodes) {
         // The rendererData.nodes array holds wrappers { node: rawNode, ... }
         // We need to update the 'node' reference in these wrappers or update the properties.
+        let invalidWrappers = 0;
         rendererRef.current.rendererData.nodes.forEach((wrapper: any) => {
-          const freshNode = storeNodes.find((n: any) => n.ObjectId === wrapper.node.ObjectId);
+          const wrapperNodeId = wrapper?.node?.ObjectId;
+          if (typeof wrapperNodeId !== 'number') {
+            invalidWrappers++;
+            return;
+          }
+          const freshNode = storeNodeMap.get(wrapperNodeId);
           if (freshNode) {
             wrapper.node = freshNode;
             // If PivotPoint changed, the matrix calculation needs to happen again.
             // The renderer loop handles matrix calc, so just updating the data should be enough for the NEXT frame.
           }
         });
+
+        // Importing/switching model can leave stale renderer wrappers briefly.
+        // Rebuild wrappers once to avoid null node access crashes.
+        if (invalidWrappers > 0) {
+          const instance = (rendererRef.current as any).modelInstance;
+          if (instance && typeof instance.syncNodes === 'function') {
+            console.warn('[Viewer] Detected invalid renderer node wrappers, forcing syncNodes()', { invalidWrappers });
+            instance.syncNodes();
+          }
+        }
       }
 
       // Nodes (including keyframes) changed; force a renderer.update(0) in the next RAF tick.
@@ -1405,7 +1497,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           const { selectedNodeIds } = useSelectionStore.getState()
           selectedNodeIds.forEach(nodeId => {
             // 1. Snapshot original KEYS from STORE (source of truth)
-            const storeNode = nodes.find((n: any) => n.ObjectId === nodeId)
+            const storeNode = nodes.find((n: any) => n && n.ObjectId === nodeId)
             if (storeNode) {
               // Deep copy relevant props
               keyframeDragData.current!.initialKeys.set(nodeId, {
@@ -2283,31 +2375,44 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       } else {
         setLoadingStatus('正在解析模型...')
         const buffer = await readPathBytes(path)
-
-        // WORKER-BASED PARSING
-        const parseStart = performance.now()
-        model = await new Promise((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error('Model parsing timeout')), 30000)
-          const oldOnMessage = modelWorker.onmessage
-          modelWorker.onmessage = (e: any) => {
-            const { type, payload } = e.data
-            if (type === 'PARSE_SUCCESS') {
-              clearTimeout(timer)
-              modelWorker.onmessage = oldOnMessage
-              resolve(payload.model)
-            } else if (type === 'ERROR') {
-              clearTimeout(timer)
-              modelWorker.onmessage = oldOnMessage
-              reject(new Error(payload.error))
+        const parseWithWorker = (bytes: Uint8Array) =>
+          new Promise<any>((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error('Model parsing timeout')), 30000)
+            const oldOnMessage = parseWorker.onmessage
+            parseWorker.onmessage = (e: any) => {
+              const { type, payload } = e.data
+              if (type === 'PARSE_SUCCESS') {
+                clearTimeout(timer)
+                parseWorker.onmessage = oldOnMessage
+                resolve(payload.model)
+              } else if (type === 'ERROR') {
+                clearTimeout(timer)
+                parseWorker.onmessage = oldOnMessage
+                reject(new Error(payload.error))
+              }
             }
+            const tightBuffer = toTightArrayBuffer(bytes)
+            parseWorker.postMessage({
+              type: 'PARSE_MODEL',
+              payload: { buffer: tightBuffer, path }
+            }, [tightBuffer])
+          })
+
+        const tightBuffer = toTightArrayBuffer(buffer)
+        try {
+          if (path.toLowerCase().endsWith('.mdl')) {
+            const text = new TextDecoder().decode(tightBuffer)
+            model = parseMDL(text)
+          } else {
+            model = parseMDX(tightBuffer)
           }
-          const tightBuffer = toTightArrayBuffer(buffer)
-          modelWorker.postMessage({
-            type: 'PARSE_MODEL',
-            payload: { buffer: tightBuffer, path }
-          }, [tightBuffer])
-        })
-        console.log(`[Viewer] Async parsing took ${(performance.now() - parseStart).toFixed(1)}ms`)
+          if (!model) {
+            throw new Error('Main-thread parser returned empty model')
+          }
+        } catch (mainParseError) {
+          console.warn('[Viewer] Main-thread parse failed, fallback to worker parser:', mainParseError)
+          model = await parseWithWorker(buffer)
+        }
       }
       console.timeEnd('[Viewer] MDX Parse')
       console.log(`[Viewer] Model Parsing took ${(performance.now() - parseStart).toFixed(1)}ms`)
@@ -2355,7 +2460,14 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
       setLoadingStatus('加载贴图资源...')
       // Load textures using concurrent loader with mipmap optimization (max 512px)
-      const textureResults = await loadAllTextures(model, newRenderer, path, modelWorker, 512)
+      const textureResults = await loadAllTextures(
+        model,
+        newRenderer,
+        path,
+        textureWorkers,
+        512,
+        { yieldUploads: false }
+      )
 
       // Track missing textures or unsupported formats for warning UI
       const missingPaths = textureResults
@@ -2363,7 +2475,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         .map(r => r.path)
       useRendererStore.getState().setMissingTextures(missingPaths)
 
-      loadTeamColorTextures(teamColor)
+      await loadTeamColorTextures(teamColor)
 
       if (usedFallback && typeof (newRenderer as any).setSequence === 'function') {
         ; (newRenderer as any).setSequence(0)
@@ -2514,7 +2626,14 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
       // Load textures using concurrent loader with mipmap optimization
       console.log('[Viewer] Step 6: Loading textures...')
-      const textureResults = await loadAllTextures(model, newRenderer, safeModelPath, modelWorker, 512)
+      const textureResults = await loadAllTextures(
+        model,
+        newRenderer,
+        safeModelPath,
+        textureWorkers,
+        512,
+        { yieldUploads: false }
+      )
       console.log('[Viewer] Step 6: Textures loaded')
 
       // Keep missing texture warning in sync after a full reload
@@ -2528,7 +2647,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       useRendererStore.getState().setMissingTextures(missingPaths)
 
       console.log('[Viewer] Step 7: Loading team color textures...')
-      loadTeamColorTextures(teamColor)
+      await loadTeamColorTextures(teamColor)
       console.log('[Viewer] Step 7: Team colors loaded')
 
       // Set renderer AFTER textures are loaded to avoid race condition where
@@ -3115,8 +3234,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
           // === Camera Frustum Rendering ===
           if (gl && showCamerasRef.current) {
-            const { nodes: storeNodes } = useModelStore.getState();
-            const cameraNodes = storeNodes.filter((n: any) => n.type === 'Camera');
+            const rawNodes = useModelStore.getState().nodes;
+            const cameraNodes = (Array.isArray(rawNodes) ? rawNodes : []).filter((n: any) => n && n.type === 'Camera');
 
             // Get selected camera index from dropdown
             const selector = document.getElementById('camera-selector') as HTMLSelectElement;
@@ -3702,7 +3821,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             // === Light Object Rendering ===
             if (gl && showLightsRef.current && mdlRenderer.rendererData.nodes) {
               const { nodes } = useModelStore.getState()
-              const lightNodes = nodes.filter((n: any) => n.type === 'Light')
+              const lightNodes = nodes.filter((n: any) => n && n.type === 'Light')
 
               if (lightNodes.length > 0) {
                 const viewMatrix = mvMatrix
@@ -4716,7 +4835,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               // Translation is relative to PARENT's coordinate system, not the bone's own rotation
               // So we need to use the PARENT's rotation matrix inverse
               if (subMode === 'keyframe') {
-                const storeNode = nodes.find((n: any) => n.ObjectId === nodeId)
+                const storeNode = nodes.find((n: any) => n && n.ObjectId === nodeId)
                 const parentId = storeNode?.Parent
 
                 if (parentId !== undefined && parentId >= 0) {
@@ -4774,7 +4893,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                     // 确保 Translation 属性存在，并从 store 复制现有关键帧
                     // 这样渲染器才能正确插值其他帧
                     if (!rendererNode.Translation || !rendererNode.Translation.Keys?.length) {
-                      const storeNode = nodes.find((n: any) => n.ObjectId === nodeId)
+                      const storeNode = nodes.find((n: any) => n && n.ObjectId === nodeId)
                       const storeKeys = storeNode?.Translation?.Keys || []
                       // 深拷贝现有关键帧（不包括预览关键帧）
                       const copiedKeys = storeKeys
@@ -4804,7 +4923,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                       baseSource = 'exactKeyframe'
                     } else {
                       // 没有精确关键帧，从 store 节点的关键帧实时插值
-                      const storeNode = nodes.find((n: any) => n.ObjectId === nodeId)
+                      const storeNode = nodes.find((n: any) => n && n.ObjectId === nodeId)
                       const storeKeys = storeNode?.Translation?.Keys
                       if (storeKeys && storeKeys.length > 0) {
                         // 插值计算
@@ -5017,7 +5136,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
           selectedNodeIds.forEach(nodeId => {
             // 1. Snapshot original KEYS from STORE (source of truth)
-            const storeNode = nodes.find((n: any) => n.ObjectId === nodeId)
+            const storeNode = nodes.find((n: any) => n && n.ObjectId === nodeId)
             if (storeNode) {
               keyframeDragData.current!.initialKeys.set(nodeId, {
                 Rotation: storeNode.Rotation ? JSON.parse(JSON.stringify(storeNode.Rotation)) : undefined,
@@ -5089,11 +5208,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 quat.copy(currentVal.rotation as any, newRot)
 
                 // INJECT into Renderer Model for PREVIEW
-                const rendererNode = rendererRef.current!.model.Nodes.find((n: any) => n.ObjectId === nodeId)
+                const rendererNode = rendererRef.current!.model.Nodes.find((n: any) => n && n.ObjectId === nodeId)
                 if (rendererNode) {
                   const frame = Math.round(currentFrame)
                   if (!rendererNode.Rotation || !rendererNode.Rotation.Keys?.length) {
-                    const storeNode = nodes.find((n: any) => n.ObjectId === nodeId)
+                    const storeNode = nodes.find((n: any) => n && n.ObjectId === nodeId)
                     const storeKeys = storeNode?.Rotation?.Keys || []
                     const copiedKeys = storeKeys
                       .filter((k: any) => !k._isPreviewKey)
@@ -5154,11 +5273,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               keyframeTransformDirty.current = true
 
               // INJECT into Renderer Model for PREVIEW
-              const rendererNode = rendererRef.current!.model.Nodes.find((n: any) => n.ObjectId === nodeId)
+              const rendererNode = rendererRef.current!.model.Nodes.find((n: any) => n && n.ObjectId === nodeId)
               if (rendererNode) {
                 const frame = Math.round(currentFrame)
                 if (!rendererNode.Scaling || !rendererNode.Scaling.Keys?.length) {
-                  const storeNode = nodes.find((n: any) => n.ObjectId === nodeId)
+                  const storeNode = nodes.find((n: any) => n && n.ObjectId === nodeId)
                   const storeKeys = storeNode?.Scaling?.Keys || []
                   const copiedKeys = storeKeys
                     .filter((k: any) => !k._isPreviewKey)
@@ -5565,7 +5684,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             // FIRST: Clean up preview keyframes from renderer model
             if (rendererRef.current && rendererRef.current.model && rendererRef.current.model.Nodes) {
               selectedNodeIds.forEach(nodeId => {
-                const rendererNode = rendererRef.current!.model.Nodes.find((n: any) => n.ObjectId === nodeId)
+                const rendererNode = rendererRef.current!.model.Nodes.find((n: any) => n && n.ObjectId === nodeId)
                 if (rendererNode && rendererNode.Translation && rendererNode.Translation.Keys) {
                   // Remove all preview keys (marked with _isPreviewKey)
                   rendererNode.Translation.Keys = rendererNode.Translation.Keys.filter((k: any) => !k._isPreviewKey)
@@ -5580,7 +5699,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               selectedNodeIds.forEach(nodeId => {
                 const delta = dragDelta[nodeId]
                 if (delta && (delta[0] !== 0 || delta[1] !== 0 || delta[2] !== 0)) {
-                  const storeNode = nodes.find((n: any) => n.ObjectId === nodeId)
+                  const storeNode = nodes.find((n: any) => n && n.ObjectId === nodeId)
                   if (storeNode) {
                     const oldKeys = storeNode.Translation?.Keys || []
                     const existingKey = oldKeys.find((k: any) => Math.abs(k.Frame - frame) < 0.1)
@@ -5667,7 +5786,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           // Clean up preview keys for Rotation/Scaling
           if (rendererRef.current && rendererRef.current.model && rendererRef.current.model.Nodes) {
             selectedNodeIds.forEach(nodeId => {
-              const rendererNode = rendererRef.current!.model.Nodes.find((n: any) => n.ObjectId === nodeId)
+              const rendererNode = rendererRef.current!.model.Nodes.find((n: any) => n && n.ObjectId === nodeId)
               if (rendererNode?.Rotation?.Keys) {
                 rendererNode.Rotation.Keys = rendererNode.Rotation.Keys.filter((k: any) => !k._isPreviewKey)
               }
@@ -5716,7 +5835,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
               const { selectedNodeIds } = useSelectionStore.getState()
               selectedNodeIds.forEach(nodeId => {
-                const storeNode = nodes.find((n: any) => n.ObjectId === nodeId)
+                const storeNode = nodes.find((n: any) => n && n.ObjectId === nodeId)
                 if (!storeNode) return
 
                 if (transformMode === 'rotate') {
@@ -5845,7 +5964,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   const getPrimarySelectedNode = () => {
     const { selectedNodeIds } = useSelectionStore.getState()
     if (selectedNodeIds.length === 0) return null
-    return storeNodes.find((n) => n.ObjectId === selectedNodeIds[0]) ?? null
+    return stableStoreNodes.find((n) => n.ObjectId === selectedNodeIds[0]) ?? null
   }
 
   const selectParentNode = (): boolean => {
@@ -5862,7 +5981,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     if (mainMode !== 'animation') return false
     const node = getPrimarySelectedNode()
     if (!node) return false
-    const children = storeNodes.filter((n) => n.Parent === node.ObjectId)
+    const children = stableStoreNodes.filter((n) => n.Parent === node.ObjectId)
     if (children.length === 0) return false
     children.sort((a, b) => a.ObjectId - b.ObjectId)
     selectNode(children[0].ObjectId)
@@ -5878,7 +5997,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     const queue: number[] = [node.ObjectId]
     while (queue.length > 0) {
       const parentId = queue.shift() as number
-      const children = storeNodes.filter((n) => n.Parent === parentId)
+      const children = stableStoreNodes.filter((n) => n.Parent === parentId)
       for (const child of children) {
         collected.push(child.ObjectId)
         queue.push(child.ObjectId)
@@ -6224,8 +6343,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
       {/* Camera Selector Dropdown */}
       {!isTexturePreviewMode && (() => {
-        const { nodes: storeNodes } = useModelStore.getState();
-        const cameraList = storeNodes.filter((n: any) => n.type === 'Camera');
+        const cameraList = stableStoreNodes.filter((n: any) => n && n.type === 'Camera');
         if (cameraList.length === 0) return null;
 
         return (
@@ -6484,13 +6602,13 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       {/* Context Menu for Bone Operations */}
       {!isTexturePreviewMode && nodeContextMenu && (() => {
         const node = nodeContextMenu.nodeId !== null
-          ? storeNodes.find((n) => n.ObjectId === nodeContextMenu.nodeId) ?? null
+          ? stableStoreNodes.find((n) => n.ObjectId === nodeContextMenu.nodeId) ?? null
           : null
         const hasNode = !!node
         const hasParent = hasNode && node.Parent !== undefined && node.Parent !== null && node.Parent >= 0
-        const children = node ? storeNodes.filter((n) => n.Parent === node.ObjectId) : []
+        const children = node ? stableStoreNodes.filter((n) => n.Parent === node.ObjectId) : []
         const hasChild = children.length > 0
-        const canCopyPose = storeNodes.length > 0
+        const canCopyPose = stableStoreNodes.length > 0
         const canPastePose = !!poseClipboardRef.current
         const menuItemStyle = (enabled: boolean) => ({
           padding: '6px 12px',
@@ -6693,3 +6811,5 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 })
 
 export default Viewer
+
+

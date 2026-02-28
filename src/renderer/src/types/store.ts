@@ -5,6 +5,11 @@
 import { ModelData } from './model';
 import { ModelNode } from './node';
 
+export interface SetModelDataOptions {
+    skipAutoRecalculate?: boolean;
+    skipModelRebuild?: boolean;
+}
+
 // 编辑模式
 export enum EditMode {
     OBJECT = 'object',
@@ -37,7 +42,7 @@ export interface ModelState {
     setPreviewTransform: (transform: Partial<ModelState['previewTransform']>) => void;
     resetPreviewTransform: () => void;
 
-    setModelData: (data: ModelData | null, path: string | null) => void;
+    setModelData: (data: ModelData | null, path: string | null, options?: SetModelDataOptions) => void;
     setLoading: (loading: boolean) => void;
     updateNode: (node: ModelNode) => void;
     addNode: (node: ModelNode) => void;

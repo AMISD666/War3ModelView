@@ -204,10 +204,14 @@ const BoneParameterPanel: React.FC = () => {
     const [translationSpace, setTranslationSpace] = useState<'world' | 'local'>('world')
     const [worldTick, setWorldTick] = useState(0)
     const [viewportHeight, setViewportHeight] = useState(() => (typeof window !== 'undefined' ? window.innerHeight : 720))
+    const safeNodes = useMemo(
+        () => (Array.isArray(nodes) ? nodes.filter((n: any) => n && typeof n.ObjectId === 'number') : []),
+        [nodes]
+    )
 
     // 选中的单个骨骼
     const selectedNode = selectedNodeIds.length === 1
-        ? nodes.find((n: any) => n.ObjectId === selectedNodeIds[0])
+        ? safeNodes.find((n: any) => n && n.ObjectId === selectedNodeIds[0])
         : null
 
     // 计算骨骼绑定的顶点数
@@ -237,13 +241,13 @@ const BoneParameterPanel: React.FC = () => {
             const matrixGroup = geoset.Groups[matrixGroupIndex] as any
             if (matrixGroup && Array.isArray(matrixGroup)) {
                 matrixGroup.forEach((nodeIndex: number) => {
-                    const node = nodes.find((n: any) => n.ObjectId === nodeIndex)
+                    const node = safeNodes.find((n: any) => n && n.ObjectId === nodeIndex)
                     if (node) boneMap.set(nodeIndex, node.Name)
                 })
             }
         })
         return Array.from(boneMap.entries()).map(([index, name]) => ({ index, name }))
-    }, [modelData, nodes, selectedVertexIds])
+    }, [modelData, safeNodes, selectedVertexIds])
 
     // 插值数据
     const translationLocal = useMemo(() => {
@@ -334,7 +338,7 @@ const BoneParameterPanel: React.FC = () => {
         const nodeId = selectedNode.ObjectId
         const frame = Math.round(currentFrame)
         const { nodes, updateNodeSilent } = useModelStore.getState()
-        const storeNode = nodes.find(n => n.ObjectId === nodeId) as any
+        const storeNode = (Array.isArray(nodes) ? nodes : []).find((n: any) => n && n.ObjectId === nodeId) as any
         if (!storeNode) return
 
         const existingProp = storeNode[propName] || { Keys: [], InterpolationType: 1 }
@@ -361,7 +365,7 @@ const BoneParameterPanel: React.FC = () => {
 
         updateNodeSilent(nodeId, { [propName]: { ...existingProp, Keys: keys } })
         if (renderer?.model?.Nodes) {
-            const rNode = renderer.model.Nodes.find((n: any) => n.ObjectId === nodeId) as any
+            const rNode = renderer.model.Nodes.find((n: any) => n && n.ObjectId === nodeId) as any
             if (rNode) rNode[propName] = { ...existingProp, Keys: keys }
         }
         message.success(`已更新 ${propName} 关键帧（帧 ${frame}）`)
@@ -418,11 +422,11 @@ const BoneParameterPanel: React.FC = () => {
 
     // 可用的父节点列表
     const availableParents = useMemo(() => {
-        if (!nodes) return []
-        return nodes
+        if (!safeNodes) return []
+        return safeNodes
             .filter((n: any) => !selectedNode || n.ObjectId !== selectedNode.ObjectId)
             .map((n: any) => ({ label: `${n.Name} (${n.ObjectId})`, value: n.ObjectId }))
-    }, [nodes, selectedNode])
+    }, [safeNodes, selectedNode])
 
     const handleParentChange = (value: number | undefined) => {
         if (!renderer || !selectedNode) return
