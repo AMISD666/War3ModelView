@@ -20,6 +20,7 @@ const ModelOptimizeModal = React.lazy(() => import('./modals/ModelOptimizeModal'
 import { GeosetVisibilityPanel } from './GeosetVisibilityPanel'
 import { open } from '@tauri-apps/plugin-dialog'
 import { generateMDL, generateMDX } from 'war3-model'
+import { getRecentFiles, addRecentFile, clearRecentFiles, RecentFile } from '../services/historyService'
 import { useModelStore } from '../store/modelStore'
 import { NodeType } from '../types/node'
 import { useUIStore } from '../store/uiStore'
@@ -2557,10 +2558,8 @@ const MainLayout: React.FC = () => {
 
     const handleGlobalSeqCommand = useCallback((command: string, payload: any) => {
         if (command === 'EXECUTE_GLOBAL_SEQ_ACTION' && payload?.action === 'SAVE') {
-            const { modelData, setModelData, modelPath } = useModelStore.getState();
-            if (modelData) {
-                setModelData({ ...modelData, GlobalSequences: payload.globalSequences }, modelPath);
-            }
+            const { updateGlobalSequences } = useModelStore.getState();
+            updateGlobalSequences(payload.globalSequences);
         }
     }, []);
 
@@ -2850,6 +2849,8 @@ const MainLayout: React.FC = () => {
     }, [modelPath]);
     handleCopyModelRef.current = handleCopyModel;
 
+    const [recentFiles, setRecentFiles] = useState<RecentFile[]>(() => getRecentFiles())
+
     const handleImport = useCallback(async () => {
         try {
             const selected = await open({
@@ -2862,6 +2863,7 @@ const MainLayout: React.FC = () => {
 
             if (selected && typeof selected === 'string') {
                 openModelAsTab(selected)
+                setRecentFiles(addRecentFile(selected))
             }
         } catch (error) {
             console.error('Failed to open file dialog:', error)
@@ -2925,6 +2927,16 @@ const MainLayout: React.FC = () => {
 
     const handleOpen = handleImport // Alias for MenuBar
 
+    const handleOpenRecent = useCallback((path: string) => {
+        openModelAsTab(path)
+        setRecentFiles(addRecentFile(path))
+    }, [openModelAsTab])
+
+    const handleClearRecentFiles = useCallback(() => {
+        clearRecentFiles()
+        setRecentFiles([])
+    }, [])
+
     // Tauri file drag-drop listeners (works with dragDropEnabled: true and mouse-based node tree drag)
     useEffect(() => {
         let unlistenDrop: (() => void) | undefined
@@ -2960,6 +2972,7 @@ const MainLayout: React.FC = () => {
 
                     console.log('[MainLayout] File dropped (Tauri):', filePath)
                     openModelAsTab(filePath)
+                    setRecentFiles(addRecentFile(filePath))
                 })
 
                 // Listen for drag enter
@@ -3833,6 +3846,9 @@ const MainLayout: React.FC = () => {
                 onSaveAs={handleSaveAs}
                 onExportMDL={handleExportMDL}
                 onExportMDX={handleExportMDX}
+                onOpenRecent={handleOpenRecent}
+                recentFiles={recentFiles}
+                onClearRecentFiles={handleClearRecentFiles}
                 // onLoadMPQ={handleLoadMPQ} // Removed
                 // mpqLoaded={mpqLoaded} // Removed
                 teamColor={teamColor}

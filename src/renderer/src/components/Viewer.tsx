@@ -1383,7 +1383,10 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   }
 
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
-    targetCamera.current.distance = Math.max(10, targetCamera.current.distance * (1 + e.deltaY * 0.001))
+    // Note: Ctrl+Wheel is handled by a separate native non-passive listener (see useEffect below)
+    if (!e.ctrlKey) {
+      targetCamera.current.distance = Math.max(10, targetCamera.current.distance * (1 + e.deltaY * 0.001))
+    }
   }
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -2256,10 +2259,22 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     window.addEventListener('mousemove', handleMouseMove)
     window.addEventListener('mouseup', handleMouseUp)
 
+    // Native non-passive wheel listener so we can call preventDefault() on Ctrl+Wheel
+    const handleNativeWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault()
+        const { nodeSize, setNodeSize } = useRendererStore.getState()
+        const delta = e.deltaY > 0 ? -0.1 : 0.1
+        setNodeSize((nodeSize ?? 1.0) + delta)
+      }
+    }
+    canvas.addEventListener('wheel', handleNativeWheel, { passive: false })
+
     return () => {
       resizeObserver.disconnect()
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
+      canvas.removeEventListener('wheel', handleNativeWheel)
     }
   }, [])
 
@@ -3153,6 +3168,25 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               mdlRenderer.update(0)
               frameCacheRef.current = currentFrame
               needsRendererUpdateRef.current = false
+
+              // When gizmo is dragging in animation keyframe mode, ribbon emitter vertices are
+              // baked world-space positions. When the node moves, old vertices expire via LifeSpan
+              // causing the ribbon to disappear. Reset ribbon state for all selected nodes so the
+              // ribbon re-emits from the new node position.
+              if (gizmoDragging && currentMainMode === 'animation' && currentAnimationSubMode === 'keyframe') {
+                const ribbonsCtrl = (mdlRenderer as any)?.modelInstance?.ribbonsController
+                if (ribbonsCtrl && typeof ribbonsCtrl.resetEmitters === 'function') {
+                  const { selectedNodeIds } = useSelectionStore.getState()
+                  if (selectedNodeIds.length > 0) {
+                    for (const nodeId of selectedNodeIds) {
+                      ribbonsCtrl.resetEmitters(nodeId)
+                    }
+                  } else {
+                    // No explicit selection? Reset all to be safe
+                    ribbonsCtrl.resetEmitters()
+                  }
+                }
+              }
             }
 
             // Keep timeline/store in sync while paused in animation mode.
@@ -3668,7 +3702,8 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 parentOfSelected,
                 childrenOfSelected,
                 nodeTypeColors,
-                currentMainMode === 'animation' && currentAnimationSubMode === 'keyframe'
+                currentMainMode === 'animation' && currentAnimationSubMode === 'keyframe',
+                useRendererStore.getState().nodeSize ?? 1.0
               )
 
               // Keyframe mode: visualize ParticleEmitter2 Width/Length as a box centered on emitter pivot.

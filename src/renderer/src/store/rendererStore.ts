@@ -88,6 +88,8 @@ interface RendererStore {
     setGizmoSize: (size: number) => void
     gizmoOrientation: 'world' | 'camera'
     setGizmoOrientation: (mode: 'world' | 'camera') => void
+    nodeSize: number
+    setNodeSize: (size: number) => void
     snapTranslateEnabled: boolean
     setSnapTranslateEnabled: (enabled: boolean) => void
     snapTranslateStep: number
@@ -215,6 +217,8 @@ export const useRendererStore = create<RendererStore>()(
             setGizmoSize: (size) => set({ gizmoSize: size }),
             gizmoOrientation: 'world',
             setGizmoOrientation: (mode) => set({ gizmoOrientation: mode }),
+            nodeSize: 1.0,
+            setNodeSize: (size) => set({ nodeSize: Math.max(0.2, Math.min(5.0, size)) }),
             snapTranslateEnabled: false,
             setSnapTranslateEnabled: (enabled) => set({ snapTranslateEnabled: enabled }),
             snapTranslateStep: 1,
@@ -302,6 +306,7 @@ export const useRendererStore = create<RendererStore>()(
                 teamColor: state.teamColor,
                 gizmoSize: state.gizmoSize,
                 gizmoOrientation: state.gizmoOrientation,
+                nodeSize: state.nodeSize,
                 snapTranslateEnabled: state.snapTranslateEnabled,
                 snapTranslateStep: state.snapTranslateStep,
                 snapRotateEnabled: state.snapRotateEnabled,

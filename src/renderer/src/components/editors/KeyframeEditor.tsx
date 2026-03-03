@@ -8,6 +8,7 @@ import { listen } from '@tauri-apps/api/event'
 import { emit } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { CloseOutlined } from '@ant-design/icons'
+import { GlobalSequenceSelect } from '../common/GlobalSequenceSelect'
 
 const { TextArea } = Input
 
@@ -598,13 +599,6 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
         }
     }
 
-    const globalSeqOptions = [
-        { value: -1, label: '(None)' },
-        ...globalSequences.map((duration, index) => ({
-            value: index,
-            label: `GlobalSequence ${index} (${duration})`
-        }))
-    ]
 
     const innerContent = (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: isStandalone ? '12px 16px' : 0 }}>
@@ -666,12 +660,10 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
                 <Row gutter={12}>
                     <Col span={12}>
                         <div style={{ marginBottom: 4, color: '#b0b0b0', fontSize: 12 }}>全局序列 ID</div>
-                        <Select
-                            style={{ width: '100%' }}
-                            size="small"
-                            value={globalSeqId === null ? -1 : globalSeqId}
-                            onChange={(v) => setGlobalSeqId(v === -1 ? null : v)}
-                            options={globalSeqOptions}
+                        <GlobalSequenceSelect
+                            value={globalSeqId}
+                            onChange={setGlobalSeqId}
+                            isStandalone={isStandalone}
                         />
                     </Col>
                     <Col span={12}>

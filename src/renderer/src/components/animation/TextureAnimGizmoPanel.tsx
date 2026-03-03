@@ -15,6 +15,7 @@ import { useSelectionStore } from '../../store/selectionStore'
 import { useHistoryStore } from '../../store/historyStore'
 import { emit, listen } from '@tauri-apps/api/event'
 import { windowManager } from '../../utils/windowManager'
+import { GlobalSequenceSelect } from '../common/GlobalSequenceSelect'
 import RightFloatingPanelShell from './RightFloatingPanelShell'
 
 const { Text } = Typography
@@ -802,16 +803,6 @@ const TextureAnimGizmoPanel: React.FC = () => {
         }
     }, [gizmoMode, currentAnim])
 
-    const globalSeqOptions = useMemo(() => {
-        const list = Array.isArray((modelData as any)?.GlobalSequences) ? (modelData as any).GlobalSequences : []
-        return [
-            { label: '无', value: -1 },
-            ...list.map((duration: any, i: number) => ({
-                label: `#${i} (${Number(duration) || 0}ms)`,
-                value: i
-            }))
-        ]
-    }, [modelData])
 
     const updateTrackMeta = useCallback((patch: { GlobalSeqId?: number; InterpolationType?: number }) => {
         if (
@@ -1063,15 +1054,12 @@ const TextureAnimGizmoPanel: React.FC = () => {
 
                 <div style={{ display: 'grid', gridTemplateColumns: '50px 1fr', gap: 8, alignItems: 'center' }}>
                     <Text style={{ color: '#888', fontSize: 11 }}>全局序列</Text>
-                    <div onDoubleClick={openTrackEditorFromGlobalSeq}>
-                        <Select
-                            size="small"
-                            style={{ width: '100%' }}
-                            value={activeTrackMeta.globalSeqId}
-                            options={globalSeqOptions}
-                            onChange={(value) => updateTrackMeta({ GlobalSeqId: Number(value) })}
-                        />
-                    </div>
+                    <GlobalSequenceSelect
+                        size="small"
+                        style={{ width: '100%' }}
+                        value={activeTrackMeta.globalSeqId}
+                        onChange={(value) => updateTrackMeta({ GlobalSeqId: value ?? -1 })}
+                    />
                     <Text style={{ color: '#888', fontSize: 11 }}>插值类型</Text>
                     <div style={{ display: 'flex', gap: 4 }}>
                         <Select

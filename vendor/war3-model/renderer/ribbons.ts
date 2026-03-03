@@ -417,6 +417,26 @@ export class RibbonsController {
         }
     }
 
+    /**
+     * Reset ribbon emitter vertex history for a specific node (by ObjectId) or all emitters.
+     * Call this when a node's world matrix changes interactively (e.g. gizmo drag in keyframe mode)
+     * so that stale baked-world-position vertices are discarded and the ribbon re-emits from the
+     * new position rather than disappearing when old vertices expire via LifeSpan.
+     */
+    public resetEmitters(objectId?: number): void {
+        for (const emitter of this.emitters) {
+            if (objectId !== undefined && emitter.props.ObjectId !== objectId) {
+                continue;
+            }
+            // Clear all baked vertex history so the ribbon starts fresh from current node position
+            emitter.creationTimes.length = 0;
+            emitter.emission = 0;
+            if (emitter.vertices) {
+                emitter.vertices.fill(0);
+            }
+        }
+    }
+
     public update(delta: number): void {
         this.syncEmitters();
         for (const emitter of this.emitters) {

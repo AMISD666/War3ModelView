@@ -151,6 +151,7 @@ interface ModelState {
     reset: () => void;
 
     setModelData: (data: ModelData | null, path: string | null, options?: SetModelDataOptions) => void;
+    updateGlobalSequences: (sequences: number[]) => void;
     setLoading: (loading: boolean) => void;
     updateNode: (objectId: number, updates: Partial<ModelNode>) => void;
     // 静默更新节点 - 不触发 renderer reload（用于关键帧编辑等高频更新）
@@ -963,8 +964,12 @@ export const useModelStore = create<ModelState>((set, get) => ({
         const geosetCount = (correctedData as any)?.Geosets?.length || 0;
         const allGeosetIds = Array.from({ length: geosetCount }, (_, i) => i);
 
-        // Reuse nodes from correctedData if available, otherwise use initial extract
-        const correctedNodes = Array.isArray((correctedData as any)?.Nodes) ? (correctedData as any).Nodes : nodes;
+        // IMPORTANT: Always use `nodes` from extractNodesFromModel (which correctly sets .type for each node)
+        // DO NOT use correctedData.Nodes directly - raw MDX Nodes lack the `.type` field needed by the UI
+        // If correctedData has updated Nodes, re-extract from it to get fresh typed nodes
+        const correctedNodes = correctedData !== data
+            ? extractNodesFromModel(correctedData)
+            : nodes;
 
         const sequences = (correctedData as any)?.Sequences || [];
         const defaultSequenceIndex = pickDefaultSequenceIndex(sequences);
@@ -1066,6 +1071,15 @@ export const useModelStore = create<ModelState>((set, get) => ({
             return {
                 modelData: updatedModelData,
                 sequences: newSequences
+            };
+        });
+    },
+
+    updateGlobalSequences: (sequences) => {
+        set((state) => {
+            if (!state.modelData) return {};
+            return {
+                modelData: { ...state.modelData, GlobalSequences: sequences }
             };
         });
     },

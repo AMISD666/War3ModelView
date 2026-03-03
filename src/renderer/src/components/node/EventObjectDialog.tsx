@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { Form, Button, Select, Space } from 'antd';
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
+import { GlobalSequenceSelect } from '../common/GlobalSequenceSelect';
 import { DraggableModal } from '../DraggableModal';
 import { useModelStore } from '../../store/modelStore';
 import type { EventObjectNode } from '../../types/node';
@@ -121,14 +122,6 @@ const EventObjectDialog: React.FC<EventObjectDialogProps> = ({ visible, nodeId, 
         return '';
     };
 
-    // Global sequence options
-    const globalSeqOptions = [
-        { label: '(None)', value: -1 },
-        ...((modelData?.GlobalSequences as unknown as number[] || []).map((gs: number, idx: number) => ({
-            label: `全局序列 ${idx} (${gs}ms)`,
-            value: idx
-        })) || [])
-    ];
 
     return (
         <DraggableModal
@@ -238,10 +231,8 @@ const EventObjectDialog: React.FC<EventObjectDialogProps> = ({ visible, nodeId, 
                     <div style={{ display: 'flex', alignItems: 'center' }}>
                         <span style={{ width: 100, color: '#888' }}>全局顺序 ID:</span>
                         <Form.Item name="GlobalSequenceId" noStyle>
-                            <Select
-                                options={globalSeqOptions}
+                            <GlobalSequenceSelect
                                 style={{ flex: 1 }}
-                                size="small"
                             />
                         </Form.Item>
                     </div>

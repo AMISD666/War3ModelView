@@ -21,6 +21,9 @@ interface MenuBarProps {
     onSaveAs: () => void | Promise<boolean>
     onExportMDL: () => void
     onExportMDX: () => void
+    onOpenRecent: (path: string) => void
+    recentFiles: { path: string; name: string; time: number }[]
+    onClearRecentFiles: () => void
     // onLoadMPQ removed
     // mpqLoaded removed (accessed via store in ViewSettingsWindow)
     teamColor: number
@@ -74,6 +77,9 @@ const MenuBar: React.FC<MenuBarProps> = ({
     onSaveAs,
     onExportMDL,
     onExportMDX,
+    onOpenRecent,
+    recentFiles,
+    onClearRecentFiles,
     // onLoadMPQ,
     // mpqLoaded,
     teamColor,
@@ -122,6 +128,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
 }) => {
     const [activeMenu, setActiveMenu] = useState<string | null>(null)
     const [settingsSubMenu, setSettingsSubMenu] = useState<string | null>(null)
+    const [showRecentMenu, setShowRecentMenu] = useState(false)
     const menuRef = useRef<HTMLDivElement>(null)
     const showMpqBrowser = useUIStore(state => state.showMpqBrowser)
     const toggleMpqBrowser = useUIStore(state => state.toggleMpqBrowser)
@@ -288,6 +295,76 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             <span>导入模型</span>
                             <span style={{ color: '#888', fontSize: '11px' }}>Ctrl+O</span>
                         </div>
+
+                        {/* Recent Files Submenu */}
+                        <div
+                            style={{ ...itemStyle, position: 'relative' }}
+                            onMouseEnter={(e) => { hoverStyle(e); setShowRecentMenu(true) }}
+                            onMouseLeave={(e) => { unhoverStyle(e); setShowRecentMenu(false) }}
+                        >
+                            <span>最近文件</span>
+                            <span style={{ color: '#888', fontSize: '11px' }}>▶</span>
+
+                            {showRecentMenu && (
+                                <div style={{
+                                    position: 'absolute',
+                                    top: 0,
+                                    left: '100%',
+                                    backgroundColor: '#333',
+                                    boxShadow: '2px 2px 8px rgba(0,0,0,0.6)',
+                                    zIndex: 1100,
+                                    minWidth: '320px',
+                                    maxWidth: '480px',
+                                    padding: '5px 0',
+                                    border: '1px solid #444'
+                                }}>
+                                    {recentFiles.length === 0 ? (
+                                        <div style={{ padding: '8px 15px', color: '#666', fontSize: '12px' }}>暂无历史记录</div>
+                                    ) : (
+                                        recentFiles.map((f, i) => (
+                                            <div
+                                                key={f.path}
+                                                style={{
+                                                    padding: '7px 15px',
+                                                    cursor: 'pointer',
+                                                    color: '#ddd',
+                                                    fontSize: '12px',
+                                                    overflow: 'hidden',
+                                                    textOverflow: 'ellipsis',
+                                                    whiteSpace: 'nowrap',
+                                                    display: 'flex',
+                                                    gap: 8,
+                                                    alignItems: 'center'
+                                                }}
+                                                title={f.path}
+                                                onMouseEnter={hoverStyle}
+                                                onMouseLeave={unhoverStyle}
+                                                onClick={() => { onOpenRecent(f.path); closeMenu() }}
+                                            >
+                                                <span style={{ color: '#666', minWidth: 16, textAlign: 'right', fontSize: 11 }}>{i + 1}.</span>
+                                                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.name}</span>
+                                                <span style={{ color: '#555', fontSize: 10, flexShrink: 0 }}>
+                                                    {f.path.length > 50 ? '…' + f.path.slice(-48) : f.path}
+                                                </span>
+                                            </div>
+                                        ))
+                                    )}
+                                    {recentFiles.length > 0 && (
+                                        <>
+                                            <div style={{ borderTop: '1px solid #444', margin: '4px 0' }} />
+                                            <div
+                                                style={{ padding: '7px 15px', cursor: 'pointer', color: '#888', fontSize: '12px' }}
+                                                onMouseEnter={hoverStyle}
+                                                onMouseLeave={unhoverStyle}
+                                                onClick={() => { onClearRecentFiles(); closeMenu() }}
+                                            >
+                                                清空历史记录
+                                            </div>
+                                        </>
+                                    )}
+                                </div>
+                            )}
+                        </div>
                         <div
                             style={itemStyle}
                             onMouseEnter={hoverStyle}
@@ -316,7 +393,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             onMouseLeave={unhoverStyle}
                             onClick={() => { onExportMDL(); closeMenu() }}
                         >
-                            导出为 MDL
+                            另存为 MDL
                         </div>
                         <div
                             style={itemStyle}
@@ -324,7 +401,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             onMouseLeave={unhoverStyle}
                             onClick={() => { onExportMDX(); closeMenu() }}
                         >
-                            导出为 MDX
+                            另存为 MDX
                         </div>
                     </div>
                 )}

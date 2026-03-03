@@ -166,7 +166,8 @@ export class GizmoRenderer {
         } else if (mode === 'rotate') {
             // Draw circles
             const segments = 32
-            const r = axisLen
+            const r = axisLen * 0.5 // SYNC: must match raycast rotate radius below
+
 
             // X-Axis Circle (YZ plane)
             for (let i = 0; i < segments; i++) {
@@ -426,7 +427,7 @@ export class GizmoRenderer {
         } else if (mode === 'rotate') {
             // Ray-Plane intersection for circles? Or just distance to ring?
             // Distance to ring is better.
-            const r = axisLen
+            const r = axisLen * 0.5 // SYNC: must match render rotate radius above
 
             // X-Axis Ring (YZ Plane)
             const distX = this.distToRing(cameraPos, rayDir, center, axisX, r)

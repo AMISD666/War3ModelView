@@ -95,6 +95,8 @@ export class SimpleOrbitCamera {
             },
             wheel: (e: WheelEvent) => {
                 if (!this.enabled) return
+                // Ctrl+Wheel is reserved for node size scaling (handled in Viewer.tsx)
+                if (e.ctrlKey || e.metaKey) return
                 e.preventDefault()
                 let deltaY = e.deltaY
                 if (e.deltaMode === 1) {

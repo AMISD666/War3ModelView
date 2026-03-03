@@ -18,16 +18,14 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({
     onClose,
     isStandalone,
 }) => {
-    const modelData = useModelStore(state => state.modelData)
-    const setModelData = useModelStore(state => state.setModelData)
-    const modelPath = useModelStore(state => state.modelPath)
+    const updateGlobalSequences = useModelStore(state => state.updateGlobalSequences)
 
     const { state: rpcState, emitCommand } = useRpcClient<{ globalSequences: number[] }>(
         'globalSequenceManager',
         { globalSequences: [] }
     )
 
-    const storeGlobalSequences = (modelData as any)?.GlobalSequences as number[] || []
+    const storeGlobalSequences = useModelStore(state => ((state.modelData as any)?.GlobalSequences as number[]) || [])
     const globalSequences: number[] = isStandalone ? (rpcState.globalSequences || []) : storeGlobalSequences
 
     const [localSeqs, setLocalSeqs] = useState<number[]>([])
@@ -40,9 +38,8 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({
         if (isStandalone) {
             emitCommand('EXECUTE_GLOBAL_SEQ_ACTION', { action: 'SAVE', globalSequences: newSeqs })
         } else {
-            if (setModelData && modelData) {
-                setModelData({ ...modelData, GlobalSequences: newSeqs } as any, modelPath)
-            }
+            // Targeted patch — avoids full model reload and preserving animation state
+            updateGlobalSequences(newSeqs)
         }
     }
 
