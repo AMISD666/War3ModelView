@@ -103,6 +103,7 @@ export class ModelInstance {
         this.particlesController = new ParticlesController(this.interp, this.rendererData);
         this.ribbonsController = new RibbonsController(this.interp, this.rendererData);
 
+        (this.rendererData as any).modelInstance = this;
         this.initNodes();
         this.initGlobalSequences();
         this.initMaterialLayers();
@@ -269,7 +270,9 @@ export class ModelInstance {
     public update(delta: number) {
         this.rendererData.frame += delta;
         if (this.rendererData.animationInfo) {
-            if (this.rendererData.frame > this.rendererData.animationInfo.Interval[1]) {
+            // Apply a small float threshold to prevent rounding errors during timeline
+            // scrub simulation loop from overshooting Interval[1] and accidentally wrapping back to 0.
+            if (this.rendererData.frame > this.rendererData.animationInfo.Interval[1] + 0.001) {
                 if (this.rendererData.loop) {
                     this.rendererData.frame = this.rendererData.animationInfo.Interval[0];
                 } else {

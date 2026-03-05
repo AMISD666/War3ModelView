@@ -1,4 +1,4 @@
-/// <reference types="vite/client" />
+﻿/// <reference types="vite/client" />
 /// <reference types="@webgpu/types" />
 
 import { getShader } from './util';
@@ -66,6 +66,8 @@ export class RibbonsController {
     private interp: ModelInterp;
     private rendererData: RendererData;
     private emitters: RibbonEmitterWrapper[];
+    private previewVisibilityForced = false;
+    private lastTimelineFrame: number | null = null;
 
     constructor(interp: ModelInterp, rendererData: RendererData) {
         this.shaderProgramLocations = {
@@ -428,22 +430,167 @@ export class RibbonsController {
             if (objectId !== undefined && emitter.props.ObjectId !== objectId) {
                 continue;
             }
-            // Clear all baked vertex history so the ribbon starts fresh from current node position
             emitter.creationTimes.length = 0;
             emitter.emission = 0;
             if (emitter.vertices) {
                 emitter.vertices.fill(0);
             }
+            if (emitter.texCoords) {
+                emitter.texCoords.fill(0);
+            }
         }
+    }
+
+    public setPreviewVisibility(forced: boolean): void {
+        this.previewVisibilityForced = !!forced;
+    }
+
+    private setGlobalSequenceFramesForRebuild(frame: number): void {
+        const durations = this.rendererData.model.GlobalSequences as ArrayLike<number> | undefined;
+        const frames = this.rendererData.globalSequencesFrames;
+        if (!durations || !Array.isArray(frames)) {
+            return;
+        }
+
+        const maxIndex = Math.min(durations.length ?? 0, frames.length);
+        for (let i = 0; i < maxIndex; ++i) {
+            const duration = Number(durations[i]);
+            if (!Number.isFinite(duration) || duration <= 0) {
+                frames[i] = 0;
+                continue;
+            }
+
+            let globalFrame = frame % duration;
+            if (globalFrame < 0) {
+                globalFrame += duration;
+            }
+            if (globalFrame === 0 && frame > 0) {
+                globalFrame = duration;
+            }
+            frames[i] = globalFrame;
+        }
+    }
+
+    private updateNodeAt(frame: number): void {
+        this.rendererData.frame = frame;
+
+        const modelInstance = (this.rendererData as any).modelInstance;
+        if (!modelInstance) {
+            return;
+        }
+
+        if (modelInstance.rendererData) {
+            modelInstance.rendererData.frame = frame;
+        }
+
+        if (typeof modelInstance.updateNode === 'function' && modelInstance.rendererData?.rootNode) {
+            modelInstance.updateNode(modelInstance.rendererData.rootNode);
+        }
+    }
+
+    public buildHistoryAt(targetFrame: number): void {
+        if (!Number.isFinite(targetFrame)) {
+            return;
+        }
+
+        this.syncEmitters();
+
+        const interval = this.rendererData.animationInfo?.Interval as ArrayLike<number> | undefined;
+        const hasInterval = !!interval && typeof interval.length === 'number' && interval.length >= 2;
+        const sequenceStart = hasInterval ? Number(interval[0]) : 0;
+        const clampedTarget = Math.max(Number.isFinite(sequenceStart) ? sequenceStart : 0, targetFrame);
+        const stepSize = 1000 / 60;
+
+        const originalFrame = Number(this.rendererData.frame ?? 0);
+        const originalGlobalFrames = Array.isArray(this.rendererData.globalSequencesFrames)
+            ? [...this.rendererData.globalSequencesFrames]
+            : [];
+        const nowBase = Date.now();
+
+        for (const emitter of this.emitters) {
+            emitter.creationTimes.length = 0;
+            emitter.emission = 0;
+            if (emitter.vertices) {
+                emitter.vertices.fill(0);
+            }
+            if (emitter.texCoords) {
+                emitter.texCoords.fill(0);
+            }
+
+            const lifeSpan = Number(emitter.props.LifeSpan ?? 0);
+            if (!Number.isFinite(lifeSpan) || lifeSpan <= 0) {
+                continue;
+            }
+
+            const historyStart = Math.max(sequenceStart, clampedTarget - lifeSpan * 1000);
+            let t = historyStart;
+
+            while (t <= clampedTarget + 0.0001) {
+                const sampleFrame = Math.min(t, clampedTarget);
+
+                this.setGlobalSequenceFramesForRebuild(sampleFrame);
+                this.updateNodeAt(sampleFrame);
+
+                const visibility = this.interp.animVectorVal(emitter.props.Visibility, 1);
+                if (visibility > 0 || this.previewVisibilityForced) {
+                    const emissionRate = this.interp.animVectorVal(emitter.props.EmissionRate, 0);
+                    emitter.emission += emissionRate * stepSize;
+
+                    let emittedThisStep = 0;
+                    while (emitter.emission >= 1000 && emittedThisStep < 8) {
+                        emitter.emission -= 1000;
+                        emittedThisStep += 1;
+
+                        if (emitter.creationTimes.length + 1 > emitter.capacity) {
+                            this.resizeEmitterBuffers(emitter, emitter.creationTimes.length + 1);
+                        }
+
+                        this.appendVertices(emitter);
+                        emitter.creationTimes.push(nowBase - (clampedTarget - sampleFrame));
+                    }
+                }
+
+                if (sampleFrame >= clampedTarget) {
+                    break;
+                }
+                t += stepSize;
+            }
+
+            if (emitter.creationTimes.length > 0) {
+                this.updateEmitterTexCoords(emitter, nowBase);
+            }
+            emitter.emission = 0;
+        }
+
+        this.rendererData.frame = originalFrame;
+        if (originalGlobalFrames.length > 0 && Array.isArray(this.rendererData.globalSequencesFrames)) {
+            const maxIndex = Math.min(originalGlobalFrames.length, this.rendererData.globalSequencesFrames.length);
+            for (let i = 0; i < maxIndex; ++i) {
+                this.rendererData.globalSequencesFrames[i] = originalGlobalFrames[i];
+            }
+        }
+        this.updateNodeAt(originalFrame);
+        this.lastTimelineFrame = clampedTarget;
     }
 
     public update(delta: number): void {
         this.syncEmitters();
+        const currentFrame = Number(this.rendererData.frame ?? 0);
+        if (
+            delta > 0 &&
+            this.lastTimelineFrame !== null &&
+            Number.isFinite(this.lastTimelineFrame) &&
+            Number.isFinite(currentFrame) &&
+            currentFrame < this.lastTimelineFrame - 0.001
+        ) {
+            this.resetEmitters();
+        }
+        this.lastTimelineFrame = Number.isFinite(currentFrame) ? currentFrame : this.lastTimelineFrame;
+
         for (const emitter of this.emitters) {
             this.updateEmitter(emitter, delta);
         }
     }
-
     public render(mvMatrix: mat4, pMatrix: mat4): void {
         this.gl.useProgram(this.shaderProgram);
 
@@ -460,7 +607,7 @@ export class RibbonsController {
 
             // Check visibility before rendering
             const visibility = this.interp.animVectorVal(emitter.props.Visibility, 1);
-            if (visibility <= 0) {
+            if (!this.previewVisibilityForced && visibility <= 0) {
                 continue;
             }
 
@@ -867,3 +1014,4 @@ export class RibbonsController {
         this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, emitter.creationTimes.length * 2);
     }
 }
+

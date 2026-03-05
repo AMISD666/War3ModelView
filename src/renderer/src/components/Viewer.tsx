@@ -145,7 +145,8 @@ const getTextureDecodeWorkerCount = (): number => {
   return Math.max(2, Math.min(4, Math.floor(cores / 2)))
 }
 
-const Viewer = forwardRef<ViewerRef, ViewerProps>(({
+const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
+  const {
   modelPath,
   animationIndex,
   teamColor,
@@ -167,7 +168,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
   viewPreset,
   modelData,
   onAddCameraFromView
-}, ref) => {
+  } = props
   const [parseWorker] = useState(() => new ModelWorker())
   const [textureWorkers] = useState(() => {
     const count = getTextureDecodeWorkerCount()
@@ -911,7 +912,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           const blp = decodeBLP(toTightArrayBuffer(mpqData) as any)
           const blpMip = getBLPImageData(blp, 0)
 
-          // CRITICAL: Use premultiplyAlpha:'none' — Canvas or default createImageBitmap destroys RGB on transparent pixels
+          // CRITICAL: Use premultiplyAlpha:'none' 鈥?Canvas or default createImageBitmap destroys RGB on transparent pixels
           const idata = new ImageData(new Uint8ClampedArray(blpMip.data), blpMip.width, blpMip.height)
           const img = await createImageBitmap(idata, { premultiplyAlpha: 'none' })
           if (renderer.setReplaceableTexture) {
@@ -1127,7 +1128,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 
     switch (viewPreset.type) {
       case 'perspective':
-        // 切换到透视模式
+        // 鍒囨崲鍒伴€忚妯″紡
         console.log('[Viewer] Switching to perspective mode')
         if (cameraRef.current) {
           cameraRef.current.setPerspective()
@@ -1140,7 +1141,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         }
         break
       case 'orthographic':
-        // 切换到正交投影（不改变当前视角方向）
+        // 鍒囨崲鍒版浜ゆ姇褰憋紙涓嶆敼鍙樺綋鍓嶈瑙掓柟鍚戯級
         console.log('[Viewer] Switching to orthographic mode')
         if (cameraRef.current) {
           cameraRef.current.setOrthographic()
@@ -1177,12 +1178,12 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         targetCamera.current.distance = 500
         targetCamera.current.theta = Math.PI / 4
         targetCamera.current.phi = Math.PI / 4
-        // focus 保持当前投影模式
+        // focus 淇濇寔褰撳墠鎶曞奖妯″紡
         break
     }
-    // 同步相机角度
+    // 鍚屾鐩告満瑙掑害
     syncCameraToOrbit()
-  }, [viewPreset]) // 仅依赖 viewPreset
+  }, [viewPreset]) // 浠呬緷璧?viewPreset
 
   // Handle Animation and Mode Changes
   useEffect(() => {
@@ -1659,9 +1660,9 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     // const isCtrl = e.ctrlKey || e.metaKey
 
     // Box Selection behavior:
-    // - View mode: 左键直接旋转摄像机，不进行框选
-    // - Batch mode: 同view mode，左键旋转摄像机
-    // - Other modes: 左键框选，Alt+左键旋转摄像机
+    // - View mode: 宸﹂敭鐩存帴鏃嬭浆鎽勫儚鏈猴紝涓嶈繘琛屾閫?
+    // - Batch mode: 鍚寁iew mode锛屽乏閿棆杞憚鍍忔満
+    // - Other modes: 宸﹂敭妗嗛€夛紝Alt+宸﹂敭鏃嬭浆鎽勫儚鏈?
     const shouldStartBoxSelection = e.button === 0 && !e.altKey && mainMode !== 'view' && mainMode !== 'batch'
 
     if (shouldStartBoxSelection) {
@@ -2065,7 +2066,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       if (rendererRef.current.rendererData && rendererRef.current.rendererData.nodes) {
         rendererRef.current.rendererData.nodes.forEach((nodeWrapper: any) => {
           const pivot = getOrCreateNodePivot(nodeWrapper)
-          if (!pivot) return // 跳过没有 PivotPoint 的节点
+          if (!pivot) return // 璺宠繃娌℃湁 PivotPoint 鐨勮妭鐐?
           // Apply current transformation
           const worldPos = vec3.create()
           vec3.transformMat4(worldPos, pivot, nodeWrapper.matrix)
@@ -2288,7 +2289,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     }
 
     setLoading(true)
-    setLoadingStatus('读取模型文件...')
+    setLoadingStatus('璇诲彇妯″瀷鏂囦欢...')
 
     // Clear the canvas without creating a context.
     const canvas = canvasRef.current
@@ -2314,7 +2315,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           const mpqPayload = await invoke<any>('read_mpq_file', { path: assetPath }).catch(() => null)
           const mpqBytes = toUint8Array(mpqPayload)
           if (!mpqBytes || mpqBytes.byteLength === 0) {
-            throw new Error(`无法读取资源文件: ${assetPath}`)
+            throw new Error(`鏃犳硶璇诲彇璧勬簮鏂囦欢: ${assetPath}`)
           }
           return mpqBytes
         }
@@ -2325,7 +2326,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         const bytes = await readPathBytes(path)
         const imageData = decodeTextureData(toTightArrayBuffer(bytes), path, { preferredBLPMip: 0 })
         if (!imageData) {
-          throw new Error(`无法解码贴图文件: ${path}`)
+          throw new Error(`鏃犳硶瑙ｇ爜璐村浘鏂囦欢: ${path}`)
         }
 
         const previewCanvas = document.createElement('canvas')
@@ -2333,7 +2334,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         previewCanvas.height = imageData.height
         const previewCtx = previewCanvas.getContext('2d')
         if (!previewCtx) {
-          throw new Error('无法创建贴图预览上下文')
+          throw new Error('Failed to create texture preview canvas context')
         }
         previewCtx.putImageData(imageData, 0, 0)
 
@@ -2396,7 +2397,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
         console.log('[Viewer] Loading model from in-memory data')
         model = inMemoryData
       } else {
-        setLoadingStatus('正在解析模型...')
+        setLoadingStatus('姝ｅ湪瑙ｆ瀽妯″瀷...')
         const buffer = await readPathBytes(path)
         const parseWithWorker = (bytes: Uint8Array) =>
           new Promise<any>((resolve, reject) => {
@@ -2481,7 +2482,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
       resetCamera()
       console.log(`[Viewer] Renderer Init took ${(performance.now() - rendererStart).toFixed(1)}ms`)
 
-      setLoadingStatus('加载贴图资源...')
+      setLoadingStatus('鍔犺浇璐村浘璧勬簮...')
       // Load textures using concurrent loader with mipmap optimization (max 512px)
       const textureResults = await loadAllTextures(
         model,
@@ -2527,7 +2528,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
     })
     console.time('[Viewer] ReloadModel')
     setLoading(true)
-    setLoadingStatus('同步模型数据...')
+    setLoadingStatus('鍚屾妯″瀷鏁版嵁...')
     // CRITICAL: Capture old renderer's Geoset geometry BEFORE destroying
     // The TypedArrays (Vertices, Faces, Normals) are lost in store's spread operations
     // NOTE: This logic is currently disabled, see commented block below
@@ -3135,22 +3136,85 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             }
           } else {
             // Animation paused or bind pose mode
-            // 性能优化: 仅在必要时更新骨骼矩阵（如 Gizmo 拖动或帧变化）
-            // 静态姿势时跳过矩阵计算，节省 CPU
+            // 鎬ц兘浼樺寲: 浠呭湪蹇呰鏃舵洿鏂伴楠肩煩闃碉紙濡?Gizmo 鎷栧姩鎴栧抚鍙樺寲锛?
+            // 闈欐€佸Э鍔挎椂璺宠繃鐭╅樀璁＄畻锛岃妭鐪?CPU
             const gizmoDragging = gizmoState.current.isDragging
             let currentFrame = mdlRenderer.rendererData?.frame ?? 0
 
             let forceFrameRefresh = false
+            let simulatedTimelineStep = false
 
             // In animation mode, Timeline is authoritative (store -> renderer).
             // In view/geometry/uv modes, renderer frame is authoritative to avoid pause reset jumps.
             const storeFrame = useModelStore.getState().currentFrame
             if (mdlRenderer.rendererData) {
               if (currentMainMode === 'animation') {
-                if (Math.abs(storeFrame - currentFrame) > 0.1) {
-                  mdlRenderer.rendererData.frame = storeFrame
-                  currentFrame = storeFrame
-                  forceFrameRefresh = true
+                if (Math.abs(storeFrame - currentFrame) > 0.0001) {
+                  const interval = mdlRenderer.rendererData.animationInfo?.Interval
+                  const hasInterval =
+                    !!interval &&
+                    typeof (interval as any).length === 'number' &&
+                    (interval as any).length >= 2
+
+                  if (hasInterval && Number.isFinite(storeFrame)) {
+                    const sequenceStart = Number(interval[0])
+                    const sequenceEnd = Number(interval[1])
+                    const targetFrame = Math.min(Math.max(storeFrame, sequenceStart), sequenceEnd)
+
+                    // Deterministic paused preview:
+                    // Keep a single authoritative frame for ribbons and other anim channels.
+                    const globalSequenceDurations = mdlRenderer.model?.GlobalSequences
+                    const globalSequenceCount =
+                      typeof (globalSequenceDurations as ArrayLike<number> | undefined)?.length === 'number'
+                        ? Number((globalSequenceDurations as ArrayLike<number>).length)
+                        : 0
+                    const hasGlobalSeq = globalSequenceCount > 0 && Array.isArray(mdlRenderer.rendererData.globalSequencesFrames)
+                    if (hasGlobalSeq) {
+                      const currentFrameInGlobalSeq = targetFrame
+                      const currentGlobalFrames = mdlRenderer.rendererData.globalSequencesFrames
+                      const maxIndex = Math.min(globalSequenceCount, currentGlobalFrames.length)
+                      for (let i = 0; i < maxIndex; ++i) {
+                        const duration = Number(globalSequenceDurations[i])
+                        if (!Number.isFinite(duration) || duration <= 0) {
+                          currentGlobalFrames[i] = 0
+                          continue
+                        }
+
+                        let nextFrame = currentFrameInGlobalSeq % duration
+                        if (nextFrame < 0) {
+                          nextFrame += duration
+                        }
+                        if (nextFrame === 0 && currentFrameInGlobalSeq > 0) {
+                          nextFrame = duration
+                        }
+                        currentGlobalFrames[i] = nextFrame
+                      }
+                    }
+                    const ribbonsController = (mdlRenderer as any)?.modelInstance?.ribbonsController
+                    if (ribbonsController && typeof ribbonsController.resetEmitters === 'function') {
+                      ribbonsController.resetEmitters()
+                    }
+
+                    // Keep renderer exactly on requested timeline position.
+                    mdlRenderer.rendererData.frame = targetFrame
+                    mdlRenderer.update(0)
+
+                    // [Ultrathink] Deterministic stateless reverse-construction for Ribbons:
+                    // Bypass the error-prone accumulated simulation path and pull out
+                    // the exact mathematical node trajectory from history to shape the ribbon instantly.
+                    if (ribbonsController && typeof ribbonsController.buildHistoryAt === 'function') {
+                      ribbonsController.buildHistoryAt(targetFrame)
+                    }
+
+                    currentFrame = Number(mdlRenderer.rendererData.frame ?? targetFrame)
+                    simulatedTimelineStep = true
+                    frameCacheRef.current = currentFrame
+                    needsRendererUpdateRef.current = false
+                  } else {
+                    mdlRenderer.rendererData.frame = storeFrame
+                    currentFrame = storeFrame
+                    forceFrameRefresh = true
+                  }
                 }
               } else {
                 if (Math.abs(storeFrame - currentFrame) > 0.1) {
@@ -3159,43 +3223,25 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               }
             }
 
-            // 使用 ref 替代 window 全局变量，避免污染和潜在冲突
+            // 浣跨敤 ref 鏇夸唬 window 鍏ㄥ眬鍙橀噺锛岄伩鍏嶆薄鏌撳拰娼滃湪鍐茬獊
             const lastFrame = frameCacheRef.current
 
             const needsUpdate = needsRendererUpdateRef.current || forceFrameRefresh
-            if (gizmoDragging || needsUpdate || currentFrame !== lastFrame) {
+            if (!simulatedTimelineStep && (gizmoDragging || needsUpdate || currentFrame !== lastFrame)) {
               // Update with delta=0 to refresh bone matrices without advancing animation
               mdlRenderer.update(0)
               frameCacheRef.current = currentFrame
               needsRendererUpdateRef.current = false
 
-              // When gizmo is dragging in animation keyframe mode, ribbon emitter vertices are
-              // baked world-space positions. When the node moves, old vertices expire via LifeSpan
-              // causing the ribbon to disappear. Reset ribbon state for all selected nodes so the
-              // ribbon re-emits from the new node position.
-              if (gizmoDragging && currentMainMode === 'animation' && currentAnimationSubMode === 'keyframe') {
-                const ribbonsCtrl = (mdlRenderer as any)?.modelInstance?.ribbonsController
-                if (ribbonsCtrl && typeof ribbonsCtrl.resetEmitters === 'function') {
-                  const { selectedNodeIds } = useSelectionStore.getState()
-                  if (selectedNodeIds.length > 0) {
-                    for (const nodeId of selectedNodeIds) {
-                      ribbonsCtrl.resetEmitters(nodeId)
-                    }
-                  } else {
-                    // No explicit selection? Reset all to be safe
-                    ribbonsCtrl.resetEmitters()
-                  }
-                }
-              }
+              // NOTE:
+              // Do not reset ribbon history every frame during keyframe dragging.
+              // In paused keyframe mode we call update(0), which means no new ribbon
+              // points are emitted; per-frame reset would immediately clear all ribbons.
             }
 
-            // Keep timeline/store in sync while paused in animation mode.
-            if (currentMainMode === 'animation' && mdlRenderer.rendererData) {
-              const storeFrame = useModelStore.getState().currentFrame
-              if (Math.abs(storeFrame - currentFrame) > 0.1) {
-                useModelStore.getState().setFrame(currentFrame)
-              }
-            }
+            // In animation mode, timeline/store is authoritative (store -> renderer).
+            // Do not write renderer frame back to store here, otherwise it fights timeline
+            // dragging and can lock scrubbing around the first processed frame.
           }
 
           // === Collision Shape Rendering ===
@@ -3432,11 +3478,18 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             const particlesController = modelInstance?.particlesController
             const ribbonsController = modelInstance?.ribbonsController
             const noopRender = () => { }
+            // Keep ribbon visibility behavior consistent with autoplay while scrubbing.
+            // Forcing preview visibility makes first-frame and paused results diverge.
+            const forceRibbonPreviewVisibility = false
 
             const originalParticleRender = particlesController?.render
             const originalParticleRenderGPU = particlesController?.renderGPU
             const originalRibbonRender = ribbonsController?.render
             const originalRibbonRenderGPU = ribbonsController?.renderGPU
+
+            if (ribbonsController && typeof ribbonsController.setPreviewVisibility === 'function') {
+              ribbonsController.setPreviewVisibility(forceRibbonPreviewVisibility)
+            }
 
             if (particlesController && !showParticlesRef.current) {
               particlesController.render = noopRender
@@ -3589,7 +3642,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               }
             }
 
-            // 关键帧模式和绑定模式都显示节点
+            // 鍏抽敭甯фā寮忓拰缁戝畾妯″紡閮芥樉绀鸿妭鐐?
             if ((showNodesRef.current || currentMainMode === 'animation') && mdlRenderer.rendererData.nodes && currentMainMode !== 'geometry') {
               const { selectedNodeIds } = useSelectionStore.getState()
               let parentOfSelected: number | null = null
@@ -3950,24 +4003,24 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             const selectionColorRgb = hexToRgb(selectionColor)
             const hoverColorRgb = hexToRgb(hoverColor)
 
-            // 计算动态顶点大小：根据相机缩放级别调整
-            // 放大视角 → 顶点变大，缩小视角 → 顶点变小
-            // 使用 sqrt 平滑缩放效果
+            // 璁＄畻鍔ㄦ€侀《鐐瑰ぇ灏忥細鏍规嵁鐩告満缂╂斁绾у埆璋冩暣
+            // 鏀惧ぇ瑙嗚 鈫?椤剁偣鍙樺ぇ锛岀缉灏忚瑙?鈫?椤剁偣鍙樺皬
+            // 浣跨敤 sqrt 骞虫粦缂╂斁鏁堟灉
             let zoomScale = 1.0
             if (cameraRef.current) {
               if (cameraRef.current.projectionMode === 'orthographic') {
-                // 正交模式：基准 orthoSize = 200
+                // 姝ｄ氦妯″紡锛氬熀鍑?orthoSize = 200
                 zoomScale = Math.sqrt(200 / Math.max(1, cameraRef.current.orthoSize))
               } else {
-                // 透视模式：基准 distance = 400
+                // 閫忚妯″紡锛氬熀鍑?distance = 400
                 zoomScale = Math.sqrt(400 / Math.max(1, cameraRef.current.distance))
               }
             }
-            // 限制缩放范围：0.375 到 2（放大8px，缩小1.5px）
+            // 闄愬埗缂╂斁鑼冨洿锛?.375 鍒?2锛堟斁澶?px锛岀缉灏?.5px锛?
             zoomScale = Math.max(0.375, Math.min(2, zoomScale))
             const basePointSize = 4.0 * zoomScale
             const hoverPointSize = 6.0 * zoomScale
-            // 选中顶点只改变颜色，大小和普通顶点一样
+            // 閫変腑椤剁偣鍙敼鍙橀鑹诧紝澶у皬鍜屾櫘閫氶《鐐逛竴鏍?
             const selectedPointSize = basePointSize
 
             // Render all visible geoset vertices (only if show vertices is enabled)
@@ -4125,14 +4178,14 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 showGizmo = true
               }
             }
-            // 动画模式（binding 和 keyframe）显示 Gizmo
+            // 鍔ㄧ敾妯″紡锛坆inding 鍜?keyframe锛夋樉绀?Gizmo
             else if (currentMainMode === 'animation') {
               const { selectedNodeIds } = useSelectionStore.getState()
               if (selectedNodeIds && selectedNodeIds.length > 0) {
                 for (const nodeId of selectedNodeIds) {
                   const nodeWrapper = mdlRenderer.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
                   if (nodeWrapper && nodeWrapper.matrix) {
-                    // 使用矩阵变换 PivotPoint 获取正确的世界坐标
+                    // 浣跨敤鐭╅樀鍙樻崲 PivotPoint 鑾峰彇姝ｇ‘鐨勪笘鐣屽潗鏍?
                     const matrix = nodeWrapper.matrix
                     let pivot = [0, 0, 0]
                     if (nodeWrapper.node && nodeWrapper.node.PivotPoint) {
@@ -4147,14 +4200,14 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                     center[1] += y
                     center[2] += z
                     count++;
-                    // 更新全局骨骼位置供 BoneParameterPanel 使用
+                    // 鏇存柊鍏ㄥ眬楠ㄩ浣嶇疆渚?BoneParameterPanel 浣跨敤
                     (window as any)._selectedBoneWorldPos = [x, y, z]
                   }
                 }
                 showGizmo = true
               }
             }
-            // 全局变换模式显示 Gizmo
+            // 鍏ㄥ眬鍙樻崲妯″紡鏄剧ず Gizmo
             else if (isGlobalTransformMode) {
               center[0] = globalPivot[0]
               center[1] = globalPivot[1]
@@ -4910,15 +4963,15 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 // If no parent (root bone), world delta = local delta (no transformation needed)
               }
 
-              // binding 模式：修改 PivotPoint（静态绑定位置）
+              // binding 妯″紡锛氫慨鏀?PivotPoint锛堥潤鎬佺粦瀹氫綅缃級
               if (subMode === 'binding') {
                 pivot[0] += localMoveVec[0]
                 pivot[1] += localMoveVec[1]
                 pivot[2] += localMoveVec[2]
               }
-              // keyframe 模式：累积 delta 并注入临时 Translation 关键帧用于实时预览
+              // keyframe 妯″紡锛氱疮绉?delta 骞舵敞鍏ヤ复鏃?Translation 鍏抽敭甯х敤浜庡疄鏃堕瑙?
               else if (subMode === 'keyframe') {
-                // 累积 LOCAL 偏移到全局变量 (用于 MouseUp 时提交)
+                // 绱Н LOCAL 鍋忕Щ鍒板叏灞€鍙橀噺 (鐢ㄤ簬 MouseUp 鏃舵彁浜?
                 if (!(window as any)._keyframeDragDelta) {
                   (window as any)._keyframeDragDelta = {}
                 }
@@ -4929,23 +4982,23 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 (window as any)._keyframeDragDelta[nodeId][1] += localMoveVec[1];
                 (window as any)._keyframeDragDelta[nodeId][2] += localMoveVec[2];
 
-                // 实时预览：注入临时 Translation 关键帧到渲染器模型
-                // 使用 baseTranslation + accumulatedDelta 作为预览值
-                // baseTranslation 优先使用当前帧的现有关键帧值
+                // 瀹炴椂棰勮锛氭敞鍏ヤ复鏃?Translation 鍏抽敭甯у埌娓叉煋鍣ㄦā鍨?
+                // 浣跨敤 baseTranslation + accumulatedDelta 浣滀负棰勮鍊?
+                // baseTranslation 浼樺厛浣跨敤褰撳墠甯х殑鐜版湁鍏抽敭甯у€?
                 const dragData = keyframeDragData.current
                 if (dragData && rendererRef.current) {
                   const delta = (window as any)._keyframeDragDelta[nodeId]
                   const frame = Math.round(currentFrame)
 
-                  // 获取渲染器中的节点
+                  // 鑾峰彇娓叉煋鍣ㄤ腑鐨勮妭鐐?
                   const rendererNode = rendererRef.current.model?.Nodes?.find((n: any) => n.ObjectId === nodeId)
                   if (rendererNode) {
-                    // 确保 Translation 属性存在，并从 store 复制现有关键帧
-                    // 这样渲染器才能正确插值其他帧
+                    // 纭繚 Translation 灞炴€у瓨鍦紝骞朵粠 store 澶嶅埗鐜版湁鍏抽敭甯?
+                    // 杩欐牱娓叉煋鍣ㄦ墠鑳芥纭彃鍊煎叾浠栧抚
                     if (!rendererNode.Translation || !rendererNode.Translation.Keys?.length) {
                       const storeNode = nodes.find((n: any) => n && n.ObjectId === nodeId)
                       const storeKeys = storeNode?.Translation?.Keys || []
-                      // 深拷贝现有关键帧（不包括预览关键帧）
+                      // 娣辨嫹璐濈幇鏈夊叧閿抚锛堜笉鍖呮嫭棰勮鍏抽敭甯э級
                       const copiedKeys = storeKeys
                         .filter((k: any) => !k._isPreviewKey)
                         .map((k: any) => ({
@@ -4960,7 +5013,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                       }
                     }
 
-                    // 获取基础值：优先使用现有关键帧，否则实时从 store 插值
+                    // 鑾峰彇鍩虹鍊硷細浼樺厛浣跨敤鐜版湁鍏抽敭甯э紝鍚﹀垯瀹炴椂浠?store 鎻掑€?
                     let baseTranslation = [0, 0, 0]
                     let baseSource = 'default'
                     const existingKey = rendererNode.Translation.Keys.find(
@@ -4972,11 +5025,11 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                       baseTranslation = Array.isArray(v) ? [...v] : Array.from(v) as number[]
                       baseSource = 'exactKeyframe'
                     } else {
-                      // 没有精确关键帧，从 store 节点的关键帧实时插值
+                      // 娌℃湁绮剧‘鍏抽敭甯э紝浠?store 鑺傜偣鐨勫叧閿抚瀹炴椂鎻掑€?
                       const storeNode = nodes.find((n: any) => n && n.ObjectId === nodeId)
                       const storeKeys = storeNode?.Translation?.Keys
                       if (storeKeys && storeKeys.length > 0) {
-                        // 插值计算
+                        // 鎻掑€艰绠?
                         const sortedKeys = [...storeKeys].filter((k: any) => !k._isPreviewKey).sort((a: any, b: any) => a.Frame - b.Frame)
                         if (sortedKeys.length > 0) {
                           const toArr = (v: any) => Array.isArray(v) ? [...v] : Array.from(v || [0, 0, 0]) as number[]
@@ -5021,7 +5074,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                       baseTranslation[2] + delta[2]
                     ]
 
-                    // 在当前帧注入临时关键帧用于预览
+                    // 鍦ㄥ綋鍓嶅抚娉ㄥ叆涓存椂鍏抽敭甯х敤浜庨瑙?
                     const tempKeyIndex = rendererNode.Translation.Keys.findIndex((k: any) => k._isPreviewKey)
                     if (tempKeyIndex >= 0) {
                       rendererNode.Translation.Keys[tempKeyIndex].Vector = previewTranslation
@@ -6341,10 +6394,15 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           backdropFilter: 'blur(8px)',
           border: '1px solid rgba(255, 255, 255, 0.1)'
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', width: '100%' }}>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            width: '100%'
+          }}>
             <button
               onClick={onTogglePlay}
-              title={isPlaying ? '暂停' : '播放'}
+              title={isPlaying ? 'Pause' : 'Play'}
               style={{
                 background: 'none',
                 border: 'none',
@@ -6358,7 +6416,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 transition: 'all 0.2s'
               }}
             >
-              {isPlaying ? '⏸' : '▶'}
+              {isPlaying ? 'Pause' : 'Play'}
             </button>
             <input
               type="range"
@@ -6369,7 +6427,6 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               style={{
                 flex: 1,
                 cursor: 'pointer',
-                height: '4px',
                 accentColor: '#1890ff'
               }}
             />
@@ -6384,7 +6441,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             </span>
             <button
               onClick={() => setLooping(!isLooping)}
-              title={isLooping ? '循环: 开启' : '循环: 关闭'}
+              title={isLooping ? 'Loop: On' : 'Loop: Off'}
               style={{
                 background: 'none',
                 border: 'none',
@@ -6444,7 +6501,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
           }}>
             <select
               id="camera-selector"
-              title="按~键可以快速切换到选中相机视角"
+              title="鎸墌閿彲浠ュ揩閫熷垏鎹㈠埌閫変腑鐩告満瑙嗚"
               style={{
                 background: 'rgba(0, 0, 0, 0.7)',
                 color: '#fff',
@@ -6465,14 +6522,14 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               }}
               defaultValue="-1"
             >
-              <option value="-1" disabled>选择相机...</option>
+              <option value="-1" disabled>閫夋嫨鐩告満...</option>
               {cameraList.map((cam: any, i: number) => (
                 <option key={i} value={i}>{cam.Name || `Camera ${i + 1}`}</option>
               ))}
             </select>
             <button
               type="button"
-              title="从当前视角新建相机"
+              title="Create camera from current view"
               onClick={() => onAddCameraFromView?.()}
               style={{
                 display: 'inline-flex',
@@ -6491,7 +6548,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
             </button>
             <button
               type="button"
-              title="复制相机位置和焦点"
+              title="Copy camera position and target"
               onClick={copySelectedCameraParams}
               style={{
                 display: 'inline-flex',
@@ -6592,7 +6649,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               justifyContent: 'space-between',
               alignItems: 'center'
             }}>
-              <span>模型信息</span>
+              <span>妯″瀷淇℃伅</span>
             </div>
             <div style={{ flex: 1, overflow: 'auto' }}>
               <ModelInfoPanel />
@@ -6650,7 +6707,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               setContextMenu(null)
             }}
           >
-            分离顶点
+            鍒嗙椤剁偣
           </div>
           <div
             style={{
@@ -6680,7 +6737,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
               setContextMenu(null)
             }}
           >
-            焊接顶点
+            鐒婃帴椤剁偣
           </div>
         </div>
       )}
@@ -6761,7 +6818,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 setNodeContextMenu(null)
               }}
             >
-              编辑节点
+              缂栬緫鑺傜偣
             </div>
             <div
               style={menuItemStyle(hasParent)}
@@ -6774,7 +6831,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 setNodeContextMenu(null)
               }}
             >
-              选取父节点
+              閫夊彇鐖惰妭鐐?
             </div>
             <div
               style={menuItemStyle(hasChild)}
@@ -6787,7 +6844,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 setNodeContextMenu(null)
               }}
             >
-              选取子节点
+              閫夊彇瀛愯妭鐐?
             </div>
             <div
               style={menuItemStyle(hasChild)}
@@ -6800,7 +6857,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 setNodeContextMenu(null)
               }}
             >
-              选取所有子节点
+              閫夊彇鎵€鏈夊瓙鑺傜偣
             </div>
             <div
               style={menuItemStyle(hasNode)}
@@ -6813,7 +6870,7 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
                 setNodeContextMenu(null)
               }}
             >
-              删除节点
+              鍒犻櫎鑺傜偣
             </div>
           </div>
         )
@@ -6897,5 +6954,17 @@ const Viewer = forwardRef<ViewerRef, ViewerProps>(({
 })
 
 export default Viewer
+
+
+
+
+
+
+
+
+
+
+
+
 
 

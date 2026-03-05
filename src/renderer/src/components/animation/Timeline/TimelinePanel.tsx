@@ -1194,19 +1194,13 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const clamped = Math.max(seqStartRef.current, Math.min(seqEndRef.current, Math.round(targetFrame)))
         frameRef.current = clamped
 
-        // Keep store frame in sync while scrubbing. In paused keyframe mode, Viewer uses
-        // store.currentFrame as source of truth and will overwrite renderer.frame each RAF.
+        // Keep store frame in sync while scrubbing.
+        // IMPORTANT: don't directly push renderer.frame/update(0) here.
+        // Viewer owns paused-frame simulation (including ribbon rewind/rebuild logic).
+        // Writing renderer.frame in Timeline bypasses that path and causes scrub desync.
         const modelState = useModelStore.getState()
         if (Math.abs((modelState.currentFrame ?? 0) - clamped) > 0.1) {
             modelState.setFrame(clamped)
-        }
-
-        const renderer = useRendererStore.getState().renderer
-        if (renderer && renderer.rendererData) {
-            renderer.rendererData.frame = clamped
-            if (typeof renderer.update === 'function') {
-                renderer.update(0)
-            }
         }
     }
 
@@ -3064,4 +3058,3 @@ const btnStyle: React.CSSProperties = {
 }
 
 export default React.memo(TimelinePanel)
-
