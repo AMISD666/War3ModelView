@@ -1,4 +1,4 @@
-﻿import React, { useMemo, useCallback, useRef, useEffect, useState } from 'react'
+import React, { useMemo, useCallback, useRef, useEffect, useState } from 'react'
 import { Typography, Select, message, Button, ColorPicker, Input, Tooltip } from 'antd'
 import { quat, vec3 } from 'gl-matrix'
 import { useSelectionStore } from '../../store/selectionStore'
@@ -517,8 +517,10 @@ const BoneParameterPanel: React.FC = () => {
                                 border: disabled ? '1px solid #333' : '1px solid #444',
                                 borderRadius: 4,
                                 color: disabled ? '#555' : '#fff',
-                                padding: compactUi.inputPadding,
-                                paddingRight: unit ? 18 : undefined,
+                                paddingTop: isKeyframeCompact ? 2 : 4,
+                                paddingBottom: isKeyframeCompact ? 2 : 4,
+                                paddingLeft: isKeyframeCompact ? 6 : 8,
+                                paddingRight: unit ? 18 : (isKeyframeCompact ? 6 : 8),
                                 fontSize: compactUi.inputFontSize,
                                 outline: 'none',
                                 cursor: disabled ? 'not-allowed' : 'text',
@@ -563,8 +565,10 @@ const BoneParameterPanel: React.FC = () => {
                                 border: disabled ? '1px solid #333' : '1px solid #444',
                                 borderRadius: 4,
                                 color: disabled ? '#555' : '#fff',
-                                padding: compactUi.inputPadding,
-                                paddingRight: unit ? 18 : undefined,
+                                paddingTop: isKeyframeCompact ? 2 : 4,
+                                paddingBottom: isKeyframeCompact ? 2 : 4,
+                                paddingLeft: isKeyframeCompact ? 6 : 8,
+                                paddingRight: unit ? 18 : (isKeyframeCompact ? 6 : 8),
                                 fontSize: compactUi.inputFontSize,
                                 outline: 'none',
                                 cursor: disabled ? 'not-allowed' : 'text',

@@ -1,4 +1,4 @@
-/// <reference types="vite/client" />
+﻿/// <reference types="vite/client" />
 /// <reference types="@webgpu/types" />
 
 import type { DdsInfo } from 'dds-parser';
@@ -812,12 +812,36 @@ export class ModelRenderer {
     }
 
     private validateNormals(): void {
-        //         console.log('[ModelRenderer] Forcing auto-recalculation of normals on import...');
         for (let i = 0; i < this.model.Geosets.length; ++i) {
             const geoset = this.model.Geosets[i];
-            // Unconditionally recalculate normals to ensure high quality lighting
-            // This fixes issues with models having bad/non-normalized normals from export
-            geoset.Normals = this.calculateSmoothNormals(geoset);
+            const normals = geoset.Normals;
+            const expectedLength = geoset.Vertices.length;
+            let shouldRecalculate = false;
+
+            if (!normals || normals.length !== expectedLength) {
+                shouldRecalculate = true;
+            } else {
+                for (let j = 0; j < normals.length; j += 3) {
+                    const nx = normals[j];
+                    const ny = normals[j + 1];
+                    const nz = normals[j + 2];
+
+                    if (!Number.isFinite(nx) || !Number.isFinite(ny) || !Number.isFinite(nz)) {
+                        shouldRecalculate = true;
+                        break;
+                    }
+
+                    const len2 = nx * nx + ny * ny + nz * nz;
+                    if (len2 < 1e-10) {
+                        shouldRecalculate = true;
+                        break;
+                    }
+                }
+            }
+
+            if (shouldRecalculate) {
+                geoset.Normals = this.calculateSmoothNormals(geoset);
+            }
         }
     }
 
@@ -5115,3 +5139,4 @@ export class ModelRenderer {
     }
 
 }
+

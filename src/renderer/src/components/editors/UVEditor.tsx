@@ -41,7 +41,7 @@ interface UVSelection {
     indices: number[]
 }
 
-type UVSubMode = 'vertex' | 'edge' | 'face' | 'group'
+type UVSubMode = 'vertex' | 'edge' | 'face' | 'group' | 'block'
 type UVTransformMode = 'select' | 'translate' | 'rotate' | 'scale'
 
 const MAX_HISTORY = 20
@@ -136,6 +136,79 @@ const UVEditor: React.FC<UVEditorProps> = ({
         return null
     }, [])
 
+
+    const getUvCoordKey = useCallback((uvs: Float32Array | number[], index: number) => {
+        const u = Number(uvs[index * 2] ?? 0)
+        const v = Number(uvs[index * 2 + 1] ?? 0)
+        return `${Math.round(u * 1000000)},${Math.round(v * 1000000)}`
+    }, [])
+
+    const getUvEdgeKey = useCallback((uvs: Float32Array | number[], a: number, b: number) => {
+        const keyA = getUvCoordKey(uvs, a)
+        const keyB = getUvCoordKey(uvs, b)
+        return keyA < keyB ? `${keyA}|${keyB}` : `${keyB}|${keyA}`
+    }, [getUvCoordKey])
+
+    const getConnectedUvBlockIndices = useCallback((geoset: any, seedFaceIndices: number[]) => {
+        const uvs = getGeosetUVs(geoset)
+        const faces = geoset?.Faces
+        if (!uvs || !faces || seedFaceIndices.length === 0) return [] as number[]
+
+        const faceCount = Math.floor(faces.length / 3)
+        const edgeToFaces = new Map<string, number[]>()
+
+        for (let faceIndex = 0; faceIndex < faceCount; faceIndex++) {
+            const base = faceIndex * 3
+            const i0 = Number(faces[base])
+            const i1 = Number(faces[base + 1])
+            const i2 = Number(faces[base + 2])
+
+            ;[
+                getUvEdgeKey(uvs, i0, i1),
+                getUvEdgeKey(uvs, i1, i2),
+                getUvEdgeKey(uvs, i2, i0)
+            ].forEach((edgeKey) => {
+                const linkedFaces = edgeToFaces.get(edgeKey)
+                if (linkedFaces) linkedFaces.push(faceIndex)
+                else edgeToFaces.set(edgeKey, [faceIndex])
+            })
+        }
+
+        const queue = [...new Set(seedFaceIndices.filter((faceIndex) => faceIndex >= 0 && faceIndex < faceCount))]
+        const visitedFaces = new Set<number>(queue)
+
+        while (queue.length > 0) {
+            const faceIndex = queue.shift() as number
+            const base = faceIndex * 3
+            const i0 = Number(faces[base])
+            const i1 = Number(faces[base + 1])
+            const i2 = Number(faces[base + 2])
+
+            ;[
+                getUvEdgeKey(uvs, i0, i1),
+                getUvEdgeKey(uvs, i1, i2),
+                getUvEdgeKey(uvs, i2, i0)
+            ].forEach((edgeKey) => {
+                const linkedFaces = edgeToFaces.get(edgeKey) || []
+                linkedFaces.forEach((linkedFaceIndex) => {
+                    if (!visitedFaces.has(linkedFaceIndex)) {
+                        visitedFaces.add(linkedFaceIndex)
+                        queue.push(linkedFaceIndex)
+                    }
+                })
+            })
+        }
+
+        const selectedSet = new Set<number>()
+        visitedFaces.forEach((faceIndex) => {
+            const base = faceIndex * 3
+            selectedSet.add(Number(faces[base]))
+            selectedSet.add(Number(faces[base + 1]))
+            selectedSet.add(Number(faces[base + 2]))
+        })
+
+        return Array.from(selectedSet)
+    }, [getGeosetUVs, getUvEdgeKey])
     const getSelectionCenter = useCallback(() => {
         if (!modelData?.Geosets || selectedUVs.length === 0) return null
 
@@ -292,7 +365,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
         })
 
         setRenderTick(t => t + 1)
-    }, [modelData, selectedUVs, zoom, getGeosetUVs])
+    }, [modelData, selectedUVs, zoom, getGeosetUVs, snapTranslateEnabled, snapTranslateStep])
 
     const applyScale = useCallback((dx: number, dy: number) => {
         if (!modelData?.Geosets) return
@@ -341,7 +414,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
         if (!canvas) return
 
         // Rotation angle based on mouse movement (negative for correct direction)
-        let angle = -(dx - dy) * 0.01 // Radians
+        let angle = (dx - dy) * 0.01 // Radians
         if (snapRotateEnabled && snapRotateStep > 0) {
             const snap = snapDragRef.current
             const angleDeg = angle * 180 / Math.PI
@@ -370,7 +443,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
         })
 
         setRenderTick(t => t + 1)
-    }, [modelData, selectedUVs, getSelectionCenter, getGeosetUVs])
+    }, [modelData, selectedUVs, getSelectionCenter, getGeosetUVs, snapRotateEnabled, snapRotateStep])
 
     const mirrorHorizontal = useCallback(() => {
         if (!modelData?.Geosets) return
@@ -464,8 +537,11 @@ const UVEditor: React.FC<UVEditorProps> = ({
                 if (!uvs || !geoset.Faces) return
                 const faces = geoset.Faces
 
-                ctx.strokeStyle = '#0af'
-                ctx.lineWidth = 1
+                const selection = selectedUVs.find(sel => sel.geosetIndex === geosetIndex)
+                const selectedSet = new Set(selection?.indices || [])
+
+                ctx.strokeStyle = '#ffffff'
+                ctx.lineWidth = 0.75
                 ctx.beginPath()
                 for (let i = 0; i < faces.length; i += 3) {
                     const i0 = Number(faces[i]), i1 = Number(faces[i + 1]), i2 = Number(faces[i + 2])
@@ -476,14 +552,72 @@ const UVEditor: React.FC<UVEditorProps> = ({
                 }
                 ctx.stroke()
 
+                if (selectedSet.size > 0 && faces) {
+                    if (uvSubMode === 'edge') {
+                        ctx.strokeStyle = '#ffd400'
+                        ctx.lineWidth = 1.7
+                        ctx.beginPath()
+                        for (let i = 0; i < faces.length; i += 3) {
+                            const i0 = Number(faces[i]), i1 = Number(faces[i + 1]), i2 = Number(faces[i + 2])
+                            const uv0 = uvToCanvas(Number(uvs[i0 * 2]), Number(uvs[i0 * 2 + 1]))
+                            const uv1 = uvToCanvas(Number(uvs[i1 * 2]), Number(uvs[i1 * 2 + 1]))
+                            const uv2 = uvToCanvas(Number(uvs[i2 * 2]), Number(uvs[i2 * 2 + 1]))
+                            if (selectedSet.has(i0) && selectedSet.has(i1)) {
+                                ctx.moveTo(uv0.x, uv0.y)
+                                ctx.lineTo(uv1.x, uv1.y)
+                            }
+                            if (selectedSet.has(i1) && selectedSet.has(i2)) {
+                                ctx.moveTo(uv1.x, uv1.y)
+                                ctx.lineTo(uv2.x, uv2.y)
+                            }
+                            if (selectedSet.has(i2) && selectedSet.has(i0)) {
+                                ctx.moveTo(uv2.x, uv2.y)
+                                ctx.lineTo(uv0.x, uv0.y)
+                            }
+                        }
+                        ctx.stroke()
+                    } else if (uvSubMode === 'face' || uvSubMode === 'group' || uvSubMode === 'block') {
+                        const fillColor = uvSubMode === 'group'
+                            ? 'rgba(0, 220, 255, 0.18)'
+                            : uvSubMode === 'block'
+                                ? 'rgba(255, 72, 128, 0.18)'
+                                : 'rgba(255, 208, 0, 0.22)'
+                        const strokeColor = uvSubMode === 'group'
+                            ? '#2fe7ff'
+                            : uvSubMode === 'block'
+                                ? '#ff5f8f'
+                                : '#ffd400'
+                        ctx.fillStyle = fillColor
+                        ctx.strokeStyle = strokeColor
+                        ctx.lineWidth = uvSubMode === 'group' ? 1.6 : uvSubMode === 'block' ? 1.5 : 1.3
+                        for (let i = 0; i < faces.length; i += 3) {
+                            const i0 = Number(faces[i]), i1 = Number(faces[i + 1]), i2 = Number(faces[i + 2])
+                            if (!selectedSet.has(i0) || !selectedSet.has(i1) || !selectedSet.has(i2)) continue
+                            const uv0 = uvToCanvas(Number(uvs[i0 * 2]), Number(uvs[i0 * 2 + 1]))
+                            const uv1 = uvToCanvas(Number(uvs[i1 * 2]), Number(uvs[i1 * 2 + 1]))
+                            const uv2 = uvToCanvas(Number(uvs[i2 * 2]), Number(uvs[i2 * 2 + 1]))
+                            ctx.beginPath()
+                            ctx.moveTo(uv0.x, uv0.y)
+                            ctx.lineTo(uv1.x, uv1.y)
+                            ctx.lineTo(uv2.x, uv2.y)
+                            ctx.closePath()
+                            ctx.fill()
+                            ctx.stroke()
+                        }
+                    }
+                }
+
                 // Vertices
                 const vertexCount = uvs.length / 2
                 for (let i = 0; i < vertexCount; i++) {
                     const pos = uvToCanvas(uvs[i * 2] as number, uvs[i * 2 + 1] as number)
-                    const isSelected = selectedUVs.some(sel => sel.geosetIndex === geosetIndex && sel.indices.includes(i))
+                    const isSelected = selectedSet.has(i)
                     ctx.beginPath()
-                    ctx.arc(pos.x, pos.y, 2.5, 0, Math.PI * 2)
-                    ctx.fillStyle = isSelected ? '#fff000' : '#00aaff'
+                    const radius = uvSubMode === 'vertex'
+                        ? (isSelected ? 2.2 : 1.5)
+                        : (isSelected ? 1.5 : 1.0)
+                    ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2)
+                    ctx.fillStyle = isSelected ? '#ff3b30' : '#1aa8ff'
                     ctx.fill()
                 }
             })
@@ -536,17 +670,12 @@ const UVEditor: React.FC<UVEditorProps> = ({
                 ctx.strokeRect(cp.x + 8, cp.y - 8 - xySize, xySize, xySize)
 
             } else if (transformMode === 'rotate') {
-                // Rotate Gizmo: Circle
-                const radius = 40
-                ctx.strokeStyle = (hoveredAxis === 'xy' || activeAxis === 'xy') ? '#66aaff' : '#4488ff'
-                ctx.lineWidth = 3
+                // Rotate Gizmo: Simple circle
+                const radius = 42
+                ctx.strokeStyle = (hoveredAxis === 'xy' || activeAxis === 'xy') ? '#ff7a70' : '#ff3b30'
+                ctx.lineWidth = 2.5
                 ctx.beginPath()
                 ctx.arc(cp.x, cp.y, radius, 0, Math.PI * 2)
-                ctx.stroke()
-
-                // Arc indicator
-                ctx.beginPath()
-                ctx.arc(cp.x, cp.y, radius - 5, -Math.PI / 4, Math.PI / 4)
                 ctx.stroke()
 
             } else if (transformMode === 'scale') {
@@ -855,8 +984,27 @@ const UVEditor: React.FC<UVEditorProps> = ({
                                 selectedSet.add(i)
                             }
                         }
-                    }
+                    } else if (uvSubMode === 'block' && faces) {
+                        const seedFaceIndices: number[] = []
+                        for (let i = 0; i < faces.length; i += 3) {
+                            const faceIndex = i / 3
+                            const i0 = Number(faces[i])
+                            const i1 = Number(faces[i + 1])
+                            const i2 = Number(faces[i + 2])
 
+                            const anyInBox = isInBox(Number(uvs[i0 * 2]), Number(uvs[i0 * 2 + 1])) ||
+                                isInBox(Number(uvs[i1 * 2]), Number(uvs[i1 * 2 + 1])) ||
+                                isInBox(Number(uvs[i2 * 2]), Number(uvs[i2 * 2 + 1]))
+
+                            if (anyInBox) {
+                                seedFaceIndices.push(faceIndex)
+                            }
+                        }
+
+                        getConnectedUvBlockIndices(geoset, seedFaceIndices).forEach((index) => {
+                            selectedSet.add(index)
+                        })
+                    }
                     if (selectedSet.size > 0) {
                         newSelections.push({ geosetIndex, indices: Array.from(selectedSet) })
                     }
@@ -911,7 +1059,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
         setSelectionStart(null)
         setSelectionEnd(null)
         setDragStart(null)
-    }, [isSelecting, selectionStart, selectionEnd, modelData, visibleGeosetIds, uvToCanvas, isDragging, selectedUVs, syncToStore, uvSubMode])
+    }, [isSelecting, selectionStart, selectionEnd, modelData, visibleGeosetIds, uvToCanvas, isDragging, selectedUVs, syncToStore, uvSubMode, getConnectedUvBlockIndices])
 
     // -------------------------------------------------------------------------
     // EFFECTS
@@ -927,7 +1075,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
                     undo()
                     return true
                 },
-                { isActive: isUvMode, priority: 10 }
+                { isActive: isUvMode, priority: 100 }
             ),
             registerShortcutHandler(
                 'edit.redo',
@@ -935,7 +1083,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
                     redo()
                     return true
                 },
-                { isActive: isUvMode, priority: 10 }
+                { isActive: isUvMode, priority: 100 }
             ),
             registerShortcutHandler(
                 'transform.translate',
@@ -943,7 +1091,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
                     setTransformMode('translate')
                     return true
                 },
-                { isActive: isUvMode, priority: 10 }
+                { isActive: isUvMode, priority: 100 }
             ),
             registerShortcutHandler(
                 'transform.rotate',
@@ -951,7 +1099,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
                     setTransformMode('rotate')
                     return true
                 },
-                { isActive: isUvMode, priority: 10 }
+                { isActive: isUvMode, priority: 100 }
             ),
             registerShortcutHandler(
                 'transform.scale',
@@ -959,11 +1107,32 @@ const UVEditor: React.FC<UVEditorProps> = ({
                     setTransformMode('scale')
                     return true
                 },
-                { isActive: isUvMode, priority: 10 }
+                { isActive: isUvMode, priority: 100 }
             )
         ]
 
+        const handleUvKeyDown = (event: KeyboardEvent) => {
+            if (useSelectionStore.getState().mainMode !== 'uv') return
+            const key = event.key.toLowerCase()
+            if (key === 'w') {
+                setTransformMode('translate')
+                event.preventDefault()
+                event.stopPropagation()
+            } else if (key === 'e') {
+                setTransformMode('rotate')
+                event.preventDefault()
+                event.stopPropagation()
+            } else if (key === 'r') {
+                setTransformMode('scale')
+                event.preventDefault()
+                event.stopPropagation()
+            }
+        }
+
+        window.addEventListener('keydown', handleUvKeyDown, true)
+
         return () => {
+            window.removeEventListener('keydown', handleUvKeyDown, true)
             unsubscribeHandlers.forEach((unsubscribe) => unsubscribe())
         }
     }, [undo, redo])
@@ -1153,7 +1322,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
         >
             {/* Toolbar */}
             <div style={toolbarStyle}>
-                {/* Sub-mode: Vertex/Edge/Face/Group */}
+                {/* Sub-mode: Vertex/Edge/Face/Group/Block */}
                 <Tooltip title="选择顶点">
                     <Button size="small" icon={<BorderOutlined />} style={uvSubMode === 'vertex' ? btnActiveStyle : btnStyle} onClick={() => setUvSubMode('vertex')} />
                 </Tooltip>
@@ -1165,6 +1334,25 @@ const UVEditor: React.FC<UVEditorProps> = ({
                 </Tooltip>
                 <Tooltip title="选择组">
                     <Button size="small" icon={<GroupOutlined />} style={uvSubMode === 'group' ? btnActiveStyle : btnStyle} onClick={() => setUvSubMode('group')} />
+                </Tooltip>
+
+                <Tooltip title="选择块">
+                    <Button size="small" style={uvSubMode === 'block' ? btnActiveStyle : btnStyle} onClick={() => setUvSubMode('block')}>块</Button>
+                </Tooltip>
+
+                <div style={{ width: '1px', backgroundColor: '#555', margin: '0 4px' }} />
+
+                <Tooltip title="框选/选择">
+                    <Button size="small" icon={<SelectOutlined />} style={transformMode === 'select' ? btnActiveStyle : btnStyle} onClick={() => setTransformMode('select')} />
+                </Tooltip>
+                <Tooltip title="移动 (W)">
+                    <Button size="small" icon={<DragOutlined />} style={transformMode === 'translate' ? btnActiveStyle : btnStyle} onClick={() => setTransformMode('translate')} />
+                </Tooltip>
+                <Tooltip title="旋转 (E)">
+                    <Button size="small" icon={<RotateLeftOutlined />} style={transformMode === 'rotate' ? btnActiveStyle : btnStyle} onClick={() => setTransformMode('rotate')} />
+                </Tooltip>
+                <Tooltip title="缩放 (R)">
+                    <Button size="small" icon={<ColumnWidthOutlined />} style={transformMode === 'scale' ? btnActiveStyle : btnStyle} onClick={() => setTransformMode('scale')} />
                 </Tooltip>
 
                 <div style={{ width: '1px', backgroundColor: '#555', margin: '0 4px' }} />
@@ -1292,4 +1480,13 @@ const UVEditor: React.FC<UVEditorProps> = ({
 }
 
 export default UVEditor
+
+
+
+
+
+
+
+
+
 

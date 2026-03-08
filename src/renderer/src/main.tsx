@@ -1,24 +1,23 @@
-import React from 'react'
+﻿import React from 'react'
 import ReactDOM from 'react-dom/client'
 import 'antd/dist/reset.css'
-import App from './App'
-import ModelOptimizeModal from './components/modals/ModelOptimizeModal'
-import CameraManagerModal from './components/modals/CameraManagerModal'
-import GeosetEditorModal from './components/modals/GeosetEditorModal'
-import GeosetVisibilityToolModal from './components/modals/GeosetVisibilityToolModal'
-import GeosetAnimationModal from './components/modals/GeosetAnimationModal'
-import TextureEditorModal from './components/modals/TextureEditorModal'
-import TextureAnimationManagerModal from './components/modals/TextureAnimationManagerModal'
-import MaterialEditorModal from './components/modals/MaterialEditorModal'
-import SequenceEditorModal from './components/modals/SequenceEditorModal'
-import GlobalSequenceModal from './components/modals/GlobalSequenceModal'
-import KeyframeEditor from './components/editors/KeyframeEditor'
 import './assets/index.css'
-import { parseMDX } from 'war3-model'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import { markStandalonePerf } from './utils/standalonePerf'
 
-// Tauri webview still has some "browser" accelerators (find/refresh/print, etc.).
-// We disable those so function keys (e.g. F3/F5) and app shortcuts aren't hijacked.
+const App = React.lazy(() => import('./App'))
+const ModelOptimizeModal = React.lazy(() => import('./components/modals/ModelOptimizeModal'))
+const CameraManagerModal = React.lazy(() => import('./components/modals/CameraManagerModal'))
+const GeosetEditorModal = React.lazy(() => import('./components/modals/GeosetEditorModal'))
+const GeosetVisibilityToolModal = React.lazy(() => import('./components/modals/GeosetVisibilityToolModal'))
+const GeosetAnimationModal = React.lazy(() => import('./components/modals/GeosetAnimationModal'))
+const TextureEditorModal = React.lazy(() => import('./components/modals/TextureEditorModal'))
+const TextureAnimationManagerModal = React.lazy(() => import('./components/modals/TextureAnimationManagerModal'))
+const MaterialEditorModal = React.lazy(() => import('./components/modals/MaterialEditorModal'))
+const SequenceEditorModal = React.lazy(() => import('./components/modals/SequenceEditorModal'))
+const GlobalSequenceModal = React.lazy(() => import('./components/modals/GlobalSequenceModal'))
+const KeyframeEditor = React.lazy(() => import('./components/editors/KeyframeEditor'))
+
 const installBrowserGuards = () => {
     window.addEventListener(
         'keydown',
@@ -27,25 +26,22 @@ const installBrowserGuards = () => {
             const ctrlOrMeta = e.ctrlKey || e.metaKey
             const lower = typeof key === 'string' ? key.toLowerCase() : ''
 
-            // Never allow refresh/print/find navigations.
             const shouldBlock =
-                key === 'F3' || // browser find-next in some shells
-                key === 'F5' || // refresh
-                (ctrlOrMeta && (lower === 'r' || lower === 'p' || lower === 'f' || lower === 'g')) || // refresh/print/find/find-next
-                (ctrlOrMeta && key === 'F5') || // hard refresh variant
-                (e.altKey && (key === 'ArrowLeft' || key === 'ArrowRight')) || // back/forward navigation
-                key === 'ContextMenu' || // keyboard context menu key
-                (e.shiftKey && key === 'F10') // keyboard context menu shortcut
+                key === 'F3' ||
+                key === 'F5' ||
+                (ctrlOrMeta && (lower === 'r' || lower === 'p' || lower === 'f' || lower === 'g')) ||
+                (ctrlOrMeta && key === 'F5') ||
+                (e.altKey && (key === 'ArrowLeft' || key === 'ArrowRight')) ||
+                key === 'ContextMenu' ||
+                (e.shiftKey && key === 'F10')
 
             if (shouldBlock) {
-                // Prevent the webview's default behavior while still letting our own shortcut handlers run.
                 e.preventDefault()
             }
         },
         true
     )
 
-    // Disable the default webview context menu (refresh/print/etc). App provides its own context menus.
     document.addEventListener(
         'contextmenu',
         (e) => {
@@ -55,167 +51,143 @@ const installBrowserGuards = () => {
     )
 }
 
-// Suppress specific debug logs in production
-const suppressedPrefixes = ['[Particles]', '[initShaders]', '[ModelRenderer]'];
-const originalLog = console.log;
-const originalWarn = console.warn;
+const suppressedPrefixes = ['[Particles]', '[initShaders]', '[ModelRenderer]']
+const originalLog = console.log
+const originalWarn = console.warn
 
 console.log = (...args: any[]) => {
     if (typeof args[0] === 'string' && suppressedPrefixes.some(p => args[0].startsWith(p))) {
-        return;
+        return
     }
-    originalLog(...args);
-};
+    originalLog(...args)
+}
 
 console.warn = (...args: any[]) => {
     if (typeof args[0] === 'string' && suppressedPrefixes.some(p => args[0].startsWith(p))) {
-        return;
+        return
     }
-    originalWarn(...args);
-};
-
-console.log('war3-model loaded:', parseMDX)
+    originalWarn(...args)
+}
 
 installBrowserGuards()
 
-// Simple Router based on Tauri Window URL
-const searchParams = new URLSearchParams(window.location.search);
-const targetWindow = searchParams.get('window');
+const searchParams = new URLSearchParams(window.location.search)
+const targetWindow = searchParams.get('window')
 
-let RootComponent = <App />;
+markStandalonePerf(targetWindow ? 'standalone_entry_selected' : 'main_entry_selected', {
+    targetWindow: targetWindow || 'main',
+})
 
-if (targetWindow === 'modelOptimize') {
-    RootComponent = (
-        <React.Suspense fallback={null}>
-            <ModelOptimizeModal
-                visible={true}
-                onClose={() => getCurrentWindow().hide()}
-                modelData={null}
-                isStandalone={true}
-            />
-        </React.Suspense>
-    );
-} else if (targetWindow === 'cameraManager') {
-    RootComponent = (
-        <React.Suspense fallback={null}>
-            <CameraManagerModal
-                visible={true}
-                onClose={() => getCurrentWindow().hide()}
-                isStandalone={true}
-            />
-        </React.Suspense>
-    );
-} else if (targetWindow === 'geosetEditor') {
-    RootComponent = (
-        <React.Suspense fallback={null}>
-            <GeosetEditorModal
-                visible={true}
-                onClose={() => getCurrentWindow().hide()}
-                isStandalone={true}
-            />
-        </React.Suspense>
-    );
-} else if (targetWindow === 'geosetVisibilityTool') {
-    RootComponent = (
-        <React.Suspense fallback={null}>
-            <GeosetVisibilityToolModal
-                visible={true}
-                onClose={() => getCurrentWindow().hide()}
-                isStandalone={true}
-            />
-        </React.Suspense>
-    );
-} else if (targetWindow === 'geosetAnimManager') {
-    RootComponent = (
-        <React.Suspense fallback={null}>
-            <GeosetAnimationModal
-                visible={true}
-                onClose={() => getCurrentWindow().hide()}
-                isStandalone={true}
-            />
-        </React.Suspense>
-    );
-} else if (targetWindow === 'textureManager') {
-    RootComponent = (
-        <React.Suspense fallback={null}>
-            <TextureEditorModal
-                visible={true}
-                onClose={() => getCurrentWindow().hide()}
-                isStandalone={true}
-            />
-        </React.Suspense>
-    );
-} else if (targetWindow === 'textureAnimManager') {
-    RootComponent = (
-        <React.Suspense fallback={null}>
-            <TextureAnimationManagerModal
-                visible={true}
-                onClose={() => getCurrentWindow().hide()}
-                isStandalone={true}
-            />
-        </React.Suspense>
-    );
-} else if (targetWindow === 'materialManager') {
-    RootComponent = (
-        <React.Suspense fallback={null}>
-            <MaterialEditorModal
-                visible={true}
-                onClose={() => getCurrentWindow().hide()}
-                isStandalone={true}
-            />
-        </React.Suspense>
-    );
-} else if (targetWindow === 'sequenceManager') {
-    RootComponent = (
-        <React.Suspense fallback={null}>
-            <SequenceEditorModal
-                visible={true}
-                onClose={() => getCurrentWindow().hide()}
-                isStandalone={true}
-            />
-        </React.Suspense>
-    );
-} else if (targetWindow === 'globalSequenceManager') {
-    RootComponent = (
-        <React.Suspense fallback={null}>
-            <GlobalSequenceModal
-                visible={true}
-                onClose={() => getCurrentWindow().hide()}
-                isStandalone={true}
-            />
-        </React.Suspense>
-    );
-} else if (targetWindow?.startsWith('keyframeEditor')) {
-    RootComponent = (
-        <React.Suspense fallback={null}>
-            <KeyframeEditor
-                visible={true}
-                onCancel={() => getCurrentWindow().hide()}
-                onOk={() => { }}
-                initialData={null}
-                isStandalone={true}
-            />
-        </React.Suspense>
-    );
-}
-
-ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
-    RootComponent
+const renderWithinSuspense = (node: React.ReactNode) => (
+    <React.Suspense fallback={null}>
+        {node}
+    </React.Suspense>
 )
 
-// Show the window now that React has mounted (window starts hidden via visible:false)
-// Also remove the inline skeleton that was visible during JS loading
+let RootComponent = renderWithinSuspense(<App />)
+
+if (targetWindow === 'modelOptimize') {
+    RootComponent = renderWithinSuspense(
+        <ModelOptimizeModal
+            visible={true}
+            onClose={() => getCurrentWindow().hide()}
+            modelData={null}
+            isStandalone={true}
+        />
+    )
+} else if (targetWindow === 'cameraManager') {
+    RootComponent = renderWithinSuspense(
+        <CameraManagerModal
+            visible={true}
+            onClose={() => getCurrentWindow().hide()}
+            isStandalone={true}
+        />
+    )
+} else if (targetWindow === 'geosetEditor') {
+    RootComponent = renderWithinSuspense(
+        <GeosetEditorModal
+            visible={true}
+            onClose={() => getCurrentWindow().hide()}
+            isStandalone={true}
+        />
+    )
+} else if (targetWindow === 'geosetVisibilityTool') {
+    RootComponent = renderWithinSuspense(
+        <GeosetVisibilityToolModal
+            visible={true}
+            onClose={() => getCurrentWindow().hide()}
+            isStandalone={true}
+        />
+    )
+} else if (targetWindow === 'geosetAnimManager') {
+    RootComponent = renderWithinSuspense(
+        <GeosetAnimationModal
+            visible={true}
+            onClose={() => getCurrentWindow().hide()}
+            isStandalone={true}
+        />
+    )
+} else if (targetWindow === 'textureManager') {
+    RootComponent = renderWithinSuspense(
+        <TextureEditorModal
+            visible={true}
+            onClose={() => getCurrentWindow().hide()}
+            isStandalone={true}
+        />
+    )
+} else if (targetWindow === 'textureAnimManager') {
+    RootComponent = renderWithinSuspense(
+        <TextureAnimationManagerModal
+            visible={true}
+            onClose={() => getCurrentWindow().hide()}
+            isStandalone={true}
+        />
+    )
+} else if (targetWindow === 'materialManager') {
+    RootComponent = renderWithinSuspense(
+        <MaterialEditorModal
+            visible={true}
+            onClose={() => getCurrentWindow().hide()}
+            isStandalone={true}
+        />
+    )
+} else if (targetWindow === 'sequenceManager') {
+    RootComponent = renderWithinSuspense(
+        <SequenceEditorModal
+            visible={true}
+            onClose={() => getCurrentWindow().hide()}
+            isStandalone={true}
+        />
+    )
+} else if (targetWindow === 'globalSequenceManager') {
+    RootComponent = renderWithinSuspense(
+        <GlobalSequenceModal
+            visible={true}
+            onClose={() => getCurrentWindow().hide()}
+            isStandalone={true}
+        />
+    )
+} else if (targetWindow?.startsWith('keyframeEditor')) {
+    RootComponent = renderWithinSuspense(
+        <KeyframeEditor
+            visible={true}
+            onCancel={() => getCurrentWindow().hide()}
+            onOk={() => { }}
+            initialData={null}
+            isStandalone={true}
+        />
+    )
+}
+
+ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(RootComponent)
+
 if (targetWindow) {
-    // Standalone windows: just remove skeleton, do NOT `.show()` it here! 
-    // It is a preloaded window that should stay hidden until `WindowManager.openToolWindow()` is called.
     const skeleton = document.getElementById('app-skeleton')
     if (skeleton) skeleton.remove()
 } else {
-    // Main window: slightly delay show to hide heavy 3D engine initialization
     requestAnimationFrame(() => {
         const skeleton = document.getElementById('app-skeleton')
         if (skeleton) skeleton.remove()
         getCurrentWindow().show().catch(() => { })
     })
 }
-

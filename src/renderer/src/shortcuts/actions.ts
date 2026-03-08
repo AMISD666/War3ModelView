@@ -173,7 +173,7 @@ export const shortcutActions: ShortcutAction[] = [
     },
     {
         id: 'editor.globalSequenceManager',
-        label: '模型全局动作管理器',
+        label: '全局动作管理器',
         category: '编辑器',
         contexts: ['global'],
         defaultBindings: ['L']

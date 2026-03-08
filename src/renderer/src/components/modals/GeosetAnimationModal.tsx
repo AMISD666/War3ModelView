@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react'
+﻿import React, { useState, useEffect, useRef } from 'react'
 import { List, Checkbox, Button, Select, ColorPicker, Card, Typography, message } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { DraggableModal } from '../DraggableModal';
@@ -9,7 +9,7 @@ import { PlusOutlined, EditOutlined, DeleteOutlined, CloseOutlined } from '@ant-
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useRpcClient } from '../../hooks/useRpc'
-import { emit, listen } from '@tauri-apps/api/event'
+import { listen } from '@tauri-apps/api/event'
 import { windowManager } from '../../utils/windowManager'
 
 const { Text } = Typography
@@ -23,13 +23,22 @@ interface GeosetAnimationModalProps {
 
 const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, onClose, isStandalone }) => {
     const { modelData, updateGeosetAnim, setGeosetAnims } = useModelStore()
-    const rpcClient = useRpcClient<any>('geosetAnimManager', isStandalone)
+    const rpcClient = useRpcClient<any>('geosetAnimManager', { geosets: [], geosetAnims: [], globalSequences: [], pickedGeosetIndex: null })
     const rpcState = rpcClient.state
 
     const [localAnims, setLocalAnims] = useState<any[]>([])
     const [selectedIndex, setSelectedIndex] = useState<number>(-1)
     const [geosets, setGeosets] = useState<any[]>([])
+    const listRef = useRef<HTMLDivElement>(null)
+
+    const scrollToItem = (index: number) => {
+        if (listRef.current && index >= 0) {
+            const itemHeight = 46
+            listRef.current.scrollTop = index * itemHeight
+        }
+    }
     const cloneAnimVector = (animVector: any, size: number) => {
+
         if (!animVector || typeof animVector !== 'object') return animVector
         const toArray = (val: any): number[] => {
             if (ArrayBuffer.isView(val)) return Array.from(val as ArrayLike<number>).slice(0, size)
@@ -102,34 +111,34 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
     useEffect(() => {
         if (!visible) return
 
-        // Read initial value immediately when modal opens
-        const initialPickedIndex = useSelectionStore.getState().pickedGeosetIndex
-        if (initialPickedIndex !== null && localAnims.length > 0) {
-            const matchingIndex = localAnims.findIndex((anim: any) => anim.GeosetId === initialPickedIndex)
+        const handlePickedGeoset = (pickedGeosetIndex: number | null) => {
+            if (pickedGeosetIndex === null || localAnims.length === 0) return
+            const matchingIndex = localAnims.findIndex((anim: any) => anim.GeosetId === pickedGeosetIndex)
             if (matchingIndex !== -1) {
                 setSelectedIndex(matchingIndex)
-                console.log('[GeosetAnimationEditor] Initial auto-selected animation', matchingIndex, 'for geoset', initialPickedIndex)
+                setTimeout(() => scrollToItem(matchingIndex), 0)
+                console.log('[GeosetAnimationEditor] Auto-selected animation', matchingIndex, 'for geoset', pickedGeosetIndex)
             }
         }
 
-        // Subscribe to future changes
+        if (isStandalone) {
+            handlePickedGeoset(typeof rpcState.pickedGeosetIndex === 'number' ? rpcState.pickedGeosetIndex : null)
+            return
+        }
+
+        const initialPickedIndex = useSelectionStore.getState().pickedGeosetIndex
+        handlePickedGeoset(initialPickedIndex)
+
         let lastPickedIndex: number | null = initialPickedIndex
         const unsubscribe = useSelectionStore.subscribe((state) => {
             const pickedGeosetIndex = state.pickedGeosetIndex
             if (pickedGeosetIndex !== lastPickedIndex) {
                 lastPickedIndex = pickedGeosetIndex
-                if (pickedGeosetIndex !== null && localAnims.length > 0) {
-                    // Find geoset animation that matches this geoset
-                    const matchingIndex = localAnims.findIndex((anim: any) => anim.GeosetId === pickedGeosetIndex)
-                    if (matchingIndex !== -1) {
-                        setSelectedIndex(matchingIndex)
-                        console.log('[GeosetAnimationEditor] Auto-selected animation', matchingIndex, 'for geoset', pickedGeosetIndex)
-                    }
-                }
+                handlePickedGeoset(pickedGeosetIndex)
             }
         })
         return unsubscribe
-    }, [visible, localAnims])
+    }, [visible, localAnims, isStandalone, rpcState.pickedGeosetIndex])
 
     const saveToBackend = (anims: any[]) => {
         if (isStandalone) {
@@ -312,9 +321,7 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
             payload.targetWindowId = windowId;
 
             // Emit instantly to update react state before visual native window paint
-            emit('IPC_KEYFRAME_INIT', payload);
-
-            windowManager.openToolWindow(windowId, payload.title, 600, 480);
+            void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload);
             // Legacy inline route, which we obsolete now but just in case
             console.warn("GeosetAnimationModal inline KeyframeEditor is obsolete. Use standalone");
         }
@@ -332,7 +339,7 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
         <>
             <div style={{ display: 'flex', height: '450px', border: '1px solid #4a4a4a', backgroundColor: '#252525' }}>
                 {/* List (Left) */}
-                <div style={{ width: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', backgroundColor: '#333333', borderRight: '1px solid #4a4a4a' }}>
+                <div ref={listRef} style={{ width: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', backgroundColor: '#333333', borderRight: '1px solid #4a4a4a' }}>
                     <div style={{ padding: '8px', borderBottom: '1px solid #4a4a4a' }}>
                         <Button
                             type="primary"
@@ -550,3 +557,5 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
 }
 
 export default GeosetAnimationModal
+
+

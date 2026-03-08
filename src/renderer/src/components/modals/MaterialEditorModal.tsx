@@ -3,7 +3,7 @@ import { Button, List, Card, Checkbox, Select, Typography, message } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { DraggableModal } from '../DraggableModal'
-import { emit, listen } from '@tauri-apps/api/event'
+import { listen } from '@tauri-apps/api/event'
 import { windowManager } from '../../utils/windowManager'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
@@ -11,6 +11,7 @@ import { useHistoryStore } from '../../store/historyStore'
 import { getDraggedTextureIndex } from '../../utils/textureDragDrop'
 import { useRpcClient } from '../../hooks/useRpc'
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
+import { markStandalonePerf, markStandalonePerfOnce } from '../../utils/standalonePerf'
 
 const { Text } = Typography
 
@@ -81,32 +82,71 @@ interface MaterialEditorModalProps {
     isStandalone?: boolean
 }
 
-const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onClose, isStandalone }) => {
-    // RPC hooks
-    const { state: rpcState, emitCommand } = useRpcClient<any>('materialManager', {
-        materials: [],
-        textures: [],
-        geosets: [],
-        globalSequences: [],
-        sequences: [],
-        modelPath: '',
-        pickedGeosetIndex: null
-    })
+interface MaterialManagerSnapshot {
+    materials: any[]
+    textures: any[]
+    geosets: any[]
+    globalSequences: number[]
+    sequences: any[]
+    modelPath: string
+}
 
+interface MaterialManagerRpcState {
+    snapshotVersion: number
+    snapshot: MaterialManagerSnapshot
+    pickedGeosetIndex: number | null
+}
+
+interface MaterialManagerPatch {
+    pickedGeosetIndex: number | null
+}
+
+const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onClose, isStandalone }) => {
+    const initialRpcState: MaterialManagerRpcState = {
+        snapshotVersion: 0,
+        snapshot: {
+            materials: [],
+            textures: [],
+            geosets: [],
+            globalSequences: [],
+            sequences: [],
+            modelPath: '',
+        },
+        pickedGeosetIndex: null,
+    }
+
+    const { state: rpcState, emitCommand } = useRpcClient<MaterialManagerRpcState, MaterialManagerPatch>(
+        'materialManager',
+        initialRpcState,
+        {
+            applyPatch: (previousState, patch) => {
+                const nextPickedGeosetIndex = patch?.pickedGeosetIndex ?? null
+                if (previousState.pickedGeosetIndex === nextPickedGeosetIndex) {
+                    return previousState
+                }
+                return {
+                    ...previousState,
+                    pickedGeosetIndex: nextPickedGeosetIndex,
+                }
+            }
+        }
+    )
+
+    const rpcSnapshot = rpcState.snapshot
     const directModelData = useModelStore((state) => state.modelData)
     const directModelPath = useModelStore((state) => state.modelPath)
     const directSetMaterials = useModelStore((state) => state.setMaterials)
     const directSetTextures = useModelStore((state) => state.setTextures)
 
     const modelData = isStandalone ? {
-        Materials: rpcState.materials,
-        Textures: rpcState.textures,
-        Geosets: rpcState.geosets,
-        GlobalSequences: rpcState.globalSequences,
-        Sequences: rpcState.sequences
+        Materials: rpcSnapshot.materials,
+        Textures: rpcSnapshot.textures,
+        Geosets: rpcSnapshot.geosets,
+        GlobalSequences: rpcSnapshot.globalSequences,
+        Sequences: rpcSnapshot.sequences
     } : directModelData
 
-    const modelPath = isStandalone ? rpcState.modelPath : directModelPath
+    const modelPath = isStandalone ? rpcSnapshot.modelPath : directModelPath
 
     const setMaterials = (materials: any[]) => {
         if (isStandalone) {
@@ -123,7 +163,6 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             directSetTextures(textures)
         }
     }
-
     const [localMaterials, setLocalMaterials] = useState<any[]>([])
     const [selectedMaterialIndex, setSelectedMaterialIndex] = useState<number>(-1)
     const [selectedLayerIndex, setSelectedLayerIndex] = useState<number>(-1)
@@ -151,6 +190,32 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     }, [dragOverLayerIndex])
 
     const lastRpcMaterialsRef = React.useRef<any>(null)
+    const lastHandledPickedGeosetRef = React.useRef<number | null | undefined>(undefined)
+
+    useEffect(() => {
+        if (!isStandalone) return
+        markStandalonePerf('child_runtime_mounted', { windowId: 'materialManager' })
+    }, [isStandalone])
+
+    useEffect(() => {
+        if (!isStandalone || !visible || localMaterials.length === 0) return
+        markStandalonePerfOnce('materialManager:first_content_rendered', 'first_content_rendered', {
+            windowId: 'materialManager',
+            materialCount: localMaterials.length,
+            selectedMaterialIndex,
+        })
+    }, [isStandalone, visible, localMaterials.length, selectedMaterialIndex])
+    const scrollMaterialToItem = (index: number) => {
+        if (!materialListRef.current || index < 0) return
+        const item = materialListRef.current.querySelector(`[data-material-index="${index}"]`) as HTMLElement | null
+        item?.scrollIntoView({ block: 'nearest' })
+    }
+
+    const scrollLayerToItem = (index: number) => {
+        if (!layerListRef.current || index < 0) return
+        const item = layerListRef.current.querySelector(`[data-layer-index="${index}"]`) as HTMLElement | null
+        item?.scrollIntoView({ block: 'nearest' })
+    }
 
     // Initialize local state
     useEffect(() => {
@@ -158,11 +223,11 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             const hasMaterials = modelData && modelData.Materials && modelData.Materials.length > 0
             // In standalone mode, rpcState.materials starts empty and arrives asynchronously.
             // We must re-initialize when a fresh, non-empty array arrives.
-            const rpcDataChanged = isStandalone && modelData?.Materials !== lastRpcMaterialsRef.current
+            const rpcDataChanged = isStandalone && rpcState.snapshotVersion !== lastRpcMaterialsRef.current
 
             if (hasMaterials && (!isInitialized.current || rpcDataChanged)) {
                 console.log('[MaterialEditorModal] Initializing local materials from store. Count:', modelData.Materials.length)
-                lastRpcMaterialsRef.current = modelData.Materials
+                lastRpcMaterialsRef.current = isStandalone ? rpcState.snapshotVersion : modelData.Materials
                 originalMaterialsRef.current = JSON.parse(JSON.stringify(modelData.Materials))
                 originalTexturesRef.current = JSON.parse(JSON.stringify(modelData.Textures || []))
                 isCommittingRef.current = false
@@ -171,9 +236,26 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                 // Convert Shading bitmask to boolean properties for UI display
                 const normalized = normalizeMaterialsForUI(JSON.parse(JSON.stringify(modelData.Materials)));
                 setLocalMaterials(normalized)
-                const firstMat = normalized[0]
-                setSelectedMaterialIndex(normalized.length > 0 ? 0 : -1)
-                setSelectedLayerIndex(firstMat && firstMat.Layers && firstMat.Layers.length > 0 ? 0 : -1)
+                if (!isInitialized.current) {
+                    const firstMat = normalized[0]
+                    setSelectedMaterialIndex(normalized.length > 0 ? 0 : -1)
+                    setSelectedLayerIndex(firstMat && firstMat.Layers && firstMat.Layers.length > 0 ? 0 : -1)
+                } else {
+                    const nextMaterialIndex =
+                        selectedMaterialIndex >= 0 && selectedMaterialIndex < normalized.length
+                            ? selectedMaterialIndex
+                            : (normalized.length > 0 ? 0 : -1)
+                    const nextMaterial =
+                        nextMaterialIndex >= 0 && nextMaterialIndex < normalized.length
+                            ? normalized[nextMaterialIndex]
+                            : null
+                    const nextLayerIndex =
+                        nextMaterial && nextMaterial.Layers && nextMaterial.Layers.length > 0
+                            ? (selectedLayerIndex >= 0 && selectedLayerIndex < nextMaterial.Layers.length ? selectedLayerIndex : 0)
+                            : -1
+                    setSelectedMaterialIndex(nextMaterialIndex)
+                    setSelectedLayerIndex(nextLayerIndex)
+                }
                 isInitialized.current = true
             }
         } else {
@@ -191,25 +273,37 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             didRealtimePreviewRef.current = false
             didRealtimeTexturePreviewRef.current = false
         }
-    }, [visible, modelData])
+    }, [visible, modelData, isStandalone, selectedMaterialIndex, selectedLayerIndex, rpcState.snapshotVersion])
 
     // Subscribe to Ctrl+Click geoset picking - auto-select material
     useEffect(() => {
         if (!visible || !modelData) return
 
-        let lastPickedIndex: number | null = null;
         let unsubscribe: (() => void) | null = null;
 
         const handlePickedGeoset = (pickedGeosetIndex: number | null) => {
-            if (pickedGeosetIndex !== lastPickedIndex) {
-                lastPickedIndex = pickedGeosetIndex;
-                if (pickedGeosetIndex !== null && modelData.Geosets && modelData.Geosets[pickedGeosetIndex]) {
-                    const materialId = modelData.Geosets[pickedGeosetIndex].MaterialID;
-                    if (materialId !== undefined && materialId >= 0 && materialId < localMaterials.length) {
-                        setSelectedMaterialIndex(materialId);
-                        setSelectedLayerIndex(-1);
-                        console.log('[MaterialEditor] Auto-selected material', materialId, 'for geoset', pickedGeosetIndex);
-                    }
+            if (pickedGeosetIndex === lastHandledPickedGeosetRef.current) {
+                return;
+            }
+
+            lastHandledPickedGeosetRef.current = pickedGeosetIndex;
+
+            if (pickedGeosetIndex !== null && modelData.Geosets && modelData.Geosets[pickedGeosetIndex]) {
+                const materialId = modelData.Geosets[pickedGeosetIndex].MaterialID;
+                if (materialId !== undefined && materialId >= 0 && materialId < localMaterials.length) {
+                    const pickedMaterial = localMaterials[materialId];
+                    const nextLayerIndex =
+                        pickedMaterial && pickedMaterial.Layers && pickedMaterial.Layers.length > 0
+                            ? ((materialId === selectedMaterialIndex && selectedLayerIndex >= 0 && selectedLayerIndex < pickedMaterial.Layers.length)
+                                ? selectedLayerIndex
+                                : 0)
+                            : -1;
+                    setSelectedMaterialIndex(materialId);
+                    setSelectedLayerIndex(nextLayerIndex);
+                    setTimeout(() => {
+                        scrollMaterialToItem(materialId)
+                        if (nextLayerIndex >= 0) scrollLayerToItem(nextLayerIndex)
+                    }, 0);
                 }
             }
         };
@@ -226,7 +320,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         return () => {
             if (unsubscribe) unsubscribe();
         };
-    }, [visible, modelData, localMaterials.length, isStandalone ? rpcState.pickedGeosetIndex : null])
+    }, [visible, modelData, localMaterials, selectedMaterialIndex, selectedLayerIndex, isStandalone ? rpcState.pickedGeosetIndex : null, isStandalone ? rpcState.snapshotVersion : null])
 
     const handleOk = () => {
         // Convert boolean flags back to Shading bitmask before saving
@@ -497,8 +591,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
         payload.targetWindowId = windowId;
 
-        emit('IPC_KEYFRAME_INIT', payload);
-        windowManager.openToolWindow(windowId, payload.title, 600, 480);
+        void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload);
     }
 
     const handleAnimToggle = (field: string, checked: boolean, vectorSize: number = 1) => {
@@ -877,6 +970,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                             dataSource={localMaterials}
                             renderItem={(_item: any, index: number) => (
                                 <List.Item
+                                    data-material-index={index}
                                     onClick={() => {
                                         setSelectedMaterialIndex(index)
                                         const mats = localMaterials[index]
@@ -1124,7 +1218,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 
     if (isStandalone) {
         return (
-            <StandaloneWindowFrame title="材质编辑器" onClose={handleCancel}>
+            <StandaloneWindowFrame title="材质管理器" onClose={handleCancel}>
                 <div style={{ flex: 1, padding: 0, overflow: 'hidden' }}>
                     {innerContent}
                 </div>
@@ -1134,7 +1228,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 
     return (
         <DraggableModal
-            title="材质编辑器 (Material Editor)"
+            title="材质管理器 (Material Editor)"
             open={visible}
             onOk={handleOk}
             onCancel={handleCancel}
@@ -1151,3 +1245,10 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 }
 
 export default MaterialEditorModal
+
+
+
+
+
+
+

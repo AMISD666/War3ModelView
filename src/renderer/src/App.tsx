@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react'
+﻿import { useEffect, useMemo, useState } from 'react'
 import MainLayoutNew from './components/MainLayoutNew'
 import ActivationModal from './components/modals/ActivationModal'
+import StandaloneToolWindowRouter, { isStandaloneToolWindowLabel } from './components/detached/StandaloneToolWindowRouter'
 import { initDebugLogging } from './utils/debugLog'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { exit } from '@tauri-apps/plugin-process'
+import { windowManager } from './utils/WindowManager'
 
 interface ActivationStatus {
     is_activated: boolean
@@ -15,23 +17,32 @@ interface ActivationStatus {
 }
 
 function App(): JSX.Element {
-    // Start as null (unknown), render main UI optimistically
     const [isActivated, setIsActivated] = useState<boolean | null>(null)
+    const standaloneWindowLabel = useMemo(() => {
+        if (typeof window === 'undefined') return null
+        const params = new URLSearchParams(window.location.search)
+        const windowLabel = params.get('window')
+        return isStandaloneToolWindowLabel(windowLabel) ? windowLabel : null
+    }, [])
 
     useEffect(() => {
         initDebugLogging()
+
+        if (standaloneWindowLabel) {
+            return
+        }
+
         checkActivation()
 
-        // When the main window closes, forcefully exit the entire application 
-        // to prevent preloaded background windows from keeping the process alive.
         const unlistenPromise = getCurrentWindow().onCloseRequested(async () => {
-            await exit(0);
-        });
+            await windowManager.destroyAllWindows().catch(console.error)
+            await exit(0)
+        })
 
         return () => {
-            unlistenPromise.then(unlisten => unlisten()).catch(console.error);
+            unlistenPromise.then(unlisten => unlisten()).catch(console.error)
         }
-    }, [])
+    }, [standaloneWindowLabel])
 
     const checkActivation = async () => {
         try {
@@ -47,12 +58,14 @@ function App(): JSX.Element {
         setIsActivated(true)
     }
 
+    if (standaloneWindowLabel) {
+        return <StandaloneToolWindowRouter windowLabel={standaloneWindowLabel} />
+    }
+
     return (
         <>
-            {/* Always render main layout immediately — no blocking spinner */}
             <MainLayoutNew />
 
-            {/* Overlay activation modal only after check confirms not activated */}
             {isActivated === false && (
                 <ActivationModal
                     open={true}
@@ -64,4 +77,3 @@ function App(): JSX.Element {
 }
 
 export default App
-

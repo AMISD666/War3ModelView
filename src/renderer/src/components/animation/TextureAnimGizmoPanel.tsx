@@ -1,4 +1,4 @@
-﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Select, Tooltip, Typography } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import {
@@ -13,7 +13,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useHistoryStore } from '../../store/historyStore'
-import { emit, listen } from '@tauri-apps/api/event'
+import { listen } from '@tauri-apps/api/event'
 import { windowManager } from '../../utils/windowManager'
 import { GlobalSequenceSelect } from '../common/GlobalSequenceSelect'
 import RightFloatingPanelShell from './RightFloatingPanelShell'
@@ -873,8 +873,7 @@ const TextureAnimGizmoPanel: React.FC = () => {
         const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
         payload.targetWindowId = windowId;
 
-        emit('IPC_KEYFRAME_INIT', payload);
-        windowManager.openToolWindow(windowId, payload.title, 600, 480);
+        void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload);
     }, [ensureSelection, currentTrackEditorData, activeTrackMeta, trackEditorVectorSize, modelData])
 
     const handleSaveTrackEditor = useCallback((animVector: any) => {

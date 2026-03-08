@@ -1,10 +1,10 @@
-﻿import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Typography, Select, Button, ColorPicker, Input, Tooltip } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useModelStore } from '../../store/modelStore'
 import { useHistoryStore } from '../../store/historyStore'
-import { emit, listen } from '@tauri-apps/api/event'
+import { listen } from '@tauri-apps/api/event'
 import { windowManager } from '../../utils/windowManager'
 import RightFloatingPanelShell from './RightFloatingPanelShell'
 
@@ -439,8 +439,7 @@ const GeosetAnimPanel: React.FC = () => {
         const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
         payload.targetWindowId = windowId;
 
-        emit('IPC_KEYFRAME_INIT', payload);
-        windowManager.openToolWindow(windowId, payload.title, 600, 480);
+        void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload);
     }, [activeGeosetAnim, currentGeosetAlpha, currentGeosetColor, modelData]);
 
     useEffect(() => {

@@ -4,6 +4,7 @@ import { SmartInputNumber as InputNumber } from '../common/SmartInputNumber'
 import type { MenuProps } from 'antd'
 import { PlusOutlined, DeleteOutlined, FolderOpenOutlined, DatabaseOutlined, ReloadOutlined } from '@ant-design/icons'
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame';
+import { DraggableModal } from '../DraggableModal'
 import { useSelectionStore } from '../../store/selectionStore'
 
 import { useModelStore } from '../../store/modelStore'
@@ -24,6 +25,7 @@ import {
 import { useRpcClient } from '../../hooks/useRpc'
 import { emit, listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { markStandalonePerf, markStandalonePerfOnce } from '../../utils/standalonePerf'
 
 const { Text } = Typography
 
@@ -42,6 +44,31 @@ interface LocalTexture {
     [key: string]: any
 }
 
+interface PreviewCacheEntry {
+    basePreviewImageData: ImageData | null
+    previewUrl: string | null
+    previewSource: string | null
+    previewError: string | null
+}
+
+interface TextureManagerSnapshot {
+    textures: any[]
+    materials: any[]
+    geosets: any[]
+    globalSequences: number[]
+    modelPath: string | undefined
+}
+
+interface TextureManagerRpcState {
+    snapshotVersion: number
+    snapshot: TextureManagerSnapshot
+    pickedGeosetIndex: number | null
+}
+
+interface TextureManagerPatch {
+    pickedGeosetIndex: number | null
+}
+
 const createEditorId = (): string => {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
         return crypto.randomUUID()
@@ -58,33 +85,46 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
     // 1. Local Store & RPC Fallback Setups
     const localStore = useModelStore()
 
-    // Fallback RPC state for standalone
-    const { state: rpcState, emitCommand } = useRpcClient<{
-        textures: any[],
-        materials: any[],
-        geosets: any[],
-        globalSequences: number[],
-        modelPath: string | undefined,
-        pickedGeosetIndex: number | null
-    }>('textureManager', {
-        textures: [],
-        materials: [],
-        geosets: [],
-        globalSequences: [],
-        modelPath: undefined,
-        pickedGeosetIndex: null
-    })
+    const initialRpcState: TextureManagerRpcState = {
+        snapshotVersion: 0,
+        snapshot: {
+            textures: [],
+            materials: [],
+            geosets: [],
+            globalSequences: [],
+            modelPath: undefined,
+        },
+        pickedGeosetIndex: null,
+    }
 
-    const modelPath = propModelPath || (isStandalone ? rpcState.modelPath : localStore.modelPath)
+    const { state: rpcState, emitCommand } = useRpcClient<TextureManagerRpcState, TextureManagerPatch>(
+        'textureManager',
+        initialRpcState,
+        {
+            applyPatch: (previousState, patch) => {
+                const nextPickedGeosetIndex = patch?.pickedGeosetIndex ?? null
+                if (previousState.pickedGeosetIndex === nextPickedGeosetIndex) {
+                    return previousState
+                }
+                return {
+                    ...previousState,
+                    pickedGeosetIndex: nextPickedGeosetIndex,
+                }
+            }
+        }
+    )
+
+    const rpcSnapshot = rpcState.snapshot
+    const modelPath = propModelPath || (isStandalone ? rpcSnapshot.modelPath : localStore.modelPath)
 
     // Abstract the active data source based on mode
     const getActiveData = () => {
         if (isStandalone) {
             return {
-                Textures: rpcState.textures,
-                Materials: rpcState.materials,
-                Geosets: rpcState.geosets,
-                GlobalSequences: rpcState.globalSequences,
+                Textures: rpcSnapshot.textures,
+                Materials: rpcSnapshot.materials,
+                Geosets: rpcSnapshot.geosets,
+                GlobalSequences: rpcSnapshot.globalSequences,
                 pickedGeosetIndex: rpcState.pickedGeosetIndex
             }
         } else {
@@ -109,6 +149,13 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
     const listRef = useRef<HTMLDivElement>(null)
     const previewLoadIdRef = useRef(0)
     const hasLiveTextureOverrideRef = useRef(false)
+    const previewCacheRef = useRef<Map<string, PreviewCacheEntry>>(new Map())
+    const selectedPreviewCacheKeyRef = useRef<string | null>(null)
+    const previewAdjustRafRef = useRef<number | null>(null)
+    const rendererAdjustmentFlushTimeoutRef = useRef<number | null>(null)
+    const latestSelectedTextureRef = useRef<LocalTexture | null>(null)
+    const latestSelectedAdjustmentsRef = useRef<TextureAdjustments>(DEFAULT_TEXTURE_ADJUSTMENTS)
+    const latestBasePreviewImageDataRef = useRef<ImageData | null>(null)
 
     // Helper to scroll to selected item
     const scrollToItem = (index: number) => {
@@ -135,17 +182,104 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         }
         return null
     }
-
+    const lastHandledPickedGeosetRef = useRef<number | null | undefined>(undefined)
+    const isInitializedRef = useRef(false)
+    const lastTexturesSignatureRef = useRef('')
+    const lastStandaloneSnapshotVersionRef = useRef<number | null>(null)
+    const lastSelectedIndexRef = useRef(-1)
     const selectedTexture = selectedIndex >= 0 ? localTextures[selectedIndex] : null
     const selectedTextureId = selectedTexture?.__editorId || ''
     const selectedAdjustments = selectedTextureId
         ? (adjustmentsByTextureId[selectedTextureId] || DEFAULT_TEXTURE_ADJUSTMENTS)
         : DEFAULT_TEXTURE_ADJUSTMENTS
 
+    useEffect(() => {
+        lastSelectedIndexRef.current = selectedIndex
+    }, [selectedIndex])
+
+    useEffect(() => {
+        latestSelectedTextureRef.current = selectedTexture
+    }, [selectedTexture])
+
+    useEffect(() => {
+        latestSelectedAdjustmentsRef.current = selectedAdjustments
+    }, [selectedAdjustments])
+
+    useEffect(() => {
+        latestBasePreviewImageDataRef.current = basePreviewImageData
+    }, [basePreviewImageData])
+
+    useEffect(() => {
+        return () => {
+            if (previewAdjustRafRef.current !== null) {
+                cancelAnimationFrame(previewAdjustRafRef.current)
+            }
+            if (rendererAdjustmentFlushTimeoutRef.current !== null) {
+                window.clearTimeout(rendererAdjustmentFlushTimeoutRef.current)
+            }
+        }
+    }, [])
+
+    useEffect(() => {
+        if (!isStandalone) return
+        markStandalonePerf('child_runtime_mounted', { windowId: 'textureManager' })
+    }, [isStandalone])
+
+    useEffect(() => {
+        if (!isStandalone || !visible || localTextures.length === 0) return
+        markStandalonePerfOnce('textureManager:first_content_rendered', 'first_content_rendered', {
+            windowId: 'textureManager',
+            textureCount: localTextures.length,
+            selectedIndex,
+        })
+    }, [isStandalone, visible, localTextures.length, selectedIndex])
+
+    const getTextureIndexForPickedGeoset = (data: ReturnType<typeof getActiveData>): number => {
+        const pickedGeosetIndex = data?.pickedGeosetIndex
+        if (pickedGeosetIndex === null || pickedGeosetIndex === undefined) return -1
+        if (!data.Geosets || !data.Geosets[pickedGeosetIndex]) return -1
+
+        const materialId = data.Geosets[pickedGeosetIndex].MaterialID
+        if (materialId === undefined || !data.Materials || !data.Materials[materialId]) return -1
+
+        const material = data.Materials[materialId]
+        if (!material?.Layers || material.Layers.length === 0) return -1
+
+        const textureId = material.Layers[0].TextureID
+        if (typeof textureId !== 'number' || textureId < 0 || textureId >= data.Textures.length) return -1
+
+        return textureId
+    }
+
     // Initialize local state
     useEffect(() => {
-        const data = getActiveData();
-        if (visible && data && data.Textures && data.Textures.length > 0) {
+        const data = getActiveData()
+
+        if (!visible) {
+            isInitializedRef.current = false
+            lastTexturesSignatureRef.current = ''
+            lastStandaloneSnapshotVersionRef.current = null
+            lastHandledPickedGeosetRef.current = undefined
+            return
+        }
+
+        if (data && data.Textures && data.Textures.length > 0) {
+            const textureSignature = JSON.stringify(
+                data.Textures.map((texture: any) => ({
+                    image: texture?.Image ?? '',
+                    replaceableId: texture?.ReplaceableId ?? 0,
+                    flags: texture?.Flags ?? 0
+                }))
+            )
+            const snapshotChanged = isStandalone && lastStandaloneSnapshotVersionRef.current !== rpcState.snapshotVersion
+            const texturesChanged =
+                !isInitializedRef.current ||
+                snapshotChanged ||
+                lastTexturesSignatureRef.current !== textureSignature
+
+            if (!texturesChanged) {
+                return
+            }
             const cloned = JSON.parse(JSON.stringify(data.Textures))
             const nextAdjustments: Record<string, TextureAdjustments> = {}
             const withReplaceables = cloned.map((t: any) => {
@@ -169,51 +303,89 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                 }
                 return texture
             })
+
+            const rememberedIndex = lastSelectedIndexRef.current
+            const pickedTextureIndex = getTextureIndexForPickedGeoset(data)
+            const nextSelectedIndex =
+                (!isInitializedRef.current && pickedTextureIndex >= 0 && pickedTextureIndex < withReplaceables.length)
+                    ? pickedTextureIndex
+                    : rememberedIndex >= 0 && rememberedIndex < withReplaceables.length
+                        ? rememberedIndex
+                        : selectedIndex >= 0 && selectedIndex < withReplaceables.length
+                            ? selectedIndex
+                            : pickedTextureIndex >= 0 && pickedTextureIndex < withReplaceables.length
+                                ? pickedTextureIndex
+                                : withReplaceables.length > 0
+                                    ? 0
+                                    : -1
+
             setLocalTextures(withReplaceables)
             setAdjustmentsByTextureId(nextAdjustments)
             setBasePreviewImageData(null)
             hasLiveTextureOverrideRef.current = false
+            setSelectedIndex(nextSelectedIndex)
 
-            // If no selection yet, try to select based on picked geoset
-            const initialPickedIndex = data.pickedGeosetIndex
-            let initialSelection = -1
-
-            if (initialPickedIndex !== null && data.Geosets && data.Geosets[initialPickedIndex]) {
-                const materialId = data.Geosets[initialPickedIndex].MaterialID
-                if (materialId !== undefined && data.Materials && data.Materials[materialId]) {
-                    const material = data.Materials[materialId]
-                    if (material.Layers && material.Layers.length > 0) {
-                        const textureId = material.Layers[0].TextureID
-                        if (typeof textureId === 'number' && textureId >= 0 && textureId < data.Textures.length) {
-                            initialSelection = textureId
-                            console.log('[TextureEditor] Initial auto-selected texture', textureId, 'for geoset', initialPickedIndex)
-                        }
-                    }
-                }
+            if (nextSelectedIndex >= 0) {
+                setTimeout(() => scrollToItem(nextSelectedIndex), 0)
             }
 
-            if (initialSelection !== -1) {
-                setSelectedIndex(initialSelection)
-                setTimeout(() => scrollToItem(initialSelection), 0)
-            } else {
-                setSelectedIndex(data.Textures.length > 0 ? 0 : -1)
-            }
+            lastTexturesSignatureRef.current = textureSignature
+            lastStandaloneSnapshotVersionRef.current = isStandalone ? rpcState.snapshotVersion : null
+            isInitializedRef.current = true
+            lastHandledPickedGeosetRef.current = data.pickedGeosetIndex ?? null
         } else if (visible) {
             setLocalTextures([])
             setSelectedIndex(-1)
             setAdjustmentsByTextureId({})
             setBasePreviewImageData(null)
             hasLiveTextureOverrideRef.current = false
+            isInitializedRef.current = false
+            lastTexturesSignatureRef.current = ''
+            lastHandledPickedGeosetRef.current = data?.pickedGeosetIndex ?? null
         }
-    }, [visible, isStandalone ? rpcState.textures : localStore.modelData?.Textures])
+    }, [visible, isStandalone ? rpcState.snapshotVersion : localStore.modelData?.Textures])
 
     // Subscribe to Ctrl+Click geoset picking - auto-select texture
     useEffect(() => {
-        const data = getActiveData();
+        const data = getActiveData()
         if (!visible || !data) return
 
-        // Initial check is handled in the init effect above to avoid race conditions or double sets
-        // But we still need to subscribe to subsequent changes while modal is open
+        const handlePickedGeoset = (pickedGeosetIndex: number | null) => {
+            if (pickedGeosetIndex === lastHandledPickedGeosetRef.current) {
+                return
+            }
+
+            lastHandledPickedGeosetRef.current = pickedGeosetIndex
+
+            if (pickedGeosetIndex === null || !data.Geosets || !data.Geosets[pickedGeosetIndex]) {
+                return
+            }
+
+            const materialId = data.Geosets[pickedGeosetIndex].MaterialID
+            if (materialId === undefined || !data.Materials || !data.Materials[materialId]) {
+                return
+            }
+
+            const material = data.Materials[materialId]
+            if (!material.Layers || material.Layers.length === 0) {
+                return
+            }
+
+            const textureId = material.Layers[0].TextureID
+            if (typeof textureId !== 'number' || textureId < 0 || textureId >= localTextures.length) {
+                return
+            }
+
+            if (textureId !== lastSelectedIndexRef.current) {
+                setSelectedIndex(textureId)
+                setTimeout(() => scrollToItem(textureId), 0)
+            }
+        }
+
+        if (isStandalone) {
+            handlePickedGeoset(rpcState.pickedGeosetIndex ?? null)
+            return
+        }
 
         let lastPickedIndex: number | null = useSelectionStore.getState().pickedGeosetIndex
 
@@ -221,25 +393,11 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
             const pickedGeosetIndex = state.pickedGeosetIndex
             if (pickedGeosetIndex !== lastPickedIndex) {
                 lastPickedIndex = pickedGeosetIndex
-                if (pickedGeosetIndex !== null && data.Geosets && data.Geosets[pickedGeosetIndex]) {
-                    const materialId = data.Geosets[pickedGeosetIndex].MaterialID
-                    if (materialId !== undefined && data.Materials && data.Materials[materialId]) {
-                        const material = data.Materials[materialId]
-                        if (material.Layers && material.Layers.length > 0) {
-                            const textureId = material.Layers[0].TextureID
-                            // Note: TextureID can be AnimVector, handle number only
-                            if (typeof textureId === 'number' && textureId >= 0 && textureId < localTextures.length) {
-                                setSelectedIndex(textureId)
-                                scrollToItem(textureId)
-                                console.log('[TextureEditor] Auto-selected texture', textureId, 'for geoset', pickedGeosetIndex)
-                            }
-                        }
-                    }
-                }
+                handlePickedGeoset(pickedGeosetIndex)
             }
         })
         return unsubscribe
-    }, [visible, isStandalone ? rpcState.geosets : localStore.modelData?.Geosets, localTextures.length])
+    }, [visible, isStandalone, rpcState.pickedGeosetIndex, isStandalone ? rpcState.snapshotVersion : localStore.modelData?.Geosets, isStandalone ? rpcState.snapshotVersion : localStore.modelData?.Materials, localTextures.length])
 
     const imageDataToDataUrl = (imageData: ImageData): string | null => {
         const canvas = document.createElement('canvas')
@@ -284,7 +442,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
     }
 
-    const isAbsolutePath = (p: string) => /^[a-zA-Z]:/.test(p) || p.startsWith('\\\\')
+    const isAbsolutePath = (p: string) => /^[a-zA-Z]:/.test(p) || p.startsWith('\\')
 
     const getLocalCandidates = (imagePath: string): string[] => {
         const normalized = normalizePath(imagePath)
@@ -292,44 +450,59 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         if (modelPath) return getTextureCandidatePaths(modelPath, normalized)
         return [normalized]
     }
-
-    const updateSelectedAdjustment = (patch: Partial<TextureAdjustments>) => {
-        if (!selectedTextureId) return
-        setAdjustmentsByTextureId((prev) => {
-            const merged = {
-                ...(prev[selectedTextureId] || DEFAULT_TEXTURE_ADJUSTMENTS),
-                ...patch
-            }
-            return {
-                ...prev,
-                [selectedTextureId]: normalizeTextureAdjustments(merged)
-            }
-        })
+    const getPreviewCacheKey = (texture: LocalTexture | null | undefined): string => {
+        const imagePath = typeof texture?.Image === 'string' ? normalizePath(texture.Image) : ''
+        return `${modelPath || ''}::${texture?.__editorId || ''}::${texture?.ReplaceableId ?? -1}::${imagePath}`
     }
 
-    const resetAdjustmentField = (field: keyof TextureAdjustments) => {
-        updateSelectedAdjustment({ [field]: DEFAULT_TEXTURE_ADJUSTMENTS[field] })
+    const writePreviewCache = (cacheKey: string, entry: PreviewCacheEntry) => {
+        const cache = previewCacheRef.current
+        if (cache.has(cacheKey)) cache.delete(cacheKey)
+        cache.set(cacheKey, entry)
+        if (cache.size > 96) {
+            const oldestKey = cache.keys().next().value
+            if (typeof oldestKey === 'string') cache.delete(oldestKey)
+        }
+    }
+
+    const applyCachedPreview = (cacheKey: string, allowPreviewUrl: boolean): boolean => {
+        const cache = previewCacheRef.current
+        const cached = cache.get(cacheKey)
+        if (!cached) return false
+        cache.delete(cacheKey)
+        cache.set(cacheKey, cached)
+        setPreviewError(cached.previewError)
+        setPreviewSource(cached.previewSource)
+        setBasePreviewImageData(cached.basePreviewImageData)
+        setPreviewUrl(cached.basePreviewImageData && !allowPreviewUrl ? null : cached.previewUrl)
+        setIsLoadingPreview(false)
+        return true
     }
 
     const toPercent = (value: number) => `${Math.round(value)}%`
     const toDegree = (value: number) => `${Math.round(value)}°`
     const huePreviewColor = `hsl(${Math.round(selectedAdjustments.hue + 180)}, 100%, 50%)`
 
+    const clearRendererAdjustmentFlush = () => {
+        if (rendererAdjustmentFlushTimeoutRef.current !== null) {
+            window.clearTimeout(rendererAdjustmentFlushTimeoutRef.current)
+            rendererAdjustmentFlushTimeoutRef.current = null
+        }
+    }
+
     const applyTextureToRenderer = (imagePath: string | undefined, imageData: ImageData) => {
         if (!imagePath) return
 
         if (isStandalone) {
-            // In standalone mode, we must send the updated image data via IPC back to the main thread's renderer
-            const dataUrl = imageDataToDataUrl(imageData);
+            const dataUrl = imageDataToDataUrl(imageData)
             if (dataUrl) {
-                emit('IPC_LIVE_TEXTURE_UPDATE', { imagePath, dataUrl });
+                emit('IPC_LIVE_TEXTURE_UPDATE', { imagePath, dataUrl })
             }
-            return;
+            return
         }
 
         const renderer = useRendererStore.getState().renderer
         if (renderer && typeof renderer.setTextureImageData === 'function') {
-            // Try both original and normalized paths to ensure matching
             renderer.setTextureImageData(imagePath, [imageData])
 
             const normalized = normalizePath(imagePath)
@@ -337,12 +510,91 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                 renderer.setTextureImageData(normalized, [imageData])
             }
 
-            // Also try with forward slashes if normalized uses backslashes
             const forwardSlash = normalized.replace(/\\/g, '/')
             if (forwardSlash !== normalized) {
                 renderer.setTextureImageData(forwardSlash, [imageData])
             }
         }
+    }
+
+    const flushTextureAdjustmentsToRenderer = (options?: {
+        adjustments?: TextureAdjustments
+        textureId?: string
+    }) => {
+        const texture = latestSelectedTextureRef.current
+        const sourceImageData = latestBasePreviewImageDataRef.current
+        const nextAdjustments = normalizeTextureAdjustments(
+            options?.adjustments || latestSelectedAdjustmentsRef.current
+        )
+
+        if (!texture?.Image || !sourceImageData) return
+        if (options?.textureId && texture.__editorId !== options.textureId) return
+
+        const imageDataForRenderer = isDefaultTextureAdjustments(nextAdjustments)
+            ? sourceImageData
+            : applyTextureAdjustments(sourceImageData, nextAdjustments)
+
+        applyTextureToRenderer(texture.Image, imageDataForRenderer)
+        hasLiveTextureOverrideRef.current = !isDefaultTextureAdjustments(nextAdjustments)
+    }
+
+    const scheduleTextureAdjustmentRendererFlush = (
+        textureId: string,
+        adjustments: TextureAdjustments,
+        delayMs: number
+    ) => {
+        clearRendererAdjustmentFlush()
+        rendererAdjustmentFlushTimeoutRef.current = window.setTimeout(() => {
+            rendererAdjustmentFlushTimeoutRef.current = null
+            flushTextureAdjustmentsToRenderer({ textureId, adjustments })
+        }, delayMs)
+    }
+
+    const updateSelectedAdjustment = (
+        patch: Partial<TextureAdjustments>,
+        rendererSync: 'none' | 'debounced' | 'immediate' = 'none'
+    ) => {
+        if (!selectedTextureId) return
+
+        const nextAdjustments = normalizeTextureAdjustments({
+            ...latestSelectedAdjustmentsRef.current,
+            ...patch
+        })
+
+        latestSelectedAdjustmentsRef.current = nextAdjustments
+
+        setAdjustmentsByTextureId((prev) => ({
+            ...prev,
+            [selectedTextureId]: nextAdjustments
+        }))
+
+        if (rendererSync === 'immediate') {
+            clearRendererAdjustmentFlush()
+            flushTextureAdjustmentsToRenderer({ textureId: selectedTextureId, adjustments: nextAdjustments })
+            return
+        }
+
+        if (rendererSync === 'debounced') {
+            scheduleTextureAdjustmentRendererFlush(
+                selectedTextureId,
+                nextAdjustments,
+                isStandalone ? 160 : 96
+            )
+        }
+    }
+
+    const handleAdjustmentSliderChange = (field: keyof TextureAdjustments, value: number) => {
+        updateSelectedAdjustment({ [field]: value }, 'debounced')
+    }
+
+    const handleAdjustmentSliderComplete = () => {
+        if (!selectedTextureId) return
+        clearRendererAdjustmentFlush()
+        flushTextureAdjustmentsToRenderer({ textureId: selectedTextureId })
+    }
+
+    const resetAdjustmentField = (field: keyof TextureAdjustments) => {
+        updateSelectedAdjustment({ [field]: DEFAULT_TEXTURE_ADJUSTMENTS[field] }, 'immediate')
     }
 
     const buildTexturesForSave = (): any[] => {
@@ -370,8 +622,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
     const handleCancel = () => {
         if (hasLiveTextureOverrideRef.current) {
             if (isStandalone) {
-                // Tell main thread to reload rendering
-                emitCommand('EXECUTE_TEXTURE_ACTION', { action: 'RELOAD_RENDERER' });
+                emitCommand('EXECUTE_TEXTURE_ACTION', { action: 'RELOAD_RENDERER' })
             } else {
                 localStore.triggerRendererReload()
             }
@@ -384,7 +635,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         const texturesForSave = buildTexturesForSave()
 
         if (isStandalone) {
-            emitCommand('EXECUTE_TEXTURE_ACTION', { action: 'SAVE_TEXTURES', payload: texturesForSave });
+            emitCommand('EXECUTE_TEXTURE_ACTION', { action: 'SAVE_TEXTURES', payload: texturesForSave })
         } else {
             localStore.setTextures(texturesForSave)
         }
@@ -392,9 +643,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         message.success('纹理已保存')
         hasLiveTextureOverrideRef.current = false
         if (isStandalone) {
-            // In standalone mode we don't necessarily close unless explicitly handling window drops, but typically yes
-            // Wait, standard modal onClose() will hide the window if we are standalone
-            onClose();
+            onClose()
         } else {
             onClose()
         }
@@ -406,26 +655,40 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         const isStale = () => previewLoadIdRef.current !== loadId
 
         const loadTexture = async () => {
-            if (selectedIndex < 0 || !localTextures[selectedIndex]) {
+            if (!selectedTexture) {
+                setIsLoadingPreview(false)
                 setPreviewUrl(null)
                 setPreviewError(null)
                 setPreviewSource(null)
                 setBasePreviewImageData(null)
+                selectedPreviewCacheKeyRef.current = null
                 return
             }
 
-            const texture = localTextures[selectedIndex]
+            const texture = selectedTexture
+            const cacheKey = getPreviewCacheKey(texture)
+            selectedPreviewCacheKeyRef.current = cacheKey
+            const allowCachedPreviewUrl = isDefaultTextureAdjustments(selectedAdjustments)
+            if (applyCachedPreview(cacheKey, allowCachedPreviewUrl)) {
+                return
+            }
+
             if (!texture.Image) {
+                setIsLoadingPreview(false)
                 setBasePreviewImageData(null)
                 const replaceableLabel = getReplaceableLabel(texture.ReplaceableId)
                 if (texture.ReplaceableId === 1) {
-                    setPreviewUrl(makeSolidDataUrl(220, 60, 60))
+                    const url = makeSolidDataUrl(220, 60, 60)
+                    setPreviewUrl(url)
                     setPreviewError(null)
                     setPreviewSource('Replaceable')
+                    writePreviewCache(cacheKey, { basePreviewImageData: null, previewUrl: url, previewSource: 'Replaceable', previewError: null })
                 } else if (texture.ReplaceableId === 2) {
-                    setPreviewUrl(makeSolidDataUrl(255, 210, 0))
+                    const url = makeSolidDataUrl(255, 210, 0)
+                    setPreviewUrl(url)
                     setPreviewError(null)
                     setPreviewSource('Replaceable')
+                    writePreviewCache(cacheKey, { basePreviewImageData: null, previewUrl: url, previewSource: 'Replaceable', previewError: null })
                 } else if (replaceableLabel) {
                     setPreviewUrl(null)
                     setPreviewError(replaceableLabel)
@@ -453,13 +716,11 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
 
             let loaded = false
 
-            // Strategy 1: Try MPQ first for standard Warcraft 3 paths
             const isMpqPath = isMPQPath(normalizedImagePath)
 
             if (isMpqPath && isSupported) {
                 try {
                     const mpqPath = normalizedImagePath
-                    console.log('[TextureEditor] Trying MPQ for:', mpqPath)
                     const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: mpqPath })
                     if (isStale()) return
 
@@ -467,14 +728,17 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                     if (mpqBuffer && mpqBuffer.byteLength > 0) {
                         const imageData = decodeTextureData(mpqBuffer, imagePath)
                         if (imageData) {
+                            const defaultPreviewUrl = imageDataToDataUrl(imageData)
                             setBasePreviewImageData(imageData)
                             setPreviewSource('MPQ')
+                            if (allowCachedPreviewUrl && defaultPreviewUrl) {
+                                setPreviewUrl(defaultPreviewUrl)
+                            }
+                            writePreviewCache(cacheKey, { basePreviewImageData: imageData, previewUrl: defaultPreviewUrl, previewSource: 'MPQ', previewError: null })
                             loaded = true
-                            console.log('[TextureEditor] Loaded from MPQ successfully')
                         }
                     }
-                } catch (mpqError) {
-                    console.log('[TextureEditor] MPQ loading failed, trying file system:', mpqError)
+                } catch {
                 }
                 if (!loaded && (isReplaceable || !isSupported)) {
                     if (texture.ReplaceableId === 1) {
@@ -493,24 +757,26 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                 }
             }
 
-            // Strategy 2: Try local file system if MPQ didn't work
             if (!loaded && isSupported && !isReplaceable) {
                 try {
                     const candidates = getLocalCandidates(imagePath)
                     let lastError: string | null = null
 
                     for (const candidate of candidates) {
-                        console.log('[TextureEditor] Trying file system for:', candidate)
                         try {
                             const buffer = await readFile(candidate)
                             if (isStale()) return
                             if (buffer) {
                                 const imageData = decodeTextureData(buffer.buffer, imagePath)
                                 if (imageData) {
+                                    const defaultPreviewUrl = imageDataToDataUrl(imageData)
                                     setBasePreviewImageData(imageData)
                                     setPreviewSource('文件')
+                                    if (allowCachedPreviewUrl && defaultPreviewUrl) {
+                                        setPreviewUrl(defaultPreviewUrl)
+                                    }
+                                    writePreviewCache(cacheKey, { basePreviewImageData: imageData, previewUrl: defaultPreviewUrl, previewSource: '文件', previewError: null })
                                     loaded = true
-                                    console.log('[TextureEditor] Loaded from file system successfully')
                                     break
                                 } else {
                                     lastError = '无法加载贴图：BLP 解码失败'
@@ -529,14 +795,12 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                         setPreviewError(lastError)
                     }
                 } catch (e: any) {
-                    console.error("[TextureEditor] File system load failed:", e)
                     if (!loaded) {
                         setPreviewError(`无法加载贴图：${e.message || '读取失败'}`)
                     }
                 }
             }
 
-            // Strategy 3: MPQ fallback even for non-standard paths
             if (!loaded && isSupported && !isReplaceable) {
                 try {
                     const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: normalizedImagePath })
@@ -546,19 +810,23 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                     if (mpqBuffer && mpqBuffer.byteLength > 0) {
                         const imageData = decodeTextureData(mpqBuffer, imagePath)
                         if (imageData) {
+                            const defaultPreviewUrl = imageDataToDataUrl(imageData)
                             setBasePreviewImageData(imageData)
                             setPreviewSource('MPQ')
+                            if (allowCachedPreviewUrl && defaultPreviewUrl) {
+                                setPreviewUrl(defaultPreviewUrl)
+                            }
+                            writePreviewCache(cacheKey, { basePreviewImageData: imageData, previewUrl: defaultPreviewUrl, previewSource: 'MPQ', previewError: null })
                             loaded = true
                         }
                     }
-                } catch (e: any) {
+                } catch {
                     if (!loaded) {
-                        setPreviewError(`无法加载贴图：MPQ 读取失败`)
+                        setPreviewError('无法加载贴图：MPQ 读取失败')
                     }
                 }
             }
 
-            // Non-BLP texture (PNG, TGA, etc.)
             if (!loaded && !isSupported) {
                 const candidates = getLocalCandidates(imagePath)
                 let fullPath = candidates[0] || imagePath
@@ -569,38 +837,69 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                         fullPath = candidate
                         break
                     } catch {
-                        // Try next candidate
                     }
                 }
+                const filePreviewUrl = `file://${fullPath}`
                 setBasePreviewImageData(null)
-                setPreviewUrl(`file://${fullPath}`)
+                setPreviewUrl(filePreviewUrl)
                 setPreviewSource('文件')
+                writePreviewCache(cacheKey, { basePreviewImageData: null, previewUrl: filePreviewUrl, previewSource: '文件', previewError: null })
             }
 
             if (isStale()) return
             setIsLoadingPreview(false)
         }
         loadTexture()
-    }, [selectedIndex, localTextures, modelPath])
+    }, [selectedIndex, selectedTexture?.__editorId, selectedTexture?.Image, selectedTexture?.ReplaceableId, selectedTexture?.Flags, modelPath])
 
     const selectedImageLower = (selectedTexture?.Image || '').toLowerCase()
     const isSelectedTextureBlpOrTga = selectedImageLower.endsWith('.blp') || selectedImageLower.endsWith('.tga')
     const canAdjustSelectedTexture = isSelectedTextureBlpOrTga && !!basePreviewImageData && !isLoadingPreview
 
     useEffect(() => {
+        clearRendererAdjustmentFlush()
+    }, [selectedTextureId, basePreviewImageData])
+
+    useEffect(() => {
         if (!basePreviewImageData) return
-        const adjusted = applyTextureAdjustments(basePreviewImageData, selectedAdjustments)
-        const dataUrl = imageDataToDataUrl(adjusted)
-        if (dataUrl) {
-            setPreviewUrl(dataUrl)
+        if (previewAdjustRafRef.current !== null) {
+            cancelAnimationFrame(previewAdjustRafRef.current)
+            previewAdjustRafRef.current = null
         }
-        if (isSelectedTextureBlpOrTga && selectedTexture?.Image) {
-            applyTextureToRenderer(selectedTexture.Image, adjusted)
-            if (!isDefaultTextureAdjustments(selectedAdjustments)) {
-                hasLiveTextureOverrideRef.current = true
+        const cacheKey = selectedPreviewCacheKeyRef.current
+        const useDefaultAdjustments = isDefaultTextureAdjustments(selectedAdjustments)
+        if (useDefaultAdjustments && cacheKey) {
+            const cached = previewCacheRef.current.get(cacheKey)
+            if (cached?.previewUrl) {
+                setPreviewUrl(cached.previewUrl)
+                return
             }
         }
-    }, [basePreviewImageData, selectedAdjustments, isSelectedTextureBlpOrTga, selectedTexture?.Image])
+
+        previewAdjustRafRef.current = requestAnimationFrame(() => {
+            previewAdjustRafRef.current = null
+            const adjusted = useDefaultAdjustments
+                ? basePreviewImageData
+                : applyTextureAdjustments(basePreviewImageData, selectedAdjustments)
+            const dataUrl = imageDataToDataUrl(adjusted)
+            if (dataUrl) {
+                setPreviewUrl(dataUrl)
+                if (cacheKey && useDefaultAdjustments) {
+                    const cached = previewCacheRef.current.get(cacheKey)
+                    if (cached) {
+                        writePreviewCache(cacheKey, { ...cached, previewUrl: dataUrl, previewError: null })
+                    }
+                }
+            }
+        })
+
+        return () => {
+            if (previewAdjustRafRef.current !== null) {
+                cancelAnimationFrame(previewAdjustRafRef.current)
+                previewAdjustRafRef.current = null
+            }
+        }
+    }, [basePreviewImageData, selectedAdjustments, selectedTextureId])
 
     const updateLocalTexture = (index: number, updates: any) => {
         const newTextures = [...localTextures]
@@ -621,8 +920,85 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         return ((localTextures[selectedIndex].Flags || 0) & flag) !== 0
     }
 
+    const pathInputDropRef = useRef<HTMLDivElement | null>(null)
+    const previewDropRef = useRef<HTMLDivElement | null>(null)
+    const selectedIndexRef = useRef(-1)
+    const modelPathRef = useRef<string | undefined>(modelPath)
 
+    const normalizeDroppedTexturePath = (filePath: string, currentModelPath?: string): string => {
+        const normalizedFilePath = filePath.replace(/\\/g, '/')
+        if (!currentModelPath) {
+            return normalizedFilePath.replace(/\//g, '\\')
+        }
 
+        const modelDir = currentModelPath.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
+        if (modelDir && normalizedFilePath.toLowerCase().startsWith(`${modelDir.toLowerCase()}/`)) {
+            return normalizedFilePath.substring(modelDir.length + 1).replace(/\//g, '\\')
+        }
+
+        return normalizedFilePath.replace(/\//g, '\\')
+    }
+
+    useEffect(() => {
+        selectedIndexRef.current = selectedIndex
+        modelPathRef.current = modelPath
+    }, [selectedIndex, modelPath])
+
+    const applyDroppedTexture = (filePath: string) => {
+        const currentSelectedIndex = selectedIndexRef.current
+        if (currentSelectedIndex < 0) return
+
+        const nextImagePath = normalizeDroppedTexturePath(filePath, modelPathRef.current)
+        setLocalTextures((prev) => {
+            if (currentSelectedIndex < 0 || currentSelectedIndex >= prev.length) return prev
+            const next = [...prev]
+            next[currentSelectedIndex] = { ...next[currentSelectedIndex], Image: nextImagePath, ReplaceableId: 0 }
+            return next
+        })
+        message.success(`已替换贴图: ${nextImagePath}`)
+    }
+
+    useEffect(() => {
+        if (!isStandalone || !visible) return
+
+        let disposed = false
+        let unlistenDrop: (() => void) | undefined
+
+        const setupDragDrop = async () => {
+            const currentWindowLabel = getCurrentWindow().label
+            unlistenDrop = await listen<{ paths?: string[]; position?: { x: number; y: number } }>('tauri://drag-drop', (event) => {
+                if (disposed) return
+                const sourceWindowLabel = (event as any)?.windowLabel
+                if (sourceWindowLabel && sourceWindowLabel !== currentWindowLabel) return
+
+                const filePath = (event.payload?.paths || []).find((path) => /\.(blp|tga)$/i.test(path))
+                if (!filePath) return
+
+                const dropTargets = [pathInputDropRef.current, previewDropRef.current].filter(Boolean) as HTMLDivElement[]
+                if (dropTargets.length === 0) return
+
+                const position = event.payload?.position
+                if (position) {
+                    const hitTarget = dropTargets.some((target) => {
+                        const rect = target.getBoundingClientRect()
+                        return position.x >= rect.left && position.x <= rect.right && position.y >= rect.top && position.y <= rect.bottom
+                    })
+                    if (!hitTarget) return
+                }
+
+                applyDroppedTexture(filePath)
+            })
+        }
+
+        setupDragDrop().catch((error) => {
+            console.error('[TextureEditor] Failed to setup standalone drag-drop:', error)
+        })
+
+        return () => {
+            disposed = true
+            unlistenDrop?.()
+        }
+    }, [isStandalone, visible])
     const Wrapper = isStandalone ? 'div' : DraggableModal as any;
     const wrapperProps = isStandalone
         ? { style: { display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: '#252525', overflow: 'hidden' } }
@@ -780,22 +1156,18 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                     draggable
                                     onDragStart={(e) => {
                                         setDraggedTextureIndex(e.dataTransfer, index)
-                                        e.dataTransfer.effectAllowed = 'copy'
                                     }}
                                     style={{
                                         cursor: 'pointer',
-                                        padding: '8px 12px',
-                                        backgroundColor: selectedIndex === index ? '#5a9cff' : 'transparent',
-                                        color: selectedIndex === index ? '#fff' : '#b0b0b0',
-                                        transition: 'background 0.2s',
-                                        borderBottom: '1px solid #3a3a3a'
+                                        padding: '10px 12px',
+                                        backgroundColor: selectedIndex === index ? '#1677ff' : 'transparent',
+                                        borderBottom: '1px solid #4a4a4a'
                                     }}
-                                    className="hover:bg-[#454545]"
                                 >
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center', color: selectedIndex === index ? '#ffffff' : '#e8e8e8' }}>
                                         <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px' }}>
-                                            <span style={{ marginRight: '8px', opacity: 0.7 }}>{index}:</span>
-                                            {item.Image || getReplaceableLabel(item.ReplaceableId) || '无法加载贴图'}
+                                            <span style={{ marginRight: '8px', opacity: 0.7, color: 'inherit' }}>{index}:</span>
+                                            <span style={{ color: 'inherit' }}>{(item.Image ? item.Image.split(/[\\/]/).pop() : null) || getReplaceableLabel(item.ReplaceableId) || '无法加载贴图'}</span>
                                         </div>
                                         <DeleteOutlined
                                             onClick={(e) => {
@@ -813,7 +1185,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                                 if (selectedIndex === index) setSelectedIndex(-1)
                                                 else if (selectedIndex > index) setSelectedIndex(selectedIndex - 1)
                                             }}
-                                            style={{ color: '#ff4d4f' }}
+                                            style={{ color: selectedIndex === index ? '#ffffff' : '#ff4d4f' }}
                                         />
                                     </div>
                                 </List.Item>
@@ -829,7 +1201,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                 <div style={{ flex: 1, display: 'flex', gap: '16px', minHeight: 0 }}>
                                     {/* Left Settings (Inputs, Checkboxes & Adjustments) */}
                                     <div style={{ width: '272px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                        <div style={{ flexShrink: 0 }}>
+                                        <div ref={pathInputDropRef} style={{ flexShrink: 0 }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '4px' }}>
                                                 <Typography.Text style={{ color: '#b0b0b0' }}>路径:</Typography.Text>
                                             </div>
@@ -838,6 +1210,11 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                                 onChange={(e) => updateLocalTexture(selectedIndex, { Image: e.target.value })}
                                                 style={{ backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
                                             />
+                                            {isStandalone && (
+                                                <Typography.Text style={{ display: 'block', marginTop: '4px', fontSize: '10px', color: '#808080' }}>
+                                                    可拖放 .blp / .tga 文件替换当前贴图
+                                                </Typography.Text>
+                                            )}
                                         </div>
                                         <div style={{ flexShrink: 0 }}>
                                             <Typography.Text style={{ display: 'block', marginBottom: '4px', color: '#b0b0b0' }}>可替换 ID:</Typography.Text>
@@ -870,7 +1247,8 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                                     <Slider
                                                         min={-180} max={180} step={1}
                                                         value={selectedAdjustments.hue}
-                                                        onChange={(value) => updateSelectedAdjustment({ hue: Number(value) })}
+                                                        onChange={(value) => handleAdjustmentSliderChange('hue', Number(value))}
+                                                        onChangeComplete={handleAdjustmentSliderComplete}
                                                         disabled={!canAdjustSelectedTexture}
                                                         tooltip={{ open: false }}
                                                         style={{ margin: 0 }}
@@ -887,7 +1265,8 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                                     <Slider
                                                         min={0} max={200} step={1}
                                                         value={selectedAdjustments.brightness}
-                                                        onChange={(value) => updateSelectedAdjustment({ brightness: Number(value) })}
+                                                        onChange={(value) => handleAdjustmentSliderChange('brightness', Number(value))}
+                                                        onChangeComplete={handleAdjustmentSliderComplete}
                                                         disabled={!canAdjustSelectedTexture}
                                                         tooltip={{ open: false }}
                                                         style={{ margin: 0 }}
@@ -904,7 +1283,8 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                                     <Slider
                                                         min={0} max={200} step={1}
                                                         value={selectedAdjustments.saturation}
-                                                        onChange={(value) => updateSelectedAdjustment({ saturation: Number(value) })}
+                                                        onChange={(value) => handleAdjustmentSliderChange('saturation', Number(value))}
+                                                        onChangeComplete={handleAdjustmentSliderComplete}
                                                         disabled={!canAdjustSelectedTexture}
                                                         tooltip={{ open: false }}
                                                         style={{ margin: 0 }}
@@ -921,7 +1301,8 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                                     <Slider
                                                         min={0} max={200} step={1}
                                                         value={selectedAdjustments.opacity}
-                                                        onChange={(value) => updateSelectedAdjustment({ opacity: Number(value) })}
+                                                        onChange={(value) => handleAdjustmentSliderChange('opacity', Number(value))}
+                                                        onChangeComplete={handleAdjustmentSliderComplete}
                                                         disabled={!canAdjustSelectedTexture}
                                                         tooltip={{ open: false }}
                                                         style={{ margin: 0 }}
@@ -939,7 +1320,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                     </div>
 
                                     {/* Right Preview (Square, fixed size) */}
-                                    <div style={{ width: '380px', flexShrink: 0, height: '380px', border: '1px solid #4a4a4a', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', backgroundColor: '#1f1f1f', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
+                                    <div ref={previewDropRef} style={{ width: '380px', flexShrink: 0, height: '380px', border: '1px solid #4a4a4a', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', backgroundColor: '#1f1f1f', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
                                         {isLoadingPreview ? (
                                             <div style={{ color: '#5a9cff', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
                                                 <div className="ant-spin ant-spin-spinning" style={{ fontSize: 24 }}>?</div>
@@ -989,4 +1370,17 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
 }
 
 export default TextureEditorModal
+
+
+
+
+
+
+
+
+
+
+
+
+
 

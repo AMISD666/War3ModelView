@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import { Button } from 'antd';
 import { CloseOutlined, MinusOutlined, PushpinOutlined, PushpinFilled } from '@ant-design/icons';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { markStandalonePerfOnce } from '../../utils/standalonePerf';
 
 interface StandaloneWindowFrameProps {
     title: string | React.ReactNode;
@@ -11,10 +12,9 @@ interface StandaloneWindowFrameProps {
 
 export const StandaloneWindowFrame: React.FC<StandaloneWindowFrameProps> = ({ title, children, onClose }) => {
     const [isPinned, setIsPinned] = useState(false);
+    const titleLabelRef = useRef(typeof title === 'string' ? title : 'custom-title');
 
     useEffect(() => {
-        // We initialize the local state based on what we set, but to be 100% sure we could query the window if Tauri API allowed it synchronously.
-        // For now, since Windows spawn with alwaysOnTop: false, we start at false.
         getCurrentWindow().setAlwaysOnTop(isPinned).catch(console.error);
     }, [isPinned]);
 
@@ -42,27 +42,41 @@ export const StandaloneWindowFrame: React.FC<StandaloneWindowFrameProps> = ({ ti
         }
     };
 
+    const handleTitleMouseDown = () => {
+        const oncePrefix = `first-drag:${titleLabelRef.current}`;
+        markStandalonePerfOnce(`${oncePrefix}:pointerdown`, 'first_drag_pointerdown', {
+            title: titleLabelRef.current,
+        });
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                markStandalonePerfOnce(`${oncePrefix}:after-frames`, 'first_drag_after_frames', {
+                    title: titleLabelRef.current,
+                });
+            });
+        });
+    };
+
     return (
         <div style={{
             width: '100vw',
             height: '100vh',
-            backgroundColor: '#1e1e1e', // Standard Base
+            backgroundColor: '#1e1e1e',
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden'
         }}>
-            {/* Native Window Custom Title Bar Wrapper */}
             <div
                 data-tauri-drag-region
+                onMouseDown={handleTitleMouseDown}
                 style={{
-                    height: '36px', // Standard Height
+                    height: '36px',
                     minHeight: '36px',
-                    backgroundColor: '#2c2c2c', // Standard Header Base
-                    borderBottom: '1px solid #3a3a3a', // Standard Border
+                    backgroundColor: '#2c2c2c',
+                    borderBottom: '1px solid #3a3a3a',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
-                    padding: '0', // Adjust padding to let buttons align perfectly
+                    padding: '0',
                     userSelect: 'none',
                 }}
             >
@@ -92,7 +106,7 @@ export const StandaloneWindowFrame: React.FC<StandaloneWindowFrameProps> = ({ ti
                             transition: 'all 0.2s'
                         }}
                         className="hover:!bg-[#3a3a3a] hover:!text-[#e0e0e0]"
-                        title={isPinned ? "取消置顶" : "置顶窗口"}
+                        title={isPinned ? '取消置顶' : '置顶窗口'}
                     />
                     <Button
                         type="text"
@@ -134,7 +148,6 @@ export const StandaloneWindowFrame: React.FC<StandaloneWindowFrameProps> = ({ ti
                     />
                 </div>
             </div>
-            {/* Content Wrapper */}
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                 {children}
             </div>

@@ -16,6 +16,7 @@ const GeosetEditorModal = React.lazy(() => import('./modals/GeosetEditorModal'))
 const GlobalSequenceModal = React.lazy(() => import('./modals/GlobalSequenceModal'))
 const TransformModelDialog = React.lazy(() => import('./node/TransformModelDialog').then(m => ({ default: m.TransformModelDialog })))
 const ModelOptimizeModal = React.lazy(() => import('./modals/ModelOptimizeModal'))
+const StandalonePerfModal = React.lazy(() => import('./modals/StandalonePerfModal'))
 
 import { GeosetVisibilityPanel } from './GeosetVisibilityPanel'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -32,6 +33,7 @@ import { showMessage, showConfirm } from '../store/messageStore'
 import { registerShortcutHandler } from '../shortcuts/manager'
 import { checkGiteeUpdate, showChangelog as showUpdateLog, checkGiteeUpdateSilent } from '../services/updateService';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { listen as listenEvent } from '@tauri-apps/api/event'
 import { Button, Modal } from 'antd';
 import { decodeTexture } from './viewer/textureLoader'
 import {
@@ -42,7 +44,9 @@ import {
 } from '../utils/textureAdjustments'
 import { optimizeModelKeyframes, optimizeModelPolygons } from '../utils/modelOptimization'
 import { windowManager } from '../utils/WindowManager'
+import { scheduleStandaloneWarmup } from '../utils/standaloneWarmup'
 import { useRpcServer } from '../hooks/useRpc'
+import { STANDALONE_PERF_EVENT, StandalonePerfEntry } from '../utils/standalonePerf'
 
 /**
  * Normalize model data before saving to ensure typed arrays are correct.
@@ -52,6 +56,67 @@ import { useRpcServer } from '../hooks/useRpc'
  * Uses structuredClone to preserve existing typed arrays while only converting
  * regular arrays that need to be typed arrays.
  */
+const MAX_STANDALONE_PERF_ENTRIES = 400
+
+type StandalonePerfHostWindow = Window & {
+    __standalonePerfEntries?: StandalonePerfEntry[]
+}
+
+type TextureManagerSnapshot = {
+    textures: any[]
+    materials: any[]
+    geosets: any[]
+    globalSequences: number[]
+    modelPath: string | undefined
+}
+
+type TextureManagerRpcState = {
+    snapshotVersion: number
+    snapshot: TextureManagerSnapshot
+    pickedGeosetIndex: number | null
+}
+
+type TextureManagerPatch = {
+    pickedGeosetIndex: number | null
+}
+
+type MaterialManagerSnapshot = {
+    materials: any[]
+    textures: any[]
+    geosets: any[]
+    globalSequences: number[]
+    sequences: any[]
+    modelPath: string | undefined
+}
+
+type MaterialManagerRpcState = {
+    snapshotVersion: number
+    snapshot: MaterialManagerSnapshot
+    pickedGeosetIndex: number | null
+}
+
+type MaterialManagerPatch = {
+    pickedGeosetIndex: number | null
+}
+
+const mergeStandalonePerfEntries = (
+    previousEntries: StandalonePerfEntry[],
+    incomingEntries: StandalonePerfEntry[]
+): StandalonePerfEntry[] => {
+    const seen = new Set<string>()
+    const merged: StandalonePerfEntry[] = []
+
+    ;[...incomingEntries, ...previousEntries].forEach((entry) => {
+        if (!entry || seen.has(entry.entryId)) {
+            return
+        }
+        seen.add(entry.entryId)
+        merged.push(entry)
+    })
+
+    return merged.slice(0, MAX_STANDALONE_PERF_ENTRIES)
+}
+
 function prepareModelDataForSave(modelData: any): any {
     if (!modelData) return modelData;
 
@@ -1251,7 +1316,7 @@ function prepareModelDataForSave(modelData: any): any {
                         filterModeValue = 0;
                     }
                     if (typeof filterModeValue === 'string') {
-                        const normalized = filterModeValue.replace(/\s+/g, '').toLowerCase();
+                        const normalized = filterModeValue.replace(/\\s+/g, '').toLowerCase();
                         const map: Record<string, number> = {
                             none: 0,
                             transparent: 1,
@@ -1261,7 +1326,7 @@ function prepareModelDataForSave(modelData: any): any {
                             modulate: 5,
                             modulate2x: 6
                         };
-                        if (/^\d+$/.test(normalized)) {
+                        if (/^d+$/.test(normalized)) {
                             filterModeValue = Number.parseInt(normalized, 10);
                         } else {
                             filterModeValue = map[normalized] ?? 0;
@@ -1690,6 +1755,8 @@ const MainLayout: React.FC = () => {
     const [showGeosetModal, setShowGeosetModal] = useState<boolean>(false)
     const [showModelOptimizeModal, setShowModelOptimizeModal] = useState<boolean>(false)
     const [showAbout, setShowAbout] = useState<boolean>(false)
+    const [showStandalonePerf, setShowStandalonePerf] = useState<boolean>(false)
+    const [standalonePerfEntries, setStandalonePerfEntries] = useState<StandalonePerfEntry[]>([])
     const [modelOptimizeRunning, setModelOptimizeRunning] = useState<boolean>(false)
     const [modelOptimizeLastResult, setModelOptimizeLastResult] = useState<string>('')
     const modelOptimizeRunningRef = useRef(false)
@@ -1697,7 +1764,169 @@ const MainLayout: React.FC = () => {
 
     // Use modelData directly from store to ensure updates from NodeManager are reflected
     const modelData = useModelStore(state => state.modelData)
+    const standaloneWarmupStartedRef = useRef(false)
+    const textureManagerSnapshotCacheRef = useRef({
+        snapshotVersion: 0,
+        snapshot: {
+            textures: [],
+            materials: [],
+            geosets: [],
+            globalSequences: [],
+            modelPath: undefined,
+        } as TextureManagerSnapshot,
+        sourceRefs: {
+            textures: null as any[] | null,
+            materials: null as any[] | null,
+            geosets: null as any[] | null,
+            globalSequences: null as number[] | null,
+            modelPath: undefined as string | undefined,
+        },
+    })
+    const materialManagerSnapshotCacheRef = useRef({
+        snapshotVersion: 0,
+        snapshot: {
+            materials: [],
+            textures: [],
+            geosets: [],
+            globalSequences: [],
+            sequences: [],
+            modelPath: undefined,
+        } as MaterialManagerSnapshot,
+        sourceRefs: {
+            materials: null as any[] | null,
+            textures: null as any[] | null,
+            geosets: null as any[] | null,
+            globalSequences: null as number[] | null,
+            sequences: null as any[] | null,
+            modelPath: undefined as string | undefined,
+        },
+    })
+    const standaloneSnapshotDispatchRef = useRef({
+        textureManager: -1,
+        materialManager: -1,
+    })
 
+
+    const ensureTextureManagerSnapshotState = useCallback((): TextureManagerRpcState => {
+        const liveModelState = useModelStore.getState()
+        const liveModelData = liveModelState.modelData
+        const cache = textureManagerSnapshotCacheRef.current
+        const nextSourceRefs = {
+            textures: liveModelData?.Textures || null,
+            materials: liveModelData?.Materials || null,
+            geosets: liveModelData?.Geosets || null,
+            globalSequences: liveModelData?.GlobalSequences || null,
+            modelPath: liveModelState.modelPath,
+        }
+
+        const snapshotChanged =
+            cache.sourceRefs.textures !== nextSourceRefs.textures ||
+            cache.sourceRefs.materials !== nextSourceRefs.materials ||
+            cache.sourceRefs.geosets !== nextSourceRefs.geosets ||
+            cache.sourceRefs.globalSequences !== nextSourceRefs.globalSequences ||
+            cache.sourceRefs.modelPath !== nextSourceRefs.modelPath
+
+        if (snapshotChanged) {
+            cache.snapshotVersion += 1
+            cache.sourceRefs = nextSourceRefs
+            cache.snapshot = {
+                textures: liveModelData?.Textures || [],
+                materials: liveModelData?.Materials || [],
+                geosets: stripGeosetData(liveModelData?.Geosets),
+                globalSequences: liveModelData?.GlobalSequences || [],
+                modelPath: liveModelState.modelPath,
+            }
+            markStandalonePerf('texture_snapshot_cached', {
+                snapshotVersion: cache.snapshotVersion,
+                textureCount: cache.snapshot.textures.length,
+                materialCount: cache.snapshot.materials.length,
+                geosetCount: cache.snapshot.geosets.length,
+            })
+        }
+
+        return {
+            snapshotVersion: cache.snapshotVersion,
+            snapshot: cache.snapshot,
+            pickedGeosetIndex: useSelectionStore.getState().pickedGeosetIndex ?? null,
+        }
+    }, [])
+
+    const ensureMaterialManagerSnapshotState = useCallback((): MaterialManagerRpcState => {
+        const liveModelState = useModelStore.getState()
+        const liveModelData = liveModelState.modelData
+        const cache = materialManagerSnapshotCacheRef.current
+        const nextSourceRefs = {
+            materials: liveModelData?.Materials || null,
+            textures: liveModelData?.Textures || null,
+            geosets: liveModelData?.Geosets || null,
+            globalSequences: liveModelData?.GlobalSequences || null,
+            sequences: liveModelData?.Sequences || null,
+            modelPath: liveModelState.modelPath,
+        }
+
+        const snapshotChanged =
+            cache.sourceRefs.materials !== nextSourceRefs.materials ||
+            cache.sourceRefs.textures !== nextSourceRefs.textures ||
+            cache.sourceRefs.geosets !== nextSourceRefs.geosets ||
+            cache.sourceRefs.globalSequences !== nextSourceRefs.globalSequences ||
+            cache.sourceRefs.sequences !== nextSourceRefs.sequences ||
+            cache.sourceRefs.modelPath !== nextSourceRefs.modelPath
+
+        if (snapshotChanged) {
+            cache.snapshotVersion += 1
+            cache.sourceRefs = nextSourceRefs
+            cache.snapshot = {
+                materials: liveModelData?.Materials || [],
+                textures: liveModelData?.Textures || [],
+                geosets: stripGeosetData(liveModelData?.Geosets),
+                globalSequences: liveModelData?.GlobalSequences || [],
+                sequences: liveModelData?.Sequences || [],
+                modelPath: liveModelState.modelPath,
+            }
+            markStandalonePerf('material_snapshot_cached', {
+                snapshotVersion: cache.snapshotVersion,
+                materialCount: cache.snapshot.materials.length,
+                textureCount: cache.snapshot.textures.length,
+                geosetCount: cache.snapshot.geosets.length,
+            })
+        }
+
+        return {
+            snapshotVersion: cache.snapshotVersion,
+            snapshot: cache.snapshot,
+            pickedGeosetIndex: useSelectionStore.getState().pickedGeosetIndex ?? null,
+        }
+    }, [])
+    const clearStandalonePerfEntries = useCallback(() => {
+        setStandalonePerfEntries([])
+        ; (window as StandalonePerfHostWindow).__standalonePerfEntries = []
+    }, [])
+
+    useEffect(() => {
+        const perfWindow = window as StandalonePerfHostWindow
+        if (Array.isArray(perfWindow.__standalonePerfEntries) && perfWindow.__standalonePerfEntries.length > 0) {
+            setStandalonePerfEntries((previousEntries) => mergeStandalonePerfEntries(
+                previousEntries,
+                [...perfWindow.__standalonePerfEntries].reverse()
+            ))
+        }
+
+        let unsubscribe: (() => void) | undefined
+
+        listenEvent<StandalonePerfEntry>(STANDALONE_PERF_EVENT, (event) => {
+            setStandalonePerfEntries((previousEntries) => mergeStandalonePerfEntries(previousEntries, [event.payload]))
+        }).then((unlisten) => {
+            unsubscribe = unlisten
+        }).catch((error) => {
+            console.error('[MainLayout] Failed to listen for standalone perf events:', error)
+        })
+
+        return () => {
+            if (unsubscribe) {
+                unsubscribe()
+            }
+        }
+    }, [])
 
     // RPC Server for modelOptimize standalone window
     const getModelOptimizeState = useCallback(() => {
@@ -1831,46 +2060,12 @@ const MainLayout: React.FC = () => {
         broadcastModelOptimize(getModelOptimizeState());
     }, [modelOptimizeRunning, modelOptimizeLastResult, getModelOptimizeState, broadcastModelOptimize]);
 
-
-    // Preload standalone tool windows silently in the background
-    // Staggered to avoid blocking the main thread during startup
     useEffect(() => {
-        const windows = [
-            { id: 'modelOptimize', title: '模型优化', w: 320, h: 380 },
-            { id: 'cameraManager', title: '相机管理器', w: 700, h: 520 },
-            { id: 'geosetVisibilityTool', title: '多边形动作显隐工具', w: 980, h: 560 },
-            { id: 'geosetEditor', title: '多边形编辑器', w: 640, h: 480 },
-            { id: 'geosetAnimManager', title: '多边形动画管理器', w: 800, h: 480 },
-            { id: 'textureManager', title: '贴图管理器', w: 920, h: 480 },
-            { id: 'textureAnimManager', title: '贴图动画管理器', w: 800, h: 480 },
-            { id: 'materialManager', title: '材质管理器', w: 740, h: 450 },
-            { id: 'sequenceManager', title: '动画管理器', w: 600, h: 450 },
-            { id: 'globalSequenceManager', title: '全局动作管理器', w: 300, h: 360 },
-            ...Array.from({ length: 8 }).map((_, i) => ({
-                id: `keyframeEditor_${i}`,
-                title: '关键帧编辑器',
-                w: 600,
-                h: 480
-            }))
-        ];
+        if (!modelData || standaloneWarmupStartedRef.current) return
 
-        let timer: any;
-        // Delay preloading start by 1.5s to let the main UI breathe first
-        timer = setTimeout(async () => {
-            for (const win of windows) {
-                try {
-                    await windowManager.preloadToolWindow(win.id, win.title, win.w as number || 800, win.h as number || 600);
-                    // Wait 300ms between each window to keep the event loop responsive
-                    await new Promise(resolve => setTimeout(resolve, 300));
-                } catch (e) {
-                    console.warn(`[MainLayout] Failed to preload ${win.id}:`, e);
-                }
-            }
-        }, 1500);
-
-        return () => clearTimeout(timer);
-    }, []);
-
+        standaloneWarmupStartedRef.current = true
+        return scheduleStandaloneWarmup()
+    }, [modelData]);
     // Persistent settings
     // Persistent settings replaced by store
     const {
@@ -2294,6 +2489,7 @@ const MainLayout: React.FC = () => {
     // RPC Server for Geoset Editor
     const getGeosetManagerState = useCallback(() => {
         const _modelData = useModelStore.getState().modelData;
+        const _pickedGeosetIndex = useSelectionStore.getState().pickedGeosetIndex;
         const geosets = (_modelData?.Geosets || []).map((g: any, index: number) => ({
             index,
             MaterialID: g.MaterialID,
@@ -2305,7 +2501,8 @@ const MainLayout: React.FC = () => {
         return {
             geosets,
             materialsCount: _modelData?.Materials?.length || 0,
-            selectedIndex: useModelStore.getState().selectedGeosetIndex || 0,
+            selectedIndex: _pickedGeosetIndex ?? useModelStore.getState().selectedGeosetIndex ?? 0,
+            pickedGeosetIndex: _pickedGeosetIndex,
         };
     }, []);
 
@@ -2341,21 +2538,10 @@ const MainLayout: React.FC = () => {
     );
 
     // RPC Server for Texture Manager 
-    const getTextureManagerState = useCallback(() => {
-        const _modelData = useModelStore.getState().modelData;
-        const _modelPath = useModelStore.getState().modelPath;
-        const _pickedGeosetIndex = useSelectionStore.getState().pickedGeosetIndex;
-
-        return {
-            textures: _modelData?.Textures || [],
-            globalSequences: _modelData?.GlobalSequences || [],
-            materials: _modelData?.Materials || [],
-            geosets: _modelData?.Geosets || [],
-            modelPath: _modelPath,
-            pickedGeosetIndex: _pickedGeosetIndex
-        };
-    }, []);
-
+    // RPC Server for Texture Manager 
+    const getTextureManagerState = useCallback((): TextureManagerRpcState => {
+        return ensureTextureManagerSnapshotState()
+    }, [ensureTextureManagerSnapshotState]);
     const handleTextureCommand = useCallback((command: string, payload: any) => {
         if (command === 'SAVE_TEXTURES' && payload.textures) {
             console.log('[RPC COMMAND: SAVE_TEXTURES]', payload.textures);
@@ -2371,7 +2557,7 @@ const MainLayout: React.FC = () => {
         }
     }, [showMessage]);
 
-    const { broadcastSync: broadcastTextureManager } = useRpcServer(
+    const { broadcastSync: broadcastTextureManager, broadcastPatch: broadcastTextureManagerPatch } = useRpcServer<TextureManagerRpcState, TextureManagerPatch>(
         'textureManager',
         getTextureManagerState,
         handleTextureCommand
@@ -2418,6 +2604,7 @@ const MainLayout: React.FC = () => {
     // RPC Server for Geoset Anim Manager
     const getGeosetAnimManagerState = useCallback(() => {
         const _modelData = useModelStore.getState().modelData;
+        const _pickedGeosetIndex = useSelectionStore.getState().pickedGeosetIndex;
         const geosets = (_modelData?.Geosets || []).map((_, index: number) => ({
             index
         }));
@@ -2426,6 +2613,7 @@ const MainLayout: React.FC = () => {
             geosets,
             geosetAnims: _modelData?.GeosetAnims || [],
             globalSequences: _modelData?.GlobalSequences || [],
+            pickedGeosetIndex: _pickedGeosetIndex,
         };
     }, []);
 
@@ -2487,21 +2675,8 @@ const MainLayout: React.FC = () => {
 
     // RPC Server for Material Manager
     const getMaterialManagerState = useCallback(() => {
-        const _modelData = useModelStore.getState().modelData;
-        const _modelPath = useModelStore.getState().modelPath;
-        const _pickedGeosetIndex = useSelectionStore.getState().pickedGeosetIndex;
-
-        return {
-            materials: _modelData?.Materials || [],
-            textures: _modelData?.Textures || [],
-            geosets: _modelData?.Geosets || [],
-            globalSequences: _modelData?.GlobalSequences || [],
-            sequences: _modelData?.Sequences || [],
-            modelPath: _modelPath,
-            pickedGeosetIndex: _pickedGeosetIndex
-        };
-    }, []);
-
+        return ensureMaterialManagerSnapshotState()
+    }, [ensureMaterialManagerSnapshotState])
     const handleMaterialCommand = useCallback((command: string, payload: any) => {
         if (command === 'EXECUTE_MATERIAL_ACTION') {
             const { action, payload: actionPayload } = payload;
@@ -2517,7 +2692,7 @@ const MainLayout: React.FC = () => {
         }
     }, []);
 
-    const { broadcastSync: broadcastMaterialManager } = useRpcServer(
+    const { broadcastSync: broadcastMaterialManager, broadcastPatch: broadcastMaterialManagerPatch } = useRpcServer<MaterialManagerRpcState, MaterialManagerPatch>(
         'materialManager',
         getMaterialManagerState,
         handleMaterialCommand
@@ -2575,9 +2750,9 @@ const MainLayout: React.FC = () => {
         broadcastGeosetEditor, getGeosetManagerState,
         broadcastGeosetVisibilityTool, getGeosetVisibilityState,
         broadcastGeosetAnimManager, getGeosetAnimManagerState,
-        broadcastTextureManager, getTextureManagerState,
+        broadcastTextureManager, broadcastTextureManagerPatch, getTextureManagerState,
         broadcastTextureAnimManager, getTextureAnimManagerState,
-        broadcastMaterialManager, getMaterialManagerState,
+        broadcastMaterialManager, broadcastMaterialManagerPatch, getMaterialManagerState,
         broadcastSequenceManager, getSequenceManagerState,
         broadcastGlobalSeqManager, getGlobalSeqManagerState,
         lastBroadcastTime: 0
@@ -2589,9 +2764,9 @@ const MainLayout: React.FC = () => {
             broadcastGeosetEditor, getGeosetManagerState,
             broadcastGeosetVisibilityTool, getGeosetVisibilityState,
             broadcastGeosetAnimManager, getGeosetAnimManagerState,
-            broadcastTextureManager, getTextureManagerState,
+            broadcastTextureManager, broadcastTextureManagerPatch, getTextureManagerState,
             broadcastTextureAnimManager, getTextureAnimManagerState,
-            broadcastMaterialManager, getMaterialManagerState,
+            broadcastMaterialManager, broadcastMaterialManagerPatch, getMaterialManagerState,
             broadcastSequenceManager, getSequenceManagerState,
             broadcastGlobalSeqManager, getGlobalSeqManagerState,
             lastBroadcastTime: rpcRefs.current.lastBroadcastTime
@@ -2604,7 +2779,33 @@ const MainLayout: React.FC = () => {
         let prevModelData = useModelStore.getState().modelData;
         let prevNodes = useModelStore.getState().nodes;
 
-        const performBroadcast = (state: any) => {
+        const performBroadcast = async (state: any) => {
+            const [
+                cameraManagerVisible,
+                geosetEditorVisible,
+                geosetVisibilityVisible,
+                geosetAnimVisible,
+                textureManagerVisible,
+                textureAnimVisible,
+                materialManagerVisible,
+                sequenceManagerVisible,
+                globalSeqVisible,
+            ] = await Promise.all([
+                windowManager.isToolWindowVisible('cameraManager'),
+                windowManager.isToolWindowVisible('geosetEditor'),
+                windowManager.isToolWindowVisible('geosetVisibilityTool'),
+                windowManager.isToolWindowVisible('geosetAnimManager'),
+                windowManager.isToolWindowVisible('textureManager'),
+                windowManager.isToolWindowVisible('textureAnimManager'),
+                windowManager.isToolWindowVisible('materialManager'),
+                windowManager.isToolWindowVisible('sequenceManager'),
+                windowManager.isToolWindowVisible('globalSequenceManager'),
+            ]);
+
+            if (!cameraManagerVisible && !geosetEditorVisible && !geosetVisibilityVisible && !geosetAnimVisible && !textureManagerVisible && !textureAnimVisible && !materialManagerVisible && !sequenceManagerVisible && !globalSeqVisible) {
+                return;
+            }
+
             const {
                 broadcastCameraManager,
                 broadcastGeosetEditor,
@@ -2618,77 +2819,92 @@ const MainLayout: React.FC = () => {
             } = rpcRefs.current;
 
             const strippedGeosets = stripGeosetData(state.modelData?.Geosets);
-            const strippedNodes = stripNodeData(state.nodes);
             const modelData = state.modelData;
+            const pickedGeosetIndex = useSelectionStore.getState().pickedGeosetIndex;
+            const textureManagerState = getTextureManagerState();
+            const materialManagerState = getMaterialManagerState();
 
-            // 1. Camera Sync (Minimal Nodes)
-            broadcastCameraManager({
-                cameras: state.nodes.filter(n => n.type === NodeType.CAMERA),
-                globalSequences: (modelData?.GlobalSequences || []) as number[]
-            });
+            if (cameraManagerVisible) {
+                broadcastCameraManager({
+                    cameras: state.nodes.filter(n => n.type === NodeType.CAMERA),
+                    globalSequences: (modelData?.GlobalSequences || []) as number[]
+                });
+            }
 
-            // 2. Geoset Editor Sync (Stripped)
-            broadcastGeosetEditor({
-                geosets: strippedGeosets,
-                materialsCount: modelData?.Materials?.length || 0,
-                selectedIndex: state.selectedGeosetIndex || 0,
-            });
+            if (geosetEditorVisible) {
+                broadcastGeosetEditor({
+                    geosets: strippedGeosets,
+                    materialsCount: modelData?.Materials?.length || 0,
+                    selectedIndex: pickedGeosetIndex ?? state.selectedGeosetIndex ?? 0,
+                    pickedGeosetIndex,
+                });
+            }
 
-            // 3. Visibility Tool Sync (Stripped)
-            broadcastGeosetVisibilityTool({
-                geosets: strippedGeosets,
-                sequences: modelData?.Sequences || [],
-                geosetsAnims: modelData?.GeosetAnims || [],
-                globalSequences: modelData?.GlobalSequences || [],
-            });
+            if (geosetVisibilityVisible) {
+                broadcastGeosetVisibilityTool({
+                    geosets: strippedGeosets,
+                    sequences: modelData?.Sequences || [],
+                    geosetsAnims: modelData?.GeosetAnims || [],
+                    globalSequences: modelData?.GlobalSequences || [],
+                });
+            }
 
-            // 4. Anim Manager Sync (Stripped)
-            broadcastGeosetAnimManager({
-                geosets: strippedGeosets.map(g => ({ index: (g as any).index })),
-                geosetAnims: modelData?.GeosetAnims || [],
-                globalSequences: modelData?.GlobalSequences || [],
-            });
+            if (geosetAnimVisible) {
+                broadcastGeosetAnimManager({
+                    geosets: strippedGeosets.map(g => ({ index: (g as any).index })),
+                    geosetAnims: modelData?.GeosetAnims || [],
+                    globalSequences: modelData?.GlobalSequences || [],
+                });
+            }
 
-            // 5. Texture Manager Sync (Stripped Geosets & Nodes)
-            broadcastTextureManager({
-                textures: modelData?.Textures || [],
-                globalSequences: modelData?.GlobalSequences || [],
-                materials: modelData?.Materials || [],
-                geosets: strippedGeosets,
-                modelPath: state.modelPath,
-                pickedGeosetIndex: useSelectionStore.getState().pickedGeosetIndex
-            });
+            if (textureManagerVisible) {
+                if (standaloneSnapshotDispatchRef.current.textureManager !== textureManagerState.snapshotVersion) {
+                    standaloneSnapshotDispatchRef.current.textureManager = textureManagerState.snapshotVersion
+                    broadcastTextureManager(textureManagerState);
+                } else {
+                    markStandalonePerf('snapshot_broadcast_skipped', {
+                        windowId: 'textureManager',
+                        snapshotVersion: textureManagerState.snapshotVersion,
+                        reason: 'snapshot_version_unchanged',
+                    })
+                }
+            }
 
-            // 6. Texture Anim Manager Sync (Stripped Geosets)
-            broadcastTextureAnimManager({
-                textureAnims: modelData?.TextureAnims || [],
-                globalSequences: modelData?.GlobalSequences || [],
-                sequences: modelData?.Sequences || [],
-                materials: modelData?.Materials || [],
-                geosets: strippedGeosets,
-                pickedGeosetIndex: useSelectionStore.getState().pickedGeosetIndex
-            });
+            if (textureAnimVisible) {
+                broadcastTextureAnimManager({
+                    textureAnims: modelData?.TextureAnims || [],
+                    globalSequences: modelData?.GlobalSequences || [],
+                    sequences: modelData?.Sequences || [],
+                    materials: modelData?.Materials || [],
+                    geosets: strippedGeosets,
+                    pickedGeosetIndex
+                });
+            }
 
-            // 7. Material Manager Sync
-            broadcastMaterialManager({
-                materials: modelData?.Materials || [],
-                textures: modelData?.Textures || [],
-                geosets: strippedGeosets,
-                globalSequences: modelData?.GlobalSequences || [],
-                sequences: modelData?.Sequences || [],
-                modelPath: state.modelPath,
-                pickedGeosetIndex: useSelectionStore.getState().pickedGeosetIndex
-            });
+            if (materialManagerVisible) {
+                if (standaloneSnapshotDispatchRef.current.materialManager !== materialManagerState.snapshotVersion) {
+                    standaloneSnapshotDispatchRef.current.materialManager = materialManagerState.snapshotVersion
+                    broadcastMaterialManager(materialManagerState);
+                } else {
+                    markStandalonePerf('snapshot_broadcast_skipped', {
+                        windowId: 'materialManager',
+                        snapshotVersion: materialManagerState.snapshotVersion,
+                        reason: 'snapshot_version_unchanged',
+                    })
+                }
+            }
 
-            // 8. Sequence Manager Sync
-            broadcastSequenceManager({
-                sequences: modelData?.Sequences || []
-            });
+            if (sequenceManagerVisible) {
+                broadcastSequenceManager({
+                    sequences: modelData?.Sequences || []
+                });
+            }
 
-            // 9. Global Sequence Manager Sync
-            broadcastGlobalSeqManager({
-                globalSequences: (modelData?.GlobalSequences || []) as number[]
-            });
+            if (globalSeqVisible) {
+                broadcastGlobalSeqManager({
+                    globalSequences: (modelData?.GlobalSequences || []) as number[]
+                });
+            }
         };
 
         // Subscribe directly to Zustand
@@ -2701,20 +2917,55 @@ const MainLayout: React.FC = () => {
 
                 if (isInitialLoad) {
                     console.log('[MainLayout] Initial model load detected, deferring IPC broadcast for smoothness');
-                    setTimeout(() => performBroadcast(useModelStore.getState()), 250);
+                    setTimeout(() => { void performBroadcast(useModelStore.getState()); }, 250);
                 } else {
-                    performBroadcast(state);
+                    void performBroadcast(state);
                 }
+            }
+        });
+
+        let prevPickedGeosetIndex = useSelectionStore.getState().pickedGeosetIndex;
+        const unsubscribeSelection = useSelectionStore.subscribe((selectionState) => {
+            if (selectionState.pickedGeosetIndex !== prevPickedGeosetIndex) {
+                prevPickedGeosetIndex = selectionState.pickedGeosetIndex;
+
+                const liveModelState = useModelStore.getState();
+                const modelData = liveModelState.modelData;
+                const pickedGeosetIndex = selectionState.pickedGeosetIndex;
+                const strippedGeosets = stripGeosetData(modelData?.Geosets);
+
+                rpcRefs.current.broadcastGeosetEditor({
+                    geosets: strippedGeosets,
+                    materialsCount: modelData?.Materials?.length || 0,
+                    selectedIndex: pickedGeosetIndex ?? liveModelState.selectedGeosetIndex ?? 0,
+                    pickedGeosetIndex,
+                });
+
+                rpcRefs.current.broadcastTextureManagerPatch({
+                    pickedGeosetIndex,
+                });
+
+                rpcRefs.current.broadcastMaterialManagerPatch({
+                    pickedGeosetIndex,
+                });
+
+                rpcRefs.current.broadcastGeosetAnimManager({
+                    geosets: strippedGeosets.map(g => ({ index: (g as any).index })),
+                    geosetAnims: modelData?.GeosetAnims || [],
+                    globalSequences: modelData?.GlobalSequences || [],
+                    pickedGeosetIndex,
+                });
             }
         });
 
         // Initial broadcast after a short delay to ensure preloading started
         setTimeout(() => {
-            performBroadcast(useModelStore.getState());
+            void performBroadcast(useModelStore.getState());
         }, 500);
 
         return () => {
             unsubscribe();
+            unsubscribeSelection();
         };
     }, []); // Zero dependencies: stable throughout lifecycle
 
@@ -2798,7 +3049,7 @@ const MainLayout: React.FC = () => {
                     if (installPath) {
                         console.log('[MainLayout] Detected Warcraft III path:', installPath)
                         const mpqs = ['war3.mpq', 'War3Patch.mpq', 'War3x.mpq', 'War3xLocal.mpq']
-                        const basePath = installPath.endsWith('\\') ? installPath : `${installPath}\\`
+                        const basePath = installPath.endsWith('') ? installPath : `${installPath}`
                         const pathsToLoad = mpqs.map(mpq => `${basePath}${mpq}`)
 
                         // OPTIMIZATION: Load all MPQs in parallel
@@ -2955,6 +3206,10 @@ const MainLayout: React.FC = () => {
                 unlistenDrop = await listen<{ paths?: string[]; position?: { x: number; y: number } }>('tauri://drag-drop', async (event) => {
                     setIsDragging(false)
                     isExternalModelDragRef.current = false
+                    const sourceWindowLabel = (event as any)?.windowLabel
+                    const currentWindowLabel = getCurrentWindow().label
+                    if (sourceWindowLabel && sourceWindowLabel !== currentWindowLabel) return
+
                     const paths = Array.isArray(event.payload?.paths) ? event.payload.paths : []
                     if (!paths || paths.length === 0) return
 
@@ -2977,6 +3232,10 @@ const MainLayout: React.FC = () => {
 
                 // Listen for drag enter
                 unlistenEnter = await listen<{ paths?: string[] }>('tauri://drag-enter', (event) => {
+                    const sourceWindowLabel = (event as any)?.windowLabel
+                    const currentWindowLabel = getCurrentWindow().label
+                    if (sourceWindowLabel && sourceWindowLabel !== currentWindowLabel) return
+
                     const paths = Array.isArray(event.payload?.paths) ? event.payload.paths : []
                     const hasSupportedAsset = paths.some(isSupportedAssetFile)
                     isExternalModelDragRef.current = hasSupportedAsset
@@ -3036,10 +3295,10 @@ const MainLayout: React.FC = () => {
 
     const normalizeWindowsPath = (path: string): string => path.replace(/\//g, '\\');
     const isAbsoluteWindowsPath = (path: string): boolean =>
-        /^[a-zA-Z]:[\\/]/.test(path) || path.startsWith('\\\\');
+        /^[a-zA-Z]:\\/.test(path) || path.startsWith('\\\\');
     const getDirname = (path: string): string => {
         const normalized = normalizeWindowsPath(path);
-        const idx = normalized.lastIndexOf('\\');
+        const idx = normalized.lastIndexOf('');
         return idx >= 0 ? normalized.slice(0, idx) : normalized;
     };
 
@@ -3114,7 +3373,7 @@ const MainLayout: React.FC = () => {
                 const normalizedImagePath = normalizeWindowsPath(imagePathRaw);
                 const outputPath = isAbsoluteWindowsPath(normalizedImagePath)
                     ? normalizedImagePath
-                    : `${targetModelDir}\\${normalizedImagePath}`;
+                    : `${targetModelDir}${normalizedImagePath}`;
                 const outputDir = getDirname(outputPath);
                 if (outputDir) {
                     await mkdir(outputDir, { recursive: true });
@@ -3150,8 +3409,8 @@ const MainLayout: React.FC = () => {
             if (validationErrors.length > 0) {
                 console.warn('[MainLayout] Model validation warnings:', validationErrors);
                 // Show first 3 errors to user
-                const errorMsg = validationErrors.slice(0, 3).join('\n');
-                const proceed = confirm(`模型验证发现以下问题:\n${errorMsg}\n${validationErrors.length > 3 ? `...还有 ${validationErrors.length - 3} 个问题` : ''}\n\n是否仍然保存?`);
+                const errorMsg = validationErrors.slice(0, 3).join('n');
+                const proceed = confirm(`模型验证发现以下问题:n${errorMsg}n${validationErrors.length > 3 ? `...还有 ${validationErrors.length - 3} 个问题` : ''}nn是否仍然保存?`);
                 if (!proceed) {
                     isSavingRef.current = false;
                     return false;
@@ -3183,11 +3442,11 @@ const MainLayout: React.FC = () => {
             }
 
             if (textureEncodeResult.failed.length > 0) {
-                const lines = textureEncodeResult.failed.slice(0, 3).join('\n');
+                const lines = textureEncodeResult.failed.slice(0, 3).join('n');
                 showMessage(
                     'warning',
                     '部分贴图写出失败',
-                    `${textureEncodeResult.failed.length} 个贴图写出失败：\n${lines}${textureEncodeResult.failed.length > 3 ? '\n...' : ''}`
+                    `${textureEncodeResult.failed.length} 个贴图写出失败：n${lines}${textureEncodeResult.failed.length > 3 ? 'n...' : ''}`
                 );
             }
             if (textureEncodeResult.encodedCount > 0) {
@@ -3266,11 +3525,11 @@ const MainLayout: React.FC = () => {
                     await writeFile(selected, new Uint8Array(buffer))
                 }
                 if (textureEncodeResult.failed.length > 0) {
-                    const lines = textureEncodeResult.failed.slice(0, 3).join('\n');
+                    const lines = textureEncodeResult.failed.slice(0, 3).join('n');
                     showMessage(
                         'warning',
                         '部分贴图写出失败',
-                        `${textureEncodeResult.failed.length} 个贴图写出失败：\n${lines}${textureEncodeResult.failed.length > 3 ? '\n...' : ''}`
+                        `${textureEncodeResult.failed.length} 个贴图写出失败：n${lines}${textureEncodeResult.failed.length > 3 ? 'n...' : ''}`
                     );
                 }
                 if (textureEncodeResult.encodedCount > 0) {
@@ -3391,7 +3650,7 @@ const MainLayout: React.FC = () => {
                 return true;
             }),
             registerShortcutHandler('editor.geosetManager', () => {
-                windowManager.openToolWindow('geosetEditor', '多边形编辑器', 850, 480);
+                windowManager.openToolWindow('geosetEditor', '多边形管理器', 850, 480);
                 return true;
             }),
             registerShortcutHandler('editor.geosetAnimManager', () => {
@@ -3512,9 +3771,9 @@ const MainLayout: React.FC = () => {
     // Helper function to get model name from path or default
     const getModelBaseName = (): string => {
         if (modelPath) {
-            const filename = modelPath.split(/[/\\]/).pop() || 'model'
+            const filename = modelPath.split(/[/]/).pop() || 'model'
             // Remove extension
-            return filename.replace(/\.(mdx|mdl)$/i, '')
+            return filename.replace(/.(mdx|mdl)$/i, '')
         }
         return 'model'
     }
@@ -3700,8 +3959,8 @@ const MainLayout: React.FC = () => {
             return;
         }
         if (editor === 'geoset') {
-            windowManager.openToolWindow('geosetEditor', '多边形编辑器', 850, 480).catch(e => {
-                showMessage(`无法打开多边形编辑器: ${e.message || e}`, 'error');
+            windowManager.openToolWindow('geosetEditor', '多边形管理器', 850, 480).catch(e => {
+                showMessage(`无法打开多边形管理器: ${e.message || e}`, 'error');
             });
             return;
         }
@@ -3787,7 +4046,7 @@ const MainLayout: React.FC = () => {
             setActivationCode('');
 
             if (result.is_activated) {
-                alert(`激活成功！\n\n版本: ${result.level_name}\n授权类型: ${result.license_type === 'PERM' ? '永久授权' : '时限授权'}`);
+                alert(`激活成功！nn版本: ${result.level_name}n授权类型: ${result.license_type === 'PERM' ? '永久授权' : '时限授权'}`);
             }
         } catch (e: any) {
             setActivationError(typeof e === 'string' ? e : (e.message || '激活失败'));
@@ -3892,7 +4151,6 @@ const MainLayout: React.FC = () => {
                     const newVal = !showAttachments
                     setShowAttachments(newVal)
                 }}
-                onSetViewPreset={(preset) => setViewPreset({ type: preset, time: Date.now() })}
                 onToggleEditor={(editor) => {
                     console.log('[MainLayout] onToggleEditor called with:', editor)
                     if (editor === 'nodeManager') {
@@ -3914,14 +4172,14 @@ const MainLayout: React.FC = () => {
 
                         windowManager.openToolWindow('materialManager', '材质管理器', 650, 380)
                     } else if (editor === 'geoset') {
-                        windowManager.openToolWindow('geosetEditor', '多边形编辑器', 640, 480);
+                        windowManager.openToolWindow('geosetEditor', '多边形管理器', 640, 480);
                     } else if (editor === 'geosetAnim') {
                         windowManager.openToolWindow('geosetAnimManager', '多边形动画管理器', 800, 480);
                     } else if (editor === 'globalSequence') {
                         windowManager.openToolWindow('globalSequenceManager', '全局动作管理器', 300, 360);
                     } else if (editor === 'modelOptimize') {
                         // Open as native window using the WindowManager
-                        windowManager.openToolWindow('modelOptimize', '模型优化', 320, 380);
+                        windowManager.openToolWindow('modelOptimize', '模型优化', 320, 520);
                     } else if (editor === 'geosetVisibility') {
                         setShowGeosetVisibility(!showGeosetVisibility)
                     } else {
@@ -3933,6 +4191,8 @@ const MainLayout: React.FC = () => {
                 onSetMainMode={setMainMode}
                 showDebugConsole={showDebugConsole}
                 onToggleDebugConsole={() => setShowDebugConsole(!showDebugConsole)}
+                showStandalonePerf={showStandalonePerf}
+                onShowStandalonePerf={() => setShowStandalonePerf(true)}
                 onShowAbout={() => setShowAbout(true)}
                 onRecalculateNormals={() => {
                     useModelStore.getState().recalculateNormals();
@@ -3990,6 +4250,15 @@ const MainLayout: React.FC = () => {
                 }}
                 onCopyModel={handleCopyModel}
             />
+
+            <Suspense fallback={null}>
+                <StandalonePerfModal
+                    open={showStandalonePerf}
+                    onClose={() => setShowStandalonePerf(false)}
+                    onClear={clearStandalonePerfEntries}
+                    entries={standalonePerfEntries}
+                />
+            </Suspense>
 
             {/* About Dialog */}
             {showAbout && (
@@ -4286,3 +4555,32 @@ const MainLayout: React.FC = () => {
 }
 
 export default MainLayout
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

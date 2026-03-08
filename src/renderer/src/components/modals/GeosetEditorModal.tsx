@@ -24,12 +24,17 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
     const [selectedIndex, setSelectedIndex] = useState<number>(-1)
     const [_hasChanges, setHasChanges] = useState(false)
     const listRef = useRef<HTMLDivElement>(null)
+    const lastHandledStandalonePickedRef = useRef<number | null | undefined>(undefined)
 
     // RPC Sync for standalone mode
-    const { state: rpcState, emitCommand } = useRpcClient<any>('geosetEditor', { geosets: [], materialsCount: 0 });
+    const { state: rpcState, emitCommand } = useRpcClient<any>('geosetEditor', { geosets: [], materialsCount: 0, selectedIndex: -1, pickedGeosetIndex: null });
 
     const sourceGeosets = isStandalone ? rpcState.geosets : modelData?.Geosets || [];
 
+    const standalonePickedIndex =
+        typeof rpcState.pickedGeosetIndex === 'number'
+            ? rpcState.pickedGeosetIndex
+            : (typeof rpcState.selectedIndex === 'number' ? rpcState.selectedIndex : -1);
     // Helper to scroll to selected item
     const scrollToItem = (index: number) => {
         if (listRef.current && index >= 0) {
@@ -47,22 +52,36 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
                 setLocalGeosets([])
             }
 
+            const standaloneIndex =
+                typeof rpcState.pickedGeosetIndex === 'number'
+                    ? rpcState.pickedGeosetIndex
+                    : (typeof rpcState.selectedIndex === 'number' ? rpcState.selectedIndex : -1)
+
             // Use persistent selection from store if available, otherwise default to first
             const { selectedGeosetIndex } = useModelStore.getState()
-            if (selectedGeosetIndex !== null && selectedGeosetIndex >= 0 && selectedGeosetIndex < sourceGeosets.length) {
+            if (isStandalone && standaloneIndex >= 0 && standaloneIndex < sourceGeosets.length) {
+                setSelectedIndex(standaloneIndex)
+            } else if (selectedGeosetIndex !== null && selectedGeosetIndex >= 0 && selectedGeosetIndex < sourceGeosets.length) {
                 setSelectedIndex(selectedGeosetIndex)
             } else {
                 setSelectedIndex(sourceGeosets.length > 0 ? 0 : -1)
             }
             setHasChanges(false)
         }
-    }, [visible, sourceGeosets])
+    }, [visible, sourceGeosets, isStandalone, rpcState.selectedIndex, rpcState.pickedGeosetIndex])
 
     // Subscribe to Ctrl+Click geoset picking - auto-select geoset
     useEffect(() => {
         if (!visible) return
 
-        // Read initial value immediately when modal opens
+        if (isStandalone) {
+            if (standalonePickedIndex >= 0 && standalonePickedIndex < sourceGeosets.length) {
+                setSelectedIndex(standalonePickedIndex)
+                setTimeout(() => scrollToItem(standalonePickedIndex), 0)
+            }
+            return
+        }
+
         const initialPickedIndex = useSelectionStore.getState().pickedGeosetIndex
         if (initialPickedIndex !== null && initialPickedIndex >= 0 && initialPickedIndex < localGeosets.length) {
             setSelectedIndex(initialPickedIndex)
@@ -70,7 +89,6 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
             console.log('[GeosetEditor] Initial auto-selected geoset', initialPickedIndex)
         }
 
-        // Subscribe to future changes
         let lastPickedIndex: number | null = initialPickedIndex
         const unsubscribe = useSelectionStore.subscribe((state) => {
             const pickedGeosetIndex = state.pickedGeosetIndex
@@ -84,7 +102,7 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
             }
         })
         return unsubscribe
-    }, [visible, localGeosets.length])
+    }, [visible, localGeosets.length, sourceGeosets.length, isStandalone, standalonePickedIndex])
 
     const handleOk = () => {
         if (isStandalone) {
@@ -222,7 +240,7 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
     );
     if (isStandalone) {
         return (
-            <StandaloneWindowFrame title="多边形编辑器" onClose={() => getCurrentWindow().hide()}>
+            <StandaloneWindowFrame title="多边形管理器" onClose={() => getCurrentWindow().hide()}>
                 <div style={{ flex: 1, overflowY: 'auto' }}>
                     {innerContent}
                 </div>
@@ -231,7 +249,7 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
     }
     return (
         <DraggableModal
-            title="多边形编辑器 (Geoset Editor)"
+            title="多边形管理器 (Geoset Editor)"
             open={visible}
             onOk={handleOk}
             onCancel={handleCancel}
@@ -253,4 +271,8 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
 }
 
 export default GeosetEditorModal
+
+
+
+
 

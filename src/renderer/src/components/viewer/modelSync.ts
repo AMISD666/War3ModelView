@@ -1,4 +1,4 @@
-/**
+﻿/**
  * modelSync - Model data synchronization utilities
  * Handles lightweight sync between store and renderer without full reloads
  */
@@ -246,3 +246,4 @@ export function syncNodeData(renderer: any, storeNodes: any[]): void {
         }
     })
 }
+

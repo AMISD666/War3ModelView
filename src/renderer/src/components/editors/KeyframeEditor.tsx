@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useMemo, useRef } from 'react'
+import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { Input, Select, Row, Col, Button, ColorPicker } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { DraggableModal } from '../DraggableModal'
@@ -69,6 +69,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
     // TextureID Batch Generation State
     const textureCount = modelData?.Textures?.length || 1
     const [textureBatchCount, setTextureBatchCount] = useState<number>(textureCount)
+    const [textureBatchStartFrame, setTextureBatchStartFrame] = useState<number>(0)
     const [textureBatchInterval, setTextureBatchInterval] = useState<number>(100)
 
     // Check if editing TextureID
@@ -82,10 +83,11 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
     )
 
     // Helper to format a single vector/scalar value
-    const formatValue = (val: number | number[] | Float32Array | undefined | null, vSize: number): string => {
+    const formatValue = (val: number | number[] | Float32Array | undefined | null, vSize: number = vectorSize): string => {
+        const normalizedSize = Number.isFinite(vSize) && vSize > 0 ? vSize : vectorSize
         // Handle undefined/null
         if (val === undefined || val === null) {
-            return vSize === 1 ? '0' : `{ ${new Array(vSize).fill('0').join(', ')} } `
+            return normalizedSize === 1 ? '0' : `{ ${new Array(vSize).fill('0').join(', ')} } `
         }
 
         let nums: number[] = []
@@ -104,25 +106,26 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
         })
 
         // Scalar: just the number
-        if (vSize === 1) return parts[0] || '0'
+        if (normalizedSize === 1) return parts[0] || '0'
 
         // Vector: { a, b, c }
         return `{ ${parts.join(', ')} } `
     }
 
     // Helper to parse a value string like "{ 1, 0, 0 }" or "0.5"
-    const parseValue = (str: string, vSize: number): number[] => {
+    const parseValue = (str: string, vSize: number = vectorSize): number[] => {
+        const normalizedSize = Number.isFinite(vSize) && vSize > 0 ? vSize : vectorSize
         const clean = str.replace(/[{}]/g, '').trim()
         const parts = clean.split(/[,\s]+/).filter(Boolean)
         const nums = parts.map(p => parseFloat(p)).filter(n => !isNaN(n))
 
         // Pad or truncate
-        while (nums.length < vSize) nums.push(0)
-        return nums.slice(0, vSize)
+        while (nums.length < normalizedSize) nums.push(0)
+        return nums.slice(0, normalizedSize)
     }
 
     // Generate formatted text from keys
-    const generateText = (keys: any[], type: number, vSize: number) => {
+    const generateText = (keys: any[], type: number, vSize: number = vectorSize) => {
         return keys.map(k => {
             let lines = [`${k.Frame}: ${formatValue(k.Vector, vSize)} `]
 
@@ -136,7 +139,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
     }
 
     // Parse current text into keys
-    const parseText = (currentText: string, vSize: number): any[] => {
+    const parseText = (currentText: string, vSize: number = vectorSize): any[] => {
         const lines = currentText.split('\n')
         const keys: any[] = []
         let currentKey: any = null
@@ -455,11 +458,9 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
     // Handle TextureID Batch Generation
     const handleTextureIDBatchGenerate = () => {
         const newKeys: any[] = []
-        // Generate frames for each texture (0 to textureBatchCount inclusive)
-        // This creates textureBatchCount+1 keyframes: 0, 1, 2, ..., textureBatchCount
-        for (let i = 0; i <= textureBatchCount; i++) {
+        for (let i = 0; i < textureBatchCount; i++) {
             newKeys.push({
-                Frame: i * textureBatchInterval,
+                Frame: textureBatchStartFrame + i * textureBatchInterval,
                 Vector: [i],
                 InTan: [0],
                 OutTan: [0]
@@ -687,7 +688,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
                 {isTextureIDField && (
                     <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #4a4a4a' }}>
                         <div style={{ marginBottom: 6, color: '#b0b0b0', fontSize: 12 }}>贴图ID批量生成</div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                                 <span style={{ color: '#ccc', fontSize: 12 }}>张数:</span>
                                 <InputNumber
@@ -695,6 +696,16 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
                                     value={textureBatchCount}
                                     onChange={(v) => setTextureBatchCount(v || 1)}
                                     style={{ width: 60 }}
+                                    size="small"
+                                />
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                <span style={{ color: '#ccc', fontSize: 12 }}>起始帧:</span>
+                                <InputNumber
+                                    min={0}
+                                    value={textureBatchStartFrame}
+                                    onChange={(v) => setTextureBatchStartFrame(v || 0)}
+                                    style={{ width: 70 }}
                                     size="small"
                                 />
                             </div>
@@ -723,7 +734,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
                 {/* Simplified Batch Generation Section - Only for Scalars (NOT TextureID) */}
                 {vectorSize === 1 && !isTextureIDField && (
                     <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #4a4a4a' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                                 <span style={{ color: '#ccc', fontSize: 12 }}>数值:</span>
                                 <Input
@@ -843,5 +854,6 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
 }
 
 export default KeyframeEditor
+
 
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import { Modal, Checkbox, Slider, InputNumber, Button, Row, Col, Typography, Divider } from 'antd';
 import Draggable, { DraggableData, DraggableEvent } from 'react-draggable';
 import { clearAndFixModel, IClearConfig } from '../../utils/modelUtils';
@@ -335,3 +335,4 @@ const ModelOptimizeModal: React.FC<ModelOptimizeModalProps> = ({ visible, onClos
 };
 
 export default ModelOptimizeModal;
+

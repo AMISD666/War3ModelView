@@ -1,11 +1,11 @@
-import React, { useEffect, useMemo, useState } from 'react'
+﻿import React, { useEffect, useMemo, useState } from 'react'
 import { Checkbox, Dropdown, Input, message, Typography, Button, type MenuProps } from 'antd'
 import { CloseOutlined } from '@ant-design/icons'
 import { DraggableModal } from '../DraggableModal'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useHistoryStore } from '../../store/historyStore'
-import { emit, listen } from '@tauri-apps/api/event'
+import { listen } from '@tauri-apps/api/event'
 import { windowManager } from '../../utils/windowManager'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useRpcClient } from '../../hooks/useRpc'
@@ -465,8 +465,7 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
         const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
         payload.targetWindowId = windowId;
 
-        emit('IPC_KEYFRAME_INIT', payload);
-        windowManager.openToolWindow(windowId, payload.title, 600, 480);
+        void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload);
     }
 
     const handleGeosetClick = (geosetId: number, event: React.MouseEvent<HTMLElement>) => {
@@ -491,10 +490,17 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
             return
         }
 
-        setSelectedGeosetIds([geosetId])
-        setLastSelectedGeosetId(geosetId)
-    }
+        setSelectedGeosetIds((prev) => {
+            if (prev.includes(geosetId)) {
+                const next = prev.filter((id) => id !== geosetId)
+                setLastSelectedGeosetId(next.length > 0 ? next[next.length - 1] : null)
+                return next
+            }
+            setLastSelectedGeosetId(geosetId)
+            return [geosetId]
+        })
 
+    }
     const getSequenceMenu = (sequence: SequenceItem): MenuProps => ({
         items: [{ key: 'edit-alpha-text', label: '编辑透明度动态txt' }],
         onClick: () => openAlphaTextEditor(sequence)
@@ -690,3 +696,4 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
 }
 
 export default GeosetVisibilityToolModal
+

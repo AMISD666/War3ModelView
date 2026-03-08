@@ -1,4 +1,4 @@
-import { vec3, mat4, quat } from 'gl-matrix'
+﻿import { vec3, mat4, quat } from 'gl-matrix'
 
 export class SimpleOrbitCamera {
     private canvas: HTMLCanvasElement
@@ -85,7 +85,7 @@ export class SimpleOrbitCamera {
                 const dx = this.mouse.x - this.mouse.x2
                 const dy = this.mouse.y - this.mouse.y2
 
-                if (this.mouse.buttons[0]) {
+                if (this.mouse.buttons[0] || this.mouse.buttons[1]) {
                     this.rotate(dx, dy)
                 }
 
@@ -251,4 +251,5 @@ export class SimpleOrbitCamera {
         if (this.onChange) this.onChange()
     }
 }
+
 

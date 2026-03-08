@@ -147,7 +147,7 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
                     opacity: 0,
                     transition: 'opacity 0.2s'
                 }}>
-                    <Tooltip title="澶嶅埗妯″瀷">
+                    <Tooltip title="复制模型">
                         <Button
                             type="text"
                             icon={<CopyOutlined style={{ color: '#fff' }} />}
@@ -157,7 +157,7 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
                         />
                     </Tooltip>
 
-                    <Tooltip title="淇敼璐村浘璺緞">
+                    <Tooltip title="修改贴图路径">
                         <Button
                             type="text"
                             icon={<FileImageOutlined style={{ color: '#fff' }} />}
@@ -167,7 +167,7 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
                         />
                     </Tooltip>
 
-                    <Tooltip title="鍒犻櫎妯″瀷">
+                    <Tooltip title="删除模型">
                         <Button
                             type="text"
                             danger
@@ -209,7 +209,7 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
                 {showAnimationSelect && animations.length > 0 && (
                     <Select
                         size="small"
-                        placeholder="閫夋嫨鍔ㄧ敾"
+                        placeholder="选择动画"
                         value={selectedAnimation}
                         onChange={(value) => {
                             setSelectedAnimation(value);

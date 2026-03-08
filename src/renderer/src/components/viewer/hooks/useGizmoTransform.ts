@@ -3,7 +3,7 @@
  * Handles translation, rotation, and scaling of vertices and nodes via gizmo dragging
  */
 
-import { useCallback } from 'react'
+import { useCallback, useRef } from 'react'
 import { vec3, mat4 } from 'gl-matrix'
 import { useSelectionStore } from '../../../store/selectionStore'
 import { useModelStore } from '../../../store/modelStore'
@@ -45,6 +45,57 @@ function getMoveVectorForAxis(deltaX: number, deltaY: number, moveScale: number,
     else if (axis === 'yz') { moveVec[1] = -deltaY * moveScale; moveVec[2] = deltaX * moveScale }
     return moveVec
 }
+
+function getCoincidentVertexKey(vertices: Float32Array | number[], vertexIndex: number): string {
+    const vIndex = vertexIndex * 3
+    const q = (value: number) => Math.round(Number(value) * 10000) / 10000
+    return `${q(vertices[vIndex])}|${q(vertices[vIndex + 1])}|${q(vertices[vIndex + 2])}`
+}
+
+function collectExpandedFaceVertices(renderer: any, selectedFaceIds: Array<{ geosetIndex: number, index: number }>): Array<{ geosetIndex: number, index: number }> {
+    const result: Array<{ geosetIndex: number, index: number }> = []
+    const uniqueVertexKeys = new Set<string>()
+    const positionKeysByGeoset = new Map<number, Set<string>>()
+
+    for (const sel of selectedFaceIds) {
+        const geoset = renderer?.model?.Geosets?.[sel.geosetIndex]
+        if (!geoset?.Faces || !geoset?.Vertices) continue
+        const fIndex = sel.index * 3
+        const faceVertexIndices = [geoset.Faces[fIndex], geoset.Faces[fIndex + 1], geoset.Faces[fIndex + 2]]
+
+        for (const vertexIndex of faceVertexIndices) {
+            if (!Number.isFinite(vertexIndex)) continue
+            const uniqueKey = `${sel.geosetIndex}-${vertexIndex}`
+            if (!uniqueVertexKeys.has(uniqueKey)) {
+                uniqueVertexKeys.add(uniqueKey)
+                result.push({ geosetIndex: sel.geosetIndex, index: vertexIndex })
+            }
+            let posSet = positionKeysByGeoset.get(sel.geosetIndex)
+            if (!posSet) {
+                posSet = new Set<string>()
+                positionKeysByGeoset.set(sel.geosetIndex, posSet)
+            }
+            posSet.add(getCoincidentVertexKey(geoset.Vertices, vertexIndex))
+        }
+    }
+
+    for (const [geosetIndex, posSet] of positionKeysByGeoset.entries()) {
+        const geoset = renderer?.model?.Geosets?.[geosetIndex]
+        if (!geoset?.Vertices) continue
+        const vertexCount = Math.floor(geoset.Vertices.length / 3)
+        for (let vertexIndex = 0; vertexIndex < vertexCount; vertexIndex++) {
+            const posKey = getCoincidentVertexKey(geoset.Vertices, vertexIndex)
+            if (!posSet.has(posKey)) continue
+            const uniqueKey = `${geosetIndex}-${vertexIndex}`
+            if (uniqueVertexKeys.has(uniqueKey)) continue
+            uniqueVertexKeys.add(uniqueKey)
+            result.push({ geosetIndex, index: vertexIndex })
+        }
+    }
+
+    return result
+}
+
 
 /**
  * 自动K帧：为选中节点在当前帧添加 Translation 关键帧
@@ -139,6 +190,21 @@ export function useGizmoTransform({
     gizmoState,
     animationSubMode: _animationSubMode
 }: UseGizmoTransformParams) {
+    const expandedFaceSelectionRef = useRef<Array<{ geosetIndex: number, index: number }> | null>(null)
+    const expandedFaceSelectionSignatureRef = useRef("")
+
+    const getExpandedFaceSelection = useCallback((selectedFaceIds: Array<{ geosetIndex: number, index: number }>) => {
+        const signature = selectedFaceIds
+            .map((sel) => `${sel.geosetIndex}-${sel.index}`)
+            .sort()
+            .join("|")
+        if (!expandedFaceSelectionRef.current || expandedFaceSelectionSignatureRef.current !== signature) {
+            expandedFaceSelectionRef.current = collectExpandedFaceVertices(rendererRef.current, selectedFaceIds)
+            expandedFaceSelectionSignatureRef.current = signature
+        }
+        return expandedFaceSelectionRef.current
+    }, [rendererRef])
+
 
     /**
      * Handle gizmo drag for transformations
@@ -193,10 +259,14 @@ export function useGizmoTransform({
         const moveVec = getMoveVectorForAxis(deltaX, deltaY, moveScale, axis)
         const { selectedVertexIds, selectedFaceIds, geometrySubMode } = useSelectionStore.getState()
         const affectedGeosets = new Set<number>()
+        const visitedVertices = new Set<string>()
 
         const updateVertex = (geosetIndex: number, vertexIndex: number, updateFn: (v: Float32Array, idx: number) => void) => {
             const geoset = rendererRef.current.model.Geosets[geosetIndex]
             if (!geoset) return
+            const key = `${geosetIndex}-${vertexIndex}`
+            if (visitedVertices.has(key)) return
+            visitedVertices.add(key)
             updateFn(geoset.Vertices, vertexIndex * 3)
             affectedGeosets.add(geosetIndex)
         }
@@ -205,15 +275,7 @@ export function useGizmoTransform({
             if (geometrySubMode === 'vertex') {
                 selectedVertexIds.forEach(sel => updateVertex(sel.geosetIndex, sel.index, updateFn))
             } else if (geometrySubMode === 'face') {
-                selectedFaceIds.forEach(sel => {
-                    const geoset = rendererRef.current.model.Geosets[sel.geosetIndex]
-                    if (geoset) {
-                        const fIndex = sel.index * 3
-                        updateVertex(sel.geosetIndex, geoset.Faces[fIndex], updateFn)
-                        updateVertex(sel.geosetIndex, geoset.Faces[fIndex + 1], updateFn)
-                        updateVertex(sel.geosetIndex, geoset.Faces[fIndex + 2], updateFn)
-                    }
-                })
+                getExpandedFaceSelection(selectedFaceIds).forEach(sel => updateVertex(sel.geosetIndex, sel.index, updateFn))
             }
         }
 
@@ -334,6 +396,7 @@ export function useGizmoTransform({
         if (!rendererRef.current) return
 
         const { selectedVertexIds, selectedFaceIds, geometrySubMode } = useSelectionStore.getState()
+        const visitedVertices = new Set<string>()
 
         // Calculate center of selection
         const center = vec3.create()
@@ -342,6 +405,9 @@ export function useGizmoTransform({
         const accumulateCenter = (geosetIndex: number, vertexIndex: number) => {
             const geoset = rendererRef.current.model.Geosets[geosetIndex]
             if (!geoset) return
+            const key = `${geosetIndex}-${vertexIndex}`
+            if (visitedVertices.has(key)) return
+            visitedVertices.add(key)
             const vIndex = vertexIndex * 3
             center[0] += geoset.Vertices[vIndex]
             center[1] += geoset.Vertices[vIndex + 1]
@@ -352,25 +418,21 @@ export function useGizmoTransform({
         if (geometrySubMode === 'vertex') {
             selectedVertexIds.forEach(sel => accumulateCenter(sel.geosetIndex, sel.index))
         } else if (geometrySubMode === 'face') {
-            selectedFaceIds.forEach(sel => {
-                const geoset = rendererRef.current.model.Geosets[sel.geosetIndex]
-                if (geoset) {
-                    const fIndex = sel.index * 3
-                    accumulateCenter(sel.geosetIndex, geoset.Faces[fIndex])
-                    accumulateCenter(sel.geosetIndex, geoset.Faces[fIndex + 1])
-                    accumulateCenter(sel.geosetIndex, geoset.Faces[fIndex + 2])
-                }
-            })
+            getExpandedFaceSelection(selectedFaceIds).forEach(sel => accumulateCenter(sel.geosetIndex, sel.index))
         }
 
         if (count === 0) return
         vec3.scale(center, center, 1.0 / count)
 
         const affectedGeosets = new Set<number>()
+        const transformedVertices = new Set<string>()
 
         const updateVertex = (geosetIndex: number, vertexIndex: number, updateFn: (v: Float32Array, idx: number) => void) => {
             const geoset = rendererRef.current.model.Geosets[geosetIndex]
             if (!geoset) return
+            const key = `${geosetIndex}-${vertexIndex}`
+            if (transformedVertices.has(key)) return
+            transformedVertices.add(key)
             updateFn(geoset.Vertices, vertexIndex * 3)
             affectedGeosets.add(geosetIndex)
         }
@@ -379,15 +441,7 @@ export function useGizmoTransform({
             if (geometrySubMode === 'vertex') {
                 selectedVertexIds.forEach(sel => updateVertex(sel.geosetIndex, sel.index, updateFn))
             } else if (geometrySubMode === 'face') {
-                selectedFaceIds.forEach(sel => {
-                    const geoset = rendererRef.current.model.Geosets[sel.geosetIndex]
-                    if (geoset) {
-                        const fIndex = sel.index * 3
-                        updateVertex(sel.geosetIndex, geoset.Faces[fIndex], updateFn)
-                        updateVertex(sel.geosetIndex, geoset.Faces[fIndex + 1], updateFn)
-                        updateVertex(sel.geosetIndex, geoset.Faces[fIndex + 2], updateFn)
-                    }
-                })
+                getExpandedFaceSelection(selectedFaceIds).forEach(sel => updateVertex(sel.geosetIndex, sel.index, updateFn))
             }
         }
 

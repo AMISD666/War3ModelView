@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 节点编辑对话框组件
  * 用于编辑节点的基本属性、位置、变换和标志位
  */
@@ -7,7 +7,7 @@ import React, { useEffect, useState } from 'react'
 import { Form, Input, Select, Checkbox, Row, Col, Card, Button } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { DraggableModal } from '../DraggableModal'
-import { emit, listen } from '@tauri-apps/api/event'
+import { listen } from '@tauri-apps/api/event'
 import { windowManager } from '../../utils/windowManager'
 import type { ModelNode } from '../../types/node'
 import { useModelStore } from '../../store/modelStore'
@@ -162,8 +162,7 @@ const NodeDialog: React.FC<NodeDialogProps> = ({ visible, nodeId, onClose }) => 
         const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
         payload.targetWindowId = windowId;
 
-        emit('IPC_KEYFRAME_INIT', payload);
-        windowManager.openToolWindow(windowId, payload.title, 600, 480);
+        void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload);
     }
 
     const handleDynamicToggle = (propName: string, checked: boolean) => {

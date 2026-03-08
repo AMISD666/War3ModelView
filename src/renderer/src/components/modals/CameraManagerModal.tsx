@@ -1,4 +1,4 @@
-﻿import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
+import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import React, { useState } from 'react';
 import { Button, Card, Space, Row, Col, Input, Checkbox, Tooltip } from 'antd';
 import { EyeOutlined, CameraOutlined } from '@ant-design/icons';
@@ -7,11 +7,12 @@ import { useModelStore } from '../../store/modelStore';
 import { DraggableModal } from '../DraggableModal';
 import { useHistoryStore } from '../../store/historyStore';
 import { CameraNode, NodeType } from '../../types/node';
-import { emit, listen } from '@tauri-apps/api/event';
+import { listen } from '@tauri-apps/api/event';
 import { windowManager } from '../../utils/windowManager';
 import { useRpcClient } from '../../hooks/useRpc';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 
+import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame';
 interface CameraManagerModalProps {
     visible: boolean;
     onClose: () => void;
@@ -168,8 +169,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
         const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
         payload.targetWindowId = windowId;
 
-        emit('IPC_KEYFRAME_INIT', payload);
-        windowManager.openToolWindow(windowId, payload.title, 600, 480);
+        void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload);
     };
 
     const renderListItem = (item: any, index: number, isSelected: boolean) => (
@@ -382,48 +382,11 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
 
     if (isStandalone) {
         return (
-            <div style={{
-                width: '100vw',
-                height: '100vh',
-                backgroundColor: '#1e1e1e',
-                display: 'flex',
-                flexDirection: 'column',
-                overflow: 'hidden'
-            }}>
-                {/* Native Window Custom Title Bar Wrapper */}
-                <div
-                    style={{
-                        height: '32px',
-                        minHeight: '32px',
-                        backgroundColor: '#222',
-                        borderBottom: '1px solid #333',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        padding: '0 16px',
-                        userSelect: 'none',
-                    }}
-                >
-                    <div
-                        data-tauri-drag-region
-                        style={{ flex: 1, height: '100%', display: 'flex', alignItems: 'center', cursor: 'default' }}
-                    >
-                        <strong data-tauri-drag-region style={{ margin: 0, color: '#e0e0e0', fontWeight: 600, fontSize: 13 }}>相机管理器</strong>
-                    </div>
-                    <Button
-                        type="text"
-                        size="small"
-                        icon={<span style={{ fontSize: 14 }}>✕</span>}
-                        onClick={() => getCurrentWindow().hide()}
-                        style={{ color: '#888', zIndex: 10, width: 24, height: 24, minWidth: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}
-                    />
-                </div>
-                {/* Scrollable Content Wrapper */}
+            <StandaloneWindowFrame title="相机管理器" onClose={() => getCurrentWindow().hide()}>
                 <div style={{ flex: 1, overflowY: 'auto' }}>
                     {innerContent}
                 </div>
-
-            </div>
+            </StandaloneWindowFrame>
         );
     }
 

@@ -34,6 +34,7 @@ import { getNodeIcon } from '../utils/nodeUtils';
 interface ViewerToolbarProps {
     onRecalculateNormals?: () => void
     onSplitVertices?: () => void
+    onAutoSeparateLayers?: () => void
     onWeldVertices?: () => void
     onFitToView?: () => void
 }
@@ -41,6 +42,7 @@ interface ViewerToolbarProps {
 export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
     onRecalculateNormals,
     onSplitVertices,
+    onAutoSeparateLayers,
     onWeldVertices,
     onFitToView
 }) => {
@@ -276,6 +278,15 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                                 onClick={onRecalculateNormals}
                             />
                         </Tooltip>
+                        <Tooltip title="一键分层 - 按 4000 顶点上限自动最少拆分">
+                            <Button
+                                icon={<ApartmentOutlined />}
+                                onClick={onAutoSeparateLayers}
+                            />
+                        </Tooltip>
+                    </Space>
+                    <div style={dividerStyle} />
+                    <Space>
                         {/* Vertex Operations - always visible in geometry mode */}
                         <Tooltip title="分离 - 将选中顶点及其面分离为新多边形">
                             <Button
@@ -303,7 +314,6 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                     <div style={dividerStyle} />
                 </>
             )}
-
             {mainMode === 'animation' && (
                 <>
                     <Space>
@@ -398,14 +408,14 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
 
             <div style={dividerStyle} />
             <Space size={4}>
-                <Tooltip title={'\u4e16\u754c\u5750\u6807\u671d\u5411'}>
+                <Tooltip title={'世界坐标朝向'}>
                     <Button
                         type={gizmoOrientation === 'world' ? 'primary' : 'default'}
                         icon={<GlobalOutlined />}
                         onClick={() => setGizmoOrientation('world')}
                     />
                 </Tooltip>
-                <Tooltip title={'\u6444\u50cf\u673a\u671d\u5411'}>
+                <Tooltip title={'摄像机朝向'}>
                     <Button
                         type={gizmoOrientation === 'camera' ? 'primary' : 'default'}
                         icon={<CameraOutlined />}
@@ -417,12 +427,12 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
             <div style={dividerStyle} />
             <Space size={10}>
                 <div style={snapStackStyle}>
-                    <Tooltip title={'\u8ddd\u79bb\u6355\u6349'}>
+                    <Tooltip title={'距离捕捉'}>
                         <Button
                             type={snapTranslateEnabled ? 'primary' : 'default'}
                             onClick={() => setSnapTranslateEnabled(!snapTranslateEnabled)}
                             style={snapButtonStyle}
-                        >{'\u8ddd'}</Button>
+                         icon={<DragOutlined />} />
                     </Tooltip>
                     <InputNumber
                         size="small"
@@ -438,12 +448,12 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                     />
                 </div>
                 <div style={snapStackStyle}>
-                    <Tooltip title={'\u89d2\u5ea6\u6355\u6349'}>
+                    <Tooltip title={'角度捕捉'}>
                         <Button
                             type={snapRotateEnabled ? 'primary' : 'default'}
                             onClick={() => setSnapRotateEnabled(!snapRotateEnabled)}
                             style={snapButtonStyle}
-                        >{'\u89d2'}</Button>
+                         icon={<RedoOutlined />} />
                     </Tooltip>
                     <InputNumber
                         size="small"
@@ -464,23 +474,17 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                 <>
                     <div style={dividerStyle} />
                     <Space>
-                        <Tooltip title="全局变换模式 (锁定在原点，对整个模型生效)">
+                        <Tooltip title="全局变换模式 (可以直接修改模型默认位置大小和旋转)">
                             <Button
                                 type={isGlobalTransformMode ? 'primary' : 'default'}
                                 icon={<GlobalOutlined />}
-                                onClick={() => setIsGlobalTransformMode(!isGlobalTransformMode)}
+                                onClick={() => {
+                                    useSelectionStore.getState().setGlobalTransformPivot('modelCenter')
+                                    setIsGlobalTransformMode(!isGlobalTransformMode)
+                                }}
                                 style={isGlobalTransformMode ? { backgroundColor: '#52c41a', borderColor: '#52c41a' } : undefined}
                             >
                                 全局变换
-                            </Button>
-                        </Tooltip>
-                        <Tooltip title="全局枢轴：原点 / 模型中心">
-                            <Button
-                                type={globalTransformPivot === 'modelCenter' ? 'primary' : 'default'}
-                                icon={<AimOutlined />}
-                                onClick={() => setGlobalTransformPivot(globalTransformPivot === 'modelCenter' ? 'origin' : 'modelCenter')}
-                            >
-                                中心枢轴
                             </Button>
                         </Tooltip>
                     </Space>
@@ -499,4 +503,17 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         </div>
     );
 };
+
+
+
+
+
+
+
+
+
+
+
+
+
 

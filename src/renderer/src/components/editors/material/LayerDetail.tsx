@@ -1,8 +1,8 @@
-﻿import React, { useState } from 'react'
+import React, { useState } from 'react'
 import { Checkbox, Button, Select, Space } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { EditOutlined } from '@ant-design/icons'
-import { emit, listen } from '@tauri-apps/api/event'
+import { listen } from '@tauri-apps/api/event'
 import { windowManager } from '../../../utils/windowManager'
 import { useModelStore } from '../../../store/modelStore'
 import TextureAnimationManagerModal from '../../modals/TextureAnimationManagerModal'
@@ -86,8 +86,7 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
         const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
         payload.targetWindowId = windowId;
 
-        emit('IPC_KEYFRAME_INIT', payload);
-        windowManager.openToolWindow(windowId, payload.title, 600, 480);
+        void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload);
     }
 
     const filterModeOptions = [

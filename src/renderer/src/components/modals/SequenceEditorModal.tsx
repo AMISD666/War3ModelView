@@ -340,7 +340,7 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
 
     if (isStandalone) {
         return (
-            <StandaloneWindowFrame title="序列编辑器" onClose={onClose}>
+            <StandaloneWindowFrame title="模型动作管理器" onClose={onClose}>
                 <div style={{ height: '100%', width: '100%', backgroundColor: '#252525' }}>
                     {innerContent}
                 </div>
@@ -350,7 +350,7 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
 
     return (
         <DraggableModal
-            title="序列编辑器"
+            title="模型动作管理器"
             open={visible}
             onOk={handleOk}
             onCancel={onClose}

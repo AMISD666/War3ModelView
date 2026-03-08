@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback, useEffect } from 'react'
+﻿import React, { useState, useMemo, useCallback, useEffect } from 'react'
 import { ModelData } from '../../types/model'
 import { Checkbox } from 'antd'
 
@@ -21,6 +21,7 @@ const TextureGeosetSelector: React.FC<TextureGeosetSelectorProps> = ({
     const [textureRatio, setTextureRatio] = useState(0.45)
     const [isDragging, setIsDragging] = useState(false)
     const containerRef = React.useRef<HTMLDivElement>(null)
+    const safeVisibleGeosetIds = Array.isArray(visibleGeosetIds) ? visibleGeosetIds : []
 
     // Group geosets by texture
     const textureMap = useMemo(() => {
@@ -58,6 +59,7 @@ const TextureGeosetSelector: React.FC<TextureGeosetSelectorProps> = ({
         if (selectedTextureId === null) return []
         return textureMap.get(selectedTextureId) || []
     }, [selectedTextureId, textureMap])
+
 
     // Splitter drag handlers
     const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -116,7 +118,7 @@ const TextureGeosetSelector: React.FC<TextureGeosetSelectorProps> = ({
                     ))}
                     {usedTextures.length === 0 && (
                         <div style={{ padding: 10, color: '#666', fontStyle: 'italic', fontSize: '11px' }}>
-                            没有使用纹理的几何体
+                            没有使用纹理的多边形组
                         </div>
                     )}
                 </div>
@@ -141,14 +143,14 @@ const TextureGeosetSelector: React.FC<TextureGeosetSelectorProps> = ({
             {/* Geoset List - 2 columns */}
             <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
                 <div style={{ padding: '6px 10px', background: '#333', borderBottom: '1px solid #444', fontWeight: 'bold', fontSize: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span>几何体</span>
+                    <span>多边形组</span>
                     {selectedTextureId !== null && currentGeosets.length > 0 && (
                         <div style={{ display: 'flex', gap: '4px' }}>
                             <button
                                 onClick={() => {
                                     // Select all geosets for this texture
                                     currentGeosets.forEach(geosetId => {
-                                        if (!visibleGeosetIds.includes(geosetId)) {
+                                        if (!safeVisibleGeosetIds.includes(geosetId)) {
                                             onToggleGeosetVisibility(geosetId, true)
                                         }
                                     })
@@ -169,7 +171,7 @@ const TextureGeosetSelector: React.FC<TextureGeosetSelectorProps> = ({
                                 onClick={() => {
                                     // Deselect all geosets for this texture
                                     currentGeosets.forEach(geosetId => {
-                                        if (visibleGeosetIds.includes(geosetId)) {
+                                        if (safeVisibleGeosetIds.includes(geosetId)) {
                                             onToggleGeosetVisibility(geosetId, false)
                                         }
                                     })
@@ -197,21 +199,21 @@ const TextureGeosetSelector: React.FC<TextureGeosetSelectorProps> = ({
                             {currentGeosets.map(geosetId => (
                                 <div
                                     key={geosetId}
-                                    onClick={() => onToggleGeosetVisibility(geosetId, !visibleGeosetIds.includes(geosetId))}
+                                    onClick={() => onToggleGeosetVisibility(geosetId, !safeVisibleGeosetIds.includes(geosetId))}
                                     style={{
                                         padding: '4px 6px',
                                         cursor: 'pointer',
-                                        backgroundColor: visibleGeosetIds.includes(geosetId) ? '#1a3a5a' : '#2a2a2a',
-                                        color: visibleGeosetIds.includes(geosetId) ? '#fff' : '#888',
+                                        backgroundColor: safeVisibleGeosetIds.includes(geosetId) ? '#1a3a5a' : '#2a2a2a',
+                                        color: safeVisibleGeosetIds.includes(geosetId) ? '#fff' : '#888',
                                         borderRadius: '3px',
                                         display: 'flex',
                                         alignItems: 'center',
                                         fontSize: '11px',
-                                        border: visibleGeosetIds.includes(geosetId) ? '1px solid #1890ff' : '1px solid #444'
+                                        border: safeVisibleGeosetIds.includes(geosetId) ? '1px solid #1890ff' : '1px solid #444'
                                     }}
                                 >
                                     <Checkbox
-                                        checked={visibleGeosetIds.includes(geosetId)}
+                                        checked={safeVisibleGeosetIds.includes(geosetId)}
                                         style={{ marginRight: 4, pointerEvents: 'none' }}
                                     />
                                     <span>{geosetId}</span>
@@ -220,7 +222,7 @@ const TextureGeosetSelector: React.FC<TextureGeosetSelectorProps> = ({
                         </div>
                     )}
                     {selectedTextureId !== null && currentGeosets.length === 0 && (
-                        <div style={{ padding: 10, color: '#666', fontSize: '11px' }}>该贴图没有关联的几何体</div>
+                        <div style={{ padding: 10, color: '#666', fontSize: '11px' }}>该贴图没有关联的多边形组</div>
                     )}
                 </div>
             </div>
@@ -229,3 +231,7 @@ const TextureGeosetSelector: React.FC<TextureGeosetSelectorProps> = ({
 }
 
 export default TextureGeosetSelector
+
+
+
+

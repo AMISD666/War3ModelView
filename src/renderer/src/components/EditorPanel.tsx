@@ -16,9 +16,9 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ activeTab, onClose }) => {
     const getTitle = () => {
         switch (activeTab) {
             case 'texture': return '纹理编辑器'
-            case 'sequence': return '序列编辑器'
-            case 'material': return '材质编辑器'
-            case 'geoset': return '多边形编辑器'
+            case 'sequence': return '模型动作管理器'
+            case 'material': return '材质管理器'
+            case 'geoset': return '多边形管理器'
             case 'geosetAnim': return '多边形动画管理器'
             default: return '编辑器'
         }

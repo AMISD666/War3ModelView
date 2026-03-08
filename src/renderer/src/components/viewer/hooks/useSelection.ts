@@ -1,4 +1,4 @@
-/**
+﻿/**
  * useSelection - Selection logic for the Viewer component
  * Handles box selection and single-click selection for vertices, faces, and nodes
  */
@@ -287,8 +287,6 @@ export function useSelection({
                 setSelectedGeosetIndex(result.geosetIndex)
                 setTimeout(() => setHoveredGeosetId(null), 300)
                 return
-            } else {
-                setPickedGeosetIndex(null)
             }
         }
 
@@ -417,3 +415,4 @@ export function useSelection({
         handleSelectionClick
     }
 }
+

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react'
+﻿import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import UVEditor from './editors/UVEditor'
 import TextureGeosetSelector from './editors/TextureGeosetSelector'
 import { useModelStore } from '../store/modelStore'
@@ -73,8 +73,11 @@ const UVModeLayout: React.FC<UVModeOverlayProps & { children: React.ReactNode }>
     // Handlers for Selection
     const handleSelectTexture = useCallback((id: number) => {
         setSelectedTextureId(id)
-        setVisibleGeosetIds([])
-    }, [])
+        const matchedGeosets = Array.from(geosetToTextureMap.entries())
+            .filter(([, textureId]) => textureId === id)
+            .map(([geosetId]) => geosetId)
+        setVisibleGeosetIds(matchedGeosets)
+    }, [geosetToTextureMap])
 
     const handleToggleGeoset = useCallback((id: number, visible: boolean) => {
         setVisibleGeosetIds(prev => {
@@ -252,3 +255,5 @@ const UVModeLayout: React.FC<UVModeOverlayProps & { children: React.ReactNode }>
 }
 
 export default UVModeLayout
+
+

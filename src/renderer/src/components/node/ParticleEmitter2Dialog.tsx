@@ -1,9 +1,9 @@
-﻿import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
+import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import React, { useEffect, useState } from 'react';
 import { Form, Checkbox, Select, ColorPicker, Button, Input } from 'antd';
 
 import { DraggableModal } from '../DraggableModal';
-import { emit, listen } from '@tauri-apps/api/event';
+import { listen } from '@tauri-apps/api/event';
 import { windowManager } from '../../utils/windowManager';
 import type { Color } from 'antd/es/color-picker';
 import type { ParticleEmitter2Node } from '../../types/node';
@@ -405,8 +405,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
         const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
         payload.targetWindowId = windowId;
 
-        emit('IPC_KEYFRAME_INIT', payload);
-        windowManager.openToolWindow(windowId, payload.title, 600, 480);
+        void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload);
     };
 
     const handleDynamicChange = (propName: string, checked: boolean) => {

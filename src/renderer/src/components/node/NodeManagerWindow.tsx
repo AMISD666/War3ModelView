@@ -1,4 +1,4 @@
-
+﻿
 /**
  * 节点管理器窗口组件
  */
@@ -733,17 +733,7 @@ export const NodeManagerWindow: React.FC = () => {
                 style={{ marginBottom: 8 }}
             />
             {/* Diagnostic Element Removed */}
-            <Space size="small" style={{ marginBottom: 8 }}>
-                <Tooltip title="创建节点">
-                    <Button type="primary" size="small" icon={<PlusOutlined />} onClick={handleCreate} />
-                </Tooltip>
-                <Tooltip title="编辑节点">
-                    <Button size="small" icon={<EditOutlined />} onClick={handleEdit} disabled={selectedNodeIds.length !== 1} />
-                </Tooltip>
-                <Tooltip title="删除节点">
-                    <Button size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete()} disabled={selectedNodeIds.length === 0} />
-                </Tooltip>
-            </Space>
+
             <div
                 ref={treeWrapperRef}
                 className="node-manager-tree-wrapper"
@@ -1003,3 +993,4 @@ export const NodeManagerWindow: React.FC = () => {
         </div >
     );
 };
+

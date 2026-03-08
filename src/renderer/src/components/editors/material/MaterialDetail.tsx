@@ -147,7 +147,7 @@ const MaterialDetail: React.FC<MaterialDetailProps> = ({ material, onUpdate, onS
                             checked={material.SortPrimsFarZ}
                             onChange={(e) => handleSettingChange('SortPrimsFarZ', e.target.checked)}
                         >
-                            沿Z轴远向排列原始几何体
+                            沿Z轴远向排列原始多边形组
                         </Checkbox>
                     </div>
                     <div>

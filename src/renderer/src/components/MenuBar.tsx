@@ -3,6 +3,7 @@ import { Tooltip } from 'antd'
 import {
     AimOutlined,
     AppstoreOutlined,
+    GatewayOutlined,
     BgColorsOutlined,
     BorderOutlined,
     BulbOutlined,
@@ -12,6 +13,7 @@ import {
     ToolOutlined
 } from '@ant-design/icons'
 import { useRendererStore } from '../store/rendererStore'
+import { useSelectionStore } from '../store/selectionStore'
 import { useUIStore } from '../store/uiStore'
 
 
@@ -56,6 +58,8 @@ interface MenuBarProps {
     onSetMainMode: (mode: 'view' | 'geometry' | 'uv' | 'animation' | 'batch') => void
     showDebugConsole: boolean
     onToggleDebugConsole: () => void
+    showStandalonePerf: boolean
+    onShowStandalonePerf: () => void
     onShowAbout: () => void
     onShowChangelog: () => void
     onRecalculateNormals: () => void
@@ -112,6 +116,8 @@ const MenuBar: React.FC<MenuBarProps> = ({
     onSetMainMode,
     showDebugConsole,
     onToggleDebugConsole,
+    showStandalonePerf,
+    onShowStandalonePerf,
     onShowAbout,
     onShowChangelog,
     onRecalculateNormals,
@@ -138,6 +144,11 @@ const MenuBar: React.FC<MenuBarProps> = ({
         showGridXY: quickShowGridXY, setShowGridXY: setQuickShowGridXY,
         showGridXZ: quickShowGridXZ, setShowGridXZ: setQuickShowGridXZ,
         showGridYZ: quickShowGridYZ, setShowGridYZ: setQuickShowGridYZ,
+        showVerticesByMode,
+        setShowVerticesForMode,
+        showVerticesInAnimationBinding,
+        showVerticesInAnimationKeyframe,
+        setShowVerticesForAnimationSubMode,
         showNodes: quickShowNodes, setShowNodes: setQuickShowNodes,
         showSkeleton: quickShowSkeleton, setShowSkeleton: setQuickShowSkeleton,
         showGeosetVisibility: quickShowGeosetVisibility, setShowGeosetVisibility: setQuickShowGeosetVisibility,
@@ -152,6 +163,11 @@ const MenuBar: React.FC<MenuBarProps> = ({
         setShowGridXZ: state.setShowGridXZ,
         showGridYZ: state.showGridYZ,
         setShowGridYZ: state.setShowGridYZ,
+        showVerticesByMode: state.showVerticesByMode,
+        setShowVerticesForMode: state.setShowVerticesForMode,
+        showVerticesInAnimationBinding: state.showVerticesInAnimationBinding,
+        showVerticesInAnimationKeyframe: state.showVerticesInAnimationKeyframe,
+        setShowVerticesForAnimationSubMode: state.setShowVerticesForAnimationSubMode,
         showNodes: state.showNodes,
         setShowNodes: state.setShowNodes,
         showSkeleton: state.showSkeleton,
@@ -167,6 +183,24 @@ const MenuBar: React.FC<MenuBarProps> = ({
         showRibbons: state.showRibbons,
         setShowRibbons: state.setShowRibbons
     }))
+
+    const { mainMode: currentMainMode, animationSubMode } = useSelectionStore((state) => ({
+        mainMode: state.mainMode,
+        animationSubMode: state.animationSubMode
+    }))
+
+    const quickShowVertices =
+        currentMainMode === 'animation'
+            ? (animationSubMode === 'binding' ? showVerticesInAnimationBinding : showVerticesInAnimationKeyframe)
+            : (showVerticesByMode[currentMainMode] ?? true)
+
+    const toggleQuickVertices = (next: boolean) => {
+        if (currentMainMode === 'animation') {
+            setShowVerticesForAnimationSubMode(animationSubMode, next)
+            return
+        }
+        setShowVerticesForMode(currentMainMode, next)
+    }
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
@@ -239,6 +273,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
             { key: 'grid-xy', label: 'XY 网格', checked: quickShowGridXY, onToggle: setQuickShowGridXY, icon: <AppstoreOutlined />, badge: 'XY' },
             { key: 'grid-xz', label: 'XZ 网格', checked: quickShowGridXZ, onToggle: setQuickShowGridXZ, icon: <AppstoreOutlined />, badge: 'XZ' },
             { key: 'grid-yz', label: 'YZ 网格', checked: quickShowGridYZ, onToggle: setQuickShowGridYZ, icon: <AppstoreOutlined />, badge: 'YZ' },
+            { key: 'vertices', label: '顶点显示', checked: quickShowVertices, onToggle: toggleQuickVertices, icon: <GatewayOutlined /> },
             { key: 'nodes', label: '骨骼节点', checked: quickShowNodes, onToggle: setQuickShowNodes, icon: <AimOutlined /> },
             { key: 'skeleton', label: '渲染骨架', checked: quickShowSkeleton, onToggle: setQuickShowSkeleton, icon: <DeploymentUnitOutlined /> },
             { key: 'geoset-tool', label: '多边形工具', checked: quickShowGeosetVisibility, onToggle: setQuickShowGeosetVisibility, icon: <ToolOutlined /> },
@@ -507,7 +542,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             onMouseLeave={unhoverStyle}
                             onClick={() => { onToggleEditor('globalSequence'); closeMenu() }}
                         >
-                            <span>模型全局动作管理器</span>
+                            <span>全局动作管理器</span>
                             <span style={{ color: '#888', fontSize: '11px' }}>L</span>
                         </div>
                         <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
@@ -538,7 +573,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
                         >
                             <span>查看模式</span>
                             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                                <span style={{ color: '#888', fontSize: '11px' }}>F1</span>
+                                <span style={{ color: '#888', fontSize: '11px' }}>1</span>
                                 <span style={{ width: '12px' }}>{mainMode === 'view' ? '✓' : ''}</span>
                             </div>
                         </div>
@@ -550,7 +585,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
                         >
                             <span>顶点模式</span>
                             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                                <span style={{ color: '#888', fontSize: '11px' }}>F2</span>
+                                <span style={{ color: '#888', fontSize: '11px' }}>2</span>
                                 <span style={{ width: '12px' }}>{mainMode === 'geometry' ? '✓' : ''}</span>
                             </div>
                         </div>
@@ -562,7 +597,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
                         >
                             <span>UV 模式</span>
                             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                                <span style={{ color: '#888', fontSize: '11px' }}>F3</span>
+                                <span style={{ color: '#888', fontSize: '11px' }}>3</span>
                                 <span style={{ width: '12px' }}>{mainMode === 'uv' ? '✓' : ''}</span>
                             </div>
                         </div>
@@ -574,7 +609,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
                         >
                             <span>动画模式</span>
                             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                                <span style={{ color: '#888', fontSize: '11px' }}>F4</span>
+                                <span style={{ color: '#888', fontSize: '11px' }}>4</span>
                                 <span style={{ width: '12px' }}>{mainMode === 'animation' ? '✓' : ''}</span>
                             </div>
                         </div>
@@ -819,6 +854,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
                 MPQ浏览
             </div>
 
+
             {/* Batch Button - Direct Action */}
             <div
                 style={{ ...menuStyle, backgroundColor: mainMode === 'batch' ? '#444' : 'transparent' }}
@@ -854,3 +890,5 @@ const MenuBar: React.FC<MenuBarProps> = ({
 }
 
 export default MenuBar
+
+

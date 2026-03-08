@@ -285,7 +285,7 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
     // Global Transform Toggle
     isGlobalTransformMode: false,
     setIsGlobalTransformMode: (isGlobal) => set({ isGlobalTransformMode: isGlobal }),
-    globalTransformPivot: 'origin',
+    globalTransformPivot: 'modelCenter',
     setGlobalTransformPivot: (pivot) => set({ globalTransformPivot: pivot }),
 
     // 清除所有选择
@@ -316,7 +316,7 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
             isPickingParent: false,
             pickedGeosetIndex: null,
             isGlobalTransformMode: false,
-            globalTransformPivot: 'origin'
+            globalTransformPivot: 'modelCenter'
         });
     }
 }));

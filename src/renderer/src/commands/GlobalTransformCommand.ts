@@ -40,8 +40,6 @@ export class GlobalTransformCommand implements Command {
     private applyMatrix(matrix: mat4) {
         const { transformModel } = useModelStore.getState()
         const ops = this.decomposeMatrix(matrix)
-        // Suppress full reload - we will sync the renderer manually below.
-        // This prevents screen flicker while maintaining correct animation.
         transformModel({ ...ops, suppressReload: true })
         this.syncRenderer()
     }
@@ -186,3 +184,4 @@ export class GlobalTransformCommand implements Command {
         }
     }
 }
+

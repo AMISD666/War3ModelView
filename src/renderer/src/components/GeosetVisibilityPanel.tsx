@@ -1,7 +1,8 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+﻿import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Checkbox, message } from 'antd';
 import { EyeOutlined, EyeInvisibleOutlined, CloseOutlined, MinusOutlined, DeleteOutlined, MergeCellsOutlined } from '@ant-design/icons';
 import { useModelStore } from '../store/modelStore';
+import { useSelectionStore } from '../store/selectionStore';
 import { commandManager } from '../utils/CommandManager';
 import { SetGeosetVisibilityCommand } from '../commands/SetGeosetVisibilityCommand';
 import { GeosetMergeDialog } from './modals/GeosetMergeDialog';
@@ -50,6 +51,7 @@ const getDefaultPanelPosition = (width: number, height: number) => {
 };
 
 export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ visible, onClose }) => {
+    const pickedGeosetIndex = useSelectionStore((state) => state.pickedGeosetIndex);
     const {
         modelData,
         hiddenGeosetIds,
@@ -89,13 +91,15 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
 
     // Sync from global store to local state
     useEffect(() => {
-        const globalSelection = selectedGeosetIndices.length > 0
-            ? selectedGeosetIndices
-            : (selectedGeosetIndex !== null ? [selectedGeosetIndex] : []);
+        const globalSelection = typeof pickedGeosetIndex === 'number'
+            ? [pickedGeosetIndex]
+            : selectedGeosetIndices.length > 0
+                ? selectedGeosetIndices
+                : (selectedGeosetIndex !== null ? [selectedGeosetIndex] : []);
         if (!areSameIndices(selectedIndices, globalSelection)) {
             setSelectedIndices(globalSelection);
         }
-    }, [selectedGeosetIndices, selectedGeosetIndex]);
+    }, [pickedGeosetIndex, selectedGeosetIndices, selectedGeosetIndex]);
 
     const applySelection = (indices: number[]) => {
         const cleaned = Array.from(new Set(indices.filter(i => Number.isInteger(i) && i >= 0)));
@@ -130,8 +134,12 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
             // Remove range from selection
             applySelection(selectedIndices.filter(i => !rangeIndices.includes(i)));
         } else {
-            // Regular click: Clear and select one
-            applySelection([index]);
+            // Regular click: toggle clicked item; if not selected, make it the only selection
+            if (selectedIndices.includes(index)) {
+                applySelection(selectedIndices.filter(i => i !== index));
+            } else {
+                applySelection([index]);
+            }
         }
         setLastClickedIndex(index);
     };
@@ -846,3 +854,5 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
 };
 
 export default GeosetVisibilityPanel;
+
+

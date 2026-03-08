@@ -246,7 +246,7 @@ interface ModelState {
 /**
  * 从模型数据中提取所有节点
  */
-function extractNodesFromModel(data: ModelData | null): ModelNode[] {
+export function extractNodesFromModel(data: ModelData | null): ModelNode[] {
     if (!data) return [];
 
     const nodes: ModelNode[] = [];
@@ -2098,7 +2098,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
             // 8. Re-sync nodes state and recalculate derived data
             const updatedNodes = extractNodesFromModel(modelData);
-            recalculateModelExtent(modelData);
+            calculateModelExtent(modelData);
 
             console.log(`[ModelStore] Applied global transformation:
                 Geosets: ${modelData.Geosets?.length || 0}
@@ -2117,7 +2117,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
     recalculateExtents: () => {
         set((state) => {
             if (!state.modelData) return {};
-            recalculateModelExtent(state.modelData);
+            calculateModelExtent(state.modelData);
             // Force update
             return { modelData: { ...state.modelData }, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
         });

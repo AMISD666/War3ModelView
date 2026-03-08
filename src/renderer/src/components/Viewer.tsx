@@ -24,8 +24,8 @@ import { useRendererStore } from '../store/rendererStore'
 import { useHistoryStore } from '../store/historyStore'
 import { ModelInfoPanel } from './info/ModelInfoPanel'
 import { ViewerToolbar } from './ViewerToolbar'
-import { ConfigProvider, theme } from 'antd'
-import { CameraOutlined, CopyOutlined, SyncOutlined } from '@ant-design/icons'
+import { ConfigProvider, message, theme } from 'antd'
+import { CameraOutlined, CopyOutlined, SyncOutlined, PauseCircleOutlined, PlayCircleOutlined } from '@ant-design/icons'
 import { commandManager } from '../utils/CommandManager'
 import { MoveVerticesCommand, VertexChange } from '../commands/MoveVerticesCommand'
 import { MoveNodesCommand, NodeChange } from '../commands/MoveNodesCommand'
@@ -34,6 +34,7 @@ import { VertexEditor } from './VertexEditor'
 import { pickClosestGeoset } from '../utils/rayTriangle'
 import { recalculateAllNormals } from '../utils/geometryUtils'
 import { SplitVerticesCommand } from '../commands/SplitVerticesCommand'
+import { AutoSeparateLayersCommand } from '../commands/AutoSeparateLayersCommand'
 import { WeldVerticesCommand } from '../commands/WeldVerticesCommand'
 import { DeleteVerticesCommand } from '../commands/DeleteVerticesCommand'
 import { PasteVerticesCommand } from '../commands/PasteVerticesCommand'
@@ -108,7 +109,7 @@ const toUint8Array = (payload: any): Uint8Array | null => {
       return toUint8Array(candidate)
     }
     const numericKeys = Object.keys(payload)
-      .filter((k) => /^\d+$/.test(k))
+      .filter((k) => /^d+$/.test(k))
       .sort((a, b) => Number(a) - Number(b))
     if (numericKeys.length > 0) {
       const bytes = new Uint8Array(numericKeys.length)
@@ -226,7 +227,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   const formatCameraValue = (value: number): string => {
     if (!Number.isFinite(value)) return '0'
     const formatted = value.toFixed(2)
-    return formatted.replace(/\.?0+$/, '')
+    return formatted.replace(/.?0+$/, '')
   }
 
   const getCameraVector = (prop: any, directProp?: any): number[] => {
@@ -242,6 +243,181 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     return [0, 0, 0]
   }
 
+  const getAvailableCameras = (): any[] => {
+    const { modelData, nodes } = useModelStore.getState()
+    const modelCameras = Array.isArray((modelData as any)?.Cameras) ? (modelData as any).Cameras.filter((cam: any) => cam) : []
+    if (modelCameras.length > 0) return modelCameras
+    return Array.isArray(nodes) ? nodes.filter((n: any) => n && n.type === 'Camera') : []
+  }
+  const roundVertexCoord = (value: number): number => Math.round(value * 10000) / 10000
+
+  const getVertexPositionKey = (vertices: ArrayLike<number>, vertexIndex: number): string => {
+    const base = vertexIndex * 3
+    return `${roundVertexCoord(Number(vertices[base] ?? 0))},${roundVertexCoord(Number(vertices[base + 1] ?? 0))},${roundVertexCoord(Number(vertices[base + 2] ?? 0))}`
+  }
+
+  const getExpandedFaceVertexSelection = (
+    selectedFaceIds: Array<{ geosetIndex: number; index: number }>
+  ): Array<{ geosetIndex: number; index: number }> => {
+    const result: Array<{ geosetIndex: number; index: number }> = []
+    const uniqueVertexKeys = new Set<string>()
+    const coincidentPositionKeysByGeoset = new Map<number, Set<string>>()
+
+    if (!rendererRef.current || !Array.isArray(rendererRef.current.model?.Geosets)) {
+      return result
+    }
+
+    const geosets = rendererRef.current.model.Geosets
+
+    const pushVertex = (geosetIndex: number, index: number) => {
+      const vertexKey = `${geosetIndex}:${index}`
+      if (uniqueVertexKeys.has(vertexKey)) {
+        return
+      }
+      uniqueVertexKeys.add(vertexKey)
+      result.push({ geosetIndex, index })
+    }
+
+    selectedFaceIds.forEach((sel) => {
+      const geoset = geosets[sel.geosetIndex]
+      if (!geoset?.Vertices || !geoset?.Faces) {
+        return
+      }
+
+      const fIndex = sel.index * 3
+      const indices = [
+        Number(geoset.Faces[fIndex]),
+        Number(geoset.Faces[fIndex + 1]),
+        Number(geoset.Faces[fIndex + 2])
+      ].filter((value) => Number.isFinite(value))
+
+      let posSet = coincidentPositionKeysByGeoset.get(sel.geosetIndex)
+      if (!posSet) {
+        posSet = new Set<string>()
+        coincidentPositionKeysByGeoset.set(sel.geosetIndex, posSet)
+      }
+
+      indices.forEach((vertexIndex) => {
+        pushVertex(sel.geosetIndex, vertexIndex)
+        posSet!.add(getVertexPositionKey(geoset.Vertices, vertexIndex))
+      })
+    })
+
+    coincidentPositionKeysByGeoset.forEach((positionKeys, geosetIndex) => {
+      const geoset = geosets[geosetIndex]
+      if (!geoset?.Vertices) {
+        return
+      }
+
+      const vertexCount = Math.floor(geoset.Vertices.length / 3)
+      for (let vertexIndex = 0; vertexIndex < vertexCount; vertexIndex++) {
+        if (positionKeys.has(getVertexPositionKey(geoset.Vertices, vertexIndex))) {
+          pushVertex(geosetIndex, vertexIndex)
+        }
+      }
+    })
+
+    return result
+  }
+
+
+  const getConnectedGeometryGroup = (
+    geosetIndex: number,
+    seedFaceIndices: number[] = [],
+    seedVertexIndices: number[] = []
+  ): {
+    vertices: Array<{ geosetIndex: number; index: number }>,
+    faces: Array<{ geosetIndex: number; index: number }>
+  } => {
+    if (!rendererRef.current) {
+      return { vertices: [], faces: [] }
+    }
+
+    const geoset = rendererRef.current.model?.Geosets?.[geosetIndex]
+    if (!geoset?.Vertices || !geoset?.Faces) {
+      return { vertices: [], faces: [] }
+    }
+
+    const faceCount = Math.floor(geoset.Faces.length / 3)
+    const facesByPositionKey = new Map<string, number[]>()
+    const positionKeysByFace = new Array<string[]>(faceCount)
+    const vertexIndicesByFace = new Array<number[]>(faceCount)
+
+    for (let faceIndex = 0; faceIndex < faceCount; faceIndex++) {
+      const fIndex = faceIndex * 3
+      const vertexIndices = [
+        Number(geoset.Faces[fIndex]),
+        Number(geoset.Faces[fIndex + 1]),
+        Number(geoset.Faces[fIndex + 2])
+      ]
+      vertexIndicesByFace[faceIndex] = vertexIndices
+      positionKeysByFace[faceIndex] = vertexIndices.map((vertexIndex) => getVertexPositionKey(geoset.Vertices, vertexIndex))
+
+      positionKeysByFace[faceIndex].forEach((positionKey) => {
+        const connectedFaces = facesByPositionKey.get(positionKey)
+        if (connectedFaces) {
+          connectedFaces.push(faceIndex)
+        } else {
+          facesByPositionKey.set(positionKey, [faceIndex])
+        }
+      })
+    }
+
+    const pendingFaces: number[] = []
+    const visitedFaces = new Set<number>()
+    const visitedVertices = new Set<number>()
+
+    const enqueueFace = (faceIndex: number) => {
+      if (faceIndex < 0 || faceIndex >= faceCount || visitedFaces.has(faceIndex)) {
+        return
+      }
+      visitedFaces.add(faceIndex)
+      pendingFaces.push(faceIndex)
+    }
+
+    seedFaceIndices.forEach(enqueueFace)
+
+    seedVertexIndices.forEach((vertexIndex) => {
+      const positionKey = getVertexPositionKey(geoset.Vertices, vertexIndex)
+      const connectedFaces = facesByPositionKey.get(positionKey)
+      if (connectedFaces && connectedFaces.length > 0) {
+        connectedFaces.forEach(enqueueFace)
+      } else {
+        visitedVertices.add(vertexIndex)
+      }
+    })
+
+    while (pendingFaces.length > 0) {
+      const faceIndex = pendingFaces.pop()!
+      const vertexIndices = vertexIndicesByFace[faceIndex]
+      vertexIndices.forEach((vertexIndex) => visitedVertices.add(vertexIndex))
+      positionKeysByFace[faceIndex].forEach((positionKey) => {
+        const connectedFaces = facesByPositionKey.get(positionKey)
+        if (connectedFaces) {
+          connectedFaces.forEach(enqueueFace)
+        }
+      })
+    }
+
+    if (visitedVertices.size > 0) {
+      const seedPositionKeys = new Set<string>()
+      visitedVertices.forEach((vertexIndex) => {
+        seedPositionKeys.add(getVertexPositionKey(geoset.Vertices, vertexIndex))
+      })
+      const vertexCount = Math.floor(geoset.Vertices.length / 3)
+      for (let vertexIndex = 0; vertexIndex < vertexCount; vertexIndex++) {
+        if (seedPositionKeys.has(getVertexPositionKey(geoset.Vertices, vertexIndex))) {
+          visitedVertices.add(vertexIndex)
+        }
+      }
+    }
+
+    return {
+      vertices: Array.from(visitedVertices).map((index) => ({ geosetIndex, index })),
+      faces: Array.from(visitedFaces).map((index) => ({ geosetIndex, index }))
+    }
+  }
+
   // Sync isLooping to renderer
   useEffect(() => {
     if (renderer && renderer.rendererData) {
@@ -250,9 +426,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   }, [renderer, isLooping])
 
   const copySelectedCameraParams = () => {
-    const { nodes } = useModelStore.getState()
     const { selectedNodeIds } = useSelectionStore.getState()
-    const cameraList = nodes.filter((n: any) => n && n.type === 'Camera')
+    const cameraList = getAvailableCameras()
 
     if (cameraList.length === 0) return
 
@@ -609,9 +784,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
     const selector = document.getElementById('camera-selector') as HTMLSelectElement
     if (selector && selector.value !== '-1') {
-      const rawNodes = useModelStore.getState().nodes
-      const cameraList = (Array.isArray(rawNodes) ? rawNodes : [])
-        .filter((n: any) => n && n.type === 'Camera')
+      const cameraList = getAvailableCameras()
       const idx = parseInt(selector.value)
       if (idx >= 0 && idx < cameraList.length) {
         const cam = cameraList[idx] as any
@@ -745,10 +918,31 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   const qPressedRef = useRef(false)
   useEffect(() => {
     const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.defaultPrevented) return
+
       // Don't interfere with text input.
       const el = document.activeElement
       if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return
+      if (el instanceof HTMLSelectElement) return
       if (el instanceof HTMLElement && el.isContentEditable) return
+
+      if (ev.key === 'ArrowUp' || ev.key === 'ArrowDown') {
+        const direction = ev.key === 'ArrowUp' ? -1 : 1
+        const { sequences, currentSequence, setSequence } = useModelStore.getState()
+        if (!Array.isArray(sequences) || sequences.length === 0) return
+
+        let nextIndex = 0
+        if (currentSequence >= 0 && currentSequence < sequences.length) {
+          nextIndex = (currentSequence + direction + sequences.length) % sequences.length
+        } else if (direction < 0) {
+          nextIndex = sequences.length - 1
+        }
+
+        setSequence(nextIndex)
+        window.dispatchEvent(new Event('timeline-fit-current-sequence'))
+        ev.preventDefault()
+        return
+      }
 
       if (ev.key === 'q' || ev.key === 'Q') {
         qPressedRef.current = true
@@ -775,11 +969,13 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     activeAxis: GizmoAxis,
     isDragging: boolean,
     dragStartPos: vec3 | null,
+    dragCenter: vec3 | null,
     isShiftDuplicate: boolean // Track if shift was held to trigger duplicate
   }>({
     activeAxis: null,
     isDragging: false,
     dragStartPos: null,
+    dragCenter: null,
     isShiftDuplicate: false
   })
 
@@ -826,7 +1022,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   const poseClipboardRef = useRef<{ frame: number, nodes: { nodeId: number, translation: number[], rotation: number[], scaling: number[] }[] } | null>(null)
   const formatHudNumber = (value: number, digits: number) => {
     const fixed = value.toFixed(digits)
-    return fixed.replace(/\.?0+$/, '')
+    return fixed.replace(/.?0+$/, '')
   }
   const formatHudVec3 = (vec: [number, number, number], digits: number) => {
     return `${formatHudNumber(vec[0], digits)}, ${formatHudNumber(vec[1], digits)}, ${formatHudNumber(vec[2], digits)}`
@@ -874,12 +1070,12 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   const buildHudText = (mode: 'translate' | 'rotate' | 'scale') => {
     const hud = gizmoHudRef.current
     if (mode === 'translate') {
-      return `\u79fb\u52a8 \u0394: (${formatHudVec3(hud.translation, 3)})`
+      return `移动 Δ: (${formatHudVec3(hud.translation, 3)})`
     }
     if (mode === 'rotate') {
-      return `\u65cb\u8f6c \u0394: (${formatHudVec3(hud.rotation, 1)})\u00b0`
+      return `旋转 Δ: (${formatHudVec3(hud.rotation, 1)})°`
     }
-    return `\u7f29\u653e \u0394: (${formatHudVec3(hud.scale, 3)})`
+    return `缩放 Δ: (${formatHudVec3(hud.scale, 3)})`
   }
   const updateHudPosition = (e: { clientX: number, clientY: number }, mode: 'translate' | 'rotate' | 'scale') => {
     setGizmoHud({
@@ -900,8 +1096,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     if (!renderer) return
 
     const idStr = colorIndex.toString().padStart(2, '0')
-    const teamColorPath = `ReplaceableTextures\\TeamColor\\TeamColor${idStr}.blp`
-    const teamGlowPath = `ReplaceableTextures\\TeamGlow\\TeamGlow${idStr}.blp`
+    const teamColorPath = `ReplaceableTexturesTeamColorTeamColor${idStr}.blp`
+    const teamGlowPath = `ReplaceableTexturesTeamGlowTeamGlow${idStr}.blp`
 
     const loadTexture = async (path: string, id: number) => {
       try {
@@ -1128,7 +1324,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
     switch (viewPreset.type) {
       case 'perspective':
-        // 鍒囨崲鍒伴€忚妯″紡
+        // 切换到透视模式
         console.log('[Viewer] Switching to perspective mode')
         if (cameraRef.current) {
           cameraRef.current.setPerspective()
@@ -1141,7 +1337,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         }
         break
       case 'orthographic':
-        // 鍒囨崲鍒版浜ゆ姇褰憋紙涓嶆敼鍙樺綋鍓嶈瑙掓柟鍚戯級
+        // 切换到正交投影（不改变当前视角方向）
         console.log('[Viewer] Switching to orthographic mode')
         if (cameraRef.current) {
           cameraRef.current.setOrthographic()
@@ -1178,12 +1374,12 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         targetCamera.current.distance = 500
         targetCamera.current.theta = Math.PI / 4
         targetCamera.current.phi = Math.PI / 4
-        // focus 淇濇寔褰撳墠鎶曞奖妯″紡
+        // focus 保持当前投影模式
         break
     }
-    // 鍚屾鐩告満瑙掑害
+    // 同步相机角度
     syncCameraToOrbit()
-  }, [viewPreset]) // 浠呬緷璧?viewPreset
+  }, [viewPreset]) // 仅依赖 viewPreset
 
   // Handle Animation and Mode Changes
   useEffect(() => {
@@ -1319,6 +1515,10 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         lastLoadedModelPath.current = modelPath
       }
 
+
+      if (!isTexturePreviewPath(modelPath)) {
+        setTexturePreview(null)
+      }
       // Check if this is a dropped file (has in-memory data)
       if (modelPath.startsWith('dropped:')) {
         // Load from in-memory data stored in the model store
@@ -1424,6 +1624,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       if (cameraRef.current) cameraRef.current.enabled = false
       gizmoState.current.isDragging = true
       gizmoState.current.isShiftDuplicate = e.shiftKey // Track if this is a shift-duplicate operation
+      const gizmoInfo = computeCurrentGizmoCenter()
+      gizmoState.current.dragCenter = gizmoInfo.count > 0 ? vec3.clone(gizmoInfo.center) : null
       snapDragRef.current.translationDelta = [0, 0, 0]
       snapDragRef.current.translationApplied = [0, 0, 0]
       snapDragRef.current.rotationDelta = [0, 0, 0]
@@ -1438,7 +1640,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       }
 
       // Shift+Drag = Duplicate then move
-      if (e.shiftKey && (geometrySubMode === 'vertex' || geometrySubMode === 'face') && rendererRef.current) {
+      if (e.shiftKey && (geometrySubMode === 'vertex' || geometrySubMode === 'face' || geometrySubMode === 'group') && rendererRef.current) {
 
         let buffer: VertexCopyBuffer | null = null
         let mode: 'vertex' | 'face' = 'vertex'
@@ -1451,7 +1653,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             buffer = copyVertices(geoset, vertexIndices, geosetIndex)
             mode = 'vertex'
           }
-        } else if (geometrySubMode === 'face' && selectedFaceIds.length > 0) {
+        } else if ((geometrySubMode === 'face' || geometrySubMode === 'group') && selectedFaceIds.length > 0) {
           const geosetIndex = selectedFaceIds[0].geosetIndex
           const geoset = rendererRef.current.model.Geosets[geosetIndex]
           if (geoset) {
@@ -1628,19 +1830,41 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           })
           console.log('[Viewer] Captured node positions:', initialNodePositions.current.size)
         }
-      } else if (geometrySubMode === 'vertex') {
+      } else if (geometrySubMode === 'vertex' || geometrySubMode === 'group') {
         console.log('[Viewer] Capturing vertices for vertex mode. Selected count:', currentSelection.selectedVertexIds.length)
         currentSelection.selectedVertexIds.forEach(sel => captureVertex(sel.geosetIndex, sel.index))
         console.log('[Viewer] Captured vertices:', initialVertexPositions.current.size)
       } else if (geometrySubMode === 'face') {
+        const faceVertexKeysByGeoset = new Map<number, Set<string>>()
         currentSelection.selectedFaceIds.forEach(sel => {
           if (!renderer) return
           const geoset = renderer.model.Geosets[sel.geosetIndex]
-          if (geoset) {
-            const fIndex = sel.index * 3
-            captureVertex(sel.geosetIndex, geoset.Faces[fIndex])
-            captureVertex(sel.geosetIndex, geoset.Faces[fIndex + 1])
-            captureVertex(sel.geosetIndex, geoset.Faces[fIndex + 2])
+          if (!geoset?.Vertices) return
+          const fIndex = sel.index * 3
+          const faceVertexIndices = [geoset.Faces[fIndex], geoset.Faces[fIndex + 1], geoset.Faces[fIndex + 2]]
+          let posSet = faceVertexKeysByGeoset.get(sel.geosetIndex)
+          if (!posSet) {
+            posSet = new Set<string>()
+            faceVertexKeysByGeoset.set(sel.geosetIndex, posSet)
+          }
+          faceVertexIndices.forEach((vertexIndex: number) => {
+            captureVertex(sel.geosetIndex, vertexIndex)
+            const vIndex = vertexIndex * 3
+            const posKey = `${Math.round(Number(geoset.Vertices[vIndex]) * 10000) / 10000}|${Math.round(Number(geoset.Vertices[vIndex + 1]) * 10000) / 10000}|${Math.round(Number(geoset.Vertices[vIndex + 2]) * 10000) / 10000}`
+            posSet!.add(posKey)
+          })
+        })
+        faceVertexKeysByGeoset.forEach((posSet, geosetIndex) => {
+          if (!renderer) return
+          const geoset = renderer.model.Geosets[geosetIndex]
+          if (!geoset?.Vertices) return
+          const vertexCount = Math.floor(geoset.Vertices.length / 3)
+          for (let vertexIndex = 0; vertexIndex < vertexCount; vertexIndex++) {
+            const vIndex = vertexIndex * 3
+            const posKey = `${Math.round(Number(geoset.Vertices[vIndex]) * 10000) / 10000}|${Math.round(Number(geoset.Vertices[vIndex + 1]) * 10000) / 10000}|${Math.round(Number(geoset.Vertices[vIndex + 2]) * 10000) / 10000}`
+            if (posSet.has(posKey)) {
+              captureVertex(geosetIndex, vertexIndex)
+            }
           }
         })
       }
@@ -1660,9 +1884,9 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     // const isCtrl = e.ctrlKey || e.metaKey
 
     // Box Selection behavior:
-    // - View mode: 宸﹂敭鐩存帴鏃嬭浆鎽勫儚鏈猴紝涓嶈繘琛屾閫?
-    // - Batch mode: 鍚寁iew mode锛屽乏閿棆杞憚鍍忔満
-    // - Other modes: 宸﹂敭妗嗛€夛紝Alt+宸﹂敭鏃嬭浆鎽勫儚鏈?
+    // - View mode: 左键直接旋转摄像机，不进行框选
+    // - Batch mode: 同 View mode，左键旋转摄像机
+    // - Other modes: 左键框选，Alt+左键旋转摄像机
     const shouldStartBoxSelection = e.button === 0 && !e.altKey && mainMode !== 'view' && mainMode !== 'batch'
 
     if (shouldStartBoxSelection) {
@@ -1834,27 +2058,51 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         }
       }
 
-      // If group mode, expand affected geosets to all their vertices based on the vertices we just collected
       if (geometrySubMode === 'group') {
-        const engagedGeosetIndices = new Set<number>()
-        newSelection.forEach(s => engagedGeosetIndices.add(s.geosetIndex))
+        const groupedVertices: { geosetIndex: number, index: number }[] = []
+        const groupedFaces: { geosetIndex: number, index: number }[] = []
+        const vertexKeys = new Set<string>()
+        const faceKeys = new Set<string>()
+        const seedsByGeoset = new Map<number, number[]>()
 
-        console.log('[Viewer] Group Mode: Engaged geosets from box:', engagedGeosetIndices.size)
-
-        // Clear initial vertex selection and replace with full geosets
-        newSelection.length = 0
-
-        engagedGeosetIndices.forEach(idx => {
-          if (!rendererRef.current) return
-          const geo = rendererRef.current.model.Geosets[idx]
-          if (geo && geo.Vertices) {
-            const count = geo.Vertices.length / 3
-            // Add all vertices
-            for (let k = 0; k < count; k++) {
-              newSelection.push({ geosetIndex: idx, index: k })
-            }
+        newSelection.forEach((sel) => {
+          const seeds = seedsByGeoset.get(sel.geosetIndex)
+          if (seeds) {
+            seeds.push(sel.index)
+          } else {
+            seedsByGeoset.set(sel.geosetIndex, [sel.index])
           }
         })
+
+        seedsByGeoset.forEach((seedVertexIndices, geosetIndex) => {
+          const groupSelection = getConnectedGeometryGroup(geosetIndex, [], seedVertexIndices)
+          groupSelection.vertices.forEach((vertexSel) => {
+            const key = `${vertexSel.geosetIndex}-${vertexSel.index}`
+            if (!vertexKeys.has(key)) {
+              vertexKeys.add(key)
+              groupedVertices.push(vertexSel)
+            }
+          })
+          groupSelection.faces.forEach((faceSel) => {
+            const key = `${faceSel.geosetIndex}-${faceSel.index}`
+            if (!faceKeys.has(key)) {
+              faceKeys.add(key)
+              groupedFaces.push(faceSel)
+            }
+          })
+        })
+
+        if (isShift) {
+          removeVertexSelection(groupedVertices)
+          removeFaceSelection(groupedFaces)
+        } else if (isCtrl) {
+          addVertexSelection(groupedVertices)
+          addFaceSelection(groupedFaces)
+        } else {
+          selectVertices(groupedVertices)
+          selectFaces(groupedFaces)
+        }
+        return
       }
 
       if (isShift) {
@@ -1922,7 +2170,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   const handleSelectionClick = (clientX: number, clientY: number, isShift: boolean, isCtrl: boolean, isAlt: boolean = false) => {
     if (!rendererRef.current || !canvasRef.current) return
 
-    const { mainMode, animationSubMode, geometrySubMode, selectVertex, selectVertices, selectFace, addVertexSelection, addFaceSelection, removeVertexSelection, removeFaceSelection, clearAllSelections, selectNode, setPickedGeosetIndex } = useSelectionStore.getState()
+    const { mainMode, animationSubMode, geometrySubMode, selectVertex, selectVertices, selectFace, selectFaces, addVertexSelection, addFaceSelection, removeVertexSelection, removeFaceSelection, clearAllSelections, selectNode, setPickedGeosetIndex } = useSelectionStore.getState()
 
     // === Ctrl+Click Geoset Picking (works in any mode) ===
     if (isCtrl) {
@@ -2066,7 +2314,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       if (rendererRef.current.rendererData && rendererRef.current.rendererData.nodes) {
         rendererRef.current.rendererData.nodes.forEach((nodeWrapper: any) => {
           const pivot = getOrCreateNodePivot(nodeWrapper)
-          if (!pivot) return // 璺宠繃娌℃湁 PivotPoint 鐨勮妭鐐?
+          if (!pivot) return // 跳过没有 PivotPoint 的节点
           // Apply current transformation
           const worldPos = vec3.create()
           vec3.transformMat4(worldPos, pivot, nodeWrapper.matrix)
@@ -2163,7 +2411,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     vec3.normalize(rayDir, rayDir)
 
     // In Binding Mode OR Group Mode, treat as vertex selection for raycasting
-    const effectiveSubMode = ((mainMode === 'animation' && animationSubMode === 'binding') || geometrySubMode === 'group') ? 'vertex' : geometrySubMode
+    const effectiveSubMode = ((mainMode === 'animation' && animationSubMode === 'binding') || geometrySubMode === 'group') ? 'face' : geometrySubMode
 
     // DISABLED: Single-click vertex/face selection in geometry mode
     // Only box selection is allowed for vertices/faces
@@ -2181,36 +2429,27 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     const result = rendererRef.current.raycast(cameraPos, rayDir, effectiveSubMode)
 
     if (result) {
-      if (effectiveSubMode === 'vertex') {
+      if (geometrySubMode === 'group') {
         const sel = result as { geosetIndex: number, index: number }
-
-        if (geometrySubMode === 'group') {
-          // Group Selection: Select ALL vertices in this geoset
-          const geoset = rendererRef.current.model.Geosets[sel.geosetIndex]
-          if (geoset) {
-            const allVertices: { geosetIndex: number, index: number }[] = []
-            const count = geoset.Vertices.length / 3
-            for (let i = 0; i < count; i++) {
-              allVertices.push({ geosetIndex: sel.geosetIndex, index: i })
-            }
-
-            if (isShift) {
-              removeVertexSelection(allVertices)
-            } else if (isCtrl) {
-              addVertexSelection(allVertices)
-            } else {
-              selectVertices(allVertices)
-            }
-          }
+        const groupSelection = getConnectedGeometryGroup(sel.geosetIndex, [sel.index], [])
+        if (isShift) {
+          removeVertexSelection(groupSelection.vertices)
+          removeFaceSelection(groupSelection.faces)
+        } else if (isCtrl) {
+          addVertexSelection(groupSelection.vertices)
+          addFaceSelection(groupSelection.faces)
         } else {
-          // Normal Vertex Selection (Actually disabled by block above, but keeping for reference/animation mode)
-          if (isShift) {
-            removeVertexSelection([sel])
-          } else if (isCtrl) {
-            addVertexSelection([sel])
-          } else {
-            selectVertex(sel, false)
-          }
+          selectVertices(groupSelection.vertices)
+          selectFaces(groupSelection.faces)
+        }
+      } else if (effectiveSubMode === 'vertex') {
+        const sel = result as { geosetIndex: number, index: number }
+        if (isShift) {
+          removeVertexSelection([sel])
+        } else if (isCtrl) {
+          addVertexSelection([sel])
+        } else {
+          selectVertex(sel, false)
         }
       } else if (geometrySubMode === 'face') {
         const sel = result as { geosetIndex: number, index: number }
@@ -2289,7 +2528,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     }
 
     setLoading(true)
-    setLoadingStatus('璇诲彇妯″瀷鏂囦欢...')
+    setLoadingStatus('读取模型文件...')
 
     // Clear the canvas without creating a context.
     const canvas = canvasRef.current
@@ -2315,7 +2554,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           const mpqPayload = await invoke<any>('read_mpq_file', { path: assetPath }).catch(() => null)
           const mpqBytes = toUint8Array(mpqPayload)
           if (!mpqBytes || mpqBytes.byteLength === 0) {
-            throw new Error(`鏃犳硶璇诲彇璧勬簮鏂囦欢: ${assetPath}`)
+            throw new Error(`无法读取资源文件: ${assetPath}`)
           }
           return mpqBytes
         }
@@ -2326,7 +2565,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         const bytes = await readPathBytes(path)
         const imageData = decodeTextureData(toTightArrayBuffer(bytes), path, { preferredBLPMip: 0 })
         if (!imageData) {
-          throw new Error(`鏃犳硶瑙ｇ爜璐村浘鏂囦欢: ${path}`)
+          throw new Error(`无法解码贴图文件: ${path}`)
         }
 
         const previewCanvas = document.createElement('canvas')
@@ -2397,7 +2636,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         console.log('[Viewer] Loading model from in-memory data')
         model = inMemoryData
       } else {
-        setLoadingStatus('姝ｅ湪瑙ｆ瀽妯″瀷...')
+        setLoadingStatus('正在解析模型...')
         const buffer = await readPathBytes(path)
         const parseWithWorker = (bytes: Uint8Array) =>
           new Promise<any>((resolve, reject) => {
@@ -2482,7 +2721,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       resetCamera()
       console.log(`[Viewer] Renderer Init took ${(performance.now() - rendererStart).toFixed(1)}ms`)
 
-      setLoadingStatus('鍔犺浇璐村浘璧勬簮...')
+      setLoadingStatus('加载贴图资源...')
       // Load textures using concurrent loader with mipmap optimization (max 512px)
       const textureResults = await loadAllTextures(
         model,
@@ -2528,7 +2767,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     })
     console.time('[Viewer] ReloadModel')
     setLoading(true)
-    setLoadingStatus('鍚屾妯″瀷鏁版嵁...')
+    setLoadingStatus('同步模型数据...')
     // CRITICAL: Capture old renderer's Geoset geometry BEFORE destroying
     // The TypedArrays (Vertices, Faces, Normals) are lost in store's spread operations
     // NOTE: This logic is currently disabled, see commented block below
@@ -3089,10 +3328,10 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             mat4.perspective(pMatrix, Math.PI / 4, canvas.width / canvas.height, 1, 100000)
           }
 
-          const { geometrySubMode, transformMode, selectedVertexIds, selectedFaceIds, animationSubMode: currentAnimationSubMode, mainMode: currentMainMode, isGlobalTransformMode, globalTransformPivot } = useSelectionStore.getState()
+          const { geometrySubMode, transformMode, selectedVertexIds, selectedFaceIds, animationSubMode: currentAnimationSubMode, mainMode: currentMainMode, isGlobalTransformMode } = useSelectionStore.getState()
           const previewTransform = previewTransformRef.current
           const baseMvMatrix = isGlobalTransformMode ? mat4.clone(mvMatrix) : null
-          const globalPivot = globalTransformPivot === 'modelCenter' ? getModelCenter() : [0, 0, 0]
+          const globalPivot = getModelCenter()
           const isBindPoseMode =
             animationIndex === -1 ||
             currentMainMode === 'geometry' ||
@@ -3136,8 +3375,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             }
           } else {
             // Animation paused or bind pose mode
-            // 鎬ц兘浼樺寲: 浠呭湪蹇呰鏃舵洿鏂伴楠肩煩闃碉紙濡?Gizmo 鎷栧姩鎴栧抚鍙樺寲锛?
-            // 闈欐€佸Э鍔挎椂璺宠繃鐭╅樀璁＄畻锛岃妭鐪?CPU
+            // 性能优化：仅在必要时更新骨骼矩阵（如 Gizmo 拖动或帧变化）
+            // 静态姿态时跳过矩阵计算，节省 CPU
             const gizmoDragging = gizmoState.current.isDragging
             let currentFrame = mdlRenderer.rendererData?.frame ?? 0
 
@@ -3223,7 +3462,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
               }
             }
 
-            // 浣跨敤 ref 鏇夸唬 window 鍏ㄥ眬鍙橀噺锛岄伩鍏嶆薄鏌撳拰娼滃湪鍐茬獊
+            // 使用 ref 替代 window 全局变量，避免污染和潜在冲突
             const lastFrame = frameCacheRef.current
 
             const needsUpdate = needsRendererUpdateRef.current || forceFrameRefresh
@@ -3453,13 +3692,9 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
               const rotScale = mat4.create()
               mat4.fromRotationTranslationScale(rotScale, rotQuat, [0, 0, 0], previewTransform.scale)
               mat4.translate(previewMatrix, previewMatrix, previewTransform.translation)
-              if (globalTransformPivot === 'modelCenter') {
-                mat4.translate(previewMatrix, previewMatrix, globalPivot as [number, number, number])
-                mat4.multiply(previewMatrix, previewMatrix, rotScale)
-                mat4.translate(previewMatrix, previewMatrix, [-globalPivot[0], -globalPivot[1], -globalPivot[2]])
-              } else {
-                mat4.multiply(previewMatrix, previewMatrix, rotScale)
-              }
+              mat4.translate(previewMatrix, previewMatrix, globalPivot as [number, number, number])
+              mat4.multiply(previewMatrix, previewMatrix, rotScale)
+              mat4.translate(previewMatrix, previewMatrix, [-globalPivot[0], -globalPivot[1], -globalPivot[2]])
 
               // Apply to mvMatrix - transforms the entire rendered scene including mesh, particles, skeleton
               mat4.multiply(mvMatrix, mvMatrix, previewMatrix)
@@ -3468,7 +3703,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             const { gridSettings, showGridXY, showGridXZ, showGridYZ } = useRendererStore.getState()
 
             const renderOpts = {
-              wireframe: showWireframeRef.current || (currentMainMode === 'geometry' && (geometrySubMode === 'face' || geometrySubMode === 'group')),
+              wireframe: showWireframeRef.current,
               enableLighting: enableLightingRef.current
             } as any
 
@@ -3590,7 +3825,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             // === Hover Highlight ===
             // If a geoset is hovered, render a highlight overlay
             if (hoveredGeosetId !== null && mdlRenderer.model.Geosets && mdlRenderer.model.Geosets[hoveredGeosetId]) {
-              const isWireframeMode = showWireframeRef.current || (currentMainMode === 'geometry' && (geometrySubMode === 'face' || geometrySubMode === 'group'))
+              const isWireframeMode = showWireframeRef.current
 
               if (isWireframeMode && gl && debugRenderer.current) {
                 // In wireframe mode, draw red wireframe for hovered geoset using debugRenderer
@@ -3642,7 +3877,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
               }
             }
 
-            // 鍏抽敭甯фā寮忓拰缁戝畾妯″紡閮芥樉绀鸿妭鐐?
+            // 关键帧模式和绑定模式都显示节点
             if ((showNodesRef.current || currentMainMode === 'animation') && mdlRenderer.rendererData.nodes && currentMainMode !== 'geometry') {
               const { selectedNodeIds } = useSelectionStore.getState()
               let parentOfSelected: number | null = null
@@ -4003,24 +4238,24 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             const selectionColorRgb = hexToRgb(selectionColor)
             const hoverColorRgb = hexToRgb(hoverColor)
 
-            // 璁＄畻鍔ㄦ€侀《鐐瑰ぇ灏忥細鏍规嵁鐩告満缂╂斁绾у埆璋冩暣
-            // 鏀惧ぇ瑙嗚 鈫?椤剁偣鍙樺ぇ锛岀缉灏忚瑙?鈫?椤剁偣鍙樺皬
-            // 浣跨敤 sqrt 骞虫粦缂╂斁鏁堟灉
+            // 计算动态顶点大小：根据相机缩放级别调整
+            // 放大视角时顶点变大，缩小时顶点变小
+            // 使用 sqrt 平滑缩放效果
             let zoomScale = 1.0
             if (cameraRef.current) {
               if (cameraRef.current.projectionMode === 'orthographic') {
-                // 姝ｄ氦妯″紡锛氬熀鍑?orthoSize = 200
+                // 正交模式：基准 orthoSize = 200
                 zoomScale = Math.sqrt(200 / Math.max(1, cameraRef.current.orthoSize))
               } else {
-                // 閫忚妯″紡锛氬熀鍑?distance = 400
+                // 透视模式：基准 distance = 400
                 zoomScale = Math.sqrt(400 / Math.max(1, cameraRef.current.distance))
               }
             }
-            // 闄愬埗缂╂斁鑼冨洿锛?.375 鍒?2锛堟斁澶?px锛岀缉灏?.5px锛?
+            // 限制缩放范围：0.375 到 2（放大约 8px，缩小约 1.5px）
             zoomScale = Math.max(0.375, Math.min(2, zoomScale))
             const basePointSize = 4.0 * zoomScale
             const hoverPointSize = 6.0 * zoomScale
-            // 閫変腑椤剁偣鍙敼鍙橀鑹诧紝澶у皬鍜屾櫘閫氶《鐐逛竴鏍?
+            // 选中顶点只改变颜色，大小与普通顶点一致
             const selectedPointSize = basePointSize
 
             // Render all visible geoset vertices (only if show vertices is enabled)
@@ -4043,37 +4278,27 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
               }
             }
 
-            if (selectedVertexIds.length > 0 && showVerticesRef.current) {
+            if (selectedVertexIds.length > 0 && showVerticesRef.current && geometrySubMode !== 'group') {
               const selectedPositions: number[] = []
 
               if (geometrySubMode === 'group') {
-                // Group Mode: Render Wireframe (Lines) using selection color
-                const engagedGeosets = new Set<number>()
-                selectedVertexIds.forEach(v => engagedGeosets.add(v.geosetIndex))
-
                 const linePositions: number[] = []
-                engagedGeosets.forEach(geosetIndex => {
-                  const geoset = mdlRenderer.model.Geosets[geosetIndex]
+                for (const sel of selectedFaceIds) {
+                  const geoset = mdlRenderer.model.Geosets[sel.geosetIndex]
                   if (geoset && geoset.Faces && geoset.Vertices) {
-                    // Render ALL faces of this geoset as lines
-                    const faces = geoset.Faces
                     const verts = geoset.Vertices
-                    for (let i = 0; i < faces.length; i += 3) {
-                      const i1 = faces[i] * 3, i2 = faces[i + 1] * 3, i3 = faces[i + 2] * 3
-                      // Edge 1
-                      linePositions.push(verts[i1], verts[i1 + 1], verts[i1 + 2], verts[i2], verts[i2 + 1], verts[i2 + 2])
-                      // Edge 2
-                      linePositions.push(verts[i2], verts[i2 + 1], verts[i2 + 2], verts[i3], verts[i3 + 1], verts[i3 + 2])
-                      // Edge 3
-                      linePositions.push(verts[i3], verts[i3 + 1], verts[i3 + 2], verts[i1], verts[i1 + 1], verts[i1 + 2])
-                    }
+                    const fIndex = sel.index * 3
+                    const i1 = geoset.Faces[fIndex] * 3
+                    const i2 = geoset.Faces[fIndex + 1] * 3
+                    const i3 = geoset.Faces[fIndex + 2] * 3
+                    linePositions.push(verts[i1], verts[i1 + 1], verts[i1 + 2], verts[i2], verts[i2 + 1], verts[i2 + 2])
+                    linePositions.push(verts[i2], verts[i2 + 1], verts[i2 + 2], verts[i3], verts[i3 + 1], verts[i3 + 2])
+                    linePositions.push(verts[i3], verts[i3 + 1], verts[i3 + 2], verts[i1], verts[i1 + 1], verts[i1 + 2])
                   }
-                })
-                // Render lines with selection color
+                }
                 gl.disable(gl.DEPTH_TEST)
                 debugRenderer.current.renderLines(gl as WebGLRenderingContext, mvMatrix, pMatrix, linePositions, [...selectionColorRgb, 1])
                 gl.enable(gl.DEPTH_TEST)
-
               } else {
                 // Vertex Mode: Render Points with selection color
                 for (const sel of selectedVertexIds) {
@@ -4094,7 +4319,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             }
           }
 
-          if (gl && currentMainMode === 'geometry' && geometrySubMode === 'face') {
+          if (gl && currentMainMode === 'geometry' && (geometrySubMode === 'face' || geometrySubMode === 'group')) {
             if (selectedFaceIds.length > 0) {
               const { selectionColor } = useRendererStore.getState()
               const selectionColorRgb = hexToRgb(selectionColor)
@@ -4120,7 +4345,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 mvMatrix,
                 pMatrix,
                 selectedPositions,
-                [selectionColorRgb[0], selectionColorRgb[1], selectionColorRgb[2], 1],
+                [1, 0, 0, 0.55],
                 false
               )
 
@@ -4138,7 +4363,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 mvMatrix,
                 pMatrix,
                 linePositions,
-                [selectionColorRgb[0], selectionColorRgb[1], selectionColorRgb[2], 1],
+                [1, 0.35, 0.35, 1],
                 false
               )
               gl.enable(gl.DEPTH_TEST)
@@ -4151,7 +4376,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             let showGizmo = false
 
             if (currentMainMode === 'geometry') {
-              if (geometrySubMode === 'vertex' && selectedVertexIds.length > 0) {
+              if ((geometrySubMode === 'vertex' || geometrySubMode === 'group') && selectedVertexIds.length > 0) {
                 for (const sel of selectedVertexIds) {
                   const geoset = mdlRenderer.model.Geosets[sel.geosetIndex]
                   if (geoset) {
@@ -4178,14 +4403,14 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 showGizmo = true
               }
             }
-            // 鍔ㄧ敾妯″紡锛坆inding 鍜?keyframe锛夋樉绀?Gizmo
+            // 动画模式（binding 和 keyframe）显示 Gizmo
             else if (currentMainMode === 'animation') {
               const { selectedNodeIds } = useSelectionStore.getState()
               if (selectedNodeIds && selectedNodeIds.length > 0) {
                 for (const nodeId of selectedNodeIds) {
                   const nodeWrapper = mdlRenderer.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
                   if (nodeWrapper && nodeWrapper.matrix) {
-                    // 浣跨敤鐭╅樀鍙樻崲 PivotPoint 鑾峰彇姝ｇ‘鐨勪笘鐣屽潗鏍?
+                    // 使用矩阵变换 PivotPoint 获取正确的世界坐标
                     const matrix = nodeWrapper.matrix
                     let pivot = [0, 0, 0]
                     if (nodeWrapper.node && nodeWrapper.node.PivotPoint) {
@@ -4200,14 +4425,14 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                     center[1] += y
                     center[2] += z
                     count++;
-                    // 鏇存柊鍏ㄥ眬楠ㄩ浣嶇疆渚?BoneParameterPanel 浣跨敤
+                    // 更新全局骨骼位置，供 BoneParameterPanel 使用
                     (window as any)._selectedBoneWorldPos = [x, y, z]
                   }
                 }
                 showGizmo = true
               }
             }
-            // 鍏ㄥ眬鍙樻崲妯″紡鏄剧ず Gizmo
+            // 全局变换模式显示 Gizmo
             else if (isGlobalTransformMode) {
               center[0] = globalPivot[0]
               center[1] = globalPivot[1]
@@ -4313,7 +4538,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       return [
         (min[0] + max[0]) * 0.5,
         (min[1] + max[1]) * 0.5,
-        (min[2] + max[2]) * 0.5
+        min[2]
       ]
     }
     return [0, 0, 0]
@@ -4406,77 +4631,88 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     return pivot ?? null
   }
 
+  const computeCurrentGizmoCenter = (): { center: vec3, count: number, show: boolean } => {
+    const { mainMode, selectedVertexIds, selectedFaceIds, geometrySubMode, selectedNodeIds, isGlobalTransformMode } = useSelectionStore.getState()
+    const center = vec3.create()
+    let count = 0
+    let show = false
+
+    if (!rendererRef.current) {
+      return { center, count, show }
+    }
+
+    if (mainMode === 'geometry') {
+      if ((geometrySubMode === 'vertex' || geometrySubMode === 'group') && selectedVertexIds.length > 0) {
+        for (const sel of selectedVertexIds) {
+          const geoset = rendererRef.current.model.Geosets[sel.geosetIndex]
+          if (!geoset?.Vertices) continue
+          const vIndex = sel.index * 3
+          center[0] += geoset.Vertices[vIndex]
+          center[1] += geoset.Vertices[vIndex + 1]
+          center[2] += geoset.Vertices[vIndex + 2]
+          count++
+        }
+        show = true
+      } else if (geometrySubMode === 'face' && selectedFaceIds.length > 0) {
+        const expandedFaceSelection = getExpandedFaceVertexSelection(selectedFaceIds as Array<{ geosetIndex: number; index: number }>)
+        for (const sel of expandedFaceSelection) {
+          const geoset = rendererRef.current.model.Geosets[sel.geosetIndex]
+          if (!geoset?.Vertices) continue
+          const vIndex = sel.index * 3
+          center[0] += geoset.Vertices[vIndex]
+          center[1] += geoset.Vertices[vIndex + 1]
+          center[2] += geoset.Vertices[vIndex + 2]
+          count++
+        }
+        show = expandedFaceSelection.length > 0
+      }
+    } else if (mainMode === 'animation' && selectedNodeIds.length > 0) {
+      show = true
+      for (const nodeId of selectedNodeIds) {
+        const nodeWrapper = rendererRef.current.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
+        if (!nodeWrapper?.matrix) continue
+        let pivot = [0, 0, 0]
+        if (nodeWrapper.node && nodeWrapper.node.PivotPoint) {
+          pivot = nodeWrapper.node.PivotPoint
+        } else if (rendererRef.current.model.PivotPoints && rendererRef.current.model.PivotPoints[nodeId]) {
+          pivot = rendererRef.current.model.PivotPoints[nodeId]
+        }
+        const matrix = nodeWrapper.matrix
+        center[0] += matrix[0] * pivot[0] + matrix[4] * pivot[1] + matrix[8] * pivot[2] + matrix[12]
+        center[1] += matrix[1] * pivot[0] + matrix[5] * pivot[1] + matrix[9] * pivot[2] + matrix[13]
+        center[2] += matrix[2] * pivot[0] + matrix[6] * pivot[1] + matrix[10] * pivot[2] + matrix[14]
+        count++
+      }
+    } else if (isGlobalTransformMode) {
+      const pivot = getModelCenter()
+      center[0] = pivot[0]
+      center[1] = pivot[1]
+      center[2] = pivot[2]
+      count = 1
+      show = true
+    }
+
+    if (count > 0) {
+      vec3.scale(center, center, 1.0 / count)
+    }
+
+    return { center, count, show }
+  }
+
   const handleMouseMove = (e: any) => {
     // 1. Gizmo Dragging
-    const { transformMode, mainMode, animationSubMode: subMode, selectedVertexIds, selectedFaceIds, geometrySubMode, selectedNodeIds, isGlobalTransformMode, globalTransformPivot } = useSelectionStore.getState()
+    const { transformMode, mainMode, animationSubMode: subMode, isGlobalTransformMode } = useSelectionStore.getState()
 
     // --- Calculate Gizmo Center (Hoisted) ---
     // We need center for Ray-Plane intersection in drag mode
-    let gizmoCenter = vec3.create()
-    let gizmoCount = 0
-    let showGizmo = false
-
-    if (rendererRef.current) {
-      if (mainMode === 'geometry') {
-        if (geometrySubMode === 'vertex' && selectedVertexIds.length > 0) {
-          for (const sel of selectedVertexIds) {
-            const geoset = rendererRef.current.model.Geosets[sel.geosetIndex]
-            if (geoset) {
-              const vIndex = sel.index * 3
-              gizmoCenter[0] += geoset.Vertices[vIndex]
-              gizmoCenter[1] += geoset.Vertices[vIndex + 1]
-              gizmoCenter[2] += geoset.Vertices[vIndex + 2]
-              gizmoCount++
-            }
-          }
-          showGizmo = true
-        } else if (geometrySubMode === 'face' && selectedFaceIds.length > 0) {
-          for (const sel of selectedFaceIds) {
-            const geoset = rendererRef.current.model.Geosets[sel.geosetIndex]
-            if (geoset) {
-              const fIndex = sel.index * 3
-              const i1 = geoset.Faces[fIndex] * 3, i2 = geoset.Faces[fIndex + 1] * 3, i3 = geoset.Faces[fIndex + 2] * 3
-              gizmoCenter[0] += geoset.Vertices[i1] + geoset.Vertices[i2] + geoset.Vertices[i3]
-              gizmoCenter[1] += geoset.Vertices[i1 + 1] + geoset.Vertices[i2 + 1] + geoset.Vertices[i3 + 1]
-              gizmoCenter[2] += geoset.Vertices[i1 + 2] + geoset.Vertices[i2 + 2] + geoset.Vertices[i3 + 2]
-              gizmoCount += 3
-            }
-          }
-          showGizmo = true
-        }
-      } else if (mainMode === 'animation' && selectedNodeIds.length > 0) {
-        showGizmo = true
-        for (const nodeId of selectedNodeIds) {
-          const nodeWrapper = rendererRef.current.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
-          if (nodeWrapper && nodeWrapper.matrix) {
-            const matrix = nodeWrapper.matrix
-            let pivot = [0, 0, 0]
-            if (nodeWrapper.node && nodeWrapper.node.PivotPoint) {
-              pivot = nodeWrapper.node.PivotPoint
-            } else if (rendererRef.current.model.PivotPoints && rendererRef.current.model.PivotPoints[nodeId]) {
-              pivot = rendererRef.current.model.PivotPoints[nodeId]
-            }
-            const x = matrix[0] * pivot[0] + matrix[4] * pivot[1] + matrix[8] * pivot[2] + matrix[12]
-            const y = matrix[1] * pivot[0] + matrix[5] * pivot[1] + matrix[9] * pivot[2] + matrix[13]
-            const z = matrix[2] * pivot[0] + matrix[6] * pivot[1] + matrix[10] * pivot[2] + matrix[14]
-            gizmoCenter[0] += x
-            gizmoCenter[1] += y
-            gizmoCenter[2] += z
-            gizmoCount++
-          }
-        }
-      } else if (isGlobalTransformMode) {
-        const pivot = globalTransformPivot === 'modelCenter' ? getModelCenter() : [0, 0, 0]
-        gizmoCenter[0] = pivot[0]
-        gizmoCenter[1] = pivot[1]
-        gizmoCenter[2] = pivot[2]
-        gizmoCount = 1
-        showGizmo = true
-      }
-    }
-
-    if (gizmoCount > 0) {
-      vec3.scale(gizmoCenter, gizmoCenter, 1.0 / gizmoCount)
+    const gizmoInfo = computeCurrentGizmoCenter()
+    let gizmoCenter = gizmoInfo.center
+    let gizmoCount = gizmoInfo.count
+    let showGizmo = gizmoInfo.show
+    if (gizmoState.current.isDragging && gizmoState.current.dragCenter) {
+      gizmoCenter = vec3.clone(gizmoState.current.dragCenter)
+      gizmoCount = 1
+      showGizmo = true
     }
     // ----------------------------------------
 
@@ -4864,6 +5100,9 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         applyTranslateSnap(vecs.moveVec)
         applyHudTranslate(vecs.moveVec)
         const { selectedVertexIds, selectedFaceIds, geometrySubMode } = useSelectionStore.getState()
+        const expandedFaceSelection = geometrySubMode === 'face'
+          ? getExpandedFaceVertexSelection(selectedFaceIds as Array<{ geosetIndex: number; index: number }>)
+          : []
         const affectedGeosets = new Set<number>()
 
         const updateVertex = (geosetIndex: number, vertexIndex: number, updateFn: (v: Float32Array, idx: number) => void) => {
@@ -4875,19 +5114,10 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         }
 
         const applyToSelection = (updateFn: (v: Float32Array, idx: number) => void) => {
-          if (geometrySubMode === 'vertex') {
+          if (geometrySubMode === 'vertex' || geometrySubMode === 'group') {
             selectedVertexIds.forEach(sel => updateVertex(sel.geosetIndex, sel.index, updateFn))
           } else if (geometrySubMode === 'face') {
-            selectedFaceIds.forEach(sel => {
-              if (!rendererRef.current) return
-              const geoset = rendererRef.current.model.Geosets[sel.geosetIndex]
-              if (geoset) {
-                const fIndex = sel.index * 3
-                updateVertex(sel.geosetIndex, geoset.Faces[fIndex], updateFn)
-                updateVertex(sel.geosetIndex, geoset.Faces[fIndex + 1], updateFn)
-                updateVertex(sel.geosetIndex, geoset.Faces[fIndex + 2], updateFn)
-              }
-            })
+            expandedFaceSelection.forEach(sel => updateVertex(sel.geosetIndex, sel.index, updateFn))
           }
         }
 
@@ -4963,15 +5193,15 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 // If no parent (root bone), world delta = local delta (no transformation needed)
               }
 
-              // binding 妯″紡锛氫慨鏀?PivotPoint锛堥潤鎬佺粦瀹氫綅缃級
+              // binding 模式：修改 PivotPoint（静态绑定位置）
               if (subMode === 'binding') {
                 pivot[0] += localMoveVec[0]
                 pivot[1] += localMoveVec[1]
                 pivot[2] += localMoveVec[2]
               }
-              // keyframe 妯″紡锛氱疮绉?delta 骞舵敞鍏ヤ复鏃?Translation 鍏抽敭甯х敤浜庡疄鏃堕瑙?
+              // keyframe 模式：累计 delta 并注入临时 Translation 关键帧用于实时预览
               else if (subMode === 'keyframe') {
-                // 绱Н LOCAL 鍋忕Щ鍒板叏灞€鍙橀噺 (鐢ㄤ簬 MouseUp 鏃舵彁浜?
+                // 累积本地偏移到全局变量（用于 MouseUp 时提交）
                 if (!(window as any)._keyframeDragDelta) {
                   (window as any)._keyframeDragDelta = {}
                 }
@@ -4982,23 +5212,23 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 (window as any)._keyframeDragDelta[nodeId][1] += localMoveVec[1];
                 (window as any)._keyframeDragDelta[nodeId][2] += localMoveVec[2];
 
-                // 瀹炴椂棰勮锛氭敞鍏ヤ复鏃?Translation 鍏抽敭甯у埌娓叉煋鍣ㄦā鍨?
-                // 浣跨敤 baseTranslation + accumulatedDelta 浣滀负棰勮鍊?
-                // baseTranslation 浼樺厛浣跨敤褰撳墠甯х殑鐜版湁鍏抽敭甯у€?
+                // 实时预览：注入临时 Translation 关键帧到渲染模型
+                // 使用 baseTranslation + accumulatedDelta 作为预览值
+                // baseTranslation 优先使用当前帧的现有关键帧值
                 const dragData = keyframeDragData.current
                 if (dragData && rendererRef.current) {
                   const delta = (window as any)._keyframeDragDelta[nodeId]
                   const frame = Math.round(currentFrame)
 
-                  // 鑾峰彇娓叉煋鍣ㄤ腑鐨勮妭鐐?
+                  // 获取渲染器中的节点
                   const rendererNode = rendererRef.current.model?.Nodes?.find((n: any) => n.ObjectId === nodeId)
                   if (rendererNode) {
-                    // 纭繚 Translation 灞炴€у瓨鍦紝骞朵粠 store 澶嶅埗鐜版湁鍏抽敭甯?
-                    // 杩欐牱娓叉煋鍣ㄦ墠鑳芥纭彃鍊煎叾浠栧抚
+                    // 确保 Translation 属性存在，并从 store 复制现有关键帧
+                    // 这样渲染器才能正确插值其他帧
                     if (!rendererNode.Translation || !rendererNode.Translation.Keys?.length) {
                       const storeNode = nodes.find((n: any) => n && n.ObjectId === nodeId)
                       const storeKeys = storeNode?.Translation?.Keys || []
-                      // 娣辨嫹璐濈幇鏈夊叧閿抚锛堜笉鍖呮嫭棰勮鍏抽敭甯э級
+                      // 深拷贝现有关键帧（不包含预览关键帧）
                       const copiedKeys = storeKeys
                         .filter((k: any) => !k._isPreviewKey)
                         .map((k: any) => ({
@@ -5013,7 +5243,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                       }
                     }
 
-                    // 鑾峰彇鍩虹鍊硷細浼樺厛浣跨敤鐜版湁鍏抽敭甯э紝鍚﹀垯瀹炴椂浠?store 鎻掑€?
+                    // 获取基础值：优先使用现有关键帧，否则实时从 store 插值
                     let baseTranslation = [0, 0, 0]
                     let baseSource = 'default'
                     const existingKey = rendererNode.Translation.Keys.find(
@@ -5025,7 +5255,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                       baseTranslation = Array.isArray(v) ? [...v] : Array.from(v) as number[]
                       baseSource = 'exactKeyframe'
                     } else {
-                      // 娌℃湁绮剧‘鍏抽敭甯э紝浠?store 鑺傜偣鐨勫叧閿抚瀹炴椂鎻掑€?
+                      // 没有精确关键帧时，从 store 节点的关键帧实时插值
                       const storeNode = nodes.find((n: any) => n && n.ObjectId === nodeId)
                       const storeKeys = storeNode?.Translation?.Keys
                       if (storeKeys && storeKeys.length > 0) {
@@ -5074,7 +5304,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                       baseTranslation[2] + delta[2]
                     ]
 
-                    // 鍦ㄥ綋鍓嶅抚娉ㄥ叆涓存椂鍏抽敭甯х敤浜庨瑙?
+                    // 在当前帧注入临时关键帧用于预览
                     const tempKeyIndex = rendererNode.Translation.Keys.findIndex((k: any) => k._isPreviewKey)
                     if (tempKeyIndex >= 0) {
                       rendererNode.Translation.Keys[tempKeyIndex].Vector = previewTranslation
@@ -5100,6 +5330,9 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         }
       } else if ((transformMode === 'rotate' || transformMode === 'scale') && mainMode === 'geometry') {
         const { selectedVertexIds, selectedFaceIds, geometrySubMode } = useSelectionStore.getState()
+        const expandedFaceSelection = geometrySubMode === 'face'
+          ? getExpandedFaceVertexSelection(selectedFaceIds as Array<{ geosetIndex: number; index: number }>)
+          : []
 
         const center = vec3.create()
         let count = 0
@@ -5114,19 +5347,10 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           count++
         }
 
-        if (geometrySubMode === 'vertex') {
+        if (geometrySubMode === 'vertex' || geometrySubMode === 'group') {
           selectedVertexIds.forEach(sel => accumulateCenter(sel.geosetIndex, sel.index))
         } else if (geometrySubMode === 'face') {
-          selectedFaceIds.forEach(sel => {
-            if (!rendererRef.current) return
-            const geoset = rendererRef.current.model.Geosets[sel.geosetIndex]
-            if (geoset) {
-              const fIndex = sel.index * 3
-              accumulateCenter(sel.geosetIndex, geoset.Faces[fIndex])
-              accumulateCenter(sel.geosetIndex, geoset.Faces[fIndex + 1])
-              accumulateCenter(sel.geosetIndex, geoset.Faces[fIndex + 2])
-            }
-          })
+          expandedFaceSelection.forEach(sel => accumulateCenter(sel.geosetIndex, sel.index))
         }
 
         if (count > 0) {
@@ -5142,19 +5366,10 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           }
 
           const applyToSelection = (updateFn: (v: Float32Array, idx: number) => void) => {
-            if (geometrySubMode === 'vertex') {
+            if (geometrySubMode === 'vertex' || geometrySubMode === 'group') {
               selectedVertexIds.forEach(sel => updateVertex(sel.geosetIndex, sel.index, updateFn))
             } else if (geometrySubMode === 'face') {
-              selectedFaceIds.forEach(sel => {
-                if (!rendererRef.current) return
-                const geoset = rendererRef.current.model.Geosets[sel.geosetIndex]
-                if (geoset) {
-                  const fIndex = sel.index * 3
-                  updateVertex(sel.geosetIndex, geoset.Faces[fIndex], updateFn)
-                  updateVertex(sel.geosetIndex, geoset.Faces[fIndex + 1], updateFn)
-                  updateVertex(sel.geosetIndex, geoset.Faces[fIndex + 2], updateFn)
-                }
-              })
+              expandedFaceSelection.forEach(sel => updateVertex(sel.geosetIndex, sel.index, updateFn))
             }
           }
 
@@ -5297,15 +5512,35 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           }
           if (angle !== 0) {
             keyframeTransformDirty.current = true
-            const deltaQuat = quat.create()
-            quat.setAxisAngle(deltaQuat, rotAxis, angle)
+            const worldDeltaQuat = quat.create()
+            quat.setAxisAngle(worldDeltaQuat, rotAxis, angle)
 
             selectedNodeIds.forEach(nodeId => {
               const currentVal = keyframeDragData.current?.initialValues.get(nodeId)
               if (currentVal) {
+                const localDeltaQuat = quat.clone(worldDeltaQuat)
+                const storeNode = nodes.find((n: any) => n && n.ObjectId === nodeId)
+                const parentId = storeNode?.Parent
+                if (parentId !== undefined && parentId !== null && parentId >= 0) {
+                  const parentWrapper = rendererRef.current!.rendererData.nodes.find(
+                    (n: any) => n && n.node && n.node.ObjectId === parentId
+                  )
+                  if (parentWrapper?.matrix) {
+                    const parentRot = quat.create()
+                    mat4.getRotation(parentRot, parentWrapper.matrix as mat4)
+                    const invParentRot = quat.create()
+                    quat.invert(invParentRot, parentRot)
+                    const localAxis = vec3.create()
+                    vec3.transformQuat(localAxis, rotAxis, invParentRot)
+                    if (vec3.length(localAxis) > 0.000001) {
+                      vec3.normalize(localAxis, localAxis)
+                      quat.setAxisAngle(localDeltaQuat, localAxis, angle)
+                    }
+                  }
+                }
                 const newRot = quat.create()
-                // Aggregate rotation: New = Current * Delta (Local approximation)
-                quat.multiply(newRot, currentVal.rotation as any, deltaQuat)
+                // Apply delta in parent-local space to keep world/camera-axis drag continuous.
+                quat.multiply(newRot, localDeltaQuat, currentVal.rotation as any)
 
                 // Update current value so next frame accumulates
                 quat.copy(currentVal.rotation as any, newRot)
@@ -5315,7 +5550,6 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 if (rendererNode) {
                   const frame = Math.round(currentFrame)
                   if (!rendererNode.Rotation || !rendererNode.Rotation.Keys?.length) {
-                    const storeNode = nodes.find((n: any) => n && n.ObjectId === nodeId)
                     const storeKeys = storeNode?.Rotation?.Keys || []
                     const copiedKeys = storeKeys
                       .filter((k: any) => !k._isPreviewKey)
@@ -5577,6 +5811,37 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     setSeparateDialogVisible(true)
   }
 
+  const handleAutoSeparateLayers = () => {
+    if (!rendererRef.current) {
+      message.warning('当前渲染器未就绪')
+      return
+    }
+    const { mainMode } = useSelectionStore.getState()
+    if (mainMode !== 'geometry') {
+      message.warning('请先切换到顶点模式')
+      return
+    }
+
+    message.loading({ content: '正在执行一键分层...', key: 'auto-separate-layers', duration: 0 })
+    const cmd = new AutoSeparateLayersCommand(rendererRef.current)
+    commandManager.execute(cmd)
+
+    if (!cmd.lastResult) {
+      message.warning({ content: '一键分层未返回结果', key: 'auto-separate-layers' })
+      return
+    }
+
+    if (cmd.lastResult.changedGeosetCount <= 0) {
+      message.info({ content: '当前模型不需要分层', key: 'auto-separate-layers' })
+      return
+    }
+
+    message.success({
+      content: `一键分层完成：${cmd.lastResult.sourceGeosetCount} -> ${cmd.lastResult.resultGeosetCount}，处理 ${cmd.lastResult.changedGeosetCount} 个多边形组`,
+      key: 'auto-separate-layers'
+    })
+  }
+
   // Handle separate dialog confirmation
   const handleSeparateConfirm = (config: {
     mode: 'keep' | 'new' | 'existing';
@@ -5654,10 +5919,11 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     if (wasGizmoDragging) {
       gizmoState.current.isDragging = false
       gizmoState.current.activeAxis = null
+      gizmoState.current.dragCenter = null
       setGizmoHud(null)
 
       if (rendererRef.current) {
-        const { mainMode, animationSubMode, isGlobalTransformMode, globalTransformPivot } = useSelectionStore.getState()
+        const { mainMode, animationSubMode, isGlobalTransformMode } = useSelectionStore.getState()
 
         if (isGlobalTransformMode) {
           const previewTransform = previewTransformRef.current
@@ -5673,7 +5939,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           // CRITICAL: Execute command FIRST to bake transform into model data,
           // then reset preview. Otherwise model visually jumps back before bake completes.
           if (hasTransform) {
-            const pivot = globalTransformPivot === 'modelCenter' ? getModelCenter() : null
+            const pivot = getModelCenter()
             const cmd = new GlobalTransformCommand(commitTransform, rendererRef.current, pivot)
             commandManager.execute(cmd)
             console.log('[Viewer] Global transform applied via command')
@@ -6369,7 +6635,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
               background: 'rgba(0, 0, 0, 0.55)'
             }}
           >
-            {texturePreview.path.split(/[/\\]/).pop()} ({texturePreview.width}x{texturePreview.height})
+            {texturePreview.path.split(/[/]/).pop()} ({texturePreview.width}x{texturePreview.height})
           </div>
         </div>
       )}
@@ -6402,7 +6668,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           }}>
             <button
               onClick={onTogglePlay}
-              title={isPlaying ? 'Pause' : 'Play'}
+              title={isPlaying ? '暂停' : '播放'}
               style={{
                 background: 'none',
                 border: 'none',
@@ -6416,7 +6682,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 transition: 'all 0.2s'
               }}
             >
-              {isPlaying ? 'Pause' : 'Play'}
+              {isPlaying ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
             </button>
             <input
               type="range"
@@ -6441,7 +6707,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             </span>
             <button
               onClick={() => setLooping(!isLooping)}
-              title={isLooping ? 'Loop: On' : 'Loop: Off'}
+              title={isLooping ? '循环开启' : '循环关闭'}
               style={{
                 background: 'none',
                 border: 'none',
@@ -6486,8 +6752,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
       {/* Camera Selector Dropdown */}
       {!isTexturePreviewMode && (() => {
-        const cameraList = stableStoreNodes.filter((n: any) => n && n.type === 'Camera');
-        if (cameraList.length === 0) return null;
+        const cameraList = getAvailableCameras();
+        const hasCamera = cameraList.length > 0
 
         return (
           <div style={{
@@ -6501,7 +6767,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           }}>
             <select
               id="camera-selector"
-              title="鎸墌閿彲浠ュ揩閫熷垏鎹㈠埌閫変腑鐩告満瑙嗚"
+              title="选择模型相机"
               style={{
                 background: 'rgba(0, 0, 0, 0.7)',
                 color: '#fff',
@@ -6511,6 +6777,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 fontSize: '12px',
                 cursor: 'pointer'
               }}
+              disabled={!hasCamera}
               onChange={(e) => {
                 const idx = parseInt(e.target.value);
                 if (idx >= 0 && idx < cameraList.length) {
@@ -6522,14 +6789,35 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
               }}
               defaultValue="-1"
             >
-              <option value="-1" disabled>閫夋嫨鐩告満...</option>
+              <option value="-1" disabled>选择相机...</option>
               {cameraList.map((cam: any, i: number) => (
                 <option key={i} value={i}>{cam.Name || `Camera ${i + 1}`}</option>
               ))}
             </select>
             <button
               type="button"
-              title="Create camera from current view"
+              title="复制相机参数"
+              onClick={copySelectedCameraParams}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '24px',
+                height: '24px',
+                background: 'rgba(0, 0, 0, 0.7)',
+                color: '#fff',
+                border: '1px solid #555',
+                borderRadius: '4px',
+                cursor: hasCamera ? 'pointer' : 'not-allowed',
+                opacity: hasCamera ? 1 : 0.45
+              }}
+              disabled={!hasCamera}
+            >
+              <CopyOutlined style={{ fontSize: '12px' }} />
+            </button>
+            <button
+              type="button"
+              title="按当前视角新建相机"
               onClick={() => onAddCameraFromView?.()}
               style={{
                 display: 'inline-flex',
@@ -6545,25 +6833,6 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
               }}
             >
               <CameraOutlined style={{ fontSize: '12px' }} />
-            </button>
-            <button
-              type="button"
-              title="Copy camera position and target"
-              onClick={copySelectedCameraParams}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                width: '24px',
-                height: '24px',
-                background: 'rgba(0, 0, 0, 0.7)',
-                color: '#fff',
-                border: '1px solid #555',
-                borderRadius: '4px',
-                cursor: 'pointer'
-              }}
-            >
-              <CopyOutlined style={{ fontSize: '12px' }} />
             </button>
           </div>
         );
@@ -6649,7 +6918,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
               justifyContent: 'space-between',
               alignItems: 'center'
             }}>
-              <span>妯″瀷淇℃伅</span>
+              <span>模型信息</span>
             </div>
             <div style={{ flex: 1, overflow: 'auto' }}>
               <ModelInfoPanel />
@@ -6663,6 +6932,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         key="viewer-toolbar"
         onRecalculateNormals={handleRecalculateNormals}
         onSplitVertices={handleSplitVertices}
+        onAutoSeparateLayers={handleAutoSeparateLayers}
         onWeldVertices={handleWeldVertices}
         onFitToView={handleFitToView}
       />}
@@ -6791,7 +7061,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 setNodeContextMenu(null)
               }}
             >
-              {'\u590d\u5236\u59ff\u6001'}
+              {'复制姿态'}
             </div>
             <div
               style={menuItemStyle(canPastePose)}
@@ -6804,7 +7074,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 setNodeContextMenu(null)
               }}
             >
-              {'\u7c98\u8d34\u59ff\u6001'}
+              {'粘贴姿态'}
             </div>
             <div style={dividerStyle} />
             <div
@@ -6818,7 +7088,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 setNodeContextMenu(null)
               }}
             >
-              缂栬緫鑺傜偣
+              编辑节点
             </div>
             <div
               style={menuItemStyle(hasParent)}
@@ -6831,7 +7101,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 setNodeContextMenu(null)
               }}
             >
-              閫夊彇鐖惰妭鐐?
+              选择父节点
             </div>
             <div
               style={menuItemStyle(hasChild)}
@@ -6844,7 +7114,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 setNodeContextMenu(null)
               }}
             >
-              閫夊彇瀛愯妭鐐?
+              选择子节点
             </div>
             <div
               style={menuItemStyle(hasChild)}
@@ -6857,7 +7127,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 setNodeContextMenu(null)
               }}
             >
-              閫夊彇鎵€鏈夊瓙鑺傜偣
+              选择所有子节点
             </div>
             <div
               style={menuItemStyle(hasNode)}
@@ -6870,7 +7140,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 setNodeContextMenu(null)
               }}
             >
-              鍒犻櫎鑺傜偣
+              删除节点
             </div>
           </div>
         )
@@ -6954,6 +7224,28 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 })
 
 export default Viewer
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

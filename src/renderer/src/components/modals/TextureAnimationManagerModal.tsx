@@ -6,7 +6,7 @@ import { useHistoryStore } from '../../store/historyStore';
 import { useSelectionStore } from '../../store/selectionStore';
 import { DraggableModal } from '../DraggableModal';
 import DynamicField from '../node/DynamicField';
-import { emit, listen } from '@tauri-apps/api/event';
+import { listen } from '@tauri-apps/api/event';
 import { windowManager } from '../../utils/windowManager';
 
 import { useRpcClient } from '../../hooks/useRpc';
@@ -213,8 +213,7 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
         const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
         payload.targetWindowId = windowId;
 
-        emit('IPC_KEYFRAME_INIT', payload);
-        windowManager.openToolWindow(windowId, payload.title, 600, 480);
+        void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload);
     };
 
     const renderListItem = (_item: any, index: number, isSelected: boolean) => (
@@ -262,7 +261,7 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
     const wrapperProps = isStandalone
         ? { style: { display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: '#252525', overflow: 'hidden' } }
         : {
-            title: "纹理动画管理器",
+            title: "贴图动画管理器",
             open: visible,
             onCancel: onClose,
             width: 800,
@@ -274,7 +273,7 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
         <Wrapper {...wrapperProps}>
             {isStandalone && (
                 <div data-tauri-drag-region style={{ height: 32, flexShrink: 0, backgroundColor: '#333333', borderBottom: '1px solid #4a4a4a', display: 'flex', alignItems: 'center', padding: '0 16px', justifyContent: 'space-between', userSelect: 'none' }}>
-                    <span data-tauri-drag-region style={{ color: '#e8e8e8', fontSize: 13, fontWeight: 'bold' }}>纹理动画管理器</span>
+                    <span data-tauri-drag-region style={{ color: '#e8e8e8', fontSize: 13, fontWeight: 'bold' }}>贴图动画管理器</span>
                     <Button type="text" size="small" icon={<CloseOutlined />} onClick={() => getCurrentWindow().hide()} style={{ color: '#b0b0b0' }} />
                 </div>
             )}
