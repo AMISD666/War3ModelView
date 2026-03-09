@@ -1,7 +1,6 @@
 ﻿import React, { useState, useCallback, useEffect, useRef, Suspense } from 'react'
-import Viewer, { ViewerRef } from './Viewer'
+import type { ViewerRef } from './Viewer'
 import MenuBar from './MenuBar'
-import EditorPanel from './EditorPanel'
 // Lazy load modal components for faster startup
 const GeosetAnimationModal = React.lazy(() => import('./modals/GeosetAnimationModal'))
 const TextureEditorModal = React.lazy(() => import('./modals/TextureEditorModal'))
@@ -10,13 +9,15 @@ const SequenceEditorModal = React.lazy(() => import('./modals/SequenceEditorModa
 const CameraManagerModal = React.lazy(() => import('./modals/CameraManagerModal'))
 const UVModeLayout = React.lazy(() => import('./UVModeLayout'))
 const AnimationModeLayout = React.lazy(() => import('./animation/AnimationModeLayout'))
-import AnimationPanel from './AnimationPanel'
 const MaterialEditorModal = React.lazy(() => import('./modals/MaterialEditorModal'))
 const GeosetEditorModal = React.lazy(() => import('./modals/GeosetEditorModal'))
 const GlobalSequenceModal = React.lazy(() => import('./modals/GlobalSequenceModal'))
 const TransformModelDialog = React.lazy(() => import('./node/TransformModelDialog').then(m => ({ default: m.TransformModelDialog })))
 const ModelOptimizeModal = React.lazy(() => import('./modals/ModelOptimizeModal'))
 const StandalonePerfModal = React.lazy(() => import('./modals/StandalonePerfModal'))
+const Viewer = React.lazy(() => import('./Viewer'))
+const AnimationPanel = React.lazy(() => import('./AnimationPanel'))
+const EditorPanel = React.lazy(() => import('./EditorPanel'))
 
 import { GeosetVisibilityPanel } from './GeosetVisibilityPanel'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -31,22 +32,18 @@ import { useHistoryStore } from '../store/historyStore'
 import { GlobalMessageLayer } from './GlobalMessageLayer'
 import { showMessage, showConfirm } from '../store/messageStore'
 import { registerShortcutHandler } from '../shortcuts/manager'
-import { checkGiteeUpdate, showChangelog as showUpdateLog, checkGiteeUpdateSilent } from '../services/updateService';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { listen as listenEvent } from '@tauri-apps/api/event'
+import { emit, listen as listenEvent } from '@tauri-apps/api/event'
 import { Button, Modal } from 'antd';
-import { decodeTexture } from './viewer/textureLoader'
 import {
     applyTextureAdjustments,
     normalizeTextureAdjustments,
     isDefaultTextureAdjustments,
     TEXTURE_ADJUSTMENTS_KEY
 } from '../utils/textureAdjustments'
-import { optimizeModelKeyframes, optimizeModelPolygons } from '../utils/modelOptimization'
 import { windowManager } from '../utils/WindowManager'
-import { scheduleStandaloneWarmup } from '../utils/standaloneWarmup'
 import { useRpcServer } from '../hooks/useRpc'
-import { STANDALONE_PERF_EVENT, StandalonePerfEntry } from '../utils/standalonePerf'
+import { STANDALONE_PERF_EVENT, StandalonePerfEntry, markStandalonePerf } from '../utils/standalonePerf'
 
 /**
  * Normalize model data before saving to ensure typed arrays are correct.
@@ -1715,6 +1712,7 @@ function stripNodeData(nodes: any[]) {
 const MainLayout: React.FC = () => {
     // Zustand stores
     const modelPath = useModelStore(state => state.modelPath)
+    const activeTabId = useModelStore(state => state.activeTabId)
     const setZustandModelData = useModelStore(state => state.setModelData)
     const addTab = useModelStore(state => state.addTab)
     const setZustandLoading = useModelStore(state => state.setLoading)
@@ -1967,6 +1965,7 @@ const MainLayout: React.FC = () => {
                 const startedAt = performance.now();
 
                 if (command === 'EXECUTE_POLYGON_OPT') {
+                    const { optimizeModelPolygons } = await import('../utils/modelOptimization')
                     const result = await optimizeModelPolygons(workingCopy, {
                         removeRedundantVertices: payload?.removeRedundantVertices !== false,
                         decimateModel: payload?.decimateModel !== false,
@@ -1995,6 +1994,7 @@ const MainLayout: React.FC = () => {
                 }
 
                 if (command === 'EXECUTE_KEYFRAME_OPT') {
+                    const { optimizeModelKeyframes } = await import('../utils/modelOptimization')
                     const result = await optimizeModelKeyframes(workingCopy, {
                         removeRedundantFrames: payload?.removeRedundantFrames !== false,
                         optimizeKeyframes: payload?.optimizeKeyframes !== false
@@ -2064,7 +2064,21 @@ const MainLayout: React.FC = () => {
         if (!modelData || standaloneWarmupStartedRef.current) return
 
         standaloneWarmupStartedRef.current = true
-        return scheduleStandaloneWarmup()
+
+        let disposed = false
+        let cleanup: (() => void) | undefined
+
+        void import('../utils/standaloneWarmup').then(({ scheduleStandaloneWarmup }) => {
+            if (disposed) {
+                return
+            }
+            cleanup = scheduleStandaloneWarmup()
+        })
+
+        return () => {
+            disposed = true
+            cleanup?.()
+        }
     }, [modelData]);
     // Persistent settings
     // Persistent settings replaced by store
@@ -2773,6 +2787,46 @@ const MainLayout: React.FC = () => {
         };
     });
 
+    useEffect(() => {
+        void emit('active-model-changed', {
+            activeTabId,
+            modelPath: modelPath || '',
+            hasModelData: !!modelData,
+        }).catch(() => { })
+    }, [activeTabId, modelPath, modelData])
+    useEffect(() => {
+        let cancelled = false
+
+        const pushActiveModelSnapshots = async () => {
+            const [textureManagerVisible, materialManagerVisible] = await Promise.all([
+                windowManager.isToolWindowVisible('textureManager'),
+                windowManager.isToolWindowVisible('materialManager'),
+            ])
+
+            if (cancelled) {
+                return
+            }
+
+            if (textureManagerVisible) {
+                const textureManagerState = getTextureManagerState()
+                standaloneSnapshotDispatchRef.current.textureManager = textureManagerState.snapshotVersion
+                broadcastTextureManager(textureManagerState)
+            }
+
+            if (materialManagerVisible) {
+                const materialManagerState = getMaterialManagerState()
+                standaloneSnapshotDispatchRef.current.materialManager = materialManagerState.snapshotVersion
+                broadcastMaterialManager(materialManagerState)
+            }
+        }
+
+        void pushActiveModelSnapshots()
+
+        return () => {
+            cancelled = true
+        }
+    }, [activeTabId, modelPath, modelData, broadcastTextureManager, getTextureManagerState, broadcastMaterialManager, getMaterialManagerState])
+
     // Push state to the standalone window whenever the model changes
     // Optimized with selective synchronization (Data Stripping)
     useEffect(() => {
@@ -3349,6 +3403,7 @@ const MainLayout: React.FC = () => {
             }
 
             const decodeModelPath = sourceModelPath || targetModelPath;
+            const { decodeTexture } = await import('./viewer/textureLoader')
             const decodeResult = await decodeTexture(imagePathRaw, decodeModelPath);
             if (!decodeResult.imageData) {
                 failed.push(`${imagePathRaw} (解码失败)`);
@@ -4022,11 +4077,36 @@ const MainLayout: React.FC = () => {
         }
     }, [showAbout, fetchActivationStatus])
 
-    // Daily automatic update check
+    const handleCheckUpdate = useCallback(async () => {
+        const { checkGiteeUpdate } = await import('../services/updateService')
+        await checkGiteeUpdate()
+    }, [])
+
+    const handleShowChangelog = useCallback(async () => {
+        const { showChangelog } = await import('../services/updateService')
+        await showChangelog()
+    }, [])
+
+    // Delay update check until after the first paint to keep startup responsive.
     useEffect(() => {
-        const today = new Date().toISOString().split('T')[0];
-        checkGiteeUpdateSilent();
-        localStorage.setItem('lastUpdateCheck', today);
+        let disposed = false
+
+        const timeoutId = window.setTimeout(() => {
+            void import('../services/updateService').then(({ checkGiteeUpdateSilent }) => {
+                if (disposed) {
+                    return
+                }
+
+                const today = new Date().toISOString().split('T')[0]
+                checkGiteeUpdateSilent()
+                localStorage.setItem('lastUpdateCheck', today)
+            })
+        }, 1500)
+
+        return () => {
+            disposed = true
+            window.clearTimeout(timeoutId)
+        }
     }, []);
 
     // Handle activation
@@ -4124,8 +4204,8 @@ const MainLayout: React.FC = () => {
                 onChangeBackgroundColor={setBackgroundColor}
                 showFPS={showFPS}
                 onToggleFPS={() => setShowFPS(!showFPS)}
-                onCheckUpdate={() => checkGiteeUpdate()}
-                onShowChangelog={() => showUpdateLog()}
+                onCheckUpdate={handleCheckUpdate}
+                onShowChangelog={handleShowChangelog}
                 showGeosetVisibility={showGeosetVisibility}
                 onToggleGeosetVisibility={() => {
                     const newValue = !showGeosetVisibility;
@@ -4413,18 +4493,28 @@ const MainLayout: React.FC = () => {
             )}
 
 
-            <TextureAnimationManagerModal
-                visible={showTextureAnimModal}
-                onClose={() => setShowTextureAnimModal(false)}
-            />
-            <SequenceEditorModal
-                visible={showSequenceModal}
-                onClose={() => setShowSequenceModal(false)}
-            />
+            {showTextureAnimModal && (
+                <Suspense fallback={null}>
+                    <TextureAnimationManagerModal
+                        visible={showTextureAnimModal}
+                        onClose={() => setShowTextureAnimModal(false)}
+                    />
+                </Suspense>
+            )}
+            {showSequenceModal && (
+                <Suspense fallback={null}>
+                    <SequenceEditorModal
+                        visible={showSequenceModal}
+                        onClose={() => setShowSequenceModal(false)}
+                    />
+                </Suspense>
+            )}
 
-            <Suspense fallback={null}>
-                <TransformModelDialog />
-            </Suspense>
+            {showTransformModelDialog && (
+                <Suspense fallback={null}>
+                    <TransformModelDialog />
+                </Suspense>
+            )}
 
 
             <div style={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative', minWidth: 0 }}>
@@ -4434,22 +4524,25 @@ const MainLayout: React.FC = () => {
                         data-left-animation-panel="true"
                         style={{ width: 'clamp(160px, 18vw, 230px)', display: 'flex', flexDirection: 'column', borderRight: '1px solid #333', minWidth: 0 }}
                     >
-                        <AnimationPanel
-                            onImport={handleImport}
-                        />
+                        <Suspense fallback={null}>
+                            <AnimationPanel
+                                onImport={handleImport}
+                            />
+                        </Suspense>
                     </div>
                 )}
 
                 {/* Center - 3D Viewer or Animation/UV Mode Layout */}
                 <div id="main-viewer-host" style={{ flex: 1, position: 'relative', backgroundColor, minWidth: 0 }}>
-                    <AnimationModeLayout isActive={mainMode === 'animation'}>
-                        <UVModeLayout
+                    <Suspense fallback={<div style={{ position: 'absolute', inset: 0, backgroundColor }} />}>
+                        <AnimationModeLayout isActive={mainMode === 'animation'}>
+                            <UVModeLayout
 
-                            modelPath={modelPath}
-                            isActive={mainMode === 'uv'}
-                        >
-                            <Viewer
-                                ref={viewerRef}
+                                modelPath={modelPath}
+                                isActive={mainMode === 'uv'}
+                            >
+                                <Viewer
+                                    ref={viewerRef as any}
                                 modelPath={modelPath}
                                 modelData={modelData}
                                 teamColor={teamColor}
@@ -4471,9 +4564,10 @@ const MainLayout: React.FC = () => {
                                 playbackSpeed={playbackSpeed}
                                 viewPreset={viewPreset}
                                 onAddCameraFromView={handleAddCameraFromView}
-                            />
-                        </UVModeLayout>
-                    </AnimationModeLayout>
+                                />
+                            </UVModeLayout>
+                        </AnimationModeLayout>
+                    </Suspense>
 
 
                     <GeosetVisibilityPanel
@@ -4528,10 +4622,12 @@ const MainLayout: React.FC = () => {
                             onMouseEnter={(e) => { if (!isResizingEditor) e.currentTarget.style.backgroundColor = '#007acc40' }}
                             onMouseLeave={(e) => { if (!isResizingEditor) e.currentTarget.style.backgroundColor = 'transparent' }}
                         />
-                        <EditorPanel
-                            activeTab={activeEditor}
-                            onClose={() => setActiveEditor(null)}
-                        />
+                        <Suspense fallback={null}>
+                            <EditorPanel
+                                activeTab={activeEditor}
+                                onClose={() => setActiveEditor(null)}
+                            />
+                        </Suspense>
                     </div>
                 )}
             </div>
@@ -4555,6 +4651,8 @@ const MainLayout: React.FC = () => {
 }
 
 export default MainLayout
+
+
 
 
 

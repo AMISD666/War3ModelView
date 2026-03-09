@@ -410,12 +410,9 @@ Status:
 - Update checklist items when a task is completed.
 - Record major architecture decisions here before broad rollout.
 - Use `textureManager` as the proving ground before applying the same pattern to other standalone windows.
+- 2026-03-09: Reworked texture-adjustment preview in `TextureEditorModal` so slider drags no longer recompute pixels and data URLs on the main thread. Preview adjustment now runs in a dedicated worker and paints into a persistent canvas, while renderer live-sync reuses the latest worker output instead of recomputing synchronously on drag.
+- 2026-03-09: Finalized texture-adjustment preview around a worker-backed single-flight pipeline. Preview source pixels are registered once per selected texture, background adjustment jobs keep only the latest pending slider state, canvas drawing happens from worker results, and renderer live-sync remains debounced while reusing the latest preview output. This removes the main-thread full-image recompute bottleneck without dropping visible preview/model updates.
 
+- 2026-03-09: Reworked standalone live texture preview sync to match the simulated-window architecture more closely. The detached texture manager now sends source pixels once per selected texture and sends only lightweight adjustment payloads during slider drags; the main Viewer caches the source image and applies adjustments locally through its own worker before uploading to the renderer. This removes the repeated cross-window full-texture transfer bottleneck that caused drag stutter and delayed model updates.
 
-
-
-
-
-
-
-
+- 2026-03-09: Removed the heavy detached-window live texture source transfer path. Standalone texture tools now emit `IPC_LIVE_TEXTURE_PREPARE` and `IPC_LIVE_TEXTURE_ADJUST` only; the main Viewer resolves and caches source textures locally from file/MPQ on demand, then applies live adjustments through its own worker queue. This decouples detached preview loading from cross-window pixel serialization and keeps repeated slider drags from piling up large payloads.

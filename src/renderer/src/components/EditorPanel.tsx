@@ -1,9 +1,10 @@
-import React from 'react'
-import TextureEditor from './editors/TextureEditor'
-import SequenceEditor from './editors/SequenceEditor'
-import MaterialEditor from './editors/MaterialEditor'
-import GeosetEditor from './editors/GeosetEditor'
-import GeosetAnimationEditor from './editors/GeosetAnimationEditor'
+import React, { Suspense, lazy } from 'react'
+
+const TextureEditor = lazy(() => import('./editors/TextureEditor'))
+const SequenceEditor = lazy(() => import('./editors/SequenceEditor'))
+const MaterialEditor = lazy(() => import('./editors/MaterialEditor'))
+const GeosetEditor = lazy(() => import('./editors/GeosetEditor'))
+const GeosetAnimationEditor = lazy(() => import('./editors/GeosetAnimationEditor'))
 
 interface EditorPanelProps {
     activeTab: string
@@ -15,12 +16,12 @@ import { ConfigProvider, theme } from 'antd'
 const EditorPanel: React.FC<EditorPanelProps> = ({ activeTab, onClose }) => {
     const getTitle = () => {
         switch (activeTab) {
-            case 'texture': return '纹理编辑器'
-            case 'sequence': return '模型动作管理器'
-            case 'material': return '材质管理器'
-            case 'geoset': return '多边形管理器'
-            case 'geosetAnim': return '多边形动画管理器'
-            default: return '编辑器'
+            case 'texture': return '\u7eb9\u7406\u7f16\u8f91\u5668'
+            case 'sequence': return '\u6a21\u578b\u52a8\u4f5c\u7ba1\u7406\u5668'
+            case 'material': return '\u6750\u8d28\u7ba1\u7406\u5668'
+            case 'geoset': return '\u591a\u8fb9\u5f62\u7ba1\u7406\u5668'
+            case 'geosetAnim': return '\u591a\u8fb9\u5f62\u52a8\u753b\u7ba1\u7406\u5668'
+            default: return '\u7f16\u8f91\u5668'
         }
     }
 
@@ -29,7 +30,7 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ activeTab, onClose }) => {
             <div style={{
                 width: '100%',
                 height: '100%',
-                backgroundColor: '#141414', // Ant Design Dark bg
+                backgroundColor: '#141414',
                 borderLeft: '1px solid #303030',
                 display: 'flex',
                 flexDirection: 'column',
@@ -54,11 +55,13 @@ const EditorPanel: React.FC<EditorPanelProps> = ({ activeTab, onClose }) => {
                     }}>X</button>
                 </div>
                 <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
-                    {activeTab === 'texture' && <TextureEditor />}
-                    {activeTab === 'sequence' && <SequenceEditor />}
-                    {activeTab === 'material' && <MaterialEditor />}
-                    {activeTab === 'geoset' && <GeosetEditor />}
-                    {activeTab === 'geosetAnim' && <GeosetAnimationEditor />}
+                    <Suspense fallback={null}>
+                        {activeTab === 'texture' && <TextureEditor />}
+                        {activeTab === 'sequence' && <SequenceEditor />}
+                        {activeTab === 'material' && <MaterialEditor />}
+                        {activeTab === 'geoset' && <GeosetEditor />}
+                        {activeTab === 'geosetAnim' && <GeosetAnimationEditor />}
+                    </Suspense>
                 </div>
             </div>
         </ConfigProvider>

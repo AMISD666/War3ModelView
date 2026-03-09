@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+﻿import React, { useState, useEffect, useRef } from 'react'
 import { List, Button, Input, Checkbox, Card, Typography, message, Dropdown, Slider } from 'antd'
 import { SmartInputNumber as InputNumber } from '../common/SmartInputNumber'
 import type { MenuProps } from 'antd'
@@ -13,6 +13,7 @@ import { readFile } from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { decodeTextureData, getTextureCandidatePaths, isMPQPath, normalizePath } from '../viewer/textureLoader'
+import TextureAdjustWorker from '../../workers/texture-adjust.worker?worker'
 import { setDraggedTextureIndex } from '../../utils/textureDragDrop'
 import {
     applyTextureAdjustments,
@@ -151,7 +152,21 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
     const hasLiveTextureOverrideRef = useRef(false)
     const previewCacheRef = useRef<Map<string, PreviewCacheEntry>>(new Map())
     const selectedPreviewCacheKeyRef = useRef<string | null>(null)
-    const previewAdjustRafRef = useRef<number | null>(null)
+    const previewCanvasRef = useRef<HTMLCanvasElement | null>(null)
+    const previewAdjustWorkerRef = useRef<Worker | null>(null)
+    const previewAdjustSourceKeyRef = useRef<string | null>(null)
+    const previewAdjustRequestIdRef = useRef(0)
+    const previewAdjustInFlightRef = useRef(false)
+    const pendingPreviewAdjustmentsRef = useRef<TextureAdjustments>(DEFAULT_TEXTURE_ADJUSTMENTS)
+    const latestAdjustedPreviewImageDataRef = useRef<ImageData | null>(null)
+    const latestAdjustedPreviewAdjustmentsRef = useRef<TextureAdjustments>(DEFAULT_TEXTURE_ADJUSTMENTS)
+    const latestAdjustedPreviewKeyRef = useRef<string | null>(null)
+    const pendingRendererSyncRef = useRef<{
+        textureId: string
+        imagePath?: string
+        adjustments: TextureAdjustments
+        previewKey: string | null
+    } | null>(null)
     const rendererAdjustmentFlushTimeoutRef = useRef<number | null>(null)
     const latestSelectedTextureRef = useRef<LocalTexture | null>(null)
     const latestSelectedAdjustmentsRef = useRef<TextureAdjustments>(DEFAULT_TEXTURE_ADJUSTMENTS)
@@ -210,13 +225,60 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
     }, [basePreviewImageData])
 
     useEffect(() => {
-        return () => {
-            if (previewAdjustRafRef.current !== null) {
-                cancelAnimationFrame(previewAdjustRafRef.current)
+        const worker = new TextureAdjustWorker()
+        previewAdjustWorkerRef.current = worker
+
+        worker.onmessage = (event: MessageEvent<any>) => {
+            const payload = event.data
+            if (!payload || payload.type !== 'result') {
+                return
             }
+
+            if (payload.key !== selectedPreviewCacheKeyRef.current) {
+                return
+            }
+
+            if (payload.requestId !== previewAdjustRequestIdRef.current) {
+                return
+            }
+
+            previewAdjustInFlightRef.current = false
+
+            const adjusted = new ImageData(new Uint8ClampedArray(payload.buffer), payload.width, payload.height)
+            const normalizedAdjustments = normalizeTextureAdjustments(payload.adjustments)
+            latestAdjustedPreviewImageDataRef.current = adjusted
+            latestAdjustedPreviewAdjustmentsRef.current = normalizedAdjustments
+            latestAdjustedPreviewKeyRef.current = payload.key
+            drawPreviewImageData(adjusted)
+            setPreviewUrl(null)
+            fulfillPendingRendererSync()
+
+            if (!areAdjustmentsEqual(pendingPreviewAdjustmentsRef.current, normalizedAdjustments)) {
+                dispatchPreviewAdjustments(pendingPreviewAdjustmentsRef.current)
+            }
+        }
+
+        worker.onerror = () => {
+            previewAdjustInFlightRef.current = false
+            previewAdjustWorkerRef.current = null
+            applyPreviewAdjustmentsNow(pendingPreviewAdjustmentsRef.current)
+        }
+
+        worker.onmessageerror = () => {
+            previewAdjustInFlightRef.current = false
+            previewAdjustWorkerRef.current = null
+            applyPreviewAdjustmentsNow(pendingPreviewAdjustmentsRef.current)
+        }
+
+        return () => {
+            pendingRendererSyncRef.current = null
+            previewAdjustInFlightRef.current = false
+            previewAdjustWorkerRef.current = null
+            previewAdjustSourceKeyRef.current = null
             if (rendererAdjustmentFlushTimeoutRef.current !== null) {
                 window.clearTimeout(rendererAdjustmentFlushTimeoutRef.current)
             }
+            worker.terminate()
         }
     }, [])
 
@@ -251,6 +313,34 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         return textureId
     }
 
+
+    useEffect(() => {
+        if (!isStandalone || !visible) return
+
+        let disposed = false
+        let unlistenModelChange: (() => void) | undefined
+
+        listen<{ modelPath?: string }>('active-model-changed', (event) => {
+            if (disposed) return
+            const nextModelPath = String(event.payload?.modelPath || '')
+            const currentModelPath = String(rpcState.snapshot.modelPath || '')
+            if (nextModelPath === currentModelPath && currentModelPath !== '') {
+                return
+            }
+            emit('rpc-req-textureManager').catch(() => { })
+        }).then((fn) => {
+            if (disposed) {
+                fn()
+                return
+            }
+            unlistenModelChange = fn
+        }).catch(() => { })
+
+        return () => {
+            disposed = true
+            if (unlistenModelChange) unlistenModelChange()
+        }
+    }, [isStandalone, visible, rpcState.snapshot.modelPath])
     // Initialize local state
     useEffect(() => {
         const data = getActiveData()
@@ -399,18 +489,6 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         return unsubscribe
     }, [visible, isStandalone, rpcState.pickedGeosetIndex, isStandalone ? rpcState.snapshotVersion : localStore.modelData?.Geosets, isStandalone ? rpcState.snapshotVersion : localStore.modelData?.Materials, localTextures.length])
 
-    const imageDataToDataUrl = (imageData: ImageData): string | null => {
-        const canvas = document.createElement('canvas')
-        canvas.width = imageData.width
-        canvas.height = imageData.height
-        const ctx = canvas.getContext('2d')
-        if (ctx) {
-            ctx.putImageData(imageData, 0, 0)
-            return canvas.toDataURL()
-        }
-        return null
-    }
-
     const toUint8Array = (payload: any): Uint8Array | null => {
         if (!payload) return null
         if (payload instanceof Uint8Array) return payload
@@ -483,6 +561,105 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
     const toDegree = (value: number) => `${Math.round(value)}°`
     const huePreviewColor = `hsl(${Math.round(selectedAdjustments.hue + 180)}, 100%, 50%)`
 
+    const areAdjustmentsEqual = (left: TextureAdjustments, right: TextureAdjustments) =>
+        left.hue === right.hue &&
+        left.brightness === right.brightness &&
+        left.saturation === right.saturation &&
+        left.opacity === right.opacity
+
+    const drawPreviewImageData = (imageData: ImageData | null) => {
+        const canvas = previewCanvasRef.current
+        if (!canvas || !imageData) {
+            return
+        }
+
+        if (canvas.width !== imageData.width) canvas.width = imageData.width
+        if (canvas.height !== imageData.height) canvas.height = imageData.height
+
+        const ctx = canvas.getContext('2d', { alpha: true, willReadFrequently: false })
+        if (!ctx) {
+            return
+        }
+
+        ctx.putImageData(imageData, 0, 0)
+    }
+
+    const fulfillPendingRendererSync = () => {
+        const pending = pendingRendererSyncRef.current
+        const adjustedImageData = latestAdjustedPreviewImageDataRef.current
+        if (!pending || !adjustedImageData) {
+            return
+        }
+
+        if (pending.previewKey !== latestAdjustedPreviewKeyRef.current) {
+            return
+        }
+
+        if (!areAdjustmentsEqual(pending.adjustments, latestAdjustedPreviewAdjustmentsRef.current)) {
+            return
+        }
+
+        applyTextureToRenderer(pending.imagePath, adjustedImageData)
+        hasLiveTextureOverrideRef.current = !isDefaultTextureAdjustments(pending.adjustments)
+        pendingRendererSyncRef.current = null
+    }
+
+    const applyPreviewAdjustmentsNow = (adjustments: TextureAdjustments) => {
+        const cacheKey = selectedPreviewCacheKeyRef.current
+        const sourceImageData = latestBasePreviewImageDataRef.current
+        if (!sourceImageData || !cacheKey) {
+            return
+        }
+
+        const normalizedAdjustments = normalizeTextureAdjustments(adjustments)
+        const adjusted = isDefaultTextureAdjustments(normalizedAdjustments)
+            ? sourceImageData
+            : applyTextureAdjustments(sourceImageData, normalizedAdjustments)
+
+        latestAdjustedPreviewImageDataRef.current = adjusted
+        latestAdjustedPreviewAdjustmentsRef.current = normalizedAdjustments
+        latestAdjustedPreviewKeyRef.current = cacheKey
+        drawPreviewImageData(adjusted)
+        setPreviewUrl(null)
+        fulfillPendingRendererSync()
+    }
+
+    const dispatchPreviewAdjustments = (adjustments: TextureAdjustments) => {
+        const cacheKey = selectedPreviewCacheKeyRef.current
+        const worker = previewAdjustWorkerRef.current
+        const normalizedAdjustments = normalizeTextureAdjustments(adjustments)
+
+        pendingPreviewAdjustmentsRef.current = normalizedAdjustments
+
+        if (!cacheKey || !latestBasePreviewImageDataRef.current) {
+            return
+        }
+
+        if (isDefaultTextureAdjustments(normalizedAdjustments)) {
+            previewAdjustInFlightRef.current = false
+            applyPreviewAdjustmentsNow(normalizedAdjustments)
+            return
+        }
+
+        if (!worker || previewAdjustSourceKeyRef.current !== cacheKey) {
+            applyPreviewAdjustmentsNow(normalizedAdjustments)
+            return
+        }
+
+        if (previewAdjustInFlightRef.current) {
+            return
+        }
+
+        previewAdjustInFlightRef.current = true
+        const requestId = ++previewAdjustRequestIdRef.current
+        worker.postMessage({
+            type: 'apply',
+            key: cacheKey,
+            requestId,
+            adjustments: normalizedAdjustments,
+        })
+    }
+
     const clearRendererAdjustmentFlush = () => {
         if (rendererAdjustmentFlushTimeoutRef.current !== null) {
             window.clearTimeout(rendererAdjustmentFlushTimeoutRef.current)
@@ -492,14 +669,6 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
 
     const applyTextureToRenderer = (imagePath: string | undefined, imageData: ImageData) => {
         if (!imagePath) return
-
-        if (isStandalone) {
-            const dataUrl = imageDataToDataUrl(imageData)
-            if (dataUrl) {
-                emit('IPC_LIVE_TEXTURE_UPDATE', { imagePath, dataUrl })
-            }
-            return
-        }
 
         const renderer = useRendererStore.getState().renderer
         if (renderer && typeof renderer.setTextureImageData === 'function') {
@@ -530,12 +699,45 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         if (!texture?.Image || !sourceImageData) return
         if (options?.textureId && texture.__editorId !== options.textureId) return
 
-        const imageDataForRenderer = isDefaultTextureAdjustments(nextAdjustments)
-            ? sourceImageData
-            : applyTextureAdjustments(sourceImageData, nextAdjustments)
+        const previewKey = selectedPreviewCacheKeyRef.current
 
-        applyTextureToRenderer(texture.Image, imageDataForRenderer)
-        hasLiveTextureOverrideRef.current = !isDefaultTextureAdjustments(nextAdjustments)
+        if (isStandalone) {
+            emit('IPC_LIVE_TEXTURE_ADJUST', {
+                modelPath: modelPath || '',
+                imagePath: texture.Image,
+                adjustments: nextAdjustments,
+            })
+            hasLiveTextureOverrideRef.current = !isDefaultTextureAdjustments(nextAdjustments)
+            pendingRendererSyncRef.current = null
+            return
+        }
+
+        if (isDefaultTextureAdjustments(nextAdjustments)) {
+            pendingRendererSyncRef.current = null
+            applyTextureToRenderer(texture.Image, sourceImageData)
+            hasLiveTextureOverrideRef.current = false
+            return
+        }
+
+        if (
+            latestAdjustedPreviewImageDataRef.current &&
+            latestAdjustedPreviewKeyRef.current === previewKey &&
+            areAdjustmentsEqual(nextAdjustments, latestAdjustedPreviewAdjustmentsRef.current)
+        ) {
+            pendingRendererSyncRef.current = null
+            applyTextureToRenderer(texture.Image, latestAdjustedPreviewImageDataRef.current)
+            hasLiveTextureOverrideRef.current = true
+            return
+        }
+
+        pendingRendererSyncRef.current = {
+            textureId: texture.__editorId,
+            imagePath: texture.Image,
+            adjustments: nextAdjustments,
+            previewKey,
+        }
+
+        dispatchPreviewAdjustments(nextAdjustments)
     }
 
     const scheduleTextureAdjustmentRendererFlush = (
@@ -578,7 +780,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
             scheduleTextureAdjustmentRendererFlush(
                 selectedTextureId,
                 nextAdjustments,
-                isStandalone ? 160 : 96
+                isStandalone ? 48 : 64
             )
         }
     }
@@ -669,6 +871,10 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
             const cacheKey = getPreviewCacheKey(texture)
             selectedPreviewCacheKeyRef.current = cacheKey
             const allowCachedPreviewUrl = isDefaultTextureAdjustments(selectedAdjustments)
+            latestAdjustedPreviewImageDataRef.current = null
+            latestAdjustedPreviewAdjustmentsRef.current = DEFAULT_TEXTURE_ADJUSTMENTS
+            latestAdjustedPreviewKeyRef.current = null
+            pendingRendererSyncRef.current = null
             if (applyCachedPreview(cacheKey, allowCachedPreviewUrl)) {
                 return
             }
@@ -728,13 +934,10 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                     if (mpqBuffer && mpqBuffer.byteLength > 0) {
                         const imageData = decodeTextureData(mpqBuffer, imagePath)
                         if (imageData) {
-                            const defaultPreviewUrl = imageDataToDataUrl(imageData)
                             setBasePreviewImageData(imageData)
+                            setPreviewUrl(null)
                             setPreviewSource('MPQ')
-                            if (allowCachedPreviewUrl && defaultPreviewUrl) {
-                                setPreviewUrl(defaultPreviewUrl)
-                            }
-                            writePreviewCache(cacheKey, { basePreviewImageData: imageData, previewUrl: defaultPreviewUrl, previewSource: 'MPQ', previewError: null })
+                            writePreviewCache(cacheKey, { basePreviewImageData: imageData, previewUrl: null, previewSource: 'MPQ', previewError: null })
                             loaded = true
                         }
                     }
@@ -769,20 +972,17 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                             if (buffer) {
                                 const imageData = decodeTextureData(buffer.buffer, imagePath)
                                 if (imageData) {
-                                    const defaultPreviewUrl = imageDataToDataUrl(imageData)
                                     setBasePreviewImageData(imageData)
-                                    setPreviewSource('文件')
-                                    if (allowCachedPreviewUrl && defaultPreviewUrl) {
-                                        setPreviewUrl(defaultPreviewUrl)
-                                    }
-                                    writePreviewCache(cacheKey, { basePreviewImageData: imageData, previewUrl: defaultPreviewUrl, previewSource: '文件', previewError: null })
+                                    setPreviewUrl(null)
+                                    setPreviewSource('\u6587\u4ef6')
+                                    writePreviewCache(cacheKey, { basePreviewImageData: imageData, previewUrl: null, previewSource: '\u6587\u4ef6', previewError: null })
                                     loaded = true
                                     break
                                 } else {
-                                    lastError = '无法加载贴图：BLP 解码失败'
+                                    lastError = '\u65e0\u6cd5\u52a0\u8f7d\u8d34\u56fe\uff1aBLP \u89e3\u7801\u5931\u8d25'
                                 }
                             } else {
-                                lastError = '无法加载贴图：读取失败'
+                                lastError = '\u65e0\u6cd5\u52a0\u8f7d\u8d34\u56fe\uff1a\u8bfb\u53d6\u5931\u8d25'
                             }
                         } catch (e: any) {
                             if (!loaded) {
@@ -810,13 +1010,10 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                     if (mpqBuffer && mpqBuffer.byteLength > 0) {
                         const imageData = decodeTextureData(mpqBuffer, imagePath)
                         if (imageData) {
-                            const defaultPreviewUrl = imageDataToDataUrl(imageData)
                             setBasePreviewImageData(imageData)
+                            setPreviewUrl(null)
                             setPreviewSource('MPQ')
-                            if (allowCachedPreviewUrl && defaultPreviewUrl) {
-                                setPreviewUrl(defaultPreviewUrl)
-                            }
-                            writePreviewCache(cacheKey, { basePreviewImageData: imageData, previewUrl: defaultPreviewUrl, previewSource: 'MPQ', previewError: null })
+                            writePreviewCache(cacheKey, { basePreviewImageData: imageData, previewUrl: null, previewSource: 'MPQ', previewError: null })
                             loaded = true
                         }
                     }
@@ -857,48 +1054,63 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
     const canAdjustSelectedTexture = isSelectedTextureBlpOrTga && !!basePreviewImageData && !isLoadingPreview
 
     useEffect(() => {
+        if (!isStandalone || !selectedTexture?.Image || !modelPath) {
+            return
+        }
+
+        emit('IPC_LIVE_TEXTURE_PREPARE', {
+            modelPath,
+            imagePath: selectedTexture.Image,
+        })
+    }, [isStandalone, modelPath, selectedTexture?.Image, selectedTextureId])
+
+    useEffect(() => {
         clearRendererAdjustmentFlush()
     }, [selectedTextureId, basePreviewImageData])
 
     useEffect(() => {
-        if (!basePreviewImageData) return
-        if (previewAdjustRafRef.current !== null) {
-            cancelAnimationFrame(previewAdjustRafRef.current)
-            previewAdjustRafRef.current = null
-        }
         const cacheKey = selectedPreviewCacheKeyRef.current
-        const useDefaultAdjustments = isDefaultTextureAdjustments(selectedAdjustments)
-        if (useDefaultAdjustments && cacheKey) {
-            const cached = previewCacheRef.current.get(cacheKey)
-            if (cached?.previewUrl) {
-                setPreviewUrl(cached.previewUrl)
-                return
+        const worker = previewAdjustWorkerRef.current
+
+        if (!basePreviewImageData || !cacheKey) {
+            latestAdjustedPreviewImageDataRef.current = null
+            latestAdjustedPreviewAdjustmentsRef.current = DEFAULT_TEXTURE_ADJUSTMENTS
+            latestAdjustedPreviewKeyRef.current = null
+            previewAdjustSourceKeyRef.current = null
+            previewAdjustInFlightRef.current = false
+            if (worker) {
+                worker.postMessage({ type: 'clear' })
             }
+            return
         }
 
-        previewAdjustRafRef.current = requestAnimationFrame(() => {
-            previewAdjustRafRef.current = null
-            const adjusted = useDefaultAdjustments
-                ? basePreviewImageData
-                : applyTextureAdjustments(basePreviewImageData, selectedAdjustments)
-            const dataUrl = imageDataToDataUrl(adjusted)
-            if (dataUrl) {
-                setPreviewUrl(dataUrl)
-                if (cacheKey && useDefaultAdjustments) {
-                    const cached = previewCacheRef.current.get(cacheKey)
-                    if (cached) {
-                        writePreviewCache(cacheKey, { ...cached, previewUrl: dataUrl, previewError: null })
-                    }
-                }
-            }
-        })
+        latestAdjustedPreviewImageDataRef.current = basePreviewImageData
+        latestAdjustedPreviewAdjustmentsRef.current = DEFAULT_TEXTURE_ADJUSTMENTS
+        latestAdjustedPreviewKeyRef.current = cacheKey
+        previewAdjustSourceKeyRef.current = cacheKey
+        previewAdjustInFlightRef.current = false
 
-        return () => {
-            if (previewAdjustRafRef.current !== null) {
-                cancelAnimationFrame(previewAdjustRafRef.current)
-                previewAdjustRafRef.current = null
-            }
+        if (worker) {
+            const sourcePixels = new Uint8ClampedArray(basePreviewImageData.data)
+            worker.postMessage({
+                type: 'set-source',
+                key: cacheKey,
+                width: basePreviewImageData.width,
+                height: basePreviewImageData.height,
+                buffer: sourcePixels.buffer,
+            }, [sourcePixels.buffer])
         }
+
+        dispatchPreviewAdjustments(selectedAdjustments)
+    }, [basePreviewImageData, selectedTextureId])
+
+    useEffect(() => {
+        const cacheKey = selectedPreviewCacheKeyRef.current
+        if (!basePreviewImageData || !cacheKey) {
+            return
+        }
+
+        dispatchPreviewAdjustments(selectedAdjustments)
     }, [basePreviewImageData, selectedAdjustments, selectedTextureId])
 
     const updateLocalTexture = (index: number, updates: any) => {
@@ -1326,6 +1538,25 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                                 <div className="ant-spin ant-spin-spinning" style={{ fontSize: 24 }}>?</div>
                                                 <span>加载中...</span>
                                             </div>
+                                        ) : basePreviewImageData ? (
+                                            <>
+                                                <canvas ref={previewCanvasRef} style={{ maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto' }} />
+                                                {previewSource && (
+                                                    <div style={{
+                                                        position: 'absolute',
+                                                        bottom: 4,
+                                                        right: 4,
+                                                        backgroundColor: previewSource === 'MPQ' ? '#52c41a' : '#1677ff',
+                                                        color: '#fff',
+                                                        padding: '2px 6px',
+                                                        borderRadius: 3,
+                                                        fontSize: 10,
+                                                        fontWeight: 'bold'
+                                                    }}>
+                                                        {previewSource}
+                                                    </div>
+                                                )}
+                                            </>
                                         ) : previewUrl ? (
                                             <>
                                                 <img src={previewUrl} alt="Preview" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
@@ -1370,6 +1601,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
 }
 
 export default TextureEditorModal
+
 
 
 

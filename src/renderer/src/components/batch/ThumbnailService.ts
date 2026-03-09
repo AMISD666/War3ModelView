@@ -1,4 +1,4 @@
-/**
+﻿/**
  * ThumbnailService - Manages background thumbnail rendering via Web Workers
  * 
  * Provides absolute isolation from the main thread's WebGL state.
@@ -8,7 +8,7 @@
 import { parseMDX, parseMDL, decodeBLP, getBLPImageData } from 'war3-model';
 import { readFile } from '@tauri-apps/plugin-fs';
 import { invoke } from '@tauri-apps/api/core';
-import { decodeTexture, REPLACEABLE_TEXTURES, isMPQPath, normalizePath } from '../viewer/textureLoader';
+import { decodeTexture, REPLACEABLE_TEXTURES, normalizePath } from '../viewer/textureLoader';
 import { getEnvironmentManager } from '../viewer/EnvironmentManager';
 import { useRendererStore } from '../../store/rendererStore';
 
@@ -519,8 +519,11 @@ class ThumbnailService {
 
     private getTextureCacheKey(modelPath: string, texturePath: string): string {
         const normalizedTexture = normalizePath(texturePath).toLowerCase();
-        if (isMPQPath(normalizedTexture)) {
-            return `mpq:${normalizedTexture}`;
+        if (/^[a-z]:\\/.test(normalizedTexture) || normalizedTexture.startsWith('\\\\')) {
+            return `abs:${normalizedTexture}`;
+        }
+        if (normalizedTexture.startsWith('replaceabletextures\\')) {
+            return `replaceable:${normalizedTexture}`;
         }
 
         const normalizedModel = normalizePath(modelPath).toLowerCase();
@@ -915,25 +918,15 @@ class ThumbnailService {
             try {
                 if (loadTargets.length > 0) {
                     await this.withTextureTaskSlot(async () => {
-                        const mpqTargets: string[] = [];
-                        const fsTargets: string[] = [];
-                        loadTargets.forEach((path) => {
-                            const normalized = normalizePath(path);
-                            if (isMPQPath(normalized)) {
-                                mpqTargets.push(path);
-                            } else {
-                                fsTargets.push(path);
-                            }
-                        });
-
                         const fallbackPaths: string[] = [];
 
                         // Worker-side decode: store raw bytes directly, skip main-thread decode
-                        const processRawBinaryMap = (targets: string[], rawBinaryMap: Map<string, Uint8Array>) => {
+                        const processRawBinaryMap = (targets: string[], rawBinaryMap: Map<string, Uint8Array>): string[] => {
+                            const unresolved: string[] = [];
                             for (const path of targets) {
                                 const data = rawBinaryMap.get(path);
                                 if (!data || data.byteLength === 0) {
-                                    fallbackPaths.push(path);
+                                    unresolved.push(path);
                                     continue;
                                 }
                                 // Store raw bytes — worker will decode
@@ -947,43 +940,42 @@ class ThumbnailService {
                                 this.touchSharedTextureCache(key, buffer.slice(0));
                                 resolverByKey.get(key)?.(buffer.slice(0));
                             }
+                            return unresolved;
                         };
 
-                        if (mpqTargets.length > 0) {
+                        const fsBatchStart = performance.now();
+                        let unresolvedTargets = [...loadTargets];
+                        try {
+                            const payload = await invoke<Uint8Array>('load_textures_batch_bin', {
+                                modelPath: fullPath,
+                                texturePaths: loadTargets
+                            });
+                            const rawBinaryMap = this.parseTextureBytesPayload(payload, loadTargets);
+                            unresolvedTargets = processRawBinaryMap(loadTargets, rawBinaryMap);
+                        } catch (err) {
+                            console.warn('[ThumbnailService] Binary batch texture load failed, falling back to MPQ/direct loader:', err);
+                            unresolvedTargets = [...loadTargets];
+                        } finally {
+                            const elapsed = performance.now() - fsBatchStart;
+                            metrics.batchFsLoadMs += elapsed;
+                            metrics.batchLoadMs += elapsed;
+                        }
+
+                        if (unresolvedTargets.length > 0) {
                             const mpqBatchStart = performance.now();
                             try {
                                 const payload = await invoke<Uint8Array>('load_textures_batch_bin', {
-                                    // Empty modelPath forces MPQ-only resolution in Rust command.
                                     modelPath: '',
-                                    texturePaths: mpqTargets
+                                    texturePaths: unresolvedTargets
                                 });
-                                const rawBinaryMap = this.parseTextureBytesPayload(payload, mpqTargets);
-                                processRawBinaryMap(mpqTargets, rawBinaryMap);
+                                const rawBinaryMap = this.parseTextureBytesPayload(payload, unresolvedTargets);
+                                fallbackPaths.push(...processRawBinaryMap(unresolvedTargets, rawBinaryMap));
                             } catch (err) {
                                 console.warn('[ThumbnailService] Binary MPQ batch texture load failed:', err);
-                                fallbackPaths.push(...mpqTargets);
+                                fallbackPaths.push(...unresolvedTargets);
                             } finally {
                                 const elapsed = performance.now() - mpqBatchStart;
                                 metrics.batchMpqLoadMs += elapsed;
-                                metrics.batchLoadMs += elapsed;
-                            }
-                        }
-
-                        if (fsTargets.length > 0) {
-                            const fsBatchStart = performance.now();
-                            try {
-                                const payload = await invoke<Uint8Array>('load_textures_batch_bin', {
-                                    modelPath: fullPath,
-                                    texturePaths: fsTargets
-                                });
-                                const rawBinaryMap = this.parseTextureBytesPayload(payload, fsTargets);
-                                processRawBinaryMap(fsTargets, rawBinaryMap);
-                            } catch (err) {
-                                console.warn('[ThumbnailService] Binary FS batch texture load failed, fallback to direct loader:', err);
-                                fallbackPaths.push(...fsTargets);
-                            } finally {
-                                const elapsed = performance.now() - fsBatchStart;
-                                metrics.batchFsLoadMs += elapsed;
                                 metrics.batchLoadMs += elapsed;
                             }
                         }
@@ -1442,3 +1434,5 @@ class ThumbnailService {
 }
 
 export const thumbnailService = new ThumbnailService();
+
+

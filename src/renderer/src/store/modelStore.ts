@@ -975,18 +975,52 @@ export const useModelStore = create<ModelState>((set, get) => ({
         const defaultSequenceIndex = pickDefaultSequenceIndex(sequences);
         const hasSequences = sequences.length > 0;
 
-        set({
-            modelData: correctedData,
-            modelPath: path || (data as any)?.path || (data as any)?.__modelPath || null,
-            nodes: correctedNodes,
-            sequences,
-            currentSequence: hasSequences ? defaultSequenceIndex : -1,
-            currentFrame: 0,
-            isPlaying: hasSequences,
-            hiddenGeosetIds: allGeosetIds,
-            forceShowAllGeosets: true,
-            selectedGeosetIndex: null,
-            selectedGeosetIndices: []
+        const resolvedModelPath = path || (data as any)?.path || (data as any)?.__modelPath || null;
+        const nextCurrentSequence = hasSequences ? defaultSequenceIndex : -1;
+        const nextCurrentFrame = 0;
+        const nextHiddenGeosetIds = allGeosetIds;
+
+        set((state) => {
+            const nextState: Partial<ModelState> & { tabs?: Tab[] } = {
+                modelData: correctedData,
+                modelPath: resolvedModelPath,
+                nodes: correctedNodes,
+                sequences,
+                currentSequence: nextCurrentSequence,
+                currentFrame: nextCurrentFrame,
+                isPlaying: hasSequences,
+                hiddenGeosetIds: nextHiddenGeosetIds,
+                forceShowAllGeosets: true,
+                selectedGeosetIndex: null,
+                selectedGeosetIndices: []
+            };
+
+            if (!state.activeTabId) {
+                return nextState;
+            }
+
+            nextState.tabs = state.tabs.map((tab) => {
+                if (tab.id !== state.activeTabId) {
+                    return tab;
+                }
+
+                return {
+                    ...tab,
+                    snapshot: {
+                        ...tab.snapshot,
+                        modelData: correctedData,
+                        modelPath: resolvedModelPath,
+                        nodes: sanitizeNodesArray(correctedNodes),
+                        sequences: [...sequences],
+                        currentSequence: nextCurrentSequence,
+                        currentFrame: nextCurrentFrame,
+                        hiddenGeosetIds: [...nextHiddenGeosetIds],
+                        lastActive: Date.now()
+                    }
+                };
+            });
+
+            return nextState;
         });
     },
 

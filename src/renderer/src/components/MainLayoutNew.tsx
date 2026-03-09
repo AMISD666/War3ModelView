@@ -1,26 +1,28 @@
-/**
+﻿/**
  * 集成了 Ant Design 和 Zustand的新版 MainLayout - 支持可调整大小的节点管理器
  * 
  * CRITICAL: Only ONE MainLayoutOld is rendered to avoid war3-model shared state corruption.
  * In batch mode, BatchManager is shown on the left and the single MainLayoutOld on the right.
  */
 
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { Suspense, lazy, useState, useCallback, useRef, useEffect } from 'react';
 import { Layout, ConfigProvider, theme, Button } from 'antd';
 import { CloseOutlined } from '@ant-design/icons';
 import { useUIStore } from '../store/uiStore';
 import { useSelectionStore } from '../store/selectionStore';
 import { useModelStore } from '../store/modelStore';
-import MainLayoutOld from './MainLayout';
-import { NodeManagerWindow } from './node/NodeManagerWindow';
-import NodeDialog from './node/NodeDialog';
-import { CreateNodeDialog } from './node/CreateNodeDialog';
-import { ViewSettingsWindow } from './ViewSettingsWindow';
-import { BatchManager } from './batch/BatchManager';
+import { useRendererStore } from '../store/rendererStore';
 import { TabBar } from './TabBar';
-import { MpqBrowserPanel } from './mpq/MpqBrowserPanel';
 import { listen } from '@tauri-apps/api/event';
 import { handleGlobalShortcutKeyDown } from '../shortcuts/manager';
+
+const MainLayoutOld = lazy(() => import('./MainLayout'));
+const NodeManagerWindow = lazy(() => import('./node/NodeManagerWindow').then(m => ({ default: m.NodeManagerWindow })));
+const NodeDialog = lazy(() => import('./node/NodeDialog'));
+const CreateNodeDialog = lazy(() => import('./node/CreateNodeDialog').then(m => ({ default: m.CreateNodeDialog })));
+const ViewSettingsWindow = lazy(() => import('./ViewSettingsWindow').then(m => ({ default: m.ViewSettingsWindow })));
+const BatchManager = lazy(() => import('./batch/BatchManager').then(m => ({ default: m.BatchManager })));
+const MpqBrowserPanel = lazy(() => import('./mpq/MpqBrowserPanel').then(m => ({ default: m.MpqBrowserPanel })));
 
 const { Content } = Layout;
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
@@ -30,6 +32,7 @@ export const MainLayoutNew: React.FC = () => {
         showNodeManager,
         showMpqBrowser,
         showNodeDialog,
+        showCreateNodeDialog,
         editingNodeId,
         setNodeDialogVisible,
         setShowNodeManager,
@@ -37,6 +40,7 @@ export const MainLayoutNew: React.FC = () => {
     } = useUIStore();
 
     const mainMode = useSelectionStore(state => state.mainMode);
+    const showSettingsPanel = useRendererStore(state => state.showSettingsPanel);
 
     // Node Manager resizing
     const [nodeManagerWidth, setNodeManagerWidth] = useState(300);
@@ -53,10 +57,13 @@ export const MainLayoutNew: React.FC = () => {
     });
     const containerRef = useRef<HTMLDivElement>(null);
 
-    // Batch mode state: track selected model for preview
-    const [batchSelectedPath, setBatchSelectedPath] = useState<string | null>(null);
+    // Batch mode state: the right-side preview stays in sync with the shared model tabs.
     const [batchSelectedAnimation, setBatchSelectedAnimation] = useState<number>(0);
-    const { addTab } = useModelStore();
+    const addTab = useModelStore(state => state.addTab);
+    const tabs = useModelStore(state => state.tabs);
+    const activeTabId = useModelStore(state => state.activeTabId);
+    const activeBatchTab = tabs.find(tab => tab.id === activeTabId) || null;
+    const batchSelectedPath = activeBatchTab?.path || null;
     const getNodeManagerBounds = useCallback(() => {
         const containerWidth = containerRef.current?.clientWidth ?? window.innerWidth;
         const minWidth = 180;
@@ -80,9 +87,8 @@ export const MainLayoutNew: React.FC = () => {
     // Handle model selection from BatchManager
     const handleBatchSelectModel = useCallback((path: string, animationIndex: number) => {
         console.log('[MainLayoutNew] Batch model selected:', path, 'animation:', animationIndex);
-        setBatchSelectedPath(path);
         setBatchSelectedAnimation(animationIndex);
-        // Open through tab system so it is visible in main view tab bar.
+        // Open or activate through the shared tab system so preview and standalone tools stay on the same model.
         addTab(path);
     }, [addTab]);
 
@@ -214,13 +220,15 @@ export const MainLayoutNew: React.FC = () => {
                             minWidth: 0
                         }}>
                             <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
-                                <BatchManager
-                                    onSelectModel={handleBatchSelectModel}
-                                    onAnimationChange={handleBatchAnimationChange}
-                                    selectedPath={batchSelectedPath}
-                                    isFullBatchView={isBatchFullView}
-                                    onToggleFullBatchView={() => setIsBatchFullView((prev) => !prev)}
-                                />
+                                <Suspense fallback={null}>
+                                    <BatchManager
+                                        onSelectModel={handleBatchSelectModel}
+                                        onAnimationChange={handleBatchAnimationChange}
+                                        selectedPath={batchSelectedPath}
+                                        isFullBatchView={isBatchFullView}
+                                        onToggleFullBatchView={() => setIsBatchFullView((prev) => !prev)}
+                                    />
+                                </Suspense>
                             </ConfigProvider>
                         </div>
 
@@ -309,7 +317,9 @@ export const MainLayoutNew: React.FC = () => {
                                     />
                                 </div>
                                 <div style={{ flex: 1, overflow: 'hidden' }}>
-                                    <NodeManagerWindow />
+                                    <Suspense fallback={null}>
+                                        <NodeManagerWindow />
+                                    </Suspense>
                                 </div>
                                 <div
                                     onMouseDown={handleNodeMgrMouseDown}
@@ -352,28 +362,15 @@ export const MainLayoutNew: React.FC = () => {
                             <TabBar />
                         )}
 
-                        {isBatchMode && (
-                            <div style={{
-                                padding: '10px 16px',
-                                borderBottom: '1px solid #333',
-                                color: '#fff',
-                                fontWeight: 'bold',
-                                fontSize: 13,
-                                backgroundColor: '#252525',
-                                flexShrink: 0,
-                                whiteSpace: 'nowrap',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis'
-                            }}>
-                                {batchSelectedPath
-                                    ? `预览: ${batchSelectedPath.split(/[/\\]/).pop()}`
-                                    : '点击左侧模型卡片预览'}
-                            </div>
+                                                {isBatchMode && (
+                            <TabBar emptyText="点击左侧模型卡片预览" />
                         )}
 
                         {/* SINGLE MainLayoutOld - always rendered, positioned based on mode */}
                         <Content style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
-                            <MainLayoutOld />
+                            <Suspense fallback={<div style={{ flex: 1, backgroundColor: '#1a1a1a' }} />}>
+                                <MainLayoutOld />
+                            </Suspense>
                         </Content>
                     </div>
 
@@ -416,7 +413,9 @@ export const MainLayoutNew: React.FC = () => {
                             />
                             <div style={{ flex: 1, overflow: 'hidden' }}>
                                 <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
-                                    <MpqBrowserPanel onClose={() => setShowMpqBrowser(false)} />
+                                    <Suspense fallback={null}>
+                                        <MpqBrowserPanel onClose={() => setShowMpqBrowser(false)} />
+                                    </Suspense>
                                 </ConfigProvider>
                             </div>
                         </div>
@@ -424,15 +423,28 @@ export const MainLayoutNew: React.FC = () => {
                 </div>
             </div>
 
-            <NodeDialog
-                visible={showNodeDialog}
-                nodeId={editingNodeId}
-                onClose={() => setNodeDialogVisible(false)}
-            />
-            <CreateNodeDialog />
-            <ViewSettingsWindow />
+            {showNodeDialog && (
+                <Suspense fallback={null}>
+                    <NodeDialog
+                        visible={showNodeDialog}
+                        nodeId={editingNodeId}
+                        onClose={() => setNodeDialogVisible(false)}
+                    />
+                </Suspense>
+            )}
+            {showCreateNodeDialog && (
+                <Suspense fallback={null}>
+                    <CreateNodeDialog />
+                </Suspense>
+            )}
+            {showSettingsPanel && (
+                <Suspense fallback={null}>
+                    <ViewSettingsWindow />
+                </Suspense>
+            )}
         </>
     );
 };
 
 export default MainLayoutNew;
+

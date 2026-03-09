@@ -1,4 +1,4 @@
-/**
+﻿/**
  * TabBar Component - Displays open model tabs at the top of the viewer
  */
 
@@ -6,7 +6,11 @@ import React from 'react';
 import { useModelStore } from '../store/modelStore';
 import { CloseOutlined } from '@ant-design/icons';
 
-export const TabBar: React.FC = () => {
+interface TabBarProps {
+    emptyText?: string;
+}
+
+export const TabBar: React.FC<TabBarProps> = ({ emptyText }) => {
     const { tabs, activeTabId, setActiveTab, closeTab } = useModelStore();
 
     // We always render the container now to keep it persistent as requested by the user.
@@ -24,6 +28,18 @@ export const TabBar: React.FC = () => {
             overflow: 'hidden',
             flexShrink: 0
         }}>
+            {tabs.length === 0 && emptyText && (
+                <div style={{
+                    padding: '0 12px',
+                    color: '#888',
+                    fontSize: 12,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis'
+                }}>
+                    {emptyText}
+                </div>
+            )}
             {tabs.map((tab) => {
                 const isActive = tab.id === activeTabId;
                 return (
@@ -91,3 +107,4 @@ export const TabBar: React.FC = () => {
 };
 
 export default TabBar;
+

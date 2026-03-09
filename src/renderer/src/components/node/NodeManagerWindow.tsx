@@ -3,7 +3,7 @@
  * 节点管理器窗口组件
  */
 
-import React, { useMemo, useState, useEffect, useLayoutEffect, useRef } from 'react';
+import React, { useMemo, useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { Tree, Input, Space, Button, Tooltip, message, Modal, Menu } from 'antd';
 import {
     PlusOutlined,
@@ -31,6 +31,7 @@ import LightDialog from './LightDialog';
 
 import EventObjectDialog from './EventObjectDialog';
 import RibbonEmitterDialog from './RibbonEmitterDialog';
+import { createParticleEmitter2FromPreset, listParticleEmitter2Presets, ParticleEmitter2PresetSummary } from '../../services/particleEmitter2PresetService';
 
 const { Search } = Input;
 
@@ -76,6 +77,7 @@ export const NodeManagerWindow: React.FC = () => {
     const [lightDialogVisible, setLightDialogVisible] = useState(false);
     const [eventDialogVisible, setEventDialogVisible] = useState(false);
     const [ribbonDialogVisible, setRibbonDialogVisible] = useState(false);
+    const [particleEmitterPresets, setParticleEmitterPresets] = useState<ParticleEmitter2PresetSummary[]>([]);
 
     // Mouse-based Drag-Drop State (replaces HTML5 drag-drop to work with Tauri dragDropEnabled)
     const [draggedNodeId, setDraggedNodeId] = useState<number | null>(null);
@@ -174,6 +176,39 @@ export const NodeManagerWindow: React.FC = () => {
     const handleCreate = () => {
         setCreateNodeDialogVisible(true);
     };
+
+
+    const refreshParticleEmitterPresets = useCallback(async () => {
+        try {
+            const presets = await listParticleEmitter2Presets();
+            setParticleEmitterPresets(presets);
+        } catch {
+            setParticleEmitterPresets([]);
+        }
+    }, []);
+
+    const handleCreateParticlePresetNode = useCallback(async (presetId: string, parentId: number) => {
+        try {
+            const { nodeName } = await createParticleEmitter2FromPreset({ presetId, parentId });
+            message.success('\u5df2\u521b\u5efa\u7c92\u5b50\u9884\u8bbe\u8282\u70b9: ' + nodeName);
+        } catch (error: any) {
+            message.error(error?.message || '使用粒子预设失败');
+        }
+    }, []);
+
+    const getParticlePresetMenuItems = useCallback((parentId: number): MenuProps['items'] => {
+        if (particleEmitterPresets.length === 0) {
+            return [{ key: `particle_preset_empty_${parentId}`, label: '暂无预设', disabled: true }];
+        }
+
+        return particleEmitterPresets.map((preset) => ({
+            key: `particle_preset_${parentId}_${preset.id}`,
+            label: preset.name,
+            onClick: () => {
+                void handleCreateParticlePresetNode(preset.id, parentId);
+            }
+        }));
+    }, [handleCreateParticlePresetNode, particleEmitterPresets]);
 
     const handleEdit = () => {
         if (selectedNodeIds.length === 0) {
@@ -323,8 +358,15 @@ export const NodeManagerWindow: React.FC = () => {
                                 addNode({ type: NodeType.COLLISION_SHAPE, Name: 'New Collision', Parent: -1 });
                                 message.success('已创建碰撞形状节点');
                             }
-                        }
+                        },
                     ]
+                },
+                {
+                    key: 'use_particle_preset_root',
+                    label: '\u4f7f\u7528\u9884\u8bbe',
+                    icon: <FireOutlined />,
+                    popupClassName: 'node-manager-context-submenu',
+                    children: getParticlePresetMenuItems(-1)
                 },
                 { type: 'divider' },
                 {
@@ -579,8 +621,15 @@ export const NodeManagerWindow: React.FC = () => {
                             addNode({ type: NodeType.COLLISION_SHAPE, Name: 'New Collision', Parent: nodeId });
                             message.success('已创建碰撞形状节点');
                         }
-                    }
+                    },
                 ]
+            },
+            {
+                key: 'create_particle_preset',
+                label: '\u4f7f\u7528\u9884\u8bbe',
+                icon: <FireOutlined />,
+                popupClassName: 'node-manager-context-submenu',
+                children: getParticlePresetMenuItems(nodeId)
             },
             {
                 key: 'rename',
@@ -630,6 +679,15 @@ export const NodeManagerWindow: React.FC = () => {
         document.addEventListener('click', handleClick);
         return () => document.removeEventListener('click', handleClick);
     }, []);
+
+    useEffect(() => {
+        void refreshParticleEmitterPresets();
+    }, [refreshParticleEmitterPresets]);
+
+    useEffect(() => {
+        if (!contextMenuVisible) return;
+        void refreshParticleEmitterPresets();
+    }, [contextMenuVisible, refreshParticleEmitterPresets]);
 
     const contextMenuItems = contextMenuNodeId === null ? [] : getContextMenuItems(contextMenuNodeId);
 

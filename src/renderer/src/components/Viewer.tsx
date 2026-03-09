@@ -2,8 +2,9 @@
 import { decodeBLP, getBLPImageData, parseMDX, parseMDL, ModelRenderer } from 'war3-model'
 // @ts-ignore
 import ModelWorker from '../workers/model-worker.worker?worker'
+import TextureAdjustWorker from '../workers/texture-adjust.worker?worker'
 import { SimpleOrbitCamera } from '../utils/SimpleOrbitCamera'
-import { decodeTextureData, loadAllTextures, normalizePath } from './viewer/textureLoader'
+import { decodeTextureData, getTextureCandidatePaths, loadAllTextures, normalizePath } from './viewer/textureLoader'
 import { validateAllParticleEmitters } from './viewer/particleValidator'
 import { checkForStructuralChanges } from './viewer/modelSync'
 import { getEnvironmentManager } from './viewer/EnvironmentManager'
@@ -17,6 +18,7 @@ import { AxisIndicator } from './AxisIndicator'
 import { readFile } from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { DEFAULT_TEXTURE_ADJUSTMENTS, TextureAdjustments, applyTextureAdjustments, isDefaultTextureAdjustments, normalizeTextureAdjustments } from '../utils/textureAdjustments'
 import { useUIStore } from '../store/uiStore'
 import { useSelectionStore } from '../store/selectionStore'
 import { useModelStore } from '../store/modelStore'
@@ -38,6 +40,26 @@ import { AutoSeparateLayersCommand } from '../commands/AutoSeparateLayersCommand
 import { WeldVerticesCommand } from '../commands/WeldVerticesCommand'
 import { DeleteVerticesCommand } from '../commands/DeleteVerticesCommand'
 import { PasteVerticesCommand } from '../commands/PasteVerticesCommand'
+
+const toTextureUpdateUint8Array = (payload: any): Uint8ClampedArray | null => {
+  if (!payload) return null
+  if (payload instanceof Uint8ClampedArray) return payload
+  if (payload instanceof Uint8Array) return new Uint8ClampedArray(payload.buffer, payload.byteOffset, payload.byteLength)
+  if (payload instanceof ArrayBuffer) return new Uint8ClampedArray(payload)
+  if (ArrayBuffer.isView(payload)) {
+    return new Uint8ClampedArray(payload.buffer, payload.byteOffset, payload.byteLength)
+  }
+  if (Array.isArray(payload)) return new Uint8ClampedArray(payload)
+  return null
+}
+
+const getLiveTextureSourceKey = (modelPath: string, imagePath: string): string => `${modelPath || ''}::${normalizePath(imagePath || '')}`
+
+type LiveTextureAdjustPayload = {
+  modelPath: string
+  imagePath: string
+  adjustments: TextureAdjustments
+}
 import { GlobalTransformCommand } from '../commands/GlobalTransformCommand'
 import { copyVertices, copyFaces, VertexCopyBuffer } from '../utils/vertexOperations'
 import { UpdateKeyframeCommand, KeyframeChange } from '../commands/UpdateKeyframeCommand'
@@ -620,41 +642,189 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
   // Live Texture Preview from Standalone Texture Manager
   useEffect(() => {
-    const unlisten = listen('IPC_LIVE_TEXTURE_UPDATE', (event) => {
-      const payload: any = event.payload;
-      if (payload && payload.imagePath && payload.dataUrl) {
-        const img = new Image();
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          canvas.width = img.width;
-          canvas.height = img.height;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.drawImage(img, 0, 0);
-            const imageData = ctx.getImageData(0, 0, img.width, img.height);
+    const sourceCache = new Map<string, { imagePath: string, imageData: ImageData }>()
+    const sourceLoadCache = new Map<string, Promise<ImageData | null>>()
+    const adjustWorker = new TextureAdjustWorker()
+    let processing = false
+    let activeSourceKey: string | null = null
+    let queuedAdjust: LiveTextureAdjustPayload | null = null
+    let pendingResolve: ((imageData: ImageData | null) => void) | null = null
+    let pendingRequestId = 0
 
-            const currentRenderer = rendererRef.current;
-            if (currentRenderer && typeof currentRenderer.setTextureImageData === 'function') {
-              currentRenderer.setTextureImageData(payload.imagePath, [imageData]);
-              const normalized = normalizePath(payload.imagePath);
-              if (normalized !== payload.imagePath) {
-                currentRenderer.setTextureImageData(normalized, [imageData]);
-              }
-              const forwardSlash = normalized.replace(/\\/g, '/');
-              if (forwardSlash !== normalized) {
-                currentRenderer.setTextureImageData(forwardSlash, [imageData]);
-              }
-            }
-          }
-        };
-        img.src = payload.dataUrl;
+    const areAdjustmentsEqual = (left: TextureAdjustments, right: TextureAdjustments) =>
+      left.hue === right.hue &&
+      left.brightness === right.brightness &&
+      left.saturation === right.saturation &&
+      left.opacity === right.opacity
+
+    const applyImageDataToRenderer = (imagePath: string, imageData: ImageData) => {
+      const currentRenderer = rendererRef.current
+      if (currentRenderer && typeof currentRenderer.setTextureImageData === 'function') {
+        currentRenderer.setTextureImageData(imagePath, [imageData])
+        const normalized = normalizePath(imagePath)
+        if (normalized !== imagePath) {
+          currentRenderer.setTextureImageData(normalized, [imageData])
+        }
+        const forwardSlash = normalized.replace(/\\/g, '/')
+        if (forwardSlash !== normalized) {
+          currentRenderer.setTextureImageData(forwardSlash, [imageData])
+        }
       }
-    });
+    }
+
+    const readTextureSource = async (modelPathValue: string, imagePath: string): Promise<ImageData | null> => {
+      const normalizedImagePath = normalizePath(imagePath)
+      if (modelPathValue && !modelPathValue.startsWith('dropped:')) {
+        const candidates = getTextureCandidatePaths(modelPathValue, normalizedImagePath)
+        for (const candidate of candidates) {
+          const buffer = await readFile(candidate).catch(() => null)
+          if (buffer) {
+            const imageData = decodeTextureData(buffer.buffer, imagePath)
+            if (imageData) return imageData
+          }
+        }
+      }
+
+      try {
+        const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: normalizedImagePath })
+        if (mpqData && mpqData.length > 0) {
+          return decodeTextureData(mpqData.buffer as ArrayBuffer, imagePath)
+        }
+      } catch {
+      }
+
+      return null
+    }
+
+    const ensureSourceImageData = async (modelPathValue: string, imagePath: string): Promise<ImageData | null> => {
+      const sourceKey = getLiveTextureSourceKey(modelPathValue, imagePath)
+      const cached = sourceCache.get(sourceKey)
+      if (cached) return cached.imageData
+
+      const existing = sourceLoadCache.get(sourceKey)
+      if (existing) return existing
+
+      const loadPromise = readTextureSource(modelPathValue, imagePath)
+        .then((imageData) => {
+          if (imageData) {
+            sourceCache.set(sourceKey, { imagePath, imageData })
+          }
+          return imageData
+        })
+        .finally(() => {
+          sourceLoadCache.delete(sourceKey)
+        })
+
+      sourceLoadCache.set(sourceKey, loadPromise)
+      return loadPromise
+    }
+
+    const runWorkerAdjust = (sourceKey: string, imageData: ImageData, adjustments: TextureAdjustments): Promise<ImageData | null> => {
+      if (activeSourceKey !== sourceKey) {
+        activeSourceKey = sourceKey
+        const sourcePixels = new Uint8ClampedArray(imageData.data)
+        adjustWorker.postMessage({
+          type: 'set-source',
+          key: sourceKey,
+          width: imageData.width,
+          height: imageData.height,
+          buffer: sourcePixels.buffer,
+        }, [sourcePixels.buffer])
+      }
+
+      return new Promise((resolve) => {
+        pendingResolve = resolve
+        const requestId = ++pendingRequestId
+        adjustWorker.postMessage({
+          type: 'apply',
+          key: sourceKey,
+          requestId,
+          adjustments,
+        })
+      })
+    }
+
+    const processQueuedAdjust = async () => {
+      if (processing) return
+      processing = true
+
+      while (queuedAdjust) {
+        const current = queuedAdjust
+        queuedAdjust = null
+
+        const normalizedAdjustments = normalizeTextureAdjustments(current.adjustments)
+        const sourceKey = getLiveTextureSourceKey(current.modelPath, current.imagePath)
+        const sourceImageData = await ensureSourceImageData(current.modelPath, current.imagePath)
+        if (!sourceImageData) {
+          continue
+        }
+
+        if (isDefaultTextureAdjustments(normalizedAdjustments)) {
+          applyImageDataToRenderer(current.imagePath, sourceImageData)
+          continue
+        }
+
+        let adjusted = await runWorkerAdjust(sourceKey, sourceImageData, normalizedAdjustments)
+        if (!adjusted) {
+          adjusted = applyTextureAdjustments(sourceImageData, normalizedAdjustments)
+        }
+
+        if (queuedAdjust && areAdjustmentsEqual(normalizedAdjustments, normalizeTextureAdjustments(queuedAdjust.adjustments))) {
+          continue
+        }
+
+        applyImageDataToRenderer(current.imagePath, adjusted)
+      }
+
+      processing = false
+    }
+
+    adjustWorker.onmessage = (event: MessageEvent<any>) => {
+      const payload = event.data
+      if (!payload || payload.type !== 'result' || !pendingResolve) {
+        return
+      }
+
+      const resolve = pendingResolve
+      pendingResolve = null
+      resolve(new ImageData(new Uint8ClampedArray(payload.buffer), payload.width, payload.height))
+    }
+
+    adjustWorker.onerror = () => {
+      if (pendingResolve) {
+        const resolve = pendingResolve
+        pendingResolve = null
+        resolve(null)
+      }
+    }
+
+    const unlistenPrepare = listen('IPC_LIVE_TEXTURE_PREPARE', (event) => {
+      const payload: any = event.payload
+      if (!payload?.modelPath || !payload?.imagePath) {
+        return
+      }
+      void ensureSourceImageData(String(payload.modelPath), payload.imagePath)
+    })
+
+    const unlistenAdjust = listen('IPC_LIVE_TEXTURE_ADJUST', (event) => {
+      const payload: any = event.payload
+      if (!payload?.imagePath) {
+        return
+      }
+      queuedAdjust = {
+        modelPath: String(payload?.modelPath || ''),
+        imagePath: payload.imagePath,
+        adjustments: normalizeTextureAdjustments(payload?.adjustments || DEFAULT_TEXTURE_ADJUSTMENTS),
+      }
+      void processQueuedAdjust()
+    })
 
     return () => {
-      unlisten.then(f => f());
-    };
-  }, []);
+      adjustWorker.terminate()
+      unlistenPrepare.then(f => f())
+      unlistenAdjust.then(f => f())
+    }
+  }, [])
 
   const readVec3 = (v: any): [number, number, number] | null => {
     if (!v) return null

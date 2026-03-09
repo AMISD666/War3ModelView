@@ -1,5 +1,6 @@
-import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
+﻿import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Form, Checkbox, Select, ColorPicker, Button, Input } from 'antd';
 
 import { DraggableModal } from '../DraggableModal';
@@ -10,6 +11,8 @@ import type { ParticleEmitter2Node } from '../../types/node';
 import { useModelStore } from '../../store/modelStore';
 import { useHistoryStore } from '../../store/historyStore';
 import { getDraggedTextureIndex } from '../../utils/textureDragDrop';
+import { saveParticleEmitter2Preset } from '../../services/particleEmitter2PresetService';
+import { showMessage } from '../../store/messageStore';
 
 interface ParticleEmitter2DialogProps {
     visible: boolean;
@@ -47,7 +50,7 @@ const getStaticValue = (val: any, defaultVal: number = 0): number => {
 
 const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible, nodeId, onClose }) => {
     const [form] = Form.useForm();
-    const { getNodeById, updateNode, modelData } = useModelStore();
+    const { getNodeById, updateNode, modelData, modelPath } = useModelStore();
     const [isTextureDropActive, setIsTextureDropActive] = useState(false);
 
     const currentNode = nodeId !== null ? getNodeById(nodeId) as ParticleEmitter2Node : null;
@@ -59,6 +62,9 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
     // Animation State
     const [animDataMap, setAnimDataMap] = useState<Record<string, any>>({});
     const [currentEditingProp, setCurrentEditingProp] = useState<string | null>(null);
+    const [presetModalOpen, setPresetModalOpen] = useState(false);
+    const [presetName, setPresetName] = useState('');
+    const [isSavingPreset, setIsSavingPreset] = useState(false);
 
     // Helper to convert array [r, g, b] (0-1) to Antd Color
     const toAntdColor = (rgb?: [number, number, number]) => {
@@ -260,92 +266,128 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
         form.setFieldValue('TextureID', safeTextureId);
     };
 
+    const buildUpdatedNodeFromValues = (values: any): ParticleEmitter2Node | null => {
+        if (!currentNode) return null;
+
+        const updatedNode: ParticleEmitter2Node = {
+            ...currentNode,
+            TextureID: Number(values.TextureID),
+            FilterMode: values.FilterMode,
+            Rows: Number(values.Rows),
+            Columns: Number(values.Columns),
+            PriorityPlane: Number(values.PriorityPlane),
+            ReplaceableId: Number(values.ReplaceableId),
+            SegmentColor: [
+                fromAntdColor(values.Seg1Color),
+                fromAntdColor(values.Seg2Color),
+                fromAntdColor(values.Seg3Color),
+            ],
+            Alpha: [Number(values.Seg1Alpha), Number(values.Seg2Alpha), Number(values.Seg3Alpha)],
+            ParticleScaling: [Number(values.Seg1Scaling), Number(values.Seg2Scaling), Number(values.Seg3Scaling)],
+            LifeSpanUVAnim: [Number(values.HeadLifeSpanStart) || 0, Number(values.HeadLifeSpanEnd) || 0, Number(values.HeadLifeSpanRepeat) || 1],
+            DecayUVAnim: [Number(values.HeadDecayStart) || 0, Number(values.HeadDecayEnd) || 0, Number(values.HeadDecayRepeat) || 1],
+            TailUVAnim: [Number(values.TailLifeSpanStart) || 0, Number(values.TailLifeSpanEnd) || 0, Number(values.TailLifeSpanRepeat) || 1],
+            TailDecayUVAnim: [Number(values.TailDecayStart) || 0, Number(values.TailDecayEnd) || 0, Number(values.TailDecayRepeat) || 1],
+            TailLength: Number(values.TailLength),
+            Time: Number(values.Time),
+            LifeSpan: Number(values.LifeSpan),
+            Unshaded: values.Unshaded,
+            Unfogged: values.Unfogged,
+            SortPrimsFarZ: values.SortPrimsFarZ,
+            LineEmitter: values.LineEmitter,
+            ModelSpace: values.ModelSpace,
+            XYQuad: values.XYQuad,
+            Squirt: values.Squirt,
+            Head: values.Head,
+            Tail: values.Tail,
+            Visibility: Number(values.Visibility),
+        };
+
+        const dynamicProps: Array<{ prop: string }> = [
+            { prop: 'EmissionRate' },
+            { prop: 'Speed' },
+            { prop: 'Variation' },
+            { prop: 'Latitude' },
+            { prop: 'Width' },
+            { prop: 'Length' },
+            { prop: 'Gravity' },
+            { prop: 'Visibility' }
+        ];
+
+        dynamicProps.forEach(({ prop }) => {
+            const animKey = PROP_TO_ANIM_KEY[prop];
+            if (animDataMap[prop]) {
+                (updatedNode as any)[prop] = animDataMap[prop];
+                if (animKey) {
+                    (updatedNode as any)[animKey] = animDataMap[prop];
+                }
+            } else {
+                (updatedNode as any)[prop] = Number(values[prop]);
+                if (animKey) {
+                    delete (updatedNode as any)[animKey];
+                }
+            }
+        });
+
+        Object.entries(PROP_TO_ANIM_KEY).forEach(([propName, animKey]) => {
+            if (animDataMap[propName]) {
+                (updatedNode as any)[animKey] = animDataMap[propName];
+            } else {
+                delete (updatedNode as any)[animKey];
+            }
+        });
+
+        return updatedNode;
+    };
+
     const handleCancel = () => {
         if (!isCommittingRef.current && didRealtimePreviewRef.current && initialNodeRef.current && nodeId !== null) {
             updateNode(nodeId, initialNodeRef.current);
         }
+        setPresetModalOpen(false);
         onClose();
+    };
+
+    const handleOpenPresetModal = () => {
+        setPresetName((currentNode?.Name || '').trim() || '粒子预设');
+        setPresetModalOpen(true);
+    };
+
+    const handleSavePreset = async () => {
+        try {
+            const values = await form.validateFields();
+            const updatedNode = buildUpdatedNodeFromValues(values);
+            if (!updatedNode) return;
+
+            const textureId = Number(updatedNode.TextureID);
+            const texture = textureId >= 0 ? (modelData?.Textures?.[textureId] ?? null) : null;
+
+            setIsSavingPreset(true);
+            await saveParticleEmitter2Preset({
+                name: presetName,
+                emitter: updatedNode,
+                texture,
+                modelPath,
+            });
+            showMessage('success', '保存成功', '粒子预设 "' + presetName.trim() + '" 已保存');
+            setPresetModalOpen(false);
+        } catch (e: any) {
+            if (e?.errorFields) {
+                return;
+            }
+            const detail = e instanceof Error ? e.message : typeof e === 'string' ? e : (() => { try { return JSON.stringify(e); } catch { return String(e); } })();
+            console.error('[ParticleEmitter2Dialog] 保存粒子预设失败:', e);
+            showMessage('error', '保存粒子预设失败', detail || '未知错误');
+            setIsSavingPreset(false);
+        }
     };
 
     const handleOk = async () => {
         try {
             const values = await form.validateFields();
             if (!currentNode || nodeId === null) return;
-
-            const updatedNode: ParticleEmitter2Node = {
-                ...currentNode,
-                TextureID: Number(values.TextureID),
-                FilterMode: values.FilterMode,
-                Rows: Number(values.Rows),
-                Columns: Number(values.Columns),
-                PriorityPlane: Number(values.PriorityPlane),
-                ReplaceableId: Number(values.ReplaceableId),
-
-                SegmentColor: [
-                    fromAntdColor(values.Seg1Color),
-                    fromAntdColor(values.Seg2Color),
-                    fromAntdColor(values.Seg3Color),
-                ],
-                Alpha: [Number(values.Seg1Alpha), Number(values.Seg2Alpha), Number(values.Seg3Alpha)],
-                ParticleScaling: [Number(values.Seg1Scaling), Number(values.Seg2Scaling), Number(values.Seg3Scaling)],
-
-                // HeadLifeSpan/HeadDecay/TailLifeSpan/TailDecay are 3-value interval arrays [start, end, repeat]
-                LifeSpanUVAnim: [Number(values.HeadLifeSpanStart) || 0, Number(values.HeadLifeSpanEnd) || 0, Number(values.HeadLifeSpanRepeat) || 1],
-                DecayUVAnim: [Number(values.HeadDecayStart) || 0, Number(values.HeadDecayEnd) || 0, Number(values.HeadDecayRepeat) || 1],
-                TailUVAnim: [Number(values.TailLifeSpanStart) || 0, Number(values.TailLifeSpanEnd) || 0, Number(values.TailLifeSpanRepeat) || 1],
-                TailDecayUVAnim: [Number(values.TailDecayStart) || 0, Number(values.TailDecayEnd) || 0, Number(values.TailDecayRepeat) || 1],
-                TailLength: Number(values.TailLength),
-                Time: Number(values.Time),
-                LifeSpan: Number(values.LifeSpan),
-
-                Unshaded: values.Unshaded,
-                Unfogged: values.Unfogged,
-                SortPrimsFarZ: values.SortPrimsFarZ,
-                LineEmitter: values.LineEmitter,
-                ModelSpace: values.ModelSpace,
-                XYQuad: values.XYQuad,
-                Squirt: values.Squirt,
-                Head: values.Head,
-                Tail: values.Tail,
-                Visibility: Number(values.Visibility),
-            };
-
-            const dynamicProps: Array<{ prop: string }> = [
-                { prop: 'EmissionRate' },
-                { prop: 'Speed' },
-                { prop: 'Variation' },
-                { prop: 'Latitude' },
-                { prop: 'Width' },
-                { prop: 'Length' },
-                { prop: 'Gravity' },
-                { prop: 'Visibility' }
-            ];
-
-            dynamicProps.forEach(({ prop }) => {
-                const animKey = PROP_TO_ANIM_KEY[prop];
-                if (animDataMap[prop]) {
-                    (updatedNode as any)[prop] = animDataMap[prop];
-                    if (animKey) {
-                        (updatedNode as any)[animKey] = animDataMap[prop];
-                    }
-                } else {
-                    (updatedNode as any)[prop] = Number(values[prop]);
-                    if (animKey) {
-                        delete (updatedNode as any)[animKey];
-                    }
-                }
-            });
-
-            // Merge Animation Data
-            Object.entries(PROP_TO_ANIM_KEY).forEach(([propName, animKey]) => {
-                if (animDataMap[propName]) {
-                    (updatedNode as any)[animKey] = animDataMap[propName];
-                } else {
-                    // Start of block: Explicitly Delete Removed Animations
-                    // If the user unchecked "Dynamic", ensure the anim key is removed or set to undefined
-                    delete (updatedNode as any)[animKey];
-                }
-            });
+            const updatedNode = buildUpdatedNodeFromValues(values);
+            if (!updatedNode) return;
 
             const oldNode = initialNodeRef.current || currentNode;
             useHistoryStore.getState().push({
@@ -356,9 +398,6 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
 
             isCommittingRef.current = true;
             updateNode(nodeId, updatedNode);
-            // NOTE: Auto renderer reload disabled - was causing model data corruption
-            // const { triggerRendererReload } = useModelStore.getState();
-            // triggerRendererReload();
             onClose();
         } catch (e) {
             console.error("Validation failed", e);
@@ -824,12 +863,45 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
                             <div style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 6 }}>
                                 <Button onClick={handleOk} type="primary" size="small" block>确定</Button>
                                 <Button onClick={handleCancel} size="small" block>取消</Button>
+                                <Button onClick={handleOpenPresetModal} size="small" block>保存预设</Button>
                             </div>
                         </div>
                     </div>
                 </div>
             </Form>
-
+            {presetModalOpen && typeof document !== 'undefined' ? createPortal(
+                <div
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <DraggableModal
+                        title="保存粒子预设"
+                        open={presetModalOpen}
+                        onCancel={() => setPresetModalOpen(false)}
+                        width={360}
+                        minWidth={360}
+                        minHeight={150}
+                        resizable={false}
+                        destroyOnClose
+                        styles={{ body: { padding: 16 } }}
+                        footer={(
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                                <Button size="small" onClick={() => setPresetModalOpen(false)}>取消</Button>
+                                <Button size="small" type="primary" loading={isSavingPreset} onClick={() => { void handleSavePreset() }}>确定</Button>
+                            </div>
+                        )}
+                    >
+                        <Input
+                            placeholder="输入预设名称"
+                            value={presetName}
+                            onChange={(e) => setPresetName(e.target.value)}
+                            onPressEnter={() => { void handleSavePreset() }}
+                            autoFocus
+                        />
+                    </DraggableModal>
+                </div>,
+                document.body
+            ) : null}
         </DraggableModal>
     );
 };
