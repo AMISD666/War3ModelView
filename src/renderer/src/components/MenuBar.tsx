@@ -150,6 +150,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
         showVerticesInAnimationKeyframe,
         setShowVerticesForAnimationSubMode,
         showNodes: quickShowNodes, setShowNodes: setQuickShowNodes,
+        nodeRenderMode, setNodeRenderMode,
         showSkeleton: quickShowSkeleton, setShowSkeleton: setQuickShowSkeleton,
         showGeosetVisibility: quickShowGeosetVisibility, setShowGeosetVisibility: setQuickShowGeosetVisibility,
         showCollisionShapes: quickShowCollisionShapes, setShowCollisionShapes: setQuickShowCollisionShapes,
@@ -170,6 +171,8 @@ const MenuBar: React.FC<MenuBarProps> = ({
         setShowVerticesForAnimationSubMode: state.setShowVerticesForAnimationSubMode,
         showNodes: state.showNodes,
         setShowNodes: state.setShowNodes,
+        nodeRenderMode: state.nodeRenderMode,
+        setNodeRenderMode: state.setNodeRenderMode,
         showSkeleton: state.showSkeleton,
         setShowSkeleton: state.setShowSkeleton,
         showGeosetVisibility: state.showGeosetVisibility,
@@ -266,31 +269,33 @@ const MenuBar: React.FC<MenuBarProps> = ({
         key: string
         label: string
         checked: boolean
-        onToggle: (next: boolean) => void
+        onToggle: () => void
         icon: React.ReactNode
         badge?: string
+        statusLabel?: string
+        tone?: 'default' | 'warning'
     }> = [
-            { key: 'grid-xy', label: 'XY 网格', checked: quickShowGridXY, onToggle: setQuickShowGridXY, icon: <AppstoreOutlined />, badge: 'XY' },
-            { key: 'grid-xz', label: 'XZ 网格', checked: quickShowGridXZ, onToggle: setQuickShowGridXZ, icon: <AppstoreOutlined />, badge: 'XZ' },
-            { key: 'grid-yz', label: 'YZ 网格', checked: quickShowGridYZ, onToggle: setQuickShowGridYZ, icon: <AppstoreOutlined />, badge: 'YZ' },
-            { key: 'vertices', label: '顶点显示', checked: quickShowVertices, onToggle: toggleQuickVertices, icon: <GatewayOutlined /> },
-            { key: 'nodes', label: '骨骼节点', checked: quickShowNodes, onToggle: setQuickShowNodes, icon: <AimOutlined /> },
-            { key: 'skeleton', label: '渲染骨架', checked: quickShowSkeleton, onToggle: setQuickShowSkeleton, icon: <DeploymentUnitOutlined /> },
-            { key: 'geoset-tool', label: '多边形工具', checked: quickShowGeosetVisibility, onToggle: setQuickShowGeosetVisibility, icon: <ToolOutlined /> },
-            { key: 'collision', label: '碰撞节点', checked: quickShowCollisionShapes, onToggle: setQuickShowCollisionShapes, icon: <BorderOutlined /> },
-            { key: 'lights', label: '灯光对象', checked: quickShowLights, onToggle: setQuickShowLights, icon: <BulbOutlined /> },
-            { key: 'particles', label: '粒子显示', checked: quickShowParticles, onToggle: setQuickShowParticles, icon: <FireOutlined /> },
-            { key: 'ribbons', label: '丝带显示', checked: quickShowRibbons, onToggle: setQuickShowRibbons, icon: <LinkOutlined /> },
+            { key: 'grid-xy', label: 'XY 网格', checked: quickShowGridXY, onToggle: () => setQuickShowGridXY(!quickShowGridXY), icon: <AppstoreOutlined />, badge: 'XY' },
+            { key: 'grid-xz', label: 'XZ 网格', checked: quickShowGridXZ, onToggle: () => setQuickShowGridXZ(!quickShowGridXZ), icon: <AppstoreOutlined />, badge: 'XZ' },
+            { key: 'grid-yz', label: 'YZ 网格', checked: quickShowGridYZ, onToggle: () => setQuickShowGridYZ(!quickShowGridYZ), icon: <AppstoreOutlined />, badge: 'YZ' },
+            { key: 'vertices', label: '顶点显示', checked: quickShowVertices, onToggle: () => toggleQuickVertices(!quickShowVertices), icon: <GatewayOutlined /> },
+            { key: 'nodes', label: '骨骼节点', checked: nodeRenderMode !== 'hidden', onToggle: () => setNodeRenderMode(nodeRenderMode === 'hidden' ? 'solid' : nodeRenderMode === 'solid' ? 'wireframe' : 'hidden'), icon: <AimOutlined />, statusLabel: nodeRenderMode === 'hidden' ? '已关闭' : nodeRenderMode === 'wireframe' ? '线框' : '实体', tone: nodeRenderMode === 'wireframe' ? 'warning' : 'default' },
+            { key: 'skeleton', label: '渲染骨架', checked: quickShowSkeleton, onToggle: () => setQuickShowSkeleton(!quickShowSkeleton), icon: <DeploymentUnitOutlined /> },
+            { key: 'geoset-tool', label: '多边形工具', checked: quickShowGeosetVisibility, onToggle: () => setQuickShowGeosetVisibility(!quickShowGeosetVisibility), icon: <ToolOutlined /> },
+            { key: 'collision', label: '碰撞节点', checked: quickShowCollisionShapes, onToggle: () => setQuickShowCollisionShapes(!quickShowCollisionShapes), icon: <BorderOutlined /> },
+            { key: 'lights', label: '灯光对象', checked: quickShowLights, onToggle: () => setQuickShowLights(!quickShowLights), icon: <BulbOutlined /> },
+            { key: 'particles', label: '粒子显示', checked: quickShowParticles, onToggle: () => setQuickShowParticles(!quickShowParticles), icon: <FireOutlined /> },
+            { key: 'ribbons', label: '丝带显示', checked: quickShowRibbons, onToggle: () => setQuickShowRibbons(!quickShowRibbons), icon: <LinkOutlined /> },
             {
                 key: 'render-mode',
                 label: '线框模式',
                 checked: renderMode === 'wireframe',
-                onToggle: (next) => onChangeRenderMode(next ? 'wireframe' : 'textured'),
+                onToggle: () => onChangeRenderMode(renderMode === 'wireframe' ? 'textured' : 'wireframe'),
                 icon: <BgColorsOutlined />
             }
         ]
 
-    const quickBtnStyle = (checked: boolean): React.CSSProperties => ({
+    const quickBtnStyle = (checked: boolean, tone: 'default' | 'warning' = 'default'): React.CSSProperties => ({
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -299,9 +304,9 @@ const MenuBar: React.FC<MenuBarProps> = ({
         height: 22,
         padding: '0 6px',
         borderRadius: 4,
-        border: checked ? '1px solid #2f7dff' : '1px solid #555',
-        backgroundColor: checked ? '#1f4f9f' : '#303030',
-        color: checked ? '#fff' : '#bfbfbf',
+        border: checked ? (tone === 'warning' ? '1px solid #d4a106' : '1px solid #2f7dff') : '1px solid #555',
+        backgroundColor: checked ? (tone === 'warning' ? '#6b5200' : '#1f4f9f') : '#303030',
+        color: checked ? (tone === 'warning' ? '#ffe58f' : '#fff') : '#bfbfbf',
         cursor: 'pointer',
         fontSize: 11,
         lineHeight: 1
@@ -876,8 +881,8 @@ const MenuBar: React.FC<MenuBarProps> = ({
                     >
                         <button
                             type="button"
-                            onClick={() => item.onToggle(!item.checked)}
-                            style={quickBtnStyle(item.checked)}
+                            onClick={item.onToggle}
+                            style={quickBtnStyle(item.checked, item.tone)}
                         >
                             {item.icon}
                             {item.badge && <span style={{ fontSize: 9, fontWeight: 600 }}>{item.badge}</span>}

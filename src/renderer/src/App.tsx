@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { exit } from '@tauri-apps/plugin-process'
 import { windowManager } from './utils/WindowManager'
+import { useRef } from 'react'
 
 const MainLayoutNew = lazy(() => import('./components/MainLayoutNew'))
 const ActivationModal = lazy(() => import('./components/modals/ActivationModal'))
@@ -20,6 +21,7 @@ interface ActivationStatus {
 function App(): JSX.Element {
     const [isActivated, setIsActivated] = useState<boolean | null>(null)
     const [shouldMountMainLayout, setShouldMountMainLayout] = useState(false)
+    const isClosingRef = useRef(false)
     const standaloneWindowLabel = useMemo(() => {
         if (typeof window === 'undefined') return null
         const params = new URLSearchParams(window.location.search)
@@ -38,9 +40,21 @@ function App(): JSX.Element {
             setShouldMountMainLayout(true)
         })
 
-        const unlistenPromise = getCurrentWindow().onCloseRequested(async () => {
-            await windowManager.destroyAllWindows().catch(console.error)
-            await exit(0)
+        const unlistenPromise = getCurrentWindow().onCloseRequested(async (event) => {
+            if (event.isPreventDefault() || isClosingRef.current) {
+                return
+            }
+
+            event.preventDefault()
+            isClosingRef.current = true
+
+            try {
+                await windowManager.destroyAllWindows().catch(console.error)
+                await exit(0)
+            } catch (error) {
+                console.error('[App] graceful exit failed:', error)
+                isClosingRef.current = false
+            }
         })
 
         return () => {

@@ -5,12 +5,18 @@ import { getVersion } from '@tauri-apps/api/app';
 import { fetch } from '@tauri-apps/plugin-http';
 import { tempDir } from '@tauri-apps/api/path';
 import { open } from '@tauri-apps/plugin-shell';
-import { writeFile } from '@tauri-apps/plugin-fs';
 import { exit } from '@tauri-apps/plugin-process';
 import { UpdateLogContent } from '../components/UpdateLogContent';
 
 const GITEE_REPO = 'AMISD666/gg-war3-model-edit';
 const API_URL = `https://gitee.com/api/v5/repos/${GITEE_REPO}/releases/latest`;
+const API_LIST_URL = `https://gitee.com/api/v5/repos/${GITEE_REPO}/releases?per_page=1`;
+const RELEASES_PAGE_URL = `https://gitee.com/${GITEE_REPO}/releases`;
+const REQUEST_HEADERS = {
+    'User-Agent': 'War3ModelView-Updater',
+    Accept: 'application/json',
+};
+const GITEE_RATE_LIMIT_ERROR = 'GITEE_RATE_LIMIT';
 
 interface GiteeRelease {
     tag_name: string;
@@ -20,6 +26,33 @@ interface GiteeRelease {
         browser_download_url: string;
     }[];
     created_at?: string;
+}
+
+function isGiteeRateLimitError(error: unknown): boolean {
+    return error instanceof Error && error.message === GITEE_RATE_LIMIT_ERROR;
+}
+
+async function fetchLatestRelease(): Promise<GiteeRelease> {
+    const response = await fetch(API_URL, { headers: REQUEST_HEADERS });
+    if (response.ok) {
+        return await response.json() as GiteeRelease;
+    }
+
+    const listResponse = await fetch(API_LIST_URL, { headers: REQUEST_HEADERS });
+    if (listResponse.ok) {
+        const list = await listResponse.json() as GiteeRelease[];
+        const latest = list[0] ?? null;
+        if (latest) {
+            return latest;
+        }
+    }
+
+    const status = listResponse.status || response.status;
+    if (status === 403) {
+        throw new Error(GITEE_RATE_LIMIT_ERROR);
+    }
+
+    throw new Error(`HTTP error! status: ${status}`);
 }
 
 // Version comparison: returns > 0 if v1 > v2
@@ -101,13 +134,7 @@ export async function checkGiteeUpdate() {
     const loadingId = showMessage('loading', '正在检查更新...', '请稍候...', 0);
     try {
         const currentVersion = await getVersion();
-        const response = await fetch(API_URL);
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const data = await response.json() as GiteeRelease;
+        const data = await fetchLatestRelease();
         const latestVersion = data.tag_name || (data as any).name || '';
 
         useMessageStore.getState().removeMessage(loadingId);
@@ -141,6 +168,18 @@ export async function checkGiteeUpdate() {
     } catch (error) {
         console.error('Update check failed:', error);
         useMessageStore.getState().removeMessage(loadingId);
+        if (isGiteeRateLimitError(error)) {
+            const shouldOpenReleasePage = await showConfirm(
+                '更新检查过于频繁',
+                'Gitee 更新接口当前触发了访问频率限制。点击确定打开发布页手动下载最新版本。',
+                520
+            );
+            if (shouldOpenReleasePage) {
+                await open(RELEASES_PAGE_URL);
+            }
+            return;
+        }
+
         showMessage('error', '更新检查失败', String(error));
     }
 }
@@ -148,9 +187,7 @@ export async function checkGiteeUpdate() {
 export async function showChangelog() {
     const loadingId = showMessage('loading', '正在获取日志...', '请稍候...', 0);
     try {
-        const response = await fetch(API_URL);
-        if (!response.ok) throw new Error('Fetch failed');
-        const data = await response.json() as GiteeRelease;
+        const data = await fetchLatestRelease();
 
         useMessageStore.getState().removeMessage(loadingId);
 
@@ -169,6 +206,11 @@ export async function showChangelog() {
 
     } catch (e) {
         useMessageStore.getState().removeMessage(loadingId);
+        if (isGiteeRateLimitError(e)) {
+            showMessage('error', '获取失败', 'Gitee 更新接口当前限流，请稍后重试。');
+            return;
+        }
+
         showMessage('error', '获取失败', '无法获取更新日志');
     }
 }
@@ -176,13 +218,7 @@ export async function showChangelog() {
 export async function checkGiteeUpdateSilent() {
     try {
         const currentVersion = await getVersion();
-        const response = await fetch(API_URL);
-
-        if (!response.ok) {
-            return; // Silent failure
-        }
-
-        const data = await response.json() as GiteeRelease;
+        const data = await fetchLatestRelease();
         const latestVersion = data.tag_name || (data as any).name || '';
 
         if (isNewerVersion(currentVersion, latestVersion)) {
@@ -201,6 +237,9 @@ export async function checkGiteeUpdateSilent() {
             }
         }
     } catch (error) {
+        if (isGiteeRateLimitError(error)) {
+            return;
+        }
         console.error('Silent update check failed:', error);
     }
 }

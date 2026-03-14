@@ -791,14 +791,19 @@ function parseNode(state: State, type: string, model: Model): Node {
         } else if (keyword === 'DontInherit') {
             strictParseSymbol(state, '{');
 
-            const val = parseKeyword(state);
+            while (state.char() !== '}') {
+                const val = parseKeyword(state);
 
-            if (val === 'Translation') {
-                node.Flags |= NodeFlags.DontInheritTranslation;
-            } else if (val === 'Rotation') {
-                node.Flags |= NodeFlags.DontInheritRotation;
-            } else if (val === 'Scaling') {
-                node.Flags |= NodeFlags.DontInheritScaling;
+                if (val === 'Translation') {
+                    node.Flags |= NodeFlags.DontInheritTranslation;
+                } else if (val === 'Rotation') {
+                    node.Flags |= NodeFlags.DontInheritRotation;
+                } else if (val === 'Scaling') {
+                    node.Flags |= NodeFlags.DontInheritScaling;
+                }
+
+                parseSymbol(state, ',');
+                parseSpace(state);
             }
 
             strictParseSymbol(state, '}');
@@ -1137,14 +1142,19 @@ function parseParticleEmitter2(state: State, model: Model): void {
         } else if (keyword === 'DontInherit') {
             strictParseSymbol(state, '{');
 
-            const val = parseKeyword(state);
+            while (state.char() !== '}') {
+                const val = parseKeyword(state);
 
-            if (val === 'Translation') {
-                res.Flags |= NodeFlags.DontInheritTranslation;
-            } else if (val === 'Rotation') {
-                res.Flags |= NodeFlags.DontInheritRotation;
-            } else if (val === 'Scaling') {
-                res.Flags |= NodeFlags.DontInheritScaling;
+                if (val === 'Translation') {
+                    res.Flags |= NodeFlags.DontInheritTranslation;
+                } else if (val === 'Rotation') {
+                    res.Flags |= NodeFlags.DontInheritRotation;
+                } else if (val === 'Scaling') {
+                    res.Flags |= NodeFlags.DontInheritScaling;
+                }
+
+                parseSymbol(state, ',');
+                parseSpace(state);
             }
 
             strictParseSymbol(state, '}');

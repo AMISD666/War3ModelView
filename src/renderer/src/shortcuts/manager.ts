@@ -127,8 +127,11 @@ export const dispatchShortcutEvent = (event: KeyboardEvent): boolean => {
 }
 
 const blurActiveElementIfSafe = (event: KeyboardEvent): void => {
-    // If focus is left on a button/menu item, some components may start swallowing key events,
-    // making shortcuts feel "stuck". Blurring restores reliable global shortcut handling.
+    // Blur the focused element BEFORE dispatching shortcuts so that buttons/sliders
+    // don't fire a native click (or Space activation) after our shortcut handler runs.
+    // e.g. Space on a focused <button> would: (1) trigger our playPause handler,
+    // then (2) trigger the button's native click → double-toggle, net no change.
+    // Blurring first prevents the native click entirely.
     if (event.key === 'Tab') return
 
     const el = document.activeElement
@@ -138,15 +141,38 @@ const blurActiveElementIfSafe = (event: KeyboardEvent): void => {
     if (isTextInputActive()) return
     if (el instanceof HTMLSelectElement) return
 
-    // Only blur focusable HTMLElements.
+    // Only blur focusable HTMLElements (buttons, sliders, custom focusable divs, etc.).
     if (el instanceof HTMLElement) {
         el.blur()
     }
 }
 
+const hasMatchingShortcut = (event: KeyboardEvent): boolean => {
+    const combo = normalizeKeyComboFromEvent(event)
+    if (!combo) return false
+    const normalizedCombo = normalizeKeyCombo(combo)
+    const activeContexts = getActiveContexts()
+    for (const action of shortcutActions) {
+        const bindings = getEffectiveBindings(action.id).map(normalizeKeyCombo)
+        if (!bindings.includes(normalizedCombo)) continue
+        if (!action.contexts.some((ctx) => activeContexts.has(ctx))) continue
+        return true
+    }
+    return false
+}
+
 export const handleGlobalShortcutKeyDown = (event: KeyboardEvent): void => {
-    const handled = dispatchShortcutEvent(event)
-    if (handled) blurActiveElementIfSafe(event)
+    // CRITICAL: blur the focused element BEFORE dispatching the shortcut.
+    // If a button/focusable element is focused, pressing Space would:
+    //   1. trigger our shortcut handler (e.g. toggling play), AND
+    //   2. trigger the browser's native Space→click on the element (toggling again)
+    // Net effect: double-toggle = no visible change.  Blurring first prevents step 2.
+    // We only do this when a shortcut actually matches (to avoid disrupting
+    // intentional use of Sliders, custom controls, etc. for non-shortcut keys).
+    if (hasMatchingShortcut(event)) {
+        blurActiveElementIfSafe(event)
+    }
+    dispatchShortcutEvent(event)
 }
 
 export const getShortcutAction = (actionId: string): ShortcutAction | undefined => {

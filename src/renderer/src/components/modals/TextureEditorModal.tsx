@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { List, Button, Input, Checkbox, Card, Typography, message, Dropdown, Slider } from 'antd'
 import { SmartInputNumber as InputNumber } from '../common/SmartInputNumber'
 import type { MenuProps } from 'antd'
@@ -9,7 +9,7 @@ import { useSelectionStore } from '../../store/selectionStore'
 
 import { useModelStore } from '../../store/modelStore'
 import { useRendererStore } from '../../store/rendererStore'
-import { readFile } from '@tauri-apps/plugin-fs'
+import { readFile, writeFile, exists, size } from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { decodeTextureData, getTextureCandidatePaths, isMPQPath, normalizePath } from '../viewer/textureLoader'
@@ -85,6 +85,10 @@ const ensureLocalTexture = (texture: any): LocalTexture => ({
 const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClose, modelPath: propModelPath, isStandalone }) => {
     // 1. Local Store & RPC Fallback Setups
     const localStore = useModelStore()
+    const textureSaveMode = useRendererStore(state => state.textureSaveMode)
+    const setTextureSaveMode = useRendererStore(state => state.setTextureSaveMode)
+    const textureSaveSuffix = useRendererStore(state => state.textureSaveSuffix)
+    const setTextureSaveSuffix = useRendererStore(state => state.setTextureSaveSuffix)
 
     const initialRpcState: TextureManagerRpcState = {
         snapshotVersion: 0,
@@ -141,6 +145,28 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
 
     const [localTextures, setLocalTextures] = useState<LocalTexture[]>([])
     const [selectedIndex, setSelectedIndex] = useState<number>(-1)
+    const [isExternalTextureDropActive, setIsExternalTextureDropActive] = useState(false)
+    // 路径输入框本地缓冲，避免每次 onChange 触发全量重渲染导致输入框失去焦点
+    const [pathInputValue, setPathInputValue] = useState('')
+    const pathInputCommittedRef = useRef(false)
+
+    const isSaveAsMode = textureSaveMode === 'save_as'
+    const textureSaveModeLabel = isSaveAsMode ? '另存为' : '覆盖原贴图'
+
+    const handleTextureSaveModeChange = (mode: 'overwrite' | 'save_as') => {
+        setTextureSaveMode(mode)
+        if (isStandalone) {
+            emitCommand('EXECUTE_TEXTURE_ACTION', { action: 'SET_TEXTURE_SAVE_MODE', payload: { mode } })
+        }
+    }
+
+    const handleTextureSaveSuffixChange = (suffix: string) => {
+        setTextureSaveSuffix(suffix)
+        if (isStandalone) {
+            emitCommand('EXECUTE_TEXTURE_ACTION', { action: 'SET_TEXTURE_SAVE_SUFFIX', payload: { suffix } })
+        }
+    }
+
     const [previewUrl, setPreviewUrl] = useState<string | null>(null)
     const [isLoadingPreview, setIsLoadingPreview] = useState(false)
     const [previewError, setPreviewError] = useState<string | null>(null)
@@ -171,6 +197,9 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
     const latestSelectedTextureRef = useRef<LocalTexture | null>(null)
     const latestSelectedAdjustmentsRef = useRef<TextureAdjustments>(DEFAULT_TEXTURE_ADJUSTMENTS)
     const latestBasePreviewImageDataRef = useRef<ImageData | null>(null)
+    const localTexturesRef = useRef<LocalTexture[]>([])
+    const adjustmentsByTextureIdRef = useRef<Record<string, TextureAdjustments>>({})
+    const pendingTextureSaveTimeoutRef = useRef<number | null>(null)
 
     // Helper to scroll to selected item
     const scrollToItem = (index: number) => {
@@ -212,9 +241,53 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         lastSelectedIndexRef.current = selectedIndex
     }, [selectedIndex])
 
+    // 当选中项切换时，把路径同步到本地输入缓冲
+    useEffect(() => {
+        setPathInputValue(selectedTexture?.Image ?? '')
+    }, [selectedIndex, selectedTexture?.__editorId])
+
+    const commitPathInput = () => {
+        if (selectedIndex < 0) return
+        const newPath = pathInputValue
+        updateLocalTexture(selectedIndex, { Image: newPath })
+
+        // 独立窗口：路径变更后立即同步到主窗口，触发渲染器更新
+        if (isStandalone) {
+            // setLocalTextures 是异步的，直接基于当前 localTextures 构建保存数据
+            const nextLocalTextures = localTextures.map((texture, i) =>
+                i === selectedIndex ? { ...texture, Image: newPath } : texture
+            )
+            const texturesForSave = nextLocalTextures.map((texture) => {
+                const { __editorId, ...rest } = texture
+                const raw = adjustmentsByTextureIdRef.current[__editorId]
+                if (raw) {
+                    const normalized = normalizeTextureAdjustments(raw)
+                    if (!isDefaultTextureAdjustments(normalized)) {
+                        return { ...rest, [TEXTURE_ADJUSTMENTS_KEY]: normalized }
+                    }
+                }
+                if (Object.prototype.hasOwnProperty.call(rest, TEXTURE_ADJUSTMENTS_KEY)) {
+                    const cleaned = { ...rest }
+                    delete cleaned[TEXTURE_ADJUSTMENTS_KEY]
+                    return cleaned
+                }
+                return rest
+            })
+            emitCommand('EXECUTE_TEXTURE_ACTION', { action: 'SAVE_TEXTURES', payload: texturesForSave })
+        }
+    }
+
     useEffect(() => {
         latestSelectedTextureRef.current = selectedTexture
     }, [selectedTexture])
+
+    useEffect(() => {
+        localTexturesRef.current = localTextures
+    }, [localTextures])
+
+    useEffect(() => {
+        adjustmentsByTextureIdRef.current = adjustmentsByTextureId
+    }, [adjustmentsByTextureId])
 
     useEffect(() => {
         latestSelectedAdjustmentsRef.current = selectedAdjustments
@@ -277,6 +350,10 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
             previewAdjustSourceKeyRef.current = null
             if (rendererAdjustmentFlushTimeoutRef.current !== null) {
                 window.clearTimeout(rendererAdjustmentFlushTimeoutRef.current)
+            }
+            if (pendingTextureSaveTimeoutRef.current !== null) {
+                window.clearTimeout(pendingTextureSaveTimeoutRef.current)
+                pendingTextureSaveTimeoutRef.current = null
             }
             worker.terminate()
         }
@@ -341,6 +418,17 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
             if (unlistenModelChange) unlistenModelChange()
         }
     }, [isStandalone, visible, rpcState.snapshot.modelPath])
+
+    // Focus listener to forcefully request data when window becomes active
+    useEffect(() => {
+        if (!isStandalone || !visible) return
+        const handleFocus = () => {
+            emit('rpc-req-textureManager').catch(() => { })
+        }
+        window.addEventListener('focus', handleFocus)
+        return () => window.removeEventListener('focus', handleFocus)
+    }, [isStandalone, visible])
+
     // Initialize local state
     useEffect(() => {
         const data = getActiveData()
@@ -432,6 +520,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
             isInitializedRef.current = false
             lastTexturesSignatureRef.current = ''
             lastHandledPickedGeosetRef.current = data?.pickedGeosetIndex ?? null
+            lastStandaloneSnapshotVersionRef.current = isStandalone ? rpcState.snapshotVersion : null
         }
     }, [visible, isStandalone ? rpcState.snapshotVersion : localStore.modelData?.Textures])
 
@@ -789,20 +878,37 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         updateSelectedAdjustment({ [field]: value }, 'debounced')
     }
 
+    const scheduleTextureSave = () => {
+        if (pendingTextureSaveTimeoutRef.current !== null) {
+            window.clearTimeout(pendingTextureSaveTimeoutRef.current)
+        }
+        pendingTextureSaveTimeoutRef.current = window.setTimeout(() => {
+            pendingTextureSaveTimeoutRef.current = null
+            const texturesForSave = buildTexturesForSave()
+            if (isStandalone) {
+                emitCommand('EXECUTE_TEXTURE_ACTION', { action: 'SAVE_TEXTURES', payload: texturesForSave })
+            } else {
+                localStore.setTextures(texturesForSave)
+            }
+        }, 120)
+    }
+
     const handleAdjustmentSliderComplete = () => {
         if (!selectedTextureId) return
         clearRendererAdjustmentFlush()
         flushTextureAdjustmentsToRenderer({ textureId: selectedTextureId })
+        scheduleTextureSave()
     }
 
     const resetAdjustmentField = (field: keyof TextureAdjustments) => {
         updateSelectedAdjustment({ [field]: DEFAULT_TEXTURE_ADJUSTMENTS[field] }, 'immediate')
+        scheduleTextureSave()
     }
 
     const buildTexturesForSave = (): any[] => {
         return localTextures.map((texture) => {
             const { __editorId, ...rest } = texture
-            const raw = adjustmentsByTextureId[__editorId]
+            const raw = adjustmentsByTextureIdRef.current[__editorId]
             if (raw) {
                 const normalized = normalizeTextureAdjustments(raw)
                 if (!isDefaultTextureAdjustments(normalized)) {
@@ -1134,21 +1240,89 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
 
     const pathInputDropRef = useRef<HTMLDivElement | null>(null)
     const previewDropRef = useRef<HTMLDivElement | null>(null)
+    const detailDropSurfaceRef = useRef<HTMLDivElement | null>(null)
     const selectedIndexRef = useRef(-1)
     const modelPathRef = useRef<string | undefined>(modelPath)
 
-    const normalizeDroppedTexturePath = (filePath: string, currentModelPath?: string): string => {
-        const normalizedFilePath = filePath.replace(/\\/g, '/')
-        if (!currentModelPath) {
-            return normalizedFilePath.replace(/\//g, '\\')
+    const normalizeTexturePathKey = (path: string): string => path.replace(/\//g, '\\').toLowerCase()
+
+    const isAbsoluteWindowsPath = (path: string): boolean => /^[a-zA-Z]:\\/.test(path) || path.startsWith('\\\\')
+
+    const getModelDirectory = (currentModelPath?: string): string | null => {
+        if (!currentModelPath) return null
+        const normalizedModelPath = currentModelPath.replace(/\//g, '\\')
+        const modelDir = normalizedModelPath.split('\\').slice(0, -1).join('\\')
+        return modelDir || null
+    }
+
+    const getFileName = (path: string): string => path.replace(/\//g, '\\').split('\\').pop() || path
+
+    const splitFileName = (fileName: string): { stem: string; ext: string } => {
+        const dot = fileName.lastIndexOf('.')
+        if (dot <= 0) return { stem: fileName, ext: '' }
+        return { stem: fileName.slice(0, dot), ext: fileName.slice(dot) }
+    }
+
+    const ensureTextureInModelDir = async (rawPath: string, currentModelPath?: string): Promise<{ relativePath: string; copied: boolean } | null> => {
+        const modelDir = getModelDirectory(currentModelPath)
+        if (!modelDir) {
+            message.warning('当前模型路径无效，无法导入外部贴图')
+            return null
         }
 
-        const modelDir = currentModelPath.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
-        if (modelDir && normalizedFilePath.toLowerCase().startsWith(`${modelDir.toLowerCase()}/`)) {
-            return normalizedFilePath.substring(modelDir.length + 1).replace(/\//g, '\\')
+        const sourcePath = rawPath.replace(/\//g, '\\')
+        if (!isAbsoluteWindowsPath(sourcePath)) {
+            return null
         }
 
-        return normalizedFilePath.replace(/\//g, '\\')
+        const sourceLower = sourcePath.toLowerCase()
+        const modelDirLower = modelDir.toLowerCase()
+        const modelDirPrefix = `${modelDirLower}\\`
+        if (sourceLower.startsWith(modelDirPrefix)) {
+            return {
+                relativePath: sourcePath.slice(modelDir.length + 1),
+                copied: false
+            }
+        }
+
+        const originalFileName = getFileName(sourcePath)
+        let targetFileName = originalFileName
+        let targetAbsPath = `${modelDir}\\${targetFileName}`
+        const sourceSize = await size(sourcePath).catch(() => null)
+
+        if (await exists(targetAbsPath)) {
+            const targetSize = await size(targetAbsPath).catch(() => null)
+            if (sourceSize !== null && targetSize !== null && sourceSize === targetSize) {
+                return {
+                    relativePath: targetFileName,
+                    copied: false
+                }
+            }
+
+            const { stem, ext } = splitFileName(originalFileName)
+            let index = 1
+            while (await exists(`${modelDir}\\${stem}_${index}${ext}`)) {
+                const candidateFileName = `${stem}_${index}${ext}`
+                const candidateAbsPath = `${modelDir}\\${candidateFileName}`
+                const candidateSize = await size(candidateAbsPath).catch(() => null)
+                if (sourceSize !== null && candidateSize !== null && sourceSize === candidateSize) {
+                    return {
+                        relativePath: candidateFileName,
+                        copied: false
+                    }
+                }
+                index++
+            }
+            targetFileName = `${stem}_${index}${ext}`
+            targetAbsPath = `${modelDir}\\${targetFileName}`
+        }
+
+        const bytes = await readFile(sourcePath)
+        await writeFile(targetAbsPath, bytes)
+        return {
+            relativePath: targetFileName,
+            copied: true
+        }
     }
 
     useEffect(() => {
@@ -1156,18 +1330,63 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         modelPathRef.current = modelPath
     }, [selectedIndex, modelPath])
 
-    const applyDroppedTexture = (filePath: string) => {
+    const isPointInsideElement = (x: number, y: number, element: HTMLElement | null): boolean => {
+        if (!element) return false
+        const rect = element.getBoundingClientRect()
+        return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+    }
+
+    const applyDroppedTexture = async (filePath: string) => {
         const currentSelectedIndex = selectedIndexRef.current
         if (currentSelectedIndex < 0) return
 
-        const nextImagePath = normalizeDroppedTexturePath(filePath, modelPathRef.current)
-        setLocalTextures((prev) => {
-            if (currentSelectedIndex < 0 || currentSelectedIndex >= prev.length) return prev
-            const next = [...prev]
-            next[currentSelectedIndex] = { ...next[currentSelectedIndex], Image: nextImagePath, ReplaceableId: 0 }
-            return next
+        const imported = await ensureTextureInModelDir(filePath, modelPathRef.current)
+        if (!imported) return
+
+        const currentLocalTextures = localTexturesRef.current
+        const currentAdjustmentsByTextureId = adjustmentsByTextureIdRef.current
+
+        const nextLocalTextures = currentLocalTextures.map((texture, index) => index === currentSelectedIndex
+            ? { ...texture, Image: imported.relativePath, ReplaceableId: 0 }
+            : texture)
+
+        setLocalTextures(nextLocalTextures)
+        previewCacheRef.current.clear()
+        setBasePreviewImageData(null)
+        setPreviewUrl(null)
+        setPreviewError(null)
+        setPreviewSource(null)
+        latestAdjustedPreviewImageDataRef.current = null
+        latestAdjustedPreviewKeyRef.current = null
+        selectedPreviewCacheKeyRef.current = null
+
+        const texturesForSave = nextLocalTextures.map((texture) => {
+            const { __editorId, ...rest } = texture
+            const raw = adjustmentsByTextureIdRef.current[__editorId]
+            if (raw) {
+                const normalized = normalizeTextureAdjustments(raw)
+                if (!isDefaultTextureAdjustments(normalized)) {
+                    return {
+                        ...rest,
+                        [TEXTURE_ADJUSTMENTS_KEY]: normalized
+                    }
+                }
+            }
+            if (Object.prototype.hasOwnProperty.call(rest, TEXTURE_ADJUSTMENTS_KEY)) {
+                const cleaned = { ...rest }
+                delete cleaned[TEXTURE_ADJUSTMENTS_KEY]
+                return cleaned
+            }
+            return rest
         })
-        message.success(`已替换贴图: ${nextImagePath}`)
+
+        if (isStandalone) {
+            emitCommand('EXECUTE_TEXTURE_ACTION', { action: 'SAVE_TEXTURES', payload: texturesForSave })
+        } else {
+            localStore.setTextures(texturesForSave)
+        }
+
+        message.success(imported.copied ? `已复制并替换贴图: ${imported.relativePath}` : `已替换贴图: ${imported.relativePath}`)
     }
 
     useEffect(() => {
@@ -1175,9 +1394,33 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
 
         let disposed = false
         let unlistenDrop: (() => void) | undefined
+        let unlistenDragEnter: (() => void) | undefined
+        let unlistenDragLeave: (() => void) | undefined
 
         const setupDragDrop = async () => {
             const currentWindowLabel = getCurrentWindow().label
+            const isHitTarget = (position?: { x: number; y: number } | null) => {
+                const dropTargets = [detailDropSurfaceRef.current, pathInputDropRef.current, previewDropRef.current].filter(Boolean) as HTMLDivElement[]
+                if (dropTargets.length === 0) return false
+                if (!position) return true
+                return dropTargets.some((target) => isPointInsideElement(position.x, position.y, target))
+            }
+
+            unlistenDragEnter = await listen<{ paths?: string[]; position?: { x: number; y: number } }>('tauri://drag-enter', (event) => {
+                if (disposed) return
+                const sourceWindowLabel = (event as any)?.windowLabel
+                if (sourceWindowLabel && sourceWindowLabel !== currentWindowLabel) return
+                const hasTexture = (event.payload?.paths || []).some((path) => /\.(blp|tga)$/i.test(path))
+                if (!hasTexture) return
+                if (!isHitTarget(event.payload?.position)) return
+                setIsExternalTextureDropActive(true)
+            })
+
+            unlistenDragLeave = await listen('tauri://drag-leave', () => {
+                if (disposed) return
+                setIsExternalTextureDropActive(false)
+            })
+
             unlistenDrop = await listen<{ paths?: string[]; position?: { x: number; y: number } }>('tauri://drag-drop', (event) => {
                 if (disposed) return
                 const sourceWindowLabel = (event as any)?.windowLabel
@@ -1186,19 +1429,9 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                 const filePath = (event.payload?.paths || []).find((path) => /\.(blp|tga)$/i.test(path))
                 if (!filePath) return
 
-                const dropTargets = [pathInputDropRef.current, previewDropRef.current].filter(Boolean) as HTMLDivElement[]
-                if (dropTargets.length === 0) return
-
-                const position = event.payload?.position
-                if (position) {
-                    const hitTarget = dropTargets.some((target) => {
-                        const rect = target.getBoundingClientRect()
-                        return position.x >= rect.left && position.x <= rect.right && position.y >= rect.top && position.y <= rect.bottom
-                    })
-                    if (!hitTarget) return
-                }
-
-                applyDroppedTexture(filePath)
+                if (!isHitTarget(event.payload?.position)) return
+                setIsExternalTextureDropActive(false)
+                void applyDroppedTexture(filePath)
             })
         }
 
@@ -1209,6 +1442,9 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         return () => {
             disposed = true
             unlistenDrop?.()
+            unlistenDragEnter?.()
+            unlistenDragLeave?.()
+            setIsExternalTextureDropActive(false)
         }
     }, [isStandalone, visible])
     const Wrapper = isStandalone ? 'div' : DraggableModal as any;
@@ -1410,16 +1646,26 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                         {selectedTexture ? (
                             <>
                                 {/* Top Section: Settings (Left) & Preview (Right) */}
-                                <div style={{ flex: 1, display: 'flex', gap: '16px', minHeight: 0 }}>
+                                <div ref={detailDropSurfaceRef} style={{ flex: 1, display: 'flex', gap: '16px', minHeight: 0, border: isExternalTextureDropActive ? '1px dashed #5a9cff' : '1px dashed transparent', borderRadius: 8, boxShadow: isExternalTextureDropActive ? '0 0 0 1px rgba(90,156,255,0.22) inset' : 'none', background: isExternalTextureDropActive ? 'rgba(90,156,255,0.06)' : 'transparent', transition: 'border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease' }}>
                                     {/* Left Settings (Inputs, Checkboxes & Adjustments) */}
-                                    <div style={{ width: '272px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                    <div style={{ width: '272px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '12px', position: 'relative' }}>
                                         <div ref={pathInputDropRef} style={{ flexShrink: 0 }}>
+                                            {isExternalTextureDropActive ? (
+                                                <div style={{ marginBottom: '8px', padding: '8px 10px', borderRadius: '6px', border: '1px dashed #5a9cff', background: 'rgba(90,156,255,0.10)', color: '#9fc1ff', fontSize: '12px' }}>将 .blp 或 .tga 贴图拖到右侧即可复制到模型目录并替换当前贴图</div>
+                                            ) : null}
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '4px' }}>
                                                 <Typography.Text style={{ color: '#b0b0b0' }}>路径:</Typography.Text>
                                             </div>
                                             <Input
-                                                value={selectedTexture.Image}
-                                                onChange={(e) => updateLocalTexture(selectedIndex, { Image: e.target.value })}
+                                                value={pathInputValue}
+                                                onChange={(e) => setPathInputValue(e.target.value)}
+                                                onBlur={commitPathInput}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') {
+                                                        commitPathInput();
+                                                        (e.target as HTMLInputElement).blur()
+                                                    }
+                                                }}
                                                 style={{ backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
                                             />
                                             {isStandalone && (
@@ -1532,58 +1778,90 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                     </div>
 
                                     {/* Right Preview (Square, fixed size) */}
-                                    <div ref={previewDropRef} style={{ width: '380px', flexShrink: 0, height: '380px', border: '1px solid #4a4a4a', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', backgroundColor: '#1f1f1f', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
-                                        {isLoadingPreview ? (
-                                            <div style={{ color: '#5a9cff', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-                                                <div className="ant-spin ant-spin-spinning" style={{ fontSize: 24 }}>?</div>
-                                                <span>加载中...</span>
+                                    <div style={{ width: '380px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                        <div ref={previewDropRef} style={{ width: '100%', height: '380px', border: '1px solid #4a4a4a', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', backgroundColor: '#1f1f1f', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
+                                            {isLoadingPreview ? (
+                                                <div style={{ color: '#5a9cff', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                                                    <div className="ant-spin ant-spin-spinning" style={{ fontSize: 24 }}>?</div>
+                                                    <span>加载中...</span>
+                                                </div>
+                                            ) : basePreviewImageData ? (
+                                                <>
+                                                    <canvas ref={previewCanvasRef} style={{ maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto' }} />
+                                                    {previewSource && (
+                                                        <div style={{
+                                                            position: 'absolute',
+                                                            bottom: 4,
+                                                            right: 4,
+                                                            backgroundColor: previewSource === 'MPQ' ? '#52c41a' : '#1677ff',
+                                                            color: '#fff',
+                                                            padding: '2px 6px',
+                                                            borderRadius: 3,
+                                                            fontSize: 10,
+                                                            fontWeight: 'bold'
+                                                        }}>
+                                                            {previewSource}
+                                                        </div>
+                                                    )}
+                                                </>
+                                            ) : previewUrl ? (
+                                                <>
+                                                    <img src={previewUrl} alt="Preview" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+                                                    {previewSource && (
+                                                        <div style={{
+                                                            position: 'absolute',
+                                                            bottom: 4,
+                                                            right: 4,
+                                                            backgroundColor: previewSource === 'MPQ' ? '#52c41a' : '#1677ff',
+                                                            color: '#fff',
+                                                            padding: '2px 6px',
+                                                            borderRadius: 3,
+                                                            fontSize: 10,
+                                                            fontWeight: 'bold'
+                                                        }}>
+                                                            {previewSource}
+                                                        </div>
+                                                    )}
+                                                </>
+                                            ) : previewError ? (
+                                                <div style={{ color: '#ff4d4f', textAlign: 'center', padding: 8 }}>
+                                                    <div>?? {previewError}</div>
+                                                    <div style={{ fontSize: 11, color: '#888', marginTop: 4, wordBreak: 'break-all' }}>{selectedTexture?.Image}</div>
+                                                </div>
+                                            ) : (
+                                                <span style={{ color: '#666' }}>无预览</span>
+                                            )}
+                                        </div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                                <Button
+                                                    size="small"
+                                                    type={!isSaveAsMode ? 'primary' : 'default'}
+                                                    onClick={() => handleTextureSaveModeChange('overwrite')}
+                                                    style={{ width: 72, flexShrink: 0, ...(!isSaveAsMode ? { backgroundColor: '#5a9cff', borderColor: '#5a9cff' } : { backgroundColor: '#2b2b2b', borderColor: '#3a3a3a', color: '#8c8c8c' }) }}
+                                                >
+                                                    覆盖
+                                                </Button>
+                                                <Button
+                                                    size="small"
+                                                    type={isSaveAsMode ? 'primary' : 'default'}
+                                                    onClick={() => handleTextureSaveModeChange('save_as')}
+                                                    style={{ width: 72, flexShrink: 0, ...(isSaveAsMode ? { backgroundColor: '#5a9cff', borderColor: '#5a9cff' } : { backgroundColor: '#2b2b2b', borderColor: '#3a3a3a', color: '#8c8c8c' }) }}
+                                                >
+                                                    另存为
+                                                </Button>
                                             </div>
-                                        ) : basePreviewImageData ? (
-                                            <>
-                                                <canvas ref={previewCanvasRef} style={{ maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto' }} />
-                                                {previewSource && (
-                                                    <div style={{
-                                                        position: 'absolute',
-                                                        bottom: 4,
-                                                        right: 4,
-                                                        backgroundColor: previewSource === 'MPQ' ? '#52c41a' : '#1677ff',
-                                                        color: '#fff',
-                                                        padding: '2px 6px',
-                                                        borderRadius: 3,
-                                                        fontSize: 10,
-                                                        fontWeight: 'bold'
-                                                    }}>
-                                                        {previewSource}
-                                                    </div>
-                                                )}
-                                            </>
-                                        ) : previewUrl ? (
-                                            <>
-                                                <img src={previewUrl} alt="Preview" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
-                                                {previewSource && (
-                                                    <div style={{
-                                                        position: 'absolute',
-                                                        bottom: 4,
-                                                        right: 4,
-                                                        backgroundColor: previewSource === 'MPQ' ? '#52c41a' : '#1677ff',
-                                                        color: '#fff',
-                                                        padding: '2px 6px',
-                                                        borderRadius: 3,
-                                                        fontSize: 10,
-                                                        fontWeight: 'bold'
-                                                    }}>
-                                                        {previewSource}
-                                                    </div>
-                                                )}
-                                            </>
-                                        ) : previewError ? (
-                                            <div style={{ color: '#ff4d4f', textAlign: 'center', padding: 8 }}>
-                                                <div>?? {previewError}</div>
-                                                <div style={{ fontSize: 11, color: '#888', marginTop: 4, wordBreak: 'break-all' }}>{selectedTexture?.Image}</div>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 4, opacity: isSaveAsMode ? 1 : 0.45 }}>
+                                                <Typography.Text style={{ color: '#b0b0b0', fontSize: 12 }}>另存后缀</Typography.Text>
+                                                <Input
+                                                    value={textureSaveSuffix}
+                                                    onChange={(e) => handleTextureSaveSuffixChange(e.target.value)}
+                                                    placeholder="_1"
+                                                    disabled={!isSaveAsMode}
+                                                    style={{ width: 120, backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8' }}
+                                                />
                                             </div>
-                                        ) : (
-                                            <span style={{ color: '#666' }}>无预览</span>
-                                        )}
+                                        </div>
                                     </div>
                                 </div>
                             </>
@@ -1601,6 +1879,11 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
 }
 
 export default TextureEditorModal
+
+
+
+
+
 
 
 

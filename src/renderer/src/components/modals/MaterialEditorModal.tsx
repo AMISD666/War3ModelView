@@ -1,9 +1,10 @@
-﻿import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { Button, List, Card, Checkbox, Select, Typography, message } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { DraggableModal } from '../DraggableModal'
 import { listen } from '@tauri-apps/api/event'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { windowManager } from '../../utils/windowManager'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
@@ -20,60 +21,75 @@ const { Text } = Typography
  * LayerShading: Unshaded=1, SphereEnvMap=2, TwoSided=16, Unfogged=32, NoDepthTest=64, NoDepthSet=128
  */
 function normalizeMaterialsForUI(materials: any[]): any[] {
-    return materials.map(material => ({
-        ...material,
-        Layers: (material.Layers || []).map((layer: any) => {
-            const shading = layer.Shading || 0;
-            return {
-                ...layer,
-                // Set boolean properties from Shading bitmask (if not already set)
-                Unshaded: layer.Unshaded !== undefined ? layer.Unshaded : (shading & 1) !== 0,
-                SphereEnvMap: layer.SphereEnvMap !== undefined ? layer.SphereEnvMap : (shading & 2) !== 0,
-                TwoSided: layer.TwoSided !== undefined ? layer.TwoSided : (shading & 16) !== 0,
-                Unfogged: layer.Unfogged !== undefined ? layer.Unfogged : (shading & 32) !== 0,
-                NoDepthTest: layer.NoDepthTest !== undefined ? layer.NoDepthTest : (shading & 64) !== 0,
-                NoDepthSet: layer.NoDepthSet !== undefined ? layer.NoDepthSet : (shading & 128) !== 0,
-            };
-        })
-    }));
+    return materials.map(material => {
+        const renderMode = material.RenderMode || 0;
+        return {
+            ...material,
+            ConstantColor: material.ConstantColor !== undefined ? material.ConstantColor : (renderMode & 1) !== 0,
+            SortPrimsFarZ: material.SortPrimsFarZ !== undefined ? material.SortPrimsFarZ : (renderMode & 16) !== 0,
+            FullResolution: material.FullResolution !== undefined ? material.FullResolution : (renderMode & 32) !== 0,
+            Layers: (material.Layers || []).map((layer: any) => {
+                const shading = layer.Shading || 0;
+                return {
+                    ...layer,
+                    // Set boolean properties from Shading bitmask (if not already set)
+                    Unshaded: layer.Unshaded !== undefined ? layer.Unshaded : (shading & 1) !== 0,
+                    SphereEnvMap: layer.SphereEnvMap !== undefined ? layer.SphereEnvMap : (shading & 2) !== 0,
+                    TwoSided: layer.TwoSided !== undefined ? layer.TwoSided : (shading & 16) !== 0,
+                    Unfogged: layer.Unfogged !== undefined ? layer.Unfogged : (shading & 32) !== 0,
+                    NoDepthTest: layer.NoDepthTest !== undefined ? layer.NoDepthTest : (shading & 64) !== 0,
+                    NoDepthSet: layer.NoDepthSet !== undefined ? layer.NoDepthSet : (shading & 128) !== 0,
+                };
+            })
+        };
+    });
 }
 
 /**
  * Convert boolean properties back to Shading bitmask for saving
  */
 function denormalizeMaterialsForSave(materials: any[]): any[] {
-    return materials.map(material => ({
-        ...material,
-        // Ensure material has required properties
-        PriorityPlane: material.PriorityPlane ?? 0,
-        RenderMode: material.RenderMode ?? 0,
-        Layers: (material.Layers || []).map((layer: any) => {
-            // Rebuild Shading bitmask from boolean flags
-            let shading = 0;
-            if (layer.Unshaded) shading |= 1;
-            if (layer.SphereEnvMap) shading |= 2;
-            if (layer.TwoSided) shading |= 16;
-            if (layer.Unfogged) shading |= 32;
-            if (layer.NoDepthTest) shading |= 64;
-            if (layer.NoDepthSet) shading |= 128;
+    return materials.map(material => {
+        let renderMode = material.RenderMode ?? 0;
+        if (material.ConstantColor) renderMode |= 1;
+        if (material.SortPrimsFarZ) renderMode |= 16;
+        if (material.FullResolution) renderMode |= 32;
 
-            // Create clean layer without UI-only boolean properties
-            const { Unshaded, SphereEnvMap, TwoSided, Unfogged, NoDepthTest, NoDepthSet, ...cleanLayer } = layer;
+        const { ConstantColor, SortPrimsFarZ, FullResolution, ...materialRest } = material;
 
-            return {
-                ...cleanLayer,
-                // Core required properties with defaults
-                FilterMode: layer.FilterMode ?? 0,
-                Shading: shading,
-                CoordId: layer.CoordId ?? 0,
-                Alpha: layer.Alpha ?? 1,
-                // TextureID - can be number or AnimVector
-                TextureID: layer.TextureID ?? 0,
-                // TVertexAnimId - null or a valid index (not undefined)
-                TVertexAnimId: layer.TVertexAnimId === undefined ? null : layer.TVertexAnimId,
-            };
-        })
-    }));
+        return {
+            ...materialRest,
+            // Ensure material has required properties
+            PriorityPlane: material.PriorityPlane ?? 0,
+            RenderMode: renderMode,
+            Layers: (material.Layers || []).map((layer: any) => {
+                // Rebuild Shading bitmask from boolean flags
+                let shading = 0;
+                if (layer.Unshaded) shading |= 1;
+                if (layer.SphereEnvMap) shading |= 2;
+                if (layer.TwoSided) shading |= 16;
+                if (layer.Unfogged) shading |= 32;
+                if (layer.NoDepthTest) shading |= 64;
+                if (layer.NoDepthSet) shading |= 128;
+
+                // Create clean layer without UI-only boolean properties
+                const { Unshaded, SphereEnvMap, TwoSided, Unfogged, NoDepthTest, NoDepthSet, ...cleanLayer } = layer;
+
+                return {
+                    ...cleanLayer,
+                    // Core required properties with defaults
+                    FilterMode: layer.FilterMode ?? 0,
+                    Shading: shading,
+                    CoordId: layer.CoordId ?? 0,
+                    Alpha: layer.Alpha ?? 1,
+                    // TextureID - can be number or AnimVector
+                    TextureID: layer.TextureID ?? 0,
+                    // TVertexAnimId - null or a valid index (not undefined)
+                    TVertexAnimId: layer.TVertexAnimId === undefined ? null : layer.TVertexAnimId,
+                };
+            })
+        };
+    });
 }
 
 interface MaterialEditorModalProps {
@@ -88,6 +104,7 @@ interface MaterialManagerSnapshot {
     geosets: any[]
     globalSequences: number[]
     sequences: any[]
+    textureAnims: any[]
     modelPath: string
 }
 
@@ -110,6 +127,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             geosets: [],
             globalSequences: [],
             sequences: [],
+            textureAnims: [],
             modelPath: '',
         },
         pickedGeosetIndex: null,
@@ -143,27 +161,32 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         Textures: rpcSnapshot.textures,
         Geosets: rpcSnapshot.geosets,
         GlobalSequences: rpcSnapshot.globalSequences,
-        Sequences: rpcSnapshot.sequences
+        Sequences: rpcSnapshot.sequences,
+        TextureAnims: rpcSnapshot.textureAnims
     } : directModelData
 
     const modelPath = isStandalone ? rpcSnapshot.modelPath : directModelPath
 
     const setMaterials = (materials: any[]) => {
         if (isStandalone) {
-            emitCommand('EXECUTE_MATERIAL_ACTION', { action: 'SAVE_MATERIALS', payload: { materials, textures: modelData?.Textures, geosets: modelData?.Geosets } })
+            emitCommand('EXECUTE_MATERIAL_ACTION', { action: 'SAVE_MATERIALS', payload: { materials, textures: modelTexturesRef.current } })
         } else {
             directSetMaterials(materials)
         }
     }
 
     const setTextures = (textures: any[]) => {
+        modelTexturesRef.current = textures
+        setLocalTextures(textures)
         if (isStandalone) {
-            emitCommand('EXECUTE_MATERIAL_ACTION', { action: 'SAVE_MATERIALS', payload: { materials: modelData?.Materials, textures, geosets: modelData?.Geosets } })
+            const materialsForSave = denormalizeMaterialsForSave(localMaterialsRef.current)
+            emitCommand('EXECUTE_MATERIAL_ACTION', { action: 'SAVE_MATERIALS', payload: { materials: materialsForSave, textures } })
         } else {
             directSetTextures(textures)
         }
     }
     const [localMaterials, setLocalMaterials] = useState<any[]>([])
+    const [localTextures, setLocalTextures] = useState<any[]>([])
     const [selectedMaterialIndex, setSelectedMaterialIndex] = useState<number>(-1)
     const [selectedLayerIndex, setSelectedLayerIndex] = useState<number>(-1)
     const [dragLayerIndex, setDragLayerIndex] = useState<number | null>(null)
@@ -174,20 +197,73 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const [editingField, setEditingField] = useState<string | null>(null)
     const [editingVectorSize, setEditingVectorSize] = useState(1)
 
+    const focusMaterialForGeoset = useCallback((geosetIndex: number | null | undefined) => {
+        if (!Number.isInteger(geosetIndex) || geosetIndex === null || geosetIndex === undefined) {
+            return
+        }
+        const geoset = modelGeosetsRef.current?.[geosetIndex]
+        const materialId = Number(geoset?.MaterialID)
+        if (!Number.isFinite(materialId) || materialId < 0) {
+            return
+        }
+        setSelectedMaterialIndex(materialId)
+        setSelectedLayerIndex(0)
+        setTimeout(() => {
+            if (materialListRef.current) {
+                materialListRef.current.scrollTo({ top: materialId * 50, behavior: 'smooth' })
+            }
+            if (layerListRef.current) {
+                layerListRef.current.scrollTo({ top: 0, behavior: 'smooth' })
+            }
+        }, 0)
+    }, [])
+
     const isInitialized = React.useRef(false)
     const materialListRef = React.useRef<HTMLDivElement>(null)
     const layerListRef = React.useRef<HTMLDivElement>(null)
+
+    useEffect(() => {
+        if (!visible) return
+        if (isStandalone) {
+            focusMaterialForGeoset(rpcState.pickedGeosetIndex)
+        } else {
+            focusMaterialForGeoset(useSelectionStore.getState().pickedGeosetIndex)
+        }
+    }, [visible, isStandalone, rpcState.pickedGeosetIndex, focusMaterialForGeoset])
     const textureDropZoneRef = React.useRef<HTMLDivElement>(null)
+    const layerTextureDropSurfaceRef = React.useRef<HTMLDivElement>(null)
+    const detailsDropSurfaceRef = React.useRef<HTMLDivElement>(null)
     const dragOverLayerIndexRef = React.useRef<number | null>(null)
     const originalMaterialsRef = React.useRef<any[] | null>(null)
     const originalTexturesRef = React.useRef<any[] | null>(null)
     const isCommittingRef = React.useRef(false)
     const didRealtimePreviewRef = React.useRef(false)
     const didRealtimeTexturePreviewRef = React.useRef(false)
+    const localMaterialsRef = React.useRef<any[]>([])
+    const localTexturesRef = React.useRef<any[]>([])
+    const modelTexturesRef = React.useRef<any[]>([])
+    const modelGeosetsRef = React.useRef<any[]>([])
+    const selectedMaterialIndexRef = React.useRef(-1)
+    const selectedLayerIndexRef = React.useRef(-1)
 
     useEffect(() => {
         dragOverLayerIndexRef.current = dragOverLayerIndex
     }, [dragOverLayerIndex])
+
+    useEffect(() => {
+        localMaterialsRef.current = localMaterials
+    }, [localMaterials])
+
+    useEffect(() => {
+        localTexturesRef.current = Array.isArray(localTextures) ? localTextures : []
+    }, [localTextures])
+
+    useEffect(() => {
+        modelTexturesRef.current = Array.isArray(modelData?.Textures) ? modelData.Textures : []
+        modelGeosetsRef.current = Array.isArray(modelData?.Geosets) ? modelData.Geosets : []
+        selectedMaterialIndexRef.current = selectedMaterialIndex
+        selectedLayerIndexRef.current = selectedLayerIndex
+    }, [modelData, selectedMaterialIndex, selectedLayerIndex])
 
     const lastRpcMaterialsRef = React.useRef<any>(null)
     const lastHandledPickedGeosetRef = React.useRef<number | null | undefined>(undefined)
@@ -221,6 +297,8 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     useEffect(() => {
         if (visible) {
             const hasMaterials = modelData && modelData.Materials && modelData.Materials.length > 0
+            const currentTextures = modelData?.Textures || []
+            const texturesChanged = JSON.stringify(currentTextures) !== JSON.stringify(localTexturesRef.current)
             // In standalone mode, rpcState.materials starts empty and arrives asynchronously.
             // We must re-initialize when a fresh, non-empty array arrives.
             const rpcDataChanged = isStandalone && rpcState.snapshotVersion !== lastRpcMaterialsRef.current
@@ -230,6 +308,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                 lastRpcMaterialsRef.current = isStandalone ? rpcState.snapshotVersion : modelData.Materials
                 originalMaterialsRef.current = JSON.parse(JSON.stringify(modelData.Materials))
                 originalTexturesRef.current = JSON.parse(JSON.stringify(modelData.Textures || []))
+                setLocalTextures(JSON.parse(JSON.stringify(modelData.Textures || [])))
                 isCommittingRef.current = false
                 didRealtimePreviewRef.current = false
                 didRealtimeTexturePreviewRef.current = false
@@ -257,11 +336,14 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                     setSelectedLayerIndex(nextLayerIndex)
                 }
                 isInitialized.current = true
+            } else if (hasMaterials && texturesChanged) {
+                setLocalTextures(JSON.parse(JSON.stringify(currentTextures)))
             }
         } else {
             setLocalMaterials([])
             setSelectedMaterialIndex(-1)
             setSelectedLayerIndex(-1)
+            setLocalTextures([])
             setIsTextureDropActive(false)
             isInitialized.current = false
             lastRpcMaterialsRef.current = null
@@ -325,7 +407,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const handleOk = () => {
         // Convert boolean flags back to Shading bitmask before saving
         const materialsForSave = denormalizeMaterialsForSave(localMaterials)
-        const texturesForSave = JSON.parse(JSON.stringify(modelData?.Textures || []))
+        const texturesForSave = JSON.parse(JSON.stringify(localTextures || []))
         const oldMaterials = originalMaterialsRef.current || modelData?.Materials || []
         const oldTextures = originalTexturesRef.current || modelData?.Textures || []
 
@@ -333,7 +415,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             name: 'Edit Materials',
             undo: () => {
                 if (isStandalone) {
-                    emitCommand('EXECUTE_MATERIAL_ACTION', { action: 'SAVE_MATERIALS', payload: { materials: oldMaterials, textures: oldTextures, geosets: modelData?.Geosets } })
+                    emitCommand('EXECUTE_MATERIAL_ACTION', { action: 'SAVE_MATERIALS', payload: { materials: oldMaterials, textures: oldTextures } })
                 } else {
                     setTextures(oldTextures)
                     setMaterials(oldMaterials)
@@ -341,7 +423,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             },
             redo: () => {
                 if (isStandalone) {
-                    emitCommand('EXECUTE_MATERIAL_ACTION', { action: 'SAVE_MATERIALS', payload: { materials: materialsForSave, textures: texturesForSave, geosets: modelData?.Geosets } })
+                    emitCommand('EXECUTE_MATERIAL_ACTION', { action: 'SAVE_MATERIALS', payload: { materials: materialsForSave, textures: texturesForSave } })
                 } else {
                     setTextures(texturesForSave)
                     setMaterials(materialsForSave)
@@ -351,7 +433,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 
         isCommittingRef.current = true
         if (isStandalone) {
-            emitCommand('EXECUTE_MATERIAL_ACTION', { action: 'SAVE_MATERIALS', payload: { materials: materialsForSave, textures: texturesForSave, geosets: modelData?.Geosets } })
+            emitCommand('EXECUTE_MATERIAL_ACTION', { action: 'SAVE_MATERIALS', payload: { materials: materialsForSave, textures: texturesForSave } })
         } else {
             setTextures(texturesForSave)
             setMaterials(materialsForSave)
@@ -361,23 +443,39 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     }
 
     const handleCancel = () => {
+        if (isStandalone) {
+            onClose()
+            return
+        }
         if (!isCommittingRef.current && (didRealtimeTexturePreviewRef.current || didRealtimePreviewRef.current)) {
             const mats = didRealtimePreviewRef.current && originalMaterialsRef.current ? originalMaterialsRef.current : modelData?.Materials
-            const texs = didRealtimeTexturePreviewRef.current && originalTexturesRef.current ? originalTexturesRef.current : modelData?.Textures
-            if (isStandalone) {
-                emitCommand('EXECUTE_MATERIAL_ACTION', { action: 'SAVE_MATERIALS', payload: { materials: mats, textures: texs, geosets: modelData?.Geosets } })
-            } else {
-                if (didRealtimeTexturePreviewRef.current && originalTexturesRef.current) setTextures(originalTexturesRef.current)
-                if (didRealtimePreviewRef.current && originalMaterialsRef.current) setMaterials(originalMaterialsRef.current)
-            }
+            const texs = didRealtimeTexturePreviewRef.current && originalTexturesRef.current ? originalTexturesRef.current : localTextures
+            if (didRealtimeTexturePreviewRef.current && originalTexturesRef.current) setTextures(originalTexturesRef.current)
+            if (didRealtimePreviewRef.current && originalMaterialsRef.current) setMaterials(originalMaterialsRef.current)
         }
         onClose()
     }
 
-    const updateLocalMaterial = (index: number, updates: any) => {
+    const updateLocalMaterial = (index: number, updates: any, applyRealtime: boolean = false) => {
         const newMaterials = [...localMaterials]
         newMaterials[index] = { ...newMaterials[index], ...updates }
         setLocalMaterials(newMaterials)
+
+        if (applyRealtime) {
+            didRealtimePreviewRef.current = true
+            const materialsForSave = denormalizeMaterialsForSave(newMaterials)
+            if (isStandalone) {
+                emitCommand('EXECUTE_MATERIAL_ACTION', {
+                    action: 'SAVE_MATERIALS',
+                    payload: {
+                        materials: materialsForSave,
+                        textures: modelTexturesRef.current
+                    }
+                })
+            } else {
+                setMaterials(materialsForSave)
+            }
+        }
     }
 
     const updateLocalLayer = (matIndex: number, layerIndex: number, updates: any, applyRealtime: boolean = false) => {
@@ -389,8 +487,34 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 
         if (applyRealtime) {
             didRealtimePreviewRef.current = true
-            setMaterials(denormalizeMaterialsForSave(newMaterials))
+            const materialsForSave = denormalizeMaterialsForSave(newMaterials)
+            if (isStandalone) {
+                emitCommand('EXECUTE_MATERIAL_ACTION', {
+                    action: 'SAVE_MATERIALS',
+                    payload: {
+                        materials: materialsForSave,
+                        textures: modelTexturesRef.current
+                    }
+                })
+            } else {
+                setMaterials(materialsForSave)
+            }
         }
+
+        return newMaterials
+    }
+
+    const commitStandaloneTextureDrivenChange = (nextMaterials?: any[] | null, nextTextures?: any[] | null) => {
+        if (!isStandalone) return
+        if (nextMaterials) {
+            originalMaterialsRef.current = JSON.parse(JSON.stringify(denormalizeMaterialsForSave(nextMaterials)))
+        }
+        if (nextTextures) {
+            originalTexturesRef.current = JSON.parse(JSON.stringify(nextTextures))
+        }
+        didRealtimePreviewRef.current = false
+        didRealtimeTexturePreviewRef.current = false
+        isCommittingRef.current = false
     }
 
     const moveLayer = (fromIndex: number, toIndex: number) => {
@@ -595,7 +719,9 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     }
 
     const handleAnimToggle = (field: string, checked: boolean, vectorSize: number = 1) => {
-        if (selectedMaterialIndex < 0 || selectedLayerIndex < 0) return
+        const activeMaterialIndex = selectedMaterialIndexRef.current
+        const activeLayerIndex = selectedLayerIndexRef.current
+        if (activeMaterialIndex < 0 || activeLayerIndex < 0) return
         const layer = localMaterials[selectedMaterialIndex].Layers[selectedLayerIndex]
 
         if (checked) {
@@ -747,8 +873,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                 copied: false
             }
         }
-
-        const { copyFile, exists, size } = await import('@tauri-apps/plugin-fs')
+        const { readFile, writeFile, exists, size } = await import('@tauri-apps/plugin-fs')
         const originalFileName = getFileName(sourcePath)
         let targetFileName = originalFileName
         let targetAbsPath = `${modelDir}\\${targetFileName}`
@@ -782,8 +907,8 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             targetFileName = `${stem}_${index}${ext}`
             targetAbsPath = `${modelDir}\\${targetFileName}`
         }
-
-        await copyFile(sourcePath, targetAbsPath)
+        const bytes = await readFile(sourcePath)
+        await writeFile(targetAbsPath, bytes)
         return {
             relativePath: targetFileName,
             copied: true
@@ -793,7 +918,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const importExternalTexturesAndGetFirstId = async (externalPaths: string[]): Promise<number | null> => {
         if (externalPaths.length === 0) return null
 
-        const currentTextures = Array.isArray(modelData?.Textures) ? [...modelData.Textures] : []
+        const currentTextures = Array.isArray(modelTexturesRef.current) ? [...modelTexturesRef.current] : []
         const pathToIndex = new Map<string, number>()
         currentTextures.forEach((tex: any, index: number) => {
             const path = tex?.Image
@@ -859,58 +984,111 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
     }
 
+    const handleExternalTexturePaths = async (paths: string[]) => {
+        const activeMaterialIndex = selectedMaterialIndexRef.current
+        const activeLayerIndex = selectedLayerIndexRef.current
+        if (activeMaterialIndex < 0 || activeLayerIndex < 0) return
+        if (paths.length === 0) return
+
+        try {
+            const nextTextureId = await importExternalTexturesAndGetFirstId(paths)
+            if (nextTextureId === null) return
+            const nextMaterials = updateLocalLayer(activeMaterialIndex, activeLayerIndex, { TextureID: nextTextureId }, true)
+            commitStandaloneTextureDrivenChange(nextMaterials, modelTexturesRef.current)
+        } catch (error) {
+            console.error('[MaterialEditorModal] External file drop handling failed:', error)
+            message.error('贴图导入失败')
+        }
+    }
+
     useEffect(() => {
         if (!visible) return
-
         const onExternalFileDrop = async (evt: Event) => {
-            if (selectedMaterialIndex < 0 || selectedLayerIndex < 0) return
-
+            const activeMaterialIndex = selectedMaterialIndexRef.current
+        const activeLayerIndex = selectedLayerIndexRef.current
+        if (activeMaterialIndex < 0 || activeLayerIndex < 0) return
             const customEvent = evt as CustomEvent<{ paths?: string[]; position?: { x: number; y: number } | null }>
             const paths = Array.isArray(customEvent.detail?.paths) ? customEvent.detail.paths : []
             if (paths.length === 0) return
-
             const supportedPaths = paths.filter(isSupportedTextureFile)
             if (supportedPaths.length === 0) return
-
             const position = customEvent.detail?.position
-            if (position && !isPointInsideElement(position.x, position.y, textureDropZoneRef.current)) {
+            if (position && ![detailsDropSurfaceRef.current, layerTextureDropSurfaceRef.current, textureDropZoneRef.current].some((element) => isPointInsideElement(position.x, position.y, element))) {
                 return
             }
-
-            try {
-                const nextTextureId = await importExternalTexturesAndGetFirstId(supportedPaths)
-                if (nextTextureId === null) return
-                updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TextureID: nextTextureId }, true)
-            } catch (error) {
-                console.error('[MaterialEditorModal] External file drop handling failed:', error)
-                message.error('贴图导入失败')
-            }
+            await handleExternalTexturePaths(supportedPaths)
         }
-
         window.addEventListener('war3-external-file-drop', onExternalFileDrop as EventListener)
         return () => window.removeEventListener('war3-external-file-drop', onExternalFileDrop as EventListener)
     }, [visible, selectedMaterialIndex, selectedLayerIndex, modelData, modelPath, localMaterials])
+    useEffect(() => {
+        if (!isStandalone || !visible) return
+        let disposed = false
+        let unlistenDrop: (() => void) | undefined
+        let unlistenDragEnter: (() => void) | undefined
+        let unlistenDragLeave: (() => void) | undefined
+        const setupStandaloneDragDrop = async () => {
+            const currentWindowLabel = getCurrentWindow().label
+            const isHitTarget = (position?: { x: number; y: number } | null) => {
+                const dropTargets = [detailsDropSurfaceRef.current, layerTextureDropSurfaceRef.current, textureDropZoneRef.current].filter(Boolean) as HTMLElement[]
+                if (dropTargets.length === 0) return false
+                if (!position) return true
+                return dropTargets.some((element) => isPointInsideElement(position.x, position.y, element))
+            }
 
-    const textureCount = (modelData as any)?.Textures?.length || 0
+            unlistenDragEnter = await listen<{ paths?: string[]; position?: { x: number; y: number } }>('tauri://drag-enter', (event) => {
+                if (disposed) return
+                const sourceWindowLabel = (event as any)?.windowLabel
+                if (sourceWindowLabel && sourceWindowLabel !== currentWindowLabel) return
+                const supportedPaths = (event.payload?.paths || []).filter(isSupportedTextureFile)
+                if (supportedPaths.length === 0) return
+                if (!isHitTarget(event.payload?.position)) return
+                setIsTextureDropActive(true)
+            })
+
+            unlistenDragLeave = await listen('tauri://drag-leave', () => {
+                if (disposed) return
+                setIsTextureDropActive(false)
+            })
+
+            unlistenDrop = await listen<{ paths?: string[]; position?: { x: number; y: number } }>('tauri://drag-drop', async (event) => {
+                if (disposed) return
+                const sourceWindowLabel = (event as any)?.windowLabel
+                if (sourceWindowLabel && sourceWindowLabel !== currentWindowLabel) return
+                const supportedPaths = (event.payload?.paths || []).filter(isSupportedTextureFile)
+                if (supportedPaths.length === 0) return
+                const position = event.payload?.position
+                if (position && ![detailsDropSurfaceRef.current, layerTextureDropSurfaceRef.current, textureDropZoneRef.current].some((element) => isPointInsideElement(position.x, position.y, element))) {
+                    return
+                }
+                await handleExternalTexturePaths(supportedPaths)
+            })
+        }
+        setupStandaloneDragDrop().catch((error) => {
+            console.error('[MaterialEditorModal] Failed to setup standalone drag-drop:', error)
+        })
+        return () => {
+            disposed = true
+            unlistenDrop?.()
+            unlistenDragEnter?.()
+            unlistenDragLeave?.()
+            setIsTextureDropActive(false)
+        }
+    }, [isStandalone, visible, selectedMaterialIndex, selectedLayerIndex, modelData, modelPath, localMaterials])
+
+    const effectiveTextures = localTextures.length > 0 ? localTextures : ((modelData as any)?.Textures || [])
+    const textureCount = effectiveTextures.length || 0
     const textureOptions = Array.from({ length: textureCount }, (_, i) => {
-        const path = (modelData as any)?.Textures?.[i]?.Image || '';
-        // Extract just the filename for cleaner display
+        const path = effectiveTextures?.[i]?.Image || '';
         const filename = path.replace(/\\/g, '/').split('/').pop() || path;
 
         return {
-            value: i,
-            label: (
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
-                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left', marginRight: 8 }} title={path}>
-                        {filename}
-                    </span>
-                    <span style={{ fontWeight: 'bold', minWidth: 24, textAlign: 'right', color: '#888', fontSize: '0.9em' }}>#{i}</span>
-                </div>
-            )
+            value: String(i),
+            plainLabel: filename || `Texture ${i}`,
+            label: `${filename || `Texture ${i}`}  (#${i})`
         };
     })
     if (textureOptions.length === 0) {
-        textureOptions.push({ value: -1, label: <span>No Textures</span> })
     }
 
     const handleTextureDropOver = (e: React.DragEvent<HTMLDivElement>) => {
@@ -919,6 +1097,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         const hasFilePayload = Array.from(e.dataTransfer.types || []).includes('Files')
         if (draggedIndex === null && externalTexturePaths.length === 0 && !hasFilePayload) return
         e.preventDefault()
+        e.stopPropagation()
         e.dataTransfer.dropEffect = 'copy'
         setIsTextureDropActive(true)
     }
@@ -929,8 +1108,11 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 
     const handleTextureDrop = async (e: React.DragEvent<HTMLDivElement>) => {
         setIsTextureDropActive(false)
-        if (selectedMaterialIndex < 0 || selectedLayerIndex < 0) return
+        const activeMaterialIndex = selectedMaterialIndexRef.current
+        const activeLayerIndex = selectedLayerIndexRef.current
+        if (activeMaterialIndex < 0 || activeLayerIndex < 0) return
         e.preventDefault()
+        e.stopPropagation()
 
         const draggedIndex = getDraggedTextureIndex(e.dataTransfer)
         if (draggedIndex !== null) {
@@ -938,7 +1120,8 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                 message.warning(`拖放的贴图索引 ${draggedIndex} 超出范围`)
                 return
             }
-            updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TextureID: draggedIndex }, true)
+            const nextMaterials = updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TextureID: draggedIndex }, true)
+            commitStandaloneTextureDrivenChange(nextMaterials, modelTexturesRef.current)
             return
         }
 
@@ -948,7 +1131,8 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         try {
             const nextTextureId = await importExternalTexturesAndGetFirstId(externalTexturePaths)
             if (nextTextureId === null) return
-            updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TextureID: nextTextureId }, true)
+            const nextMaterials = updateLocalLayer(activeMaterialIndex, activeLayerIndex, { TextureID: nextTextureId }, true)
+            commitStandaloneTextureDrivenChange(nextMaterials, modelTexturesRef.current)
         } catch (error) {
             console.error('[MaterialEditorModal] Texture drop import failed:', error)
             message.error('贴图导入失败')
@@ -1056,10 +1240,11 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             </div>
 
             {/* Details (Right) */}
-            <div style={{ flex: 1, padding: '8px 12px', overflowY: 'auto', backgroundColor: '#252525', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div ref={detailsDropSurfaceRef} style={{ flex: 1, padding: '8px 12px', overflowY: 'hidden', backgroundColor: isTextureDropActive ? 'rgba(90,156,255,0.05)' : '#252525', display: 'flex', flexDirection: 'column', gap: '8px', border: isTextureDropActive ? '1px dashed #5a9cff' : '1px dashed transparent', borderRadius: 8, boxShadow: isTextureDropActive ? '0 0 0 1px rgba(90,156,255,0.22) inset' : 'none', transition: 'border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease' }}>
                 {selectedMaterialIndex >= 0 ? (
                     <>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '2px' }}>
+                            {isTextureDropActive ? (<div style={{ padding: '6px 10px', borderRadius: '6px', border: '1px dashed #5a9cff', background: 'rgba(90,156,255,0.10)', color: '#9fc1ff', fontSize: '12px' }}>将 .blp 或 .tga 贴图拖到右侧即可复制到模型目录并替换当前图层贴图</div>) : null}
                             <Text style={{ color: '#b0b0b0', fontSize: '13px', fontWeight: 'bold', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                 正在编辑: Material {selectedMaterialIndex} {selectedLayerIndex >= 0 ? `/ Layer ${selectedLayerIndex}` : ''}
                             </Text>
@@ -1074,13 +1259,13 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                                         <InputNumber
                                             size="small"
                                             value={selectedMaterial.PriorityPlane || 0}
-                                            onChange={(v) => updateLocalMaterial(selectedMaterialIndex, { PriorityPlane: v })}
+                                            onChange={(v) => updateLocalMaterial(selectedMaterialIndex, { PriorityPlane: v }, true)}
                                             style={{ backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8', width: '60px' }}
                                         />
                                     </div>
-                                    <Checkbox checked={selectedMaterial.ConstantColor} onChange={(e) => updateLocalMaterial(selectedMaterialIndex, { ConstantColor: e.target.checked })} style={{ color: '#e8e8e8', fontSize: '12px' }}>固定颜色</Checkbox>
-                                    <Checkbox checked={selectedMaterial.SortPrimsFarZ} onChange={(e) => updateLocalMaterial(selectedMaterialIndex, { SortPrimsFarZ: e.target.checked })} style={{ color: '#e8e8e8', fontSize: '12px' }}>沿Z排列</Checkbox>
-                                    <Checkbox checked={selectedMaterial.FullResolution} onChange={(e) => updateLocalMaterial(selectedMaterialIndex, { FullResolution: e.target.checked })} style={{ color: '#e8e8e8', fontSize: '12px' }}>最大分辨率</Checkbox>
+                                    <Checkbox checked={selectedMaterial.ConstantColor} onChange={(e) => updateLocalMaterial(selectedMaterialIndex, { ConstantColor: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '12px' }}>固定颜色</Checkbox>
+                                    <Checkbox checked={selectedMaterial.SortPrimsFarZ} onChange={(e) => updateLocalMaterial(selectedMaterialIndex, { SortPrimsFarZ: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '12px' }}>沿Z排列</Checkbox>
+                                    <Checkbox checked={selectedMaterial.FullResolution} onChange={(e) => updateLocalMaterial(selectedMaterialIndex, { FullResolution: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '12px' }}>最大分辨率</Checkbox>
                                 </div>
                             </Card>
                         )}
@@ -1088,116 +1273,118 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                         {/* Show Layer attributes immediately below if a layer is selected */}
                         {selectedLayer ? (
                             <>
-                                <Card title={<span style={{ color: '#b0b0b0', fontSize: '12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>图层贴图与动画 (Layer Textures & Anims)</span>} size="small" bordered={false} style={{ background: '#333333', border: '1px solid #4a4a4a', marginTop: selectedMaterial ? '0px' : '0px' }} headStyle={{ borderBottom: '1px solid #4a4a4a', minHeight: 'auto', padding: '0 8px' }} bodyStyle={{ padding: '8px' }}>
-                                    {/* Row 1: Texture ID (Full Width) */}
-                                    <div style={{ marginBottom: 8 }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '2px' }}>
-                                            <Text style={{ color: '#b0b0b0', fontSize: '12px' }}>贴图 ID:</Text>
-                                            <Text style={{ color: '#7f7f7f', fontSize: '10px' }}>可拖动替换贴图</Text>
-                                        </div>
-                                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                                            <Checkbox
-                                                checked={selectedLayer.TextureID && typeof selectedLayer.TextureID !== 'number'}
-                                                onChange={(e) => handleAnimToggle('TextureID', e.target.checked)}
-                                                style={{ color: '#e8e8e8', fontSize: '12px' }}
-                                            >
-                                                动态
-                                            </Checkbox>
-                                            {selectedLayer.TextureID && typeof selectedLayer.TextureID !== 'number' ? (
-                                                <Button size="small" onClick={() => openKeyframeEditor('TextureID', 1)}>编辑动画</Button>
-                                            ) : (
-                                                <div
-                                                    ref={textureDropZoneRef}
-                                                    style={{
-                                                        flex: 1,
-                                                        border: isTextureDropActive ? '1px dashed #5a9cff' : '1px dashed transparent',
-                                                        borderRadius: 4,
-                                                        padding: 0,
-                                                        transition: 'border-color 0.15s ease'
-                                                    }}
-                                                    onDragOver={handleTextureDropOver}
-                                                    onDragEnter={handleTextureDropOver}
-                                                    onDragLeave={handleTextureDropLeave}
-                                                    onDrop={handleTextureDrop}
-                                                >
-                                                    <Select
-                                                        size="small"
-                                                        style={{ width: '100%', fontSize: '12px' }}
-                                                        value={typeof selectedLayer.TextureID === 'number' ? selectedLayer.TextureID : 0}
-                                                        onChange={(v) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TextureID: v }, true)}
-                                                        options={textureOptions}
-                                                        popupClassName="dark-theme-select-dropdown"
-                                                    />
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    {/* Row 2: Alpha, Filter Mode, TVertexAnim */}
-                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                                        <div style={{ flex: '1 1 auto', minWidth: '130px' }}>
-                                            <Text style={{ display: 'block', marginBottom: '2px', color: '#b0b0b0', fontSize: '12px', whiteSpace: 'nowrap' }}>透明度 (Alpha):</Text>
-                                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                <div ref={layerTextureDropSurfaceRef} style={{ border: isTextureDropActive ? '1px dashed #5a9cff' : '1px dashed transparent', borderRadius: 6, transition: 'border-color 0.15s ease, box-shadow 0.15s ease', boxShadow: isTextureDropActive ? '0 0 0 1px rgba(90,156,255,0.25) inset' : 'none' }}>
+                                    <Card title={<span style={{ color: '#b0b0b0', fontSize: '12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>图层贴图与动画 (Layer Textures & Anims)</span>} size="small" bordered={false} style={{ background: '#333333', border: '1px solid #4a4a4a', marginTop: selectedMaterial ? '0px' : '0px' }} headStyle={{ borderBottom: '1px solid #4a4a4a', minHeight: 'auto', padding: '0 8px' }} bodyStyle={{ padding: '8px' }}>
+                                        {/* Row 1: Texture ID (Full Width) */}
+                                        <div style={{ marginBottom: 8 }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '2px' }}>
+                                                <Text style={{ color: '#b0b0b0', fontSize: '12px' }}>贴图 ID:</Text>
+                                                <Text style={{ color: '#7f7f7f', fontSize: '10px' }}>可拖动替换贴图</Text>
+                                            </div>
+                                            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                                                 <Checkbox
-                                                    checked={selectedLayer.Alpha && typeof selectedLayer.Alpha !== 'number'}
-                                                    onChange={(e) => handleAnimToggle('Alpha', e.target.checked)}
-                                                    style={{ color: '#e8e8e8', fontSize: '12px', whiteSpace: 'nowrap' }}
+                                                    checked={selectedLayer.TextureID && typeof selectedLayer.TextureID !== 'number'}
+                                                    onChange={(e) => handleAnimToggle('TextureID', e.target.checked)}
+                                                    style={{ color: '#e8e8e8', fontSize: '12px' }}
                                                 >
                                                     动态
                                                 </Checkbox>
-                                                {selectedLayer.Alpha && typeof selectedLayer.Alpha !== 'number' ? (
-                                                    <Button size="small" onClick={() => openKeyframeEditor('Alpha', 1)}>编辑动画</Button>
+                                                {selectedLayer.TextureID && typeof selectedLayer.TextureID !== 'number' ? (
+                                                    <Button size="small" onClick={() => openKeyframeEditor('TextureID', 1)}>编辑动画</Button>
                                                 ) : (
-                                                    <InputNumber
-                                                        size="small"
-                                                        value={selectedLayer.Alpha || 1}
-                                                        onChange={(v) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { Alpha: v })}
-                                                        step={0.01} min={0} max={1}
-                                                        precision={2}
-                                                        style={{ backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8', width: '60px' }}
-                                                    />
+                                                    <div
+                                                        ref={textureDropZoneRef}
+                                                        style={{
+                                                            flex: 1,
+                                                            border: isTextureDropActive ? '1px dashed #5a9cff' : '1px dashed transparent',
+                                                            borderRadius: 4,
+                                                            padding: 0,
+                                                            transition: 'border-color 0.15s ease'
+                                                        }}
+                                                        onDragOver={handleTextureDropOver}
+                                                        onDragEnter={handleTextureDropOver}
+                                                        onDragLeave={handleTextureDropLeave}
+                                                        onDrop={handleTextureDrop}
+                                                    >
+                                                        <Select
+                                                            size="small"
+                                                            style={{ width: '100%', fontSize: '12px' }}
+                                                            value={String(typeof selectedLayer.TextureID === 'number' ? selectedLayer.TextureID : Number(selectedLayer.TextureID || 0))}
+                                                            onChange={(v) => {
+                                                                const nextMaterials = updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TextureID: Number(v) }, true)
+                                                                commitStandaloneTextureDrivenChange(nextMaterials, modelTexturesRef.current)
+                                                            }}
+                                                            options={textureOptions}
+                                                        />
+                                                    </div>
                                                 )}
                                             </div>
                                         </div>
-                                        <div style={{ flex: '1 1 auto', minWidth: '120px' }}>
-                                            <Text style={{ display: 'block', marginBottom: '2px', color: '#b0b0b0', fontSize: '12px' }}>过滤模式:</Text>
-                                            <Select
-                                                size="small"
-                                                style={{ width: '100%', fontSize: '12px' }}
-                                                value={selectedLayer.FilterMode}
-                                                onChange={(v) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { FilterMode: v })}
-                                                options={filterModeOptions}
-                                                popupClassName="dark-theme-select-dropdown"
-                                            />
+                                        {/* Row 2: Alpha, Filter Mode, TVertexAnim */}
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                                            <div style={{ flex: '1 1 auto', minWidth: '130px' }}>
+                                                <Text style={{ display: 'block', marginBottom: '2px', color: '#b0b0b0', fontSize: '12px', whiteSpace: 'nowrap' }}>透明度 (Alpha):</Text>
+                                                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                                    <Checkbox
+                                                        checked={selectedLayer.Alpha && typeof selectedLayer.Alpha !== 'number'}
+                                                        onChange={(e) => handleAnimToggle('Alpha', e.target.checked)}
+                                                        style={{ color: '#e8e8e8', fontSize: '12px', whiteSpace: 'nowrap' }}
+                                                    >
+                                                        动态
+                                                    </Checkbox>
+                                                    {selectedLayer.Alpha && typeof selectedLayer.Alpha !== 'number' ? (
+                                                        <Button size="small" onClick={() => openKeyframeEditor('Alpha', 1)}>编辑动画</Button>
+                                                    ) : (
+                                                        <InputNumber
+                                                            size="small"
+                                                            value={selectedLayer.Alpha ?? 1}
+                                                            onChange={(v) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { Alpha: v }, true)}
+                                                            step={0.01} min={0} max={1}
+                                                            precision={2}
+                                                            style={{ backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8', width: '60px' }}
+                                                        />
+                                                    )}
+                                                </div>
+                                            </div>
+                                            <div style={{ flex: '1 1 auto', minWidth: '120px' }}>
+                                                <Text style={{ display: 'block', marginBottom: '2px', color: '#b0b0b0', fontSize: '12px' }}>过滤模式:</Text>
+                                                <Select
+                                                    size="small"
+                                                    style={{ width: '100%', fontSize: '12px' }}
+                                                    value={selectedLayer.FilterMode}
+                                                    onChange={(v) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { FilterMode: v }, true)}
+                                                    options={filterModeOptions}
+                                                    popupClassName="dark-theme-select-dropdown"
+                                                />
+                                            </div>
+                                            <div style={{ flex: '1 1 auto', minWidth: '120px' }}>
+                                                <Text style={{ display: 'block', marginBottom: '2px', color: '#b0b0b0', fontSize: '12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>纹理动画:</Text>
+                                                <Select
+                                                    size="small"
+                                                    style={{ width: '100%', fontSize: '12px' }}
+                                                    value={selectedLayer.TVertexAnimId === null || selectedLayer.TVertexAnimId === undefined ? -1 : selectedLayer.TVertexAnimId}
+                                                    onChange={(v) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TVertexAnimId: v === -1 ? null : v }, true)}
+                                                    options={[
+                                                        { value: -1, label: 'None' },
+                                                        ...((modelData as any)?.TextureAnims?.map((_: any, i: number) => ({
+                                                            value: i,
+                                                            label: `Anim ${i}`
+                                                        })) || [])
+                                                    ]}
+                                                    popupClassName="dark-theme-select-dropdown"
+                                                />
+                                            </div>
                                         </div>
-                                        <div style={{ flex: '1 1 auto', minWidth: '120px' }}>
-                                            <Text style={{ display: 'block', marginBottom: '2px', color: '#b0b0b0', fontSize: '12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>纹理动画:</Text>
-                                            <Select
-                                                size="small"
-                                                style={{ width: '100%', fontSize: '12px' }}
-                                                value={selectedLayer.TVertexAnimId === null || selectedLayer.TVertexAnimId === undefined ? -1 : selectedLayer.TVertexAnimId}
-                                                onChange={(v) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TVertexAnimId: v === -1 ? null : v })}
-                                                options={[
-                                                    { value: -1, label: 'None' },
-                                                    ...((modelData as any)?.TextureAnims?.map((_: any, i: number) => ({
-                                                        value: i,
-                                                        label: `Anim ${i}`
-                                                    })) || [])
-                                                ]}
-                                                popupClassName="dark-theme-select-dropdown"
-                                            />
-                                        </div>
-                                    </div>
-                                </Card>
-
+                                    </Card>
+                                </div>
                                 <Card title={<span style={{ color: '#b0b0b0', fontSize: '12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>图层标记 (Layer Flags)</span>} size="small" bordered={false} style={{ background: '#333333', border: '1px solid #4a4a4a' }} headStyle={{ borderBottom: '1px solid #4a4a4a', minHeight: 'auto', padding: '0 8px' }} bodyStyle={{ padding: '8px' }}>
                                     <div style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: '8px' }}>
-                                        <Checkbox checked={selectedLayer.Unshaded} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { Unshaded: e.target.checked })} style={{ color: '#e8e8e8', fontSize: '12px' }}>无阴影</Checkbox>
-                                        <Checkbox checked={selectedLayer.Unfogged} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { Unfogged: e.target.checked })} style={{ color: '#e8e8e8', fontSize: '12px' }}>无迷雾</Checkbox>
-                                        <Checkbox checked={selectedLayer.TwoSided} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TwoSided: e.target.checked })} style={{ color: '#e8e8e8', fontSize: '12px' }}>双面</Checkbox>
-                                        <Checkbox checked={selectedLayer.SphereEnvMap} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { SphereEnvMap: e.target.checked })} style={{ color: '#e8e8e8', fontSize: '12px' }}>球面环境</Checkbox>
-                                        <Checkbox checked={selectedLayer.NoDepthTest} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { NoDepthTest: e.target.checked })} style={{ color: '#e8e8e8', fontSize: '12px' }}>无深度测试</Checkbox>
-                                        <Checkbox checked={selectedLayer.NoDepthSet} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { NoDepthSet: e.target.checked })} style={{ color: '#e8e8e8', fontSize: '12px' }}>无深度设置</Checkbox>
+                                        <Checkbox checked={selectedLayer.Unshaded} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { Unshaded: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '12px' }}>无阴影</Checkbox>
+                                        <Checkbox checked={selectedLayer.Unfogged} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { Unfogged: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '12px' }}>无迷雾</Checkbox>
+                                        <Checkbox checked={selectedLayer.TwoSided} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TwoSided: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '12px' }}>双面</Checkbox>
+                                        <Checkbox checked={selectedLayer.SphereEnvMap} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { SphereEnvMap: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '12px' }}>球面环境</Checkbox>
+                                        <Checkbox checked={selectedLayer.NoDepthTest} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { NoDepthTest: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '12px' }}>无深度测试</Checkbox>
+                                        <Checkbox checked={selectedLayer.NoDepthSet} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { NoDepthSet: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '12px' }}>无深度设置</Checkbox>
                                     </div>
                                 </Card>
                             </>
@@ -1245,6 +1432,11 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 }
 
 export default MaterialEditorModal
+
+
+
+
+
 
 
 

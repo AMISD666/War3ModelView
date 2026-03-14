@@ -85,32 +85,31 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
     // Helper to format a single vector/scalar value
     const formatValue = (val: number | number[] | Float32Array | undefined | null, vSize: number = vectorSize): string => {
         const normalizedSize = Number.isFinite(vSize) && vSize > 0 ? vSize : vectorSize
-        // Handle undefined/null
         if (val === undefined || val === null) {
-            return normalizedSize === 1 ? '0' : `{ ${new Array(vSize).fill('0').join(', ')} } `
+            return normalizedSize === 1 ? '0' : `{ ${new Array(normalizedSize).fill('0').join(', ')} }`
         }
 
         let nums: number[] = []
         if (typeof val === 'number') {
             nums = [val]
         } else if (Array.isArray(val)) {
-            nums = val
+            nums = [...val]
         } else {
             nums = Array.from(val as Float32Array)
         }
 
-        // Format numbers
+        while (nums.length < normalizedSize) nums.push(0)
+        nums = nums.slice(0, normalizedSize)
+
         const parts = nums.map(n => {
             const num = n ?? 0
-            return Number(num.toFixed(4)).toString()
+            return Number(num.toFixed(6)).toString()
         })
 
-        // Scalar: just the number
         if (normalizedSize === 1) return parts[0] || '0'
-
-        // Vector: { a, b, c }
-        return `{ ${parts.join(', ')} } `
+        return `{ ${parts.join(', ')} }`
     }
+
 
     // Helper to parse a value string like "{ 1, 0, 0 }" or "0.5"
     const parseValue = (str: string, vSize: number = vectorSize): number[] => {
@@ -127,12 +126,12 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
     // Generate formatted text from keys
     const generateText = (keys: any[], type: number, vSize: number = vectorSize) => {
         return keys.map(k => {
-            let lines = [`${k.Frame}: ${formatValue(k.Vector, vSize)} `]
+            let lines = [`${k.Frame}: ${formatValue(k.Vector, vSize)}`]
 
             if (type > 1) { // Hermite or Bezier
                 const defaultTan = new Array(vSize).fill(0)
-                lines.push(`  InTan: ${formatValue(k.InTan || defaultTan, vSize)} `)
-                lines.push(`  OutTan: ${formatValue(k.OutTan || defaultTan, vSize)} `)
+                lines.push(`  InTan: ${formatValue(k.InTan || defaultTan, vSize)}`)
+                lines.push(`  OutTan: ${formatValue(k.OutTan || defaultTan, vSize)}`)
             }
             return lines.join('\n')
         }).join('\n')
@@ -175,29 +174,36 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
 
     const deferredText = React.useDeferredValue(text);
     const parsedKeys = useMemo(() => {
-        return parseText(deferredText)
+        return parseText(deferredText, vectorSize)
     }, [deferredText, vectorSize])
 
     const clamp01 = (value: number) => Math.min(1, Math.max(0, value))
     const toHex = (r: number, g: number, b: number) => {
         const toPart = (n: number) => Math.round(clamp01(n) * 255).toString(16).padStart(2, '0')
-        return `#${toPart(r)}${toPart(g)}${toPart(b)} `
+        return `#${toPart(r)}${toPart(g)}${toPart(b)}`
     }
 
-    const updateColorForFrame = (frame: number, color: { r: number; g: number; b: number }) => {
-        const keys = parseText(text, vectorSize)
-        const updated = keys.map((key) => {
-            if (key.Frame !== frame) return key
-            return {
-                ...key,
-                Vector: [
-                    clamp01(color.r / 255),
-                    clamp01(color.g / 255),
-                    clamp01(color.b / 255)
-                ]
-            }
-        })
-        setText(generateText(updated, lineType, vectorSize))
+    const updateColorForFrame = (frame: number, lineIndex: number, color: { r: number; g: number; b: number }) => {
+        const lines = text.split('\n')
+        if (lineIndex < 0 || lineIndex >= lines.length) return
+
+        const targetLine = lines[lineIndex]
+        const trimmed = targetLine.trim()
+        const frameMatch = trimmed.match(/^(-?\d+)\s*:/)
+        if (!frameMatch) return
+
+        const frameValue = parseInt(frameMatch[1], 10)
+        if (Number.isNaN(frameValue) || frameValue !== frame) return
+
+        const prefix = targetLine.match(/^\s*/)?.[0] ?? ''
+        const nextValue = formatValue([
+            clamp01(color.r / 255),
+            clamp01(color.g / 255),
+            clamp01(color.b / 255)
+        ], vectorSize)
+
+        lines[lineIndex] = `${prefix}${frame}: ${nextValue}`
+        setText(lines.join('\n'))
     }
 
     const lineHeight = 24
@@ -207,8 +213,6 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
     const colorMarkers = useMemo(() => {
         if (!isColorField) return [] as Array<{ frame: number; lineIndex: number; hex: string }>
         const lines = text.split('\n')
-        const keyMap = new Map<number, any>()
-        parsedKeys.forEach((k) => keyMap.set(k.Frame, k))
 
         const markers: Array<{ frame: number; lineIndex: number; hex: string }> = []
         for (let i = 0; i < lines.length; i += 1) {
@@ -217,12 +221,13 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
             if (!match) continue
             const frame = parseInt(match[1], 10)
             if (isNaN(frame)) continue
-            const key = keyMap.get(frame)
-            if (!key) continue
-            const vec = Array.isArray(key.Vector) ? key.Vector : [0, 0, 0]
+
+            const rawValue = trimmed.split(':').slice(1).join(':')
+            const vec = parseValue(rawValue, vectorSize)
             const r = vec[0] ?? 0
             const g = vec[1] ?? 0
             const b = vec[2] ?? 0
+
             markers.push({
                 frame,
                 lineIndex: i,
@@ -230,7 +235,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
             })
         }
         return markers
-    }, [isColorField, parsedKeys, text])
+    }, [isColorField, text, vectorSize])
 
     const getDefaultVector = () => {
         let defVector: number[] = new Array(vectorSize).fill(0)
@@ -314,6 +319,26 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
         setLineType(newType)
         setText(newText)
     }
+
+    useEffect(() => {
+        if (vectorSize <= 1 || !text.trim()) return
+
+        const hasValueLine = text
+            .split('\n')
+            .some((line) => {
+                const trimmed = line.trim()
+                if (!trimmed || trimmed.startsWith('InTan:') || trimmed.startsWith('OutTan:')) return false
+                return /^-?\\d+\\s*:/.test(trimmed)
+            })
+
+        if (!hasValueLine || text.includes('{')) return
+
+        const normalizedKeys = parseText(text, vectorSize)
+        const normalizedText = generateText(normalizedKeys, lineType, vectorSize)
+        if (normalizedText !== text) {
+            setText(normalizedText)
+        }
+    }, [text, lineType, vectorSize])
 
     // Handle Batch Generation
     const handleBatchGenerate = () => {
@@ -421,39 +446,45 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
     }
 
     // Helper to normalize keys (handle Frame/Time and Vector/Value aliases)
-    const normalizeKeys = (keys: any[]): any[] => {
-        if (!Array.isArray(keys)) return [];
+    const normalizeKeys = (keys: any[], vSize: number = vectorSize): any[] => {
+        const normalizedSize = Number.isFinite(vSize) && vSize > 0 ? vSize : vectorSize
+        if (!Array.isArray(keys)) return []
         return keys.map(k => {
-            // Handle various data formats: Vector, Value, or direct number
-            let vector = k.Vector ?? k.Value;
+            let vector = k.Vector ?? k.Value
 
             if (vector === undefined || vector === null) {
-                vector = new Array(vectorSize).fill(0);
+                vector = new Array(normalizedSize).fill(0)
             } else if (typeof vector === 'number') {
-                vector = [vector];
+                vector = [vector]
             } else if (Array.isArray(vector)) {
-                // Already an array, use as-is
+                vector = [...vector]
             } else if (typeof vector === 'object') {
-                // Handle object format like {"0": 0, "1": 1} - convert to array
-                // This happens with Int32Array or similar typed arrays serialized as objects
-                const objKeys = Object.keys(vector).sort((a, b) => parseInt(a) - parseInt(b));
-                vector = objKeys.map(key => vector[key]);
+                const objKeys = Object.keys(vector).sort((a, b) => parseInt(a) - parseInt(b))
+                vector = objKeys.map(key => vector[key])
                 if (vector.length === 0) {
-                    vector = new Array(vectorSize).fill(0);
+                    vector = new Array(normalizedSize).fill(0)
                 }
             } else {
-                // Fallback to default
-                vector = new Array(vectorSize).fill(0);
+                vector = new Array(normalizedSize).fill(0)
             }
+
+            while (vector.length < normalizedSize) vector.push(0)
+            vector = vector.slice(0, normalizedSize)
+
+            const inTan = Array.isArray(k.InTan) ? [...k.InTan] : new Array(normalizedSize).fill(0)
+            const outTan = Array.isArray(k.OutTan) ? [...k.OutTan] : new Array(normalizedSize).fill(0)
+            while (inTan.length < normalizedSize) inTan.push(0)
+            while (outTan.length < normalizedSize) outTan.push(0)
 
             return {
                 Frame: k.Frame ?? k.Time ?? 0,
                 Vector: vector,
-                InTan: k.InTan ?? new Array(vectorSize).fill(0),
-                OutTan: k.OutTan ?? new Array(vectorSize).fill(0)
-            };
-        });
-    };
+                InTan: inTan.slice(0, normalizedSize),
+                OutTan: outTan.slice(0, normalizedSize)
+            }
+        })
+    }
+
 
     // Handle TextureID Batch Generation
     const handleTextureIDBatchGenerate = () => {
@@ -474,13 +505,11 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
         if (!isStandalone && visible) {
             console.log('[KeyframeEditor] Opening with initialData:', initialData, 'fieldName:', fieldName)
             if (initialData && initialData.Keys && initialData.Keys.length > 0) {
-                // Normalize and load existing data
-                const normalizedKeys = normalizeKeys(initialData.Keys);
+                const normalizedKeys = normalizeKeys(initialData.Keys, vectorSize)
                 setLineType(initialData.LineType ?? 0)
                 setGlobalSeqId(initialData.GlobalSeqId ?? null)
-                setText(generateText(normalizedKeys, initialData.LineType || 0))
+                setText(generateText(normalizedKeys, initialData.LineType || 0, vectorSize))
             } else {
-                // Default data
                 setLineType(0)
                 setGlobalSeqId(null)
                 const defVector = getDefaultVector()
@@ -490,7 +519,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
                     InTan: new Array(vectorSize).fill(0),
                     OutTan: new Array(vectorSize).fill(0)
                 }
-                setText(generateText([defaultKey], 0))
+                setText(generateText([defaultKey], 0, vectorSize))
             }
         }
     }, [visible, initialData, vectorSize, fieldName, isStandalone])
@@ -505,8 +534,6 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
             const payload = event.payload as any;
             if (!payload) return;
 
-            // PERFORMANCE: Only update if this message is intended for THIS window instance.
-            // This prevents all 8 pooled windows from re-rendering simultaneously on every click.
             if (payload.targetWindowId && payload.targetWindowId !== currentWindowLabel) {
                 return;
             }
@@ -516,9 +543,12 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
             const vSize = payload.vectorSize || 1;
             const fName = payload.fieldName || '';
             const titleStr = payload.title || 'Keyframe Editor';
+            const normalizedInitData = initData && Array.isArray(initData.Keys)
+                ? { ...initData, Keys: normalizeKeys(initData.Keys, vSize) }
+                : initData;
 
             setStandaloneData({
-                initialData: initData,
+                initialData: normalizedInitData,
                 title: titleStr,
                 vectorSize: vSize,
                 globalSequences: payload.globalSequences || [],
@@ -527,17 +557,11 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
                 callerId: payload.callerId || ''
             });
 
-            // Performance: Update text and secondary states in the same batch
             setLineType(initData?.LineType ?? 0);
             setGlobalSeqId(initData?.GlobalSeqId ?? null);
 
-            if (initData && initData.Keys && initData.Keys.length > 0) {
-                const normalized = normalizeKeys(initData.Keys);
-                // Temporarily mock vectorSize for generateText because it hasn't updated in scope yet
-                // But generateText helper uses top-level vectorSize? 
-                // No, it uses the one defined inside the component.
-                // Actually, we should probably pass it or calculate it.
-                setText(generateText(normalized, initData.LineType || 0));
+            if (normalizedInitData && normalizedInitData.Keys && normalizedInitData.Keys.length > 0) {
+                setText(generateText(normalizedInitData.Keys, initData.LineType || 0, vSize));
             } else {
                 const defVector = vSize === 4 ? [0, 0, 0, 1] : new Array(vSize).fill(titleStr.includes('Scale') ? 1 : (fName.includes('Alpha') ? 1 : 0));
                 setText(generateText([{ Frame: 0, Vector: defVector, InTan: new Array(vSize).fill(0), OutTan: new Array(vSize).fill(0) }], 0, vSize));
@@ -551,6 +575,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
 
 
     const { push } = useHistoryStore()
+
 
     const handleOk = () => {
         const keys = parseText(text, vectorSize)
@@ -649,7 +674,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
                                     size="small"
                                     showText={false}
                                     style={{ transform: 'scale(0.6)', transformOrigin: 'left center' }}
-                                    onChange={(color) => updateColorForFrame(marker.frame, color.toRgb())}
+                                    onChange={(color) => updateColorForFrame(marker.frame, marker.lineIndex, color.toRgb())}
                                 />
                             </div>
                         ))}
@@ -854,6 +879,9 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
 }
 
 export default KeyframeEditor
+
+
+
 
 
 

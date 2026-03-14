@@ -1,4 +1,4 @@
-﻿import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Checkbox, message } from 'antd';
 import { EyeOutlined, EyeInvisibleOutlined, CloseOutlined, MinusOutlined, DeleteOutlined, MergeCellsOutlined } from '@ant-design/icons';
 import { useModelStore } from '../store/modelStore';
@@ -7,6 +7,7 @@ import { commandManager } from '../utils/CommandManager';
 import { SetGeosetVisibilityCommand } from '../commands/SetGeosetVisibilityCommand';
 import { GeosetMergeDialog } from './modals/GeosetMergeDialog';
 import { LayerConfig, layerConfigToMaterialLayer } from './modals/MaterialLayerOptions';
+import { windowManager } from '../utils/WindowManager';
 
 interface GeosetVisibilityPanelProps {
     visible: boolean;
@@ -105,6 +106,9 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
         const cleaned = Array.from(new Set(indices.filter(i => Number.isInteger(i) && i >= 0)));
         setSelectedIndices(cleaned);
         setSelectedGeosetIndices(cleaned);
+        if (cleaned.length === 0) {
+            useSelectionStore.getState().setPickedGeosetIndex(null);
+        }
     };
 
     // Context menu state
@@ -156,6 +160,20 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
 
         setContextMenuPosition({ x: e.clientX, y: e.clientY });
         setContextMenuVisible(true);
+    };
+
+    const openMaterialManagerForGeoset = async () => {
+        const targetIndex = selectedIndices[0];
+        if (!Number.isInteger(targetIndex)) {
+            return;
+        }
+        useSelectionStore.getState().setPickedGeosetIndex(targetIndex);
+        try {
+            await windowManager.openMaterialManager();
+        } finally {
+            useSelectionStore.getState().setPickedGeosetIndex(null);
+            setContextMenuVisible(false);
+        }
     };
 
     // Close context menu when clicking elsewhere
@@ -838,6 +856,27 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                         onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                     >
                         <DeleteOutlined /> 删除
+                    </div>
+                    {/* Jump to material - Third */}
+                    <div
+                        onClick={openMaterialManagerForGeoset}
+                        style={{
+                            padding: '6px 12px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 8,
+                            cursor: selectedIndices.length > 0 ? 'pointer' : 'not-allowed',
+                            color: selectedIndices.length > 0 ? '#69b1ff' : '#555',
+                            fontSize: 12
+                        }}
+                        onMouseEnter={(e) => {
+                            if (selectedIndices.length > 0) {
+                                e.currentTarget.style.backgroundColor = 'rgba(100,150,255,0.2)';
+                            }
+                        }}
+                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                    >
+                        <MergeCellsOutlined /> 跳转到材质管理器
                     </div>
                 </div>
             )}

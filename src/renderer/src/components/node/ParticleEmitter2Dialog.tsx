@@ -1,4 +1,4 @@
-﻿import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
+import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Form, Checkbox, Select, ColorPicker, Button, Input } from 'antd';
@@ -680,10 +680,10 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
     );
 
     // Texture Options
-    const textureOptions = modelData?.Textures?.map((tex: any, index: number) => ({
+    const textureOptions = (modelData?.Textures || []).map((tex: any, index: number) => ({
         label: `[${index}] ${tex.Image}`,
         value: index
-    })) || [];
+    }));
     textureOptions.unshift({ label: '(None)', value: -1 });
 
     return (

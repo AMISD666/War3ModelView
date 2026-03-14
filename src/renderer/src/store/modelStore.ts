@@ -52,6 +52,17 @@ function sanitizeNodesArray(nodes: any): ModelNode[] {
     return nodes.filter((n: any) => n && typeof n.ObjectId === 'number') as ModelNode[];
 }
 
+const markActiveTabDirtyState = (state: { activeTabId: string | null; dirtyTabs: Record<string, boolean> }) => {
+    if (!state.activeTabId) return {};
+    return { dirtyTabs: { ...state.dirtyTabs, [state.activeTabId]: true } };
+};
+
+const removeDirtyTabState = (state: { dirtyTabs: Record<string, boolean> }, tabId: string) => {
+    const next = { ...state.dirtyTabs };
+    delete next[tabId];
+    return { dirtyTabs: next };
+};
+
 function collectTextureIdsFromAnimVector(value: any, ids: Set<number>): void {
     if (value === undefined || value === null) return;
     if (typeof value === 'number') {
@@ -159,6 +170,12 @@ interface ModelState {
     addNode: (node: Partial<ModelNode> & { Name: string; type: NodeType }) => void;
     deleteNode: (objectId: number) => void;
 
+    // Dirty tracking
+    markTabDirty: (tabId?: string | null) => void;
+    markTabSaved: (tabId?: string | null) => void;
+    isTabDirty: (tabId?: string | null) => boolean;
+    isAnyTabDirty: () => boolean;
+
     // New Actions
     setClipboardNode: (node: ModelNode | null) => void;
     pasteNode: (parentId: number) => void;
@@ -241,6 +258,13 @@ interface ModelState {
     closeTab: (tabId: string) => void;
     setActiveTab: (tabId: string) => void;
     getModelDataForSave: (forceReorder?: boolean) => ModelData | null;
+
+    // Dirty tracking
+    dirtyTabs: Record<string, boolean>;
+    markTabDirty: (tabId?: string | null) => void;
+    markTabSaved: (tabId?: string | null) => void;
+    isTabDirty: (tabId?: string | null) => boolean;
+    isAnyTabDirty: () => boolean;
 }
 
 /**
@@ -910,6 +934,31 @@ export const useModelStore = create<ModelState>((set, get) => ({
     activeTabId: null,
     cameraStateRef: null,
 
+    // Dirty tracking
+    dirtyTabs: {},
+    markTabDirty: (tabId) => set((state) => {
+        const id = tabId ?? state.activeTabId
+        if (!id) return state
+        return { dirtyTabs: { ...state.dirtyTabs, [id]: true } }
+    }),
+    markTabSaved: (tabId) => set((state) => {
+        const id = tabId ?? state.activeTabId
+        if (!id) return state
+        const next = { ...state.dirtyTabs }
+        delete next[id]
+        return { dirtyTabs: next }
+    }),
+    isTabDirty: (tabId) => {
+        const state = get()
+        const id = tabId ?? state.activeTabId
+        if (!id) return false
+        return !!state.dirtyTabs[id]
+    },
+    isAnyTabDirty: () => {
+        const state = get()
+        return Object.values(state.dirtyTabs).some(Boolean)
+    },
+
     // Global Preview Transform
     previewTransform: {
         translation: [0, 0, 0],
@@ -981,7 +1030,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
         const nextHiddenGeosetIds = allGeosetIds;
 
         set((state) => {
-            const nextState: Partial<ModelState> & { tabs?: Tab[] } = {
+            const nextState: Partial<ModelState> & { tabs?: Tab[]; dirtyTabs?: Record<string, boolean> } = {
                 modelData: correctedData,
                 modelPath: resolvedModelPath,
                 nodes: correctedNodes,
@@ -995,12 +1044,13 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 selectedGeosetIndices: []
             };
 
-            if (!state.activeTabId) {
+            const activeTabId = state.activeTabId
+            if (!activeTabId) {
                 return nextState;
             }
 
             nextState.tabs = state.tabs.map((tab) => {
-                if (tab.id !== state.activeTabId) {
+                if (tab.id !== activeTabId) {
                     return tab;
                 }
 
@@ -1019,6 +1069,10 @@ export const useModelStore = create<ModelState>((set, get) => ({
                     }
                 };
             });
+
+            const nextDirtyTabs = { ...state.dirtyTabs }
+            delete nextDirtyTabs[activeTabId]
+            nextState.dirtyTabs = nextDirtyTabs
 
             return nextState;
         });
@@ -1138,7 +1192,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
             return {
                 nodes: correctedNodes,
                 modelData: updatedModelData,
-                rendererReloadTrigger: state.rendererReloadTrigger + 1
+                rendererReloadTrigger: state.rendererReloadTrigger + 1,
+                ...markActiveTabDirtyState(state)
             };
         });
     },
@@ -1156,7 +1211,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
             return {
                 nodes: correctedNodes,
-                modelData: updatedModelData
+                modelData: updatedModelData,
+                ...markActiveTabDirtyState(state)
             };
         });
     },
@@ -1758,12 +1814,13 @@ export const useModelStore = create<ModelState>((set, get) => ({
         // CRITICAL: Force the viewer to reload the GPU buffers and animation tracks
         newModelData.__forceFullReload = true
 
-        set({
+        set((current) => ({
             sequences: newSequences,
             modelData: newModelData,
             nodes: correctedNodes,
-            rendererReloadTrigger: state.rendererReloadTrigger + 1
-        })
+            rendererReloadTrigger: current.rendererReloadTrigger + 1,
+            ...markActiveTabDirtyState(current)
+        }))
 
         // Sync with renderer
         const renderer = useRendererStore.getState().renderer
@@ -1782,21 +1839,86 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
     setTextures: (textures) => set((state) => {
         const updatedModelData = state.modelData ? { ...state.modelData, Textures: textures } : state.modelData;
-        return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
+        const updatedTabs = state.activeTabId
+            ? state.tabs.map((tab) => {
+                if (tab.id !== state.activeTabId) {
+                    return tab;
+                }
+                return {
+                    ...tab,
+                    snapshot: {
+                        ...tab.snapshot,
+                        modelData: updatedModelData,
+                        modelPath: state.modelPath,
+                        nodes: sanitizeNodesArray(state.nodes),
+                        sequences: [...state.sequences],
+                        currentSequence: state.currentSequence,
+                        currentFrame: state.currentFrame,
+                        hiddenGeosetIds: [...state.hiddenGeosetIds],
+                        lastActive: Date.now()
+                    }
+                };
+            })
+            : state.tabs;
+        return { modelData: updatedModelData, tabs: updatedTabs, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
     }),
     setGeosets: (geosets) => set((state) => {
         const updatedModelData = state.modelData ? { ...state.modelData, Geosets: geosets } : state.modelData;
-        return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
+        return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
     }),
     setMaterials: (materials) => set((state) => {
         console.log('[ModelStore] setMaterials called. Count:', materials ? materials.length : 0);
         const updatedModelData = state.modelData ? { ...state.modelData, Materials: materials } : state.modelData;
-        return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
+        const updatedTabs = state.activeTabId
+            ? state.tabs.map((tab) => {
+                if (tab.id !== state.activeTabId) {
+                    return tab;
+                }
+                return {
+                    ...tab,
+                    snapshot: {
+                        ...tab.snapshot,
+                        modelData: updatedModelData,
+                        modelPath: state.modelPath,
+                        nodes: sanitizeNodesArray(state.nodes),
+                        sequences: [...state.sequences],
+                        currentSequence: state.currentSequence,
+                        currentFrame: state.currentFrame,
+                        hiddenGeosetIds: [...state.hiddenGeosetIds],
+                        lastActive: Date.now()
+                    }
+                };
+            })
+            : state.tabs;
+        return { modelData: updatedModelData, tabs: updatedTabs, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
     }),
     setTextureAnims: (anims) => set((state) => {
         const updatedModelData = state.modelData ? { ...state.modelData, TextureAnims: anims } : state.modelData;
-        return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
+        return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
     }),
+
+    markTabDirty: (tabId) => set((state) => {
+        const id = tabId ?? state.activeTabId
+        if (!id) return state
+        return { dirtyTabs: { ...state.dirtyTabs, [id]: true } }
+    }),
+    markTabSaved: (tabId) => set((state) => {
+        const id = tabId ?? state.activeTabId
+        if (!id) return state
+        const next = { ...state.dirtyTabs }
+        delete next[id]
+        return { dirtyTabs: next }
+    }),
+    isTabDirty: (tabId) => {
+        const state = get()
+        const id = tabId ?? state.activeTabId
+        if (!id) return false
+        return !!state.dirtyTabs[id]
+    },
+    isAnyTabDirty: () => {
+        const state = get()
+        return Object.values(state.dirtyTabs).some(Boolean)
+    },
 
     addTextureAnim: () => {
         set((state) => {
@@ -1810,7 +1932,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             const updatedAnims = [...currentAnims, newAnim];
             const updatedModelData = { ...state.modelData, TextureAnims: updatedAnims };
             console.log('[ModelStore] Added TextureAnim, new count:', updatedAnims.length);
-            return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
+            return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
         });
     },
 
@@ -1824,7 +1946,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 updatedAnims.splice(index, 1);
                 const updatedModelData = { ...state.modelData, TextureAnims: updatedAnims };
                 console.log('[ModelStore] Removed TextureAnim at index', index);
-                return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
+                return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
             }
             return {};
         });
@@ -1837,7 +1959,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             if (index >= 0 && index < updatedAnims.length) {
                 updatedAnims[index] = { ...updatedAnims[index], ...updates };
                 const updatedModelData = { ...state.modelData, TextureAnims: updatedAnims };
-                return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
+                return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
             }
             return {};
         });
@@ -1853,7 +1975,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
                 // Update modelData
                 const updatedModelData = { ...state.modelData, Geosets: newGeosets };
-                return { modelData: updatedModelData };
+                return { modelData: updatedModelData, ...markActiveTabDirtyState(state) };
             }
             return {};
         });
@@ -1872,7 +1994,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
                 // Update modelData
                 const updatedModelData = { ...state.modelData, GeosetAnims: newGeosetAnims };
-                return { modelData: updatedModelData };
+                return { modelData: updatedModelData, ...markActiveTabDirtyState(state) };
             }
             return {};
         });
@@ -1885,7 +2007,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 ...state.modelData,
                 GeosetAnims: anims.map(normalizeGeosetAnim)
             };
-            return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
+            return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
         });
     },
 
@@ -1906,7 +2028,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[], false);
             const correctedNodes = extractNodesFromModel(updatedModelData);
             console.log('[ModelStore] Batch updated', updates.length, 'nodes');
-            return { nodes: correctedNodes as ModelNode[], modelData: updatedModelData };
+            return { nodes: correctedNodes as ModelNode[], modelData: updatedModelData, ...markActiveTabDirtyState(state) };
         });
     },
 
@@ -2371,7 +2493,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
             currentFrame: 0,
             hiddenGeosetIds: [],
             forceShowAllGeosets: true,
-            cachedRenderer: null // Reset cached renderer when adding new tab
+            cachedRenderer: null, // Reset cached renderer when adding new tab
+            dirtyTabs: { ...state.dirtyTabs }
         });
 
         console.log('[ModelStore] Added new tab:', name, 'id:', id);
@@ -2385,6 +2508,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
         const tabIndex = state.tabs.findIndex(t => t.id === tabId);
         const newTabs = state.tabs.filter(t => t.id !== tabId);
+        const nextDirtyTabs = { ...state.dirtyTabs }
+        delete nextDirtyTabs[tabId]
 
         // CLEANUP: Destroy renderer resources if cached
         // Safety: Only destroy if it's not the currently active renderer in the store
@@ -2409,7 +2534,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
                     currentFrame: 0,
                     hiddenGeosetIds: [],
                     forceShowAllGeosets: true,
-                    cachedRenderer: null
+                    cachedRenderer: null,
+                    dirtyTabs: {}
                 });
             } else {
                 // Switch to adjacent tab
@@ -2431,7 +2557,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
                     hiddenGeosetIds: [...snapshot.hiddenGeosetIds],
                     forceShowAllGeosets: false,
                     cachedRenderer: snapshot.renderer || null, // CRITICAL FIX: Restore cached renderer
-                    rendererReloadTrigger: snapshot.renderer ? state.rendererReloadTrigger : state.rendererReloadTrigger + 1
+                    rendererReloadTrigger: snapshot.renderer ? state.rendererReloadTrigger : state.rendererReloadTrigger + 1,
+                    dirtyTabs: nextDirtyTabs
                 });
 
                 // Restore camera if ref is available
@@ -2449,7 +2576,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
         }
         else {
             // Just remove the tab, no state switch needed
-            set({ tabs: newTabs });
+            set({ tabs: newTabs, dirtyTabs: nextDirtyTabs });
         }
 
         console.log('[ModelStore] Closed tab:', tabId);
@@ -2574,6 +2701,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             selectedGeosetIndices: [],
             cachedRenderer: null,
             rendererReloadTrigger: 0,
+            dirtyTabs: {},
             previewTransform: {
                 translation: [0, 0, 0],
                 rotation: [0, 0, 0],
@@ -2582,3 +2710,6 @@ export const useModelStore = create<ModelState>((set, get) => ({
         });
     }
 }));
+
+
+

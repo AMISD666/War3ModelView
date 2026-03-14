@@ -185,14 +185,14 @@ export const shortcutActions: ShortcutAction[] = [
         label: '透视视图',
         category: '视图',
         contexts: ['global', 'viewer'],
-        defaultBindings: ['0', 'Num0']
+        defaultBindings: ['~']
     },
     {
         id: 'view.orthographic',
         label: '正交视图',
         category: '视图',
         contexts: ['global', 'viewer'],
-        defaultBindings: ['O']
+        defaultBindings: ['~']
     },
     {
         id: 'view.top',
@@ -264,7 +264,7 @@ export const shortcutActions: ShortcutAction[] = [
         label: '切换模型相机视角',
         category: '视图',
         contexts: ['viewer'],
-        defaultBindings: ['Backquote']
+        defaultBindings: ['0', 'Num0']
     },
 
     // Animation

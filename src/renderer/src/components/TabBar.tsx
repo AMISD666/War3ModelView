@@ -1,17 +1,26 @@
-﻿/**
+/**
  * TabBar Component - Displays open model tabs at the top of the viewer
  */
 
 import React from 'react';
 import { useModelStore } from '../store/modelStore';
 import { CloseOutlined } from '@ant-design/icons';
+import { showConfirm } from '../store/messageStore';
 
 interface TabBarProps {
     emptyText?: string;
 }
 
 export const TabBar: React.FC<TabBarProps> = ({ emptyText }) => {
-    const { tabs, activeTabId, setActiveTab, closeTab } = useModelStore();
+    const { tabs, activeTabId, setActiveTab, closeTab, isTabDirty } = useModelStore();
+
+    const handleCloseTab = async (tabId: string, name: string) => {
+        if (isTabDirty(tabId)) {
+            const shouldClose = await showConfirm('未保存的修改', `关闭“${name}”前，是否放弃未保存的修改？`);
+            if (!shouldClose) return;
+        }
+        closeTab(tabId);
+    };
 
     // We always render the container now to keep it persistent as requested by the user.
     // if (tabs.length === 0) {
@@ -82,7 +91,7 @@ export const TabBar: React.FC<TabBarProps> = ({ emptyText }) => {
                         <CloseOutlined
                             onClick={(e) => {
                                 e.stopPropagation();
-                                closeTab(tab.id);
+                                void handleCloseTab(tab.id, tab.name);
                             }}
                             style={{
                                 fontSize: 10,

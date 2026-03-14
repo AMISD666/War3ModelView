@@ -4856,9 +4856,14 @@ export class ModelRenderer {
             this.gl.bindTexture(this.gl.TEXTURE_2D, gpuTexture || this.fallbackTexture);
             this.gl.uniform1i(this.shaderProgramLocations.samplerUniform, 0);
             this.gl.uniform1f(this.shaderProgramLocations.replaceableTypeUniform, 0);
-        } else if (texture.ReplaceableId === 1 || texture.ReplaceableId === 2) {
+        } else if (texture && (texture.ReplaceableId === 1 || texture.ReplaceableId === 2)) {
             this.gl.uniform3fv(this.shaderProgramLocations.replaceableColorUniform, instance.rendererData.teamColor);
             this.gl.uniform1f(this.shaderProgramLocations.replaceableTypeUniform, texture.ReplaceableId);
+        } else {
+            this.gl.activeTexture(this.gl.TEXTURE0);
+            this.gl.bindTexture(this.gl.TEXTURE_2D, this.fallbackTexture);
+            this.gl.uniform1i(this.shaderProgramLocations.samplerUniform, 0);
+            this.gl.uniform1f(this.shaderProgramLocations.replaceableTypeUniform, 0);
         }
 
         if (layer.Shading & LayerShading.NoDepthTest) {
@@ -5139,4 +5144,5 @@ export class ModelRenderer {
     }
 
 }
+
 

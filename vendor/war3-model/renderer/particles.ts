@@ -2,7 +2,7 @@
     ParticleEmitter2, ParticleEmitter2FilterMode, ParticleEmitter2Flags,
     ParticleEmitter2FramesFlags
 } from '../model';
-import { mat4, vec3, vec4, mat3 } from 'gl-matrix';
+import { mat4, vec3, vec4, mat3, quat } from 'gl-matrix';
 import { ModelInterp } from './modelInterp';
 import { degToRad, rand, getShader } from './util';
 import { RendererData } from './rendererData';
@@ -17,8 +17,19 @@ const secondColor = vec4.create();
 const color = vec4.create();
 const tailPos = vec3.create();
 const tailCross = vec3.create();
-const emitterRotationMat3 = mat3.create();
-const rotatedBaseVec = vec3.create();
+const particleWorldPos = vec3.create();
+const particleWorldSpeed = vec3.create();
+const tailCameraVec = vec3.create();
+const particleHeadVec = vec3.create();
+const emitterScaleVec = vec3.create();
+const emitterRotationQuat = quat.create();
+const particleRotationQuat = quat.create();
+const planeTiltQuat = quat.create();
+const localDirection = vec3.create();
+const emitterOrientationMat3 = mat3.create();
+const particlePlaneNormal = vec3.create();
+const cameraDirectionZ = vec3.create();
+const worldUnitZ = vec3.fromValues(0, 0, 1);
 
 /**
  * Helper to check particle emitter flags from both Flags bitmask and individual boolean properties.
@@ -59,6 +70,7 @@ interface Particle {
     angle: number;
     gravity: number;
     lifeSpan: number;
+    orientation: mat3;
 }
 
 interface ParticleEmitterWrapper {
@@ -109,7 +121,7 @@ interface ParticleEmitterWrapper {
     _uvLogCounter?: number; // UV animation log counter for periodic logging
 }
 
-const DISCARD_ALPHA_KEY_LEVEL = 0.83;
+const DISCARD_ALPHA_KEY_LEVEL = 0.75;
 const DISCARD_MODULATE_LEVEL = 0.01;
 
 export class ParticlesController {
@@ -220,6 +232,86 @@ export class ParticlesController {
         }
     }
 
+    private createEmitterWrapper(particleEmitter: ParticleEmitter2, index: number): ParticleEmitterWrapper {
+        const frameFlags = particleEmitter.FrameFlags || 1;
+        const lifeSpan = particleEmitter.LifeSpan || 1;
+
+        const emitter: ParticleEmitterWrapper = {
+            index,
+            emission: 0,
+            squirtFrame: 0,
+            particles: [],
+            props: particleEmitter,
+            capacity: 0,
+            baseCapacity: 0,
+            type: frameFlags,
+            tailVertices: null,
+            tailVertexBuffer: null,
+            tailVertexGPUBuffer: null,
+            headVertices: null,
+            headVertexBuffer: null,
+            headVertexGPUBuffer: null,
+            tailTexCoords: null,
+            tailTexCoordBuffer: null,
+            tailTexCoordGPUBuffer: null,
+            headTexCoords: null,
+            headTexCoordBuffer: null,
+            headTexCoordGPUBuffer: null,
+            colors: null,
+            colorBuffer: null,
+            colorGPUBuffer: null,
+            indices: null,
+            indexBuffer: null,
+            indexGPUBuffer: null,
+            fsUniformsBuffer: null,
+            _needsInitialSync: true
+        };
+
+        emitter.baseCapacity = Math.ceil(
+            ModelInterp.maxAnimVectorVal(emitter.props.EmissionRate) * lifeSpan
+        );
+
+        return emitter;
+    }
+
+    private destroyEmitterWrapper(emitter: ParticleEmitterWrapper): void {
+        if (!emitter) return;
+
+        if (emitter.colorGPUBuffer) emitter.colorGPUBuffer.destroy();
+        if (emitter.indexGPUBuffer) emitter.indexGPUBuffer.destroy();
+        if (emitter.headVertexGPUBuffer) emitter.headVertexGPUBuffer.destroy();
+        if (emitter.tailVertexGPUBuffer) emitter.tailVertexGPUBuffer.destroy();
+        if (emitter.headTexCoordGPUBuffer) emitter.headTexCoordGPUBuffer.destroy();
+        if (emitter.tailTexCoordGPUBuffer) emitter.tailTexCoordGPUBuffer.destroy();
+        if (emitter.fsUniformsBuffer) emitter.fsUniformsBuffer.destroy();
+
+        for (const particle of emitter.particles) {
+            this.particleStorage.push(particle);
+        }
+
+        emitter.particles = [];
+        emitter.capacity = 0;
+        emitter.baseCapacity = 0;
+        emitter.headVertices = null;
+        emitter.tailVertices = null;
+        emitter.headTexCoords = null;
+        emitter.tailTexCoords = null;
+        emitter.colors = null;
+        emitter.indices = null;
+        emitter.headVertexBuffer = null;
+        emitter.tailVertexBuffer = null;
+        emitter.headTexCoordBuffer = null;
+        emitter.tailTexCoordBuffer = null;
+        emitter.colorBuffer = null;
+        emitter.indexBuffer = null;
+        emitter.headVertexGPUBuffer = null;
+        emitter.tailVertexGPUBuffer = null;
+        emitter.headTexCoordGPUBuffer = null;
+        emitter.tailTexCoordGPUBuffer = null;
+        emitter.colorGPUBuffer = null;
+        emitter.indexGPUBuffer = null;
+        emitter.fsUniformsBuffer = null;
+    }
     public destroy(): void {
         if (this.shaderProgram) {
             if (this.vertexShader) {
@@ -276,10 +368,9 @@ export class ParticlesController {
      */
     public syncEmitters(): void {
         const model = this.rendererData.model;
-        if (!model.ParticleEmitters2) return;
+        const particleEmitters = model.ParticleEmitters2 || [];
 
-        // Initialize base vectors if this is the first time we have emitters
-        if (model.ParticleEmitters2.length && !this.particleBaseVectors) {
+        if (particleEmitters.length && !this.particleBaseVectors) {
             this.particleBaseVectors = [
                 vec3.create(),
                 vec3.create(),
@@ -288,58 +379,37 @@ export class ParticlesController {
             ];
         }
 
-        // Handle deleted emitters - remove emitters that no longer exist in the model
-        if (this.emitters.length > model.ParticleEmitters2.length) {
-            console.log(`[ParticlesController] syncEmitters: Removing ${this.emitters.length - model.ParticleEmitters2.length} deleted emitters`);
-
-            // Destroy GPU buffers for emitters being removed
-            for (let i = model.ParticleEmitters2.length; i < this.emitters.length; ++i) {
-                const emitter = this.emitters[i];
-
-                // Destroy GPU buffers
-                if (emitter.colorGPUBuffer) {
-                    emitter.colorGPUBuffer.destroy();
-                }
-                if (emitter.indexGPUBuffer) {
-                    emitter.indexGPUBuffer.destroy();
-                }
-                if (emitter.headVertexGPUBuffer) {
-                    emitter.headVertexGPUBuffer.destroy();
-                }
-                if (emitter.tailVertexGPUBuffer) {
-                    emitter.tailVertexGPUBuffer.destroy();
-                }
-                if (emitter.headTexCoordGPUBuffer) {
-                    emitter.headTexCoordGPUBuffer.destroy();
-                }
-                if (emitter.tailTexCoordGPUBuffer) {
-                    emitter.tailTexCoordGPUBuffer.destroy();
-                }
-                if (emitter.fsUniformsBuffer) {
-                    emitter.fsUniformsBuffer.destroy();
-                }
-
-                // Return particles to storage pool
-                for (const particle of emitter.particles) {
-                    this.particleStorage.push(particle);
-                }
+        if (!particleEmitters.length) {
+            for (const emitter of this.emitters) {
+                this.destroyEmitterWrapper(emitter);
             }
-
-            // Trim the emitters array
-            this.emitters.length = model.ParticleEmitters2.length;
+            this.emitters = [];
+            return;
         }
 
-        // Update existing emitter props references to reflect parameter changes
-        // CRITICAL FIX: Always update props reference, not just when reference changes
-        // The store may mutate the same object, so reference comparison fails
-        for (let i = 0; i < this.emitters.length && i < model.ParticleEmitters2.length; ++i) {
-            const newProps = model.ParticleEmitters2[i];
+        const structuralMismatch =
+            this.emitters.length !== particleEmitters.length ||
+            this.emitters.some((emitter, index) => {
+                const nextProps = particleEmitters[index];
+                const nextType = nextProps.FrameFlags || 1;
+                return !nextProps || emitter.props.ObjectId !== nextProps.ObjectId || emitter.type !== nextType;
+            });
+
+        if (structuralMismatch) {
+            for (const emitter of this.emitters) {
+                this.destroyEmitterWrapper(emitter);
+            }
+            this.emitters = particleEmitters.map((particleEmitter, index) => this.createEmitterWrapper(particleEmitter, index));
+            return;
+        }
+
+        for (let i = 0; i < this.emitters.length; ++i) {
+            const newProps = particleEmitters[i];
             const oldProps = this.emitters[i].props;
 
-            // Always update props reference to ensure latest data is used
+            this.emitters[i].index = i;
             this.emitters[i].props = newProps;
 
-            // Check if key properties changed OR if this is the first sync after creation
             const needsInitialSync = this.emitters[i]._needsInitialSync === true;
             const propsChanged = needsInitialSync ||
                 oldProps !== newProps ||
@@ -348,74 +418,20 @@ export class ParticlesController {
                 oldProps.EmissionRate !== newProps.EmissionRate;
 
             if (propsChanged) {
-                // Also update type in case FrameFlags changed
                 this.emitters[i].type = newProps.FrameFlags || 1;
-                // Recalculate base capacity
                 const emissionRate = newProps.EmissionRate;
                 const lifeSpan = newProps.LifeSpan || 1;
                 this.emitters[i].baseCapacity = Math.ceil(
                     ModelInterp.maxAnimVectorVal(emissionRate) * lifeSpan
                 );
-                // CRITICAL FIX: Clear existing particles when key props change
-                // Existing particles were created with old LifeSpan values
-                // They need to be replaced with new particles using updated props
                 for (const particle of this.emitters[i].particles) {
                     this.particleStorage.push(particle);
                 }
                 this.emitters[i].particles = [];
-                // Reset debug flags to re-log after props change
                 this.emitters[i]._xyQuadLogged = false;
                 this.emitters[i]._velocityLogged = false;
-                this.emitters[i]._needsInitialSync = false; // Clear initial sync flag
+                this.emitters[i]._needsInitialSync = false;
             }
-        }
-
-        // Check for new emitters that aren't yet tracked
-        for (let i = this.emitters.length; i < model.ParticleEmitters2.length; ++i) {
-            const particleEmitter = model.ParticleEmitters2[i];
-
-            // Default to Head if FrameFlags is not set
-            const frameFlags = particleEmitter.FrameFlags || 1;
-
-            const emitter: ParticleEmitterWrapper = {
-                index: i,
-                emission: 0,
-                squirtFrame: 0,
-                particles: [],
-                props: particleEmitter,
-                capacity: 0,
-                baseCapacity: 0,
-                type: frameFlags,
-                tailVertices: null,
-                tailVertexBuffer: null,
-                tailVertexGPUBuffer: null,
-                headVertices: null,
-                headVertexBuffer: null,
-                headVertexGPUBuffer: null,
-                tailTexCoords: null,
-                tailTexCoordBuffer: null,
-                tailTexCoordGPUBuffer: null,
-                headTexCoords: null,
-                headTexCoordBuffer: null,
-                headTexCoordGPUBuffer: null,
-                colors: null,
-                colorBuffer: null,
-                colorGPUBuffer: null,
-                indices: null,
-                indexBuffer: null,
-                indexGPUBuffer: null,
-                fsUniformsBuffer: null
-            };
-
-            // Calculate base capacity for buffer sizing
-            const emissionRate = particleEmitter.EmissionRate;
-            const lifeSpan = particleEmitter.LifeSpan || 1;
-            emitter.baseCapacity = Math.ceil(
-                ModelInterp.maxAnimVectorVal(emissionRate) * lifeSpan
-            );
-
-            console.log(`[ParticlesController] syncEmitters: Added new emitter ${i}, FrameFlags=${frameFlags}, baseCapacity=${emitter.baseCapacity}`);
-            this.emitters.push(emitter);
         }
     }
 
@@ -546,7 +562,6 @@ export class ParticlesController {
             createPipeline('additive', {
                 color: {
                     operation: 'add',
-                    // Match WebGL: gl.blendFunc(SRC_ALPHA, ONE)
                     srcFactor: 'src-alpha',
                     dstFactor: 'one'
                 },
@@ -707,8 +722,8 @@ export class ParticlesController {
             indices[i * 6] = i * 4;
             indices[i * 6 + 1] = i * 4 + 1;
             indices[i * 6 + 2] = i * 4 + 2;
-            indices[i * 6 + 3] = i * 4 + 2;
-            indices[i * 6 + 4] = i * 4 + 1;
+            indices[i * 6 + 3] = i * 4;
+            indices[i * 6 + 4] = i * 4 + 2;
             indices[i * 6 + 5] = i * 4 + 3;
         }
 
@@ -981,10 +996,10 @@ export class ParticlesController {
                 const isXYQuad = hasParticleFlag(emitter.props, ParticleEmitter2Flags.XYQuad);
 
                 // Base vectors in XY plane - same order for both modes
-                vec3.set(this.particleBaseVectors[0], 1, -1, 0);
-                vec3.set(this.particleBaseVectors[1], 1, 1, 0);
-                vec3.set(this.particleBaseVectors[2], -1, -1, 0);
-                vec3.set(this.particleBaseVectors[3], -1, 1, 0);
+                vec3.set(this.particleBaseVectors[0], -1, -1, 0);
+                vec3.set(this.particleBaseVectors[1], -1, 1, 0);
+                vec3.set(this.particleBaseVectors[2], 1, 1, 0);
+                vec3.set(this.particleBaseVectors[3], 1, -1, 0);
 
                 if (isXYQuad) {
                     // XYQuad: Keep particles flat in XY plane (parallel to ground/grid)
@@ -1008,7 +1023,6 @@ export class ParticlesController {
 
     private createParticle(emitter: ParticleEmitterWrapper, emitterMatrix: mat4) {
         let particle: Particle;
-
         if (this.particleStorage.length) {
             particle = this.particleStorage.pop();
         } else {
@@ -1018,81 +1032,71 @@ export class ParticlesController {
                 angle: 0,
                 speed: vec3.create(),
                 gravity: null,
-                lifeSpan: null
+                lifeSpan: null,
+                orientation: mat3.create()
             };
         }
 
-        // Use 0.5 scalling to treat input as Diameter (matching user expectation/other tools)
         const width: number = this.interp.animVectorVal(emitter.props.Width, 0) * 0.5;
         const length: number = this.interp.animVectorVal(emitter.props.Length, 0) * 0.5;
-
-        let speedScale: number = this.interp.animVectorVal(emitter.props.Speed, 0);
-        const variation: number = this.interp.animVectorVal(emitter.props.Variation, 0);
         const latitude: number = degToRad(this.interp.animVectorVal(emitter.props.Latitude, 0));
+        const variation: number = this.interp.animVectorVal(emitter.props.Variation, 0);
+        const baseSpeed: number = this.interp.animVectorVal(emitter.props.Speed, 0);
         const isModelSpace = hasParticleFlag(emitter.props, ParticleEmitter2Flags.ModelSpace);
 
-        // Get emitter node's pivot point (emission origin)
         const emitterNode = this.rendererData.nodes[emitter.props.ObjectId];
         const pivot = emitterNode?.node?.PivotPoint || [0, 0, 0];
 
         particle.emitter = emitter;
+        particle.angle = 0;
 
-        if (variation > 0) {
-            speedScale *= 1 + rand(-variation, variation);
-        }
+        const speed = baseSpeed * (1 + rand(-variation, variation));
 
-        // Start with local position (relative to pivot) and velocity
-        // Add pivot point offset
-        // Emit on XY plane (perpendicular to Z-axis emission)
         const localPos = vec3.fromValues(
             pivot[0] + rand(-width, width),
             pivot[1] + rand(-length, length),
             pivot[2]
         );
-        // Emit along local +Z axis (standard forward direction)
-        const localSpeed = vec3.fromValues(0, 0, speedScale);
 
-        particle.angle = rand(0, Math.PI * 2);
-        // Rotate around X-axis for latitude spread (cone angle from emission direction)
-        vec3.rotateX(localSpeed, localSpeed, rotateCenter, rand(0, latitude));
-        // Rotate around Z-axis for random distribution
-        vec3.rotateZ(localSpeed, localSpeed, rotateCenter, particle.angle);
+        quat.identity(particleRotationQuat);
+        quat.rotateZ(particleRotationQuat, particleRotationQuat, Math.PI / 2);
+        quat.rotateY(particleRotationQuat, particleRotationQuat, rand(-latitude, latitude));
 
-        if (hasParticleFlag(emitter.props, ParticleEmitter2Flags.LineEmitter)) {
-            localSpeed[1] = 0;
+        if (!hasParticleFlag(emitter.props, ParticleEmitter2Flags.LineEmitter)) {
+            quat.rotateX(particleRotationQuat, particleRotationQuat, rand(-latitude, latitude));
         }
+
+        vec3.set(localDirection, 0, 0, 1);
+        vec3.transformQuat(localDirection, localDirection, particleRotationQuat);
+        vec3.scale(localDirection, localDirection, speed);
 
         if (isModelSpace) {
-            // ModelSpace: Keep in local space, transform at render time
             vec3.copy(particle.pos, localPos);
-            vec3.copy(particle.speed, localSpeed);
+            vec3.copy(particle.speed, localDirection);
+            mat3.identity(particle.orientation);
         } else {
-            // Non-ModelSpace: Transform position and velocity direction to world space
-            // Position: transform local pos by emitter matrix
             vec3.transformMat4(particle.pos, localPos, emitterMatrix);
 
-            // Velocity: Transform direction to world space using endpoint method
-            // This correctly rotates the velocity vector by the matrix's rotation component
-            const velocityEnd = vec3.create();
-            vec3.add(velocityEnd, localPos, localSpeed);
-            vec3.transformMat4(velocityEnd, velocityEnd, emitterMatrix);
-            vec3.subtract(particle.speed, velocityEnd, particle.pos);
+            mat4.getRotation(emitterRotationQuat, emitterMatrix);
+            mat4.getScaling(emitterScaleVec, emitterMatrix);
+
+            vec3.transformQuat(particle.speed, localDirection, emitterRotationQuat);
+            vec3.multiply(particle.speed, particle.speed, emitterScaleVec);
+            mat3.fromQuat(particle.orientation, emitterRotationQuat);
         }
 
-        particle.gravity = this.interp.animVectorVal(emitter.props.Gravity, 0);
-        // Defensive: Ensure LifeSpan is a valid positive number
+        mat4.getScaling(emitterScaleVec, emitterMatrix);
+        particle.gravity = this.interp.animVectorVal(emitter.props.Gravity, 0) * (emitterScaleVec[2] || 1);
+
+        if (hasParticleFlag(emitter.props, ParticleEmitter2Flags.XYQuad)) {
+            particle.angle = Math.atan2(particle.speed[1], particle.speed[0]) - Math.PI + Math.PI / 8;
+        }
+
         particle.lifeSpan = (typeof emitter.props.LifeSpan === 'number' && emitter.props.LifeSpan > 0)
             ? emitter.props.LifeSpan : 1;
 
-        // Debug: Log particle velocity direction (only first particle of each emitter)
-        // if (!emitter._velocityLogged) {
-        //     console.log(`[Particles] Emitter "${emitter.props.Name}" particle velocity: [${particle.speed[0].toFixed(2)}, ${particle.speed[1].toFixed(2)}, ${particle.speed[2].toFixed(2)}], LifeSpan: ${emitter.props.LifeSpan} (type: ${typeof emitter.props.LifeSpan}), Time: ${emitter.props.Time}`);
-        //     emitter._velocityLogged = true;
-        // }
-
         return particle;
     }
-
     private updateParticleBuffers(particle: Particle, index: number, emitter: ParticleEmitterWrapper): void {
         // Defensive: Ensure LifeSpan and Time are valid non-zero numbers
         const lifeSpan = (typeof emitter.props.LifeSpan === 'number' && emitter.props.LifeSpan > 0)
@@ -1121,11 +1125,9 @@ export class ParticlesController {
         let secondScale;
         let scale;
 
-        // Defensive: Ensure ParticleScaling is valid array-like with default fallback
-        // This handles cases where ParticleScaling might be undefined or not properly initialized
         const scaling = emitter.props.ParticleScaling;
         const hasValidScaling = scaling && (Array.isArray(scaling) || scaling instanceof Float32Array) && scaling.length >= 3;
-        const defaultScale = 10; // Fallback scale value
+        const defaultScale = 10;
 
         if (firstHalf) {
             firstScale = hasValidScaling ? (scaling[0] ?? defaultScale) : defaultScale;
@@ -1135,105 +1137,110 @@ export class ParticlesController {
             secondScale = hasValidScaling ? (scaling[2] ?? defaultScale) : defaultScale;
         }
 
-        // Ensure we have valid numbers
         if (typeof firstScale !== 'number' || isNaN(firstScale)) firstScale = defaultScale;
         if (typeof secondScale !== 'number' || isNaN(secondScale)) secondScale = defaultScale;
-
-        // CRITICAL FIX: Force non-zero scaling
-        // In production, scaling might be 0 due to data issues, causing "Needles"
         if (Math.abs(firstScale) < 0.01) firstScale = defaultScale;
         if (Math.abs(secondScale) < 0.01) secondScale = defaultScale;
 
-        // eslint-disable-next-line prefer-const
         scale = lerp(firstScale, secondScale, t);
 
+        const isModelSpace = hasParticleFlag(emitter.props, ParticleEmitter2Flags.ModelSpace);
+
+        if (isModelSpace) {
+            const currentEmitterMatrix = this.rendererData.nodes[emitter.props.ObjectId].matrix;
+            vec3.transformMat4(particleWorldPos, particle.pos, currentEmitterMatrix);
+            mat4.getRotation(emitterRotationQuat, currentEmitterMatrix);
+            mat4.getScaling(emitterScaleVec, currentEmitterMatrix);
+            vec3.transformQuat(particleWorldSpeed, particle.speed, emitterRotationQuat);
+            vec3.multiply(particleWorldSpeed, particleWorldSpeed, emitterScaleVec);
+        } else {
+            vec3.copy(particleWorldPos, particle.pos);
+            vec3.copy(particleWorldSpeed, particle.speed);
+        }
+
         if (emitter.type & ParticleEmitter2FramesFlags.Head) {
+            const isXYQuad = hasParticleFlag(emitter.props, ParticleEmitter2Flags.XYQuad);
+            const cosA = Math.cos(particle.angle);
+            const sinA = Math.sin(particle.angle);
+
             for (let i = 0; i < 4; ++i) {
-                emitter.headVertices[index * 12 + i * 3] = this.particleBaseVectors[i][0] * scale;
-                emitter.headVertices[index * 12 + i * 3 + 1] = this.particleBaseVectors[i][1] * scale;
-                emitter.headVertices[index * 12 + i * 3 + 2] = this.particleBaseVectors[i][2] * scale;
+                const baseX = this.particleBaseVectors[i][0] * scale;
+                const baseY = this.particleBaseVectors[i][1] * scale;
+                const baseZ = this.particleBaseVectors[i][2] * scale;
+                if (isXYQuad) {
+                    vec3.set(particleHeadVec, baseX * cosA - baseY * sinA, baseX * sinA + baseY * cosA, 0);
 
-                if (hasParticleFlag(emitter.props, ParticleEmitter2Flags.XYQuad)) {
-                    const x = emitter.headVertices[index * 12 + i * 3];
-                    const y = emitter.headVertices[index * 12 + i * 3 + 1];
-                    const z = emitter.headVertices[index * 12 + i * 3 + 2];
-                    const cosA = Math.cos(particle.angle);
-                    const sinA = Math.sin(particle.angle);
-                    const rx = x * cosA - y * sinA;
-                    const ry = x * sinA + y * cosA;
+                    if (isModelSpace) {
+                        const currentEmitterMatrix = this.rendererData.nodes[emitter.props.ObjectId].matrix;
+                        mat4.getRotation(emitterRotationQuat, currentEmitterMatrix);
+                        vec3.transformQuat(particlePlaneNormal, worldUnitZ, emitterRotationQuat);
+                    } else {
+                        vec3.transformMat3(particlePlaneNormal, worldUnitZ, particle.orientation);
+                    }
 
-                    const emitterMatrix = this.rendererData.nodes[emitter.props.ObjectId].matrix;
-                    mat3.fromMat4(emitterRotationMat3, emitterMatrix);
-                    vec3.set(rotatedBaseVec, rx, ry, z);
-                    vec3.transformMat3(rotatedBaseVec, rotatedBaseVec, emitterRotationMat3);
+                    vec3.normalize(particlePlaneNormal, particlePlaneNormal);
+                    quat.rotationTo(planeTiltQuat, worldUnitZ, particlePlaneNormal);
+                    mat3.fromQuat(emitterOrientationMat3, planeTiltQuat);
+                    vec3.transformMat3(particleHeadVec, particleHeadVec, emitterOrientationMat3);
 
-                    const targetLen = Math.sqrt(rx * rx + ry * ry + z * z) || 1;
-                    const len = Math.sqrt(
-                        rotatedBaseVec[0] * rotatedBaseVec[0] +
-                        rotatedBaseVec[1] * rotatedBaseVec[1] +
-                        rotatedBaseVec[2] * rotatedBaseVec[2]
-                    ) || 1;
-                    const scaleFix = targetLen / len;
-
-                    emitter.headVertices[index * 12 + i * 3] = rotatedBaseVec[0] * scaleFix;
-                    emitter.headVertices[index * 12 + i * 3 + 1] = rotatedBaseVec[1] * scaleFix;
-                    emitter.headVertices[index * 12 + i * 3 + 2] = rotatedBaseVec[2] * scaleFix;
+                    emitter.headVertices[index * 12 + i * 3] = particleHeadVec[0];
+                    emitter.headVertices[index * 12 + i * 3 + 1] = particleHeadVec[1];
+                    emitter.headVertices[index * 12 + i * 3 + 2] = particleHeadVec[2];
+                } else {
+                    emitter.headVertices[index * 12 + i * 3] = baseX;
+                    emitter.headVertices[index * 12 + i * 3 + 1] = baseY;
+                    emitter.headVertices[index * 12 + i * 3 + 2] = baseZ;
                 }
             }
         }
+
         if (emitter.type & ParticleEmitter2FramesFlags.Tail) {
-            tailPos[0] = -particle.speed[0] * emitter.props.TailLength;
-            tailPos[1] = -particle.speed[1] * emitter.props.TailLength;
-            tailPos[2] = -particle.speed[2] * emitter.props.TailLength;
+            tailPos[0] = -particleWorldSpeed[0] * emitter.props.TailLength;
+            tailPos[1] = -particleWorldSpeed[1] * emitter.props.TailLength;
+            tailPos[2] = -particleWorldSpeed[2] * emitter.props.TailLength;
 
-            vec3.cross(tailCross, particle.speed, this.rendererData.cameraPos);
-            vec3.normalize(tailCross, tailCross);
-            vec3.scale(tailCross, tailCross, scale);
+            vec3.set(cameraDirectionZ, 0, 0, 1);
+            vec3.transformQuat(cameraDirectionZ, cameraDirectionZ, this.rendererData.cameraQuat);
+            vec3.cross(tailCross, cameraDirectionZ, particleWorldSpeed);
+            if (vec3.length(tailCross) < 0.0001) {
+                vec3.set(tailCross, scale, 0, 0);
+            } else {
+                vec3.normalize(tailCross, tailCross);
+                vec3.scale(tailCross, tailCross, scale);
+            }
 
-            emitter.tailVertices[index * 12] = tailCross[0];
-            emitter.tailVertices[index * 12 + 1] = tailCross[1];
-            emitter.tailVertices[index * 12 + 2] = tailCross[2];
+            // Match the reference tail vertex order:
+            // 0 = p0 - boundary, 1 = p1 - boundary, 2 = p1 + boundary, 3 = p0 + boundary
+            emitter.tailVertices[index * 12] = -tailCross[0];
+            emitter.tailVertices[index * 12 + 1] = -tailCross[1];
+            emitter.tailVertices[index * 12 + 2] = -tailCross[2];
 
-            emitter.tailVertices[index * 12 + 3] = -tailCross[0];
-            emitter.tailVertices[index * 12 + 3 + 1] = -tailCross[1];
-            emitter.tailVertices[index * 12 + 3 + 2] = -tailCross[2];
+            emitter.tailVertices[index * 12 + 3] = tailPos[0] - tailCross[0];
+            emitter.tailVertices[index * 12 + 3 + 1] = tailPos[1] - tailCross[1];
+            emitter.tailVertices[index * 12 + 3 + 2] = tailPos[2] - tailCross[2];
 
-            emitter.tailVertices[index * 12 + 2 * 3] = tailCross[0] + tailPos[0];
-            emitter.tailVertices[index * 12 + 2 * 3 + 1] = tailCross[1] + tailPos[1];
-            emitter.tailVertices[index * 12 + 2 * 3 + 2] = tailCross[2] + tailPos[2];
+            emitter.tailVertices[index * 12 + 2 * 3] = tailPos[0] + tailCross[0];
+            emitter.tailVertices[index * 12 + 2 * 3 + 1] = tailPos[1] + tailCross[1];
+            emitter.tailVertices[index * 12 + 2 * 3 + 2] = tailPos[2] + tailCross[2];
 
-            emitter.tailVertices[index * 12 + 3 * 3] = -tailCross[0] + tailPos[0];
-            emitter.tailVertices[index * 12 + 3 * 3 + 1] = -tailCross[1] + tailPos[1];
-            emitter.tailVertices[index * 12 + 3 * 3 + 2] = -tailCross[2] + tailPos[2];
-        }
-
-        // Get world position based on particle space mode
-        const isModelSpace = hasParticleFlag(emitter.props, ParticleEmitter2Flags.ModelSpace);
-        const worldPos = vec3.create();
-
-        if (isModelSpace) {
-            // ModelSpace: Transform local pos by current emitter matrix
-            const emitterMatrix = this.rendererData.nodes[emitter.props.ObjectId].matrix;
-            vec3.transformMat4(worldPos, particle.pos, emitterMatrix);
-        } else {
-            // Non-ModelSpace: pos is already in world space, use directly
-            vec3.copy(worldPos, particle.pos);
+            emitter.tailVertices[index * 12 + 3 * 3] = tailCross[0];
+            emitter.tailVertices[index * 12 + 3 * 3 + 1] = tailCross[1];
+            emitter.tailVertices[index * 12 + 3 * 3 + 2] = tailCross[2];
         }
 
         for (let i = 0; i < 4; ++i) {
             if (emitter.headVertices) {
-                emitter.headVertices[index * 12 + i * 3] += worldPos[0];
-                emitter.headVertices[index * 12 + i * 3 + 1] += worldPos[1];
-                emitter.headVertices[index * 12 + i * 3 + 2] += worldPos[2];
+                emitter.headVertices[index * 12 + i * 3] += particleWorldPos[0];
+                emitter.headVertices[index * 12 + i * 3 + 1] += particleWorldPos[1];
+                emitter.headVertices[index * 12 + i * 3 + 2] += particleWorldPos[2];
             }
             if (emitter.tailVertices) {
-                emitter.tailVertices[index * 12 + i * 3] += worldPos[0];
-                emitter.tailVertices[index * 12 + i * 3 + 1] += worldPos[1];
-                emitter.tailVertices[index * 12 + i * 3 + 2] += worldPos[2];
+                emitter.tailVertices[index * 12 + i * 3] += particleWorldPos[0];
+                emitter.tailVertices[index * 12 + i * 3 + 1] += particleWorldPos[1];
+                emitter.tailVertices[index * 12 + i * 3 + 2] += particleWorldPos[2];
             }
         }
     }
-
     private updateParticleTexCoords(index: number, emitter: ParticleEmitterWrapper, firstHalf: boolean, t: number) {
         if (emitter.type & ParticleEmitter2FramesFlags.Head) {
             this.updateParticleTexCoordsByType(index, emitter, firstHalf, t, ParticleEmitter2FramesFlags.Head);
@@ -1282,31 +1289,22 @@ export class ParticlesController {
         // Ensure repeat is at least 1
         if (repeat < 1) repeat = 1;
 
-        // Calculate UV animation frame
-        // War3 UV animation: frames cycle from start to end, repeated 'repeat' times over the phase
-        let frame: number;
+        // Support both classic 0-based intervals and common 1-based atlas numbering.
+        // Many particle atlases are authored as 1..N in tools (e.g. 4x4 => 1..16).
+        let startFrame = start;
+        let endFrame = end;
 
-        if (start === 0 && end === 0) {
-            // No UV animation - use frame 0
-            frame = 0;
-        } else {
-            // Calculate interval (number of frames in one cycle)
-            const interval = end - start + 1;
+        if (start > 0 && end > 0) {
+            startFrame = start - 1;
+            endFrame = end - 1;
+        }
 
-            if (interval <= 0) {
-                // Invalid interval (end < start), just use start frame
-                frame = start;
-            } else {
-                // Total frames across all repeats
-                const totalAnimFrames = interval * repeat;
+        let frame = startFrame;
+        const spriteCount = endFrame - startFrame + 1;
 
-                // Map t (0->1) to position in total animation frames
-                // Use floor to ensure we get discrete frame indices
-                const animPosition = Math.floor(t * totalAnimFrames);
-
-                // Calculate actual frame index (cycling within the interval)
-                frame = start + (animPosition % interval);
-            }
+        if (spriteCount > 1) {
+            const animPosition = Math.floor(spriteCount * repeat * t);
+            frame = startFrame + (animPosition % spriteCount);
         }
 
         // CRITICAL: Clamp frame to valid texture range to prevent UV overflow
@@ -1323,17 +1321,25 @@ export class ParticlesController {
         const cellWidth = 1 / columns;
         const cellHeight = 1 / rows;
 
-        texCoords[index * 8] = texCoordX * cellWidth;
-        texCoords[index * 8 + 1] = texCoordY * cellHeight;
+        // Inset atlas UVs slightly to avoid linear-filter bleeding from adjacent cells.
+        const insetX = cellWidth * 0.001;
+        const insetY = cellHeight * 0.001;
+        const left = texCoordX * cellWidth + insetX;
+        const right = (texCoordX + 1) * cellWidth - insetX;
+        const top = texCoordY * cellHeight + insetY;
+        const bottom = (texCoordY + 1) * cellHeight - insetY;
 
-        texCoords[index * 8 + 2] = texCoordX * cellWidth;
-        texCoords[index * 8 + 3] = (1 + texCoordY) * cellHeight;
+        texCoords[index * 8] = right;
+        texCoords[index * 8 + 1] = top;
 
-        texCoords[index * 8 + 4] = (1 + texCoordX) * cellWidth;
-        texCoords[index * 8 + 5] = texCoordY * cellHeight;
+        texCoords[index * 8 + 2] = left;
+        texCoords[index * 8 + 3] = top;
 
-        texCoords[index * 8 + 6] = (1 + texCoordX) * cellWidth;
-        texCoords[index * 8 + 7] = (1 + texCoordY) * cellHeight;
+        texCoords[index * 8 + 4] = left;
+        texCoords[index * 8 + 5] = bottom;
+
+        texCoords[index * 8 + 6] = right;
+        texCoords[index * 8 + 7] = bottom;
     }
 
     private updateParticleColor(index: number, emitter: ParticleEmitterWrapper, firstHalf: boolean, t: number) {
@@ -1484,3 +1490,17 @@ export class ParticlesController {
         this.gl.drawElements(this.gl.TRIANGLES, emitter.particles.length * 6, this.gl.UNSIGNED_SHORT, 0);
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+

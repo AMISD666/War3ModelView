@@ -1,5 +1,5 @@
-﻿import { emit, listen } from '@tauri-apps/api/event';
-import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { emit, listen } from '@tauri-apps/api/event';
+import { WebviewWindow, getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
 import { markStandalonePerf } from './standalonePerf';
 
 type OpenToolWindowOptions = {
@@ -231,6 +231,10 @@ class WindowManager {
         }
     }
 
+    async openMaterialManager(): Promise<void> {
+        await this.openToolWindow('materialManager', '材质管理器', 760, 450);
+    }
+
     async openToolWindow(
         windowId: string,
         title: string,
@@ -324,7 +328,7 @@ class WindowManager {
     }
 
     async destroyAllWindows(): Promise<void> {
-        const windows = Array.from(this.activeWindows.entries());
+        const trackedWindows = Array.from(this.activeWindows.entries());
         const hydrationListeners = Array.from(this.hydrationListeners.values());
         this.activeWindows.clear();
         this.visibilityCache.clear();
@@ -340,8 +344,20 @@ class WindowManager {
             }
         });
 
+        const windows = new Map<string, WebviewWindow>(trackedWindows);
+        try {
+            const discoveredWindows = await getAllWebviewWindows();
+            discoveredWindows.forEach((win) => {
+                if (win.label !== 'main') {
+                    windows.set(win.label, win);
+                }
+            });
+        } catch (e) {
+            console.warn('[WindowManager] Failed to enumerate webview windows during shutdown:', e);
+        }
+
         await Promise.all(
-            windows.map(async ([windowId, win]) => {
+            Array.from(windows.entries()).map(async ([windowId, win]) => {
                 try {
                     await win.destroy();
                 } catch (e) {

@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useRef, useState, forwardRef, useImperativeHandle, useMemo } from 'react'
+import React, { useEffect, useRef, useState, forwardRef, useImperativeHandle, useMemo } from 'react'
 import { decodeBLP, getBLPImageData, parseMDX, parseMDL, ModelRenderer } from 'war3-model'
 // @ts-ignore
 import ModelWorker from '../workers/model-worker.worker?worker'
@@ -214,6 +214,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   const rendererReloadTrigger = useModelStore((state) => state.rendererReloadTrigger)
   const cachedRenderer = useModelStore((state) => state.cachedRenderer)
   const mpqLoaded = useRendererStore((state) => state.mpqLoaded)
+  const nodeRenderMode = useRendererStore((state) => state.nodeRenderMode)
   const missingTextures = useRendererStore((state) => state.missingTextures)
   const glRef = useRef<WebGL2RenderingContext | WebGLRenderingContext | null>(null)
   const needsRendererUpdateRef = useRef(false)
@@ -535,6 +536,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   // Refs for props to be accessible in render loop
   const showGridRef = useRef(showGrid)
   const showNodesRef = useRef(showNodes)
+  const nodeRenderModeRef = useRef(nodeRenderMode)
   const showSkeletonRef = useRef(showSkeleton)
   const showCollisionShapesRef = useRef(showCollisionShapes)
   const showCamerasRef = useRef(showCameras)
@@ -582,6 +584,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   useEffect(() => {
     showGridRef.current = showGrid
     showNodesRef.current = showNodes
+    nodeRenderModeRef.current = nodeRenderMode
     showSkeletonRef.current = showSkeleton
     showCollisionShapesRef.current = showCollisionShapes
     showCamerasRef.current = showCameras
@@ -596,12 +599,24 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     const state = useRendererStore.getState()
     showVerticesRef.current = getShowVerticesForCurrentContext()
     vertexSettingsRef.current = state.vertexSettings
-  }, [showGrid, showNodes, showSkeleton, showCollisionShapes, showCameras, showLights, showAttachments, showWireframe, isPlaying, playbackSpeed, backgroundColor,
+  }, [showGrid, showNodes, nodeRenderMode, showSkeleton, showCollisionShapes, showCameras, showLights, showAttachments, showWireframe, isPlaying, playbackSpeed, backgroundColor,
     // Add implicit dependencies if they result in re-render, otherwise we rely on the loop checking refs.
     // Actually, we should subscribe or just use .getState() in the loop for low-frequency changes?
     // Refs are better for avoiding loop capturing stale closures.
     // But we need to update refs when store changes.
   ])
+
+  useEffect(() => {
+    if (isPlaying) return
+    const mdlRenderer = rendererRef.current
+    if (!mdlRenderer?.rendererData) return
+    const currentFrame = Number(mdlRenderer.rendererData.frame)
+    if (!Number.isFinite(currentFrame)) return
+
+    // Ensure timeline/store frame matches actual renderer frame on pause.
+    // This prevents a visible rollback when pausing multiple times in keyframe mode.
+    useModelStore.getState().setFrame(currentFrame)
+  }, [isPlaying])
 
   // Separate effect for store-driven updates (since they aren't props)
   useEffect(() => {
@@ -1756,7 +1771,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
     // Note: Ctrl+Wheel is handled by a separate native non-passive listener (see useEffect below)
     if (!e.ctrlKey) {
-      targetCamera.current.distance = Math.max(10, targetCamera.current.distance * (1 + e.deltaY * 0.001))
+      targetCamera.current.distance = Math.max(0.1, targetCamera.current.distance * (1 + e.deltaY * 0.001))
     }
   }
 
@@ -2197,7 +2212,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         console.log('[Viewer] Box select - setting new selection:', newSelection)
         selectNodes(newSelection)
       }
-    } else if (mainMode === 'geometry' && (geometrySubMode === 'vertex' || geometrySubMode === 'group') || (mainMode === 'animation' && animationSubMode === 'binding')) {
+    } else if ((mainMode === 'geometry' && (geometrySubMode === 'vertex' || geometrySubMode === 'group')) || (mainMode === 'animation' && animationSubMode === 'binding')) {
       // Vertex selection for geometry mode OR binding mode (which also selects vertices)
       const newSelection: { geosetIndex: number, index: number }[] = []
       // affectedGeosetIndices for future use: const affectedGeosetIndices = new Set<number>()
@@ -2580,8 +2595,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     const rayDir = vec3.fromValues(rayWorld[0], rayWorld[1], rayWorld[2])
     vec3.normalize(rayDir, rayDir)
 
-    // In Binding Mode OR Group Mode, treat as vertex selection for raycasting
-    const effectiveSubMode = ((mainMode === 'animation' && animationSubMode === 'binding') || geometrySubMode === 'group') ? 'face' : geometrySubMode
+    const isBindingVertexMode = mainMode === 'animation' && animationSubMode === 'binding'
+    const effectiveSubMode = geometrySubMode === 'group' ? 'face' : (isBindingVertexMode ? 'vertex' : geometrySubMode)
 
     // DISABLED: Single-click vertex/face selection in geometry mode
     // Only box selection is allowed for vertices/faces
@@ -3653,88 +3668,6 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             // dragging and can lock scrubbing around the first processed frame.
           }
 
-          // === Collision Shape Rendering ===
-          if (gl && showCollisionShapesRef.current && mdlRenderer.rendererData && mdlRenderer.rendererData.nodes) {
-            // Filter nodes that look like collision shapes (have Shape property)
-            const collisionNodes = mdlRenderer.rendererData.nodes.filter((n: any) => n.node.hasOwnProperty('Shape') || n.node.type === 'CollisionShape');
-
-            if (collisionNodes.length > 0) {
-              const viewMatrix = mvMatrix;
-              const projectionMatrix = pMatrix;
-              const nodeMVMatrix = mat4.create();
-
-              collisionNodes.forEach((nodeWrapper: any) => {
-                const node = nodeWrapper.node;
-                // worldMatrix may be undefined, try 'matrix' property or use identity
-                let worldMatrix = nodeWrapper.worldMatrix || nodeWrapper.matrix;
-                if (!worldMatrix) {
-                  // Use identity matrix if no world matrix available
-                  worldMatrix = mat4.create();
-                }
-
-                if (!viewMatrix) return;
-                mat4.multiply(nodeMVMatrix, viewMatrix, worldMatrix);
-
-                let isSphere = false;
-                if (node.Shape === 2 || node.ShapeType === 'Sphere') {
-                  isSphere = true;
-                } else if (node.Shape === 0 || node.ShapeType === 'Box') {
-                  isSphere = false;
-                } else if (node.BoundsRadius && node.BoundsRadius > 0) {
-                  isSphere = true;
-                }
-
-                if (isSphere) {
-                  let center;
-                  if (node.Vertices) {
-                    if (node.Vertices instanceof Float32Array || (node.Vertices.length === 3 && typeof node.Vertices[0] === 'number')) {
-                      center = node.Vertices;
-                    } else if (node.Vertices.length > 0) {
-                      center = node.Vertices[0];
-                    }
-                  }
-                  if (!center) center = node.Vertex1 || [0, 0, 0];
-                  const radius = node.BoundsRadius || 0;
-
-                  if (center && gl) {
-                    debugRenderer.current.renderWireframeSphere(
-                      (mdlRenderer as any).gl,
-                      nodeMVMatrix,
-                      projectionMatrix,
-                      radius,
-                      center,
-                      16,
-                      [1, 0.5, 0, 1]
-                    );
-                  }
-                } else {
-                  let v1, v2;
-                  if (node.Vertices) {
-                    if (node.Vertices instanceof Float32Array || (typeof node.Vertices[0] === 'number' && node.Vertices.length >= 6)) {
-                      v1 = node.Vertices.subarray ? node.Vertices.subarray(0, 3) : node.Vertices.slice(0, 3);
-                      v2 = node.Vertices.subarray ? node.Vertices.subarray(3, 6) : node.Vertices.slice(3, 6);
-                    } else if (node.Vertices.length >= 2) {
-                      v1 = node.Vertices[0];
-                      v2 = node.Vertices[1];
-                    }
-                  }
-                  if (!v1) v1 = node.Vertex1;
-                  if (!v2) v2 = node.Vertex2;
-
-                  if (v1 && v2 && gl) {
-                    debugRenderer.current.renderWireframeBox(
-                      (mdlRenderer as any).gl,
-                      nodeMVMatrix,
-                      projectionMatrix,
-                      v1,
-                      v2,
-                      [1, 0.5, 0, 1]
-                    );
-                  }
-                }
-              });
-            }
-          }
 
           // === Camera Frustum Rendering ===
           if (gl && showCamerasRef.current) {
@@ -3924,23 +3857,6 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
               gridRenderer.current.render(gl as WebGLRenderingContext, baseMvMatrix || mvMatrix, pMatrix, gridSettings, showGridXY, showGridXZ, showGridYZ)
             }
 
-            // === Vertices Rendering (Moved AFTER model for correct depth/overlay handling) ===
-            if (gl && showVerticesRef.current && mdlRenderer.model.Geosets) {
-              const settings = vertexSettingsRef.current
-              mdlRenderer.model.Geosets.forEach((geoset: any) => {
-                if (geoset.Vertices) {
-                  debugRenderer.current.renderPoints(
-                    gl,
-                    mvMatrix,
-                    pMatrix,
-                    geoset.Vertices,
-                    [1, 1, 1, 1], // White
-                    settings.size,
-                    settings.enableDepth
-                  )
-                }
-              })
-            }
 
             // === Attachment Point Rendering (Moved AFTER main scene to handle depth/overlay) ===
             if (gl && showAttachmentsRef.current && mdlRenderer.rendererData?.nodes) {
@@ -4047,8 +3963,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
               }
             }
 
-            // 关键帧模式和绑定模式都显示节点
-            if ((showNodesRef.current || currentMainMode === 'animation') && mdlRenderer.rendererData.nodes && currentMainMode !== 'geometry') {
+            if (nodeRenderModeRef.current !== 'hidden' && mdlRenderer.rendererData.nodes && currentMainMode !== 'geometry') {
               const { selectedNodeIds } = useSelectionStore.getState()
               let parentOfSelected: number | null = null
               let childrenOfSelected: number[] = []
@@ -4161,7 +4076,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 childrenOfSelected,
                 nodeTypeColors,
                 currentMainMode === 'animation' && currentAnimationSubMode === 'keyframe',
-                useRendererStore.getState().nodeSize ?? 1.0
+                useRendererStore.getState().nodeSize ?? 1.0,
+                nodeRenderModeRef.current === 'wireframe' ? 'wireframe' : 'solid'
               )
 
               // Keyframe mode: visualize ParticleEmitter2 Width/Length as a box centered on emitter pivot.
@@ -4306,15 +4222,17 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 }
               }
 
-              // Render attachment nodes as yellow tetrahedrons
-              debugRenderer.current.renderAttachmentNodes(
+              if (showAttachmentsRef.current) {
+                // Render attachment nodes as yellow tetrahedrons
+                debugRenderer.current.renderAttachmentNodes(
                 gl as WebGLRenderingContext,
                 mvMatrix,
                 pMatrix,
                 mdlRenderer.rendererData.nodes as any,
                 selectedNodeIds,
                 nodeTypeColors
-              )
+                )
+              }
             }
 
             if (showSkeletonRef.current && mdlRenderer.rendererData.nodes && currentMainMode !== 'uv') {
@@ -4396,6 +4314,82 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
               }
             }
 
+            // === Collision Shape Rendering ===
+            if (gl && showCollisionShapesRef.current && mdlRenderer.rendererData.nodes) {
+              const collisionNodes = mdlRenderer.rendererData.nodes.filter((n: any) => n.node.hasOwnProperty('Shape') || n.node.type === 'CollisionShape')
+              if (collisionNodes.length > 0) {
+                const viewMatrix = mvMatrix
+                const projectionMatrix = pMatrix
+                const nodeMVMatrix = mat4.create()
+
+                collisionNodes.forEach((nodeWrapper: any) => {
+                  const node = nodeWrapper.node
+                  let worldMatrix = nodeWrapper.worldMatrix || nodeWrapper.matrix || mat4.create()
+                  if (!viewMatrix) return
+                  mat4.multiply(nodeMVMatrix, viewMatrix, worldMatrix)
+
+                  let isSphere = false
+                  if (node.Shape === 2 || node.ShapeType === 'Sphere') {
+                    isSphere = true
+                  } else if (node.Shape === 0 || node.ShapeType === 'Box') {
+                    isSphere = false
+                  } else if (node.BoundsRadius && node.BoundsRadius > 0) {
+                    isSphere = true
+                  }
+
+                  if (isSphere) {
+                    let center
+                    if (node.Vertices) {
+                      if (node.Vertices instanceof Float32Array || (node.Vertices.length === 3 && typeof node.Vertices[0] === 'number')) {
+                        center = node.Vertices
+                      } else if (node.Vertices.length > 0) {
+                        center = node.Vertices[0]
+                      }
+                    }
+                    if (!center) center = node.Vertex1 || [0, 0, 0]
+                    const radius = node.BoundsRadius || 0
+
+                    if (center && gl) {
+                      debugRenderer.current.renderWireframeSphere(
+                        gl as WebGLRenderingContext,
+                        nodeMVMatrix,
+                        projectionMatrix,
+                        radius,
+                        center,
+                        12, // rows
+                        12, // cols
+                        [1, 0.5, 0, 1]
+                      )
+                    }
+                  } else {
+                    let v1, v2
+                    if (node.Vertices) {
+                      if (node.Vertices instanceof Float32Array || (typeof node.Vertices[0] === 'number' && node.Vertices.length >= 6)) {
+                        v1 = node.Vertices.subarray ? node.Vertices.subarray(0, 3) : node.Vertices.slice(0, 3)
+                        v2 = node.Vertices.subarray ? node.Vertices.subarray(3, 6) : node.Vertices.slice(3, 6)
+                      } else if (node.Vertices.length >= 2) {
+                        v1 = node.Vertices[0]
+                        v2 = node.Vertices[1]
+                      }
+                    }
+                    if (!v1) v1 = node.Vertex1
+                    if (!v2) v2 = node.Vertex2
+
+                    if (v1 && v2 && gl) {
+                      debugRenderer.current.renderWireframeBox(
+                        gl as WebGLRenderingContext,
+                        nodeMVMatrix,
+                        projectionMatrix,
+                        v1,
+                        v2,
+                        [1, 0.5, 0, 1]
+                      )
+                    }
+                  }
+                })
+              }
+            }
+
           }
 
           if (gl && ((currentMainMode === 'geometry' && geometrySubMode === 'vertex') ||
@@ -4423,8 +4417,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             }
             // 限制缩放范围：0.375 到 2（放大约 8px，缩小约 1.5px）
             zoomScale = Math.max(0.375, Math.min(2, zoomScale))
-            const basePointSize = 4.0 * zoomScale
-            const hoverPointSize = 6.0 * zoomScale
+            const basePointSize = 3.0 * zoomScale
+            const hoverPointSize = 5.0 * zoomScale
             // 选中顶点只改变颜色，大小与普通顶点一致
             const selectedPointSize = basePointSize
 
@@ -4448,10 +4442,11 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
               }
             }
 
-            if (selectedVertexIds.length > 0 && showVerticesRef.current && geometrySubMode !== 'group') {
+            if (selectedVertexIds.length > 0 && showVerticesRef.current) {
               const selectedPositions: number[] = []
+              const shouldRenderGroupEdges = currentMainMode === 'geometry' && geometrySubMode === 'group'
 
-              if (geometrySubMode === 'group') {
+              if (shouldRenderGroupEdges) {
                 const linePositions: number[] = []
                 for (const sel of selectedFaceIds) {
                   const geoset = mdlRenderer.model.Geosets[sel.geosetIndex]
@@ -4470,7 +4465,6 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 debugRenderer.current.renderLines(gl as WebGLRenderingContext, mvMatrix, pMatrix, linePositions, [...selectionColorRgb, 1])
                 gl.enable(gl.DEPTH_TEST)
               } else {
-                // Vertex Mode: Render Points with selection color
                 for (const sel of selectedVertexIds) {
                   const geoset = mdlRenderer.model.Geosets[sel.geosetIndex]
                   if (geoset) {
@@ -4483,7 +4477,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                   }
                 }
                 gl.disable(gl.DEPTH_TEST)
-                debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, selectedPositions, [...selectionColorRgb, 1], selectedPointSize, false) // Selected always visible
+                debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, selectedPositions, [...selectionColorRgb, 1], selectedPointSize, false)
                 gl.enable(gl.DEPTH_TEST)
               }
             }
@@ -7394,6 +7388,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 })
 
 export default Viewer
+
+
 
 
 

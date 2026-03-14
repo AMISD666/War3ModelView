@@ -4,6 +4,7 @@ import { appDirStorage } from '../utils/persistStorage'
 import type { AppMode } from './selectionStore'
 
 type AnimationSubMode = 'binding' | 'keyframe'
+type NodeRenderMode = 'hidden' | 'solid' | 'wireframe'
 
 export interface GridSettings {
     show128: boolean
@@ -58,6 +59,8 @@ interface RendererStore {
     setShowVerticesForAnimationSubMode: (subMode: AnimationSubMode, show: boolean) => void
     showNodes: boolean
     setShowNodes: (show: boolean) => void
+    nodeRenderMode: NodeRenderMode
+    setNodeRenderMode: (mode: NodeRenderMode) => void
     showSkeleton: boolean
     setShowSkeleton: (show: boolean) => void
     showFPS: boolean
@@ -120,6 +123,12 @@ interface RendererStore {
     // Missing Textures Warning
     missingTextures: string[]
     setMissingTextures: (paths: string[]) => void
+
+    // Texture save mode for adjusted textures
+    textureSaveMode: 'overwrite' | 'save_as'
+    setTextureSaveMode: (mode: 'overwrite' | 'save_as') => void
+    textureSaveSuffix: string
+    setTextureSaveSuffix: (suffix: string) => void
 
     // Auto Processing Settings (on model load)
     autoRecalculateExtent: boolean
@@ -187,7 +196,9 @@ export const useRendererStore = create<RendererStore>()(
                     subMode === 'keyframe' ? show : state.showVerticesInAnimationKeyframe
             })),
             showNodes: false,
-            setShowNodes: (show) => set({ showNodes: show }),
+            setShowNodes: (show) => set({ showNodes: show, nodeRenderMode: show ? 'solid' : 'hidden' }),
+            nodeRenderMode: 'hidden',
+            setNodeRenderMode: (mode) => set({ nodeRenderMode: mode, showNodes: mode !== 'hidden' }),
             showSkeleton: false,
             setShowSkeleton: (show) => set({ showSkeleton: show }),
             showFPS: true,
@@ -263,6 +274,12 @@ export const useRendererStore = create<RendererStore>()(
             missingTextures: [],
             setMissingTextures: (paths) => set({ missingTextures: paths }),
 
+            // Texture save mode for adjusted textures
+            textureSaveMode: 'overwrite',
+            setTextureSaveMode: (mode) => set({ textureSaveMode: mode }),
+            textureSaveSuffix: '_1',
+            setTextureSaveSuffix: (suffix) => set({ textureSaveSuffix: suffix || '_1' }),
+
             // Auto Processing Settings (on model load) - defaults ON
             autoRecalculateExtent: true,
             setAutoRecalculateExtent: (enabled) => set({ autoRecalculateExtent: enabled }),
@@ -292,6 +309,7 @@ export const useRendererStore = create<RendererStore>()(
                 showVerticesInAnimationBinding: state.showVerticesInAnimationBinding,
                 showVerticesInAnimationKeyframe: state.showVerticesInAnimationKeyframe,
                 showNodes: state.showNodes,
+                nodeRenderMode: state.nodeRenderMode,
                 showSkeleton: state.showSkeleton,
                 showFPS: state.showFPS,
                 showGeosetVisibility: state.showGeosetVisibility,
@@ -317,6 +335,8 @@ export const useRendererStore = create<RendererStore>()(
                 selectionColor: state.selectionColor,
                 hoverColor: state.hoverColor,
                 nodeColors: state.nodeColors,
+                textureSaveMode: state.textureSaveMode,
+                textureSaveSuffix: state.textureSaveSuffix,
                 autoRecalculateExtent: state.autoRecalculateExtent,
                 autoRecalculateNormals: state.autoRecalculateNormals,
                 keepCameraOnLoad: state.keepCameraOnLoad

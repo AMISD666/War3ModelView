@@ -1,4 +1,4 @@
-﻿import { vec3, mat4, quat } from 'gl-matrix'
+import { vec3, mat4, quat } from 'gl-matrix'
 
 export class SimpleOrbitCamera {
     private canvas: HTMLCanvasElement
@@ -196,7 +196,7 @@ export class SimpleOrbitCamera {
             this.orthoSize = Math.max(0.1, this.orthoSize * (1 + factor * this.zoomFactor))
         } else {
             // 透视模式：调整 distance
-            this.distance = Math.max(1, this.distance * (1 + factor * this.zoomFactor))
+            this.distance = Math.max(0.1, this.distance * (1 + factor * this.zoomFactor))
         }
         this.update()
     }

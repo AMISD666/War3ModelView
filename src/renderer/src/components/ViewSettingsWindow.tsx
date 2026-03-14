@@ -70,7 +70,7 @@ export const ViewSettingsWindow: React.FC = () => {
         showGridXY, setShowGridXY,
         showGridXZ, setShowGridXZ,
         showGridYZ, setShowGridYZ,
-        showNodes, setShowNodes,
+        nodeRenderMode, setNodeRenderMode,
         showSkeleton, setShowSkeleton,
         showFPS, setShowFPS,
         showGeosetVisibility, setShowGeosetVisibility,
@@ -507,7 +507,7 @@ export const ViewSettingsWindow: React.FC = () => {
                                         <ToggleButton checked={showGridXY} onChange={setShowGridXY} fullWidth>XY 网格</ToggleButton>
                                         <ToggleButton checked={showGridXZ} onChange={setShowGridXZ} fullWidth>XZ 网格</ToggleButton>
                                         <ToggleButton checked={showGridYZ} onChange={setShowGridYZ} fullWidth>YZ 网格</ToggleButton>
-                                        <ToggleButton checked={showNodes} onChange={setShowNodes} fullWidth>骨骼节点</ToggleButton>
+                                        <ToggleButton checked={nodeRenderMode !== 'hidden'} onChange={() => setNodeRenderMode(nodeRenderMode === 'hidden' ? 'solid' : nodeRenderMode === 'solid' ? 'wireframe' : 'hidden')} fullWidth>{nodeRenderMode === 'hidden' ? '骨骼节点' : nodeRenderMode === 'wireframe' ? '骨骼节点(线框)' : '骨骼节点(实体)'}</ToggleButton>
                                         <ToggleButton checked={showSkeleton} onChange={setShowSkeleton} fullWidth>渲染骨架</ToggleButton>
                                         <ToggleButton checked={showFPS} onChange={setShowFPS} fullWidth>显示 FPS</ToggleButton>
                                         <ToggleButton checked={showGeosetVisibility} onChange={setShowGeosetVisibility} fullWidth>多边形工具</ToggleButton>

@@ -60,9 +60,10 @@ export function renderCollisionShapes(
         // Determine color based on selection
         const selectedNodeIds = useSelectionStore.getState().selectedNodeIds
         const isSelected = selectedNodeIds.includes(node.ObjectId)
+        // User requested color to be #66ffcc (102, 255, 204 => [0.4, 1.0, 0.8])
         const color: [number, number, number, number] = isSelected
-            ? [0, 1, 0, 0.5]  // Green if selected
-            : [1, 1, 0, 0.3]  // Yellow
+            ? [0.4, 1.0, 0.8, 0.6]  // #66ffcc if selected
+            : [0.4, 1.0, 0.8, 0.3]  // #66ffcc if unselected
 
         if (shape.Type === 0) { // Box
             const vertices = shape.Vertices
@@ -75,7 +76,7 @@ export function renderCollisionShapes(
             const radius = shape.BoundsRadius || 50
             // TODO: Fix signature - DebugRenderer.renderWireframeSphere needs center parameter
             const center = [0, 0, 0] as Float32Array | number[]
-            debugRenderer.renderWireframeSphere(gl, mvMatrix, pMatrix, radius, center, 16, color)
+            debugRenderer.renderWireframeSphere(gl, mvMatrix, pMatrix, radius, center, 12, 12, color)
         } else if (shape.Type === 3) { // Cylinder
             // TODO: Implement renderWireframeCylinder in DebugRenderer
             // const radius = shape.BoundsRadius || 50

@@ -1,15 +1,15 @@
-﻿import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
+import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import React from 'react';
 import { Button, Tooltip, Space, message } from 'antd';
 import {
     GatewayOutlined, // Vertex/Point
     AppstoreOutlined, // Face
     GroupOutlined, // Group/Connected
+    PlusOutlined, // Expand Selection
+    MinusOutlined, // Shrink Selection
     DragOutlined, // Move
     RedoOutlined, // Rotate
     ExpandOutlined, // Scale
-    SkinOutlined, // Binding
-    VideoCameraOutlined, // Keyframe
     ThunderboltOutlined, // Recalculate Normals
     SplitCellsOutlined, // Split
     MergeCellsOutlined, // Weld
@@ -23,7 +23,7 @@ import {
     FullscreenOutlined // Fit to View
 } from '@ant-design/icons';
 
-import { useSelectionStore } from '../store/selectionStore';
+import { SelectionId, useSelectionStore } from '../store/selectionStore';
 import { useModelStore } from '../store/modelStore';
 import { useRendererStore } from '../store/rendererStore';
 import { useCommandManager } from '../utils/CommandManager';
@@ -55,6 +55,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         transformMode,
         setTransformMode,
         selectedVertexIds,
+        selectedFaceIds,
         selectedNodeIds,
         isPickingParent,
         setIsPickingParent,
@@ -114,6 +115,135 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         backgroundColor: '#555',
         height: '20px',
         alignSelf: 'center'
+    }
+
+    const isAnimationBindingMode = mainMode === 'animation' && animationSubMode === 'binding'
+    const shouldShowOrientationButtons = mainMode !== 'view' && !isAnimationBindingMode
+
+    React.useEffect(() => {
+        if ((isAnimationBindingMode || mainMode === 'view') && gizmoOrientation !== 'world') {
+            setGizmoOrientation('world')
+        }
+    }, [gizmoOrientation, isAnimationBindingMode, mainMode, setGizmoOrientation])
+
+    const buildVertexAdjacency = (geoset: any): Map<number, Set<number>> => {
+        const adjacency = new Map<number, Set<number>>()
+        const faces = geoset?.Faces
+        if (!faces) return adjacency
+
+        const link = (a: number, b: number) => {
+            if (!adjacency.has(a)) adjacency.set(a, new Set<number>())
+            if (!adjacency.has(b)) adjacency.set(b, new Set<number>())
+            adjacency.get(a)!.add(b)
+            adjacency.get(b)!.add(a)
+        }
+
+        for (let i = 0; i + 2 < faces.length; i += 3) {
+            const a = Number(faces[i])
+            const b = Number(faces[i + 1])
+            const c = Number(faces[i + 2])
+            if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(c)) continue
+            link(a, b)
+            link(b, c)
+            link(c, a)
+        }
+
+        return adjacency
+    }
+
+    const deriveFaceSelectionFromVertices = (vertexSelection: SelectionId[]): SelectionId[] => {
+        if (!renderer) return []
+
+        const byGeoset = new Map<number, Set<number>>()
+        vertexSelection.forEach((sel) => {
+            if (!byGeoset.has(sel.geosetIndex)) {
+                byGeoset.set(sel.geosetIndex, new Set<number>())
+            }
+            byGeoset.get(sel.geosetIndex)!.add(sel.index)
+        })
+
+        const faces: SelectionId[] = []
+        byGeoset.forEach((selectedSet, geosetIndex) => {
+            const geoset = (renderer as any).model?.Geosets?.[geosetIndex]
+            const faceIndices = geoset?.Faces
+            if (!faceIndices) return
+
+            for (let faceIndex = 0; faceIndex * 3 + 2 < faceIndices.length; faceIndex++) {
+                const base = faceIndex * 3
+                const a = Number(faceIndices[base])
+                const b = Number(faceIndices[base + 1])
+                const c = Number(faceIndices[base + 2])
+                if (selectedSet.has(a) && selectedSet.has(b) && selectedSet.has(c)) {
+                    faces.push({ geosetIndex, index: faceIndex })
+                }
+            }
+        })
+
+        return faces
+    }
+
+    const applyBindingVertexSelection = (vertexSelection: SelectionId[]) => {
+        const { selectVertices, clearFaceSelection, selectFaces } = useSelectionStore.getState()
+        selectVertices(vertexSelection)
+        if (geometrySubMode === 'group') {
+            selectFaces(deriveFaceSelectionFromVertices(vertexSelection))
+        } else {
+            clearFaceSelection()
+        }
+    }
+
+    const handleExpandVertexSelection = () => {
+        if (!renderer || selectedVertexIds.length === 0) return
+
+        const nextByGeoset = new Map<number, Set<number>>()
+        selectedVertexIds.forEach((sel) => {
+            if (!nextByGeoset.has(sel.geosetIndex)) {
+                nextByGeoset.set(sel.geosetIndex, new Set<number>())
+            }
+            nextByGeoset.get(sel.geosetIndex)!.add(sel.index)
+        })
+
+        nextByGeoset.forEach((selectedSet, geosetIndex) => {
+            const geoset = (renderer as any).model?.Geosets?.[geosetIndex]
+            const adjacency = buildVertexAdjacency(geoset)
+            Array.from(selectedSet).forEach((vertexIndex) => {
+                adjacency.get(vertexIndex)?.forEach((neighborIndex) => selectedSet.add(neighborIndex))
+            })
+        })
+
+        const nextSelection: SelectionId[] = []
+        nextByGeoset.forEach((selectedSet, geosetIndex) => {
+            selectedSet.forEach((index) => nextSelection.push({ geosetIndex, index }))
+        })
+        applyBindingVertexSelection(nextSelection)
+    }
+
+    const handleShrinkVertexSelection = () => {
+        if (!renderer || selectedVertexIds.length === 0) return
+
+        const nextSelection: SelectionId[] = []
+        const byGeoset = new Map<number, Set<number>>()
+        selectedVertexIds.forEach((sel) => {
+            if (!byGeoset.has(sel.geosetIndex)) {
+                byGeoset.set(sel.geosetIndex, new Set<number>())
+            }
+            byGeoset.get(sel.geosetIndex)!.add(sel.index)
+        })
+
+        byGeoset.forEach((selectedSet, geosetIndex) => {
+            const geoset = (renderer as any).model?.Geosets?.[geosetIndex]
+            const adjacency = buildVertexAdjacency(geoset)
+            selectedSet.forEach((vertexIndex) => {
+                const neighbors = adjacency.get(vertexIndex)
+                if (!neighbors || neighbors.size === 0) return
+                const isBoundary = Array.from(neighbors).some((neighborIndex) => !selectedSet.has(neighborIndex))
+                if (!isBoundary) {
+                    nextSelection.push({ geosetIndex, index: vertexIndex })
+                }
+            })
+        })
+
+        applyBindingVertexSelection(nextSelection)
     }
 
     const handleBind = () => {
@@ -278,7 +408,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                                 onClick={onRecalculateNormals}
                             />
                         </Tooltip>
-                        <Tooltip title="一键分层 - 按 4000 顶点上限自动最少拆分">
+                        <Tooltip title="一键智能分层">
                             <Button
                                 icon={<ApartmentOutlined />}
                                 onClick={onAutoSeparateLayers}
@@ -320,17 +450,20 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                         <Tooltip title="骨骼绑定模式 (静止姿态)">
                             <Button
                                 type={animationSubMode === 'binding' ? 'primary' : 'default'}
-                                icon={<SkinOutlined />}
-                                onClick={() => setAnimationSubMode('binding')}
+                                 onClick={() => {
+                                    setAnimationSubMode('binding')
+                                    setGeometrySubMode('vertex')
+                                    useSelectionStore.getState().clearFaceSelection()
+                                    setGizmoOrientation('world')
+                                }}
                             >
-                                绑定模式
+                                绑定
                             </Button>
                         </Tooltip>
                         <Tooltip title="关键帧模式 (动画播放)">
                             <Button
                                 type={animationSubMode === 'keyframe' ? 'primary' : 'default'}
-                                icon={<VideoCameraOutlined />}
-                                onClick={() => {
+                                 onClick={() => {
                                     const wasKeyframe = animationSubMode === 'keyframe'
                                     setAnimationSubMode('keyframe')
                                     if (!wasKeyframe) {
@@ -338,7 +471,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                                     }
                                 }}
                             >
-                                关键帧模式
+                                关键帧
                             </Button>
                         </Tooltip>
                     </Space>
@@ -346,6 +479,47 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
 
                     {animationSubMode === 'binding' && (
                         <>
+                            <Space>
+                                <Tooltip title="点模式">
+                                    <Button
+                                        type={geometrySubMode === 'vertex' ? 'primary' : 'default'}
+                                        icon={<GatewayOutlined />}
+                                        onClick={() => {
+                                            setGeometrySubMode('vertex')
+                                            useSelectionStore.getState().clearFaceSelection()
+                                        }}
+                                    />
+                                </Tooltip>
+                                <Tooltip title="组模式 (选择整个闭合连通顶点组)">
+                                    <Button
+                                        type={geometrySubMode === 'group' ? 'primary' : 'default'}
+                                        icon={<GroupOutlined />}
+                                        onClick={() => {
+                                            setGeometrySubMode('group')
+                                            if (selectedVertexIds.length > 0) {
+                                                useSelectionStore.getState().selectFaces(deriveFaceSelectionFromVertices(selectedVertexIds))
+                                            }
+                                        }}
+                                    />
+                                </Tooltip>
+                                <Tooltip title="扩选 (增加当前选择周围一圈顶点)">
+                                    <Button
+                                        icon={<PlusOutlined style={{ color: selectedVertexIds.length === 0 ? '#8c8c8c' : undefined }} />}
+                                        onClick={handleExpandVertexSelection}
+                                        disabled={selectedVertexIds.length === 0}
+                                        style={selectedVertexIds.length === 0 ? { opacity: 1, borderColor: '#4b4b4b', color: '#8c8c8c' } : undefined}
+                                    />
+                                </Tooltip>
+                                <Tooltip title="缩选 (去掉当前选择边界一圈顶点)">
+                                    <Button
+                                        icon={<MinusOutlined style={{ color: selectedVertexIds.length === 0 ? '#8c8c8c' : undefined }} />}
+                                        onClick={handleShrinkVertexSelection}
+                                        disabled={selectedVertexIds.length === 0}
+                                        style={selectedVertexIds.length === 0 ? { opacity: 1, borderColor: '#4b4b4b', color: '#8c8c8c' } : undefined}
+                                    />
+                                </Tooltip>
+                            </Space>
+                            <div style={dividerStyle} />
                             <Space>
                                 <Tooltip title="创建骨骼 (无顶点: 原点 / 有顶点: 顶点中心)">
                                     <Button
@@ -385,7 +559,6 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                         onClick={() => setTransformMode('translate')}
                     />
                 </Tooltip>
-                {/* Hide rotate/scale in animation binding mode */}
                 {!(mainMode === 'animation' && animationSubMode === 'binding') && (
                     <>
                         <Tooltip title="旋转 (E)">
@@ -406,24 +579,27 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                 )}
             </Space>
 
-            <div style={dividerStyle} />
-            <Space size={4}>
-                <Tooltip title={'世界坐标朝向'}>
-                    <Button
-                        type={gizmoOrientation === 'world' ? 'primary' : 'default'}
-                        icon={<GlobalOutlined />}
-                        onClick={() => setGizmoOrientation('world')}
-                    />
-                </Tooltip>
-                <Tooltip title={'摄像机朝向'}>
-                    <Button
-                        type={gizmoOrientation === 'camera' ? 'primary' : 'default'}
-                        icon={<CameraOutlined />}
-                        onClick={() => setGizmoOrientation('camera')}
-                    />
-                </Tooltip>
-            </Space>
-
+            {shouldShowOrientationButtons && (
+                <>
+                    <div style={dividerStyle} />
+                    <Space size={4}>
+                        <Tooltip title={'世界坐标朝向'}>
+                            <Button
+                                type={gizmoOrientation === 'world' ? 'primary' : 'default'}
+                                icon={<GlobalOutlined />}
+                                onClick={() => setGizmoOrientation('world')}
+                            />
+                        </Tooltip>
+                        <Tooltip title={'摄像机朝向'}>
+                            <Button
+                                type={gizmoOrientation === 'camera' ? 'primary' : 'default'}
+                                icon={<CameraOutlined />}
+                                onClick={() => setGizmoOrientation('camera')}
+                            />
+                        </Tooltip>
+                    </Space>
+                </>
+            )}
             <div style={dividerStyle} />
             <Space size={10}>
                 <div style={snapStackStyle}>
@@ -503,6 +679,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         </div>
     );
 };
+
 
 
 

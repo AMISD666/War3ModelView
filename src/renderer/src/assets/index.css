@@ -349,6 +349,12 @@ body,
     color: #b0b0b0 !important;
 }
 
+/* Standalone window select arrow (material manager, etc.) */
+.ant-select .ant-select-arrow,
+.ant-select-arrow {
+    color: #ffffff !important;
+}
+
 /* Select Dropdown Dark Theme */
 /* CRITICAL: High z-index ensures dropdowns appear ABOVE floating panels (z-index ~1000+) */
 .dark-theme-select-dropdown,

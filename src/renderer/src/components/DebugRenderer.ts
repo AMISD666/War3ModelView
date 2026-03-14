@@ -181,55 +181,65 @@ export class DebugRenderer {
         childrenOfSelected: number[] = [],
         typeColors?: Record<string, number[]>,
         ignoreScale: boolean = false,
-        nodeSize: number = 1.0
+        nodeSize: number = 1.0,
+        renderMode: 'solid' | 'wireframe' = 'solid'
     ) {
-        if (!this.cubeProgram || !this.cubeVertBuffer || !this.cubeNormBuffer) return
+        if (renderMode === 'wireframe') {
+            if (!this.program || !this.buffer) return
+        } else if (!this.cubeProgram || !this.cubeVertBuffer || !this.cubeNormBuffer) {
+            return
+        }
 
-        const cubeSize = 2.4 * nodeSize // Half-size of cube, scaled by nodeSize
+        const cubeSize = 2.4 * nodeSize
+        const wireframeCubeSize = cubeSize * 0.72
         const s = cubeSize
-
-        // Cube faces (6 faces, 2 triangles each = 36 vertices)
+        const ws = wireframeCubeSize
         const baseCubeVerts = [
-            // Front face (Z+)
             -s, -s, s, s, -s, s, s, s, s,
             -s, -s, s, s, s, s, -s, s, s,
-            // Back face (Z-)
             s, -s, -s, -s, -s, -s, -s, s, -s,
             s, -s, -s, -s, s, -s, s, s, -s,
-            // Top face (Y+)
             -s, s, s, s, s, s, s, s, -s,
             -s, s, s, s, s, -s, -s, s, -s,
-            // Bottom face (Y-)
             -s, -s, -s, s, -s, -s, s, -s, s,
             -s, -s, -s, s, -s, s, -s, -s, s,
-            // Right face (X+)
             s, -s, s, s, -s, -s, s, s, -s,
             s, -s, s, s, s, -s, s, s, s,
-            // Left face (X-)
             -s, -s, -s, -s, -s, s, -s, s, s,
             -s, -s, -s, -s, s, s, -s, s, -s,
         ]
-
-        // Per-vertex normals (same for each face)
         const baseCubeNormals = [
-            // Front face
             0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1,
-            // Back face
             0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1,
-            // Top face
             0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0,
-            // Bottom face
             0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0,
-            // Right face
             1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0,
-            // Left face
             -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0,
         ]
+        const baseWireframeLines = [
+            -ws, -ws, -ws, ws, -ws, -ws,
+            ws, -ws, -ws, ws, ws, -ws,
+            ws, ws, -ws, -ws, ws, -ws,
+            -ws, ws, -ws, -ws, -ws, -ws,
+            -ws, -ws, ws, ws, -ws, ws,
+            ws, -ws, ws, ws, ws, ws,
+            ws, ws, ws, -ws, ws, ws,
+            -ws, ws, ws, -ws, -ws, ws,
+            -ws, -ws, -ws, -ws, -ws, ws,
+            ws, -ws, -ws, ws, -ws, ws,
+            ws, ws, -ws, ws, ws, ws,
+            -ws, ws, -ws, -ws, ws, ws,
+        ]
 
-        gl.useProgram(this.cubeProgram)
         gl.disable(gl.DEPTH_TEST)
-        gl.enable(gl.CULL_FACE)
-        gl.cullFace(gl.BACK)
+        if (renderMode === 'wireframe') {
+            gl.useProgram(this.program)
+            gl.disable(gl.CULL_FACE)
+        } else {
+            gl.useProgram(this.cubeProgram)
+            gl.enable(gl.CULL_FACE)
+            gl.cullFace(gl.BACK)
+        }
 
         const tempVec = vec3.create()
         const tempNormal = vec3.create()
@@ -241,14 +251,12 @@ export class DebugRenderer {
             const x0 = noScaleMatrix[0], x1 = noScaleMatrix[1], x2 = noScaleMatrix[2]
             const y0 = noScaleMatrix[4], y1 = noScaleMatrix[5], y2 = noScaleMatrix[6]
             const z0 = noScaleMatrix[8], z1 = noScaleMatrix[9], z2 = noScaleMatrix[10]
-
             let lx = Math.hypot(x0, x1, x2)
             let ly = Math.hypot(y0, y1, y2)
             let lz = Math.hypot(z0, z1, z2)
             if (lx === 0) lx = 1
             if (ly === 0) ly = 1
             if (lz === 0) lz = 1
-
             noScaleMatrix[0] = x0 / lx
             noScaleMatrix[1] = x1 / lx
             noScaleMatrix[2] = x2 / lx
@@ -262,12 +270,9 @@ export class DebugRenderer {
         }
 
         for (const node of nodes) {
-            if (!node.node.PivotPoint) continue
-            if (!node.matrix) continue
-            // Skip attachment nodes - they are rendered separately as tetrahedrons
+            if (!node.node.PivotPoint || !node.matrix) continue
             if ((node.node as any).type === 'Attachment') continue
 
-            // Determine color based on selection state and node type
             const fallbackColors: Record<string, number[]> = {
                 Bone: [0.0, 1.0, 0.4, 1],
                 Helper: [0.2, 0.6, 1.0, 1],
@@ -284,37 +289,48 @@ export class DebugRenderer {
 
             let color: number[]
             if (selectedNodeIds.includes(node.node.ObjectId)) {
-                color = [1.0, 0.3, 0.3, 1] // Bright red - selected
+                color = [1.0, 0.3, 0.3, 1]
             } else if (node.node.ObjectId === parentOfSelected) {
-                color = [1.0, 0.6, 0.0, 1] // Bright Orange - parent
+                color = [1.0, 0.6, 0.0, 1]
             } else if (childrenOfSelected.includes(node.node.ObjectId)) {
-                color = [1.0, 1.0, 0.3, 1] // Bright yellow - children
+                color = [1.0, 1.0, 0.3, 1]
             } else {
                 const colorMap = typeColors || fallbackColors
                 color = colorMap[(node.node as any).type || ''] || [0.4, 1.0, 0.4, 1]
             }
 
             const nodeMatrix = ignoreScale ? getNoScaleMatrix(node.matrix) : node.matrix
-
-            // Transform cube vertices by node matrix
-            // Cube vertices need to be offset by PivotPoint first (like original point rendering)
             const pivot = node.node.PivotPoint
+
+            if (renderMode === 'wireframe' && this.program && this.buffer) {
+                const transformedLines: number[] = []
+                for (let i = 0; i < baseWireframeLines.length; i += 3) {
+                    vec3.set(tempVec, baseWireframeLines[i] + pivot[0], baseWireframeLines[i + 1] + pivot[1], baseWireframeLines[i + 2] + pivot[2])
+                    vec3.transformMat4(tempVec, tempVec, nodeMatrix)
+                    transformedLines.push(tempVec[0], tempVec[1], tempVec[2])
+                }
+                gl.useProgram(this.program)
+                gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer)
+                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(transformedLines), gl.DYNAMIC_DRAW)
+                gl.enableVertexAttribArray(this.aPosition)
+                gl.vertexAttribPointer(this.aPosition, 3, gl.FLOAT, false, 0, 0)
+                gl.uniformMatrix4fv(this.uMVMatrix, false, mvMatrix)
+                gl.uniformMatrix4fv(this.uPMatrix, false, pMatrix)
+                gl.uniform4fv(this.uColor, color)
+                gl.uniform1f(this.uPointSize, 1.0)
+                gl.uniform1f(this.uDepthBias, 0.0)
+                gl.drawArrays(gl.LINES, 0, transformedLines.length / 3)
+                continue
+            }
+
             const transformedVerts: number[] = []
             for (let i = 0; i < baseCubeVerts.length; i += 3) {
-                // Add PivotPoint offset to cube vertex, then transform
-                vec3.set(tempVec,
-                    baseCubeVerts[i] + pivot[0],
-                    baseCubeVerts[i + 1] + pivot[1],
-                    baseCubeVerts[i + 2] + pivot[2]
-                )
+                vec3.set(tempVec, baseCubeVerts[i] + pivot[0], baseCubeVerts[i + 1] + pivot[1], baseCubeVerts[i + 2] + pivot[2])
                 vec3.transformMat4(tempVec, tempVec, nodeMatrix)
                 transformedVerts.push(tempVec[0], tempVec[1], tempVec[2])
             }
 
-            // Calculate normal matrix from node matrix
             mat3.normalFromMat4(normalMatrix, nodeMatrix)
-
-            // Transform normals
             const transformedNormals: number[] = []
             for (let i = 0; i < baseCubeNormals.length; i += 3) {
                 vec3.set(tempNormal, baseCubeNormals[i], baseCubeNormals[i + 1], baseCubeNormals[i + 2])
@@ -323,44 +339,30 @@ export class DebugRenderer {
                 transformedNormals.push(tempNormal[0], tempNormal[1], tempNormal[2])
             }
 
-            // 为父骨骼和子骨骼渲染亮青色实体边框（不受光照影响）
             const isParentOrChild = node.node.ObjectId === parentOfSelected || childrenOfSelected.includes(node.node.ObjectId)
             if (isParentOrChild && this.program) {
-                const outlineSize = cubeSize * 1.1 // 边框比立方体大10%
+                const outlineSize = cubeSize * 1.1
                 const os = outlineSize
-                // 大一点的实体立方体顶点（与 baseCubeVerts 相同结构但尺寸不同）
                 const outlineCubeVerts = [
-                    // Front face (Z+)
                     -os, -os, os, os, -os, os, os, os, os,
                     -os, -os, os, os, os, os, -os, os, os,
-                    // Back face (Z-)
                     os, -os, -os, -os, -os, -os, -os, os, -os,
                     os, -os, -os, -os, os, -os, os, os, -os,
-                    // Top face (Y+)
                     -os, os, os, os, os, os, os, os, -os,
                     -os, os, os, os, os, -os, -os, os, -os,
-                    // Bottom face (Y-)
                     -os, -os, -os, os, -os, -os, os, -os, os,
                     -os, -os, -os, os, -os, os, -os, -os, os,
-                    // Right face (X+)
                     os, -os, os, os, -os, -os, os, os, -os,
                     os, -os, os, os, os, -os, os, os, os,
-                    // Left face (X-)
                     -os, -os, -os, -os, -os, os, -os, os, os,
                     -os, -os, -os, -os, os, os, -os, os, -os,
                 ]
-                // 变换顶点
                 const outlineTransformed: number[] = []
                 for (let i = 0; i < outlineCubeVerts.length; i += 3) {
-                    vec3.set(tempVec,
-                        outlineCubeVerts[i] + pivot[0],
-                        outlineCubeVerts[i + 1] + pivot[1],
-                        outlineCubeVerts[i + 2] + pivot[2]
-                    )
+                    vec3.set(tempVec, outlineCubeVerts[i] + pivot[0], outlineCubeVerts[i + 1] + pivot[1], outlineCubeVerts[i + 2] + pivot[2])
                     vec3.transformMat4(tempVec, tempVec, nodeMatrix)
                     outlineTransformed.push(tempVec[0], tempVec[1], tempVec[2])
                 }
-                // 使用简单着色器程序渲染（不受光照影响）
                 gl.useProgram(this.program)
                 gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer)
                 gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(outlineTransformed), gl.DYNAMIC_DRAW)
@@ -368,41 +370,31 @@ export class DebugRenderer {
                 gl.vertexAttribPointer(this.aPosition, 3, gl.FLOAT, false, 0, 0)
                 gl.uniformMatrix4fv(this.uMVMatrix, false, mvMatrix)
                 gl.uniformMatrix4fv(this.uPMatrix, false, pMatrix)
-                gl.uniform4fv(this.uColor, [0.0, 1.0, 1.0, 1.0]) // 亮青色
+                gl.uniform4fv(this.uColor, [0.0, 1.0, 1.0, 1.0])
                 gl.uniform1f(this.uPointSize, 1.0)
-                gl.uniform1f(this.uDepthBias, 0.0) // No bias for outline?
+                gl.uniform1f(this.uDepthBias, 0.0)
                 gl.drawArrays(gl.TRIANGLES, 0, 36)
-                // 切换回立方体程序
                 gl.useProgram(this.cubeProgram)
             }
 
-            // Upload vertex data
             gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeVertBuffer)
             gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(transformedVerts), gl.DYNAMIC_DRAW)
             gl.enableVertexAttribArray(this.cubeAPosition)
             gl.vertexAttribPointer(this.cubeAPosition, 3, gl.FLOAT, false, 0, 0)
-
-            // Upload normal data
             gl.bindBuffer(gl.ARRAY_BUFFER, this.cubeNormBuffer)
             gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(transformedNormals), gl.DYNAMIC_DRAW)
             gl.enableVertexAttribArray(this.cubeANormal)
             gl.vertexAttribPointer(this.cubeANormal, 3, gl.FLOAT, false, 0, 0)
-
-            // Set uniforms
             gl.uniformMatrix4fv(this.cubeUMVMatrix, false, mvMatrix)
             gl.uniformMatrix4fv(this.cubeUPMatrix, false, pMatrix)
             gl.uniformMatrix3fv(this.cubeUNormalMatrix, false, normalMatrix)
             gl.uniform4fv(this.cubeUColor, color)
-
-            // Draw
             gl.drawArrays(gl.TRIANGLES, 0, 36)
         }
 
-        // Restore state
         gl.disable(gl.CULL_FACE)
         gl.enable(gl.DEPTH_TEST)
     }
-
     renderBoneVertices(
         gl: WebGLRenderingContext | WebGL2RenderingContext,
         mvMatrix: mat4,
@@ -584,32 +576,45 @@ export class DebugRenderer {
         pMatrix: mat4,
         radius: number,
         center: Float32Array | number[], // Added center
-        segments: number = 16,
+        rows: number = 8,
+        cols: number = 8,
         color: number[]
     ) {
         const lines: number[] = [];
         const cx = center[0], cy = center[1], cz = center[2];
 
-        // XY Circle
-        for (let i = 0; i < segments; i++) {
-            const theta1 = (i / segments) * Math.PI * 2;
-            const theta2 = ((i + 1) / segments) * Math.PI * 2;
-            lines.push(cx + Math.cos(theta1) * radius, cy + Math.sin(theta1) * radius, cz);
-            lines.push(cx + Math.cos(theta2) * radius, cy + Math.sin(theta2) * radius, cz);
+        // Latitudes (rows)
+        for (let i = 1; i < rows; i++) {
+            const lat = (i / rows) * Math.PI;
+            const sinLat = Math.sin(lat);
+            const cosLat = Math.cos(lat);
+            const r = radius * sinLat;
+            const z = radius * cosLat;
+            
+            for (let j = 0; j < cols; j++) {
+                const lon1 = (j / cols) * Math.PI * 2;
+                const lon2 = ((j + 1) / cols) * Math.PI * 2;
+                lines.push(cx + Math.cos(lon1) * r, cy + Math.sin(lon1) * r, cz + z);
+                lines.push(cx + Math.cos(lon2) * r, cy + Math.sin(lon2) * r, cz + z);
+            }
         }
-        // XZ Circle
-        for (let i = 0; i < segments; i++) {
-            const theta1 = (i / segments) * Math.PI * 2;
-            const theta2 = ((i + 1) / segments) * Math.PI * 2;
-            lines.push(cx + Math.cos(theta1) * radius, cy, cz + Math.sin(theta1) * radius);
-            lines.push(cx + Math.cos(theta2) * radius, cy, cz + Math.sin(theta2) * radius);
-        }
-        // YZ Circle
-        for (let i = 0; i < segments; i++) {
-            const theta1 = (i / segments) * Math.PI * 2;
-            const theta2 = ((i + 1) / segments) * Math.PI * 2;
-            lines.push(cx, cy + Math.cos(theta1) * radius, cz + Math.sin(theta1) * radius);
-            lines.push(cx, cy + Math.cos(theta2) * radius, cz + Math.sin(theta2) * radius);
+
+        // Longitudes (columns)
+        for (let j = 0; j < cols; j++) {
+            const lon = (j / cols) * Math.PI * 2;
+            const sinLon = Math.sin(lon);
+            const cosLon = Math.cos(lon);
+            
+            for (let i = 0; i < rows; i++) {
+                const lat1 = (i / rows) * Math.PI;
+                const lat2 = ((i + 1) / rows) * Math.PI;
+                const r1 = radius * Math.sin(lat1);
+                const z1 = radius * Math.cos(lat1);
+                const r2 = radius * Math.sin(lat2);
+                const z2 = radius * Math.cos(lat2);
+                lines.push(cx + cosLon * r1, cy + sinLon * r1, cz + z1);
+                lines.push(cx + cosLon * r2, cy + sinLon * r2, cz + z2);
+            }
         }
         this.renderLines(gl, mvMatrix, pMatrix, lines, color);
     }
@@ -775,14 +780,14 @@ export class DebugRenderer {
         color: number[]
     ) {
         // Render a small central sphere for the light source itself
-        this.renderWireframeSphere(gl, mvMatrix, pMatrix, 5.0, [0, 0, 0], 8, color);
+        this.renderWireframeSphere(gl, mvMatrix, pMatrix, 5.0, [0, 0, 0], 8, 8, color);
 
         // Render Attenuation Ranges for ALL light types if valid
         if (attenuationEnd > 0) {
-            this.renderWireframeSphere(gl, mvMatrix, pMatrix, attenuationEnd, [0, 0, 0], 16, [color[0], color[1], color[2], 0.3]);
+            this.renderWireframeSphere(gl, mvMatrix, pMatrix, attenuationEnd, [0, 0, 0], 16, 16, [color[0], color[1], color[2], 0.3]);
         }
         if (attenuationStart > 0 && attenuationStart < attenuationEnd) {
-            this.renderWireframeSphere(gl, mvMatrix, pMatrix, attenuationStart, [0, 0, 0], 12, [color[0], color[1], color[2], 0.1]);
+            this.renderWireframeSphere(gl, mvMatrix, pMatrix, attenuationStart, [0, 0, 0], 12, 12, [color[0], color[1], color[2], 0.1]);
         }
 
         if (type === 1) { // Directional

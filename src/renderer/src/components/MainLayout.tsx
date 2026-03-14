@@ -1,4 +1,4 @@
-﻿import React, { useState, useCallback, useEffect, useRef, Suspense } from 'react'
+import React, { useState, useCallback, useEffect, useRef, Suspense } from 'react'
 import type { ViewerRef } from './Viewer'
 import MenuBar from './MenuBar'
 // Lazy load modal components for faster startup
@@ -54,6 +54,7 @@ import { STANDALONE_PERF_EVENT, StandalonePerfEntry, markStandalonePerf } from '
  * regular arrays that need to be typed arrays.
  */
 const MAX_STANDALONE_PERF_ENTRIES = 400
+const AUTO_UPDATE_CHECK_DATE_KEY = 'lastAutoUpdateCheck'
 
 type StandalonePerfHostWindow = Window & {
     __standalonePerfEntries?: StandalonePerfEntry[]
@@ -83,6 +84,7 @@ type MaterialManagerSnapshot = {
     geosets: any[]
     globalSequences: number[]
     sequences: any[]
+    textureAnims: any[]
     modelPath: string | undefined
 }
 
@@ -1359,6 +1361,9 @@ function prepareModelDataForSave(modelData: any): any {
                     // TextureID - can be number or AnimVector, default to 0
                     if (layer.TextureID === undefined || layer.TextureID === null) {
                         layer.TextureID = 0;
+                    } else if (typeof layer.TextureID === 'string') {
+                        const parsedTextureId = Number(layer.TextureID);
+                        layer.TextureID = Number.isFinite(parsedTextureId) ? Math.floor(parsedTextureId) : 0;
                     } else if (typeof layer.TextureID === 'object') {
                         // Fix AnimVector Key Vectors to be Int32Array
                         layer.TextureID = ensureAnimVector(layer.TextureID, 1, true, undefined, globalSeqCount) ?? layer.TextureID;
@@ -1788,6 +1793,7 @@ const MainLayout: React.FC = () => {
             geosets: [],
             globalSequences: [],
             sequences: [],
+            textureAnims: [],
             modelPath: undefined,
         } as MaterialManagerSnapshot,
         sourceRefs: {
@@ -1796,6 +1802,7 @@ const MainLayout: React.FC = () => {
             geosets: null as any[] | null,
             globalSequences: null as number[] | null,
             sequences: null as any[] | null,
+            textureAnims: null as any[] | null,
             modelPath: undefined as string | undefined,
         },
     })
@@ -1859,6 +1866,7 @@ const MainLayout: React.FC = () => {
             geosets: liveModelData?.Geosets || null,
             globalSequences: liveModelData?.GlobalSequences || null,
             sequences: liveModelData?.Sequences || null,
+            textureAnims: liveModelData?.TextureAnims || null,
             modelPath: liveModelState.modelPath,
         }
 
@@ -1868,6 +1876,7 @@ const MainLayout: React.FC = () => {
             cache.sourceRefs.geosets !== nextSourceRefs.geosets ||
             cache.sourceRefs.globalSequences !== nextSourceRefs.globalSequences ||
             cache.sourceRefs.sequences !== nextSourceRefs.sequences ||
+            cache.sourceRefs.textureAnims !== nextSourceRefs.textureAnims ||
             cache.sourceRefs.modelPath !== nextSourceRefs.modelPath
 
         if (snapshotChanged) {
@@ -1879,6 +1888,7 @@ const MainLayout: React.FC = () => {
                 geosets: stripGeosetData(liveModelData?.Geosets),
                 globalSequences: liveModelData?.GlobalSequences || [],
                 sequences: liveModelData?.Sequences || [],
+                textureAnims: liveModelData?.TextureAnims || [],
                 modelPath: liveModelState.modelPath,
             }
             markStandalonePerf('material_snapshot_cached', {
@@ -2219,9 +2229,8 @@ const MainLayout: React.FC = () => {
                     showMessage('warning', '提示', '正在保存模型，请稍候再关闭...');
                     return;
                 }
-                const { modelData } = useModelStore.getState();
-                const { isDirty } = useHistoryStore.getState();
-                if (modelData && isDirty && !closeConfirmVisibleRef.current) {
+                const { modelData, isAnyTabDirty } = useModelStore.getState();
+                if (modelData && isAnyTabDirty() && !closeConfirmVisibleRef.current) {
                     event.preventDefault();
                     setCloseConfirmVisible(true);
                 }
@@ -2565,6 +2574,11 @@ const MainLayout: React.FC = () => {
             const { action, payload: actionPayload } = payload;
             if (action === 'SAVE_TEXTURES') {
                 useModelStore.getState().setTextures(actionPayload);
+            } else if (action === 'SET_TEXTURE_SAVE_MODE') {
+                useRendererStore.getState().setTextureSaveMode(actionPayload?.mode === 'save_as' ? 'save_as' : 'overwrite');
+            } else if (action === 'SET_TEXTURE_SAVE_SUFFIX') {
+                const nextSuffix = typeof actionPayload?.suffix === 'string' ? actionPayload.suffix : '';
+                useRendererStore.getState().setTextureSaveSuffix(nextSuffix);
             } else if (action === 'RELOAD_RENDERER') {
                 useModelStore.getState().triggerRendererReload();
             }
@@ -2695,8 +2709,8 @@ const MainLayout: React.FC = () => {
         if (command === 'EXECUTE_MATERIAL_ACTION') {
             const { action, payload: actionPayload } = payload;
             if (action === 'SAVE_MATERIALS') {
-                useModelStore.getState().setMaterials(actionPayload.materials);
                 useModelStore.getState().setTextures(actionPayload.textures);
+                useModelStore.getState().setMaterials(actionPayload.materials);
                 if (actionPayload.geosets) {
                     useModelStore.getState().setGeosets(actionPayload.geosets);
                 }
@@ -3247,9 +3261,9 @@ const MainLayout: React.FC = () => {
         let unlistenDrop: (() => void) | undefined
         let unlistenEnter: (() => void) | undefined
         let unlistenLeave: (() => void) | undefined
-        const isSupportedAssetFile = (filePath: string): boolean => {
+        const isOpenableModelFile = (filePath: string): boolean => {
             const ext = filePath.toLowerCase().split('.').pop()
-            return ext === 'mdx' || ext === 'mdl' || ext === 'blp' || ext === 'tga'
+            return ext === 'mdx' || ext === 'mdl'
         }
 
         const setupDragDropListeners = async () => {
@@ -3267,7 +3281,7 @@ const MainLayout: React.FC = () => {
                     const paths = Array.isArray(event.payload?.paths) ? event.payload.paths : []
                     if (!paths || paths.length === 0) return
 
-                    const filePath = paths.find(isSupportedAssetFile)
+                    const filePath = paths.find(isOpenableModelFile)
                     if (!filePath) {
                         // Forward non-model external drops to feature-specific handlers (e.g. texture drop zones)
                         window.dispatchEvent(new CustomEvent('war3-external-file-drop', {
@@ -3291,9 +3305,9 @@ const MainLayout: React.FC = () => {
                     if (sourceWindowLabel && sourceWindowLabel !== currentWindowLabel) return
 
                     const paths = Array.isArray(event.payload?.paths) ? event.payload.paths : []
-                    const hasSupportedAsset = paths.some(isSupportedAssetFile)
-                    isExternalModelDragRef.current = hasSupportedAsset
-                    if (hasSupportedAsset) {
+                    const hasOpenableModel = paths.some(isOpenableModelFile)
+                    isExternalModelDragRef.current = hasOpenableModel
+                    if (hasOpenableModel) {
                         setIsDragging(true)
                     }
                 })
@@ -3352,8 +3366,30 @@ const MainLayout: React.FC = () => {
         /^[a-zA-Z]:\\/.test(path) || path.startsWith('\\\\');
     const getDirname = (path: string): string => {
         const normalized = normalizeWindowsPath(path);
-        const idx = normalized.lastIndexOf('');
+        const idx = normalized.lastIndexOf('\\');
         return idx >= 0 ? normalized.slice(0, idx) : normalized;
+    };
+    const getBasename = (path: string): string => {
+        const normalized = normalizeWindowsPath(path);
+        const idx = normalized.lastIndexOf('\\');
+        return idx >= 0 ? normalized.slice(idx + 1) : normalized;
+    };
+    const splitPathFileName = (path: string): { stem: string; ext: string } => {
+        const name = getBasename(path);
+        const dot = name.lastIndexOf('.');
+        if (dot <= 0) return { stem: name, ext: '' };
+        return { stem: name.slice(0, dot), ext: name.slice(dot) };
+    };
+    const isPathSeparator = (char: string): boolean => char === '/' || char === '\\';
+    const getPathDir = (path: string): string => {
+        const normalized = normalizeWindowsPath(path);
+        const idx = normalized.lastIndexOf('\\');
+        return idx >= 0 ? normalized.slice(0, idx) : '';
+    };
+    const joinPath = (dir: string, file: string): string => {
+        if (!dir) return file;
+        const normalizedDir = dir.replace(/[\\]+$/, '');
+        return `${normalizedDir}\\${file}`;
     };
 
     const clearAdjustmentKeysInStoreTextures = () => {
@@ -3367,6 +3403,79 @@ const MainLayout: React.FC = () => {
         });
     };
 
+    const buildTargetAssetPath = (targetModelDir: string, relativePath: string): string => {
+        const sanitizedDir = targetModelDir.replace(/[\\/]+$/, '')
+        const sanitizedRelative = normalizeWindowsPath(relativePath).replace(/^[\\/]+/, '')
+        return `${sanitizedDir}\\${sanitizedRelative}`
+    }
+
+    const copyReferencedTexturesToTarget = async (
+        preparedData: any,
+        sourceModelPath: string | null,
+        targetModelPath: string
+    ): Promise<{ copiedCount: number; failed: string[] }> => {
+        const textures = preparedData?.Textures
+        if (!Array.isArray(textures) || textures.length === 0 || !sourceModelPath) {
+            return { copiedCount: 0, failed: [] }
+        }
+
+        const sourceModelDir = getDirname(sourceModelPath)
+        const targetModelDir = getDirname(targetModelPath)
+        if (!sourceModelDir || !targetModelDir) {
+            return { copiedCount: 0, failed: [] }
+        }
+
+        const normalizedSourceDir = normalizeWindowsPath(sourceModelDir).replace(/[\\/]+$/, '').toLowerCase()
+        const normalizedTargetDir = normalizeWindowsPath(targetModelDir).replace(/[\\/]+$/, '').toLowerCase()
+        if (normalizedSourceDir === normalizedTargetDir) {
+            return { copiedCount: 0, failed: [] }
+        }
+
+        const { readFile, writeFile, mkdir, exists } = await import('@tauri-apps/plugin-fs')
+        const copied = new Set<string>()
+        const failed: string[] = []
+        let copiedCount = 0
+
+        for (const texture of textures) {
+            const imagePathRaw = texture?.Image
+            const replaceableId = Number(texture?.ReplaceableId ?? 0)
+            if (typeof imagePathRaw !== 'string' || !imagePathRaw || replaceableId > 0) {
+                continue
+            }
+
+            const normalizedImagePath = normalizeWindowsPath(imagePathRaw)
+            if (isAbsoluteWindowsPath(normalizedImagePath)) {
+                continue
+            }
+
+            const sourceTexturePath = buildTargetAssetPath(sourceModelDir, normalizedImagePath)
+            const targetTexturePath = buildTargetAssetPath(targetModelDir, normalizedImagePath)
+            const dedupeKey = targetTexturePath.toLowerCase()
+            if (copied.has(dedupeKey)) {
+                continue
+            }
+
+            try {
+                if (!(await exists(sourceTexturePath))) {
+                    continue
+                }
+
+                const targetTextureDir = getDirname(targetTexturePath)
+                if (targetTextureDir) {
+                    await mkdir(targetTextureDir, { recursive: true })
+                }
+
+                const bytes = await readFile(sourceTexturePath)
+                await writeFile(targetTexturePath, bytes)
+                copied.add(dedupeKey)
+                copiedCount += 1
+            } catch (error: any) {
+                failed.push(`${normalizedImagePath} (${error?.message || String(error)})`)
+            }
+        }
+
+        return { copiedCount, failed }
+    }
     const encodeAdjustedTexturesOnSave = async (
         preparedData: any,
         sourceModelPath: string | null,
@@ -3377,9 +3486,52 @@ const MainLayout: React.FC = () => {
             return { encodedCount: 0, failed: [] };
         }
 
-        const { writeFile, mkdir } = await import('@tauri-apps/plugin-fs');
+        const { writeFile, mkdir, exists } = await import('@tauri-apps/plugin-fs');
         const { invoke } = await import('@tauri-apps/api/core');
         const targetModelDir = getDirname(targetModelPath);
+        const decodeModelPath = sourceModelPath || targetModelPath;
+
+        const { textureSaveMode, textureSaveSuffix } = useRendererStore.getState();
+        const saveAsMode = textureSaveMode === 'save_as';
+        const baseSuffixRaw = typeof textureSaveSuffix === 'string' && textureSaveSuffix.trim().length > 0
+            ? textureSaveSuffix.trim()
+            : '_1';
+
+        const usedPaths = new Set<string>();
+        const normalizedPrefix = (input: string) => normalizeWindowsPath(input).toLowerCase();
+
+        textures.forEach((texture: any) => {
+            if (!texture?.Image) return;
+            usedPaths.add(normalizedPrefix(String(texture.Image)));
+        });
+
+        const resolveSaveAsPath = async (imagePathRaw: string): Promise<{ imagePath: string; outputPath: string }> => {
+            const normalizedImagePath = normalizeWindowsPath(imagePathRaw);
+            const isAbsolute = isAbsoluteWindowsPath(normalizedImagePath);
+            const originalDir = getPathDir(normalizedImagePath);
+            const { stem, ext } = splitPathFileName(normalizedImagePath);
+
+            const baseName = `${stem}${baseSuffixRaw}${ext}`;
+            const baseRelativePath = originalDir ? joinPath(originalDir, baseName) : baseName;
+
+            const buildOutput = (pathValue: string) => isAbsolute
+                ? pathValue
+                : buildTargetAssetPath(targetModelDir, pathValue);
+
+            let candidatePath = baseRelativePath;
+            let outputPath = buildOutput(candidatePath);
+            let attempt = 1;
+
+            while (usedPaths.has(normalizedPrefix(candidatePath)) || await exists(outputPath)) {
+                const nextName = `${stem}${baseSuffixRaw}${attempt}${ext}`;
+                candidatePath = originalDir ? joinPath(originalDir, nextName) : nextName;
+                outputPath = buildOutput(candidatePath);
+                attempt += 1;
+            }
+
+            usedPaths.add(normalizedPrefix(candidatePath));
+            return { imagePath: candidatePath, outputPath };
+        };
 
         let encodedCount = 0;
         const failed: string[] = [];
@@ -3402,7 +3554,6 @@ const MainLayout: React.FC = () => {
                 continue;
             }
 
-            const decodeModelPath = sourceModelPath || targetModelPath;
             const { decodeTexture } = await import('./viewer/textureLoader')
             const decodeResult = await decodeTexture(imagePathRaw, decodeModelPath);
             if (!decodeResult.imageData) {
@@ -3425,10 +3576,21 @@ const MainLayout: React.FC = () => {
                     continue;
                 }
 
-                const normalizedImagePath = normalizeWindowsPath(imagePathRaw);
-                const outputPath = isAbsoluteWindowsPath(normalizedImagePath)
-                    ? normalizedImagePath
-                    : `${targetModelDir}${normalizedImagePath}`;
+                let outputPath: string;
+                if (saveAsMode) {
+                    const resolved = await resolveSaveAsPath(imagePathRaw);
+                    texture.Image = resolved.imagePath;
+                    if (texture.Path !== undefined) {
+                        texture.Path = resolved.imagePath;
+                    }
+                    outputPath = resolved.outputPath;
+                } else {
+                    const normalizedImagePath = normalizeWindowsPath(imagePathRaw);
+                    outputPath = isAbsoluteWindowsPath(normalizedImagePath)
+                        ? normalizedImagePath
+                        : buildTargetAssetPath(targetModelDir, normalizedImagePath);
+                }
+
                 const outputDir = getDirname(outputPath);
                 if (outputDir) {
                     await mkdir(outputDir, { recursive: true });
@@ -3445,6 +3607,10 @@ const MainLayout: React.FC = () => {
     };
 
     const handleSave = async (): Promise<boolean> => {
+        if (isSavingRef.current) {
+            showMessage('warning', '提示', '正在保存模型，请稍候...')
+            return false
+        }
         if (!modelPath || !modelData) return false
 
         try {
@@ -3505,7 +3671,12 @@ const MainLayout: React.FC = () => {
                 );
             }
             if (textureEncodeResult.encodedCount > 0) {
-                clearAdjustmentKeysInStoreTextures();
+                const { textureSaveMode } = useRendererStore.getState();
+                if (textureSaveMode === 'save_as') {
+                    useModelStore.getState().setTextures(preparedData.Textures || []);
+                } else {
+                    clearAdjustmentKeysInStoreTextures();
+                }
                 try {
                     const { invoke } = await import('@tauri-apps/api/core');
                     await invoke('clear_texture_batch_cache');
@@ -3515,6 +3686,7 @@ const MainLayout: React.FC = () => {
             }
 
             useHistoryStore.getState().markSaved();
+            useModelStore.getState().markTabSaved();
             showMessage('success', '保存成功', '模型已保存')
             return true;
         } catch (err) {
@@ -3528,6 +3700,10 @@ const MainLayout: React.FC = () => {
     handleSaveRef.current = handleSave;
 
     const handleSaveAs = async (): Promise<boolean> => {
+        if (isSavingRef.current) {
+            showMessage('warning', '提示', '正在保存模型，请稍候...')
+            return false
+        }
         if (!modelData) return false
         try {
             const { save } = await import('@tauri-apps/plugin-dialog')
@@ -3569,6 +3745,13 @@ const MainLayout: React.FC = () => {
                 }
 
                 const textureEncodeResult = await encodeAdjustedTexturesOnSave(preparedData, modelPath, selected);
+                const textureCopyResult = await copyReferencedTexturesToTarget(preparedData, modelPath, selected);
+                if (textureEncodeResult.encodedCount > 0) {
+                    const { textureSaveMode } = useRendererStore.getState();
+                    if (textureSaveMode === 'save_as') {
+                        useModelStore.getState().setTextures(preparedData.Textures || []);
+                    }
+                }
 
                 if (selected.toLowerCase().endsWith('.mdl')) {
                     cleanupInvalidGeosets(preparedData)
@@ -3587,6 +3770,14 @@ const MainLayout: React.FC = () => {
                         `${textureEncodeResult.failed.length} 个贴图写出失败：n${lines}${textureEncodeResult.failed.length > 3 ? 'n...' : ''}`
                     );
                 }
+                if (textureCopyResult.failed.length > 0) {
+                    const lines = textureCopyResult.failed.slice(0, 3).join('n');
+                    showMessage(
+                        'warning',
+                        '部分贴图复制失败',
+                        `${textureCopyResult.failed.length} 个贴图复制失败：n${lines}${textureCopyResult.failed.length > 3 ? 'n...' : ''}`
+                    );
+                }
                 if (textureEncodeResult.encodedCount > 0) {
                     try {
                         const { invoke } = await import('@tauri-apps/api/core');
@@ -3597,6 +3788,7 @@ const MainLayout: React.FC = () => {
                 }
                 // Update store with new path if needed, but for now just alert
                 useHistoryStore.getState().markSaved();
+                useModelStore.getState().markTabSaved();
                 showMessage('success', '另存为成功', '模型已另存为: ' + selected)
                 return true;
             }
@@ -3723,7 +3915,7 @@ const MainLayout: React.FC = () => {
             registerShortcutHandler('editor.materialManager', () => {
                 // Not rendering inline material modal anymore
                 // setShowMaterialModal(prev => !prev);
-                windowManager.openToolWindow('materialManager', '材质管理器', 650, 380);
+                windowManager.openMaterialManager();
                 return true;
             }),
             registerShortcutHandler('editor.sequenceManager', () => {
@@ -3861,6 +4053,7 @@ const MainLayout: React.FC = () => {
 
                 // Cleanup invalid geosets BEFORE validation
                 cleanupInvalidGeosets(preparedData)
+                await copyReferencedTexturesToTarget(preparedData, modelPath, filePath)
 
                 // Validate before export
                 const validationErrors = validateModelData(preparedData);
@@ -3921,6 +4114,7 @@ const MainLayout: React.FC = () => {
 
                 // Cleanup invalid geosets BEFORE validation
                 cleanupInvalidGeosets(preparedData)
+                await copyReferencedTexturesToTarget(preparedData, modelPath, filePath)
 
                 // Validate before export
                 const validationErrors = validateModelData(preparedData);
@@ -4078,6 +4272,8 @@ const MainLayout: React.FC = () => {
     }, [showAbout, fetchActivationStatus])
 
     const handleCheckUpdate = useCallback(async () => {
+        const today = new Date().toISOString().split('T')[0]
+        localStorage.setItem(AUTO_UPDATE_CHECK_DATE_KEY, today)
         const { checkGiteeUpdate } = await import('../services/updateService')
         await checkGiteeUpdate()
     }, [])
@@ -4092,14 +4288,18 @@ const MainLayout: React.FC = () => {
         let disposed = false
 
         const timeoutId = window.setTimeout(() => {
+            const today = new Date().toISOString().split('T')[0]
+            if (localStorage.getItem(AUTO_UPDATE_CHECK_DATE_KEY) === today) {
+                return
+            }
+
+            localStorage.setItem(AUTO_UPDATE_CHECK_DATE_KEY, today)
             void import('../services/updateService').then(({ checkGiteeUpdateSilent }) => {
                 if (disposed) {
                     return
                 }
 
-                const today = new Date().toISOString().split('T')[0]
                 checkGiteeUpdateSilent()
-                localStorage.setItem('lastUpdateCheck', today)
             })
         }, 1500)
 
@@ -4249,8 +4449,7 @@ const MainLayout: React.FC = () => {
                     } else if (editor === 'camera') {
                         windowManager.openToolWindow('cameraManager', '相机管理器', 700, 520);
                     } else if (editor === 'material') {
-
-                        windowManager.openToolWindow('materialManager', '材质管理器', 650, 380)
+                        windowManager.openMaterialManager()
                     } else if (editor === 'geoset') {
                         windowManager.openToolWindow('geosetEditor', '多边形管理器', 640, 480);
                     } else if (editor === 'geosetAnim') {
@@ -4651,6 +4850,16 @@ const MainLayout: React.FC = () => {
 }
 
 export default MainLayout
+
+
+
+
+
+
+
+
+
+
 
 
 

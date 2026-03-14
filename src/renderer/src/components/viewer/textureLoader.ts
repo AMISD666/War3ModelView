@@ -154,6 +154,9 @@ export async function loadTextureFromMPQ(texturePath: string): Promise<ImageData
 export async function loadTextureFromFile(filePath: string): Promise<ImageData | null> {
     try {
         const texBuffer = await readFile(filePath)
+        if (filePath.toLowerCase().endsWith('.png')) {
+            return await decodePngImageData(texBuffer)
+        }
         return decodeTextureData(texBuffer.buffer, filePath)
     } catch (e) {
         // File loading failed
@@ -268,6 +271,26 @@ function forceOpaqueAlphaIfNeeded(imageData: ImageData, forceOpaqueAlpha?: boole
         data[i] = 255
     }
     return imageData
+}
+
+async function decodePngImageData(bytes: Uint8Array): Promise<ImageData | null> {
+    try {
+        const blob = new Blob([bytes], { type: 'image/png' })
+        const bitmap = await createImageBitmap(blob)
+        const canvas =
+            typeof OffscreenCanvas !== 'undefined'
+                ? new OffscreenCanvas(bitmap.width, bitmap.height)
+                : document.createElement('canvas')
+        canvas.width = bitmap.width
+        canvas.height = bitmap.height
+        const ctx = canvas.getContext('2d', { alpha: true, willReadFrequently: true })
+        if (!ctx) return null
+        ctx.clearRect(0, 0, bitmap.width, bitmap.height)
+        ctx.drawImage(bitmap, 0, 0)
+        return ctx.getImageData(0, 0, bitmap.width, bitmap.height)
+    } catch (e) {
+        return null
+    }
 }
 
 interface ImageLumaStats {
@@ -618,8 +641,12 @@ export async function decodeTexture(
     const startTime = performance.now()
 
     // Helper to decode buffer based on type
-    const decodeBuffer = (buffer: ArrayBuffer) =>
-        decodeTextureData(buffer, texturePath, options)
+    const decodeBuffer = async (buffer: ArrayBuffer) => {
+        if (texturePath.toLowerCase().endsWith('.png') && modelPath && !modelPath.startsWith('dropped:')) {
+            return await decodePngImageData(new Uint8Array(buffer))
+        }
+        return decodeTextureData(buffer, texturePath, options)
+    }
 
     // Strategy 1: Try local file system first (relative to model)
     if (modelPath && !modelPath.startsWith('dropped:')) {
@@ -628,7 +655,7 @@ export async function decodeTexture(
             const texBuffer = await readFile(candidate).catch(() => null)
             if (texBuffer) {
                 try {
-                    const imageData = decodeBuffer(texBuffer.buffer)
+                    const imageData = await decodeBuffer(texBuffer.buffer)
                     if (!imageData) continue
                     console.debug(`[Texture] ${texturePath}: Decoded from FS in ${(performance.now() - startTime).toFixed(1)}ms`)
                     return { path: texturePath, imageData }
@@ -643,7 +670,7 @@ export async function decodeTexture(
     try {
         const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: normalizePath(texturePath) })
         if (mpqData && mpqData.length > 0) {
-            const imageData = decodeBuffer(mpqData.buffer as ArrayBuffer)
+            const imageData = await decodeBuffer(mpqData.buffer as ArrayBuffer)
             if (!imageData) {
                 return { path: texturePath, imageData: null, error: 'Decode failed' }
             }
@@ -658,7 +685,7 @@ export async function decodeTexture(
     try {
         const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: normalizePath(texturePath) })
         if (mpqData && mpqData.length > 0) {
-            const imageData = decodeBuffer(mpqData.buffer as ArrayBuffer)
+            const imageData = await decodeBuffer(mpqData.buffer as ArrayBuffer)
             if (!imageData) {
                 return { path: texturePath, imageData: null, error: 'Decode failed' }
             }
