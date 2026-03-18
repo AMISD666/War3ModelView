@@ -1,6 +1,8 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { thumbnailEventBus } from './ThumbnailEventBus';
 
 interface AnimatedPreviewProps {
+    fullPath?: string;
     bitmap?: ImageBitmap | null;
     width?: number;
     height?: number;
@@ -14,14 +16,22 @@ interface AnimatedPreviewProps {
  * by the centralized ThumbnailService. This avoids WebGL context corruption.
  */
 export const AnimatedPreview: React.FC<AnimatedPreviewProps> = React.memo(({
+    fullPath,
     bitmap,
-    width = 256,
-    height = 256,
+    width = 160,
+    height = 160,
     isSelected = false
 }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const hostRef = useRef<HTMLDivElement>(null);
     const bitmapRef = useRef<ImageBitmap | null>(null);
+    const rafRef = useRef<number | null>(null);
+    const hasBitmapRef = useRef<boolean>(false);
+    const [hasBitmap, setHasBitmap] = useState<boolean>(() => {
+        if (bitmap) return true;
+        if (fullPath) return !!thumbnailEventBus.getBitmap(fullPath);
+        return false;
+    });
 
     const drawBitmap = () => {
         const canvas = canvasRef.current;
@@ -45,6 +55,18 @@ export const AnimatedPreview: React.FC<AnimatedPreviewProps> = React.memo(({
         }
     };
 
+    const scheduleDraw = () => {
+        if (typeof window === 'undefined') {
+            drawBitmap();
+            return;
+        }
+        if (rafRef.current !== null) return;
+        rafRef.current = window.requestAnimationFrame(() => {
+            rafRef.current = null;
+            drawBitmap();
+        });
+    };
+
     const syncCanvasResolution = () => {
         const canvas = canvasRef.current;
         const host = hostRef.current;
@@ -53,7 +75,7 @@ export const AnimatedPreview: React.FC<AnimatedPreviewProps> = React.memo(({
         const rect = host.getBoundingClientRect();
         const cssW = rect.width > 0 ? rect.width : width;
         const cssH = rect.height > 0 ? rect.height : height;
-        const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
+        const dpr = typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, 1) : 1;
 
         let targetW = Math.max(1, Math.round(cssW * dpr));
         let targetH = Math.max(1, Math.round(cssH * dpr));
@@ -70,15 +92,49 @@ export const AnimatedPreview: React.FC<AnimatedPreviewProps> = React.memo(({
         if (canvas.width !== targetW || canvas.height !== targetH) {
             canvas.width = targetW;
             canvas.height = targetH;
-            drawBitmap();
+            scheduleDraw();
         }
     };
 
     useEffect(() => {
         bitmapRef.current = bitmap || null;
-        if (!bitmap) return;
-        drawBitmap();
+        if (bitmap) {
+            if (!hasBitmapRef.current) {
+                hasBitmapRef.current = true;
+                setHasBitmap(true);
+            }
+            scheduleDraw();
+        } else if (!fullPath) {
+            hasBitmapRef.current = false;
+            setHasBitmap(false);
+        }
     }, [bitmap]);
+
+    useEffect(() => {
+        if (!fullPath) return;
+
+        const existing = thumbnailEventBus.getBitmap(fullPath) || null;
+        bitmapRef.current = existing;
+        hasBitmapRef.current = !!existing;
+        setHasBitmap(!!existing);
+        if (existing) {
+            scheduleDraw();
+        }
+
+        const handleUpdate = (nextBitmap: ImageBitmap) => {
+            bitmapRef.current = nextBitmap;
+            if (!hasBitmapRef.current) {
+                hasBitmapRef.current = true;
+                setHasBitmap(true);
+            }
+            scheduleDraw();
+        };
+
+        thumbnailEventBus.on(`update:${fullPath}`, handleUpdate);
+        return () => {
+            thumbnailEventBus.off(`update:${fullPath}`, handleUpdate);
+        };
+    }, [fullPath]);
 
     useEffect(() => {
         syncCanvasResolution();
@@ -100,6 +156,10 @@ export const AnimatedPreview: React.FC<AnimatedPreviewProps> = React.memo(({
             if (observer) observer.disconnect();
             if (typeof window !== 'undefined') {
                 window.removeEventListener('resize', onResize);
+                if (rafRef.current !== null) {
+                    window.cancelAnimationFrame(rafRef.current);
+                    rafRef.current = null;
+                }
             }
         };
     }, [width, height]);
@@ -128,7 +188,7 @@ export const AnimatedPreview: React.FC<AnimatedPreviewProps> = React.memo(({
                     boxSizing: 'border-box'
                 }}
             />
-            {!bitmap && (
+            {!hasBitmap && (
                 <div style={{
                     position: 'absolute',
                     fontSize: 24,

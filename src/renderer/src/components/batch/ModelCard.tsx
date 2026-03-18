@@ -56,18 +56,15 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
     onDoubleClick,
     onVisibilityChange
 }) => {
-    const [bitmap, setBitmap] = useState<ImageBitmap | null>(thumbnailEventBus.getBitmap(file.fullPath) || null);
     const [animations, setAnimations] = useState<string[]>(initialAnimations);
     const [selectedAnimation, setSelectedAnimation] = useState<string | undefined>(
         () => initialSelectedAnimation ?? pickPreferredAnimation(initialAnimations)
     );
     const cardRef = useRef<HTMLDivElement>(null);
 
-    // 1. Subscribe to Thumbnail Updates (Bypass parent re-render)
+    // 1. Subscribe to animation metadata updates. Thumbnail bitmap updates are handled
+    // directly inside AnimatedPreview to avoid React re-renders on every frame.
     useEffect(() => {
-        const handleUpdate = (newBitmap: ImageBitmap) => {
-            setBitmap(newBitmap);
-        };
         const handleAnims = (newAnims: string[]) => {
             setAnimations(newAnims);
             if (!selectedAnimation && newAnims.length > 0) {
@@ -75,11 +72,9 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
             }
         };
 
-        thumbnailEventBus.on(`update:${file.fullPath}`, handleUpdate);
         thumbnailEventBus.on(`animations:${file.fullPath}`, handleAnims);
 
         return () => {
-            thumbnailEventBus.off(`update:${file.fullPath}`, handleUpdate);
             thumbnailEventBus.off(`animations:${file.fullPath}`, handleAnims);
         };
     }, [file.fullPath, selectedAnimation]);
@@ -133,7 +128,7 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
                 alignItems: 'center'
             }}>
                 <AnimatedPreview
-                    bitmap={bitmap}
+                    fullPath={file.fullPath}
                     isSelected={isSelected}
                 />
 

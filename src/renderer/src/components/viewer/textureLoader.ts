@@ -13,6 +13,7 @@ import {
     TEXTURE_ADJUSTMENTS_KEY,
     TextureAdjustments
 } from '../../utils/textureAdjustments'
+import { createTextureDecodeCacheKey, getCachedDecodedTexture, setCachedDecodedTexture } from './textureDecodeCache'
 
 export interface TextureLoadResult {
     path: string
@@ -1150,6 +1151,7 @@ export async function loadAllTextures(
     }
 
     const decodedTextures = new Map<string, DecodedTextureImage>()
+    const decodeCacheKeys = new Map<string, string>()
     const workers = normalizeWorkers(worker)
 
     try {
@@ -1159,17 +1161,35 @@ export async function loadAllTextures(
         })
         const decodedBatch = parseTextureBytesPayload(payload, effectiveTexturePaths)
         const entries = Array.from(decodedBatch.entries())
-        const totalBytes = entries.reduce((sum, [, bytes]) => sum + bytes.byteLength, 0)
+        const uncachedEntries: Array<[string, Uint8Array]> = []
+
+        for (const [path, bytes] of entries) {
+            const cacheKey = createTextureDecodeCacheKey(path, bytes, {
+                adjustments: textureAdjustmentsByPath.get(path),
+                maxDimension,
+                preferBlpBaseMip: alphaRequiredTexturePaths.has(path)
+            })
+            decodeCacheKeys.set(path, cacheKey)
+
+            const cachedImage = getCachedDecodedTexture(cacheKey)
+            if (cachedImage) {
+                decodedTextures.set(path, cachedImage)
+            } else {
+                uncachedEntries.push([path, bytes])
+            }
+        }
+
+        const totalBytes = uncachedEntries.reduce((sum, [, bytes]) => sum + bytes.byteLength, 0)
         const workerDecodeMinTextures = options?.workerDecodeMinTextures ?? 6
         const workerDecodeMinBytes = options?.workerDecodeMinBytes ?? (5 * 1024 * 1024)
         const useWorkerPool =
             workers.length > 0 &&
-            entries.length >= workerDecodeMinTextures &&
+            uncachedEntries.length >= workerDecodeMinTextures &&
             totalBytes >= workerDecodeMinBytes
 
         if (useWorkerPool) {
             const pooled = await decodeBatchWithWorkerPool(
-                entries,
+                uncachedEntries,
                 workers,
                 textureAdjustmentsByPath,
                 alphaRequiredTexturePaths,
@@ -1177,9 +1197,13 @@ export async function loadAllTextures(
             )
             for (const [path, image] of pooled.entries()) {
                 decodedTextures.set(path, image)
+                const cacheKey = decodeCacheKeys.get(path)
+                if (cacheKey) {
+                    setCachedDecodedTexture(cacheKey, image)
+                }
             }
         } else {
-            for (const [path, bytes] of entries) {
+            for (const [path, bytes] of uncachedEntries) {
                 const buffer = toTightArrayBuffer(bytes)
                 const imageData = decodeTextureData(buffer, path, {
                     adjustments: textureAdjustmentsByPath.get(path),
@@ -1188,59 +1212,15 @@ export async function loadAllTextures(
                 })
                 if (imageData) {
                     decodedTextures.set(path, imageData)
+                    const cacheKey = decodeCacheKeys.get(path)
+                    if (cacheKey) {
+                        setCachedDecodedTexture(cacheKey, imageData)
+                    }
                 }
             }
         }
     } catch (e) {
         console.error('[Viewer] Texture batch load failed:', e)
-    }
-
-    const missingPaths = effectiveTexturePaths.filter(path => !decodedTextures.has(path))
-    if (missingPaths.length > 0) {
-        const fallbackResults = await Promise.all(
-            missingPaths.map(async (path) => {
-                if (modelPath && !modelPath.startsWith('dropped:')) {
-                    const candidates = getTextureCandidatePaths(modelPath, path)
-                    for (const candidate of candidates) {
-                        const buffer = await readFile(candidate).catch(() => null)
-                        if (buffer) {
-                            const imageData = decodeTextureData(buffer.buffer, path, {
-                                adjustments: textureAdjustmentsByPath.get(path),
-                                maxDimension,
-                                preferBlpBaseMip: alphaRequiredTexturePaths.has(path)
-                            })
-                            if (imageData) {
-                                return { path, imageData }
-                            }
-                        }
-                    }
-                }
-
-                try {
-                    const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: normalizePath(path) })
-                    if (mpqData && mpqData.length > 0) {
-                        const imageData = decodeTextureData(mpqData.buffer as ArrayBuffer, path, {
-                            adjustments: textureAdjustmentsByPath.get(path),
-                            maxDimension,
-                            preferBlpBaseMip: alphaRequiredTexturePaths.has(path)
-                        })
-                        if (imageData) {
-                            return { path, imageData }
-                        }
-                    }
-                } catch {
-                    // ignore fallback failure
-                }
-
-                return { path, imageData: null as DecodedTextureImage | null }
-            })
-        )
-
-        fallbackResults.forEach(result => {
-            if (result.imageData) {
-                decodedTextures.set(result.path, result.imageData)
-            }
-        })
     }
 
     const shouldYieldUploads = !!options?.yieldUploads

@@ -42,19 +42,6 @@ interface BatchManagerProps {
     onToggleFullBatchView?: () => void;
 }
 
-function pickPreferredAnimation(animations: string[]): string | undefined {
-    if (animations.length === 0) return undefined;
-
-    const exactStand = animations.find((name) => name.trim().toLowerCase() === 'stand');
-    if (exactStand) return exactStand;
-
-    const standPrefix = animations.find((name) => /^stand(\b|[^a-z0-9_])/i.test(name.trim()));
-    if (standPrefix) return standPrefix;
-
-    const standContains = animations.find((name) => name.trim().toLowerCase().includes('stand'));
-    return standContains ?? animations[0];
-}
-
 export const BatchManager: React.FC<BatchManagerProps> = ({
     onSelectModel,
     onAnimationChange,
@@ -74,7 +61,6 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
     const setQueue = useBatchStore(state => state.setQueue);
     const updateQueue = useBatchStore(state => state.updateQueue);
     const modelAnimations = useBatchStore(state => state.modelAnimations);
-    const setModelAnimations = useBatchStore(state => state.setModelAnimations);
     const selectedAnimations = useBatchStore(state => state.selectedAnimations);
     const setSelectedAnimations = useBatchStore(state => state.setSelectedAnimations);
     const loading = useBatchStore(state => state.isLoading);
@@ -86,13 +72,13 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
     const CARD_GAP = 12;
     const [currentPage, setCurrentPage] = useState(1);
     const [pageSize, setPageSize] = useState<number>(() => {
-        if (typeof window === 'undefined') return 15;
+        if (typeof window === 'undefined') return 50;
         const raw = window.localStorage.getItem('batch.pageSize');
         const parsed = raw ? Number(raw) : NaN;
         if (Number.isFinite(parsed) && PAGE_SIZE_OPTIONS.includes(parsed)) {
             return parsed;
         }
-        return 15;
+        return 75;
     });
     const [visiblePaths, setVisiblePaths] = useState<Set<string>>(new Set());
     const [fastMode, setFastMode] = useState(false);
@@ -172,8 +158,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
             const initialPageFiles = modelFiles.slice(0, pageSize);
             setQueue(initialPageFiles.map(f => ({ name: f.name, fullPath: f.fullPath })));
             const currentPagePaths = initialPageFiles.map(f => f.fullPath);
-            const warmupFiles = modelFiles.slice(pageSize, pageSize * 2).map(f => f.fullPath);
-            void thumbnailService.prefetch([...currentPagePaths, ...warmupFiles], 4, { withTextures: true });
+            void thumbnailService.prefetch(currentPagePaths, 8, { withTextures: false });
 
             message.success(`找到 ${modelFiles.length} 个模型文件`);
         } catch (err) {
@@ -275,24 +260,9 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
         thumbnailEventBus.emitThumbnail(fullPath, bitmap);
 
         if (animations && animations.length > 0) {
-            // Only update animation list if it's new or different
-            setModelAnimations(prev => {
-                if (prev[fullPath] && prev[fullPath].length === animations.length) {
-                    return prev;
-                }
-                return { ...prev, [fullPath]: animations };
-            });
-
             thumbnailEventBus.emitAnimations(fullPath, animations);
-
-            // Default to Stand animation if available, otherwise fallback to first
-            setSelectedAnimations(prev => {
-                if (prev[fullPath]) return prev;
-                const preferred = pickPreferredAnimation(animations) ?? animations[0];
-                return { ...prev, [fullPath]: preferred };
-            });
         }
-    }, [setModelAnimations, setSelectedAnimations]);
+    }, []);
 
     const handleVisibilityChange = useCallback((fullPath: string, isVisible: boolean) => {
         setVisiblePaths(prev => {
@@ -312,9 +282,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
         const pageFiles = files.slice(start, start + size);
         setQueue(pageFiles.map(f => ({ name: f.name, fullPath: f.fullPath })));
         const currentPagePaths = pageFiles.map(f => f.fullPath);
-        const warmupStart = start + size;
-        const warmupFiles = files.slice(warmupStart, warmupStart + size).map(f => f.fullPath);
-        void thumbnailService.prefetch([...currentPagePaths, ...warmupFiles], 4, { withTextures: true });
+        void thumbnailService.prefetch(currentPagePaths, 8, { withTextures: false });
     };
 
     const handlePageSizeChange = (size: number) => {
@@ -324,8 +292,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
         const pageFiles = files.slice(0, size);
         setQueue(pageFiles.map(f => ({ name: f.name, fullPath: f.fullPath })));
         const currentPagePaths = pageFiles.map(f => f.fullPath);
-        const warmupFiles = files.slice(size, size * 2).map(f => f.fullPath);
-        void thumbnailService.prefetch([...currentPagePaths, ...warmupFiles], 4, { withTextures: true });
+        void thumbnailService.prefetch(currentPagePaths, 8, { withTextures: false });
     };
 
     const handleFastModeChange = (checked: boolean) => {
@@ -334,17 +301,15 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
     };
 
     const handleItemProcessed = useCallback((fullPath: string) => {
-        updateQueue(prev => {
-            if (prev.length > 0 && prev[0].fullPath === fullPath) {
-                return prev.slice(1);
-            }
-            return prev;
-        });
+        updateQueue(prev => prev.filter(item => item.fullPath !== fullPath));
     }, [updateQueue]);
 
     const handleAnimationChange = useCallback((file: ModelFile, animation: string) => {
         setSelectedAnimations(prev => ({ ...prev, [file.fullPath]: animation }));
-        const animations = modelAnimations[file.fullPath] || [];
+        const animations = modelAnimations[file.fullPath]
+            || thumbnailEventBus.getAnimations(file.fullPath)
+            || thumbnailService.getCachedAnimations(file.fullPath)
+            || [];
         const animationIndex = animations.indexOf(animation);
         if (onAnimationChange && animationIndex >= 0) {
             onAnimationChange(animationIndex);
@@ -358,7 +323,10 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
     const handleDoubleClick = useCallback((file: ModelFile) => {
         setSelectedFile(file.fullPath);
         const selectedAnim = selectedAnimations[file.fullPath] || '';
-        const animations = modelAnimations[file.fullPath] || [];
+        const animations = modelAnimations[file.fullPath]
+            || thumbnailEventBus.getAnimations(file.fullPath)
+            || thumbnailService.getCachedAnimations(file.fullPath)
+            || [];
         const animationIndex = Math.max(0, animations.indexOf(selectedAnim));
         if (onSelectModel) {
             onSelectModel(file.fullPath, animationIndex);

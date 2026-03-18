@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState, forwardRef, useImperativeHandle, useMemo, useCallback } from 'react'
-import { decodeBLP, getBLPImageData, parseMDX, parseMDL, ModelRenderer } from 'war3-model'
+import { decodeBLP, getBLPImageData, ModelRenderer } from 'war3-model'
 // @ts-ignore
 import ModelWorker from '../workers/model-worker.worker?worker'
 import TextureAdjustWorker from '../workers/texture-adjust.worker?worker'
 import { SimpleOrbitCamera } from '../utils/SimpleOrbitCamera'
 import { decodeTextureData, getTextureCandidatePaths, loadAllTextures, normalizePath } from './viewer/textureLoader'
+import { createModelParseCacheKey, getCachedParsedModel, setCachedParsedModel } from './viewer/modelParseCache'
 import { validateAllParticleEmitters } from './viewer/particleValidator'
 import { checkForStructuralChanges } from './viewer/modelSync'
 import { getEnvironmentManager } from './viewer/EnvironmentManager'
@@ -2844,7 +2845,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         setLoadingStatus('正在解析模型...')
         const buffer = await readPathBytes(path)
         const parseWithWorker = (bytes: Uint8Array) =>
-          new Promise<any>((resolve, reject) => {
+          new Promise<{ model: any; parseMs?: number }>((resolve, reject) => {
             const timer = setTimeout(() => reject(new Error('Model parsing timeout')), 30000)
             const oldOnMessage = parseWorker.onmessage
             parseWorker.onmessage = (e: any) => {
@@ -2852,7 +2853,10 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
               if (type === 'PARSE_SUCCESS') {
                 clearTimeout(timer)
                 parseWorker.onmessage = oldOnMessage
-                resolve(payload.model)
+                resolve({
+                  model: payload.model,
+                  parseMs: payload.parseMs
+                })
               } else if (type === 'ERROR') {
                 clearTimeout(timer)
                 parseWorker.onmessage = oldOnMessage
@@ -2866,20 +2870,15 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             }, [tightBuffer])
           })
 
-        const tightBuffer = toTightArrayBuffer(buffer)
-        try {
-          if (path.toLowerCase().endsWith('.mdl')) {
-            const text = new TextDecoder().decode(tightBuffer)
-            model = parseMDL(text)
-          } else {
-            model = parseMDX(tightBuffer)
-          }
-          if (!model) {
-            throw new Error('Main-thread parser returned empty model')
-          }
-        } catch (mainParseError) {
-          console.warn('[Viewer] Main-thread parse failed, fallback to worker parser:', mainParseError)
-          model = await parseWithWorker(buffer)
+        const cacheKey = createModelParseCacheKey(path, buffer)
+        const cachedModel = getCachedParsedModel(cacheKey)
+        if (cachedModel) {
+          model = cachedModel
+          console.log('[Viewer] Loaded parsed model from cache')
+        } else {
+          const parseResult = await parseWithWorker(buffer)
+          model = parseResult.model
+          setCachedParsedModel(cacheKey, model)
         }
       }
       console.timeEnd('[Viewer] MDX Parse')
@@ -7503,8 +7502,6 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 })
 
 export default Viewer
-
-
 
 
 

@@ -130,6 +130,7 @@ self.onmessage = async (e) => {
     try {
         if (type === 'PARSE_MODEL') {
             const { buffer, path } = payload;
+            const parseStart = performance.now();
             let model: any;
             if (path.toLowerCase().endsWith('.mdl')) {
                 const text = new TextDecoder().decode(buffer);
@@ -140,7 +141,13 @@ self.onmessage = async (e) => {
 
             if (!model) throw new Error('Failed to parse model');
 
-            (self as any).postMessage({ type: 'PARSE_SUCCESS', payload: { model } });
+            (self as any).postMessage({
+                type: 'PARSE_SUCCESS',
+                payload: {
+                    model,
+                    parseMs: performance.now() - parseStart
+                }
+            });
         }
         else if (type === 'DECODE_TEXTURE') {
             const { id, path } = payload as DecodeTextureTaskPayload;

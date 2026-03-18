@@ -23,7 +23,7 @@ const REPLACEABLE_TEXTURES: Record<number, string> = {
     37: 'OutlandMushroomTree\\MushroomTree',
 }
 
-const THUMBNAIL_SIZE = 256;
+const THUMBNAIL_SIZE = 160;
 
 // --- TGA Constants ---
 const TGA_TYPE_RGB = 2;
@@ -247,7 +247,44 @@ const CACHE_LIMIT = 24;
 self.onmessage = async (e) => {
     const { type, payload } = e.data;
 
-    if (type === 'RENDER') {
+    if (type === 'WARMUP') {
+        try {
+            await initGL();
+            self.postMessage({ type: 'WARMED' });
+        } catch (err: any) {
+            self.postMessage({
+                type: 'ERROR',
+                payload: {
+                    fullPath: '',
+                    error: String(err),
+                    stack: err?.stack
+                }
+            });
+        }
+    } else if (type === 'PRELOAD') {
+        try {
+            const result = await render({ ...payload, preloadOnly: true });
+            self.postMessage({
+                type: 'PRELOADED',
+                payload: {
+                    fullPath: payload.fullPath,
+                    animations: result?.animations,
+                    texturePaths: result?.texturePaths,
+                    metrics: result?.metrics
+                }
+            });
+        } catch (err: any) {
+            console.error('[Worker] Preload failed:', err);
+            self.postMessage({
+                type: 'ERROR',
+                payload: {
+                    fullPath: payload.fullPath,
+                    error: String(err),
+                    stack: err.stack
+                }
+            });
+        }
+    } else if (type === 'RENDER') {
         try {
             const result = await render(payload);
             if (result) {
@@ -399,7 +436,8 @@ async function render(
         envLightingEnabled?: boolean,
         envLightDirection?: [number, number, number],
         envLightColor?: [number, number, number],
-        envAmbientColor?: [number, number, number]
+        envAmbientColor?: [number, number, number],
+        preloadOnly?: boolean
     }
 ) {
     const {
@@ -423,7 +461,8 @@ async function render(
         envLightingEnabled = false,
         envLightDirection,
         envLightColor,
-        envAmbientColor
+        envAmbientColor,
+        preloadOnly = false
     } = payload;
 
     await initGL();
@@ -568,6 +607,20 @@ async function render(
     // At this point item is guaranteed to exist
     const cacheItem = item!;
     const { renderer, model } = cacheItem;
+
+    if (preloadOnly) {
+        const renderMs = performance.now() - renderStartMs;
+        return {
+            animations: (model.Sequences || []).map((s: any) => s.Name || 'Unknown'),
+            texturePaths: cacheItem.texturePaths || [],
+            metrics: {
+                renderMs,
+                coldStartMs,
+                parseMs,
+                drawMs: 0
+            }
+        };
+    }
 
     // Decode raw texture bytes in the worker if provided (main thread sends compressed bytes)
     let effectiveTextureImages = textureImages;
@@ -777,7 +830,6 @@ async function render(
         try {
             const drawStart = performance.now();
             renderer.render(mvMatrix, pMatrix, { wireframe, enableLighting });
-            gl.flush(); // Ensure GPU is done before transfer
             drawMs = performance.now() - drawStart;
         } finally {
             if (particlesController) {
@@ -795,7 +847,9 @@ async function render(
         renderers.delete(fullPath);
     }
 
+    const transferStart = performance.now();
     const bitmap = canvas!.transferToImageBitmap();
+    const transferMs = performance.now() - transferStart;
 
     const renderMs = performance.now() - renderStartMs;
     return {
@@ -806,7 +860,8 @@ async function render(
             renderMs,
             coldStartMs,
             parseMs,
-            drawMs
+            drawMs,
+            transferMs
         }
     };
 }
