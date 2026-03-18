@@ -35,7 +35,7 @@ const DISPLAY_KEY_MAP: Record<string, string> = {
     ArrowDown: '↓',
     ArrowLeft: '←',
     ArrowRight: '→',
-    Backquote: '`',
+    Backquote: '~',
     Space: 'Space',
     PageUp: 'PageUp',
     PageDown: 'PageDown',
@@ -128,6 +128,5 @@ export const isTextInputActive = (): boolean => {
         ])
         return textLikeTypes.has(el.type)
     }
-    if (el instanceof HTMLElement && el.isContentEditable) return true
     return false
 }

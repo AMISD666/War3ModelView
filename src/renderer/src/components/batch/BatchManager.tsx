@@ -26,7 +26,7 @@ import { registerShortcutHandler } from '../../shortcuts/manager';
 
 const { Content, Header } = Layout;
 const { Text } = Typography;
-const PAGE_SIZE_OPTIONS = [5, 10, 15, 20, 25, 30];
+const PAGE_SIZE_OPTIONS = [25, 50, 75, 100, 125, 150, 175, 200];
 
 interface ModelFile {
     name: string;

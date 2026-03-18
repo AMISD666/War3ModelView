@@ -214,7 +214,7 @@ const GPU_LAYER_PROPS: [string, GPUBlendState, GPUDepthStencilState][] = [['none
 export class ModelRenderer {
     private isHD: boolean;
 
-    private canvas: HTMLCanvasElement;
+    private canvas: HTMLCanvasElement | OffscreenCanvas;
     private gl: WebGL2RenderingContext | WebGLRenderingContext;
     private device: GPUDevice;
     private gpuContext: GPUCanvasContext;
@@ -845,7 +845,7 @@ export class ModelRenderer {
         }
     }
 
-    public async initGPUDevice(canvas: HTMLCanvasElement, device: GPUDevice, context: GPUCanvasContext): Promise<void> {
+    public async initGPUDevice(canvas: HTMLCanvasElement | OffscreenCanvas, device: GPUDevice, context: GPUCanvasContext): Promise<void> {
         this.canvas = canvas;
         this.device = device;
         this.gpuContext = context;
@@ -950,41 +950,51 @@ export class ModelRenderer {
                 texture = this.device.createTexture({
                     size: [imageData[0].width, imageData[0].height],
                     format: 'rgba8unorm',
-                    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+                    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
                     mipLevelCount: count
                 });
                 ModelResourceManager.getInstance().setGPUTexture(path, texture);
             }
             for (let i = 0; i < count; ++i) {
-                // WebGPU requires bytesPerRow alignment (typically 256 bytes).
-                // ImageData is tightly packed (width*4), so we must pad rows when not aligned.
-                const w = imageData[i].width;
-                const h = imageData[i].height;
-                const tightBytesPerRow = w * 4;
-                const alignedBytesPerRow = Math.ceil(tightBytesPerRow / 256) * 256;
+                const source = imageData[i];
+                const w = source.width;
+                const h = source.height;
 
-                let src = imageData[i].data as unknown as Uint8Array;
-                let data: Uint8Array;
-                if (alignedBytesPerRow === tightBytesPerRow) {
-                    data = src;
+                if (source instanceof ImageBitmap) {
+                    this.device.queue.copyExternalImageToTexture(
+                        { source },
+                        { texture, mipLevel: i },
+                        { width: w, height: h }
+                    );
                 } else {
-                    data = new Uint8Array(alignedBytesPerRow * h);
-                    for (let y = 0; y < h; y++) {
-                        const srcOffset = y * tightBytesPerRow;
-                        const dstOffset = y * alignedBytesPerRow;
-                        data.set(src.subarray(srcOffset, srcOffset + tightBytesPerRow), dstOffset);
-                    }
-                }
+                    // WebGPU requires bytesPerRow alignment (typically 256 bytes).
+                    // ImageData is tightly packed (width*4), so we must pad rows when not aligned.
+                    const tightBytesPerRow = w * 4;
+                    const alignedBytesPerRow = Math.ceil(tightBytesPerRow / 256) * 256;
 
-                this.device.queue.writeTexture(
-                    {
-                        texture,
-                        mipLevel: i
-                    },
-                    data,
-                    { bytesPerRow: alignedBytesPerRow, rowsPerImage: h },
-                    { width: w, height: h },
-                );
+                    const src = source.data as unknown as Uint8Array;
+                    let data: Uint8Array;
+                    if (alignedBytesPerRow === tightBytesPerRow) {
+                        data = src;
+                    } else {
+                        data = new Uint8Array(alignedBytesPerRow * h);
+                        for (let y = 0; y < h; y++) {
+                            const srcOffset = y * tightBytesPerRow;
+                            const dstOffset = y * alignedBytesPerRow;
+                            data.set(src.subarray(srcOffset, srcOffset + tightBytesPerRow), dstOffset);
+                        }
+                    }
+
+                    this.device.queue.writeTexture(
+                        {
+                            texture,
+                            mipLevel: i
+                        },
+                        data,
+                        { bytesPerRow: alignedBytesPerRow, rowsPerImage: h },
+                        { width: w, height: h },
+                    );
+                }
             }
             this.rendererData.gpuTextures[path] = texture;
             this.processEnvMaps(path);

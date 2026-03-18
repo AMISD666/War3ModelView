@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, forwardRef, useImperativeHandle, useMemo } from 'react'
+import React, { useEffect, useRef, useState, forwardRef, useImperativeHandle, useMemo, useCallback } from 'react'
 import { decodeBLP, getBLPImageData, parseMDX, parseMDL, ModelRenderer } from 'war3-model'
 // @ts-ignore
 import ModelWorker from '../workers/model-worker.worker?worker'
@@ -40,6 +40,7 @@ import { AutoSeparateLayersCommand } from '../commands/AutoSeparateLayersCommand
 import { WeldVerticesCommand } from '../commands/WeldVerticesCommand'
 import { DeleteVerticesCommand } from '../commands/DeleteVerticesCommand'
 import { PasteVerticesCommand } from '../commands/PasteVerticesCommand'
+import { isTextInputActive } from '../shortcuts/utils'
 
 const toTextureUpdateUint8Array = (payload: any): Uint8ClampedArray | null => {
   if (!payload) return null
@@ -99,6 +100,7 @@ interface ViewerProps {
   showFPS: boolean
   playbackSpeed: number
   viewPreset?: { type: string, time: number, reset?: boolean } | null
+  onSetViewPreset?: (preset: string) => void
   modelData?: any
   onAddCameraFromView?: () => void
 }
@@ -168,6 +170,12 @@ const getTextureDecodeWorkerCount = (): number => {
   return Math.max(2, Math.min(4, Math.floor(cores / 2)))
 }
 
+const WEBGL_CONTEXT_ATTRIBUTES: WebGLContextAttributes = {
+  alpha: false,
+  premultipliedAlpha: false,
+  preserveDrawingBuffer: false
+}
+
 const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   const {
   modelPath,
@@ -190,6 +198,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   playbackSpeed,
   viewPreset,
   modelData,
+  onSetViewPreset,
   onAddCameraFromView
   } = props
   const [parseWorker] = useState(() => new ModelWorker())
@@ -896,7 +905,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   const previousCameraState = useRef<{ distance: number, theta: number, phi: number, target: Float32Array } | null>(null)
 
   // Helper to sync targetCamera state to SimpleOrbitCamera
-  const syncCameraToOrbit = () => {
+  const syncCameraToOrbit = useCallback(() => {
     if (cameraRef.current) {
       cameraRef.current.distance = targetCamera.current.distance
       cameraRef.current.horizontalAngle = targetCamera.current.theta + Math.PI / 2
@@ -904,7 +913,71 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       vec3.copy(cameraRef.current.target, targetCamera.current.target)
       cameraRef.current.update()
     }
-  }
+  }, [])
+
+  const applyViewPreset = useCallback((preset: string, options?: { syncExternal?: boolean }) => {
+    let shouldSyncOrbit = false
+
+    switch (preset) {
+      case 'perspective':
+        if (cameraRef.current) {
+          cameraRef.current.setPerspective()
+        }
+        break
+      case 'orthographic':
+        if (cameraRef.current) {
+          cameraRef.current.setOrthographic()
+        }
+        break
+      case 'front':
+        targetCamera.current.theta = 0
+        targetCamera.current.phi = Math.PI / 2
+        shouldSyncOrbit = true
+        break
+      case 'back':
+        targetCamera.current.theta = Math.PI
+        targetCamera.current.phi = Math.PI / 2
+        shouldSyncOrbit = true
+        break
+      case 'left':
+        targetCamera.current.theta = Math.PI / 2
+        targetCamera.current.phi = Math.PI / 2
+        shouldSyncOrbit = true
+        break
+      case 'right':
+        targetCamera.current.theta = -Math.PI / 2
+        targetCamera.current.phi = Math.PI / 2
+        shouldSyncOrbit = true
+        break
+      case 'top':
+        targetCamera.current.theta = 0
+        targetCamera.current.phi = 0.01
+        shouldSyncOrbit = true
+        break
+      case 'bottom':
+        targetCamera.current.theta = 0
+        targetCamera.current.phi = Math.PI - 0.01
+        shouldSyncOrbit = true
+        break
+      case 'focus':
+        vec3.set(targetCamera.current.target, 0, 0, 0)
+        targetCamera.current.distance = 500
+        targetCamera.current.theta = Math.PI / 4
+        targetCamera.current.phi = Math.PI / 4
+        shouldSyncOrbit = true
+        break
+      default:
+        return
+    }
+
+    if (shouldSyncOrbit) {
+      syncCameraToOrbit()
+    }
+
+    if (options?.syncExternal !== false) {
+      onSetViewPreset?.(preset)
+    }
+  }, [onSetViewPreset, syncCameraToOrbit])
 
   const fitToViewImpl = React.useCallback(() => {
     const renderer = rendererRef.current
@@ -1105,11 +1178,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     const onKeyDown = (ev: KeyboardEvent) => {
       if (ev.defaultPrevented) return
 
-      // Don't interfere with text input.
-      const el = document.activeElement
-      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return
-      if (el instanceof HTMLSelectElement) return
-      if (el instanceof HTMLElement && el.isContentEditable) return
+      // Only suppress viewer-local shortcuts when a real text input is focused.
+      if (isTextInputActive()) return
 
       if (ev.key === 'ArrowUp' || ev.key === 'ArrowDown') {
         const direction = ev.key === 'ArrowUp' ? -1 : 1
@@ -1129,6 +1199,16 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         return
       }
 
+      if (ev.code === 'Backquote') {
+        const nextPreset = cameraRef.current?.projectionMode === 'orthographic'
+          ? 'perspective'
+          : 'orthographic'
+        applyViewPreset(nextPreset)
+        ev.preventDefault()
+        ev.stopPropagation()
+        return
+      }
+
       if (ev.key === 'q' || ev.key === 'Q') {
         qPressedRef.current = true
       }
@@ -1138,13 +1218,13 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         qPressedRef.current = false
       }
     }
-    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keydown', onKeyDown, true)
     window.addEventListener('keyup', onKeyUp)
     return () => {
-      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keydown', onKeyDown, true)
       window.removeEventListener('keyup', onKeyUp)
     }
-  }, [])
+  }, [applyViewPreset])
 
   const initialVertexPositions = useRef<Map<string, [number, number, number]>>(new Map())
   const initialNodePositions = useRef<Map<number, [number, number, number]>>(new Map())
@@ -1204,6 +1284,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   // Context menu state for vertex operations
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number } | null>(null)
   const [nodeContextMenu, setNodeContextMenu] = useState<{ x: number, y: number, nodeId: number | null } | null>(null)
+  const [showViewMenu, setShowViewMenu] = useState(false)
   const poseClipboardRef = useRef<{ frame: number, nodes: { nodeId: number, translation: number[], rotation: number[], scaling: number[] }[] } | null>(null)
   const formatHudNumber = (value: number, digits: number) => {
     const fixed = value.toFixed(digits)
@@ -1506,65 +1587,14 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   useEffect(() => {
     if (!viewPreset) return
     console.log('[Viewer] View preset changed:', viewPreset.type)
-
-    switch (viewPreset.type) {
-      case 'perspective':
-        // 切换到透视模式
-        console.log('[Viewer] Switching to perspective mode')
-        if (cameraRef.current) {
-          cameraRef.current.setPerspective()
-        }
-        if (viewPreset.reset) {
-          vec3.set(targetCamera.current.target, 0, 0, 0)
-          targetCamera.current.distance = 500
-          targetCamera.current.theta = Math.PI / 4
-          targetCamera.current.phi = Math.PI / 4
-        }
-        break
-      case 'orthographic':
-        // 切换到正交投影（不改变当前视角方向）
-        console.log('[Viewer] Switching to orthographic mode')
-        if (cameraRef.current) {
-          cameraRef.current.setOrthographic()
-        }
-        break
-      case 'front':
-        // War3 model coordinate system in this app: "front" visually matches +X view.
-        // (Previously, "left" was effectively front.)
-        targetCamera.current.theta = 0
-        targetCamera.current.phi = Math.PI / 2
-        break
-      case 'back':
-        targetCamera.current.theta = Math.PI
-        targetCamera.current.phi = Math.PI / 2
-        break
-      case 'left':
-        targetCamera.current.theta = Math.PI / 2
-        targetCamera.current.phi = Math.PI / 2
-        break
-      case 'right':
-        targetCamera.current.theta = -Math.PI / 2
-        targetCamera.current.phi = Math.PI / 2
-        break
-      case 'top':
-        targetCamera.current.theta = 0
-        targetCamera.current.phi = 0.01
-        break
-      case 'bottom':
-        targetCamera.current.theta = 0
-        targetCamera.current.phi = Math.PI - 0.01
-        break
-      case 'focus':
-        vec3.set(targetCamera.current.target, 0, 0, 0)
-        targetCamera.current.distance = 500
-        targetCamera.current.theta = Math.PI / 4
-        targetCamera.current.phi = Math.PI / 4
-        // focus 保持当前投影模式
-        break
+    if (viewPreset.type === 'perspective' && viewPreset.reset) {
+      vec3.set(targetCamera.current.target, 0, 0, 0)
+      targetCamera.current.distance = 500
+      targetCamera.current.theta = Math.PI / 4
+      targetCamera.current.phi = Math.PI / 4
     }
-    // 同步相机角度
-    syncCameraToOrbit()
-  }, [viewPreset]) // 仅依赖 viewPreset
+    applyViewPreset(viewPreset.type, { syncExternal: false })
+  }, [applyViewPreset, viewPreset]) // 仅依赖 viewPreset
 
   // Handle Animation and Mode Changes
   useEffect(() => {
@@ -2703,6 +2733,28 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     }
   }, [])
 
+  const initializeRendererBackend = (canvas: HTMLCanvasElement, newRenderer: ModelRenderer): void => {
+    const gl =
+      (canvas.getContext('webgl2', WEBGL_CONTEXT_ATTRIBUTES) as WebGL2RenderingContext | null) ||
+      (canvas.getContext('webgl', WEBGL_CONTEXT_ATTRIBUTES) as WebGLRenderingContext | null)
+
+    if (!gl) {
+      throw new Error('Neither WebGPU nor WebGL could be initialized for the viewer canvas')
+    }
+
+    glRef.current = gl
+    gl.clearColor(0.2, 0.2, 0.2, 1)
+    gl.enable(gl.DEPTH_TEST)
+    gl.depthFunc(gl.LEQUAL)
+    gl.enable(gl.BLEND)
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+    gl.viewport(0, 0, canvas.width, canvas.height)
+
+    gridRenderer.current.init(gl)
+    debugRenderer.current.init(gl)
+    newRenderer.initGL(gl)
+  }
+
   const loadModel = async (path: string, inMemoryData?: any) => {
     lastFrameTime.current = performance.now()
 
@@ -2717,6 +2769,9 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
     // Clear the canvas without creating a context.
     const canvas = canvasRef.current
+    if (!canvas) {
+      throw new Error('Viewer canvas is not ready')
+    }
     if (canvas) {
       // Resetting width/height clears the drawing buffer.
       const w = canvas.width
@@ -2728,9 +2783,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
     try {
       console.time('[Viewer] FullModelLoad')
-      if (canvasRef.current) {
-        canvasRef.current.focus()
-      }
+      canvas.focus()
 
       const readPathBytes = async (assetPath: string): Promise<Uint8Array> => {
         try {
@@ -2778,40 +2831,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
       setTexturePreview(null)
 
-      // Align WebGL context behavior with mdx-m3-viewer:
-      // use an opaque backbuffer to avoid premultiplied compositing washout.
-      const contextAttributes: WebGLContextAttributes = {
-        alpha: false,
-        premultipliedAlpha: false,
-        preserveDrawingBuffer: false
-      }
-
       glRef.current = null
-
-      const gl =
-        glRef.current ||
-        (canvasRef.current!.getContext('webgl2', contextAttributes) as WebGL2RenderingContext | null) ||
-        (canvasRef.current!.getContext('webgl', contextAttributes) as WebGLRenderingContext | null)
-
-      if (!gl) {
-        console.error('[Viewer] WebGL not supported')
-        setLoading(false)
-        return
-      }
-
-      glRef.current = gl
-
-      gl.clearColor(0.2, 0.2, 0.2, 1)
-      gl.enable(gl.DEPTH_TEST)
-      gl.depthFunc(gl.LEQUAL)
-      gl.enable(gl.BLEND)
-      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-
-      // Set initial viewport
-      gl.viewport(0, 0, canvas.width, canvas.height)
-
-      gridRenderer.current.init(gl)
-      debugRenderer.current.init(gl)
 
       let model: any
 
@@ -2897,10 +2917,9 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       const { model: rendererModelWithSequences, usedFallback } = ensureRendererSequences(blendCompatibleModel)
       const { model: rendererModel, defaultNodeId } = ensureRenderNodes(rendererModelWithSequences)
       ensureGeosetGroups(rendererModel, defaultNodeId)
-      console.log('[Viewer] Initializing Renderer Backend (WebGL)... gl:', !!gl)
+      console.log('[Viewer] Initializing Renderer Backend (WebGL)...')
       const newRenderer = new ModelRenderer(rendererModel)
-      console.log('[Viewer] Calling initGL')
-      newRenderer.initGL(gl)
+      initializeRendererBackend(canvas, newRenderer)
       // NOTE: setRenderer(newRenderer) is called AFTER texture loading to avoid race condition
       newRenderer.update(0)
       resetCamera()
@@ -2986,17 +3005,6 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         return
       }
 
-      const gl =
-        (canvas.getContext('webgl2') as WebGL2RenderingContext | null) ||
-        (canvas.getContext('webgl') as WebGLRenderingContext | null)
-
-      if (!gl) {
-        console.error('[Viewer] WebGL not supported')
-        return
-      }
-
-      glRef.current = gl
-
       // Copy Geoset geometry data from captured old Geosets
       // The modelData from store loses TypedArrays (Vertices, Faces, Normals) during spread operations
       // BUT: Only do this when geoset count is the same! If count changed (merge/delete),
@@ -3060,7 +3068,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       console.log('[Viewer] Step 2: ModelRenderer created')
 
       console.log('[Viewer] Step 3: Initializing Renderer Backend (WebGL)...')
-      newRenderer.initGL(gl)
+      initializeRendererBackend(canvas, newRenderer)
       console.log('[Viewer] Step 3: WebGL initialized')
 
       // NOTE: setRenderer(newRenderer) is called AFTER texture loading to avoid race condition
@@ -3403,14 +3411,10 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     const runState = { shouldRun: true }
 
     if (renderer && canvasRef.current) {
-      const contextAttributes: WebGLContextAttributes = {
-        alpha: false,
-        premultipliedAlpha: false
-      }
       const gl =
         glRef.current ||
-        (canvasRef.current.getContext('webgl2', contextAttributes) as any) ||
-        (canvasRef.current.getContext('webgl', contextAttributes) as any)
+        (canvasRef.current.getContext('webgl2', WEBGL_CONTEXT_ATTRIBUTES) as WebGL2RenderingContext | null) ||
+        (canvasRef.current.getContext('webgl', WEBGL_CONTEXT_ATTRIBUTES) as WebGLRenderingContext | null)
 
       if (!gl) return undefined
       glRef.current = gl
@@ -6659,6 +6663,28 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         handleFitToView()
         return true
       }),
+      registerShortcutHandler(
+        'view.perspective',
+        () => {
+          if (cameraRef.current?.projectionMode !== 'orthographic') {
+            return false
+          }
+          applyViewPreset('perspective')
+          return true
+        },
+        { priority: 100 }
+      ),
+      registerShortcutHandler(
+        'view.orthographic',
+        () => {
+          if (cameraRef.current?.projectionMode !== 'perspective') {
+            return false
+          }
+          applyViewPreset('orthographic')
+          return true
+        },
+        { priority: 100 }
+      ),
       registerShortcutHandler('view.toggleWireframe', () => {
         onToggleWireframe()
         return true
@@ -6918,16 +6944,27 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       {!isTexturePreviewMode && (() => {
         const cameraList = getAvailableCameras();
         const hasCamera = cameraList.length > 0
+        const viewMenuItems = [
+          { key: 'perspective', label: '透视', shortcut: '~' },
+          { key: 'orthographic', label: '正交', shortcut: '~' },
+          { key: 'top', label: '顶视图', shortcut: 'F3' },
+          { key: 'bottom', label: '底视图', shortcut: 'F4' },
+          { key: 'front', label: '前视图', shortcut: 'F1' },
+          { key: 'back', label: '后视图', shortcut: 'F2' },
+          { key: 'left', label: '左视图', shortcut: 'F5' },
+          { key: 'right', label: '右视图', shortcut: 'F6' }
+        ]
 
         return (
           <div style={{
             position: 'absolute',
             top: '10px',
             left: '10px',
-            zIndex: 10,
+            zIndex: 2200,
             display: 'flex',
             alignItems: 'center',
-            gap: '8px'
+            gap: '8px',
+            pointerEvents: 'auto'
           }}>
             <select
               id="camera-selector"
@@ -6998,6 +7035,84 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             >
               <CameraOutlined style={{ fontSize: '12px' }} />
             </button>
+            <div style={{ position: 'relative' }}>
+              <button
+                type="button"
+                title="视图菜单"
+                onMouseDown={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  setShowViewMenu((prev) => !prev)
+                }}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  minWidth: '38px',
+                  height: '24px',
+                  padding: '0 10px',
+                  background: 'rgba(0, 0, 0, 0.7)',
+                  color: '#fff',
+                  border: '1px solid #555',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '12px'
+                }}
+              >
+                视图
+              </button>
+              {showViewMenu && (
+                <div style={{
+                  position: 'absolute',
+                  top: '30px',
+                  left: 0,
+                  minWidth: '140px',
+                  background: '#2f2f2f',
+                  border: '1px solid #444',
+                  borderRadius: '4px',
+                  boxShadow: '0 4px 12px rgba(0, 0, 0, 0.35)',
+                  overflow: 'hidden',
+                  zIndex: 2201,
+                  pointerEvents: 'auto'
+                }}>
+                  {viewMenuItems.map((item) => (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onMouseDown={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        applyViewPreset(item.key)
+                        setShowViewMenu(false)
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = '#3a3a3a'
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = 'transparent'
+                      }}
+                      style={{
+                        width: '100%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '8px 12px',
+                        background: 'transparent',
+                        color: '#eee',
+                        border: 'none',
+                        borderBottom: item.key === 'orthographic' ? '1px solid #444' : 'none',
+                        cursor: 'pointer',
+                        fontSize: '12px',
+                        textAlign: 'left'
+                      }}
+                    >
+                      <span>{item.label}</span>
+                      <span style={{ color: '#888', fontSize: '11px' }}>{item.shortcut}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         );
       })()}
@@ -7388,26 +7503,6 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 })
 
 export default Viewer
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

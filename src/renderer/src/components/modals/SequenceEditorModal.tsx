@@ -34,6 +34,16 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
         sequences: []
     })
 
+    const syncStandaloneSequences = (nextSequences: any[]) => {
+        if (!isStandalone) return
+        emitCommand('SAVE_SEQUENCES', nextSequences)
+    }
+
+    const pruneStandaloneIntervals = (intervals: [number, number][]) => {
+        if (!isStandalone || intervals.length === 0 || !pruneKeyframes) return
+        emitCommand('PRUNE_KEYFRAMES', intervals)
+    }
+
     // Helper to scroll to selected item
     const scrollToItem = (index: number) => {
         if (listRef.current && index >= 0) {
@@ -155,6 +165,7 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
         const newSequences = [...localSequences]
         newSequences[index] = { ...newSequences[index], ...updates }
         setLocalSequences(newSequences)
+        syncStandaloneSequences(newSequences)
     }
 
     const handleIntervalChange = (index: number, subIndex: number, value: number | null) => {
@@ -163,6 +174,7 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
         newInterval[subIndex] = value || 0
         newSequences[index].Interval = newInterval
         setLocalSequences(newSequences)
+        syncStandaloneSequences(newSequences)
     }
 
     const selectedSequence = selectedIndex >= 0 ? localSequences[selectedIndex] : null
@@ -187,7 +199,9 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
                                     MoveSpeed: 0,
                                     BoundsRadius: 0
                                 }
-                                setLocalSequences([...localSequences, newSequence])
+                                const newSequences = [...localSequences, newSequence]
+                                setLocalSequences(newSequences)
+                                syncStandaloneSequences(newSequences)
                                 setSelectedIndex(localSequences.length)
                                 setTimeout(() => scrollToItem(localSequences.length), 0)
                             }}
@@ -219,11 +233,19 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
                                         onClick={(e) => {
                                             e.stopPropagation()
                                             const seq = localSequences[index];
+                                            const deletedRange: [number, number][] = seq && seq.Interval
+                                                ? [[seq.Interval[0], seq.Interval[1]]]
+                                                : [];
                                             if (seq && seq.Interval) {
-                                                setDeletedIntervals(prev => [...prev, [seq.Interval[0], seq.Interval[1]]]);
+                                                if (isStandalone) {
+                                                    pruneStandaloneIntervals(deletedRange)
+                                                } else {
+                                                    setDeletedIntervals(prev => [...prev, [seq.Interval[0], seq.Interval[1]]]);
+                                                }
                                             }
                                             const newSequences = localSequences.filter((_, i) => i !== index)
                                             setLocalSequences(newSequences)
+                                            syncStandaloneSequences(newSequences)
                                             if (selectedIndex === index) setSelectedIndex(-1)
                                             else if (selectedIndex > index) setSelectedIndex(selectedIndex - 1)
                                         }}
@@ -380,4 +402,3 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
 }
 
 export default SequenceEditorModal
-

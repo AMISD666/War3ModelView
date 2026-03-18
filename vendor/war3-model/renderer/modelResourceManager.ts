@@ -258,6 +258,12 @@ export class ModelResourceManager {
             this.gl.deleteTexture(texture);
         }
         this.textures.delete(path);
+
+        const gpuTexture = this.gpuTextures.get(path);
+        if (gpuTexture) {
+            gpuTexture.destroy();
+        }
+        this.gpuTextures.delete(path);
     }
 
     public getGPUTexture(path: string): GPUTexture | undefined {

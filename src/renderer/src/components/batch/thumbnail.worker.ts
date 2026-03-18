@@ -427,7 +427,7 @@ async function render(
     } = payload;
 
     await initGL();
-    if (!gl) return null;
+    if (!gl || !canvas) return null;
     const renderStartMs = performance.now();
     let coldStartMs = 0;
     let parseMs = 0;
@@ -636,13 +636,12 @@ async function render(
         cacheItem.appliedTeamColor = teamColor;
     }
 
+    const bgRgb = hexToRgb(backgroundColor);
     // Reset key write masks before clear.
     gl.disable(gl.SCISSOR_TEST);
     gl.colorMask(true, true, true, true);
     gl.depthMask(true);
 
-    // Clear with user-specified background color
-    const bgRgb = hexToRgb(backgroundColor);
     gl.clearColor(bgRgb[0], bgRgb[1], bgRgb[2], 1.0);
     gl.clearDepth(1.0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -778,7 +777,7 @@ async function render(
         try {
             const drawStart = performance.now();
             renderer.render(mvMatrix, pMatrix, { wireframe, enableLighting });
-            gl!.flush(); // Ensure GPU is done before transfer
+            gl.flush(); // Ensure GPU is done before transfer
             drawMs = performance.now() - drawStart;
         } finally {
             if (particlesController) {
@@ -791,7 +790,7 @@ async function render(
             }
         }
     } catch (e) {
-        console.error(`[Worker] WebGL Render failed for ${fullPath}:`, e);
+        console.error(`[Worker] WebGL render failed for ${fullPath}:`, e);
         // FORCE RELOAD on next try to recover from poisoned State/Buffers
         renderers.delete(fullPath);
     }

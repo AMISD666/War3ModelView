@@ -3,7 +3,6 @@ import StandaloneToolWindowRouter, { isStandaloneToolWindowLabel } from './compo
 import { initDebugLogging } from './utils/debugLog'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { exit } from '@tauri-apps/plugin-process'
 import { windowManager } from './utils/WindowManager'
 import { useRef } from 'react'
 
@@ -49,8 +48,9 @@ function App(): JSX.Element {
             isClosingRef.current = true
 
             try {
+                const currentWindow = getCurrentWindow()
                 await windowManager.destroyAllWindows().catch(console.error)
-                await exit(0)
+                await currentWindow.destroy()
             } catch (error) {
                 console.error('[App] graceful exit failed:', error)
                 isClosingRef.current = false

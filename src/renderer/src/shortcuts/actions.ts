@@ -185,14 +185,14 @@ export const shortcutActions: ShortcutAction[] = [
         label: '透视视图',
         category: '视图',
         contexts: ['global', 'viewer'],
-        defaultBindings: ['~']
+        defaultBindings: ['Backquote', 'Shift+Backquote']
     },
     {
         id: 'view.orthographic',
         label: '正交视图',
         category: '视图',
         contexts: ['global', 'viewer'],
-        defaultBindings: ['~']
+        defaultBindings: ['Backquote', 'Shift+Backquote']
     },
     {
         id: 'view.top',

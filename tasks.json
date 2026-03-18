@@ -1,0 +1,16 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks. format
+    "version": "2.0.0",
+    "type": "shell",
+    "tasks": [
+        {
+            "label": "打包",
+            "command": "npm run build",
+        },
+        {
+            "label": "运行",
+            "command": "npm run tauri dev",
+        },
+    ]
+}

@@ -3927,14 +3927,6 @@ const MainLayout: React.FC = () => {
                 windowManager.openToolWindow('globalSequenceManager', '全局动作管理器', 300, 360);
                 return true;
             }),
-            registerShortcutHandler('view.perspective', () => {
-                setViewPreset({ type: 'perspective', time: Date.now() });
-                return true;
-            }),
-            registerShortcutHandler('view.orthographic', () => {
-                setViewPreset({ type: 'orthographic', time: Date.now() });
-                return true;
-            }),
             registerShortcutHandler('view.top', () => {
                 setViewPreset({ type: 'top', time: Date.now() });
                 return true;
@@ -4762,6 +4754,7 @@ const MainLayout: React.FC = () => {
                                 showFPS={mainMode !== 'uv' && showFPS}
                                 playbackSpeed={playbackSpeed}
                                 viewPreset={viewPreset}
+                                onSetViewPreset={(type) => setViewPreset({ type, time: Date.now() })}
                                 onAddCameraFromView={handleAddCameraFromView}
                                 />
                             </UVModeLayout>
@@ -4850,8 +4843,6 @@ const MainLayout: React.FC = () => {
 }
 
 export default MainLayout
-
-
 
 
 
