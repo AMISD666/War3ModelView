@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Button, Typography, Tooltip, Select } from 'antd';
-import { DeleteOutlined, FileImageOutlined, CopyOutlined } from '@ant-design/icons';
+import { DeleteOutlined, FileImageOutlined, CopyOutlined, WarningOutlined } from '@ant-design/icons';
 import { AnimatedPreview } from './AnimatedPreview';
 import { thumbnailEventBus } from './ThumbnailEventBus';
 
@@ -60,6 +60,9 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
     const [selectedAnimation, setSelectedAnimation] = useState<string | undefined>(
         () => initialSelectedAnimation ?? pickPreferredAnimation(initialAnimations)
     );
+    const [missingTextureCount, setMissingTextureCount] = useState<number>(
+        () => thumbnailEventBus.getMissingTextureCount(file.fullPath)
+    );
     const cardRef = useRef<HTMLDivElement>(null);
 
     // 1. Subscribe to animation metadata updates. Thumbnail bitmap updates are handled
@@ -78,6 +81,19 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
             thumbnailEventBus.off(`animations:${file.fullPath}`, handleAnims);
         };
     }, [file.fullPath, selectedAnimation]);
+
+    useEffect(() => {
+        const handleMissingTextures = (missCount: number) => {
+            setMissingTextureCount(missCount);
+        };
+
+        setMissingTextureCount(thumbnailEventBus.getMissingTextureCount(file.fullPath));
+        thumbnailEventBus.on(`missing-textures:${file.fullPath}`, handleMissingTextures);
+
+        return () => {
+            thumbnailEventBus.off(`missing-textures:${file.fullPath}`, handleMissingTextures);
+        };
+    }, [file.fullPath]);
 
     // 2. Visibility Tracking (Intersection Observer)
     useEffect(() => {
@@ -125,12 +141,36 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
                 overflow: 'hidden',
                 display: 'flex',
                 justifyContent: 'center',
-                alignItems: 'center'
+                alignItems: 'center',
+                zIndex: 2
             }}>
                 <AnimatedPreview
                     fullPath={file.fullPath}
                     isSelected={isSelected}
                 />
+
+                {missingTextureCount > 0 && (
+                    <Tooltip title={`贴图缺少${missingTextureCount > 1 ? ` (${missingTextureCount})` : ''}`}>
+                        <div style={{
+                            position: 'absolute',
+                            top: 4,
+                            left: 4,
+                            zIndex: 4,
+                            width: 22,
+                            height: 22,
+                            borderRadius: 999,
+                            background: 'rgba(32, 24, 0, 0.88)',
+                            border: '1px solid rgba(255, 200, 64, 0.9)',
+                            color: '#ffcf5a',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            boxShadow: '0 2px 8px rgba(0,0,0,0.35)'
+                        }}>
+                            <WarningOutlined />
+                        </div>
+                    </Tooltip>
+                )}
 
                 {/* Overlay Buttons */}
                 <div className="card-actions" style={{
@@ -139,6 +179,7 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
                     right: 4,
                     display: 'flex',
                     gap: 4,
+                    zIndex: 4,
                     opacity: 0,
                     transition: 'opacity 0.2s'
                 }}>
@@ -180,6 +221,7 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
                 left: 8,
                 right: 8,
                 bottom: 8,
+                zIndex: 4,
                 display: 'flex',
                 flexDirection: 'column',
                 gap: 6

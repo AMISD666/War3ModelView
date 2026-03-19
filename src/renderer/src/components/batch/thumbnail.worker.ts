@@ -23,7 +23,7 @@ const REPLACEABLE_TEXTURES: Record<number, string> = {
     37: 'OutlandMushroomTree\\MushroomTree',
 }
 
-const THUMBNAIL_SIZE = 160;
+const DEFAULT_THUMBNAIL_SIZE = 160;
 
 // --- TGA Constants ---
 const TGA_TYPE_RGB = 2;
@@ -210,6 +210,7 @@ interface RendererCacheItem {
     appliedTeamColor?: number;
     appliedTexturePaths: Set<string>;
     texturePaths: string[];
+    texturePathAliases?: Map<string, string>;
 }
 
 let renderers: Map<string, RendererCacheItem> = new Map();
@@ -220,6 +221,7 @@ let renderers: Map<string, RendererCacheItem> = new Map();
  * When count hits 0, delete the texture from WebGL to free GPU VRAM.
  */
 const textureRefCount: Map<string, number> = new Map();
+const uploadedTexturePaths: Set<string> = new Set();
 
 function retainTexturePaths(paths: string[]): void {
     for (const p of paths) {
@@ -232,10 +234,7 @@ function releaseTexturePaths(paths: string[]): void {
         const count = (textureRefCount.get(p) ?? 1) - 1;
         if (count <= 0) {
             textureRefCount.delete(p);
-            // Free the GPU texture from VRAM
-            try {
-                ModelResourceManager.getInstance().removeTexture(p);
-            } catch (_) { }
+            uploadedTexturePaths.delete(p);
         } else {
             textureRefCount.set(p, count);
         }
@@ -261,6 +260,31 @@ self.onmessage = async (e) => {
                 }
             });
         }
+    } else if (type === 'METADATA') {
+        try {
+            const result = parseMetadataPayload(payload.fullPath, payload.modelBuffer);
+            self.postMessage({
+                type: 'METADATA',
+                payload: {
+                    fullPath: payload.fullPath,
+                    generation: payload.generation,
+                    animations: result.animations,
+                    texturePaths: result.texturePaths,
+                    metrics: result.metrics
+                }
+            });
+        } catch (err: any) {
+            console.error('[Worker] Metadata parse failed:', err);
+            self.postMessage({
+                type: 'ERROR',
+                payload: {
+                    fullPath: payload.fullPath,
+                    generation: payload.generation,
+                    error: String(err),
+                    stack: err.stack
+                }
+            });
+        }
     } else if (type === 'PRELOAD') {
         try {
             const result = await render({ ...payload, preloadOnly: true });
@@ -268,6 +292,7 @@ self.onmessage = async (e) => {
                 type: 'PRELOADED',
                 payload: {
                     fullPath: payload.fullPath,
+                    generation: payload.generation,
                     animations: result?.animations,
                     texturePaths: result?.texturePaths,
                     metrics: result?.metrics
@@ -279,6 +304,7 @@ self.onmessage = async (e) => {
                 type: 'ERROR',
                 payload: {
                     fullPath: payload.fullPath,
+                    generation: payload.generation,
                     error: String(err),
                     stack: err.stack
                 }
@@ -289,9 +315,9 @@ self.onmessage = async (e) => {
             const result = await render(payload);
             if (result) {
                 // @ts-ignore - Use DedicatedWorkerGlobalScope.postMessage
-                self.postMessage({ type: 'DONE', payload: { ...result, fullPath: payload.fullPath } }, [result.bitmap]);
+                self.postMessage({ type: 'DONE', payload: { ...result, fullPath: payload.fullPath, generation: payload.generation } }, [result.bitmap]);
             } else {
-                self.postMessage({ type: 'ERROR', payload: { fullPath: payload.fullPath, error: 'Render returned null' } });
+                self.postMessage({ type: 'ERROR', payload: { fullPath: payload.fullPath, generation: payload.generation, error: 'Render returned null' } });
             }
         } catch (err: any) {
             console.error('[Worker] Render failed:', err);
@@ -299,6 +325,7 @@ self.onmessage = async (e) => {
                 type: 'ERROR',
                 payload: {
                     fullPath: payload.fullPath,
+                    generation: payload.generation,
                     error: String(err),
                     stack: err.stack
                 }
@@ -335,7 +362,7 @@ self.onmessage = async (e) => {
 async function initGL() {
     if (gl) return;
 
-    canvas = new OffscreenCanvas(THUMBNAIL_SIZE, THUMBNAIL_SIZE);
+    canvas = new OffscreenCanvas(DEFAULT_THUMBNAIL_SIZE, DEFAULT_THUMBNAIL_SIZE);
     const attrs = {
         alpha: true,
         premultipliedAlpha: true,
@@ -350,12 +377,22 @@ async function initGL() {
     gl.enable(gl.DEPTH_TEST);
 }
 
+function ensureRenderCanvasSize(size?: number) {
+    if (!canvas) return;
+    const targetSize = Math.max(64, Math.min(256, Math.round(Number(size) || DEFAULT_THUMBNAIL_SIZE)));
+    if (canvas.width !== targetSize || canvas.height !== targetSize) {
+        canvas.width = targetSize;
+        canvas.height = targetSize;
+    }
+}
+
 // Assuming ModelRenderer is a class defined elsewhere, this is how its method would look.
 // This function is a helper that calls the renderer's method.
 async function applyTextureImagesToRenderer(
     renderer: any,
     textureImages: Record<string, ImageData> | undefined,
-    appliedTexturePaths: Set<string>
+    appliedTexturePaths: Set<string>,
+    texturePathAliases?: Map<string, string>
 ) {
     if (!textureImages || !renderer?.setTextureImageData) return;
 
@@ -364,8 +401,10 @@ async function applyTextureImagesToRenderer(
         try {
             // CRITICAL: MUST set premultiplyAlpha to 'none' otherwise WebGL loses RGB data on transparent pixels!
             const bitmap = await createImageBitmap(img, { premultiplyAlpha: 'none' });
-            renderer.setTextureImageData(path, [bitmap]);
+            const rendererPath = texturePathAliases?.get(path) || path;
+            renderer.setTextureImageData(rendererPath, [bitmap]);
             appliedTexturePaths.add(path);
+            uploadedTexturePaths.add(rendererPath);
         } catch (e) {
             console.warn(`[Worker] Failed to apply texture ${path}:`, e);
         }
@@ -374,7 +413,8 @@ async function applyTextureImagesToRenderer(
 
 async function applyReplaceableTexturesToRenderer(
     renderer: any,
-    teamColorData: Record<number, any> | undefined
+    teamColorData: Record<number, any> | undefined,
+    teamColor: number = 0
 ) {
     if (!teamColorData || !renderer?.setReplaceableTexture) return;
     for (const [id, img] of Object.entries(teamColorData)) {
@@ -385,7 +425,8 @@ async function applyReplaceableTexturesToRenderer(
             }
             // CRITICAL: MUST set premultiplyAlpha to 'none' otherwise WebGL loses RGB data on transparent pixels, rendering them black!
             const bitmap = await createImageBitmap(source, { premultiplyAlpha: 'none' });
-            renderer.setReplaceableTexture(parseInt(id, 10), bitmap);
+            const numericId = parseInt(id, 10);
+            renderer.setReplaceableTexture(numericId, bitmap);
         } catch (e) {
             console.warn(`[Worker] Replaceable texture error ${id}:`, e);
         }
@@ -411,7 +452,106 @@ function collectTexturePaths(model: any): string[] {
         });
     }
 
+    if (model.ParticleEmitters2) {
+        model.ParticleEmitters2.forEach((emitter: any) => {
+            if (emitter.ReplaceableId > 0 && (emitter.TextureID === -1 || emitter.TextureID === undefined)) {
+                const replaceablePath = REPLACEABLE_TEXTURES[emitter.ReplaceableId];
+                if (replaceablePath !== undefined) {
+                    texturePaths.add(`ReplaceableTextures\\${replaceablePath}.blp`);
+                }
+            }
+        });
+    }
+
     return Array.from(texturePaths);
+}
+
+function parseMetadataPayload(fullPath: string, modelBuffer: ArrayBuffer): {
+    animations: string[];
+    texturePaths: string[];
+    metrics: { parseMs: number };
+} {
+    const parseStart = performance.now();
+    let model: any;
+    if (fullPath.toLowerCase().endsWith('.mdl')) {
+        model = parseMDL(new TextDecoder().decode(modelBuffer));
+    } else {
+        model = parseMDX(modelBuffer);
+    }
+
+    if (!model) {
+        return {
+            animations: [],
+            texturePaths: [],
+            metrics: { parseMs: performance.now() - parseStart }
+        };
+    }
+
+    if (model.Textures) {
+        model.Textures.forEach((texture: any) => {
+            if (!texture.Image && texture.Path) {
+                texture.Image = texture.Path;
+            }
+            if ((!texture.Image || texture.Image === '') && texture.ReplaceableId !== 0) {
+                const replaceablePath = REPLACEABLE_TEXTURES[texture.ReplaceableId];
+                if (replaceablePath !== undefined) {
+                    texture.Image = `ReplaceableTextures\\${replaceablePath}.blp`;
+                }
+            }
+        });
+    }
+
+    return {
+        animations: (model.Sequences || []).map((s: any) => s.Name || 'Unknown'),
+        texturePaths: collectTexturePaths(model),
+        metrics: { parseMs: performance.now() - parseStart }
+    };
+}
+
+function usesReplaceableTeamTextures(paths: string[] | undefined): boolean {
+    return (paths || []).some((path) => {
+        const normalized = String(path || '').replace(/\//g, '\\').toLowerCase();
+        return normalized.startsWith('replaceabletextures\\teamcolor\\') ||
+            normalized.startsWith('replaceabletextures\\teamglow\\');
+    });
+}
+
+function createModelScopedTexturePath(fullPath: string, originalPath: string): string {
+    return `batch://${fullPath.replace(/\//g, '\\')}::${originalPath.replace(/\//g, '\\')}`;
+}
+
+function namespaceModelTexturePaths(model: any, fullPath: string): Map<string, string> {
+    const aliases = new Map<string, string>();
+    const getAlias = (originalPath: string): string => {
+        const normalizedOriginal = originalPath.replace(/\//g, '\\');
+        const existing = aliases.get(normalizedOriginal);
+        if (existing) return existing;
+        const alias = createModelScopedTexturePath(fullPath, normalizedOriginal);
+        aliases.set(normalizedOriginal, alias);
+        return alias;
+    };
+
+    if (Array.isArray(model?.Textures)) {
+        model.Textures.forEach((texture: any) => {
+            const sourcePath = texture?.Image || texture?.Path;
+            if (!sourcePath || typeof sourcePath !== 'string') return;
+            const alias = getAlias(sourcePath);
+            texture.Image = alias;
+            if (texture.Path !== undefined) {
+                texture.Path = alias;
+            }
+        });
+    }
+
+    if (Array.isArray(model?.ParticleEmitters)) {
+        model.ParticleEmitters.forEach((emitter: any) => {
+            if (emitter?.FileName && typeof emitter.FileName === 'string') {
+                emitter.FileName = getAlias(emitter.FileName);
+            }
+        });
+    }
+
+    return aliases;
 }
 
 async function render(
@@ -433,6 +573,7 @@ async function render(
         showRibbons?: boolean,
         spinEnabled?: boolean,
         spinSpeed?: number,
+        renderSize?: number,
         envLightingEnabled?: boolean,
         envLightDirection?: [number, number, number],
         envLightColor?: [number, number, number],
@@ -458,6 +599,7 @@ async function render(
         showRibbons = true,
         spinEnabled = false,
         spinSpeed = 70,
+        renderSize = DEFAULT_THUMBNAIL_SIZE,
         envLightingEnabled = false,
         envLightDirection,
         envLightColor,
@@ -467,6 +609,7 @@ async function render(
 
     await initGL();
     if (!gl || !canvas) return null;
+    ensureRenderCanvasSize(renderSize);
     const renderStartMs = performance.now();
     let coldStartMs = 0;
     let parseMs = 0;
@@ -543,11 +686,14 @@ async function render(
             }
         }
 
+        const originalTexturePaths = collectTexturePaths(model);
+        const texturePathAliases = namespaceModelTexturePaths(model, fullPath);
         const renderer = new ModelRenderer(model);
         renderer.initGL(gl);
 
         const appliedTexturePaths = new Set<string>();
-        await applyTextureImagesToRenderer(renderer, textureImages, appliedTexturePaths);
+        const modelTexturePaths = originalTexturePaths;
+        await applyTextureImagesToRenderer(renderer, textureImages, appliedTexturePaths, texturePathAliases);
 
         // --- PRE-CALCULATE AABB ONCE ---
         const min = vec3.fromValues(Infinity, Infinity, Infinity);
@@ -596,7 +742,8 @@ async function render(
             textureImages,
             teamColorData,
             appliedTexturePaths,
-            texturePaths: collectTexturePaths(model)
+            texturePaths: modelTexturePaths,
+            texturePathAliases
         };
         renderers.set(fullPath, item);
         // Retain a GPU reference for each texture path this model uses
@@ -607,20 +754,6 @@ async function render(
     // At this point item is guaranteed to exist
     const cacheItem = item!;
     const { renderer, model } = cacheItem;
-
-    if (preloadOnly) {
-        const renderMs = performance.now() - renderStartMs;
-        return {
-            animations: (model.Sequences || []).map((s: any) => s.Name || 'Unknown'),
-            texturePaths: cacheItem.texturePaths || [],
-            metrics: {
-                renderMs,
-                coldStartMs,
-                parseMs,
-                drawMs: 0
-            }
-        };
-    }
 
     // Decode raw texture bytes in the worker if provided (main thread sends compressed bytes)
     let effectiveTextureImages = textureImages;
@@ -667,7 +800,7 @@ async function render(
     // Progressive texture streaming: allow texture sync after the model is already cached.
     if (effectiveTextureImages && Object.keys(effectiveTextureImages).length > 0) {
         const prevApplied = new Set(cacheItem.appliedTexturePaths);
-        await applyTextureImagesToRenderer(renderer, effectiveTextureImages, cacheItem.appliedTexturePaths);
+        await applyTextureImagesToRenderer(renderer, effectiveTextureImages, cacheItem.appliedTexturePaths, cacheItem.texturePathAliases);
         // Retain newly applied texture paths that weren't in the cache yet
         const newPaths: string[] = [];
         for (const p of cacheItem.appliedTexturePaths) {
@@ -682,11 +815,28 @@ async function render(
     if (
         teamColorData &&
         Object.keys(teamColorData).length > 0 &&
-        cacheItem.appliedTeamColor !== teamColor
+        (
+            cacheItem.appliedTeamColor !== teamColor ||
+            usesReplaceableTeamTextures(cacheItem.texturePaths)
+        )
     ) {
-        await applyReplaceableTexturesToRenderer(renderer, teamColorData);
+        await applyReplaceableTexturesToRenderer(renderer, teamColorData, teamColor);
         cacheItem.teamColorData = teamColorData;
         cacheItem.appliedTeamColor = teamColor;
+    }
+
+    if (preloadOnly) {
+        const renderMs = performance.now() - renderStartMs;
+        return {
+            animations: (model.Sequences || []).map((s: any) => s.Name || 'Unknown'),
+            texturePaths: cacheItem.texturePaths || [],
+            metrics: {
+                renderMs,
+                coldStartMs,
+                parseMs,
+                drawMs: 0
+            }
+        };
     }
 
     const bgRgb = hexToRgb(backgroundColor);
@@ -700,7 +850,7 @@ async function render(
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     // Set viewport
-    gl.viewport(0, 0, THUMBNAIL_SIZE, THUMBNAIL_SIZE);
+    gl.viewport(0, 0, canvas.width, canvas.height);
 
     // Standard render state
     gl.enable(gl.DEPTH_TEST);
@@ -1219,7 +1369,12 @@ function validateAllParticleEmitters(model: any): void {
     if (!model.ParticleEmitters2) return;
     const textureCount = model.Textures?.length || 0;
     model.ParticleEmitters2.forEach((emitter: any) => {
-        if (emitter.TextureID === undefined || emitter.TextureID < 0 || emitter.TextureID >= textureCount) emitter.TextureID = 0;
+        const hasReplaceableTexture = Number(emitter.ReplaceableId) > 0;
+        const textureId = emitter.TextureID;
+        const invalidTextureId = textureId === undefined || textureId < 0 || textureId >= textureCount;
+        if (invalidTextureId) {
+            emitter.TextureID = hasReplaceableTexture ? -1 : 0;
+        }
 
         // RibbonEmitter often missing some fields in war3-model
         let flags = typeof emitter.Flags === 'number' ? emitter.Flags : 0;

@@ -301,6 +301,69 @@ fn read_local_files_batch(paths: Vec<String>) -> Vec<Option<String>> {
         .collect()
 }
 
+#[derive(Serialize)]
+struct LocalFileReadDetailed {
+    path: String,
+    found: bool,
+    byte_len: usize,
+    read_ms: f64,
+    data_b64: Option<String>,
+}
+
+#[tauri::command]
+fn read_local_files_batch_detailed(paths: Vec<String>) -> Vec<LocalFileReadDetailed> {
+    paths
+        .into_par_iter()
+        .map(|path| {
+            let start = std::time::Instant::now();
+            match std::fs::read(&path) {
+                Ok(data) => LocalFileReadDetailed {
+                    path,
+                    found: true,
+                    byte_len: data.len(),
+                    read_ms: start.elapsed().as_secs_f64() * 1000.0,
+                    data_b64: Some(base64::engine::general_purpose::STANDARD.encode(data)),
+                },
+                Err(_) => LocalFileReadDetailed {
+                    path,
+                    found: false,
+                    byte_len: 0,
+                    read_ms: start.elapsed().as_secs_f64() * 1000.0,
+                    data_b64: None,
+                },
+            }
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn read_local_files_batch_bin(paths: Vec<String>) -> Result<Response, String> {
+    let results: Vec<(bool, f64, Vec<u8>)> = paths
+        .into_par_iter()
+        .map(|path| {
+            let start = std::time::Instant::now();
+            match std::fs::read(&path) {
+                Ok(data) => (true, start.elapsed().as_secs_f64() * 1000.0, data),
+                Err(_) => (false, start.elapsed().as_secs_f64() * 1000.0, Vec::new()),
+            }
+        })
+        .collect();
+
+    let mut payload: Vec<u8> = Vec::new();
+    payload.extend_from_slice(&(results.len() as u32).to_le_bytes());
+
+    for (found, read_ms, data) in results {
+        payload.push(if found { 1u8 } else { 0u8 });
+        payload.extend_from_slice(&read_ms.to_le_bytes());
+        payload.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        if !data.is_empty() {
+            payload.extend_from_slice(&data);
+        }
+    }
+
+    Ok(Response::new(payload))
+}
+
 fn load_texture_bytes_with_source_key(
     normalized_model_path: &str,
     normalized_model_path_lc: &str,
@@ -1468,6 +1531,8 @@ fn main() {
             set_mpq_priority,
             debug_mpq_probe,
             read_local_files_batch,
+            read_local_files_batch_detailed,
+            read_local_files_batch_bin,
             load_textures_batch_bin,
             load_textures_batch_thumb_rgba,
             clear_texture_batch_cache,

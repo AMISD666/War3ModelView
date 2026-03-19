@@ -4,7 +4,7 @@ import { useSelectionStore } from '../../store/selectionStore';
 
 const BATCH_MAX_WORKER_FPS = 144;
 const BATCH_MAX_WORKER_FRAME_INTERVAL_MS = 1000 / BATCH_MAX_WORKER_FPS;
-const INITIAL_RENDER_WORKER_LIMIT = 8;
+const INITIAL_RENDER_WORKER_LIMIT = 12;
 const TEXTURE_FIRST_FRAME_COUNT = 0;
 
 function pickPreferredAnimation(animations: string[]): string | undefined {
@@ -155,6 +155,10 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
                     .filter(item => !queueInFlightRef.current.has(item.fullPath))
                     .slice(0, queueBudget);
 
+                const sharedState = candidates.length > 0
+                    ? await thumbnailService.prepareBatchRenderState()
+                    : null;
+
                 candidates.forEach((item) => {
                     queueInFlightRef.current.add(item.fullPath);
 
@@ -163,7 +167,7 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
                     const animIndex = resolveAnimationIndex(animList, selectedAnimName);
                     const frameTime = shouldAnimateFrames ? performance.now() : 0;
 
-                    thumbnailService.renderFrame(
+                    thumbnailService.renderFrameWithSharedState(
                         item.fullPath,
                         frameTime,
                         animIndex,
@@ -174,7 +178,8 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
                             prioritize: selectedPath === item.fullPath,
                             spinEnabled: selfSpinEnabled,
                             spinSpeed: selfSpinSpeed
-                        }
+                        },
+                        sharedState || undefined
                     )
                         .then((result) => {
                             if (result && result.status === 'success' && result.bitmap) {
@@ -224,7 +229,8 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
                     return;
                 }
 
-                if (shouldAnimateFrames) {
+                const initialQueuePending = queue.some(item => !processedPaths.current.includes(item.fullPath));
+                if (shouldAnimateFrames && !initialQueuePending) {
                     const itemsToAnimate = processedPaths.current.filter(p => visiblePaths.has(p));
                     const shouldPinSelected = itemsToAnimate.length <= 12;
                     const selectedInView = shouldPinSelected && selectedPath && itemsToAnimate.includes(selectedPath) ? selectedPath : null;
@@ -248,6 +254,9 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
                         // Avoid oversubscribing workers under high-card pages; this keeps frame pacing stable.
                         const dynamicBudget = Math.max(1, Math.min(itemsToAnimate.length, freeWorkers, perPageCap));
                         const targets = pickStalestTargets(itemsToAnimate, dynamicBudget, selectedInView);
+                        const sharedState = targets.length > 0
+                            ? await thumbnailService.prepareBatchRenderState()
+                            : null;
 
                         targets.forEach((targetPath) => {
                             if (pendingRequestsRef.current.has(targetPath)) return;
@@ -260,11 +269,11 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
 
                             pendingRequestsRef.current.add(targetPath);
 
-                            thumbnailService.renderFrame(targetPath, now, animIndex, !isAnimating, {
+                            thumbnailService.renderFrameWithSharedState(targetPath, now, animIndex, !isAnimating, {
                                 prioritize: !!selectedInView && selectedPath === targetPath,
                                 spinEnabled: selfSpinEnabled,
                                 spinSpeed: selfSpinSpeed
-                            }).then(res => {
+                            }, sharedState || undefined).then(res => {
                                 pendingRequestsRef.current.delete(targetPath);
                                 if (res.status === 'success' && res.bitmap) {
                                     lastAnimatedAtRef.current.set(targetPath, performance.now());

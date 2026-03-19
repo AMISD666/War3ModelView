@@ -4482,7 +4482,16 @@ const MainLayout: React.FC = () => {
                     const { mergeSameMaterials } = await import('../services/modelCleanupService');
                     const result = mergeSameMaterials(modelData);
                     if (result.removed > 0) {
-                        useModelStore.getState().setMaterials([...(modelData.Materials || [])]);
+                        const modelStore = useModelStore.getState();
+                        modelStore.setModelData({
+                            ...modelData,
+                            Materials: [...(modelData.Materials || [])],
+                            Geosets: [...(modelData.Geosets || [])],
+                            RibbonEmitters: [...(modelData.RibbonEmitters || [])]
+                        }, modelStore.modelPath, {
+                            skipAutoRecalculate: true,
+                            skipModelRebuild: true
+                        });
                         showMessage('success', '成功', result.message);
                     } else {
                         showMessage('info', '提示', result.message);
@@ -4493,7 +4502,16 @@ const MainLayout: React.FC = () => {
                     const { cleanUnusedMaterials } = await import('../services/modelCleanupService');
                     const result = cleanUnusedMaterials(modelData);
                     if (result.removed > 0) {
-                        useModelStore.getState().setMaterials([...(modelData.Materials || [])]);
+                        const modelStore = useModelStore.getState();
+                        modelStore.setModelData({
+                            ...modelData,
+                            Materials: [...(modelData.Materials || [])],
+                            Geosets: [...(modelData.Geosets || [])],
+                            RibbonEmitters: [...(modelData.RibbonEmitters || [])]
+                        }, modelStore.modelPath, {
+                            skipAutoRecalculate: true,
+                            skipModelRebuild: true
+                        });
                         showMessage('success', '成功', result.message);
                     } else {
                         showMessage('info', '提示', result.message);
@@ -4843,7 +4861,6 @@ const MainLayout: React.FC = () => {
 }
 
 export default MainLayout
-
 
 
 

@@ -123,6 +123,9 @@ export function lightweightSync(renderer: any, modelData: any): void {
     // === RIBBON EMITTERS ===
     if (modelData.RibbonEmitters) {
         renderer.model.RibbonEmitters = modelData.RibbonEmitters
+        if (renderer.modelInstance?.ribbonsController?.syncEmitters) {
+            renderer.modelInstance.ribbonsController.syncEmitters()
+        }
     }
 
     // === LIGHTS ===
@@ -173,6 +176,12 @@ export function lightweightSync(renderer: any, modelData: any): void {
             console.log('[modelSync] First material Layers:', modelData.Materials[0]?.Layers?.length || 0)
         }
         renderer.model.Materials = modelData.Materials
+        if (renderer.modelInstance?.syncMaterials) {
+            renderer.modelInstance.syncMaterials()
+        }
+        if (renderer.modelInstance?.ribbonsController?.syncEmitters) {
+            renderer.modelInstance.ribbonsController.syncEmitters()
+        }
     }
 
     // === GEOSET ANIMS ===

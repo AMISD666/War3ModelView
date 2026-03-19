@@ -8,6 +8,7 @@ import {
     AppstoreAddOutlined,
     BulbOutlined,
     EditOutlined,
+    DownloadOutlined,
     ExpandOutlined,
     CompressOutlined
 } from '@ant-design/icons';
@@ -26,7 +27,7 @@ import { registerShortcutHandler } from '../../shortcuts/manager';
 
 const { Content, Header } = Layout;
 const { Text } = Typography;
-const PAGE_SIZE_OPTIONS = [25, 50, 75, 100, 125, 150, 175, 200];
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 75, 100];
 
 interface ModelFile {
     name: string;
@@ -90,6 +91,14 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
     const [actionScope, setActionScope] = useState<'selected' | 'all'>('selected');
     const [isPrefixModalVisible, setIsPrefixModalVisible] = useState(false);
 
+    const currentPageFiles = files.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
+    const scheduleCurrentPageWork = useCallback((pageFiles: ModelFile[]) => {
+        const currentPagePaths = pageFiles.map(f => f.fullPath);
+        thumbnailService.pruneToActiveSet(currentPagePaths);
+        setQueue(pageFiles.map(f => ({ name: f.name, fullPath: f.fullPath })));
+        void thumbnailService.prefetch(currentPagePaths, 8, { withTextures: true });
+    }, [setQueue]);
 
     // Shared states for animations moved to store
 
@@ -156,9 +165,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
 
             // Only queue the current page
             const initialPageFiles = modelFiles.slice(0, pageSize);
-            setQueue(initialPageFiles.map(f => ({ name: f.name, fullPath: f.fullPath })));
-            const currentPagePaths = initialPageFiles.map(f => f.fullPath);
-            void thumbnailService.prefetch(currentPagePaths, 8, { withTextures: false });
+            scheduleCurrentPageWork(initialPageFiles);
 
             message.success(`找到 ${modelFiles.length} 个模型文件`);
         } catch (err) {
@@ -258,6 +265,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
 
     const handleThumbnailReady = useCallback((fullPath: string, bitmap: ImageBitmap, animations?: string[]) => {
         thumbnailEventBus.emitThumbnail(fullPath, bitmap);
+        thumbnailEventBus.emitMissingTextures(fullPath, thumbnailService.getMissingTextureCount(fullPath));
 
         if (animations && animations.length > 0) {
             thumbnailEventBus.emitAnimations(fullPath, animations);
@@ -280,9 +288,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
         // When page changes, update the queue to process the new page's models
         const start = (page - 1) * size;
         const pageFiles = files.slice(start, start + size);
-        setQueue(pageFiles.map(f => ({ name: f.name, fullPath: f.fullPath })));
-        const currentPagePaths = pageFiles.map(f => f.fullPath);
-        void thumbnailService.prefetch(currentPagePaths, 8, { withTextures: false });
+        scheduleCurrentPageWork(pageFiles);
     };
 
     const handlePageSizeChange = (size: number) => {
@@ -290,9 +296,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
         setPageSize(size);
 
         const pageFiles = files.slice(0, size);
-        setQueue(pageFiles.map(f => ({ name: f.name, fullPath: f.fullPath })));
-        const currentPagePaths = pageFiles.map(f => f.fullPath);
-        void thumbnailService.prefetch(currentPagePaths, 8, { withTextures: false });
+        scheduleCurrentPageWork(pageFiles);
     };
 
     const handleFastModeChange = (checked: boolean) => {
@@ -613,6 +617,30 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
         }
     };
 
+    const handleExportPerfLog = useCallback(async () => {
+        if (currentPageFiles.length === 0) {
+            message.warning('当前页没有模型可导出性能日志');
+            return;
+        }
+
+        try {
+            const baseDir = currentPath || (() => {
+                const sample = currentPageFiles[0]?.fullPath || '';
+                const lastSlash = Math.max(sample.lastIndexOf('\\'), sample.lastIndexOf('/'));
+                return lastSlash >= 0 ? sample.slice(0, lastSlash) : sample;
+            })();
+            const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const sep = baseDir.endsWith('\\') || baseDir.endsWith('/') ? '' : '\\';
+            const outPath = `${baseDir}${sep}batch_perf_${stamp}.json`;
+            const payload = thumbnailService.exportPerfLog(currentPageFiles.map(file => file.fullPath));
+            await writeFile(outPath, new TextEncoder().encode(JSON.stringify(payload, null, 2)));
+            message.success(`性能日志已导出: ${outPath}`);
+        } catch (err) {
+            console.error('Failed to export batch perf log:', err);
+            message.error('导出性能日志失败: ' + String(err));
+        }
+    }, [currentPageFiles, currentPath]);
+
 
     return (
         <Layout style={{ height: '100%', background: '#141414' }}>
@@ -668,6 +696,16 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                                     thumbnailService.clearAll();
                                 }}
                                 disabled={files.length === 0}
+                                size="small"
+                                style={{ minWidth: 40 }}
+                            />
+                        </Tooltip>
+
+                        <Tooltip title="导出当前页批量性能日志">
+                            <Button
+                                icon={<DownloadOutlined />}
+                                onClick={handleExportPerfLog}
+                                disabled={currentPageFiles.length === 0}
                                 size="small"
                                 style={{ minWidth: 40 }}
                             />
@@ -857,7 +895,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                             alignItems: 'start',
                             alignContent: 'start'
                         }}>
-                            {files.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((file) => (
+                            {currentPageFiles.map((file) => (
                                 <ModelCard
                                     key={file.fullPath}
                                     file={file}

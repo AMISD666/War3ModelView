@@ -3206,6 +3206,9 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         // === RIBBON EMITTERS ===
         if (modelData.RibbonEmitters) {
           renderer.model.RibbonEmitters = modelData.RibbonEmitters
+          if ((renderer as any).modelInstance?.ribbonsController?.syncEmitters) {
+            ; (renderer as any).modelInstance.ribbonsController.syncEmitters()
+          }
         }
 
         // === LIGHTS ===
@@ -3253,6 +3256,9 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           // Lightweight sync: rebuild materialLayerTextureID cache
           if ((renderer as any).modelInstance && typeof (renderer as any).modelInstance.syncMaterials === 'function') {
             (renderer as any).modelInstance.syncMaterials()
+          }
+          if ((renderer as any).modelInstance?.ribbonsController?.syncEmitters) {
+            ; (renderer as any).modelInstance.ribbonsController.syncEmitters()
           }
         }
         if (modelData.Textures) {
@@ -7502,7 +7508,6 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 })
 
 export default Viewer
-
 
 
 

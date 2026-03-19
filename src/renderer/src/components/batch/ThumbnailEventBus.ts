@@ -8,6 +8,7 @@ class ThumbnailEventBus {
     private bitmaps: Map<string, ImageBitmap> = new Map();
     private graveyard: Map<string, ImageBitmap> = new Map(); // Keep last frame alive to prevent React race conditions
     private animations: Map<string, string[]> = new Map();
+    private missingTextureCounts: Map<string, number> = new Map();
 
     public on(event: string, callback: Function) {
         if (!this.listeners.has(event)) {
@@ -36,6 +37,7 @@ class ThumbnailEventBus {
         }
 
         this.bitmaps.set(fullPath, bitmap);
+        this.emit('thumbnail', fullPath, bitmap);
         this.emit(`update:${fullPath}`, bitmap);
     }
 
@@ -44,12 +46,25 @@ class ThumbnailEventBus {
         this.emit(`animations:${fullPath}`, animations);
     }
 
+    public emitMissingTextures(fullPath: string, missCount: number) {
+        if (missCount > 0) {
+            this.missingTextureCounts.set(fullPath, missCount);
+        } else {
+            this.missingTextureCounts.delete(fullPath);
+        }
+        this.emit(`missing-textures:${fullPath}`, missCount);
+    }
+
     public getBitmap(fullPath: string): ImageBitmap | undefined {
         return this.bitmaps.get(fullPath);
     }
 
     public getAnimations(fullPath: string): string[] | undefined {
         return this.animations.get(fullPath);
+    }
+
+    public getMissingTextureCount(fullPath: string): number {
+        return this.missingTextureCounts.get(fullPath) || 0;
     }
 
     public prune(activePaths: Set<string>) {
@@ -63,6 +78,7 @@ class ThumbnailEventBus {
                     try { g.close(); } catch (e) { }
                     this.graveyard.delete(path);
                 }
+                this.missingTextureCounts.delete(path);
             }
         });
     }
@@ -77,6 +93,7 @@ class ThumbnailEventBus {
         this.bitmaps.clear();
         this.graveyard.clear();
         this.animations.clear();
+        this.missingTextureCounts.clear();
         this.listeners.clear();
     }
 }
