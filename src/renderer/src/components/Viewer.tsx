@@ -14,7 +14,7 @@ import { hexToRgb } from './viewer/types'
 import { mat3, mat4, vec3, vec4, quat } from 'gl-matrix'
 import { GridRenderer } from './GridRenderer'
 import { DebugRenderer } from './DebugRenderer'
-import { GizmoRenderer, GizmoAxis } from './GizmoRenderer'
+import { GizmoRenderer, GizmoAxis, GIZMO_AXIS_LENGTH } from './GizmoRenderer'
 import { AxisIndicator } from './AxisIndicator'
 import { readFile } from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'
@@ -35,7 +35,6 @@ import { MoveNodesCommand, NodeChange } from '../commands/MoveNodesCommand'
 import { SetNodeParentCommand } from '../commands/SetNodeParentCommand'
 import { VertexEditor } from './VertexEditor'
 import { pickClosestGeoset } from '../utils/rayTriangle'
-import { recalculateAllNormals } from '../utils/geometryUtils'
 import { SplitVerticesCommand } from '../commands/SplitVerticesCommand'
 import { AutoSeparateLayersCommand } from '../commands/AutoSeparateLayersCommand'
 import { WeldVerticesCommand } from '../commands/WeldVerticesCommand'
@@ -230,6 +229,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   const needsRendererUpdateRef = useRef(false)
   const animationFrameId = useRef<number | null>(null)
   const shouldRunRenderLoop = useRef<boolean>(true) // Flag to stop RAF loop on cleanup
+  const lastRenderErrorReportTimeRef = useRef<number>(0)
   const lastFpsTime = useRef<number>(performance.now())
   const lastFrameTime = useRef<number>(performance.now())
   const frameCount = useRef<number>(0)
@@ -281,6 +281,15 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     const modelCameras = Array.isArray((modelData as any)?.Cameras) ? (modelData as any).Cameras.filter((cam: any) => cam) : []
     if (modelCameras.length > 0) return modelCameras
     return Array.isArray(nodes) ? nodes.filter((n: any) => n && n.type === 'Camera') : []
+  }
+  const getSelectedCamera = (cameraIndex = selectedCameraIndex): any | null => {
+    const cameraList = getAvailableCameras()
+    if (cameraIndex < 0 || cameraIndex >= cameraList.length) return null
+    return cameraList[cameraIndex] ?? null
+  }
+  const clearActiveModelCameraView = () => {
+    inCameraView.current = false
+    setActiveModelCameraView(null)
   }
   const roundVertexCoord = (value: number): number => Math.round(value * 10000) / 10000
 
@@ -351,6 +360,20 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     })
 
     return result
+  }
+
+  const getSplitVertexSelection = (): Array<{ geosetIndex: number; index: number }> => {
+    const { selectedVertexIds, selectedFaceIds, geometrySubMode } = useSelectionStore.getState()
+
+    if (geometrySubMode === 'vertex') {
+      return selectedVertexIds
+    }
+
+    if (geometrySubMode === 'face' || geometrySubMode === 'group') {
+      return getExpandedFaceVertexSelection(selectedFaceIds as Array<{ geosetIndex: number; index: number }>)
+    }
+
+    return []
   }
 
 
@@ -487,7 +510,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
   // Mount/Unmount tracking
   useEffect(() => {
-    console.log('[Viewer] Component mounted');
+    // // // console.log('[Viewer] Component mounted');
     return () => console.log('[Viewer] Component unmounted');
   }, []);
 
@@ -903,7 +926,27 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   // Track if currently viewing a model camera (for ~ toggle)
   const inCameraView = useRef(false)
   // Store previous camera state to restore after exiting camera view
-  const previousCameraState = useRef<{ distance: number, theta: number, phi: number, target: Float32Array } | null>(null)
+  const previousCameraState = useRef<{
+    distance: number,
+    theta: number,
+    phi: number,
+    target: Float32Array,
+    projectionMode: 'perspective' | 'orthographic',
+    fov: number,
+    orthoSize: number,
+    nearClipPlane: number,
+    farClipPlane: number
+  } | null>(null)
+  const lastAppliedViewPresetRef = useRef<string | null>(null)
+  const [selectedCameraIndex, setSelectedCameraIndex] = useState(-1)
+  const [activeModelCameraView, setActiveModelCameraView] = useState<{
+    index: number,
+    name: string,
+    fov: number,
+    nearClip: number,
+    farClip: number,
+    aspectRatio: number
+  } | null>(null)
 
   // Helper to sync targetCamera state to SimpleOrbitCamera
   const syncCameraToOrbit = useCallback(() => {
@@ -916,8 +959,84 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     }
   }, [])
 
+  const applySelectedCameraView = useCallback((cameraIndex = selectedCameraIndex) => {
+    const camera = getSelectedCamera(cameraIndex)
+    if (!camera) return false
+
+    if (!inCameraView.current || !previousCameraState.current) {
+      previousCameraState.current = {
+        distance: targetCamera.current.distance,
+        theta: targetCamera.current.theta,
+        phi: targetCamera.current.phi,
+        target: vec3.clone(targetCamera.current.target) as Float32Array,
+        projectionMode: cameraRef.current?.projectionMode ?? 'perspective',
+        fov: cameraRef.current?.fov ?? Math.PI / 4,
+        orthoSize: cameraRef.current?.orthoSize ?? 500,
+        nearClipPlane: cameraRef.current?.nearClipPlane ?? 1,
+        farClipPlane: cameraRef.current?.farClipPlane ?? 100000
+      }
+    }
+
+    const cam = camera as any
+    const pos = getCameraVector(cam.Translation, cam.Position)
+    const target = getCameraVector(cam.TargetTranslation, cam.TargetPosition)
+
+    const dx = pos[0] - target[0]
+    const dy = pos[1] - target[1]
+    const dz = pos[2] - target[2]
+    let distance = Math.sqrt(dx * dx + dy * dy + dz * dz)
+    if (distance < 0.1) distance = 100
+
+    let phi = Math.acos(dz / distance)
+    if (Number.isNaN(phi)) phi = Math.PI / 4
+    phi = Math.max(0.01, Math.min(Math.PI - 0.01, phi))
+
+    let theta = Math.atan2(dy, dx)
+    if (Number.isNaN(theta)) theta = 0
+
+    const fov = typeof cam.FieldOfView === 'number' && cam.FieldOfView > 0 ? cam.FieldOfView : Math.PI / 4
+    const nearClip = typeof cam.NearClip === 'number' && cam.NearClip > 0 ? cam.NearClip : 16
+    const farClip = typeof cam.FarClip === 'number' && cam.FarClip > nearClip ? cam.FarClip : 1000
+
+    targetCamera.current.distance = distance
+    targetCamera.current.theta = theta
+    targetCamera.current.phi = phi
+    vec3.set(targetCamera.current.target, target[0], target[1], target[2])
+
+    if (cameraRef.current) {
+      cameraRef.current.projectionMode = 'perspective'
+      cameraRef.current.fov = fov
+      cameraRef.current.nearClipPlane = nearClip
+      cameraRef.current.farClipPlane = farClip
+    }
+
+    syncCameraToOrbit()
+    inCameraView.current = true
+    setActiveModelCameraView({
+      index: cameraIndex,
+      name: cam.Name || `Camera ${cameraIndex + 1}`,
+      fov,
+      nearClip,
+      farClip,
+      aspectRatio: 4 / 3
+    })
+    return true
+  }, [selectedCameraIndex, syncCameraToOrbit])
+
   const applyViewPreset = useCallback((preset: string, options?: { syncExternal?: boolean }) => {
     let shouldSyncOrbit = false
+
+    if (preset !== 'camera') {
+      if (inCameraView.current && previousCameraState.current && cameraRef.current) {
+        cameraRef.current.projectionMode = previousCameraState.current.projectionMode
+        cameraRef.current.fov = previousCameraState.current.fov
+        cameraRef.current.orthoSize = previousCameraState.current.orthoSize
+        cameraRef.current.nearClipPlane = previousCameraState.current.nearClipPlane
+        cameraRef.current.farClipPlane = previousCameraState.current.farClipPlane
+      }
+      clearActiveModelCameraView()
+      previousCameraState.current = null
+    }
 
     switch (preset) {
       case 'perspective':
@@ -967,6 +1086,11 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         targetCamera.current.phi = Math.PI / 4
         shouldSyncOrbit = true
         break
+      case 'camera':
+        if (!applySelectedCameraView()) {
+          return
+        }
+        break
       default:
         return
     }
@@ -978,7 +1102,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     if (options?.syncExternal !== false) {
       onSetViewPreset?.(preset)
     }
-  }, [onSetViewPreset, syncCameraToOrbit])
+  }, [applySelectedCameraView, onSetViewPreset, syncCameraToOrbit])
 
   const fitToViewImpl = React.useCallback(() => {
     const renderer = rendererRef.current
@@ -999,8 +1123,13 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     const distance = Math.max(diagonal * 1.2, 300)
 
     // If user was viewing a model camera, "fit" should return to orbit mode.
-    inCameraView.current = false
+    clearActiveModelCameraView()
     previousCameraState.current = null
+    if (cameraRef.current) {
+      cameraRef.current.fov = Math.PI / 4
+      cameraRef.current.nearClipPlane = 1
+      cameraRef.current.farClipPlane = 100000
+    }
 
     targetCamera.current.target = center
     targetCamera.current.distance = distance
@@ -1025,89 +1154,82 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           previousCameraState.current.target[1],
           previousCameraState.current.target[2]
         )
+
+        if (cameraRef.current) {
+          cameraRef.current.projectionMode = previousCameraState.current.projectionMode
+          cameraRef.current.fov = previousCameraState.current.fov
+          cameraRef.current.orthoSize = previousCameraState.current.orthoSize
+          cameraRef.current.nearClipPlane = previousCameraState.current.nearClipPlane
+          cameraRef.current.farClipPlane = previousCameraState.current.farClipPlane
+        }
+
         previousCameraState.current = null
       } else {
         vec3.set(targetCamera.current.target, 0, 0, 0)
       }
       syncCameraToOrbit()
-      inCameraView.current = false
+      clearActiveModelCameraView()
       return
     }
 
-    previousCameraState.current = {
-      distance: targetCamera.current.distance,
-      theta: targetCamera.current.theta,
-      phi: targetCamera.current.phi,
-      target: vec3.clone(targetCamera.current.target) as Float32Array
-    }
-
-    const selector = document.getElementById('camera-selector') as HTMLSelectElement
-    if (selector && selector.value !== '-1') {
-      const cameraList = getAvailableCameras()
-      const idx = parseInt(selector.value)
-      if (idx >= 0 && idx < cameraList.length) {
-        const cam = cameraList[idx] as any
-        const pos = getCameraVector(cam.Translation, cam.Position)
-        const target = getCameraVector(cam.TargetTranslation, cam.TargetPosition)
-
-        const dx = pos[0] - target[0]
-        const dy = pos[1] - target[1]
-        const dz = pos[2] - target[2]
-        let distance = Math.sqrt(dx * dx + dy * dy + dz * dz)
-        if (distance < 0.1) distance = 100
-
-        let phi = Math.acos(dz / distance)
-        if (isNaN(phi)) phi = Math.PI / 4
-        phi = Math.max(0.01, Math.min(Math.PI - 0.01, phi))
-
-        let theta = Math.atan2(dy, dx)
-        if (isNaN(theta)) theta = 0
-
-        targetCamera.current.distance = distance
-        targetCamera.current.theta = theta
-        targetCamera.current.phi = phi
-        vec3.set(targetCamera.current.target, target[0], target[1], target[2])
-        syncCameraToOrbit()
-        inCameraView.current = true
-      }
-    }
+    applySelectedCameraView()
   }
 
   const resetCamera = (force = false) => {
     if (!force && useRendererStore.getState().keepCameraOnLoad) return
+    clearActiveModelCameraView()
+    previousCameraState.current = null
     vec3.set(targetCamera.current.target, 0, 0, 0)
     targetCamera.current.distance = 500
     targetCamera.current.theta = Math.PI / 4
     targetCamera.current.phi = Math.PI / 4
+    if (cameraRef.current) {
+      cameraRef.current.fov = Math.PI / 4
+      cameraRef.current.nearClipPlane = 1
+      cameraRef.current.farClipPlane = 100000
+    }
     syncCameraToOrbit()
   }
 
-  const getGizmoScale = () => {
+  const getScreenStableWorldScale = (targetPixels: number, center?: vec3) => {
     const cam = cameraRef.current
-    if (!cam) return 1.0
+    const canvas = canvasRef.current
+    if (!cam || !canvas) return 1.0
 
-    // NOTE: Historically we scaled ~linearly with distance to keep a near-constant screen size.
-    // Users reported the gizmo feeling too large when zoomed far out, so we intentionally make the
-    // scaling sub-linear (sqrt) to reduce growth at large distances.
-    const base = cam.projectionMode === 'orthographic' ? cam.orthoSize : cam.distance
-    const denom = cam.projectionMode === 'orthographic' ? 400 : 600
+    const viewportHeight = Math.max(1, canvas.height || canvas.clientHeight || 1)
+    let worldUnitsPerPixel = 1.0
 
-    // Exponent < 1.0 => gizmo becomes smaller on screen when zooming out.
-    const EXP = 0.5
-    // Overall size tuning. Lower = smaller gizmo at all zoom levels.
-    const BASE_MULT = 6.0
+    if (cam.projectionMode === 'orthographic') {
+      worldUnitsPerPixel = (cam.orthoSize * 2) / viewportHeight
+    } else {
+      const forward = vec3.create()
+      vec3.subtract(forward, cam.target, cam.position)
+      if (vec3.squaredLength(forward) > 1e-8) {
+        vec3.normalize(forward, forward)
+      } else {
+        vec3.set(forward, 0, 0, -1)
+      }
 
-    let scale = Math.pow(Math.max(0.001, base) / denom, EXP) * BASE_MULT
+      const centerToUse = center ?? cam.target
+      const toCenter = vec3.create()
+      vec3.subtract(toCenter, centerToUse, cam.position)
+      const depth = Math.max(0.1, vec3.dot(toCenter, forward))
+      const viewHeight = 2 * Math.tan(cam.fov * 0.5) * depth
+      worldUnitsPerPixel = viewHeight / viewportHeight
+    }
 
-    // Clamp base scale first to keep scaling stable across extreme zooms.
-    scale = Math.max(0.15, Math.min(20, scale))
+    return targetPixels * worldUnitsPerPixel
+  }
+
+  const getGizmoScale = (center?: vec3) => {
+    let scale = getScreenStableWorldScale(700, center) / GIZMO_AXIS_LENGTH
 
     // User multiplier from settings (0.1..1.0).
     const gizmoSize = useRendererStore.getState().gizmoSize || 1
     scale *= gizmoSize
 
-    // Final clamp after user multiplier.
-    return Math.max(0.05, Math.min(40, scale))
+    // Final clamp after user multiplier to avoid disappearing or exploding at extreme zooms.
+    return Math.max(0.01, Math.min(200, scale))
   }
 
   // Expose methods to parent via ref
@@ -1358,6 +1480,44 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       scale: [1, 1, 1]
     }
   }
+  const getActiveCameraMatte = () => {
+    const canvas = canvasRef.current
+    if (!canvas || !activeModelCameraView || cameraRef.current?.projectionMode !== 'perspective') {
+      return null
+    }
+
+    const width = canvas.clientWidth || canvas.width
+    const height = canvas.clientHeight || canvas.height
+    if (width <= 0 || height <= 0) return null
+
+    const targetAspect = activeModelCameraView.aspectRatio > 0 ? activeModelCameraView.aspectRatio : 4 / 3
+    // Warcraft portrait windows crop a noticeable margin compared with the raw camera render.
+    const safeFrameScale = 0.72
+    let frameWidth = width
+    let frameHeight = frameWidth / targetAspect
+
+    if (frameHeight > height) {
+      frameHeight = height
+      frameWidth = frameHeight * targetAspect
+    }
+
+    frameWidth *= safeFrameScale
+    frameHeight *= safeFrameScale
+
+    const left = Math.max(0, (width - frameWidth) * 0.5)
+    const top = Math.max(0, (height - frameHeight) * 0.5)
+    const fovDeg = `${(activeModelCameraView.fov * 180 / Math.PI).toFixed(1).replace(/\.0$/, '')}°`
+
+    return {
+      left,
+      top,
+      width: frameWidth,
+      height: frameHeight,
+      rightInset: Math.max(0, width - left - frameWidth),
+      bottomInset: Math.max(0, height - top - frameHeight),
+      label: `${activeModelCameraView.name}`
+    }
+  }
 
   const loadTeamColorTextures = async (colorIndex: number) => {
     if (!renderer) return
@@ -1424,11 +1584,76 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     return hasChanges ? nextMaterials : materials
   }
 
+  const sanitizeMaterialsForRenderer = (materials: any[] | undefined, texturesLength: number) => {
+    if (!Array.isArray(materials)) return materials
+
+    const maxTextureId = Math.max(0, texturesLength - 1)
+    let hasChanges = false
+
+    const nextMaterials = materials.map((material: any) => {
+      if (!material || !Array.isArray(material.Layers)) return material
+
+      let materialChanged = false
+      const nextLayers = material.Layers.map((layer: any) => {
+        if (!layer || typeof layer !== 'object') return layer
+
+        const rawTextureId = typeof layer.TextureID === 'number' ? layer.TextureID : Number(layer.TextureID)
+        const safeTextureId = Number.isFinite(rawTextureId)
+          ? Math.min(Math.max(0, Math.floor(rawTextureId)), maxTextureId)
+          : 0
+
+        if (safeTextureId !== layer.TextureID) {
+          materialChanged = true
+          hasChanges = true
+          return { ...layer, TextureID: safeTextureId }
+        }
+
+        return layer
+      })
+
+      if (!materialChanged) return material
+      return { ...material, Layers: nextLayers }
+    })
+
+    return hasChanges ? nextMaterials : materials
+  }
+
   const createRendererBlendCompatibleModel = (model: any) => {
     if (!model || !Array.isArray(model.Materials)) return model
-    const compatibleMaterials = cloneMaterialsWithReferenceBlendCompat(model.Materials)
+
+    const sanitizedMaterials = sanitizeMaterialsForRenderer(model.Materials, model.Textures?.length || 0)
+    const compatibleMaterials = cloneMaterialsWithReferenceBlendCompat(sanitizedMaterials)
+
     if (compatibleMaterials === model.Materials) return model
     return { ...model, Materials: compatibleMaterials }
+  }
+
+  const ensureWebGpuTextureSamplers = (mdlRenderer: any, textures: any[]) => {
+    if (!mdlRenderer || !Array.isArray(textures)) return
+    const device = mdlRenderer.device as GPUDevice | undefined
+    const rendererData = mdlRenderer.rendererData as any
+    if (!device || !rendererData) return
+
+    if (!Array.isArray(rendererData.gpuSamplers)) {
+      rendererData.gpuSamplers = []
+    }
+
+    for (let i = 0; i < textures.length; i++) {
+      if (rendererData.gpuSamplers[i]) continue
+      const texture = textures[i] || {}
+      const flags = typeof texture.Flags === 'number' ? texture.Flags : 0
+      const addressModeU: GPUAddressMode = (flags & 1) ? 'repeat' : 'clamp-to-edge'
+      const addressModeV: GPUAddressMode = (flags & 2) ? 'repeat' : 'clamp-to-edge'
+
+      rendererData.gpuSamplers[i] = device.createSampler({
+        label: `texture sampler ${i}`,
+        minFilter: 'linear',
+        magFilter: 'linear',
+        mipmapFilter: 'linear',
+        addressModeU,
+        addressModeV
+      })
+    }
   }
 
   useEffect(() => {
@@ -1584,9 +1809,115 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     }
   }
 
+  const hasGeometryBufferData = (value: any): boolean => {
+    return !!value && typeof value.length === 'number' && value.length > 0
+  }
+
+  const cloneGeometryBuffer = (value: any) => {
+    if (!value) return value
+    if (ArrayBuffer.isView(value)) {
+      const TypedArrayCtor = (value as any).constructor
+      return typeof TypedArrayCtor === 'function' ? new TypedArrayCtor(value as any) : value
+    }
+    if (Array.isArray(value)) {
+      return value.map((entry) => (Array.isArray(entry) ? [...entry] : entry))
+    }
+    return value
+  }
+
+  const sanitizeModelGeosetsForReload = (model: any, fallbackGeosets?: any[] | null) => {
+    if (!model || !Array.isArray(model.Geosets)) {
+      return model
+    }
+
+    const fallbackMatches =
+      Array.isArray(fallbackGeosets) &&
+      fallbackGeosets.length === model.Geosets.length
+
+    let restoredCount = 0
+    let skippedCount = 0
+    const sanitizedGeosets = model.Geosets.flatMap((geoset: any, index: number) => {
+      if (!geoset) {
+        skippedCount += 1
+        console.error(`[Viewer] Skipping null geoset during full reload at index ${index}`)
+        return []
+      }
+
+      const hasVertices = hasGeometryBufferData(geoset.Vertices)
+      const hasFaces = hasGeometryBufferData(geoset.Faces)
+      if (hasVertices && hasFaces) {
+        return [geoset]
+      }
+
+      const fallbackGeoset = fallbackMatches ? fallbackGeosets?.[index] : null
+      const canRestoreFromFallback =
+        !!fallbackGeoset &&
+        hasGeometryBufferData(fallbackGeoset.Vertices) &&
+        hasGeometryBufferData(fallbackGeoset.Faces)
+
+      if (canRestoreFromFallback) {
+        restoredCount += 1
+        console.warn(`[Viewer] Restoring missing geometry for geoset ${index} from previous renderer snapshot`)
+        return [{
+          ...geoset,
+          Vertices: cloneGeometryBuffer(fallbackGeoset.Vertices),
+          Faces: cloneGeometryBuffer(fallbackGeoset.Faces),
+          Normals: hasGeometryBufferData(geoset.Normals)
+            ? geoset.Normals
+            : cloneGeometryBuffer(fallbackGeoset.Normals),
+          TVertices: hasGeometryBufferData(geoset.TVertices)
+            ? geoset.TVertices
+            : cloneGeometryBuffer(fallbackGeoset.TVertices),
+          Groups: Array.isArray(geoset.Groups) && geoset.Groups.length > 0
+            ? geoset.Groups
+            : cloneGeometryBuffer(fallbackGeoset.Groups),
+          SkinWeights: hasGeometryBufferData(geoset.SkinWeights)
+            ? geoset.SkinWeights
+            : cloneGeometryBuffer(fallbackGeoset.SkinWeights),
+          Tangents: hasGeometryBufferData(geoset.Tangents)
+            ? geoset.Tangents
+            : cloneGeometryBuffer(fallbackGeoset.Tangents),
+          VertexGroup: hasGeometryBufferData(geoset.VertexGroup)
+            ? geoset.VertexGroup
+            : cloneGeometryBuffer(fallbackGeoset.VertexGroup),
+          MatrixGroups: hasGeometryBufferData(geoset.MatrixGroups)
+            ? geoset.MatrixGroups
+            : cloneGeometryBuffer(fallbackGeoset.MatrixGroups),
+          MatrixIndices: hasGeometryBufferData(geoset.MatrixIndices)
+            ? geoset.MatrixIndices
+            : cloneGeometryBuffer(fallbackGeoset.MatrixIndices),
+          TotalGroupsCount: geoset.TotalGroupsCount ?? fallbackGeoset.TotalGroupsCount
+        }]
+      }
+
+      skippedCount += 1
+      console.error(
+        `[Viewer] Skipping geoset ${index} during full reload because Vertices/Faces are missing and no fallback geometry is available`
+      )
+      return []
+    })
+
+    if (skippedCount === 0 && restoredCount === 0) {
+      return model
+    }
+
+    if (sanitizedGeosets.length === 0 && model.Geosets.length > 0) {
+      throw new Error('[Viewer] Full reload aborted: all geosets are missing renderable geometry')
+    }
+
+    console.warn(`[Viewer] Geoset sanitation complete. restored=${restoredCount}, skipped=${skippedCount}`)
+    return {
+      ...model,
+      Geosets: sanitizedGeosets
+    }
+  }
+
   // Handle view presets from prop
   useEffect(() => {
     if (!viewPreset) return
+    const presetKey = `${viewPreset.type}:${viewPreset.time}:${viewPreset.reset ? 1 : 0}`
+    if (lastAppliedViewPresetRef.current === presetKey) return
+    lastAppliedViewPresetRef.current = presetKey
     console.log('[Viewer] View preset changed:', viewPreset.type)
     if (viewPreset.type === 'perspective' && viewPreset.reset) {
       vec3.set(targetCamera.current.target, 0, 0, 0)
@@ -1596,6 +1927,17 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     }
     applyViewPreset(viewPreset.type, { syncExternal: false })
   }, [applyViewPreset, viewPreset]) // 仅依赖 viewPreset
+
+  useEffect(() => {
+    if (!inCameraView.current) return
+    if (activeModelCameraView?.index === selectedCameraIndex) return
+    if (!getSelectedCamera()) {
+      clearActiveModelCameraView()
+      previousCameraState.current = null
+      return
+    }
+    applySelectedCameraView(selectedCameraIndex)
+  }, [activeModelCameraView?.index, applySelectedCameraView, selectedCameraIndex])
 
   // Handle Animation and Mode Changes
   useEffect(() => {
@@ -1631,6 +1973,20 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     () => (Array.isArray(storeNodes) ? storeNodes.filter((n: any) => n && typeof n.ObjectId === 'number') : []),
     [storeNodes]
   )
+
+  useEffect(() => {
+    const cameraList = getAvailableCameras()
+    if (cameraList.length === 0) {
+      if (selectedCameraIndex !== -1) {
+        setSelectedCameraIndex(-1)
+      }
+      return
+    }
+
+    if (selectedCameraIndex < 0 || selectedCameraIndex >= cameraList.length) {
+      setSelectedCameraIndex(0)
+    }
+  }, [modelData, selectedCameraIndex, stableStoreNodes])
 
   useEffect(() => {
     if (rendererRef.current && rendererRef.current.model) {
@@ -2959,6 +3315,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   const reloadRendererWithData = async (model: any, modelPath: string) => {
     console.log('[Viewer] ========== FULL RELOAD START ==========')
     const safeModelPath = typeof modelPath === 'string' ? modelPath : ''
+    const previousRendererGeosets = Array.isArray(renderer?.model?.Geosets) ? renderer.model.Geosets : null
     console.log('[Viewer] reloadRendererWithData called with path:', safeModelPath)
     console.log('[Viewer] Model data summary:', {
       Geosets: model.Geosets?.length || 0,
@@ -2968,34 +3325,12 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       Nodes: model.Nodes?.length || 0,
       Sequences: model.Sequences?.length || 0
     })
-    console.time('[Viewer] ReloadModel')
+    const reloadTimerLabel = `[Viewer] ReloadModel:${Date.now().toString(36)}:${Math.floor(Math.random() * 1e6).toString(36)}`
+    let reloadTimerStarted = false
+    console.time(reloadTimerLabel)
+    reloadTimerStarted = true
     setLoading(true)
     setLoadingStatus('同步模型数据...')
-    // CRITICAL: Capture old renderer's Geoset geometry BEFORE destroying
-    // The TypedArrays (Vertices, Faces, Normals) are lost in store's spread operations
-    // NOTE: This logic is currently disabled, see commented block below
-    // let oldGeosets: any[] | null = null
-    // if (renderer && renderer.model && renderer.model.Geosets) {
-    //   oldGeosets = renderer.model.Geosets
-    // }
-
-    // Cleanup old renderer
-    if (animationFrameId.current !== null) {
-      cancelAnimationFrame(animationFrameId.current)
-      animationFrameId.current = null
-    }
-
-    if (renderer) {
-      try {
-        // Safety check for destroy method
-        if (typeof renderer.destroy === 'function') {
-          renderer.destroy()
-        }
-      } catch (e) {
-        console.warn('[Viewer] Error destroying renderer:', e)
-      }
-      setRenderer(null)
-    }
 
     try {
       const canvas = canvasRef.current
@@ -3004,60 +3339,37 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         return
       }
 
-      // Copy Geoset geometry data from captured old Geosets
-      // The modelData from store loses TypedArrays (Vertices, Faces, Normals) during spread operations
-      // BUT: Only do this when geoset count is the same! If count changed (merge/delete),
-      // the new geosets already have the correct geometry from the merge operation.
-      // CRITICAL UPDATE: Commented out geometry copying. 
-      // While this was intended to preserve TypedArrays, it causes severe issues when geometry is modified
-      // (e.g. UV Editor splitting vertices -> vertex count changes).
-      // Overwriting with oldGeosets reverts these changes or causes data mismatch (Index out of bounds).
-      // The performance cost of re-parsing Arrays to TypedArrays is negligible compared to correctness.
-      /*
-      if (oldGeosets && model.Geosets && oldGeosets.length === model.Geosets.length) {
-        console.log('[Viewer] Copying geometry from old geosets (same count)');
-        for (let i = 0; i < model.Geosets.length; i++) {
-          const oldGeoset = oldGeosets[i]
-          const newGeoset = model.Geosets[i]
-   
-          // Always copy geometry data from old geoset, overwriting anything in new geoset
-          if (oldGeoset.Vertices) {
-            newGeoset.Vertices = oldGeoset.Vertices
-          }
-          if (oldGeoset.Faces) {
-            newGeoset.Faces = oldGeoset.Faces
-          }
-          if (oldGeoset.Normals) {
-            newGeoset.Normals = oldGeoset.Normals
-          }
-          if (oldGeoset.TVertices) {
-            newGeoset.TVertices = oldGeoset.TVertices
-          }
-          if (oldGeoset.Groups) {
-            newGeoset.Groups = oldGeoset.Groups
-          }
-          if (oldGeoset.SkinWeights) {
-            newGeoset.SkinWeights = oldGeoset.SkinWeights
-          }
-          if (oldGeoset.Tangents) {
-            newGeoset.Tangents = oldGeoset.Tangents
-          }
-          if (oldGeoset.VertexGroup) {
-            newGeoset.VertexGroup = oldGeoset.VertexGroup
-          }
-        }
-      } else if (oldGeosets && model.Geosets) {
-        console.log('[Viewer] Geoset count changed (old:', oldGeosets.length, 'new:', model.Geosets.length, '), using merged geometry directly');
+      const modelForReload =
+        (!Array.isArray(model?.Materials) || model.Materials.length === 0) && Array.isArray(renderer?.model?.Materials) && renderer.model.Materials.length > 0
+          ? { ...model, Materials: renderer.model.Materials }
+          : model
+
+      const sanitizedModel = sanitizeModelGeosetsForReload(modelForReload, previousRendererGeosets)
+
+      // Cleanup old renderer only after we know the incoming model is safe enough to attempt a reload.
+      if (animationFrameId.current !== null) {
+        cancelAnimationFrame(animationFrameId.current)
+        animationFrameId.current = null
       }
-      */
+
+      if (renderer) {
+        try {
+          if (typeof renderer.destroy === 'function') {
+            renderer.destroy()
+          }
+        } catch (e) {
+          console.warn('[Viewer] Error destroying renderer:', e)
+        }
+        setRenderer(null)
+      }
 
       // CRITICAL FIX: Validate and fix ParticleEmitters2 before creating renderer
       // Same validation as in loadModel - prevents production-only rendering issues
-      const blendCompatibleModel = createRendererBlendCompatibleModel(model)
+      const blendCompatibleModel = createRendererBlendCompatibleModel(sanitizedModel)
       const { model: rendererModelWithNodes, defaultNodeId } = ensureRenderNodes(blendCompatibleModel)
       ensureGeosetGroups(rendererModelWithNodes, defaultNodeId)
       console.log('[Viewer] Step 1: Validating particles...')
-      validateAllParticleEmitters(model)
+      validateAllParticleEmitters(sanitizedModel)
       console.log('[Viewer] Step 1: Particle validation complete')
 
       console.log('[Viewer] Step 2: Creating ModelRenderer...')
@@ -3082,7 +3394,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       // Load textures using concurrent loader with mipmap optimization
       console.log('[Viewer] Step 6: Loading textures...')
       const textureResults = await loadAllTextures(
-        model,
+        sanitizedModel,
         newRenderer,
         safeModelPath,
         textureWorkers,
@@ -3124,17 +3436,23 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       (newRenderer as any).__modelPath = safeModelPath
       setRenderer(newRenderer)
       console.log('[Viewer] ========== FULL RELOAD COMPLETE ==========')
-      console.timeEnd('[Viewer] ReloadModel')
+      console.timeEnd(reloadTimerLabel)
+      reloadTimerStarted = false
       setLoading(false)
     } catch (error) {
       console.error('[Viewer] ========== FULL RELOAD CRASHED ==========')
       console.error('[Viewer] Error reloading renderer with data:', error)
       console.error('[Viewer] Stack:', (error as Error).stack)
+      if (reloadTimerStarted) {
+        console.timeEnd(reloadTimerLabel)
+      }
+      setLoading(false)
     }
   }
 
   // Watch for renderer reload trigger from store (e.g., when particles are updated)
   const lastReloadTrigger = useRef(0) // Start at 0 to match initial store value
+  const lastGeosetAnimsRef = useRef<any[] | undefined>(undefined)
   useEffect(() => {
     // Skip only initial mount (when trigger is still 0)
     // After that, any change should trigger sync
@@ -3246,21 +3564,9 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           renderer.model.Cameras = modelData.Cameras
         }
 
-        // === MATERIALS & TEXTURES ===
-        if (modelData.Materials) {
-          console.log('[Viewer] Syncing materials. Count:', modelData.Materials.length)
-          if (modelData.Materials.length > 0) {
-            console.log('[Viewer] Last Material:', JSON.stringify(modelData.Materials[modelData.Materials.length - 1]));
-          }
-          renderer.model.Materials = cloneMaterialsWithReferenceBlendCompat(modelData.Materials)
-          // Lightweight sync: rebuild materialLayerTextureID cache
-          if ((renderer as any).modelInstance && typeof (renderer as any).modelInstance.syncMaterials === 'function') {
-            (renderer as any).modelInstance.syncMaterials()
-          }
-          if ((renderer as any).modelInstance?.ribbonsController?.syncEmitters) {
-            ; (renderer as any).modelInstance.ribbonsController.syncEmitters()
-          }
-        }
+        // === TEXTURES & MATERIALS ===
+        // Keep Textures ahead of Materials so layers referencing a newly imported TextureID
+        // never observe the old texture array during the same lightweight sync tick.
         if (modelData.Textures) {
           // Detect new textures that need to be loaded
           const oldTexturePaths = new Set(renderer.model.Textures?.map((t: any) => t.Image) || [])
@@ -3268,34 +3574,56 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
           // Update the textures array first
           renderer.model.Textures = modelData.Textures
+          // WebGPU path requires sampler array length to keep up with Textures length.
+          // Missing sampler can crash render pass and freeze RAF loop after texture import.
+          ensureWebGpuTextureSamplers(renderer, renderer.model.Textures)
 
           // Load any new textures asynchronously
           if (newTextures.length > 0) {
             console.log('[Viewer] Lightweight sync: Loading', newTextures.length, 'new textures')
-            // Import and call texture loader for each new texture
-            Promise.all(
-              newTextures.map(async (texture: any) => {
-                try {
-                  const { loadTextureForRenderer } = await import('./viewer/textureLoader')
-                  const textureModelPath = (renderer as any).__modelPath || modelPath || (modelData as any)?.__modelPath || (modelData as any)?.path || ''
-                  const loaded = await loadTextureForRenderer(renderer, texture.Image, textureModelPath)
-                  if (loaded) {
-                    console.log('[Viewer] Loaded new texture:', texture.Image)
-                  } else {
-                    console.warn('[Viewer] Failed to load new texture:', texture.Image)
-                  }
-                } catch (e) {
-                  console.error('[Viewer] Error loading new texture:', texture.Image, e)
-                }
-              })
-            ).then(() => {
+            const textureModelPath = (renderer as any).__modelPath || modelPath || (modelData as any)?.__modelPath || (modelData as any)?.path || ''
+            void loadAllTextures(
+              renderer.model,
+              renderer,
+              textureModelPath,
+              textureWorkers,
+              undefined,
+              {
+                yieldUploads: true,
+                targetPaths: newTextures.map((texture: any) => texture.Image).filter(Boolean),
+                workerDecodeMinTextures: 1,
+                workerDecodeMinBytes: 1
+              }
+            ).then((results) => {
+              const failed = results.filter((result) => !result.loaded)
+              if (failed.length > 0) {
+                failed.forEach((result) => {
+                  console.warn('[Viewer] Failed to load new texture:', result.path, result.error)
+                })
+              }
               // After all textures loaded, rebuild material layer cache
               if ((renderer as any).modelInstance?.syncMaterials) {
                 (renderer as any).modelInstance.syncMaterials()
                 console.log('[Viewer] Rebuilt material cache after texture load')
               }
+            }).catch((e) => {
+              console.error('[Viewer] Error loading new textures via lightweight sync:', e)
             })
           }
+        }
+        if (Array.isArray(modelData.Materials) && modelData.Materials.length > 0) {
+          console.log('[Viewer] Syncing materials. Count:', modelData.Materials.length)
+          const sanitizedMaterials = sanitizeMaterialsForRenderer(modelData.Materials, renderer.model.Textures?.length || 0)
+          renderer.model.Materials = cloneMaterialsWithReferenceBlendCompat(sanitizedMaterials)
+          // Lightweight sync: rebuild materialLayerTextureID cache
+          if ((renderer as any).modelInstance && typeof (renderer as any).modelInstance.syncMaterials === 'function') {
+            (renderer as any).modelInstance.syncMaterials()
+          }
+          if ((renderer as any).modelInstance?.ribbonsController?.syncEmitters) {
+            ; (renderer as any).modelInstance.ribbonsController.syncEmitters()
+          }
+        } else if (Array.isArray(modelData.Materials) && modelData.Materials.length === 0) {
+          console.warn('[Viewer] Skip applying empty Materials patch to prevent invisible model during texture-only sync')
         }
         if (modelData.TextureAnims && Array.isArray(modelData.TextureAnims)) {
           renderer.model.TextureAnims = modelData.TextureAnims
@@ -3339,6 +3667,17 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             // Sync SelectionGroup changes
             if (geoset?.SelectionGroup !== undefined && rendererGeoset.SelectionGroup !== geoset.SelectionGroup) {
               rendererGeoset.SelectionGroup = geoset.SelectionGroup
+            }
+
+            // Sync normal buffers so menu-driven recalculate normals updates immediately
+            if (geoset?.Normals) {
+              const normalData = geoset.Normals instanceof Float32Array
+                ? geoset.Normals
+                : new Float32Array(geoset.Normals)
+              if (rendererGeoset.Normals !== normalData) {
+                rendererGeoset.Normals = normalData
+                ; (renderer as any).updateGeosetNormals?.(i, normalData)
+              }
             }
 
             // Sync UV texture coordinate buffers
@@ -3401,6 +3740,24 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     }
     lastReloadTrigger.current = rendererReloadTrigger
   }, [rendererReloadTrigger, modelData, renderer])
+
+  useEffect(() => {
+    if (!renderer || !modelData?.GeosetAnims) {
+      lastGeosetAnimsRef.current = modelData?.GeosetAnims
+      return
+    }
+
+    if (lastGeosetAnimsRef.current === modelData.GeosetAnims) {
+      return
+    }
+
+    renderer.model.GeosetAnims = modelData.GeosetAnims
+    if ((renderer as any).modelInstance && typeof (renderer as any).modelInstance.syncMaterials === 'function') {
+      ; (renderer as any).modelInstance.syncMaterials()
+    }
+    lastGeosetAnimsRef.current = modelData.GeosetAnims
+  }, [renderer, modelData?.GeosetAnims])
+
   // Handle Animation and Mode Changes
   useEffect(() => {
     // CRITICAL: Cancel any existing RAF loop BEFORE creating a new one
@@ -3680,8 +4037,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
           // === Camera Frustum Rendering ===
           if (gl && showCamerasRef.current) {
-            const rawNodes = useModelStore.getState().nodes;
-            const cameraNodes = (Array.isArray(rawNodes) ? rawNodes : []).filter((n: any) => n && n.type === 'Camera');
+            const cameraNodes = getAvailableCameras();
 
             // Get selected camera index from dropdown
             const selector = document.getElementById('camera-selector') as HTMLSelectElement;
@@ -4075,6 +4431,9 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 }
               })()
 
+              const nodeCubeEdgeWorldSize = getScreenStableWorldScale(18, cameraRef.current?.target)
+              const nodeSize = (nodeCubeEdgeWorldSize / 4.8) * (useRendererStore.getState().nodeSize ?? 1.0)
+
               debugRenderer.current.renderNodes(
                 gl as WebGLRenderingContext,
                 mvMatrix,
@@ -4085,7 +4444,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 childrenOfSelected,
                 nodeTypeColors,
                 currentMainMode === 'animation' && currentAnimationSubMode === 'keyframe',
-                useRendererStore.getState().nodeSize ?? 1.0,
+                nodeSize,
                 nodeRenderModeRef.current === 'wireframe' ? 'wireframe' : 'solid'
               )
 
@@ -4411,23 +4770,19 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             const selectionColorRgb = hexToRgb(selectionColor)
             const hoverColorRgb = hexToRgb(hoverColor)
 
-            // 计算动态顶点大小：根据相机缩放级别调整
-            // 放大视角时顶点变大，缩小时顶点变小
-            // 使用 sqrt 平滑缩放效果
-            let zoomScale = 1.0
+            // gl_PointSize 是屏幕像素。这里保持顶点在大模型/远距离下仍然可见，
+            // 只做轻微缩放，避免旧逻辑把点压到接近 1px。
+            let pointScale = 1.0
             if (cameraRef.current) {
               if (cameraRef.current.projectionMode === 'orthographic') {
-                // 正交模式：基准 orthoSize = 200
-                zoomScale = Math.sqrt(200 / Math.max(1, cameraRef.current.orthoSize))
+                pointScale = Math.pow(200 / Math.max(1, cameraRef.current.orthoSize), 0.15)
               } else {
-                // 透视模式：基准 distance = 400
-                zoomScale = Math.sqrt(400 / Math.max(1, cameraRef.current.distance))
+                pointScale = Math.pow(400 / Math.max(1, cameraRef.current.distance), 0.15)
               }
             }
-            // 限制缩放范围：0.375 到 2（放大约 8px，缩小约 1.5px）
-            zoomScale = Math.max(0.375, Math.min(2, zoomScale))
-            const basePointSize = 3.0 * zoomScale
-            const hoverPointSize = 5.0 * zoomScale
+            pointScale = Math.max(0.9, Math.min(1.25, pointScale))
+            const basePointSize = 4.5 * pointScale
+            const hoverPointSize = 7.0 * pointScale
             // 选中顶点只改变颜色，大小与普通顶点一致
             const selectedPointSize = basePointSize
 
@@ -4617,7 +4972,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             if (gl && showGizmo && count > 0) {
               vec3.scale(center, center, 1.0 / count)
 
-              const gizmoScale = getGizmoScale()
+              const gizmoScale = getGizmoScale(center)
               const gizmoOrientation = useRendererStore.getState().gizmoOrientation
               const gizmoBasis = getGizmoBasis(gizmoOrientation)
 
@@ -4649,12 +5004,27 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           }
           // NOTE: requestAnimationFrame is called AFTER the catch block, not here!
         } catch (e: any) {
-          console.error('[Viewer] Render Loop Crash:', e)
-          if (animationFrameId.current) {
-            cancelAnimationFrame(animationFrameId.current)
-            animationFrameId.current = null
+          const now = performance.now()
+          const shouldReport = now - lastRenderErrorReportTimeRef.current > 1000
+          if (shouldReport) {
+            lastRenderErrorReportTimeRef.current = now
+            const rendererModel = (rendererRef.current as any)?.model
+            const materialCount = Array.isArray(rendererModel?.Materials) ? rendererModel.Materials.length : 0
+            const textureCount = Array.isArray(rendererModel?.Textures) ? rendererModel.Textures.length : 0
+            console.error('[Viewer] Render Loop Crash:', e)
+            console.error('[Viewer] Render loop context:', {
+              materialCount,
+              textureCount,
+              currentSequence: (rendererRef.current as any)?.rendererData?.animationInfo?.Name,
+              currentFrame: (rendererRef.current as any)?.rendererData?.frame,
+            })
           }
-          return // Do NOT schedule next frame on error
+          // Keep RAF alive after a bad frame so UI controls and camera never hard-freeze.
+          // This allows hot-sync fixes (e.g., texture/material patch) to recover next frame.
+          if (runState.shouldRun && scheduleNext && globalRenderLoopId === myLoopId) {
+            animationFrameId.current = requestAnimationFrame(render)
+          }
+          return
         }
         // CRITICAL: Check THIS closure's flag AND singleton ID before scheduling next frame
         if (runState.shouldRun && scheduleNext && globalRenderLoopId === myLoopId) {
@@ -5898,7 +6268,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       const center = gizmoCenter
       const count = gizmoCount
       if (gizmoCount > 0 && transformMode) {
-        const gizmoScale = getGizmoScale()
+        const gizmoScale = getGizmoScale(center)
 
         if (canvasRef.current) {
           const rect = canvasRef.current.getBoundingClientRect()
@@ -5966,20 +6336,20 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   }
 
   const handleRecalculateNormals = () => {
-    if (!rendererRef.current) return
     console.log('[Viewer] Recalculating normals (Smooth)...')
-    recalculateAllNormals(rendererRef.current, true)
+    useModelStore.getState().recalculateNormals()
   }
 
   // Split vertices handler - now opens dialog for material selection
   const handleSplitVertices = () => {
     if (!rendererRef.current) return
-    const { selectedVertexIds, geometrySubMode, mainMode } = useSelectionStore.getState()
-    if (mainMode !== 'geometry' || geometrySubMode !== 'vertex' || selectedVertexIds.length < 1) return
+    const { geometrySubMode, mainMode } = useSelectionStore.getState()
+    const splitSelection = getSplitVertexSelection()
+    if (mainMode !== 'geometry' || !['vertex', 'face', 'group'].includes(geometrySubMode) || splitSelection.length < 1) return
 
-    console.log('[Viewer] Opening separate dialog for', selectedVertexIds.length, 'vertices')
+    console.log('[Viewer] Opening separate dialog for', splitSelection.length, 'vertices')
     // Get source geoset from first selected vertex
-    const geosetIdx = selectedVertexIds[0].geosetIndex
+    const geosetIdx = splitSelection[0].geosetIndex
     setSeparateSourceGeosetIndex(geosetIdx)
     setSeparateDialogVisible(true)
   }
@@ -6022,8 +6392,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     newLayerConfig?: LayerConfig;
   }) => {
     if (!rendererRef.current) return
-    const { selectedVertexIds } = useSelectionStore.getState()
-    if (selectedVertexIds.length < 1) return
+    const splitSelection = getSplitVertexSelection()
+    if (splitSelection.length < 1) return
 
     let targetMaterialId: number
 
@@ -6050,8 +6420,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       targetMaterialId = rendererRef.current.model.Geosets[separateSourceGeosetIndex]?.MaterialID ?? 0
     }
 
-    console.log('[Viewer] Splitting', selectedVertexIds.length, 'vertices with materialId:', targetMaterialId)
-    const cmd = new SplitVerticesCommand(rendererRef.current, selectedVertexIds, targetMaterialId)
+    console.log('[Viewer] Splitting', splitSelection.length, 'vertices with materialId:', targetMaterialId)
+    const cmd = new SplitVerticesCommand(rendererRef.current, splitSelection, targetMaterialId)
     commandManager.execute(cmd)
 
     setSeparateDialogVisible(false)
@@ -6949,9 +7319,11 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       {!isTexturePreviewMode && (() => {
         const cameraList = getAvailableCameras();
         const hasCamera = cameraList.length > 0
+        const hasSelectedCamera = selectedCameraIndex >= 0 && selectedCameraIndex < cameraList.length
         const viewMenuItems = [
           { key: 'perspective', label: '透视', shortcut: '~' },
           { key: 'orthographic', label: '正交', shortcut: '~' },
+          { key: 'camera', label: '镜头模式', shortcut: '', disabled: !hasSelectedCamera, dividerAfter: true },
           { key: 'top', label: '顶视图', shortcut: 'F3' },
           { key: 'bottom', label: '底视图', shortcut: 'F4' },
           { key: 'front', label: '前视图', shortcut: 'F1' },
@@ -6984,8 +7356,10 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 cursor: 'pointer'
               }}
               disabled={!hasCamera}
+              value={hasSelectedCamera ? String(selectedCameraIndex) : '-1'}
               onChange={(e) => {
                 const idx = parseInt(e.target.value);
+                setSelectedCameraIndex(idx)
                 if (idx >= 0 && idx < cameraList.length) {
                   const cam = cameraList[idx];
                   // Select the camera node instead of switching view
@@ -6993,7 +7367,6 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                   useSelectionStore.getState().selectNode(cam.ObjectId);
                 }
               }}
-              defaultValue="-1"
             >
               <option value="-1" disabled>选择相机...</option>
               {cameraList.map((cam: any, i: number) => (
@@ -7087,11 +7460,14 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                       onMouseDown={(event) => {
                         event.preventDefault()
                         event.stopPropagation()
+                        if (item.disabled) return
                         applyViewPreset(item.key)
                         setShowViewMenu(false)
                       }}
                       onMouseEnter={(e) => {
-                        e.currentTarget.style.background = '#3a3a3a'
+                        if (!item.disabled) {
+                          e.currentTarget.style.background = '#3a3a3a'
+                        }
                       }}
                       onMouseLeave={(e) => {
                         e.currentTarget.style.background = 'transparent'
@@ -7103,12 +7479,13 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                         justifyContent: 'space-between',
                         padding: '8px 12px',
                         background: 'transparent',
-                        color: '#eee',
+                        color: item.disabled ? '#707070' : '#eee',
                         border: 'none',
-                        borderBottom: item.key === 'orthographic' ? '1px solid #444' : 'none',
-                        cursor: 'pointer',
+                        borderBottom: item.dividerAfter ? '1px solid #444' : 'none',
+                        cursor: item.disabled ? 'not-allowed' : 'pointer',
                         fontSize: '12px',
-                        textAlign: 'left'
+                        textAlign: 'left',
+                        opacity: item.disabled ? 0.65 : 1
                       }}
                     >
                       <span>{item.label}</span>
@@ -7120,6 +7497,72 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             </div>
           </div>
         );
+      })()}
+
+      {!isTexturePreviewMode && (() => {
+        const cameraMatte = getActiveCameraMatte()
+        if (!cameraMatte) return null
+
+        return (
+          <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1200 }}>
+            <div style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              width: '100%',
+              height: cameraMatte.top,
+              background: 'rgba(0, 0, 0, 0.38)'
+            }} />
+            <div style={{
+              position: 'absolute',
+              left: 0,
+              top: cameraMatte.top + cameraMatte.height,
+              width: '100%',
+              height: cameraMatte.bottomInset,
+              background: 'rgba(0, 0, 0, 0.38)'
+            }} />
+            <div style={{
+              position: 'absolute',
+              left: 0,
+              top: cameraMatte.top,
+              width: cameraMatte.left,
+              height: cameraMatte.height,
+              background: 'rgba(0, 0, 0, 0.32)'
+            }} />
+            <div style={{
+              position: 'absolute',
+              right: 0,
+              top: cameraMatte.top,
+              width: cameraMatte.rightInset,
+              height: cameraMatte.height,
+              background: 'rgba(0, 0, 0, 0.32)'
+            }} />
+            <div style={{
+              position: 'absolute',
+              left: cameraMatte.left,
+              top: cameraMatte.top,
+              width: cameraMatte.width,
+              height: cameraMatte.height,
+              border: '1px solid rgba(99, 214, 255, 0.9)',
+              boxShadow: '0 0 0 1px rgba(0, 0, 0, 0.35) inset'
+            }} />
+            <div style={{
+              position: 'absolute',
+              left: cameraMatte.left + 10,
+              top: Math.max(10, cameraMatte.top + 10),
+              padding: '4px 8px',
+              borderRadius: '4px',
+              fontSize: '11px',
+              color: '#d8f8ff',
+              background: 'rgba(0, 16, 24, 0.72)',
+              border: '1px solid rgba(99, 214, 255, 0.35)',
+              backdropFilter: 'blur(4px)',
+              whiteSpace: 'nowrap'
+            }}>
+              {cameraMatte.label}
+            </div>
+          </div>
+        )
       })()}
 
       {/* Missing Texture Warning - Absolute positioned on the left as requested */}
@@ -7508,18 +7951,3 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 })
 
 export default Viewer
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

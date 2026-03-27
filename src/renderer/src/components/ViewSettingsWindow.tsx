@@ -1,5 +1,6 @@
 ﻿import React, { useState, useEffect } from 'react';
-import { Select, Button, Slider, ColorPicker, Modal, Input, Tabs } from 'antd';
+import { Select, Button, Slider, Modal, Input, Tabs } from 'antd';
+import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker';
 import { DraggableModal } from './DraggableModal';
 import { useRendererStore } from '../store/rendererStore';
 import { useSelectionStore } from '../store/selectionStore';

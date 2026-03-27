@@ -7,6 +7,7 @@ import { useRendererStore } from '../../store/rendererStore'
 import { useHistoryStore } from '../../store/historyStore'
 import { SetNodeParentCommand } from '../../commands/SetNodeParentCommand'
 import { useCommandManager } from '../../utils/CommandManager'
+import { GlobalSequenceSelect } from '../common/GlobalSequenceSelect'
 
 
 const { Text } = Typography
@@ -371,6 +372,20 @@ const BoneParameterPanel: React.FC = () => {
         message.success(`已更新 ${propName} 关键帧（帧 ${frame}）`)
     }, [selectedNode, currentFrame, renderer])
 
+    const updateTrackGlobalSeqId = useCallback((propName: 'Translation' | 'Rotation' | 'Scaling', globalSeqId: number | null) => {
+        if (!selectedNode) return
+        const { updateNodeSilent } = useModelStore.getState()
+        const node = selectedNode as any
+        const existingProp = node[propName] || { Keys: [], InterpolationType: 1 }
+        updateNodeSilent(node.ObjectId, {
+            [propName]: {
+                ...existingProp,
+                GlobalSeqId: globalSeqId
+            }
+        })
+        if (renderer) renderer.update(0)
+    }, [selectedNode, renderer])
+
     const handleCommitTrans = () => {
         const val: [number, number, number] = [
             parseFloat(transRefs.current.x?.value || '0') || 0,
@@ -683,6 +698,15 @@ const BoneParameterPanel: React.FC = () => {
                                     <Select.Option value={3}>贝塞尔</Select.Option>
                                 </Select>
                             </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '56px 1fr', gap: 6, alignItems: 'center', marginTop: 6 }}>
+                                <Text style={{ color: isInputDisabled ? '#555' : '#666', fontSize: compactUi.fieldFontSize }}>全局序列</Text>
+                                <GlobalSequenceSelect
+                                    size="small"
+                                    value={typeof (selectedNode as any)?.Translation?.GlobalSeqId === 'number' ? (selectedNode as any).Translation.GlobalSeqId : null}
+                                    onChange={(value) => updateTrackGlobalSeqId('Translation', value)}
+                                    style={{ width: '100%' }}
+                                />
+                            </div>
                             <div style={{ marginTop: compactUi.groupTopMargin }}>
                                 {renderInputRow('X', transRefs, transAddRefs, 'x', '#ff4d4f', handleCommitTrans, isInputDisabled, 5)}
                                 {renderInputRow('Y', transRefs, transAddRefs, 'y', '#52c41a', handleCommitTrans, isInputDisabled, 5)}
@@ -714,6 +738,15 @@ const BoneParameterPanel: React.FC = () => {
                                     <Select.Option value={3}>贝塞尔</Select.Option>
                                 </Select>
                             </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '56px 1fr', gap: 6, alignItems: 'center', marginTop: 6 }}>
+                                <Text style={{ color: isInputDisabled ? '#555' : '#666', fontSize: compactUi.fieldFontSize }}>全局序列</Text>
+                                <GlobalSequenceSelect
+                                    size="small"
+                                    value={typeof (selectedNode as any)?.Rotation?.GlobalSeqId === 'number' ? (selectedNode as any).Rotation.GlobalSeqId : null}
+                                    onChange={(value) => updateTrackGlobalSeqId('Rotation', value)}
+                                    style={{ width: '100%' }}
+                                />
+                            </div>
                             <div style={{ marginTop: compactUi.groupTopMargin }}>
                                 {renderInputRow('X', rotRefs, rotAddRefs, 'x', '#ff4d4f', handleCommitRot, isInputDisabled, 2, '°')}
                                 {renderInputRow('Y', rotRefs, rotAddRefs, 'y', '#52c41a', handleCommitRot, isInputDisabled, 2, '°')}
@@ -744,6 +777,15 @@ const BoneParameterPanel: React.FC = () => {
                                     <Select.Option value={2}>平滑</Select.Option>
                                     <Select.Option value={3}>贝塞尔</Select.Option>
                                 </Select>
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '56px 1fr', gap: 6, alignItems: 'center', marginTop: 6 }}>
+                                <Text style={{ color: isInputDisabled ? '#555' : '#666', fontSize: compactUi.fieldFontSize }}>全局序列</Text>
+                                <GlobalSequenceSelect
+                                    size="small"
+                                    value={typeof (selectedNode as any)?.Scaling?.GlobalSeqId === 'number' ? (selectedNode as any).Scaling.GlobalSeqId : null}
+                                    onChange={(value) => updateTrackGlobalSeqId('Scaling', value)}
+                                    style={{ width: '100%' }}
+                                />
                             </div>
                             <div style={{ marginTop: compactUi.groupTopMargin }}>
                                 {renderInputRow('X', scaleRefs, scaleAddRefs, 'x', '#ff4d4f', handleCommitScale, isInputDisabled, 5)}
@@ -804,4 +846,3 @@ const BoneParameterPanel: React.FC = () => {
 }
 
 export default React.memo(BoneParameterPanel)
-

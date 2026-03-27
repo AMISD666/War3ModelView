@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Button, Typography, Tooltip, Select } from 'antd';
+import { Button, Typography, Tooltip } from 'antd';
 import { DeleteOutlined, FileImageOutlined, CopyOutlined, WarningOutlined } from '@ant-design/icons';
 import { AnimatedPreview } from './AnimatedPreview';
 import { thumbnailEventBus } from './ThumbnailEventBus';
@@ -14,73 +14,31 @@ interface ModelFile {
 
 interface ModelCardProps {
     file: ModelFile;
-    initialAnimations?: string[];
-    initialSelectedAnimation?: string;
     fixedSize?: number;
     isSelected?: boolean;
-    showAnimationSelect?: boolean;
     onDelete: (file: ModelFile) => void;
     onEditTexture: (file: ModelFile) => void;
     onCopy?: (file: ModelFile) => void;
-    onAnimationChange?: (file: ModelFile, animation: string) => void;
     onSelect?: (file: ModelFile) => void;
     onDoubleClick?: (file: ModelFile) => void;
     onVisibilityChange?: (fullPath: string, isVisible: boolean) => void;
 }
 
-function pickPreferredAnimation(animations: string[]): string | undefined {
-    if (animations.length === 0) return undefined;
-
-    const exactStand = animations.find((name) => name.trim().toLowerCase() === 'stand');
-    if (exactStand) return exactStand;
-
-    const standPrefix = animations.find((name) => /^stand(\b|[^a-z0-9_])/i.test(name.trim()));
-    if (standPrefix) return standPrefix;
-
-    const standContains = animations.find((name) => name.trim().toLowerCase().includes('stand'));
-    return standContains ?? animations[0];
-}
-
 export const ModelCard: React.FC<ModelCardProps> = React.memo(({
     file,
-    initialAnimations = [],
-    initialSelectedAnimation,
     fixedSize = 160,
     isSelected = false,
-    showAnimationSelect = true,
     onDelete,
     onEditTexture,
     onCopy,
-    onAnimationChange,
     onSelect,
     onDoubleClick,
     onVisibilityChange
 }) => {
-    const [animations, setAnimations] = useState<string[]>(initialAnimations);
-    const [selectedAnimation, setSelectedAnimation] = useState<string | undefined>(
-        () => initialSelectedAnimation ?? pickPreferredAnimation(initialAnimations)
-    );
     const [missingTextureCount, setMissingTextureCount] = useState<number>(
         () => thumbnailEventBus.getMissingTextureCount(file.fullPath)
     );
     const cardRef = useRef<HTMLDivElement>(null);
-
-    // 1. Subscribe to animation metadata updates. Thumbnail bitmap updates are handled
-    // directly inside AnimatedPreview to avoid React re-renders on every frame.
-    useEffect(() => {
-        const handleAnims = (newAnims: string[]) => {
-            setAnimations(newAnims);
-            if (!selectedAnimation && newAnims.length > 0) {
-                setSelectedAnimation(pickPreferredAnimation(newAnims) ?? newAnims[0]);
-            }
-        };
-
-        thumbnailEventBus.on(`animations:${file.fullPath}`, handleAnims);
-
-        return () => {
-            thumbnailEventBus.off(`animations:${file.fullPath}`, handleAnims);
-        };
-    }, [file.fullPath, selectedAnimation]);
 
     useEffect(() => {
         const handleMissingTextures = (missCount: number) => {
@@ -241,22 +199,6 @@ export const ModelCard: React.FC<ModelCardProps> = React.memo(({
                 >
                     {file.name}
                 </Text>
-
-                {/* Animation Dropdown */}
-                {showAnimationSelect && animations.length > 0 && (
-                    <Select
-                        size="small"
-                        placeholder="选择动画"
-                        value={selectedAnimation}
-                        onChange={(value) => {
-                            setSelectedAnimation(value);
-                            onAnimationChange?.(file, value);
-                        }}
-                        style={{ width: '100%' }}
-                        options={animations.map(anim => ({ label: anim, value: anim }))}
-                        onClick={(e) => e.stopPropagation()}
-                    />
-                )}
             </div>
 
             <style>{`

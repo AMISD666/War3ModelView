@@ -357,7 +357,10 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
     if (mainMode === 'uv' || mainMode === 'batch') return null;
 
     // Check if selected vertices are all from the same geoset (required for weld)
-    const canSplit = geometrySubMode === 'vertex' && selectedVertexIds.length >= 1
+    const canSplit = (
+        (geometrySubMode === 'vertex' && selectedVertexIds.length >= 1) ||
+        ((geometrySubMode === 'face' || geometrySubMode === 'group') && selectedFaceIds.length >= 1)
+    )
     const canWeld = geometrySubMode === 'vertex' &&
         selectedVertexIds.length >= 2 &&
         selectedVertexIds.every(v => v.geosetIndex === selectedVertexIds[0]?.geosetIndex)

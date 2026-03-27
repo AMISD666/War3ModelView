@@ -1,7 +1,8 @@
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Form, Checkbox, Select, ColorPicker, Button, Input } from 'antd';
+import { Form, Checkbox, Select, Button, Input } from 'antd';
+import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker';
 
 import { DraggableModal } from '../DraggableModal';
 import { listen } from '@tauri-apps/api/event';
@@ -907,4 +908,3 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
 };
 
 export default ParticleEmitter2Dialog;
-

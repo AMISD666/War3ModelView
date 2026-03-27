@@ -26,6 +26,7 @@ const fsSource = `
 
 export type GizmoMode = 'translate' | 'rotate' | 'scale'
 export type GizmoAxis = 'x' | 'y' | 'z' | 'xy' | 'xz' | 'yz' | 'center' | null
+export const GIZMO_AXIS_LENGTH = 50.0
 
 export class GizmoRenderer {
     private program: WebGLProgram | null = null
@@ -37,8 +38,8 @@ export class GizmoRenderer {
     private buffer: WebGLBuffer | null = null
     private colorBuffer: WebGLBuffer | null = null
 
-    // Gizmo Geometry Data - Fixed size (no adaptive scaling)
-    private axisLength = 50.0
+    // Base axis length in world units before adaptive scaling is applied.
+    private axisLength = GIZMO_AXIS_LENGTH
 
 
     init(gl: WebGLRenderingContext | WebGL2RenderingContext) {

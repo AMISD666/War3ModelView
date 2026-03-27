@@ -4,6 +4,10 @@
  */
 
 import { validateAllParticleEmitters } from './particleValidator'
+import {
+    buildMaterialLayerTopologySignature,
+    buildTextureDefinitionSignature
+} from '../../utils/materialTextureRelations'
 
 /**
  * Check if structural changes require a full renderer reload
@@ -31,8 +35,9 @@ export function checkForStructuralChanges(
     })
 
     const geoChanged = (modelData.Geosets?.length || 0) !== (rendererModel.Geosets?.length || 0)
-    const textureChanged = (modelData.Textures?.length || 0) !== (rendererModel.Textures?.length || 0)
+    const textureChanged = buildTextureDefinitionSignature(modelData.Textures) !== buildTextureDefinitionSignature(rendererModel.Textures)
     const materialChanged = (modelData.Materials?.length || 0) !== (rendererModel.Materials?.length || 0)
+    const materialTopologyChanged = buildMaterialLayerTopologySignature(modelData.Materials) !== buildMaterialLayerTopologySignature(rendererModel.Materials)
     const particleChanged = (modelData.ParticleEmitters2?.length || 0) !== (rendererModel.ParticleEmitters2?.length || 0)
     const lightCountChanged = (modelData.Lights?.length || 0) !== (rendererModel.Lights?.length || 0)
 
@@ -54,7 +59,7 @@ export function checkForStructuralChanges(
         }
     }
 
-    console.log('[modelSync] Change flags:', { geoChanged, textureChanged, materialChanged, particleChanged, geosetMaterialChanged, geosetVertexCountChanged, lightCountChanged })
+    console.log('[modelSync] Change flags:', { geoChanged, textureChanged, materialChanged, materialTopologyChanged, particleChanged, geosetMaterialChanged, geosetVertexCountChanged, lightCountChanged })
 
     // OPTIMIZATION: Geoset structure changes (Split/Weld/Delete) are now handled 
     // by the commands themselves (rebuilding buffers). We can trust the live renderer.
@@ -63,17 +68,14 @@ export function checkForStructuralChanges(
         // return { needsReload: true, reason: 'Geoset count changed' }
     }
 
-    // OPTIMIZATION: Texture changes are now handled via lightweight sync
-    // New textures are loaded via setTextureImage() in the viewer
     if (textureChanged) {
-        console.log('[modelSync] Texture count changed, but using lightweight sync')
-        // return { needsReload: true, reason: 'Texture count changed' }
+        console.log('[modelSync] Texture definition changed, but using lightweight sync')
     }
-    // OPTIMIZATION: Material changes are now handled via lightweight sync
-    // syncMaterials() rebuilds the materialLayerTextureID cache
     if (materialChanged) {
-        console.log('[modelSync] Material count changed, but using lightweight sync')
-        // return { needsReload: true, reason: 'Material count changed' }
+        return { needsReload: true, reason: 'Material count changed' }
+    }
+    if (materialTopologyChanged) {
+        return { needsReload: true, reason: 'Material layer topology changed' }
     }
     // OPTIMIZATION: Particle changes are now handled via lightweight sync
     // The ParticlesController.syncEmitters() method dynamically adds/removes emitters

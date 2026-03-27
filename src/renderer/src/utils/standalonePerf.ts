@@ -1,4 +1,4 @@
-﻿import { emit } from '@tauri-apps/api/event'
+import { emit } from '@tauri-apps/api/event'
 
 export const STANDALONE_PERF_EVENT = 'standalone-perf-event'
 
@@ -56,15 +56,7 @@ export const markStandalonePerf = (mark: string, detail?: Record<string, unknown
     perfWindow.__standalonePerfEntries.push(entry)
     emit(STANDALONE_PERF_EVENT, entry).catch(() => { })
 
-    if (detail) {
-        console.log(`[StandalonePerf][${entry.windowLabel}] ${mark}`, entry)
-    } else {
-        console.log(`[StandalonePerf][${entry.windowLabel}] ${mark}`, {
-            windowLabel: entry.windowLabel,
-            epochMs: entry.epochMs,
-            perfMs: entry.perfMs,
-        })
-    }
+    // console output intentionally disabled
 
     return entry
 }

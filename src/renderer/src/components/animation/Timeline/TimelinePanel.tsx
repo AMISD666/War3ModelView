@@ -16,7 +16,7 @@ import {
     DownOutlined
 } from '@ant-design/icons'
 import { useHistoryStore } from '../../../store/historyStore'
-import { Button, Slider, Input, Radio, Tooltip, Menu, Modal, Dropdown } from 'antd'
+import { Button, Slider, Input, Radio, Tooltip, Menu, Modal, Dropdown, Select } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { registerShortcutHandler } from '../../../shortcuts/manager'
 import { UpdateKeyframeCommand, KeyframeChange } from '../../../commands/UpdateKeyframeCommand'
@@ -128,6 +128,11 @@ const cloneNodesForKeyframes = (input: any[]) => {
 
 const isAnimTrack = (value: any): value is { Keys: any[] } => {
     return !!value && typeof value === 'object' && Array.isArray(value.Keys)
+}
+
+const getTrackGlobalSeqId = (track: any): number => {
+    const raw = track?.GlobalSeqId
+    return typeof raw === 'number' ? raw : -1
 }
 
 const NODE_KEYFRAME_TYPES = ['Translation', 'Rotation', 'Scaling'] as const
@@ -402,10 +407,24 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         selectedTextureAnimIndex,
         setSelectedTextureAnimIndex,
         timelineKeyframeDisplayMode,
-        setTimelineKeyframeDisplayMode
+        setTimelineKeyframeDisplayMode,
+        timelineGlobalSequenceFilter,
+        setTimelineGlobalSequenceFilter
     } = useSelectionStore()
 
     // Derived Global Info
+    const globalSequences = useMemo<number[]>(() => {
+        const raw = (modelData as any)?.GlobalSequences
+        return Array.isArray(raw)
+            ? raw.map((entry: any) => typeof entry === 'number' ? entry : Number(entry?.Duration ?? 0))
+            : []
+    }, [modelData])
+    const activeGlobalSequenceDuration = typeof timelineGlobalSequenceFilter === 'number' && timelineGlobalSequenceFilter >= 0
+        ? Number(globalSequences[timelineGlobalSequenceFilter] ?? 0)
+        : null
+    const isSpecificGlobalSequenceView = activeGlobalSequenceDuration !== null
+        && Number.isFinite(activeGlobalSequenceDuration)
+        && activeGlobalSequenceDuration >= 0
     const allSequencesMax = useMemo(() => {
         if (!sequences || sequences.length === 0) return 1000
         return sequences.reduce((max, s) => Math.max(max, s?.Interval?.[1] ?? 0), 0)
@@ -415,8 +434,8 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
     // Derived Animation Info
     const sequence = currentSequence >= 0 && sequences ? sequences[currentSequence] : null
-    const seqStart = isAllSequences ? 0 : (sequence?.Interval?.[0] ?? 0)
-    const seqEnd = isAllSequences ? allSequencesMax : (sequence?.Interval?.[1] ?? 1000)
+    const seqStart = isSpecificGlobalSequenceView ? 0 : (isAllSequences ? 0 : (sequence?.Interval?.[0] ?? 0))
+    const seqEnd = isSpecificGlobalSequenceView ? activeGlobalSequenceDuration : (isAllSequences ? allSequencesMax : (sequence?.Interval?.[1] ?? 1000))
 
     // State (Visual)
     const [pixelsPerMs, setPixelsPerMs] = useState(0.1)
@@ -460,6 +479,17 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     // Drag Keyframe Preview State
     const [dragKeyframeOffset, setDragKeyframeOffset] = useState<number>(0)
     const [dragKeyframeScale, setDragKeyframeScale] = useState<number | null>(null)
+    const globalSequenceFilterOptions = useMemo(() => ([
+        { label: '全部轨道', value: '__all__' },
+        { label: '普通动作', value: '__sequence__' },
+        ...globalSequences.map((duration, index) => ({
+            label: `全局序列 ${index} (${duration}ms)`,
+            value: String(index)
+        }))
+    ]), [globalSequences])
+    const globalSequenceFilterValue = timelineGlobalSequenceFilter === null
+        ? '__all__'
+        : (timelineGlobalSequenceFilter === -1 ? '__sequence__' : String(timelineGlobalSequenceFilter))
 
     // Refs for RAF
     const frameRef = useRef(0)
@@ -496,15 +526,18 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     useEffect(() => { pixelsPerMsRef.current = pixelsPerMs }, [pixelsPerMs])
     useEffect(() => { scrollXRef.current = scrollX }, [scrollX])
     useEffect(() => {
-        // Use full range only when selecting "all sequences" mode.
-        if (isAllSequences) {
+        if (isSpecificGlobalSequenceView) {
+            seqStartRef.current = 0
+            seqEndRef.current = seqEnd
+        } else if (isAllSequences) {
+            // Use full range only when selecting "all sequences" mode.
             seqStartRef.current = 0
             seqEndRef.current = allSequencesMax
         } else {
             seqStartRef.current = seqStart
             seqEndRef.current = seqEnd
         }
-    }, [seqStart, seqEnd, allSequencesMax, isAllSequences])
+    }, [seqStart, seqEnd, allSequencesMax, isAllSequences, isSpecificGlobalSequenceView])
 
     useEffect(() => { selectedKeyframeUidsRef.current = selectedKeyframeUids }, [selectedKeyframeUids])
     useEffect(() => { selectionRectRef.current = selectionRect }, [selectionRect])
@@ -536,6 +569,15 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         }
     }, [keyframeDisplayMode, modelData, selectedTextureAnimIndex, setSelectedTextureAnimIndex])
 
+    const matchesTimelineGlobalSequenceFilter = useCallback((track: any) => {
+        if (timelineGlobalSequenceFilter === null) return true
+        const trackGlobalSeqId = getTrackGlobalSeqId(track)
+        if (timelineGlobalSequenceFilter === -1) {
+            return trackGlobalSeqId < 0
+        }
+        return trackGlobalSeqId === timelineGlobalSequenceFilter
+    }, [timelineGlobalSequenceFilter])
+
 
 
     // Cache active keyframes
@@ -558,7 +600,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 if (!node) return
 
                 const addKeys = (propData: any, type: string, color: string) => {
-                    if (propData && Array.isArray(propData.Keys)) {
+                    if (propData && Array.isArray(propData.Keys) && matchesTimelineGlobalSequenceFilter(propData)) {
                         propData.Keys.forEach((k: any) => {
                             keyframes.push({
                                 frame: k.Frame,
@@ -580,7 +622,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
         if (keyframeDisplayMode === 'geosetAnim' && geosetSelection.length > 0 && Array.isArray((modelData as any).GeosetAnims)) {
             const addGeosetKeys = (geosetId: number, propData: any, type: 'GeosetAlpha' | 'GeosetColor', color: string) => {
-                if (!isAnimTrack(propData)) return
+                if (!isAnimTrack(propData) || !matchesTimelineGlobalSequenceFilter(propData)) return
                 propData.Keys.forEach((k: any) => {
                     keyframes.push({
                         frame: k.Frame,
@@ -611,7 +653,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
                 PARTICLE_TRACK_INFOS.forEach(({ type, propName }) => {
                     const track = (node as any)[propName]
-                    if (!isAnimTrack(track)) return
+                    if (!isAnimTrack(track) || !matchesTimelineGlobalSequenceFilter(track)) return
                     track.Keys.forEach((k: any) => {
                         keyframes.push({
                             frame: Number(k.Frame),
@@ -639,7 +681,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 const anim = textureAnims[textureAnimId]
                 TEXTURE_ANIM_TRACK_INFOS.forEach(({ type, propName, color }) => {
                     const track = anim?.[propName]
-                    if (!isAnimTrack(track)) return
+                    if (!isAnimTrack(track) || !matchesTimelineGlobalSequenceFilter(track)) return
                     track.Keys.forEach((k: any) => {
                         keyframes.push({
                             frame: Number(k.Frame),
@@ -655,7 +697,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         }
 
         activeKeyframesRef.current = keyframes
-    }, [modelData, selectedNodeIds, modelNodes, selectedGeosetIndex, selectedGeosetIndices, pickedGeosetIndex, selectedTextureAnimIndex, keyframeDisplayMode])
+    }, [modelData, selectedNodeIds, modelNodes, selectedGeosetIndex, selectedGeosetIndices, pickedGeosetIndex, selectedTextureAnimIndex, keyframeDisplayMode, matchesTimelineGlobalSequenceFilter])
 
     const didInitialAutoFitRef = useRef(false)
 
@@ -667,9 +709,11 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         // When the panel is hidden via display:none, width is 0. Don't lock in a bad zoom.
         if (!Number.isFinite(containerWidth) || containerWidth < 20) return false
 
-        const useFullRange = isAllSequences
+        const useFullRange = isAllSequences || isSpecificGlobalSequenceView
         const start = useFullRange ? 0 : (sequence?.Interval?.[0] ?? 0)
-        const end = useFullRange ? allSequencesMax : (sequence?.Interval?.[1] ?? 1000)
+        const end = isSpecificGlobalSequenceView
+            ? seqEnd
+            : (useFullRange ? allSequencesMax : (sequence?.Interval?.[1] ?? 1000))
         const duration = end - start
         const paddedDuration = Math.max(100, duration * 1.2)
         const newPixelsPerMs = containerWidth / paddedDuration
@@ -677,7 +721,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         setPixelsPerMs(Math.max(0.01, Math.min(2, newPixelsPerMs)))
         setScrollX(Math.max(0, start - duration * 0.1))
         return true
-    }, [sequence, isAllSequences, allSequencesMax])
+    }, [sequence, isAllSequences, isSpecificGlobalSequenceView, allSequencesMax, seqEnd])
 
     // Reset the one-time auto-fit when leaving keyframe mode, so re-entering matches the selected sequence.
     useEffect(() => {
@@ -2888,6 +2932,21 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
                 {/* Playback Controls */}
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'nowrap', whiteSpace: 'nowrap', minWidth: 'max-content', justifySelf: 'center' }}>
+                    <Select
+                        size="small"
+                        style={{ width: 140 }}
+                        value={globalSequenceFilterValue}
+                        options={globalSequenceFilterOptions}
+                        onChange={(value) => {
+                            if (value === '__all__') {
+                                setTimelineGlobalSequenceFilter(null)
+                            } else if (value === '__sequence__') {
+                                setTimelineGlobalSequenceFilter(-1)
+                            } else {
+                                setTimelineGlobalSequenceFilter(Number(value))
+                            }
+                        }}
+                    />
                     <div style={{ marginTop: 2 }}>
                         <Tooltip title={currentKeyframeModeConfig.tooltip}>
                             <Dropdown
@@ -2943,7 +3002,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 {/* Zoom & Sequence Range (Right Aligned) */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flexWrap: 'nowrap', whiteSpace: 'nowrap', justifyContent: 'flex-end', justifySelf: 'end' }}>
                     {/* Sequence Range Inputs */}
-                    {sequence && sequence.Interval && sequence.Interval.length >= 2 && (
+                    {!isSpecificGlobalSequenceView && sequence && sequence.Interval && sequence.Interval.length >= 2 && (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                             <span style={{ color: '#888', fontSize: '11px' }}>序列:</span>
                             <InputNumber
@@ -2960,6 +3019,18 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                                 value={sequence.Interval[1]}
                                 onChange={handleSeqEndChange}
                                 controls={false}
+                            />
+                        </div>
+                    )}
+                    {isSpecificGlobalSequenceView && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <span style={{ color: '#888', fontSize: '11px' }}>全局序列:</span>
+                            <InputNumber
+                                size="small"
+                                style={{ width: 80, height: 20, backgroundColor: '#333', border: '1px solid #555', color: '#eee', fontSize: '11px' }}
+                                value={seqEnd}
+                                controls={false}
+                                readOnly
                             />
                         </div>
                     )}

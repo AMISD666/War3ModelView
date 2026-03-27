@@ -22,7 +22,7 @@ interface CameraManagerModalProps {
 }
 
 const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClose, onAddFromView, onViewCamera, isStandalone }) => {
-    const { modelData, updateNodes, nodes, addNode, deleteNode } = useModelStore();
+    const { modelData, nodes, setCameras } = useModelStore();
     const [selectedIndex, setSelectedIndex] = useState<number>(-1);
 
     // Editor State
@@ -32,11 +32,39 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
     const { state: rpcState, emitCommand } = useRpcClient<{ cameras: CameraNode[], globalSequences: number[] }>('cameraManager', { cameras: [], globalSequences: [] });
 
     // Filter cameras from nodes (or rpcState)
-    const storeCameras = nodes.filter(n => n.type === NodeType.CAMERA) as CameraNode[];
+    const storeCameras = (
+        Array.isArray((modelData as any)?.Cameras) && (modelData as any).Cameras.length > 0
+            ? (modelData as any).Cameras
+            : nodes.filter(n => n.type === NodeType.CAMERA)
+    ) as CameraNode[];
     const storeGlobalSequences = (modelData?.GlobalSequences || []) as unknown as number[];
 
     const cameras = isStandalone ? rpcState.cameras : storeCameras;
     const globalSequences = isStandalone ? rpcState.globalSequences : storeGlobalSequences;
+
+    const replaceLocalCameraByIndex = (index: number, updates: Partial<CameraNode>) => {
+        const currentCameras = (
+            Array.isArray((useModelStore.getState().modelData as any)?.Cameras)
+                ? (useModelStore.getState().modelData as any).Cameras
+                : []
+        ) as CameraNode[];
+        if (index < 0 || index >= currentCameras.length) return;
+        const nextCameras = currentCameras.map((camera, cameraIndex) =>
+            cameraIndex === index ? ({ ...camera, ...updates } as CameraNode) : camera
+        );
+        setCameras(nextCameras);
+    };
+
+    const removeLocalCameraByIndex = (index: number) => {
+        const currentCameras = (
+            Array.isArray((useModelStore.getState().modelData as any)?.Cameras)
+                ? (useModelStore.getState().modelData as any).Cameras
+                : []
+        ) as CameraNode[];
+        if (index < 0 || index >= currentCameras.length) return;
+        const nextCameras = currentCameras.filter((_, cameraIndex) => cameraIndex !== index);
+        setCameras(nextCameras);
+    };
 
     const handleAdd = () => {
         const newCamera: Partial<CameraNode> & { Name: string, type: NodeType } = {
@@ -62,36 +90,44 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
             return;
         }
 
-        const currentNodes = useModelStore.getState().nodes;
-        const maxObjectId = currentNodes.reduce((max, n) => Math.max(max, n.ObjectId), -1);
-        const newObjectId = maxObjectId + 1;
+        const previousCameras = JSON.parse(JSON.stringify(
+            Array.isArray((useModelStore.getState().modelData as any)?.Cameras)
+                ? (useModelStore.getState().modelData as any).Cameras
+                : []
+        ));
+        const nextCameras = [...previousCameras, newCamera];
 
         useHistoryStore.getState().push({
             name: 'Add Camera',
-            undo: () => deleteNode(newObjectId),
-            redo: () => addNode({ ...newCamera, ObjectId: newObjectId })
+            undo: () => setCameras(previousCameras),
+            redo: () => setCameras(nextCameras)
         });
 
-        addNode(newCamera);
+        setCameras(nextCameras);
     };
 
     const handleDelete = (index: number) => {
         if (index >= 0 && index < cameras.length) {
             const node = cameras[index];
             if (isStandalone) {
-                emitCommand('EXECUTE_CAMERA_ACTION', { action: 'DELETE', payload: { objectId: node.ObjectId } });
+                emitCommand('EXECUTE_CAMERA_ACTION', { action: 'DELETE', payload: { cameraIndex: index, objectId: node.ObjectId } });
                 if (selectedIndex >= index) setSelectedIndex(Math.max(-1, selectedIndex - 1));
                 return;
             }
 
-            const nodeClone = JSON.parse(JSON.stringify(node));
+            const previousCameras = JSON.parse(JSON.stringify(
+                Array.isArray((useModelStore.getState().modelData as any)?.Cameras)
+                    ? (useModelStore.getState().modelData as any).Cameras
+                    : []
+            ));
+            const nextCameras = previousCameras.filter((_: CameraNode, cameraIndex: number) => cameraIndex !== index);
             useHistoryStore.getState().push({
                 name: 'Delete Camera',
-                undo: () => addNode(nodeClone),
-                redo: () => deleteNode(node.ObjectId)
+                undo: () => setCameras(previousCameras),
+                redo: () => setCameras(nextCameras)
             });
 
-            deleteNode(node.ObjectId);
+            setCameras(nextCameras);
             if (selectedIndex >= index) setSelectedIndex(Math.max(-1, selectedIndex - 1));
         }
     };
@@ -101,7 +137,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
         if (camera) {
             const objectId = camera.ObjectId;
             if (isStandalone) {
-                emitCommand('EXECUTE_CAMERA_ACTION', { action: 'UPDATE', payload: { objectId, data: updates } });
+                emitCommand('EXECUTE_CAMERA_ACTION', { action: 'UPDATE', payload: { cameraIndex: index, objectId, data: updates } });
                 return;
             }
 
@@ -113,11 +149,11 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
 
             useHistoryStore.getState().push({
                 name: 'Update Camera',
-                undo: () => updateNodes([{ objectId, data: oldData }]),
-                redo: () => updateNodes([{ objectId, data: updates }])
+                undo: () => replaceLocalCameraByIndex(index, oldData),
+                redo: () => replaceLocalCameraByIndex(index, updates)
             });
 
-            updateNodes([{ objectId: camera.ObjectId, data: updates }]);
+            replaceLocalCameraByIndex(index, updates);
         }
     };
 
@@ -344,7 +380,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
                     disabled={selectedIndex < 0}
                     onClick={() => {
                         if (selectedIndex >= 0) {
-                            if (isStandalone) emitCommand('EXECUTE_CAMERA_ACTION', { action: 'VIEW_CAMERA', payload: { objectId: cameras[selectedIndex].ObjectId } });
+                            if (isStandalone) emitCommand('EXECUTE_CAMERA_ACTION', { action: 'VIEW_CAMERA', payload: { cameraIndex: selectedIndex, objectId: cameras[selectedIndex].ObjectId } });
                             else if (onViewCamera) onViewCamera(cameras[selectedIndex]);
                         }
                     }}

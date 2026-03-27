@@ -573,24 +573,63 @@ function byteLengthGeoset(model: Model, geoset: Geoset): number {
 }
 
 function byteLengthGeosets(model: Model): number {
-    if (!model.Geosets.length) {
+    if (!model.Geosets || !model.Geosets.length) {
         return 0;
     }
 
     return 4 /* keyword */ +
         4 /* size */ +
-        sum(model.Geosets.map(geoset => byteLengthGeoset(model, geoset)));
+        sum(model.Geosets
+            .filter((geoset) =>
+                !!geoset &&
+                !!geoset.Vertices &&
+                typeof geoset.Vertices.length === 'number' &&
+                geoset.Vertices.length > 0 &&
+                !!geoset.Faces &&
+                typeof geoset.Faces.length === 'number' &&
+                geoset.Faces.length > 0 &&
+                !!geoset.Normals &&
+                typeof geoset.Normals.length === 'number' &&
+                !!geoset.TVertices &&
+                typeof geoset.TVertices.length === 'number'
+            )
+            .map(geoset => byteLengthGeoset(model, geoset)));
 }
 
 function generateGeosets(model: Model, stream: Stream): void {
-    if (!model.Geosets.length) {
+    if (!model.Geosets || !model.Geosets.length) {
+        return;
+    }
+
+    const safeGeosets = model.Geosets.filter((geoset, index) => {
+        const valid =
+            !!geoset &&
+            !!geoset.Vertices &&
+            typeof geoset.Vertices.length === 'number' &&
+            geoset.Vertices.length > 0 &&
+            !!geoset.Faces &&
+            typeof geoset.Faces.length === 'number' &&
+            geoset.Faces.length > 0 &&
+            !!geoset.Normals &&
+            typeof geoset.Normals.length === 'number' &&
+            !!geoset.TVertices &&
+            typeof geoset.TVertices.length === 'number';
+        if (!valid) {
+            console.warn(`[war3-model][generate] Skipping invalid geoset ${index} during MDX export`);
+        }
+        return valid;
+    });
+
+    if (!safeGeosets.length) {
         return;
     }
 
     stream.keyword('GEOS');
-    stream.int32(byteLengthGeosets(model) - 8);
+    stream.int32(4 /* keyword */ +
+        4 /* size */ +
+        sum(safeGeosets.map(geoset => byteLengthGeoset(model, geoset))) - 8);
 
-    for (const geoset of model.Geosets) {
+    for (const geoset of safeGeosets) {
         stream.int32(byteLengthGeoset(model, geoset));
 
         stream.keyword('VRTX');

@@ -1,6 +1,5 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react'
-import { Checkbox, Dropdown, Input, message, Typography, Button, type MenuProps } from 'antd'
-import { CloseOutlined } from '@ant-design/icons'
+import { Checkbox, Dropdown, Input, message, Typography, type MenuProps } from 'antd'
 import { DraggableModal } from '../DraggableModal'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
@@ -151,12 +150,17 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
         globalSequences: [],
     })
 
-    const modelData = isStandalone ? {
+    const standaloneModelData = useMemo(() => ({
         Geosets: rpcState.geosets,
         Sequences: rpcState.sequences,
-        GeosetAnims: rpcState.geosetsAnims, // To correctly match state
+        GeosetAnims: Array.isArray(rpcState.geosetAnims)
+            ? rpcState.geosetAnims
+            : (Array.isArray(rpcState.geosetsAnims) ? rpcState.geosetsAnims : []),
         GlobalSequences: rpcState.globalSequences
-    } : directModelData
+    }), [rpcState.geosets, rpcState.sequences, rpcState.geosetAnims, rpcState.geosetsAnims, rpcState.globalSequences])
+
+    const modelData = isStandalone ? standaloneModelData : directModelData
+    const geosetAnimSource = Array.isArray(modelData?.GeosetAnims) ? modelData.GeosetAnims : []
 
     const setGeosetAnims = (anims: any[]) => {
         if (isStandalone) {
@@ -183,7 +187,6 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
     }
 
     const [localAnims, setLocalAnims] = useState<any[]>([])
-    const [hasChanges, setHasChanges] = useState(false)
     const [selectedGeosetIds, setSelectedGeosetIds] = useState<number[]>([])
     const [lastSelectedGeosetId, setLastSelectedGeosetId] = useState<number | null>(null)
     const [geosetFilter, setGeosetFilter] = useState('')
@@ -191,6 +194,16 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
     const [showHighlightedOnly, setShowHighlightedOnly] = useState(false)
 
     const [editingGeosetId, setEditingGeosetId] = useState<number | null>(null)
+    const editingGeosetIdRef = React.useRef<number | null>(null)
+    const localAnimsRef = React.useRef<any[]>([])
+
+    useEffect(() => {
+        editingGeosetIdRef.current = editingGeosetId
+    }, [editingGeosetId])
+
+    useEffect(() => {
+        localAnimsRef.current = localAnims
+    }, [localAnims])
 
     const geosetIds = useMemo(() => {
         const geosets = modelData?.Geosets
@@ -252,10 +265,22 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
         })
     }, [sequences, sequenceFilter, showHighlightedOnly, highlightedSequenceSet])
 
+    const applyImmediateChange = (nextAnims: any[], historyName = 'Edit Geoset Sequence Visibility') => {
+        const oldAnims = deepClone(geosetAnimSource)
+        const appliedAnims = deepClone(nextAnims)
+        useHistoryStore.getState().push({
+            name: historyName,
+            undo: () => setGeosetAnims(oldAnims),
+            redo: () => setGeosetAnims(appliedAnims)
+        })
+        setLocalAnims(appliedAnims)
+        setGeosetAnims(appliedAnims)
+    }
+
     useEffect(() => {
         if (!visible) return
 
-        const clonedAnims = (modelData?.GeosetAnims || []).map((anim: any) => {
+        const clonedAnims = geosetAnimSource.map((anim: any) => {
             const cloned = { ...anim }
             if (isAnimVector(anim?.Alpha)) cloned.Alpha = cloneAnimVector(anim.Alpha, 1)
             if (isAnimVector(anim?.Color)) cloned.Color = cloneAnimVector(anim.Color, 3)
@@ -263,17 +288,29 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
             return cloned
         })
         setLocalAnims(clonedAnims)
+        setEditingGeosetId(null)
+    }, [visible, geosetAnimSource])
 
-        const picked = useSelectionStore.getState().pickedGeosetIndex
-        const initialGeoset = picked !== null && picked >= 0 ? picked : geosetIds[0]
-        if (initialGeoset !== undefined) {
-            setSelectedGeosetIds([initialGeoset])
+    useEffect(() => {
+        if (!visible) return
+
+        setSelectedGeosetIds((currentSelected) => {
+            const validSelected = currentSelected.filter((id) => geosetIds.includes(id))
+            if (validSelected.length > 0) {
+                return validSelected
+            }
+
+            const picked = useSelectionStore.getState().pickedGeosetIndex
+            const initialGeoset = picked !== null && picked >= 0 ? picked : geosetIds[0]
+            if (initialGeoset === undefined) {
+                setLastSelectedGeosetId(null)
+                return []
+            }
+
             setLastSelectedGeosetId(initialGeoset)
-        } else {
-            setSelectedGeosetIds([])
-            setLastSelectedGeosetId(null)
-        }
-    }, [visible, modelData, geosetIds])
+            return [initialGeoset]
+        })
+    }, [visible, geosetIds])
 
     useEffect(() => {
         if (!visible) return
@@ -288,26 +325,6 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
         })
         return unsubscribe
     }, [visible])
-
-    const handleSaveAll = () => {
-        const oldAnims = deepClone(modelData?.GeosetAnims || [])
-        const newAnims = deepClone(localAnims)
-        useHistoryStore.getState().push({
-            name: 'Edit Geoset Sequence Visibility',
-            undo: () => setGeosetAnims(oldAnims),
-            redo: () => setGeosetAnims(newAnims)
-        })
-        setGeosetAnims(newAnims)
-        message.success('多边形动作显隐修改已保存')
-        onClose()
-    }
-
-    const handleApply = () => {
-        const newAnims = deepClone(localAnims)
-        setGeosetAnims(newAnims)
-        message.success('多边形动作显隐修改已应用')
-        setHasChanges(false)
-    }
 
     const handleToggleAction = (sequence: SequenceItem) => {
         if (selectedGeosetIds.length === 0) {
@@ -355,9 +372,7 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
             message.info(shouldClear ? '未找到可清理的透明度关键帧' : '没有可写入的多边形组')
             return
         }
-        setLocalAnims(nextAnims)
-        setHasChanges(true)
-        message.success(shouldClear ? `已清理 ${changed} 个多边形组在该动作范围内的关键帧` : `已写入 ${changed} 个多边形组的首尾帧透明度0`)
+        applyImmediateChange(nextAnims, shouldClear ? 'Clear Geoset Visibility Keys' : 'Set Geoset Visibility Keys')
     }
 
     const ensureEditableAlphaTrack = (geosetId: number, startFrame: number) => {
@@ -381,40 +396,53 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
             }
         }
         nextAnims[animIndex] = currentAnim
-        setLocalAnims(nextAnims)
-        setHasChanges(true)
+        applyImmediateChange(nextAnims, 'Prepare Geoset Alpha Track')
+        return nextAnims
     }
 
     useEffect(() => {
-        const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
-            const payload = event.payload as any;
-            if (payload && payload.callerId === 'GeosetVisibilityToolModal') {
-                if (editingGeosetId === null) return;
+        if (!visible) return
 
-                const nextAnims = [...localAnims]
-                let animIndex = getAnimIndexByGeosetId(nextAnims, editingGeosetId)
-                if (animIndex < 0) {
-                    nextAnims.push(createDefaultGeosetAnim(editingGeosetId))
-                    animIndex = nextAnims.length - 1
-                }
+        let disposed = false
+        let unsubscribe: (() => void) | undefined
 
-                nextAnims[animIndex] = {
-                    ...nextAnims[animIndex],
-                    Alpha: {
-                        ...payload.data,
-                        Keys: ensureDefaultVisibleKey(normalizeAlphaKeys(payload.data?.Keys || []))
-                    }
-                }
-                setLocalAnims(nextAnims)
-                setHasChanges(true)
-                setEditingGeosetId(null)
+        listen('IPC_KEYFRAME_SAVE', (event) => {
+            const payload = event.payload as any
+            if (payload?.callerId !== 'GeosetVisibilityToolModal') return
+
+            const targetGeosetId = editingGeosetIdRef.current
+            if (targetGeosetId === null) return
+
+            const nextAnims = [...localAnimsRef.current]
+            let animIndex = getAnimIndexByGeosetId(nextAnims, targetGeosetId)
+            if (animIndex < 0) {
+                nextAnims.push(createDefaultGeosetAnim(targetGeosetId))
+                animIndex = nextAnims.length - 1
             }
-        });
+
+            nextAnims[animIndex] = {
+                ...nextAnims[animIndex],
+                Alpha: {
+                    ...payload.data,
+                    Keys: ensureDefaultVisibleKey(normalizeAlphaKeys(payload.data?.Keys || []))
+                }
+            }
+
+            applyImmediateChange(nextAnims, 'Edit Geoset Alpha Track')
+            setEditingGeosetId(null)
+        }).then((unlisten) => {
+            if (disposed) {
+                unlisten()
+                return
+            }
+            unsubscribe = unlisten
+        }).catch(console.error)
 
         return () => {
-            unlisten.then(f => f());
-        };
-    }, [editingGeosetId, localAnims]);
+            disposed = true
+            if (unsubscribe) unsubscribe()
+        }
+    }, [visible]);
 
     const openAlphaTextEditor = (sequence: SequenceItem) => {
         if (selectedGeosetIds.length === 0) {
@@ -423,7 +451,7 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
         }
 
         const targetGeosetId = selectedGeosetIds[0]
-        ensureEditableAlphaTrack(targetGeosetId, sequence.start)
+        const nextAnims = ensureEditableAlphaTrack(targetGeosetId, sequence.start)
         setSequence(sequence.index)
         setFrame(sequence.start)
         setEditingGeosetId(targetGeosetId)
@@ -435,7 +463,6 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
         // We must delay the IPC call slightly so that ensureEditableAlphaTrack has time to update localAnims state
         // and editingAlphaData (which depends on localAnims) gets the new default track.
         // Actually, since we're generating the default track right now, let's just generate the payload directly:
-        const nextAnims = [...localAnims]
         let animIndex = getAnimIndexByGeosetId(nextAnims, targetGeosetId)
 
         let initialData = null
@@ -505,15 +532,6 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
         items: [{ key: 'edit-alpha-text', label: '编辑透明度动态txt' }],
         onClick: () => openAlphaTextEditor(sequence)
     })
-
-    const editingAlphaData = useMemo(() => {
-        if (editingGeosetId === null) return null
-        const anim = animByGeosetId.get(editingGeosetId)
-        if (!anim) return null
-        return isAnimVector(anim.Alpha) ? anim.Alpha : null
-    }, [editingGeosetId, animByGeosetId])
-
-    const globalSequences = (modelData as any)?.GlobalSequences || []
 
     const innerContent = (
         <div style={{ display: 'flex', gap: 10, height: 520 }}>
@@ -629,39 +647,6 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
         return (
             <StandaloneWindowFrame title="多边形动作显隐工具" onClose={() => getCurrentWindow().hide()}>
                 <div style={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: '#1e1e1e' }}>
-                    {/* Bottom Toolbar for Standalone mode */}
-                    <div style={{
-                        display: 'flex',
-                        justifyContent: 'flex-end',
-                        padding: '8px 16px',
-                        borderBottom: '1px solid #333',
-                        backgroundColor: '#252525'
-                    }}>
-                        <Button
-                            size="small"
-                            type="primary"
-                            onClick={handleApply}
-                            style={{ marginRight: 8 }}
-                            disabled={!hasChanges}
-                        >
-                            应用修改
-                        </Button>
-                        <Button
-                            size="small"
-                            onClick={() => {
-                                const clonedAnims = (modelData?.GeosetAnims || []).map((anim: any) => {
-                                    const cloned = { ...anim }
-                                    if (isAnimVector(anim?.Alpha)) cloned.Alpha = cloneAnimVector(anim.Alpha, 1)
-                                    if (isAnimVector(anim?.Color)) cloned.Color = cloneAnimVector(anim.Color, 3)
-                                    return cloned
-                                })
-                                setLocalAnims(clonedAnims)
-                                setHasChanges(false)
-                            }}
-                        >
-                            重置
-                        </Button>
-                    </div>
                     <div style={{ flex: 1, padding: 10, overflow: 'auto' }}>
                         {innerContent}
                     </div>
@@ -675,11 +660,9 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
             <DraggableModal
                 title="多边形动作显隐工具"
                 open={visible}
-                onOk={handleSaveAll}
                 onCancel={onClose}
+                footer={null}
                 width={980}
-                okText="确定"
-                cancelText="取消"
                 maskClosable={false}
                 wrapClassName="dark-theme-modal"
                 styles={{

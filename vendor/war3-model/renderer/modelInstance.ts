@@ -1,4 +1,4 @@
-﻿import { Model, Sequence, Node, AnimVector, NodeFlags, Layer, TVertexAnim, Light, LightType } from '../model';
+import { Model, Sequence, Node, AnimVector, NodeFlags, Layer, TVertexAnim, Light, LightType } from '../model';
 import { mat4, vec3, quat, mat3 } from 'gl-matrix';
 import { NodeWrapper, RendererData, LightResult } from './rendererData';
 import { ModelInterp } from './modelInterp';
@@ -284,13 +284,19 @@ export class ModelInstance {
 
         this.updateNode(this.rendererData.rootNode);
 
-        for (let i = 0; i < this.model.Geosets.length; ++i) {
+        const geosets = Array.isArray(this.model?.Geosets) ? this.model.Geosets : [];
+        const materials = Array.isArray(this.model?.Materials) ? this.model.Materials : [];
+
+        for (let i = 0; i < geosets.length; ++i) {
             this.rendererData.geosetAlpha[i] = this.findAlpha(i);
         }
 
         for (let materialId = 0; materialId < this.rendererData.materialLayerTextureID.length; ++materialId) {
+            const material = materials[materialId];
+            const materialLayers = Array.isArray(material?.Layers) ? material.Layers : [];
             for (let layerId = 0; layerId < this.rendererData.materialLayerTextureID[materialId].length; ++layerId) {
-                const layer = this.model.Materials[materialId].Layers[layerId];
+                const layer = materialLayers[layerId];
+                if (!layer) continue;
                 const TextureID: AnimVector | number = layer.TextureID;
                 const NormalTextureID: AnimVector | number = layer.NormalTextureID;
                 const ORMTextureID: AnimVector | number = layer.ORMTextureID;
@@ -371,11 +377,18 @@ export class ModelInstance {
     }
 
     private updateGlobalSequences(delta: number): void {
-        for (let i = 0; i < this.rendererData.globalSequencesFrames.length; ++i) {
+        const globalSequences = Array.isArray(this.model?.GlobalSequences) ? this.model.GlobalSequences : [];
+        const maxLen = Math.min(this.rendererData.globalSequencesFrames.length, globalSequences.length);
+
+        for (let i = 0; i < maxLen; ++i) {
             this.rendererData.globalSequencesFrames[i] += delta;
-            if (this.rendererData.globalSequencesFrames[i] > this.model.GlobalSequences[i]) {
+            if (this.rendererData.globalSequencesFrames[i] > globalSequences[i]) {
                 this.rendererData.globalSequencesFrames[i] = 0;
             }
+        }
+
+        if (this.rendererData.globalSequencesFrames.length > globalSequences.length) {
+            this.rendererData.globalSequencesFrames.length = globalSequences.length;
         }
     }
 

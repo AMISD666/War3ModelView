@@ -26,7 +26,7 @@ import {
     EyeInvisibleOutlined,
     CompressOutlined
 } from '@ant-design/icons'
-import { ColorPicker } from 'antd'
+import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker'
 
 interface UVEditorProps {
     modelPath: string | null

@@ -13,6 +13,7 @@ export type AppMode = 'view' | 'geometry' | 'uv' | 'animation' | 'batch';
 export type GeometrySubMode = 'vertex' | 'face' | 'group';
 export type TransformMode = 'translate' | 'rotate' | 'scale' | null;
 export type KeyframeDisplayMode = 'node' | 'geosetAnim' | 'particle' | 'textureAnim';
+export type TimelineGlobalSequenceFilter = number | null;
 
 export type SelectionMode = 'object' | 'vertex' | 'face' | 'group'; // Deprecated in favor of AppMode + SubMode, keeping for compatibility for now
 export type GizmoMode = 'translate' | 'rotate' | 'scale'; // Deprecated in favor of TransformMode
@@ -24,6 +25,7 @@ interface SelectionState {
     geometrySubMode: GeometrySubMode;
     animationSubMode: 'binding' | 'keyframe';
     timelineKeyframeDisplayMode: KeyframeDisplayMode;
+    timelineGlobalSequenceFilter: TimelineGlobalSequenceFilter;
     transformMode: TransformMode;
     multiMoveMode: 'relative' | 'worldUniform';
     selectedTextureAnimIndex: number | null;
@@ -32,6 +34,7 @@ interface SelectionState {
     setGeometrySubMode: (mode: GeometrySubMode) => void;
     setAnimationSubMode: (mode: 'binding' | 'keyframe') => void;
     setTimelineKeyframeDisplayMode: (mode: KeyframeDisplayMode) => void;
+    setTimelineGlobalSequenceFilter: (filter: TimelineGlobalSequenceFilter) => void;
     setTransformMode: (mode: TransformMode) => void;
     setMultiMoveMode: (mode: 'relative' | 'worldUniform') => void;
     setSelectedTextureAnimIndex: (index: number | null) => void;
@@ -95,6 +98,7 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
     geometrySubMode: 'vertex',
     animationSubMode: 'binding',
     timelineKeyframeDisplayMode: 'node',
+    timelineGlobalSequenceFilter: null,
     transformMode: 'translate',
     multiMoveMode: 'relative',
     selectedTextureAnimIndex: null,
@@ -119,6 +123,9 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
     },
     setTimelineKeyframeDisplayMode: (mode) => {
         set({ timelineKeyframeDisplayMode: mode });
+    },
+    setTimelineGlobalSequenceFilter: (filter) => {
+        set({ timelineGlobalSequenceFilter: filter });
     },
     setTransformMode: (mode) => {
         set({ transformMode: mode });
@@ -305,6 +312,7 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
             geometrySubMode: 'vertex',
             animationSubMode: 'binding',
             timelineKeyframeDisplayMode: 'node',
+            timelineGlobalSequenceFilter: null,
             transformMode: 'translate',
             multiMoveMode: 'relative',
             selectedTextureAnimIndex: null,

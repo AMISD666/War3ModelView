@@ -34,16 +34,6 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
         sequences: []
     })
 
-    const syncStandaloneSequences = (nextSequences: any[]) => {
-        if (!isStandalone) return
-        emitCommand('SAVE_SEQUENCES', nextSequences)
-    }
-
-    const pruneStandaloneIntervals = (intervals: [number, number][]) => {
-        if (!isStandalone || intervals.length === 0 || !pruneKeyframes) return
-        emitCommand('PRUNE_KEYFRAMES', intervals)
-    }
-
     // Helper to scroll to selected item
     const scrollToItem = (index: number) => {
         if (listRef.current && index >= 0) {
@@ -109,6 +99,11 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
                 setLocalSequences(cloned)
                 setSelectedIndex(0)
                 initializedRef.current = true
+            } else if (!rpcState.sequences || rpcState.sequences.length === 0) {
+                setLocalSequences([])
+                setSelectedIndex(-1)
+                setDeletedIntervals([])
+                initializedRef.current = false
             }
         } else {
             // Modal mode: sync from store on first open
@@ -141,11 +136,12 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
 
     const handleOk = () => {
         if (isStandalone) {
-            if (deletedIntervals.length > 0) {
-                emitCommand('PRUNE_KEYFRAMES', deletedIntervals)
-                setDeletedIntervals([])
-            }
-            emitCommand('SAVE_SEQUENCES', localSequences)
+            emitCommand('APPLY_SEQUENCE_CHANGES', {
+                sequences: localSequences,
+                deletedIntervals,
+                pruneKeyframes
+            })
+            setDeletedIntervals([])
             message.success('序列已保存')
             onClose()
         } else {
@@ -165,7 +161,6 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
         const newSequences = [...localSequences]
         newSequences[index] = { ...newSequences[index], ...updates }
         setLocalSequences(newSequences)
-        syncStandaloneSequences(newSequences)
     }
 
     const handleIntervalChange = (index: number, subIndex: number, value: number | null) => {
@@ -174,7 +169,6 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
         newInterval[subIndex] = value || 0
         newSequences[index].Interval = newInterval
         setLocalSequences(newSequences)
-        syncStandaloneSequences(newSequences)
     }
 
     const selectedSequence = selectedIndex >= 0 ? localSequences[selectedIndex] : null
@@ -201,7 +195,6 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
                                 }
                                 const newSequences = [...localSequences, newSequence]
                                 setLocalSequences(newSequences)
-                                syncStandaloneSequences(newSequences)
                                 setSelectedIndex(localSequences.length)
                                 setTimeout(() => scrollToItem(localSequences.length), 0)
                             }}
@@ -237,15 +230,15 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
                                                 ? [[seq.Interval[0], seq.Interval[1]]]
                                                 : [];
                                             if (seq && seq.Interval) {
-                                                if (isStandalone) {
-                                                    pruneStandaloneIntervals(deletedRange)
-                                                } else {
+                                                if (!isStandalone) {
                                                     setDeletedIntervals(prev => [...prev, [seq.Interval[0], seq.Interval[1]]]);
                                                 }
                                             }
+                                            if (isStandalone && deletedRange.length > 0 && pruneKeyframes) {
+                                                setDeletedIntervals(prev => [...prev, ...deletedRange]);
+                                            }
                                             const newSequences = localSequences.filter((_, i) => i !== index)
                                             setLocalSequences(newSequences)
-                                            syncStandaloneSequences(newSequences)
                                             if (selectedIndex === index) setSelectedIndex(-1)
                                             else if (selectedIndex > index) setSelectedIndex(selectedIndex - 1)
                                         }}

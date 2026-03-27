@@ -1,4 +1,4 @@
-﻿/// <reference types="vite/client" />
+/// <reference types="vite/client" />
 /// <reference types="@webgpu/types" />
 
 import type { DdsInfo } from 'dds-parser';
@@ -812,10 +812,27 @@ export class ModelRenderer {
     }
 
     private validateNormals(): void {
-        for (let i = 0; i < this.model.Geosets.length; ++i) {
-            const geoset = this.model.Geosets[i];
+        const geosets = Array.isArray(this.model?.Geosets) ? this.model.Geosets : [];
+        if (geosets.length === 0) {
+            console.warn('[ModelRenderer] Skipping normal validation because model.Geosets is empty or invalid');
+            return;
+        }
+
+        for (let i = 0; i < geosets.length; ++i) {
+            const geoset = geosets[i];
+            if (!geoset) {
+                console.warn(`[ModelRenderer] Skipping null geoset at index ${i} during normal validation`);
+                continue;
+            }
+
+            const vertices = geoset.Vertices;
+            if (!vertices || typeof vertices.length !== 'number' || vertices.length === 0) {
+                console.warn(`[ModelRenderer] Skipping normal validation for geoset ${i} because Vertices are missing`);
+                continue;
+            }
+
             const normals = geoset.Normals;
-            const expectedLength = geoset.Vertices.length;
+            const expectedLength = vertices.length;
             let shouldRecalculate = false;
 
             if (!normals || normals.length !== expectedLength) {
@@ -840,6 +857,17 @@ export class ModelRenderer {
             }
 
             if (shouldRecalculate) {
+                const faces = geoset.Faces;
+                if (!faces || typeof faces.length !== 'number' || faces.length === 0) {
+                    console.warn(`[ModelRenderer] Cannot recalculate normals for geoset ${i} because Faces are missing; using fallback normals`);
+                    const fallbackNormals = new Float32Array(expectedLength);
+                    for (let j = 2; j < expectedLength; j += 3) {
+                        fallbackNormals[j] = 1;
+                    }
+                    geoset.Normals = fallbackNormals;
+                    continue;
+                }
+
                 geoset.Normals = this.calculateSmoothNormals(geoset);
             }
         }

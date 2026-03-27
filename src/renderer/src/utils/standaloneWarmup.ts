@@ -21,7 +21,7 @@ const WARMUP_WINDOWS: WarmWindowSpec[] = [
     { id: 'geosetEditor', title: '多边形管理器', w: 640, h: 480 },
     { id: 'textureAnimManager', title: '贴图动画管理器', w: 800, h: 480 },
     { id: 'keyframeEditor_1', title: '关键帧编辑器', w: 600, h: 480 },
-    { id: 'geosetAnimManager', title: '多边形动画管理器', w: 800, h: 480 },
+    { id: 'geosetAnimManager', title: '多边形动画管理器', w: 800, h: 560 },
     { id: 'geosetVisibilityTool', title: '多边形动作显隐工具', w: 980, h: 560 },
     { id: 'globalSequenceManager', title: '全局动作管理器', w: 300, h: 360 },
     { id: 'modelOptimize', title: '模型优化', w: 320, h: 520 }

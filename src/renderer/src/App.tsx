@@ -1,6 +1,5 @@
 ﻿import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 import StandaloneToolWindowRouter, { isStandaloneToolWindowLabel } from './components/detached/StandaloneToolWindowRouter'
-import { initDebugLogging } from './utils/debugLog'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { windowManager } from './utils/WindowManager'
@@ -29,8 +28,6 @@ function App(): JSX.Element {
     }, [])
 
     useEffect(() => {
-        initDebugLogging()
-
         if (standaloneWindowLabel) {
             return
         }

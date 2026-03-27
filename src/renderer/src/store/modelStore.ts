@@ -10,6 +10,7 @@ import { Tab, TabSnapshot } from '../types/store';
 import { useRendererStore } from './rendererStore';
 import { processDeathAnimation, processRemoveLights, pruneModelKeyframes } from '../utils/modelUtils';
 import { calculateModelExtent, calculateModelNormals } from '../utils/geometryUtils';
+import { remapTextureRefWithMap } from '../utils/materialTextureRelations';
 
 const MAX_CACHED_RENDERERS = 5;
 
@@ -49,7 +50,9 @@ function deepClone<T>(value: T): T {
 
 function sanitizeNodesArray(nodes: any): ModelNode[] {
     if (!Array.isArray(nodes)) return [];
-    return nodes.filter((n: any) => n && typeof n.ObjectId === 'number') as ModelNode[];
+    return nodes.filter((n: any) =>
+        n && (n.type === NodeType.CAMERA || typeof n.ObjectId === 'number')
+    ) as ModelNode[];
 }
 
 const markActiveTabDirtyState = (state: { activeTabId: string | null; dirtyTabs: Record<string, boolean> }) => {
@@ -76,29 +79,6 @@ function collectTextureIdsFromAnimVector(value: any, ids: Set<number>): void {
             if (typeof id === 'number' && id >= 0) ids.add(id);
         }
     }
-}
-
-function remapTextureRef(value: any, oldToNew: Map<number, number>): any {
-    if (value === undefined || value === null) return value;
-    if (typeof value === 'number') {
-        return oldToNew.has(value) ? oldToNew.get(value)! : value;
-    }
-    if (value && typeof value === 'object' && Array.isArray(value.Keys)) {
-        for (const key of value.Keys) {
-            const vec = key?.Vector;
-            const oldId = ArrayBuffer.isView(vec) ? vec[0] : (Array.isArray(vec) ? vec[0] : undefined);
-            if (typeof oldId === 'number' && oldToNew.has(oldId)) {
-                const newId = oldToNew.get(oldId)!;
-                if (ArrayBuffer.isView(vec)) {
-                    vec[0] = newId;
-                } else if (Array.isArray(vec)) {
-                    vec[0] = newId;
-                }
-            }
-        }
-        return value;
-    }
-    return value;
 }
 
 function findExistingTextureIndex(textures: any[], tex: any): number {
@@ -163,6 +143,7 @@ interface ModelState {
 
     setModelData: (data: ModelData | null, path: string | null, options?: SetModelDataOptions) => void;
     updateGlobalSequences: (sequences: number[]) => void;
+    setCameras: (cameras: ModelNode[]) => void;
     setLoading: (loading: boolean) => void;
     updateNode: (objectId: number, updates: Partial<ModelNode>) => void;
     // 静默更新节点 - 不触发 renderer reload（用于关键帧编辑等高频更新）
@@ -211,6 +192,7 @@ interface ModelState {
     setTextures: (textures: any[]) => void;
     setGeosets: (geosets: any[]) => void;
     setMaterials: (materials: any[]) => void;
+    setVisualDataPatch: (patch: { Textures?: any[]; Materials?: any[]; Geosets?: any[]; TextureAnims?: any[] }) => void;
     setTextureAnims: (anims: any[]) => void;
     addTextureAnim: () => void;
     removeTextureAnim: (index: number) => void;
@@ -404,7 +386,7 @@ export function extractNodesFromModel(data: ModelData | null): ModelNode[] {
                 // Color - convert Float32Array to array for UI
                 if (item.Color instanceof Float32Array) {
                     node.Color = Array.from(item.Color);
-                    console.log('[ModelStore] RibbonEmitter Color converted:', node.Color);
+                    // // // console.log('[ModelStore] RibbonEmitter Color converted:', node.Color);
                 } else if (Array.isArray(item.Color)) {
                     node.Color = item.Color;
                 }
@@ -622,6 +604,12 @@ function updateModelDataWithNodes(
     updated.CollisionShapes = orderedNodes.filter(n => n.type === NodeType.COLLISION_SHAPE);
     (updated as any).ParticleEmitterPopcorns = orderedNodes.filter(n => n.type === NodeType.PARTICLE_EMITTER_POPCORN);
     updated.Cameras = cameras; // Camera nodes don't have ObjectId
+    if ((updated as any).Camera !== undefined) {
+        delete (updated as any).Camera;
+    }
+    if (updated.Model) {
+        updated.Model.NumCameras = cameras.length;
+    }
 
     // Set the master Nodes array (sorted by new ObjectId)
     updated.Nodes = [...orderedNodes].sort((a, b) => a.ObjectId - b.ObjectId);
@@ -1172,6 +1160,32 @@ export const useModelStore = create<ModelState>((set, get) => ({
         });
     },
 
+    setCameras: (cameras) => {
+        set((state) => {
+            if (!state.modelData) return {};
+            const updatedModelData: any = {
+                ...state.modelData,
+                Cameras: cameras
+            };
+            if (updatedModelData.Camera !== undefined) {
+                delete updatedModelData.Camera;
+            }
+            if (updatedModelData.Model) {
+                updatedModelData.Model = {
+                    ...updatedModelData.Model,
+                    NumCameras: cameras.length
+                };
+            }
+            const correctedNodes = extractNodesFromModel(updatedModelData);
+            return {
+                modelData: updatedModelData,
+                nodes: correctedNodes,
+                rendererReloadTrigger: state.rendererReloadTrigger + 1,
+                ...markActiveTabDirtyState(state)
+            };
+        });
+    },
+
     setLoading: (loading) => {
         set({ isLoading: loading });
     },
@@ -1456,7 +1470,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                                 ];
                                 for (const k of keys) {
                                     if (layer?.[k] !== undefined) {
-                                        layer[k] = remapTextureRef(layer[k], texOldToNew);
+                                        layer[k] = remapTextureRefWithMap(layer[k], texOldToNew);
                                     }
                                 }
 
@@ -1864,11 +1878,60 @@ export const useModelStore = create<ModelState>((set, get) => ({
     }),
     setGeosets: (geosets) => set((state) => {
         const updatedModelData = state.modelData ? { ...state.modelData, Geosets: geosets } : state.modelData;
-        return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
+        const updatedTabs = state.activeTabId
+            ? state.tabs.map((tab) => {
+                if (tab.id !== state.activeTabId) {
+                    return tab;
+                }
+                return {
+                    ...tab,
+                    snapshot: {
+                        ...tab.snapshot,
+                        modelData: updatedModelData,
+                        modelPath: state.modelPath,
+                        nodes: sanitizeNodesArray(state.nodes),
+                        sequences: [...state.sequences],
+                        currentSequence: state.currentSequence,
+                        currentFrame: state.currentFrame,
+                        hiddenGeosetIds: [...state.hiddenGeosetIds],
+                        lastActive: Date.now()
+                    }
+                };
+            })
+            : state.tabs;
+        return { modelData: updatedModelData, tabs: updatedTabs, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
     }),
     setMaterials: (materials) => set((state) => {
         console.log('[ModelStore] setMaterials called. Count:', materials ? materials.length : 0);
         const updatedModelData = state.modelData ? { ...state.modelData, Materials: materials } : state.modelData;
+        const updatedTabs = state.activeTabId
+            ? state.tabs.map((tab) => {
+                if (tab.id !== state.activeTabId) {
+                    return tab;
+                }
+                return {
+                    ...tab,
+                    snapshot: {
+                        ...tab.snapshot,
+                        modelData: updatedModelData,
+                        modelPath: state.modelPath,
+                        nodes: sanitizeNodesArray(state.nodes),
+                        sequences: [...state.sequences],
+                        currentSequence: state.currentSequence,
+                        currentFrame: state.currentFrame,
+                        hiddenGeosetIds: [...state.hiddenGeosetIds],
+                        lastActive: Date.now()
+                    }
+                };
+            })
+            : state.tabs;
+        return { modelData: updatedModelData, tabs: updatedTabs, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
+    }),
+    setVisualDataPatch: (patch) => set((state) => {
+        const sanitizedPatch = Object.fromEntries(
+            Object.entries(patch || {}).filter(([, value]) => value !== undefined)
+        ) as typeof patch;
+        const updatedModelData = state.modelData ? { ...state.modelData, ...sanitizedPatch } : state.modelData;
         const updatedTabs = state.activeTabId
             ? state.tabs.map((tab) => {
                 if (tab.id !== state.activeTabId) {
@@ -2007,7 +2070,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 ...state.modelData,
                 GeosetAnims: anims.map(normalizeGeosetAnim)
             };
-            return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
+            return { modelData: updatedModelData, ...markActiveTabDirtyState(state) };
         });
     },
 
@@ -2042,7 +2105,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
             return {
                 nodes: correctedNodes as ModelNode[],
                 modelData: updatedModelData,
-                rendererReloadTrigger: state.rendererReloadTrigger + (triggerReload ? 1 : 0)
+                rendererReloadTrigger: state.rendererReloadTrigger + (triggerReload ? 1 : 0),
+                ...markActiveTabDirtyState(state)
             };
         });
     },
@@ -2710,6 +2774,3 @@ export const useModelStore = create<ModelState>((set, get) => ({
         });
     }
 }));
-
-
-

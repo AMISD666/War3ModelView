@@ -8,6 +8,7 @@ interface BatchTexturePrefixModalProps {
     visible: boolean;
     onClose: () => void;
     onProcess: (options: PrefixOptions) => Promise<void>;
+    zIndex?: number;
 }
 
 export interface PrefixOptions {
@@ -20,7 +21,8 @@ export interface PrefixOptions {
 export const BatchTexturePrefixModal: React.FC<BatchTexturePrefixModalProps> = ({
     visible,
     onClose,
-    onProcess
+    onProcess,
+    zIndex = 1000
 }) => {
     const { message } = App.useApp();
     const [prefix, setPrefix] = useState('war3mapImported\\');
@@ -57,6 +59,7 @@ export const BatchTexturePrefixModal: React.FC<BatchTexturePrefixModalProps> = (
             okText="确定"
             cancelText="取消"
             width={500}
+            zIndex={zIndex}
             styles={{
                 content: { backgroundColor: '#1e1e1e', color: '#ccc' },
                 header: { backgroundColor: '#1e1e1e', color: '#ccc', borderBottom: '1px solid #333' },

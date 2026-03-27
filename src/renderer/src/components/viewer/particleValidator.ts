@@ -11,7 +11,7 @@ export function validateParticleEmitter2(emitter: any, idx: number, textureCount
     // Fix 1: TextureID - change -1 or invalid to 0 (first texture)
     if (emitter.TextureID === undefined || emitter.TextureID === null ||
         emitter.TextureID < 0 || emitter.TextureID >= textureCount) {
-        console.log(`[particleValidator] Particle ${idx} "${emitter.Name}": TextureID ${emitter.TextureID} -> 0`)
+        // // console.log(`[particleValidator] Particle ${idx} "${emitter.Name}": TextureID ${emitter.TextureID} -> 0`)
         emitter.TextureID = textureCount > 0 ? 0 : 0
     }
 

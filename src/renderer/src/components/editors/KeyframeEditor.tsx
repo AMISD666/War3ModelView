@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react'
-import { Input, Select, Row, Col, Button, ColorPicker } from 'antd'
+import { Input, Select, Row, Col, Button } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
+import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker'
 import { DraggableModal } from '../DraggableModal'
 import { useModelStore } from '../../store/modelStore'
 import { useHistoryStore } from '../../store/historyStore'
@@ -879,7 +880,6 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
 }
 
 export default KeyframeEditor
-
 
 
 

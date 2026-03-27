@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Button, Empty, Layout, theme, Typography, Spin, message, Pagination, Tooltip, Space, Radio, Switch, Slider, Select } from 'antd';
 import {
     FolderOpenOutlined,
@@ -15,11 +15,14 @@ import {
 import { BatchTexturePrefixModal, PrefixOptions } from './BatchTexturePrefixModal';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readFile, writeFile } from '@tauri-apps/plugin-fs';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { parseMDX, parseMDL, generateMDX, generateMDL } from 'war3-model';
 import { useSelectionStore } from '../../store/selectionStore';
 import { ThumbnailGenerator } from './ThumbnailGenerator';
 import { thumbnailService } from './ThumbnailService';
 import { thumbnailEventBus } from './ThumbnailEventBus';
+import { thumbnailAnimationCache } from './thumbnailAnimationCache';
 import { ModelCard } from './ModelCard';
 import { processDeathAnimation, processRemoveLights } from '../../utils/modelUtils';
 import { useBatchStore } from '../../store/batchStore';
@@ -28,6 +31,7 @@ import { registerShortcutHandler } from '../../shortcuts/manager';
 const { Content, Header } = Layout;
 const { Text } = Typography;
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 75, 100];
+const BATCH_MODAL_Z_INDEX = 11000;
 
 interface ModelFile {
     name: string;
@@ -37,7 +41,6 @@ interface ModelFile {
 
 interface BatchManagerProps {
     onSelectModel?: (path: string, animationIndex: number) => void;
-    onAnimationChange?: (animationIndex: number) => void;
     selectedPath?: string | null;
     isFullBatchView?: boolean;
     onToggleFullBatchView?: () => void;
@@ -45,7 +48,6 @@ interface BatchManagerProps {
 
 export const BatchManager: React.FC<BatchManagerProps> = ({
     onSelectModel,
-    onAnimationChange,
     selectedPath,
     isFullBatchView = false,
     onToggleFullBatchView
@@ -63,7 +65,6 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
     const updateQueue = useBatchStore(state => state.updateQueue);
     const modelAnimations = useBatchStore(state => state.modelAnimations);
     const selectedAnimations = useBatchStore(state => state.selectedAnimations);
-    const setSelectedAnimations = useBatchStore(state => state.setSelectedAnimations);
     const loading = useBatchStore(state => state.isLoading);
     const setLoading = useBatchStore(state => state.setLoading);
     const batchReset = useBatchStore(state => state.reset);
@@ -90,14 +91,64 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
     const [deathApplyLoading, setDeathApplyLoading] = useState(false);
     const [actionScope, setActionScope] = useState<'selected' | 'all'>('selected');
     const [isPrefixModalVisible, setIsPrefixModalVisible] = useState(false);
+    const activeScanIdRef = useRef<string | null>(null);
+    const firstPagePublishedRef = useRef(false);
+    const scanCleanupRef = useRef<Array<() => void>>([]);
+    const prefetchTokenRef = useRef(0);
+    const deferredPrefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const currentPageFiles = files.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
     const scheduleCurrentPageWork = useCallback((pageFiles: ModelFile[]) => {
-        const currentPagePaths = pageFiles.map(f => f.fullPath);
-        thumbnailService.pruneToActiveSet(currentPagePaths);
-        setQueue(pageFiles.map(f => ({ name: f.name, fullPath: f.fullPath })));
-        void thumbnailService.prefetch(currentPagePaths, 8, { withTextures: true });
+        prefetchTokenRef.current += 1;
+        const currentPrefetchToken = prefetchTokenRef.current;
+        if (deferredPrefetchTimerRef.current) {
+            clearTimeout(deferredPrefetchTimerRef.current);
+            deferredPrefetchTimerRef.current = null;
+        }
+        const originalPagePaths = pageFiles.map(f => f.fullPath);
+        thumbnailService.pruneToActiveSet(originalPagePaths);
+
+        void (async () => {
+            const cacheFlags = await Promise.all(
+                pageFiles.map(async (file) => ({
+                    file,
+                    hasCachedAnimation: await thumbnailAnimationCache.hasClip(file.fullPath)
+                }))
+            );
+            if (prefetchTokenRef.current !== currentPrefetchToken) {
+                return;
+            }
+
+            const orderedFiles = [
+                ...cacheFlags.filter(item => !item.hasCachedAnimation).map(item => item.file),
+                ...cacheFlags.filter(item => item.hasCachedAnimation).map(item => item.file)
+            ];
+            const orderedPaths = orderedFiles.map(f => f.fullPath);
+
+            setQueue(orderedFiles.map(f => ({ name: f.name, fullPath: f.fullPath })));
+
+            const eagerCount = orderedPaths.length >= 50
+                ? Math.min(12, orderedPaths.length)
+                : orderedPaths.length >= 25
+                    ? Math.min(16, orderedPaths.length)
+                    : orderedPaths.length;
+            const eagerPaths = orderedPaths.slice(0, eagerCount);
+            const deferredPaths = orderedPaths.slice(eagerCount);
+
+            if (eagerPaths.length > 0) {
+                void thumbnailService.prefetch(eagerPaths, 8, { withTextures: true });
+            }
+
+            if (deferredPaths.length > 0) {
+                deferredPrefetchTimerRef.current = setTimeout(() => {
+                    if (prefetchTokenRef.current !== currentPrefetchToken) {
+                        return;
+                    }
+                    void thumbnailService.prefetch(deferredPaths, 4, { withTextures: true });
+                }, 120);
+            }
+        })();
     }, [setQueue]);
 
     // Shared states for animations moved to store
@@ -123,55 +174,89 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
 
     const scanFolder = async (path: string) => {
         setLoading(true);
+        setCurrentPage(1);
+        setFiles([]);
+        setQueue([]);
+        firstPagePublishedRef.current = false;
         try {
-            const modelFiles: ModelFile[] = [];
-            const { readDir } = await import('@tauri-apps/plugin-fs');
-            const dirs: string[] = [path];
-            const scanWorkers = Math.min(8, Math.max(2, (navigator.hardwareConcurrency || 8) >> 1));
+            scanCleanupRef.current.forEach((fn) => fn());
+            scanCleanupRef.current = [];
 
-            const scanWorker = async () => {
-                while (dirs.length > 0) {
-                    const dirPath = dirs.pop();
-                    if (!dirPath) continue;
+            const scanId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            activeScanIdRef.current = scanId;
 
-                    try {
-                        const entries = await readDir(dirPath);
-                        for (const entry of entries) {
-                            if (!entry?.name) continue;
-                            const entryPath = dirPath + (dirPath.endsWith('\\') || dirPath.endsWith('/') ? '' : '\\') + entry.name;
-                            if (entry.isDirectory) {
-                                dirs.push(entryPath);
-                                continue;
-                            }
-
-                            const name = entry.name.toLowerCase();
-                            if (name.endsWith('.mdx') || name.endsWith('.mdl')) {
-                                modelFiles.push({
-                                    name: entry.name,
-                                    path: entry.name,
-                                    fullPath: entryPath
-                                });
-                            }
-                        }
-                    } catch (readErr) {
-                        console.warn(`Failed to read directory: ${dirPath}`, readErr);
-                    }
+            const parseFirstPageBinaryPayload = (payload: Uint8Array | ArrayBuffer) => {
+                const bytes = payload instanceof Uint8Array ? payload : new Uint8Array(payload);
+                if (bytes.byteLength < 4) {
+                    return [] as Array<{ fullPath: string; buffer: ArrayBuffer; readMs: number }>;
                 }
+                const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+                let offset = 0;
+                const count = view.getUint32(offset, true);
+                offset += 4;
+                const rows: Array<{ fullPath: string; buffer: ArrayBuffer; readMs: number }> = [];
+                for (let i = 0; i < count; i++) {
+                    if (offset + 4 > bytes.byteLength) break;
+                    const pathLen = view.getUint32(offset, true);
+                    offset += 4;
+                    if (offset + pathLen + 12 > bytes.byteLength) break;
+                    const pathBytes = bytes.subarray(offset, offset + pathLen);
+                    offset += pathLen;
+                    const fullPath = new TextDecoder().decode(pathBytes);
+                    const readMs = view.getFloat64(offset, true);
+                    offset += 8;
+                    const dataLen = view.getUint32(offset, true);
+                    offset += 4;
+                    if (offset + dataLen > bytes.byteLength) break;
+                    const slice = bytes.subarray(offset, offset + dataLen);
+                    const buffer = slice.buffer.slice(slice.byteOffset, slice.byteOffset + slice.byteLength);
+                    offset += dataLen;
+                    rows.push({ fullPath, buffer, readMs });
+                }
+                return rows;
             };
 
-            await Promise.all(Array.from({ length: scanWorkers }, () => scanWorker()));
+            const toModelFiles = (paths: string[]): ModelFile[] => paths.map((fullPath) => ({
+                fullPath,
+                name: fullPath.split(/[/\\]/).pop() || fullPath,
+                path: fullPath.split(/[/\\]/).pop() || fullPath
+            }));
 
-            setFiles(modelFiles);
+            const unlistenComplete = await listen<{ scan_id: string; files: string[] }>('batch-scan-complete', (event) => {
+                const payload = event.payload;
+                if (!payload || payload.scan_id !== activeScanIdRef.current) {
+                    return;
+                }
 
-            // Only queue the current page
-            const initialPageFiles = modelFiles.slice(0, pageSize);
-            scheduleCurrentPageWork(initialPageFiles);
+                const allFiles = toModelFiles(payload.files);
+                setFiles(allFiles);
+                if (allFiles.length > 0 && !firstPagePublishedRef.current) {
+                    const firstPageFiles = allFiles.slice(0, pageSize);
+                    scheduleCurrentPageWork(firstPageFiles);
+                }
+                setLoading(false);
+                message.success(`找到 ${allFiles.length} 个模型文件`);
+            });
 
-            message.success(`找到 ${modelFiles.length} 个模型文件`);
+            scanCleanupRef.current = [unlistenComplete];
+
+            const firstPagePayload = await invoke<Uint8Array>('scan_model_files_streamed', {
+                root: path,
+                pageSize,
+                scanId
+            });
+            const firstPageEntries = parseFirstPageBinaryPayload(firstPagePayload);
+            if (firstPageEntries.length > 0) {
+                firstPagePublishedRef.current = true;
+                thumbnailService.primeModelBuffers(firstPageEntries);
+                const firstPageFiles = toModelFiles(firstPageEntries.map((entry) => entry.fullPath));
+                setFiles(firstPageFiles);
+                scheduleCurrentPageWork(firstPageFiles);
+                setLoading(false);
+            }
         } catch (err) {
             console.error('Failed to read directory:', err);
             message.error('读取文件夹失败: ' + String(err));
-        } finally {
             setLoading(false);
         }
     };
@@ -186,6 +271,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                     okText: '删除',
                     okButtonProps: { danger: true },
                     cancelText: '取消',
+                    zIndex: BATCH_MODAL_Z_INDEX,
                     onOk: () => resolve(true),
                     onCancel: () => resolve(false)
                 });
@@ -266,6 +352,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
     const handleThumbnailReady = useCallback((fullPath: string, bitmap: ImageBitmap, animations?: string[]) => {
         thumbnailEventBus.emitThumbnail(fullPath, bitmap);
         thumbnailEventBus.emitMissingTextures(fullPath, thumbnailService.getMissingTextureCount(fullPath));
+        void thumbnailAnimationCache.captureFrame(fullPath, bitmap);
 
         if (animations && animations.length > 0) {
             thumbnailEventBus.emitAnimations(fullPath, animations);
@@ -308,18 +395,6 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
         updateQueue(prev => prev.filter(item => item.fullPath !== fullPath));
     }, [updateQueue]);
 
-    const handleAnimationChange = useCallback((file: ModelFile, animation: string) => {
-        setSelectedAnimations(prev => ({ ...prev, [file.fullPath]: animation }));
-        const animations = modelAnimations[file.fullPath]
-            || thumbnailEventBus.getAnimations(file.fullPath)
-            || thumbnailService.getCachedAnimations(file.fullPath)
-            || [];
-        const animationIndex = animations.indexOf(animation);
-        if (onAnimationChange && animationIndex >= 0) {
-            onAnimationChange(animationIndex);
-        }
-    }, [modelAnimations, onAnimationChange, setSelectedAnimations]);
-
     const handleSelect = useCallback((file: ModelFile) => {
         setSelectedFile(file.fullPath);
     }, []);
@@ -360,6 +435,17 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
         if (typeof window === 'undefined') return;
         window.localStorage.setItem('batch.pageSize', String(pageSize));
     }, [pageSize]);
+
+    useEffect(() => {
+        return () => {
+            scanCleanupRef.current.forEach((fn) => fn());
+            scanCleanupRef.current = [];
+            if (deferredPrefetchTimerRef.current) {
+                clearTimeout(deferredPrefetchTimerRef.current);
+                deferredPrefetchTimerRef.current = null;
+            }
+        };
+    }, []);
 
     const applyDeathAnimationToPath = async (targetPath: string): Promise<'added' | 'updated'> => {
         const buffer = await readFile(targetPath);
@@ -875,12 +961,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                         </span>
                     )}
                 </div>
-                {loading ? (
-                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', flexDirection: 'column' }}>
-                        <Spin size="large" />
-                        <div style={{ marginTop: 16, color: '#999' }}>正在扫描文件...</div>
-                    </div>
-                ) : files.length > 0 ? (
+                {files.length > 0 ? (
                     <>
                         <div style={{
                             display: 'grid',
@@ -900,14 +981,10 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                                     key={file.fullPath}
                                     file={file}
                                     fixedSize={FIXED_CARD_SIZE}
-                                    initialAnimations={modelAnimations[file.fullPath]}
-                                    initialSelectedAnimation={selectedAnimations[file.fullPath]}
-                                    showAnimationSelect={!fastMode}
                                     isSelected={(selectedPath ?? selectedFile) === file.fullPath}
                                     onDelete={handleDelete}
                                     onEditTexture={handleEditTexture}
                                     onCopy={handleCopyModel}
-                                    onAnimationChange={handleAnimationChange}
                                     onSelect={handleSelect}
                                     onDoubleClick={handleDoubleClick}
                                     onVisibilityChange={handleVisibilityChange}
@@ -933,6 +1010,11 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                             />
                         </div>
                     </>
+                ) : loading ? (
+                    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', flexDirection: 'column' }}>
+                        <Spin size="large" />
+                        <div style={{ marginTop: 16, color: '#999' }}>正在扫描文件...</div>
+                    </div>
                 ) : (
                     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
                         <Empty
@@ -963,6 +1045,7 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
                     visible={isPrefixModalVisible}
                     onClose={() => setIsPrefixModalVisible(false)}
                     onProcess={handlePrefixProcess}
+                    zIndex={BATCH_MODAL_Z_INDEX}
                 />
             </Content>
 

@@ -16,6 +16,21 @@ import { markStandalonePerf, markStandalonePerfOnce } from '../../utils/standalo
 
 const { Text } = Typography
 
+const createEditorId = (prefix: string): string => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return `${prefix}-${crypto.randomUUID()}`
+    }
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+function cloneDeep<T>(value: T): T {
+    try {
+        return structuredClone(value)
+    } catch {
+        return JSON.parse(JSON.stringify(value))
+    }
+}
+
 /**
  * Convert Shading bitmask to individual boolean properties for UI display
  * LayerShading: Unshaded=1, SphereEnvMap=2, TwoSided=16, Unfogged=32, NoDepthTest=64, NoDepthSet=128
@@ -25,6 +40,7 @@ function normalizeMaterialsForUI(materials: any[]): any[] {
         const renderMode = material.RenderMode || 0;
         return {
             ...material,
+            __editorMaterialId: typeof material?.__editorMaterialId === 'string' ? material.__editorMaterialId : createEditorId('mat'),
             ConstantColor: material.ConstantColor !== undefined ? material.ConstantColor : (renderMode & 1) !== 0,
             SortPrimsFarZ: material.SortPrimsFarZ !== undefined ? material.SortPrimsFarZ : (renderMode & 16) !== 0,
             FullResolution: material.FullResolution !== undefined ? material.FullResolution : (renderMode & 32) !== 0,
@@ -32,6 +48,7 @@ function normalizeMaterialsForUI(materials: any[]): any[] {
                 const shading = layer.Shading || 0;
                 return {
                     ...layer,
+                    __editorLayerId: typeof layer?.__editorLayerId === 'string' ? layer.__editorLayerId : createEditorId('layer'),
                     // Set boolean properties from Shading bitmask (if not already set)
                     Unshaded: layer.Unshaded !== undefined ? layer.Unshaded : (shading & 1) !== 0,
                     SphereEnvMap: layer.SphereEnvMap !== undefined ? layer.SphereEnvMap : (shading & 2) !== 0,
@@ -55,7 +72,7 @@ function denormalizeMaterialsForSave(materials: any[]): any[] {
         if (material.SortPrimsFarZ) renderMode |= 16;
         if (material.FullResolution) renderMode |= 32;
 
-        const { ConstantColor, SortPrimsFarZ, FullResolution, ...materialRest } = material;
+        const { ConstantColor, SortPrimsFarZ, FullResolution, __editorMaterialId, ...materialRest } = material;
 
         return {
             ...materialRest,
@@ -73,7 +90,7 @@ function denormalizeMaterialsForSave(materials: any[]): any[] {
                 if (layer.NoDepthSet) shading |= 128;
 
                 // Create clean layer without UI-only boolean properties
-                const { Unshaded, SphereEnvMap, TwoSided, Unfogged, NoDepthTest, NoDepthSet, ...cleanLayer } = layer;
+                const { Unshaded, SphereEnvMap, TwoSided, Unfogged, NoDepthTest, NoDepthSet, __editorLayerId, ...cleanLayer } = layer;
 
                 return {
                     ...cleanLayer,
@@ -155,6 +172,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const directModelPath = useModelStore((state) => state.modelPath)
     const directSetMaterials = useModelStore((state) => state.setMaterials)
     const directSetTextures = useModelStore((state) => state.setTextures)
+    const directSetVisualDataPatch = useModelStore((state) => state.setVisualDataPatch)
 
     const modelData = isStandalone ? {
         Materials: rpcSnapshot.materials,
@@ -185,6 +203,25 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             directSetTextures(textures)
         }
     }
+
+    const applyVisualPatch = React.useCallback((patch: { Textures?: any[]; Materials?: any[]; Geosets?: any[] }) => {
+        if (patch.Textures) {
+            modelTexturesRef.current = patch.Textures
+            setLocalTextures(patch.Textures)
+        }
+        if (isStandalone) {
+            emitCommand('EXECUTE_MATERIAL_ACTION', {
+                action: 'SAVE_MATERIALS',
+                payload: {
+                    materials: patch.Materials ?? denormalizeMaterialsForSave(localMaterialsRef.current),
+                    textures: patch.Textures ?? modelTexturesRef.current,
+                    geosets: patch.Geosets
+                }
+            })
+        } else {
+            directSetVisualDataPatch(patch)
+        }
+    }, [directSetVisualDataPatch, emitCommand, isStandalone])
     const [localMaterials, setLocalMaterials] = useState<any[]>([])
     const [localTextures, setLocalTextures] = useState<any[]>([])
     const [selectedMaterialIndex, setSelectedMaterialIndex] = useState<number>(-1)
@@ -246,6 +283,19 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const selectedMaterialIndexRef = React.useRef(-1)
     const selectedLayerIndexRef = React.useRef(-1)
 
+    const syncStandaloneMaterials = React.useCallback((nextMaterialsUi: any[], nextTextures?: any[], nextGeosets?: any[]) => {
+        if (!isStandalone) return
+        const materialsForSave = denormalizeMaterialsForSave(cloneDeep(nextMaterialsUi))
+        emitCommand('EXECUTE_MATERIAL_ACTION', {
+            action: 'SAVE_MATERIALS',
+            payload: {
+                materials: materialsForSave,
+                textures: cloneDeep(nextTextures ?? modelTexturesRef.current),
+                geosets: nextGeosets ? cloneDeep(nextGeosets) : undefined
+            }
+        })
+    }, [emitCommand, isStandalone])
+
     useEffect(() => {
         dragOverLayerIndexRef.current = dragOverLayerIndex
     }, [dragOverLayerIndex])
@@ -264,6 +314,14 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         selectedMaterialIndexRef.current = selectedMaterialIndex
         selectedLayerIndexRef.current = selectedLayerIndex
     }, [modelData, selectedMaterialIndex, selectedLayerIndex])
+
+    const applyMaterialsChange = React.useCallback((updater: (previous: any[]) => any[]) => {
+        const previousMaterials = cloneDeep(localMaterialsRef.current || [])
+        const nextMaterials = updater(previousMaterials)
+        localMaterialsRef.current = nextMaterials
+        setLocalMaterials(nextMaterials)
+        return nextMaterials
+    }, [])
 
     const lastRpcMaterialsRef = React.useRef<any>(null)
     const lastHandledPickedGeosetRef = React.useRef<number | null | undefined>(undefined)
@@ -336,8 +394,23 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                     setSelectedLayerIndex(nextLayerIndex)
                 }
                 isInitialized.current = true
-            } else if (hasMaterials && texturesChanged) {
+            } else if (hasMaterials && texturesChanged && !isStandalone) {
                 setLocalTextures(JSON.parse(JSON.stringify(currentTextures)))
+            } else if (!hasMaterials) {
+                setLocalMaterials([])
+                setSelectedMaterialIndex(-1)
+                setSelectedLayerIndex(-1)
+                setLocalTextures([])
+                setIsTextureDropActive(false)
+                isInitialized.current = false
+                lastRpcMaterialsRef.current = isStandalone ? rpcState.snapshotVersion : null
+                if (isCommittingRef.current) {
+                    isCommittingRef.current = false
+                }
+                originalMaterialsRef.current = null
+                originalTexturesRef.current = null
+                didRealtimePreviewRef.current = false
+                didRealtimeTexturePreviewRef.current = false
             }
         } else {
             setLocalMaterials([])
@@ -417,16 +490,14 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                 if (isStandalone) {
                     emitCommand('EXECUTE_MATERIAL_ACTION', { action: 'SAVE_MATERIALS', payload: { materials: oldMaterials, textures: oldTextures } })
                 } else {
-                    setTextures(oldTextures)
-                    setMaterials(oldMaterials)
+                    applyVisualPatch({ Textures: oldTextures, Materials: oldMaterials })
                 }
             },
             redo: () => {
                 if (isStandalone) {
                     emitCommand('EXECUTE_MATERIAL_ACTION', { action: 'SAVE_MATERIALS', payload: { materials: materialsForSave, textures: texturesForSave } })
                 } else {
-                    setTextures(texturesForSave)
-                    setMaterials(materialsForSave)
+                    applyVisualPatch({ Textures: texturesForSave, Materials: materialsForSave })
                 }
             }
         })
@@ -435,8 +506,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         if (isStandalone) {
             emitCommand('EXECUTE_MATERIAL_ACTION', { action: 'SAVE_MATERIALS', payload: { materials: materialsForSave, textures: texturesForSave } })
         } else {
-            setTextures(texturesForSave)
-            setMaterials(materialsForSave)
+            applyVisualPatch({ Textures: texturesForSave, Materials: materialsForSave })
         }
         message.success('材质已保存')
         onClose()
@@ -448,20 +518,24 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             return
         }
         if (!isCommittingRef.current && (didRealtimeTexturePreviewRef.current || didRealtimePreviewRef.current)) {
-            const mats = didRealtimePreviewRef.current && originalMaterialsRef.current ? originalMaterialsRef.current : modelData?.Materials
-            const texs = didRealtimeTexturePreviewRef.current && originalTexturesRef.current ? originalTexturesRef.current : localTextures
-            if (didRealtimeTexturePreviewRef.current && originalTexturesRef.current) setTextures(originalTexturesRef.current)
-            if (didRealtimePreviewRef.current && originalMaterialsRef.current) setMaterials(originalMaterialsRef.current)
+            if (didRealtimeTexturePreviewRef.current && originalTexturesRef.current && didRealtimePreviewRef.current && originalMaterialsRef.current) {
+                applyVisualPatch({ Textures: originalTexturesRef.current, Materials: originalMaterialsRef.current })
+            } else {
+                if (didRealtimeTexturePreviewRef.current && originalTexturesRef.current) setTextures(originalTexturesRef.current)
+                if (didRealtimePreviewRef.current && originalMaterialsRef.current) setMaterials(originalMaterialsRef.current)
+            }
         }
         onClose()
     }
 
     const updateLocalMaterial = (index: number, updates: any, applyRealtime: boolean = false) => {
-        const newMaterials = [...localMaterials]
-        newMaterials[index] = { ...newMaterials[index], ...updates }
-        setLocalMaterials(newMaterials)
+        const newMaterials = applyMaterialsChange((previous) => {
+            if (index < 0 || index >= previous.length) return previous
+            previous[index] = { ...previous[index], ...updates }
+            return previous
+        })
 
-        if (applyRealtime) {
+        if (isStandalone || applyRealtime) {
             didRealtimePreviewRef.current = true
             const materialsForSave = denormalizeMaterialsForSave(newMaterials)
             if (isStandalone) {
@@ -479,13 +553,17 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     }
 
     const updateLocalLayer = (matIndex: number, layerIndex: number, updates: any, applyRealtime: boolean = false) => {
-        const newMaterials = [...localMaterials]
-        const newLayers = [...newMaterials[matIndex].Layers]
-        newLayers[layerIndex] = { ...newLayers[layerIndex], ...updates }
-        newMaterials[matIndex].Layers = newLayers
-        setLocalMaterials(newMaterials)
+        const newMaterials = applyMaterialsChange((previous) => {
+            if (matIndex < 0 || matIndex >= previous.length) return previous
+            const material = previous[matIndex]
+            const layers = Array.isArray(material?.Layers) ? [...material.Layers] : []
+            if (layerIndex < 0 || layerIndex >= layers.length) return previous
+            layers[layerIndex] = { ...layers[layerIndex], ...updates }
+            previous[matIndex] = { ...material, Layers: layers }
+            return previous
+        })
 
-        if (applyRealtime) {
+        if (isStandalone || applyRealtime) {
             didRealtimePreviewRef.current = true
             const materialsForSave = denormalizeMaterialsForSave(newMaterials)
             if (isStandalone) {
@@ -517,9 +595,46 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         isCommittingRef.current = false
     }
 
+    const stageImportedTextures = (nextTextures: any[]) => {
+        modelTexturesRef.current = nextTextures
+        localTexturesRef.current = nextTextures
+        setLocalTextures(nextTextures)
+    }
+
+    const applyImportedTextureToLayer = (matIndex: number, layerIndex: number, textureId: number, nextTextures?: any[] | null) => {
+        const hasTexturePatch = Array.isArray(nextTextures)
+        if (hasTexturePatch) {
+            didRealtimeTexturePreviewRef.current = true
+            stageImportedTextures(nextTextures)
+        }
+
+        const nextMaterials = applyMaterialsChange((previous) => {
+            if (matIndex < 0 || matIndex >= previous.length) return previous
+            const material = previous[matIndex]
+            const layers = Array.isArray(material?.Layers) ? [...material.Layers] : []
+            if (layerIndex < 0 || layerIndex >= layers.length) return previous
+            layers[layerIndex] = { ...layers[layerIndex], TextureID: textureId }
+            previous[matIndex] = { ...material, Layers: layers }
+            return previous
+        })
+        didRealtimePreviewRef.current = true
+
+        if (isStandalone) {
+            syncStandaloneMaterials(nextMaterials, hasTexturePatch ? nextTextures ?? undefined : undefined)
+            commitStandaloneTextureDrivenChange(nextMaterials, hasTexturePatch ? nextTextures ?? undefined : null)
+        } else {
+            applyVisualPatch({
+                Textures: hasTexturePatch ? nextTextures ?? undefined : undefined,
+                Materials: denormalizeMaterialsForSave(nextMaterials)
+            })
+        }
+
+        return nextMaterials
+    }
+
     const moveLayer = (fromIndex: number, toIndex: number) => {
         if (selectedMaterialIndex < 0) return
-        const material = localMaterials[selectedMaterialIndex]
+        const material = localMaterialsRef.current[selectedMaterialIndex]
         const layers = [...(material?.Layers || [])]
         if (fromIndex < 0 || toIndex < 0 || fromIndex >= layers.length || toIndex >= layers.length) return
         if (fromIndex === toIndex) return
@@ -527,9 +642,17 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         const [moved] = layers.splice(fromIndex, 1)
         layers.splice(toIndex, 0, moved)
 
-        const newMaterials = [...localMaterials]
-        newMaterials[selectedMaterialIndex] = { ...material, Layers: layers }
-        setLocalMaterials(newMaterials)
+        const newMaterials = applyMaterialsChange((previous) => {
+            if (selectedMaterialIndex < 0 || selectedMaterialIndex >= previous.length) return previous
+            previous[selectedMaterialIndex] = { ...previous[selectedMaterialIndex], Layers: layers }
+            return previous
+        })
+        if (isStandalone) {
+            syncStandaloneMaterials(newMaterials)
+        } else {
+            didRealtimePreviewRef.current = true
+            setMaterials(denormalizeMaterialsForSave(newMaterials))
+        }
 
         if (selectedLayerIndex === fromIndex) {
             setSelectedLayerIndex(toIndex)
@@ -595,6 +718,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const handleAddMaterial = () => {
         // Include a default layer with TextureID 0 so the geoset renders correctly
         const defaultLayer = {
+            __editorLayerId: createEditorId('layer'),
             FilterMode: 0,
             TextureID: 0,
             Alpha: 1,
@@ -605,9 +729,15 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             NoDepthTest: false,
             NoDepthSet: false
         }
-        const newMaterial = { PriorityPlane: 0, RenderMode: 0, Layers: [defaultLayer] }
-        setLocalMaterials([...localMaterials, newMaterial])
-        setSelectedMaterialIndex(localMaterials.length)
+        const newMaterial = { __editorMaterialId: createEditorId('mat'), PriorityPlane: 0, RenderMode: 0, Layers: [defaultLayer] }
+        const nextMaterials = applyMaterialsChange((previous) => [...previous, newMaterial])
+        if (isStandalone) {
+            syncStandaloneMaterials(nextMaterials)
+        } else {
+            didRealtimePreviewRef.current = true
+            setMaterials(denormalizeMaterialsForSave(nextMaterials))
+        }
+        setSelectedMaterialIndex(nextMaterials.length - 1)
         setSelectedLayerIndex(0) // Auto-select the first layer of the new material
 
         // Auto-scroll to the new material after state update
@@ -619,8 +749,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     }
 
     const handleDeleteMaterial = (index: number) => {
-        const newMaterials = localMaterials.filter((_, i) => i !== index)
-        setLocalMaterials(newMaterials)
+        const newMaterials = applyMaterialsChange((previous) => previous.filter((_, i) => i !== index))
 
         // Update geoset MaterialID references - only for geosets that referenced the deleted material
         // Set them to use material 0 (the first remaining material)
@@ -639,8 +768,17 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             });
             // Sync BOTH materials and geosets to the store together to prevent mismatch
             // This ensures the renderer sees consistent data
-            setMaterials(newMaterials);
-            useModelStore.getState().setGeosets(updatedGeosets);
+            if (isStandalone) {
+                syncStandaloneMaterials(newMaterials, modelTexturesRef.current, updatedGeosets)
+            } else {
+                didRealtimePreviewRef.current = true
+                applyVisualPatch({ Materials: denormalizeMaterialsForSave(newMaterials), Geosets: updatedGeosets });
+            }
+        } else if (isStandalone) {
+            syncStandaloneMaterials(newMaterials)
+        } else {
+            didRealtimePreviewRef.current = true
+            setMaterials(denormalizeMaterialsForSave(newMaterials))
         }
 
         if (selectedMaterialIndex === index) {
@@ -655,6 +793,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const handleAddLayer = () => {
         if (selectedMaterialIndex < 0) return
         const newLayer = {
+            __editorLayerId: createEditorId('layer'),
             FilterMode: 0,
             TextureID: 0,  // Default to first texture (index 0) instead of -1 (invalid)
             Alpha: 1,
@@ -665,19 +804,51 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             NoDepthTest: false,
             NoDepthSet: false
         }
-        const newMaterials = [...localMaterials]
-        newMaterials[selectedMaterialIndex].Layers = [...(newMaterials[selectedMaterialIndex].Layers || []), newLayer]
-        setLocalMaterials(newMaterials)
+        const newMaterials = applyMaterialsChange((previous) => {
+            if (selectedMaterialIndex < 0 || selectedMaterialIndex >= previous.length) return previous
+            const material = previous[selectedMaterialIndex]
+            previous[selectedMaterialIndex] = {
+                ...material,
+                Layers: [...(material?.Layers || []), newLayer]
+            }
+            return previous
+        })
+        if (isStandalone) {
+            syncStandaloneMaterials(newMaterials)
+        } else {
+            didRealtimePreviewRef.current = true
+            setMaterials(denormalizeMaterialsForSave(newMaterials))
+        }
         setSelectedLayerIndex(newMaterials[selectedMaterialIndex].Layers.length - 1)
     }
 
     const handleDeleteLayer = (index: number) => {
         if (selectedMaterialIndex < 0) return
-        const newMaterials = [...localMaterials]
-        newMaterials[selectedMaterialIndex].Layers = newMaterials[selectedMaterialIndex].Layers.filter((_: any, i: number) => i !== index)
-        setLocalMaterials(newMaterials)
-        if (selectedLayerIndex === index) setSelectedLayerIndex(-1)
-        else if (selectedLayerIndex > index) setSelectedLayerIndex(selectedLayerIndex - 1)
+        const newMaterials = applyMaterialsChange((previous) => {
+            if (selectedMaterialIndex < 0 || selectedMaterialIndex >= previous.length) return previous
+            const material = previous[selectedMaterialIndex]
+            previous[selectedMaterialIndex] = {
+                ...material,
+                Layers: (material?.Layers || []).filter((_: any, i: number) => i !== index)
+            }
+            return previous
+        })
+        if (isStandalone) {
+            syncStandaloneMaterials(newMaterials)
+        } else {
+            didRealtimePreviewRef.current = true
+            setMaterials(denormalizeMaterialsForSave(newMaterials))
+        }
+        const remainingLayers = newMaterials[selectedMaterialIndex]?.Layers || []
+        if (remainingLayers.length === 0) {
+            setSelectedLayerIndex(-1)
+            return
+        }
+        if (selectedLayerIndex === index) {
+            setSelectedLayerIndex(Math.min(index, remainingLayers.length - 1))
+        } else if (selectedLayerIndex > index) {
+            setSelectedLayerIndex(selectedLayerIndex - 1)
+        }
     }
 
     // Keyframe Logic
@@ -722,7 +893,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         const activeMaterialIndex = selectedMaterialIndexRef.current
         const activeLayerIndex = selectedLayerIndexRef.current
         if (activeMaterialIndex < 0 || activeLayerIndex < 0) return
-        const layer = localMaterials[selectedMaterialIndex].Layers[selectedLayerIndex]
+        const layer = localMaterials[activeMaterialIndex].Layers[activeLayerIndex]
 
         if (checked) {
             const currentVal = layer[field]
@@ -734,7 +905,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                 LineType: 0,
                 GlobalSeqId: null
             }
-            updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { [field]: animVector })
+            updateLocalLayer(activeMaterialIndex, activeLayerIndex, { [field]: animVector })
         } else {
             const currentVal = layer[field]
             // For TextureID, default to 0; for Alpha, default to 1
@@ -742,7 +913,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             if (currentVal && currentVal.Keys && currentVal.Keys.length > 0) {
                 staticVal = currentVal.Keys[0].Vector[0]
             }
-            updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { [field]: staticVal })
+            updateLocalLayer(activeMaterialIndex, activeLayerIndex, { [field]: staticVal })
         }
     }
 
@@ -915,7 +1086,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         }
     }
 
-    const importExternalTexturesAndGetFirstId = async (externalPaths: string[]): Promise<number | null> => {
+    const importExternalTextures = async (externalPaths: string[]): Promise<{ firstTextureId: number; nextTextures?: any[] } | null> => {
         if (externalPaths.length === 0) return null
 
         const currentTextures = Array.isArray(modelTexturesRef.current) ? [...modelTexturesRef.current] : []
@@ -964,8 +1135,6 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         if (firstTextureId === null) return null
 
         if (addedCount > 0) {
-            didRealtimeTexturePreviewRef.current = true
-            setTextures(currentTextures)
             if (copiedCount > 0) {
                 message.success(`已复制 ${copiedCount} 个贴图到模型目录并应用`)
             } else {
@@ -975,7 +1144,10 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             message.success('已应用已存在的贴图到当前图层')
         }
 
-        return firstTextureId
+        return {
+            firstTextureId,
+            nextTextures: addedCount > 0 ? currentTextures : undefined
+        }
     }
 
     const isPointInsideElement = (x: number, y: number, element: HTMLElement | null): boolean => {
@@ -991,10 +1163,14 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         if (paths.length === 0) return
 
         try {
-            const nextTextureId = await importExternalTexturesAndGetFirstId(paths)
-            if (nextTextureId === null) return
-            const nextMaterials = updateLocalLayer(activeMaterialIndex, activeLayerIndex, { TextureID: nextTextureId }, true)
-            commitStandaloneTextureDrivenChange(nextMaterials, modelTexturesRef.current)
+            const importedResult = await importExternalTextures(paths)
+            if (!importedResult) return
+            applyImportedTextureToLayer(
+                activeMaterialIndex,
+                activeLayerIndex,
+                importedResult.firstTextureId,
+                importedResult.nextTextures
+            )
         } catch (error) {
             console.error('[MaterialEditorModal] External file drop handling failed:', error)
             message.error('贴图导入失败')
@@ -1129,10 +1305,14 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         if (externalTexturePaths.length === 0) return
 
         try {
-            const nextTextureId = await importExternalTexturesAndGetFirstId(externalTexturePaths)
-            if (nextTextureId === null) return
-            const nextMaterials = updateLocalLayer(activeMaterialIndex, activeLayerIndex, { TextureID: nextTextureId }, true)
-            commitStandaloneTextureDrivenChange(nextMaterials, modelTexturesRef.current)
+            const importedResult = await importExternalTextures(externalTexturePaths)
+            if (!importedResult) return
+            applyImportedTextureToLayer(
+                activeMaterialIndex,
+                activeLayerIndex,
+                importedResult.firstTextureId,
+                importedResult.nextTextures
+            )
         } catch (error) {
             console.error('[MaterialEditorModal] Texture drop import failed:', error)
             message.error('贴图导入失败')
@@ -1152,6 +1332,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                     <div ref={materialListRef} style={{ overflowY: 'auto', flex: 1 }}>
                         <List
                             dataSource={localMaterials}
+                            rowKey={(item: any, index?: number) => item?.__editorMaterialId || `material-${index ?? 0}`}
                             renderItem={(_item: any, index: number) => (
                                 <List.Item
                                     data-material-index={index}
@@ -1203,6 +1384,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                         {selectedMaterial ? (
                             <List
                                 dataSource={selectedMaterial.Layers || []}
+                                rowKey={(item: any, index?: number) => item?.__editorLayerId || `layer-${index ?? 0}`}
                                 renderItem={(_item: any, index: number) => (
                                     <List.Item
                                         onClick={() => setSelectedLayerIndex(index)}
@@ -1272,7 +1454,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 
                         {/* Show Layer attributes immediately below if a layer is selected */}
                         {selectedLayer ? (
-                            <>
+                            <React.Fragment key={`${selectedMaterial?.__editorMaterialId || selectedMaterialIndex}-${selectedLayer?.__editorLayerId || selectedLayerIndex}`}>
                                 <div ref={layerTextureDropSurfaceRef} style={{ border: isTextureDropActive ? '1px dashed #5a9cff' : '1px dashed transparent', borderRadius: 6, transition: 'border-color 0.15s ease, box-shadow 0.15s ease', boxShadow: isTextureDropActive ? '0 0 0 1px rgba(90,156,255,0.25) inset' : 'none' }}>
                                     <Card title={<span style={{ color: '#b0b0b0', fontSize: '12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>图层贴图与动画 (Layer Textures & Anims)</span>} size="small" bordered={false} style={{ background: '#333333', border: '1px solid #4a4a4a', marginTop: selectedMaterial ? '0px' : '0px' }} headStyle={{ borderBottom: '1px solid #4a4a4a', minHeight: 'auto', padding: '0 8px' }} bodyStyle={{ padding: '8px' }}>
                                         {/* Row 1: Texture ID (Full Width) */}
@@ -1387,7 +1569,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                                         <Checkbox checked={selectedLayer.NoDepthSet} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { NoDepthSet: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '12px' }}>无深度设置</Checkbox>
                                     </div>
                                 </Card>
-                            </>
+                            </React.Fragment>
                         ) : (
                             <div style={{ marginTop: '20px', color: '#808080', textAlign: 'center', fontSize: '12px' }}>
                                 请在左侧选择一个图层以编辑详细图层属性
@@ -1432,16 +1614,3 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 }
 
 export default MaterialEditorModal
-
-
-
-
-
-
-
-
-
-
-
-
-

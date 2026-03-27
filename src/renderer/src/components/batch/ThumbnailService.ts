@@ -182,6 +182,7 @@ class ThumbnailService {
     private renderRequestGeneration: Map<string, number> = new Map();
     private metadataCallbacks: Map<string, () => void> = new Map();
     private metadataRequestGeneration: Map<string, number> = new Map();
+    private metadataLoading: Map<string, Promise<void>> = new Map();
     private metadataWorkers: Worker[] = [];
     private metadataWorkerBusy: boolean[] = [];
     private metadataWorkerCount = 0;
@@ -898,6 +899,21 @@ class ThumbnailService {
         return modelInfo;
     }
 
+    public primeModelBuffers(entries: Array<{ fullPath: string; buffer: ArrayBuffer; readMs?: number }>) {
+        for (const entry of entries) {
+            if (!entry?.fullPath || !entry.buffer) continue;
+            if (this.modelCache.has(entry.fullPath)) continue;
+            this.markFirstTouch(entry.fullPath);
+            const readMs = Number(entry.readMs ?? 0);
+            this.storeLoadedModelBuffer(
+                entry.fullPath,
+                entry.buffer,
+                readMs,
+                `read=${readMs.toFixed(1)}ms backend=${readMs.toFixed(1)}ms invoke=0.0ms decode=0.0ms bytes=${entry.buffer.byteLength} mode=first-page-bin`
+            );
+        }
+    }
+
     private async loadModelInfoBatch(fullPaths: string[]): Promise<void> {
         const targets = Array.from(new Set(fullPaths.filter((fullPath) => {
             if (!fullPath) return false;
@@ -942,28 +958,7 @@ class ThumbnailService {
                 const fullPath = targets[cursor++];
                 const modelInfo = this.modelCache.get(fullPath);
                 if (!modelInfo) continue;
-
-                let workerIndex = this.getAvailableMetadataWorkerIndex();
-                while (workerIndex === -1) {
-                    await new Promise((resolve) => setTimeout(resolve, 2));
-                    workerIndex = this.getAvailableMetadataWorkerIndex();
-                }
-
-                const generation = this.pageGenerationByPath.get(fullPath) ?? this.activeBatchGeneration;
-                this.metadataWorkerBusy[workerIndex] = true;
-                this.metadataRequestGeneration.set(fullPath, generation);
-
-                await new Promise<void>((resolve) => {
-                    this.metadataCallbacks.set(fullPath, resolve);
-                    this.metadataWorkers[workerIndex].postMessage({
-                        type: 'METADATA',
-                        payload: {
-                            fullPath,
-                            modelBuffer: modelInfo.buffer,
-                            generation
-                        }
-                    });
-                });
+                await this.dispatchMetadataLoad(fullPath, modelInfo);
             }
         };
 
@@ -977,6 +972,63 @@ class ThumbnailService {
             }
         }
         return -1;
+    }
+
+    private dispatchMetadataLoad(fullPath: string, modelInfo: CachedModelInfo): Promise<void> {
+        if (modelInfo.texturePaths.length > 0 && modelInfo.animations.length > 0) {
+            return Promise.resolve();
+        }
+
+        const existing = this.metadataLoading.get(fullPath);
+        if (existing) {
+            return existing;
+        }
+
+        let promise!: Promise<void>;
+        promise = (async () => {
+            let workerIndex = this.getAvailableMetadataWorkerIndex();
+            while (workerIndex === -1) {
+                await new Promise((resolve) => setTimeout(resolve, 2));
+                workerIndex = this.getAvailableMetadataWorkerIndex();
+            }
+
+            const generation = this.pageGenerationByPath.get(fullPath) ?? this.activeBatchGeneration;
+            this.metadataWorkerBusy[workerIndex] = true;
+            this.metadataRequestGeneration.set(fullPath, generation);
+
+            await new Promise<void>((resolve) => {
+                this.metadataCallbacks.set(fullPath, resolve);
+                this.metadataWorkers[workerIndex].postMessage({
+                    type: 'METADATA',
+                    payload: {
+                        fullPath,
+                        modelBuffer: modelInfo.buffer,
+                        generation
+                    }
+                });
+            });
+        })().finally(() => {
+            if (this.metadataLoading.get(fullPath) === promise) {
+                this.metadataLoading.delete(fullPath);
+            }
+        });
+
+        this.metadataLoading.set(fullPath, promise);
+        return promise;
+    }
+
+    private async ensureModelMetadataReady(fullPath: string, modelInfo: CachedModelInfo): Promise<CachedModelInfo> {
+        if (modelInfo.texturePaths.length > 0 && modelInfo.animations.length > 0) {
+            return modelInfo;
+        }
+
+        await this.dispatchMetadataLoad(fullPath, modelInfo);
+        const refreshed = this.modelCache.get(fullPath);
+        if (refreshed && refreshed.texturePaths.length > 0 && refreshed.animations.length > 0) {
+            return refreshed;
+        }
+
+        return this.ensureModelMetadata(fullPath, refreshed ?? modelInfo);
     }
 
     private ensureModelMetadata(fullPath: string, modelInfo: CachedModelInfo): CachedModelInfo {
@@ -1184,12 +1236,24 @@ class ThumbnailService {
 
     private logPerfSummaryOnce(fullPath: string, stage: string) {
         const record = this.getOrCreateModelPerf(fullPath);
+        const totalLoadMs = this.getModelTotalLoadMs(record);
         this.logPerfStageOnce(
             fullPath,
             stage,
             `read=${record.modelReadMs.toFixed(1)}ms parse=${record.modelParseMs.toFixed(1)}ms ` +
             `textures=${record.textureTotalMs.toFixed(1)}ms(resolved=${record.textureResolvedCount}/${record.textureCount}, decode=${record.textureDecodeMs.toFixed(1)}ms, queue=${record.textureQueueWaitMs.toFixed(1)}ms) ` +
-            `prepare=${record.prepareMs.toFixed(1)}ms draw=${record.workerDrawMs.toFixed(1)}ms transfer=${record.workerTransferMs.toFixed(1)}ms total=${record.endToEndMs.toFixed(1)}ms`
+            `prepare=${record.prepareMs.toFixed(1)}ms draw=${record.workerDrawMs.toFixed(1)}ms transfer=${record.workerTransferMs.toFixed(1)}ms total=${record.endToEndMs.toFixed(1)}ms modelLoad=${totalLoadMs.toFixed(1)}ms`
+        );
+    }
+
+    private getModelTotalLoadMs(record: ModelPerfRecord): number {
+        return (
+            record.modelReadMs +
+            record.modelParseMs +
+            record.textureTotalMs +
+            record.prepareMs +
+            record.workerDrawMs +
+            record.workerTransferMs
         );
     }
 
@@ -2021,6 +2085,9 @@ class ThumbnailService {
             if (!isLoaded || !modelInfo || needsTexturePreparation) {
                 modelInfo = await this.loadModelInfo(fullPath);
             }
+            if (modelInfo && (modelInfo.texturePaths.length === 0 || modelInfo.animations.length === 0)) {
+                modelInfo = await this.ensureModelMetadataReady(fullPath, modelInfo);
+            }
             const texturePaths = modelInfo?.texturePaths || [];
             const hasAllCachedTextures = texturePaths.length === 0 || texturePaths.every((path) => !!textureImages[path]);
             const textureSyncKeys = this.getTextureSyncKeys(fullPath, texturePaths);
@@ -2200,6 +2267,7 @@ class ThumbnailService {
             acc.prepareMs += rec.prepareMs;
             acc.workerRenderMs += rec.workerRenderMs;
             acc.endToEndMs += rec.endToEndMs;
+            acc.modelTotalLoadMs += this.getModelTotalLoadMs(rec);
             acc.textureCount += rec.textureCount;
             acc.textureResolvedCount += rec.textureResolvedCount;
             acc.textureSharedHitCount += rec.textureSharedHitCount;
@@ -2218,6 +2286,7 @@ class ThumbnailService {
             prepareMs: 0,
             workerRenderMs: 0,
             endToEndMs: 0,
+            modelTotalLoadMs: 0,
             textureCount: 0,
             textureResolvedCount: 0,
             textureSharedHitCount: 0,
@@ -2237,6 +2306,7 @@ class ThumbnailService {
         const avgPrepareMs = sum.prepareMs / recordCount;
         const avgWorkerRenderMs = sum.workerRenderMs / recordCount;
         const avgEndToEndMs = sum.endToEndMs / recordCount;
+        const avgModelTotalLoadMs = sum.modelTotalLoadMs / recordCount;
 
         const textureLoadBase = Math.max(1e-6, avgModelReadMs + avgModelParseMs + avgTextureMs);
         const textureLoadRatioPct = (avgTextureMs / textureLoadBase) * 100;
@@ -2285,6 +2355,7 @@ class ThumbnailService {
             avgPrepareMs,
             avgWorkerRenderMs,
             avgEndToEndMs,
+            avgModelTotalLoadMs,
             textureLoadRatioPct,
             textureCoveragePct,
             sharedTextureHitRatePct,
@@ -2299,6 +2370,7 @@ class ThumbnailService {
         const records = Array.from(this.modelPerf.values())
             .filter((record) => !activeSet || activeSet.has(record.fullPath))
             .map((record) => {
+                const modelTotalLoadMs = this.getModelTotalLoadMs(record);
                 const stages: Array<{ stage: string; value: number }> = [
                     { stage: 'read', value: record.modelReadMs },
                     { stage: 'parse', value: record.modelParseMs },
@@ -2310,6 +2382,7 @@ class ThumbnailService {
                 const topStage = stages.sort((a, b) => b.value - a.value)[0] || { stage: 'unknown', value: 0 };
                 return {
                     ...record,
+                    modelTotalLoadMs,
                     suspectedBottleneckStage: topStage.stage,
                     suspectedBottleneckMs: topStage.value
                 };
@@ -2325,6 +2398,7 @@ class ThumbnailService {
             acc.workerDrawMs += record.workerDrawMs;
             acc.workerTransferMs += record.workerTransferMs;
             acc.endToEndMs += record.endToEndMs;
+            acc.modelTotalLoadMs += record.modelTotalLoadMs;
             return acc;
         }, {
             modelReadMs: 0,
@@ -2333,7 +2407,8 @@ class ThumbnailService {
             prepareMs: 0,
             workerDrawMs: 0,
             workerTransferMs: 0,
-            endToEndMs: 0
+            endToEndMs: 0,
+            modelTotalLoadMs: 0
         });
 
         return {
@@ -2347,7 +2422,8 @@ class ThumbnailService {
                 avgPrepareMs: summary.prepareMs / count,
                 avgWorkerDrawMs: summary.workerDrawMs / count,
                 avgWorkerTransferMs: summary.workerTransferMs / count,
-                avgEndToEndMs: summary.endToEndMs / count
+                avgEndToEndMs: summary.endToEndMs / count,
+                avgModelTotalLoadMs: summary.modelTotalLoadMs / count
             },
             snapshot: this.getPerfSnapshot(),
             records
@@ -2381,6 +2457,7 @@ class ThumbnailService {
         this.preloadRequestGeneration.clear();
         this.metadataRequestGeneration.clear();
         this.metadataCallbacks.clear();
+        this.metadataLoading.clear();
         this.modelWorkerAffinity.clear();
         this.perfLoggedStages.clear();
         this.workerModelCache.forEach((_, i) => this.workerModelCache[i] = []);

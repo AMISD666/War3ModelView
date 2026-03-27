@@ -240,7 +240,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
         left: 0,
         backgroundColor: '#333',
         boxShadow: '0 2px 5px rgba(0,0,0,0.5)',
-        zIndex: 1000,
+        zIndex: 3200,
         minWidth: '200px',
         padding: '5px 0',
         border: '1px solid #444'
@@ -313,6 +313,8 @@ const MenuBar: React.FC<MenuBarProps> = ({
     return (
         <div ref={menuRef} style={{
             display: 'flex',
+            position: 'relative',
+            zIndex: 3100,
             backgroundColor: '#2b2b2b',
             borderBottom: '1px solid #444',
             height: '30px',
@@ -350,7 +352,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
                                     left: '100%',
                                     backgroundColor: '#333',
                                     boxShadow: '2px 2px 8px rgba(0,0,0,0.6)',
-                                    zIndex: 1100,
+                                    zIndex: 3300,
                                     minWidth: '320px',
                                     maxWidth: '480px',
                                     padding: '5px 0',

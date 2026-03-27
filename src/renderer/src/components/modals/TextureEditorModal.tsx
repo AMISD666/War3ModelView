@@ -27,6 +27,10 @@ import { useRpcClient } from '../../hooks/useRpc'
 import { emit, listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { markStandalonePerf, markStandalonePerfOnce } from '../../utils/standalonePerf'
+import {
+    buildTextureDefinitionSignature,
+    remapMaterialsAfterTextureRemoval
+} from '../../utils/materialTextureRelations'
 
 const { Text } = Typography
 
@@ -148,7 +152,6 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
     const [isExternalTextureDropActive, setIsExternalTextureDropActive] = useState(false)
     // 路径输入框本地缓冲，避免每次 onChange 触发全量重渲染导致输入框失去焦点
     const [pathInputValue, setPathInputValue] = useState('')
-    const pathInputCommittedRef = useRef(false)
 
     const isSaveAsMode = textureSaveMode === 'save_as'
     const textureSaveModeLabel = isSaveAsMode ? '另存为' : '覆盖原贴图'
@@ -244,37 +247,76 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
     // 当选中项切换时，把路径同步到本地输入缓冲
     useEffect(() => {
         setPathInputValue(selectedTexture?.Image ?? '')
-    }, [selectedIndex, selectedTexture?.__editorId])
+    }, [selectedIndex, selectedTexture?.__editorId, selectedTexture?.Image])
+
+    const serializeTexturesForSave = (
+        textures: LocalTexture[],
+        adjustmentsMap: Record<string, TextureAdjustments> = adjustmentsByTextureIdRef.current
+    ): any[] => {
+        return textures.map((texture) => {
+            const { __editorId, ...rest } = texture
+            const raw = adjustmentsMap[__editorId]
+            if (raw) {
+                const normalized = normalizeTextureAdjustments(raw)
+                if (!isDefaultTextureAdjustments(normalized)) {
+                    return {
+                        ...rest,
+                        [TEXTURE_ADJUSTMENTS_KEY]: normalized
+                    }
+                }
+            }
+            if (Object.prototype.hasOwnProperty.call(rest, TEXTURE_ADJUSTMENTS_KEY)) {
+                const cleaned = { ...rest }
+                delete cleaned[TEXTURE_ADJUSTMENTS_KEY]
+                return cleaned
+            }
+            return rest
+        })
+    }
+
+    const syncStandaloneTextures = (
+        textures: LocalTexture[],
+        adjustmentsMap: Record<string, TextureAdjustments> = adjustmentsByTextureIdRef.current
+    ) => {
+        if (!isStandalone) {
+            return
+        }
+        emitCommand('EXECUTE_TEXTURE_ACTION', {
+            action: 'SAVE_TEXTURES',
+            payload: serializeTexturesForSave(textures, adjustmentsMap)
+        })
+    }
+
+    const buildTextureDeletionResult = (
+        removedIndex: number,
+        nextLocalTextures: LocalTexture[]
+    ): { texturesForSave: any[]; materialsForSave: any[] } => {
+        const texturesForSave = serializeTexturesForSave(nextLocalTextures)
+        const activeData = getActiveData()
+        const currentMaterials = Array.isArray(activeData.Materials) ? activeData.Materials : []
+        const materialsForSave = remapMaterialsAfterTextureRemoval(currentMaterials, removedIndex, nextLocalTextures.length)
+
+        return { texturesForSave, materialsForSave }
+    }
+
+    const commitTextureCollection = (
+        nextTextures: LocalTexture[],
+        adjustmentsMap: Record<string, TextureAdjustments> = adjustmentsByTextureIdRef.current
+    ) => {
+        setLocalTextures(nextTextures)
+        const texturesForSave = serializeTexturesForSave(nextTextures, adjustmentsMap)
+        if (isStandalone) {
+            emitCommand('EXECUTE_TEXTURE_ACTION', { action: 'SAVE_TEXTURES', payload: texturesForSave })
+        } else {
+            localStore.setTextures(texturesForSave)
+        }
+    }
 
     const commitPathInput = () => {
         if (selectedIndex < 0) return
         const newPath = pathInputValue
+        if (newPath === (localTextures[selectedIndex]?.Image ?? '')) return
         updateLocalTexture(selectedIndex, { Image: newPath })
-
-        // 独立窗口：路径变更后立即同步到主窗口，触发渲染器更新
-        if (isStandalone) {
-            // setLocalTextures 是异步的，直接基于当前 localTextures 构建保存数据
-            const nextLocalTextures = localTextures.map((texture, i) =>
-                i === selectedIndex ? { ...texture, Image: newPath } : texture
-            )
-            const texturesForSave = nextLocalTextures.map((texture) => {
-                const { __editorId, ...rest } = texture
-                const raw = adjustmentsByTextureIdRef.current[__editorId]
-                if (raw) {
-                    const normalized = normalizeTextureAdjustments(raw)
-                    if (!isDefaultTextureAdjustments(normalized)) {
-                        return { ...rest, [TEXTURE_ADJUSTMENTS_KEY]: normalized }
-                    }
-                }
-                if (Object.prototype.hasOwnProperty.call(rest, TEXTURE_ADJUSTMENTS_KEY)) {
-                    const cleaned = { ...rest }
-                    delete cleaned[TEXTURE_ADJUSTMENTS_KEY]
-                    return cleaned
-                }
-                return rest
-            })
-            emitCommand('EXECUTE_TEXTURE_ACTION', { action: 'SAVE_TEXTURES', payload: texturesForSave })
-        }
     }
 
     useEffect(() => {
@@ -442,13 +484,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         }
 
         if (data && data.Textures && data.Textures.length > 0) {
-            const textureSignature = JSON.stringify(
-                data.Textures.map((texture: any) => ({
-                    image: texture?.Image ?? '',
-                    replaceableId: texture?.ReplaceableId ?? 0,
-                    flags: texture?.Flags ?? 0
-                }))
-            )
+            const textureSignature = buildTextureDefinitionSignature(data.Textures)
             const snapshotChanged = isStandalone && lastStandaloneSnapshotVersionRef.current !== rpcState.snapshotVersion
             const texturesChanged =
                 !isInitializedRef.current ||
@@ -905,27 +941,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         scheduleTextureSave()
     }
 
-    const buildTexturesForSave = (): any[] => {
-        return localTextures.map((texture) => {
-            const { __editorId, ...rest } = texture
-            const raw = adjustmentsByTextureIdRef.current[__editorId]
-            if (raw) {
-                const normalized = normalizeTextureAdjustments(raw)
-                if (!isDefaultTextureAdjustments(normalized)) {
-                    return {
-                        ...rest,
-                        [TEXTURE_ADJUSTMENTS_KEY]: normalized
-                    }
-                }
-            }
-            if (Object.prototype.hasOwnProperty.call(rest, TEXTURE_ADJUSTMENTS_KEY)) {
-                const cleaned = { ...rest }
-                delete cleaned[TEXTURE_ADJUSTMENTS_KEY]
-                return cleaned
-            }
-            return rest
-        })
-    }
+    const buildTexturesForSave = (): any[] => serializeTexturesForSave(localTextures)
 
     const handleCancel = () => {
         if (hasLiveTextureOverrideRef.current) {
@@ -1125,7 +1141,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                     }
                 } catch {
                     if (!loaded) {
-                        setPreviewError('无法加载贴图：MPQ 读取失败')
+                        setPreviewError('无法加载贴图：读取失败')
                     }
                 }
             }
@@ -1223,6 +1239,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         const newTextures = [...localTextures]
         newTextures[index] = { ...newTextures[index], ...updates }
         setLocalTextures(newTextures)
+        syncStandaloneTextures(newTextures)
     }
 
     const handleFlagChange = (flag: number, checked: boolean) => {
@@ -1351,6 +1368,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
             : texture)
 
         setLocalTextures(nextLocalTextures)
+        setPathInputValue(imported.relativePath)
         previewCacheRef.current.clear()
         setBasePreviewImageData(null)
         setPreviewUrl(null)
@@ -1387,6 +1405,72 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         }
 
         message.success(imported.copied ? `已复制并替换贴图: ${imported.relativePath}` : `已替换贴图: ${imported.relativePath}`)
+    }
+
+    const importTexturesFromFiles = async (paths: string[]) => {
+        if (paths.length === 0) return
+
+        const currentLocalTextures = localTexturesRef.current
+        const existingPaths = new Set(
+            currentLocalTextures.map((texture) => normalizeTexturePathKey(texture.Image || ''))
+        )
+
+        const newTextures: LocalTexture[] = []
+        let addedCount = 0
+        let skippedCount = 0
+        let copiedCount = 0
+
+        for (const filePath of paths) {
+            const imported = await ensureTextureInModelDir(filePath, modelPathRef.current)
+            if (!imported) {
+                continue
+            }
+
+            const normalizedRelativePath = normalizeTexturePathKey(imported.relativePath)
+            if (existingPaths.has(normalizedRelativePath)) {
+                skippedCount++
+                continue
+            }
+
+            existingPaths.add(normalizedRelativePath)
+            newTextures.push(ensureLocalTexture({ Image: imported.relativePath, ReplaceableId: 0, Flags: 0 }))
+            addedCount++
+            if (imported.copied) {
+                copiedCount++
+            }
+        }
+
+        if (newTextures.length === 0) {
+            if (skippedCount > 0) {
+                message.warning(`所有选择的纹理都已存在，跳过 ${skippedCount} 个重复`)
+            }
+            return
+        }
+
+        const updatedTextures = [...currentLocalTextures, ...newTextures]
+        commitTextureCollection(updatedTextures)
+        const nextSelectedIndex = updatedTextures.length - 1
+        setSelectedIndex(nextSelectedIndex)
+        setTimeout(() => scrollToItem(nextSelectedIndex), 0)
+
+        if (addedCount === 1 && skippedCount === 0) {
+            message.success(copiedCount > 0
+                ? `已复制并添加纹理: ${newTextures[0].Image}`
+                : `已添加纹理: ${newTextures[0].Image}`)
+            return
+        }
+
+        if (copiedCount > 0) {
+            message.success(`已添加 ${addedCount} 个纹理，其中 ${copiedCount} 个已复制到模型目录${skippedCount > 0 ? `，跳过 ${skippedCount} 个重复` : ''}`)
+            return
+        }
+
+        if (skippedCount > 0) {
+            message.success(`已添加 ${addedCount} 个纹理，跳过 ${skippedCount} 个重复`)
+            return
+        }
+
+        message.success(`已批量添加 ${addedCount} 个纹理`)
     }
 
     useEffect(() => {
@@ -1496,66 +1580,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                                     const paths = Array.isArray(selected) ? selected : (selected ? [selected] : [])
 
                                                     if (paths.length === 0) return
-
-                                                    // Get existing texture paths for duplicate detection
-                                                    const existingPaths = new Set(
-                                                        localTextures.map(t => (t.Image || '').toLowerCase())
-                                                    )
-
-                                                    const newTextures: any[] = []
-                                                    let addedCount = 0
-                                                    let skippedCount = 0
-
-                                                    for (const filePath of paths) {
-                                                        // 计算相对路径
-                                                        let relativePath = filePath
-
-                                                        if (modelPath) {
-                                                            // 获取模型所在目录
-                                                            const modelDir = modelPath.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
-                                                            const selectedNormalized = filePath.replace(/\\/g, '/')
-
-                                                            // 检查是否在模型目录下
-                                                            if (selectedNormalized.toLowerCase().startsWith(modelDir.toLowerCase())) {
-                                                                // 提取相对路径
-                                                                relativePath = selectedNormalized.substring(modelDir.length + 1)
-                                                                // 转换为反斜杠（MDX 标准格式）
-                                                                relativePath = relativePath.replace(/\//g, '\\')
-                                                            } else {
-                                                                // 不在模型目录下，使用文件名
-                                                                relativePath = filePath.replace(/\\/g, '/').split('/').pop() || filePath
-                                                            }
-                                                        }
-
-                                                        // Check for duplicate (same path)
-                                                        if (existingPaths.has(relativePath.toLowerCase())) {
-                                                            skippedCount++
-                                                            continue
-                                                        }
-
-                                                        // Also add to existing set to prevent duplicates within the batch
-                                                        existingPaths.add(relativePath.toLowerCase())
-
-                                                        newTextures.push(ensureLocalTexture({ Image: relativePath, ReplaceableId: 0, Flags: 0 }))
-                                                        addedCount++
-                                                    }
-
-                                                    if (newTextures.length > 0) {
-                                                        const updatedTextures = [...localTextures, ...newTextures]
-                                                        setLocalTextures(updatedTextures)
-                                                        setSelectedIndex(updatedTextures.length - 1) // Select the last added texture
-                                                        setTimeout(() => scrollToItem(updatedTextures.length - 1), 0)
-
-                                                        if (addedCount === 1 && skippedCount === 0) {
-                                                            message.success(`已添加纹理: ${newTextures[0].Image}`)
-                                                        } else if (skippedCount > 0) {
-                                                            message.success(`已添加 ${addedCount} 个纹理，跳过 ${skippedCount} 个重复`)
-                                                        } else {
-                                                            message.success(`已批量添加 ${addedCount} 个纹理`)
-                                                        }
-                                                    } else if (skippedCount > 0) {
-                                                        message.warning(`所有选择的纹理都已存在，跳过 ${skippedCount} 个重复`)
-                                                    }
+                                                    await importTexturesFromFiles(paths)
                                                 } catch (e) {
                                                     console.error('Failed to open file dialog:', e)
                                                 }
@@ -1577,9 +1602,11 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                             icon: <PlusOutlined />,
                                             onClick: () => {
                                                 const newTexture = ensureLocalTexture({ Image: 'Textures\\white.blp', ReplaceableId: 0, Flags: 0 })
-                                                setLocalTextures([...localTextures, newTexture])
-                                                setSelectedIndex(localTextures.length)
-                                                setTimeout(() => scrollToItem(localTextures.length), 0)
+                                                const updatedTextures = [...localTexturesRef.current, newTexture]
+                                                commitTextureCollection(updatedTextures)
+                                                const nextSelectedIndex = updatedTextures.length - 1
+                                                setSelectedIndex(nextSelectedIndex)
+                                                setTimeout(() => scrollToItem(nextSelectedIndex), 0)
                                             }
                                         }
                                     ] as MenuProps['items']
@@ -1622,12 +1649,27 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                                 e.stopPropagation()
                                                 const removedId = localTextures[index]?.__editorId
                                                 const newTextures = localTextures.filter((_, i) => i !== index)
+                                                const { texturesForSave, materialsForSave } = buildTextureDeletionResult(index, newTextures)
                                                 setLocalTextures(newTextures)
                                                 if (removedId) {
                                                     setAdjustmentsByTextureId((prev) => {
                                                         const next = { ...prev }
                                                         delete next[removedId]
                                                         return next
+                                                    })
+                                                }
+                                                if (isStandalone) {
+                                                    emitCommand('EXECUTE_TEXTURE_ACTION', {
+                                                        action: 'SAVE_TEXTURES_WITH_MATERIALS',
+                                                        payload: {
+                                                            textures: texturesForSave,
+                                                            materials: materialsForSave
+                                                        }
+                                                    })
+                                                } else {
+                                                    localStore.setVisualDataPatch({
+                                                        Textures: texturesForSave,
+                                                        Materials: materialsForSave
                                                     })
                                                 }
                                                 if (selectedIndex === index) setSelectedIndex(-1)
@@ -1879,13 +1921,6 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
 }
 
 export default TextureEditorModal
-
-
-
-
-
-
-
 
 
 

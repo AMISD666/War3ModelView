@@ -3,10 +3,27 @@ import { splitVertices, SplitResult } from '../utils/vertexOperations'
 import { useModelStore } from '../store/modelStore'
 import { useSelectionStore } from '../store/selectionStore'
 import { ModelResourceManager } from 'war3-model'
+import { calculateGeosetExtent, calculateModelExtent } from '../utils/geometryUtils'
 
 interface VertexSelection {
     geosetIndex: number
     index: number
+}
+
+const cloneDeep = <T>(value: T): T => {
+    if (ArrayBuffer.isView(value)) {
+        const Ctor = (value as any).constructor
+        return new Ctor(value as any) as T
+    }
+    if (Array.isArray(value)) {
+        return value.map((item) => cloneDeep(item)) as T
+    }
+    if (value && typeof value === 'object') {
+        return Object.fromEntries(
+            Object.entries(value as Record<string, any>).map(([key, nestedValue]) => [key, cloneDeep(nestedValue)])
+        ) as T
+    }
+    return value
 }
 
 /**
@@ -143,21 +160,68 @@ export class SplitVerticesCommand implements Command {
     private syncToStore(): void {
         const modelStore = useModelStore.getState()
         const geosets = this.renderer.model.Geosets
-        const currentPath = modelStore.modelPath || ''
+        const previousHiddenIds = modelStore.hiddenGeosetIds
+        const nextGeosets = geosets.map((g: any) => ({
+            ...g,
+            Vertices: Array.from(g.Vertices),
+            Normals: Array.from(g.Normals),
+            VertexGroup: Array.from(g.VertexGroup),
+            Faces: Array.from(g.Faces),
+            TVertices: g.TVertices.map((tv: Float32Array) => Array.from(tv)),
+            Groups: g.Groups ? JSON.parse(JSON.stringify(g.Groups)) : [[0]]
+        }))
 
-        // Use setModelData - ensure Groups is explicitly included
-        modelStore.setModelData({
-            ...modelStore.modelData!,
-            Geosets: geosets.map((g: any) => ({
-                ...g,
-                Vertices: Array.from(g.Vertices),
-                Normals: Array.from(g.Normals),
-                VertexGroup: Array.from(g.VertexGroup),
-                Faces: Array.from(g.Faces),
-                TVertices: g.TVertices.map((tv: Float32Array) => Array.from(tv)),
-                Groups: g.Groups ? JSON.parse(JSON.stringify(g.Groups)) : [[0]]
-            }))
-        }, currentPath)
+        nextGeosets.forEach((geoset) => calculateGeosetExtent(geoset))
+
+        const sourceGeosetAnims = Array.isArray(modelStore.modelData?.GeosetAnims)
+            ? modelStore.modelData!.GeosetAnims.map((anim: any) => cloneDeep(anim))
+            : []
+        const hasNewGeoset = this.newGeosetIndex >= 0 && this.newGeosetIndex < nextGeosets.length
+        if (hasNewGeoset) {
+            const sourceAnim = sourceGeosetAnims.find((anim: any) => Number(anim?.GeosetId) === this.geosetIndex)
+            if (sourceAnim) {
+                sourceGeosetAnims.push({
+                    ...cloneDeep(sourceAnim),
+                    GeosetId: this.newGeosetIndex
+                })
+            }
+        }
+
+        const nextHiddenIds = hasNewGeoset
+            ? Array.from(new Set(
+                previousHiddenIds
+                    .filter((id) => id >= 0 && id < nextGeosets.length)
+                    .concat(this.newGeosetIndex)
+            )).sort((a, b) => a - b)
+            : previousHiddenIds.filter((id) => id >= 0 && id < nextGeosets.length)
+
+        useModelStore.setState((state) => {
+            if (!state.modelData) {
+                return state
+            }
+
+            const nextModelData: any = {
+                ...state.modelData,
+                Geosets: nextGeosets,
+                GeosetAnims: sourceGeosetAnims
+            }
+
+            if (nextModelData.Model && typeof nextModelData.Model === 'object') {
+                nextModelData.Model = {
+                    ...nextModelData.Model,
+                    NumGeosets: nextGeosets.length,
+                    NumGeosetAnims: sourceGeosetAnims.length
+                }
+            }
+
+            calculateModelExtent(nextModelData)
+
+            return {
+                modelData: nextModelData,
+                hiddenGeosetIds: nextHiddenIds,
+                rendererReloadTrigger: state.rendererReloadTrigger + 1
+            }
+        })
 
         // Force renderer reload to rebuild GPU buffers
         if (this.renderer.reload) {

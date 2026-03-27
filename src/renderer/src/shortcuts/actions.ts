@@ -264,7 +264,9 @@ export const shortcutActions: ShortcutAction[] = [
         label: '切换模型相机视角',
         category: '视图',
         contexts: ['viewer'],
-        defaultBindings: ['0', 'Num0']
+        defaultBindings: ['Tab'],
+        preventDefault: true,
+        stopPropagation: true
     },
 
     // Animation

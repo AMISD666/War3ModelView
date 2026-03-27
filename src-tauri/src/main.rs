@@ -14,6 +14,7 @@ use mpq_manager::MpqManager;
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{ipc::Response, Emitter, Manager, State};
@@ -360,6 +361,240 @@ fn read_local_files_batch_bin(paths: Vec<String>) -> Result<Response, String> {
             payload.extend_from_slice(&data);
         }
     }
+
+    Ok(Response::new(payload))
+}
+
+#[tauri::command]
+fn scan_model_files_first_page_bin(root: String, page_size: usize) -> Result<Response, String> {
+    if root.trim().is_empty() {
+        return Err("root is empty".to_string());
+    }
+
+    let mut dirs: VecDeque<PathBuf> = VecDeque::from([PathBuf::from(root)]);
+    let mut discovered: Vec<String> = Vec::new();
+    let target = page_size.max(1);
+
+    while let Some(dir) = dirs.pop_front() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+
+        let mut child_dirs: Vec<PathBuf> = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                child_dirs.push(path);
+                continue;
+            }
+
+            let ext = path
+                .extension()
+                .and_then(|v| v.to_str())
+                .map(|v| v.to_ascii_lowercase())
+                .unwrap_or_default();
+            if ext == "mdx" || ext == "mdl" {
+                discovered.push(path.to_string_lossy().to_string());
+            }
+        }
+
+        for child in child_dirs {
+            dirs.push_back(child);
+        }
+
+        if discovered.len() >= target {
+            break;
+        }
+    }
+
+    let results: Vec<(String, f64, Vec<u8>)> = discovered
+        .into_par_iter()
+        .map(|path| {
+            let start = std::time::Instant::now();
+            let data = std::fs::read(&path).unwrap_or_default();
+            (path, start.elapsed().as_secs_f64() * 1000.0, data)
+        })
+        .collect();
+
+    let mut payload: Vec<u8> = Vec::new();
+    payload.extend_from_slice(&(results.len() as u32).to_le_bytes());
+
+    for (path, read_ms, data) in results {
+        let path_bytes = path.as_bytes();
+        payload.extend_from_slice(&(path_bytes.len() as u32).to_le_bytes());
+        payload.extend_from_slice(path_bytes);
+        payload.extend_from_slice(&read_ms.to_le_bytes());
+        payload.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        if !data.is_empty() {
+            payload.extend_from_slice(&data);
+        }
+    }
+
+    Ok(Response::new(payload))
+}
+
+#[derive(Serialize, Clone)]
+struct BatchScanPayload {
+    scan_id: String,
+    files: Vec<String>,
+}
+
+fn collect_model_files_streaming(root: String, page_size: usize, on_first_page: impl Fn(Vec<String>) + Send + 'static, on_complete: impl Fn(Vec<String>) + Send + 'static) {
+    std::thread::spawn(move || {
+        let mut discovered: Vec<String> = Vec::new();
+        let mut dirs: VecDeque<PathBuf> = VecDeque::from([PathBuf::from(&root)]);
+        let mut first_page_sent = false;
+
+        while let Some(dir) = dirs.pop_front() {
+            let entries = match std::fs::read_dir(&dir) {
+                Ok(entries) => entries,
+                Err(_) => continue,
+            };
+
+            let mut child_dirs: Vec<PathBuf> = Vec::new();
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    child_dirs.push(path);
+                    continue;
+                }
+
+                let ext = path
+                    .extension()
+                    .and_then(|v| v.to_str())
+                    .map(|v| v.to_ascii_lowercase())
+                    .unwrap_or_default();
+                if ext == "mdx" || ext == "mdl" {
+                    discovered.push(path.to_string_lossy().to_string());
+                    if !first_page_sent && discovered.len() >= page_size {
+                        first_page_sent = true;
+                        on_first_page(discovered[..page_size].to_vec());
+                    }
+                }
+            }
+
+            for child in child_dirs {
+                dirs.push_back(child);
+            }
+        }
+
+        if !first_page_sent && !discovered.is_empty() {
+            on_first_page(discovered.clone());
+        }
+        on_complete(discovered);
+    });
+}
+
+#[tauri::command]
+fn scan_model_files_streamed(
+    app: tauri::AppHandle,
+    root: String,
+    page_size: usize,
+    scan_id: String,
+) -> Result<Response, String> {
+    if root.trim().is_empty() {
+        return Err("root is empty".to_string());
+    }
+
+    let mut dirs: VecDeque<PathBuf> = VecDeque::from([PathBuf::from(&root)]);
+    let mut discovered: Vec<String> = Vec::new();
+    let target = page_size.max(1);
+
+    while let Some(dir) = dirs.pop_front() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+
+        let mut child_dirs: Vec<PathBuf> = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                child_dirs.push(path);
+                continue;
+            }
+
+            let ext = path
+                .extension()
+                .and_then(|v| v.to_str())
+                .map(|v| v.to_ascii_lowercase())
+                .unwrap_or_default();
+            if ext == "mdx" || ext == "mdl" {
+                discovered.push(path.to_string_lossy().to_string());
+            }
+        }
+
+        for child in child_dirs {
+            dirs.push_back(child);
+        }
+
+        if discovered.len() >= target {
+            break;
+        }
+    }
+
+    let first_page = discovered.clone();
+    let first_page_results: Vec<(String, f64, Vec<u8>)> = first_page
+        .into_par_iter()
+        .map(|path| {
+            let start = std::time::Instant::now();
+            let data = std::fs::read(&path).unwrap_or_default();
+            (path, start.elapsed().as_secs_f64() * 1000.0, data)
+        })
+        .collect();
+
+    let mut payload: Vec<u8> = Vec::new();
+    payload.extend_from_slice(&(first_page_results.len() as u32).to_le_bytes());
+    for (path, read_ms, data) in first_page_results {
+        let path_bytes = path.as_bytes();
+        payload.extend_from_slice(&(path_bytes.len() as u32).to_le_bytes());
+        payload.extend_from_slice(path_bytes);
+        payload.extend_from_slice(&read_ms.to_le_bytes());
+        payload.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        if !data.is_empty() {
+            payload.extend_from_slice(&data);
+        }
+    }
+
+    std::thread::spawn(move || {
+        while let Some(dir) = dirs.pop_front() {
+            let entries = match std::fs::read_dir(&dir) {
+                Ok(entries) => entries,
+                Err(_) => continue,
+            };
+
+            let mut child_dirs: Vec<PathBuf> = Vec::new();
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    child_dirs.push(path);
+                    continue;
+                }
+
+                let ext = path
+                    .extension()
+                    .and_then(|v| v.to_str())
+                    .map(|v| v.to_ascii_lowercase())
+                    .unwrap_or_default();
+                if ext == "mdx" || ext == "mdl" {
+                    discovered.push(path.to_string_lossy().to_string());
+                }
+            }
+
+            for child in child_dirs {
+                dirs.push_back(child);
+            }
+        }
+
+        let _ = app.emit(
+            "batch-scan-complete",
+            BatchScanPayload {
+                scan_id,
+                files: discovered,
+            },
+        );
+    });
 
     Ok(Response::new(payload))
 }
@@ -1533,6 +1768,8 @@ fn main() {
             read_local_files_batch,
             read_local_files_batch_detailed,
             read_local_files_batch_bin,
+            scan_model_files_first_page_bin,
+            scan_model_files_streamed,
             load_textures_batch_bin,
             load_textures_batch_thumb_rgba,
             clear_texture_batch_cache,

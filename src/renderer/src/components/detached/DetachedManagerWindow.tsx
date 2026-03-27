@@ -93,12 +93,19 @@ const DetachedManagerWindow: React.FC<DetachedManagerWindowProps> = ({ detachedM
                 (event) => {
                     if (!mounted) return
                     const payload = event.payload
-                    if (!payload || payload.managerType !== managerType || !payload.modelData) return
+                    if (!payload || payload.managerType !== managerType) return
                     suppressNextApplyRef.current = true
-                    setModelData(payload.modelData, payload.modelPath ?? null, {
-                        skipAutoRecalculate: true,
-                        skipModelRebuild: true
-                    })
+                    if (payload.modelData) {
+                        setModelData(payload.modelData, payload.modelPath ?? null, {
+                            skipAutoRecalculate: true,
+                            skipModelRebuild: true
+                        })
+                    } else {
+                        setModelData(null, payload.modelPath ?? null, {
+                            skipAutoRecalculate: true,
+                            skipModelRebuild: true
+                        })
+                    }
                     hasSnapshotRef.current = true
                     setHasSnapshot(true)
                     setIsReady(true)

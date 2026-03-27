@@ -2,6 +2,7 @@ import { Command } from '../utils/CommandManager'
 import { extractNodesFromModel, useModelStore } from '../store/modelStore'
 import { useSelectionStore } from '../store/selectionStore'
 import { ModelData } from '../types/model'
+import { calculateGeosetExtent, calculateModelExtent } from '../utils/geometryUtils'
 
 const MAX_SAFE_GEOSET_VERTICES = 4000
 
@@ -348,7 +349,9 @@ export class AutoSeparateLayersCommand implements Command {
                 __forceFullReload: true
             } as ModelData & { __forceFullReload?: boolean }
 
+            ;(nextModelData.Geosets || []).forEach((geoset: any) => calculateGeosetExtent(geoset))
             updateHeaderCounts(nextModelData, nextModelData.Geosets?.length || 0, nextModelData.GeosetAnims?.length || 0)
+            calculateModelExtent(nextModelData)
 
             const nextNodes = extractNodesFromModel(nextModelData as ModelData)
             const nextGeosetCount = nextModelData.Geosets?.length || 0

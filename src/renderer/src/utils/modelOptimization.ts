@@ -1254,6 +1254,10 @@ const isRotationTrack = (trackPath: string, sampleVec: number[]) => {
     return trackPath.toLowerCase().includes('rotation') && sampleVec.length >= 4;
 };
 
+const isTranslationTrack = (trackPath: string, sampleVec: number[]) => {
+    return trackPath.toLowerCase().includes('translation') && sampleVec.length >= 2;
+};
+
 const interpolateVectors = (a: number[], b: number[], t: number, rotationTrack: boolean): number[] => {
     if (rotationTrack && a.length >= 4 && b.length >= 4) {
         return slerpQuaternion(a, b, t);
@@ -1508,6 +1512,7 @@ const computeAdaptiveTolerance = (
     const sample = keys.length > 0 ? toVector(keys[0]?.Vector) : [0];
     const isRotationTrack = lower.includes('rotation') && sample.length >= 4;
     if (isRotationTrack) return options.rotationToleranceDeg;
+    const translationTrack = isTranslationTrack(trackPath, sample);
 
     const dims = sample.length || 1;
     const mins = new Array<number>(dims).fill(Number.POSITIVE_INFINITY);
@@ -1524,6 +1529,10 @@ const computeAdaptiveTolerance = (
     for (let i = 0; i < dims; i++) {
         const range = Number.isFinite(mins[i]) && Number.isFinite(maxs[i]) ? (maxs[i] - mins[i]) : 0;
         if (range > peakRange) peakRange = range;
+    }
+    if (translationTrack) {
+        const scale = clamp(Math.pow(Math.max(peakRange, 1e-8), 0.25), 0.5, 2.4);
+        return options.vectorTolerance * scale;
     }
     const scale = clamp(Math.sqrt(Math.max(peakRange, 1e-8)), 0.6, 10);
     if (dims <= 1) return options.scalarTolerance * scale;
@@ -1550,6 +1559,10 @@ const computeVelocityTolerance = (
     const rotationTrack = isRotationTrack(trackPath, sample);
     if (rotationTrack) {
         return Math.max((options.rotationToleranceDeg / avgDt) * 2.5, 0.0015);
+    }
+    const translationTrack = isTranslationTrack(trackPath, sample);
+    if (translationTrack) {
+        return Math.max((valueTolerance / avgDt) * 1.5, options.vectorTolerance / Math.max(avgDt * 1.6, 1));
     }
     return Math.max((valueTolerance / avgDt) * 2.5, options.scalarTolerance / avgDt);
 };
@@ -1815,7 +1828,7 @@ const validateSPOSEdge = (
         });
     }
 
-    const maxSamples = 96;
+    const maxSamples = rotationTrack ? 96 : 64;
     if (samples.length > maxSamples) {
         const reduced: Array<{ frame: number; curvature: number }> = [];
         for (let s = 0; s < maxSamples; s++) {
@@ -2038,6 +2051,7 @@ const optimizeAnimVector = (
     const before = keys.length;
     const discrete = isDiscreteTrack(trackPath, keys);
     const rotationTrack = isRotationTrack(trackPath, toVector(keys[0]?.Vector));
+    const translationTrack = isTranslationTrack(trackPath, toVector(keys[0]?.Vector));
     let stage = rotationTrack ? enforceQuaternionContinuity(keys) : keys;
     let adaptiveTol = computeAdaptiveTolerance(stage, trackPath, options);
     let adaptiveVelocityTol = computeVelocityTolerance(stage, trackPath, adaptiveTol, options);
@@ -2056,7 +2070,10 @@ const optimizeAnimVector = (
                 filtered.push(curr);
                 continue;
             }
-            const sameVector = vectorMaxAbsDiff(toVector(prev.Vector), toVector(curr.Vector)) <= Math.max(options.scalarTolerance, adaptiveTol * 0.15);
+            const duplicateTolerance = translationTrack
+                ? Math.max(options.scalarTolerance * 0.5, 1e-5)
+                : Math.max(options.scalarTolerance, adaptiveTol * 0.15);
+            const sameVector = vectorMaxAbsDiff(toVector(prev.Vector), toVector(curr.Vector)) <= duplicateTolerance;
             if (sameVector) continue;
             filtered.push(curr);
         }
@@ -2073,7 +2090,8 @@ const optimizeAnimVector = (
         }
     }
 
-    if (options.optimizeKeyframes && !discrete && stage.length > 2) {
+    const allowLossyOptimization = !translationTrack;
+    if (options.optimizeKeyframes && allowLossyOptimization && !discrete && stage.length > 2) {
         const lineType = getAnimLineType(anim);
         if (lineType !== 0) {
             const forceFrames = new Set<number>(preserveFrames);

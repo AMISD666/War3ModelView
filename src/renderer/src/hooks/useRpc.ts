@@ -1,4 +1,4 @@
-﻿import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { emit, listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { debugLog } from '../utils/debugLog';
@@ -145,6 +145,7 @@ export function useRpcClient<TState, TPatch = never>(
         let isMounted = true;
         let unsubscribeSync: (() => void) | undefined;
         let unsubscribePatch: (() => void) | undefined;
+        let unsubscribeActiveModelChanged: (() => void) | undefined;
         let hasReceivedData = false;
         const bootstrapTimeouts: number[] = [];
         const currentWindow = getCurrentWindow();
@@ -226,12 +227,34 @@ export function useRpcClient<TState, TPatch = never>(
             unsubscribePatch = unlisten;
         }).catch(e => debugLog(`[RPC Client] Patch Listen Error: ${e}`));
 
+        listen<{ activeTabId: string | null; modelPath: string; hasModelData: boolean }>('active-model-changed', (event) => {
+            const payload = event.payload;
+            if (!payload?.hasModelData) {
+                hasReceivedData = false;
+                clearBootstrapTimeouts();
+                pendingSnapshotIdRef.current = null;
+                setState(initialState);
+                return;
+            }
+            hasReceivedData = false;
+            clearBootstrapTimeouts();
+            emitRequest('active-model-changed');
+            scheduleBootstrapRequests();
+        }).then(unlisten => {
+            if (!isMounted) {
+                unlisten();
+                return;
+            }
+            unsubscribeActiveModelChanged = unlisten;
+        }).catch(e => debugLog(`[RPC Client] Active-model listen error: ${e}`));
+
         return () => {
             debugLog(`[RPC Client][${windowId}] Unmounting client hook.`);
             isMounted = false;
             bootstrapRequestedRef.current = false;
             if (unsubscribeSync) unsubscribeSync();
             if (unsubscribePatch) unsubscribePatch();
+            if (unsubscribeActiveModelChanged) unsubscribeActiveModelChanged();
             clearBootstrapTimeouts();
         }
     }, [windowId]);

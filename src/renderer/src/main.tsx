@@ -51,24 +51,6 @@ const installBrowserGuards = () => {
     )
 }
 
-const suppressedPrefixes = ['[Particles]', '[initShaders]', '[ModelRenderer]']
-const originalLog = console.log
-const originalWarn = console.warn
-
-console.log = (...args: any[]) => {
-    if (typeof args[0] === 'string' && suppressedPrefixes.some(p => args[0].startsWith(p))) {
-        return
-    }
-    originalLog(...args)
-}
-
-console.warn = (...args: any[]) => {
-    if (typeof args[0] === 'string' && suppressedPrefixes.some(p => args[0].startsWith(p))) {
-        return
-    }
-    originalWarn(...args)
-}
-
 installBrowserGuards()
 
 const searchParams = new URLSearchParams(window.location.search)

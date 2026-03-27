@@ -5,7 +5,6 @@ import { useSelectionStore } from '../../store/selectionStore';
 const BATCH_MAX_WORKER_FPS = 144;
 const BATCH_MAX_WORKER_FRAME_INTERVAL_MS = 1000 / BATCH_MAX_WORKER_FPS;
 const INITIAL_RENDER_WORKER_LIMIT = 12;
-const TEXTURE_FIRST_FRAME_COUNT = 0;
 
 function pickPreferredAnimation(animations: string[]): string | undefined {
     if (animations.length === 0) return undefined;
@@ -118,7 +117,7 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
 
         if (queue.length > 0 && (queueWasEmpty || hasNewItems)) {
             processedPaths.current = [];
-            textureFirstFramePathsRef.current = new Set(currentQueuePaths.slice(0, TEXTURE_FIRST_FRAME_COUNT));
+            textureFirstFramePathsRef.current = new Set(currentQueuePaths);
         }
 
         lastQueueRef.current = currentQueuePaths;

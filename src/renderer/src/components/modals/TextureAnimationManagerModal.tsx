@@ -44,12 +44,27 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
     const sequences = isStandalone ? rpcState.sequences : modelData?.Sequences || [];
 
     useEffect(() => {
-        if (visible && Array.isArray(sourceAnims)) {
-            setLocalAnims([...sourceAnims]);
-        } else if (visible) {
+        if (!visible) {
             setLocalAnims([]);
+            setSelectedIndex(-1);
+            setEditingBlock(null);
+            return;
         }
-    }, [visible, sourceAnims]);
+
+        if (Array.isArray(sourceAnims)) {
+            setLocalAnims([...sourceAnims]);
+            if (sourceAnims.length === 0) {
+                setSelectedIndex(-1);
+                setEditingBlock(null);
+            } else if (selectedIndex >= sourceAnims.length) {
+                setSelectedIndex(sourceAnims.length - 1);
+            }
+        } else {
+            setLocalAnims([]);
+            setSelectedIndex(-1);
+            setEditingBlock(null);
+        }
+    }, [visible, sourceAnims, selectedIndex]);
 
     const saveToBackend = (action: string, payload: any, newAnims: any[]) => {
         setLocalAnims(newAnims);

@@ -620,6 +620,137 @@ body,
     margin: 2px 0 4px;
 }
 
+.war3-enhanced-color-picker-panel {
+    width: 234px;
+    max-width: 234px;
+    overflow: hidden;
+}
+
+.war3-enhanced-color-picker-panel .ant-color-picker-inner-content {
+    width: 234px;
+}
+
+.war3-enhanced-color-picker-panel .ant-color-picker-input-container {
+    align-items: center;
+}
+
+.war3-enhanced-color-picker-panel .ant-color-picker-format-select.ant-select {
+    width: 52px !important;
+    min-width: 52px;
+    margin-inline-end: 8px;
+}
+
+.war3-enhanced-color-picker-panel .ant-color-picker-format-select.ant-select .ant-select-selector {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    color: #e0e0e0 !important;
+    padding: 0 !important;
+}
+
+.war3-enhanced-color-picker-panel .ant-color-picker-format-select.ant-select .ant-select-selection-item,
+.war3-enhanced-color-picker-panel .ant-color-picker-format-select.ant-select .ant-select-arrow {
+    color: #e0e0e0 !important;
+}
+
+.war3-enhanced-color-picker-panel .ant-color-picker-input {
+    gap: 8px;
+}
+
+.war3-enhanced-color-picker-panel .ant-color-picker-rgb-input,
+.war3-enhanced-color-picker-panel .ant-color-picker-hsb-input {
+    gap: 8px !important;
+}
+
+.war3-enhanced-color-picker-panel .ant-color-picker-hsb-input {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px !important;
+    width: 100%;
+}
+
+.war3-enhanced-color-picker-panel .ant-color-picker-steppers.ant-input-number,
+.war3-enhanced-color-picker-panel .ant-color-picker-hex-input.ant-input-affix-wrapper {
+    background: #2b2b2b !important;
+    border: 1px solid #484848 !important;
+    border-radius: 2px !important;
+    box-shadow: none !important;
+}
+
+.war3-enhanced-color-picker-panel .ant-color-picker-steppers.ant-input-number:hover,
+.war3-enhanced-color-picker-panel .ant-color-picker-hex-input.ant-input-affix-wrapper:hover,
+.war3-enhanced-color-picker-panel .ant-color-picker-steppers.ant-input-number:focus-within,
+.war3-enhanced-color-picker-panel .ant-color-picker-hex-input.ant-input-affix-wrapper:focus-within {
+    border-color: #5a9cff !important;
+}
+
+.war3-enhanced-color-picker-panel .ant-color-picker-steppers .ant-input-number-input,
+.war3-enhanced-color-picker-panel .ant-color-picker-hex-input .ant-input {
+    color: #f0f0f0 !important;
+    background: transparent !important;
+}
+
+.war3-enhanced-color-picker-panel .ant-color-picker-steppers .ant-input-number-handler-wrap {
+    display: none !important;
+}
+
+.war3-enhanced-color-picker-panel .ant-color-picker-steppers .ant-input-number-input-wrap {
+    margin-right: 0 !important;
+}
+
+.war3-enhanced-color-picker-panel .ant-color-picker-hex-input .ant-input-prefix {
+    color: #8f8f8f !important;
+}
+
+.war3-enhanced-color-picker-extra {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid #3f3f3f;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.war3-enhanced-color-picker-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+}
+
+.war3-enhanced-color-picker-label {
+    width: 52px;
+    min-width: 52px;
+    font-size: 12px;
+    line-height: 24px;
+    color: #d0d0d0;
+}
+
+.war3-enhanced-color-picker-field {
+    flex: 0 0 calc(100% - 60px);
+    width: calc(100% - 60px);
+    max-width: calc(100% - 60px);
+    min-width: 0;
+}
+
+.war3-enhanced-color-picker-field>.ant-color-picker-hsb-input,
+.war3-enhanced-color-picker-field>.ant-color-picker-rgb-input,
+.war3-enhanced-color-picker-field>.ant-color-picker-hex-input.ant-input-affix-wrapper {
+    width: 100%;
+    max-width: 100%;
+}
+
+.war3-enhanced-color-picker-field>.ant-color-picker-hsb-input .ant-color-picker-steppers,
+.war3-enhanced-color-picker-field>.ant-color-picker-rgb-input .ant-color-picker-steppers {
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+.war3-enhanced-color-picker-field>.ant-color-picker-hsb-input .ant-color-picker-steppers {
+    width: 100%;
+    max-width: 100%;
+}
+
 .pe1-other-checks {
     margin-top: 4px;
 }

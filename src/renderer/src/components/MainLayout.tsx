@@ -34,7 +34,7 @@ import { showMessage, showConfirm } from '../store/messageStore'
 import { registerShortcutHandler } from '../shortcuts/manager'
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { emit, listen as listenEvent } from '@tauri-apps/api/event'
-import { Button, Modal } from 'antd';
+import { Button } from 'antd';
 import {
     applyTextureAdjustments,
     normalizeTextureAdjustments,
@@ -127,7 +127,7 @@ function prepareModelDataForSave(modelData: any): any {
         data = structuredClone(modelData);
     } catch {
         // Fallback: work with original data (will mutate it)
-        console.warn('[MainLayout] structuredClone not available, modifying original data');
+        // // console.warn('[MainLayout] structuredClone not available, modifying original data');
         data = modelData;
     }
 
@@ -451,7 +451,7 @@ function prepareModelDataForSave(modelData: any): any {
 
     // Fix Sequences - most critical for animation fix
     if (data.Sequences && Array.isArray(data.Sequences)) {
-        // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Sequences.length} sequences`);
+        // // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Sequences.length} sequences`);
         data.Sequences.forEach((seq: any, index: number) => {
             // Always log interval info for debugging
             const intervalType = seq.Interval ? (seq.Interval instanceof Uint32Array ? 'Uint32Array' : Array.isArray(seq.Interval) ? 'Array' : typeof seq.Interval) : 'undefined';
@@ -572,8 +572,13 @@ function prepareModelDataForSave(modelData: any): any {
             if (geoset.Faces && !(geoset.Faces instanceof Uint16Array)) {
                 geoset.Faces = toUint16Array(geoset.Faces);
             }
-            if (geoset.VertexGroup && !(geoset.VertexGroup instanceof Uint8Array)) {
-                geoset.VertexGroup = toUint8ClampedArray(geoset.VertexGroup);
+            if (geoset.VertexGroup) {
+                const vertexGroupValues = Array.from(geoset.VertexGroup as ArrayLike<number>, (value) => Number(value) || 0);
+                const maxGroupIndex = vertexGroupValues.reduce((max, value) => Math.max(max, Math.floor(value)), 0);
+                const TypedArrayCtor = maxGroupIndex > 255 ? Uint16Array : Uint8Array;
+                if (!(geoset.VertexGroup instanceof TypedArrayCtor)) {
+                    geoset.VertexGroup = new TypedArrayCtor(vertexGroupValues);
+                }
             }
             if (geoset.MinimumExtent && !(geoset.MinimumExtent instanceof Float32Array)) {
                 geoset.MinimumExtent = toFloat32Array(geoset.MinimumExtent);
@@ -624,10 +629,13 @@ function prepareModelDataForSave(modelData: any): any {
                     fixed.set(geoset.Normals.subarray(0, expected));
                     geoset.Normals = fixed;
                 }
+            } else if (vertexCount > 0) {
+                geoset.Normals = buildFallbackNormals(vertexCount);
             }
             if (geoset.VertexGroup) {
                 if (geoset.VertexGroup.length !== vertexCount) {
-                    const fixed = new Uint8Array(vertexCount);
+                    const TypedArrayCtor = geoset.VertexGroup instanceof Uint16Array ? Uint16Array : Uint8Array;
+                    const fixed = new TypedArrayCtor(vertexCount);
                     fixed.set(geoset.VertexGroup.subarray(0, vertexCount));
                     geoset.VertexGroup = fixed;
                 }
@@ -652,10 +660,15 @@ function prepareModelDataForSave(modelData: any): any {
                     fixed.set(typed.subarray(0, expected));
                     return fixed;
                 });
+            } else if (vertexCount > 0) {
+                geoset.TVertices = [new Float32Array(vertexCount * 2)];
             }
             if (geoset.Tangents && geoset.Tangents.length % 4 !== 0) {
                 const tangentCount = Math.floor(geoset.Tangents.length / 4);
                 geoset.Tangents = geoset.Tangents.subarray(0, tangentCount * 4);
+            }
+            if (!geoset.Anims) {
+                geoset.Anims = [];
             }
         });
     }
@@ -1235,19 +1248,20 @@ function prepareModelDataForSave(modelData: any): any {
                 geoset.TotalGroupsCount = totalCount;
             }
 
-            // Ensure VertexGroup exists and is Uint8Array (MDX uses uint8)
+            const maxGroupIndex = Math.max(0, geoset.Groups.length - 1);
+            const VertexGroupCtor = maxGroupIndex > 255 ? Uint16Array : Uint8Array;
+
+            // Ensure VertexGroup exists and uses a wide-enough integer type
             if (!geoset.VertexGroup) {
-                geoset.VertexGroup = new Uint8Array(vertexCount);
-            } else if (!(geoset.VertexGroup instanceof Uint8Array)) {
-                geoset.VertexGroup = toUint8ClampedArray(geoset.VertexGroup);
+                geoset.VertexGroup = new VertexGroupCtor(vertexCount);
+            } else if (!(geoset.VertexGroup instanceof VertexGroupCtor)) {
+                geoset.VertexGroup = new VertexGroupCtor(Array.from(geoset.VertexGroup as ArrayLike<number>, (value) => Number(value) || 0));
             }
             if (geoset.VertexGroup.length !== vertexCount) {
-                const fixed = new Uint8Array(vertexCount);
+                const fixed = new VertexGroupCtor(vertexCount);
                 fixed.set(geoset.VertexGroup.subarray(0, vertexCount));
                 geoset.VertexGroup = fixed;
             }
-
-            const maxGroupIndex = geoset.Groups.length - 1;
             if (maxGroupIndex >= 0) {
                 for (let i = 0; i < geoset.VertexGroup.length; i++) {
                     if (geoset.VertexGroup[i] > maxGroupIndex) {
@@ -1325,7 +1339,7 @@ function prepareModelDataForSave(modelData: any): any {
                             modulate: 5,
                             modulate2x: 6
                         };
-                        if (/^d+$/.test(normalized)) {
+                        if (/^\d+$/.test(normalized)) {
                             filterModeValue = Number.parseInt(normalized, 10);
                         } else {
                             filterModeValue = map[normalized] ?? 0;
@@ -1687,6 +1701,47 @@ function stripGeosetData(geosets: any[]) {
         console.error('[MainLayout] Failed to strip geoset data', e);
         return geosets;
     }
+}
+
+const GEOSET_METADATA_MERGE_KEYS = ['MaterialID', 'SelectionGroup'] as const
+
+function extractGeosetMetadataPatch(incomingGeoset: any) {
+    const patch: Record<string, unknown> = {}
+    for (const key of GEOSET_METADATA_MERGE_KEYS) {
+        if (incomingGeoset && incomingGeoset[key] !== undefined) {
+            patch[key] = incomingGeoset[key]
+        }
+    }
+    return patch
+}
+
+function mergeGeosetMetadata(existingGeosets: any[] | undefined, incomingGeosets: any[] | undefined) {
+    if (!Array.isArray(incomingGeosets)) return undefined
+    if (!Array.isArray(existingGeosets) || existingGeosets.length === 0) {
+        return incomingGeosets.map((geoset) => extractGeosetMetadataPatch(geoset))
+    }
+
+    const merged = existingGeosets.map((geoset) => geoset)
+    incomingGeosets.forEach((incomingGeoset, fallbackIndex) => {
+        const targetIndex = Number.isInteger(incomingGeoset?.index) ? incomingGeoset.index : fallbackIndex
+        if (targetIndex < 0 || targetIndex >= merged.length) return
+        const baseGeoset = merged[targetIndex]
+        if (!baseGeoset) return
+        const incomingRest = extractGeosetMetadataPatch(incomingGeoset)
+        merged[targetIndex] = {
+            ...baseGeoset,
+            ...incomingRest
+        }
+    })
+    return merged
+}
+
+function buildFallbackNormals(vertexCount: number): Float32Array {
+    const normals = new Float32Array(vertexCount * 3)
+    for (let i = 2; i < normals.length; i += 3) {
+        normals[i] = 1
+    }
+    return normals
 }
 
 /**
@@ -2111,12 +2166,14 @@ const MainLayout: React.FC = () => {
     // Load initial settings into store (optional, or rely on store defaults)
     // Settings are now handled by rendererStore persistence
     const [viewPreset, setViewPreset] = useState<{ type: string, time: number } | null>(null)
+    const handleSetViewPreset = useCallback((type: string) => {
+        setViewPreset({ type, time: Date.now() });
+    }, []);
     // removed local mpqLoaded
 
 
     const [isLoading, setIsLoading] = useState<boolean>(false)
     const [isDragging, setIsDragging] = useState<boolean>(false) // For drag-drop visual feedback
-    const [closeConfirmVisible, setCloseConfirmVisible] = useState<boolean>(false)
 
     // Editor Panel Resizing
     const [editorWidth, setEditorWidth] = useState<number>(400)
@@ -2132,7 +2189,6 @@ const MainLayout: React.FC = () => {
     const processedHotOpenPaths = useRef<Set<string>>(new Set())
     const isSavingRef = useRef(false); // Track if a save operation is in progress
     const isExternalModelDragRef = useRef(false);
-    const closeConfirmVisibleRef = useRef(false);
     const bypassClosePromptRef = useRef(false);
     const panelStateRef = useRef({
         activeEditor: null as string | null,
@@ -2163,9 +2219,6 @@ const MainLayout: React.FC = () => {
     }, [addTab])
 
     const hasResetStore = useRef(false);
-    useEffect(() => {
-        closeConfirmVisibleRef.current = closeConfirmVisible;
-    }, [closeConfirmVisible]);
 
     useEffect(() => {
         panelStateRef.current = {
@@ -2230,9 +2283,12 @@ const MainLayout: React.FC = () => {
                     return;
                 }
                 const { modelData, isAnyTabDirty } = useModelStore.getState();
-                if (modelData && isAnyTabDirty() && !closeConfirmVisibleRef.current) {
+                if (modelData && isAnyTabDirty()) {
                     event.preventDefault();
-                    setCloseConfirmVisible(true);
+                    const shouldClose = await showConfirm('未保存的修改', '模型已修改，是否保存后再退出？');
+                    if (!shouldClose) return;
+                    bypassClosePromptRef.current = true;
+                    getCurrentWindow().close();
                 }
             });
         })();
@@ -2440,8 +2496,9 @@ const MainLayout: React.FC = () => {
     // RPC Server for Camera Manager (moved here to avoid ReferenceError on handleAddCameraFromView)
     const nodes = useModelStore(state => state.nodes);
     const getCameraManagerState = useCallback(() => {
+        const rawCameras = Array.isArray((modelData as any)?.Cameras) ? (modelData as any).Cameras : [];
         return {
-            cameras: nodes.filter(n => n.type === NodeType.CAMERA),
+            cameras: rawCameras.length > 0 ? rawCameras : nodes.filter(n => n.type === NodeType.CAMERA),
             globalSequences: (modelData?.GlobalSequences || []) as number[]
         };
     }, [nodes, modelData]);
@@ -2449,53 +2506,81 @@ const MainLayout: React.FC = () => {
     const handleCameraCommand = useCallback((command: string, payload: any) => {
         if (command === 'EXECUTE_CAMERA_ACTION') {
             const { action, payload: actionPayload } = payload;
-            const modelStore = useModelStore.getState();
             const historyStore = useHistoryStore.getState();
+            const getCameras = () => {
+                const latestStore = useModelStore.getState();
+                return (Array.isArray((latestStore.modelData as any)?.Cameras)
+                    ? (latestStore.modelData as any).Cameras
+                    : latestStore.nodes.filter((node) => node.type === NodeType.CAMERA)) as any[];
+            };
+            const setCameras = (cameras: any[]) => {
+                useModelStore.getState().setCameras(cameras);
+            };
+            const syncCameraManagerNow = () => {
+                const latestStore = useModelStore.getState();
+                const latestModelData = latestStore.modelData;
+                const latestCameras = Array.isArray((latestModelData as any)?.Cameras)
+                    ? (latestModelData as any).Cameras
+                    : latestStore.nodes.filter((node) => node.type === NodeType.CAMERA);
+                rpcRefs.current.broadcastCameraManager({
+                    cameras: latestCameras,
+                    globalSequences: (latestModelData?.GlobalSequences || []) as number[]
+                });
+            };
 
             if (action === 'ADD') {
-                const currentNodes = modelStore.nodes;
-                const maxObjectId = currentNodes.reduce((max, n) => Math.max(max, n.ObjectId), -1);
-                const newObjectId = maxObjectId + 1;
-                const newNode = { ...actionPayload, ObjectId: newObjectId };
+                const previousCameras = JSON.parse(JSON.stringify(getCameras()));
+                const nextCameras = [...previousCameras, actionPayload];
 
                 historyStore.push({
                     name: 'Add Camera',
-                    undo: () => modelStore.deleteNode(newObjectId),
-                    redo: () => modelStore.addNode(newNode)
+                    undo: () => setCameras(previousCameras),
+                    redo: () => setCameras(nextCameras)
                 });
-                modelStore.addNode(newNode);
+                setCameras(nextCameras);
+                syncCameraManagerNow();
             } else if (action === 'DELETE') {
-                const objectId = actionPayload.objectId;
-                const nodeToDelete = modelStore.nodes.find(n => n.ObjectId === objectId);
-                if (nodeToDelete) {
-                    const nodeClone = JSON.parse(JSON.stringify(nodeToDelete));
+                const cameraIndex = typeof actionPayload.cameraIndex === 'number' ? actionPayload.cameraIndex : -1;
+                const previousCameras = JSON.parse(JSON.stringify(getCameras()));
+                if (cameraIndex >= 0 && cameraIndex < previousCameras.length) {
+                    const nextCameras = previousCameras.filter((_: any, index: number) => index !== cameraIndex);
                     historyStore.push({
                         name: 'Delete Camera',
-                        undo: () => modelStore.addNode(nodeClone),
-                        redo: () => modelStore.deleteNode(objectId)
+                        undo: () => setCameras(previousCameras),
+                        redo: () => setCameras(nextCameras)
                     });
-                    modelStore.deleteNode(objectId);
+                    setCameras(nextCameras);
+                    syncCameraManagerNow();
                 }
             } else if (action === 'UPDATE') {
-                const { objectId, data: updates } = actionPayload;
-                const nodeToUpdate = modelStore.nodes.find(n => n.ObjectId === objectId);
-                if (nodeToUpdate) {
+                const { data: updates } = actionPayload;
+                const cameraIndex = typeof actionPayload.cameraIndex === 'number' ? actionPayload.cameraIndex : -1;
+                const previousCameras = JSON.parse(JSON.stringify(getCameras()));
+                if (cameraIndex >= 0 && cameraIndex < previousCameras.length) {
                     const oldData: any = {};
                     Object.keys(updates).forEach(key => {
-                        oldData[key] = (nodeToUpdate as any)[key];
+                        oldData[key] = previousCameras[cameraIndex]?.[key];
                     });
+                    const nextCameras = previousCameras.map((camera: any, index: number) =>
+                        index === cameraIndex ? { ...camera, ...updates } : camera
+                    );
                     historyStore.push({
                         name: 'Update Camera',
-                        undo: () => modelStore.updateNodes([{ objectId, data: oldData }]),
-                        redo: () => modelStore.updateNodes([{ objectId, data: updates }])
+                        undo: () => setCameras(previousCameras.map((camera: any, index: number) =>
+                            index === cameraIndex ? { ...camera, ...oldData } : camera
+                        )),
+                        redo: () => setCameras(nextCameras)
                     });
-                    modelStore.updateNodes([{ objectId, data: updates }]);
+                    setCameras(nextCameras);
+                    syncCameraManagerNow();
                 }
             } else if (action === 'ADD_FROM_VIEW') {
                 handleAddCameraFromView();
+                setTimeout(syncCameraManagerNow, 0);
             } else if (action === 'VIEW_CAMERA') {
-                const objectId = actionPayload.objectId;
-                const cameraNode = modelStore.nodes.find(n => n.ObjectId === objectId);
+                const cameraIndex = typeof actionPayload.cameraIndex === 'number' ? actionPayload.cameraIndex : -1;
+                const cameraList = getCameras();
+                const cameraNode = cameraIndex >= 0 && cameraIndex < cameraList.length ? cameraList[cameraIndex] : null;
                 if (cameraNode) {
                     handleViewCamera(cameraNode as any);
                 }
@@ -2533,23 +2618,11 @@ const MainLayout: React.FC = () => {
         if (command === 'EXECUTE_GEOSET_ACTION') {
             const { action, payload: actionPayload } = payload;
             if (action === 'SAVE_ALL') {
-                // Property Merging: NEVER replace the entire Geoset array with stripped metadata
-                const _currentGeosets = useModelStore.getState().modelData?.Geosets;
-                if (!_currentGeosets) return;
-
-                const newGeosets = [..._currentGeosets];
-                actionPayload.forEach((strippedGeoset: any) => {
-                    const idx = strippedGeoset.index;
-                    if (newGeosets[idx]) {
-                        newGeosets[idx] = {
-                            ...newGeosets[idx],
-                            MaterialID: strippedGeoset.MaterialID,
-                            SelectionGroup: strippedGeoset.SelectionGroup
-                        };
-                    }
-                });
-
-                useModelStore.getState().setGeosets(newGeosets);
+                const currentGeosets = useModelStore.getState().modelData?.Geosets;
+                const mergedGeosets = mergeGeosetMetadata(currentGeosets, actionPayload);
+                if (mergedGeosets) {
+                    useModelStore.getState().setGeosets(mergedGeosets);
+                }
             }
         }
     }, []);
@@ -2574,6 +2647,14 @@ const MainLayout: React.FC = () => {
             const { action, payload: actionPayload } = payload;
             if (action === 'SAVE_TEXTURES') {
                 useModelStore.getState().setTextures(actionPayload);
+            } else if (action === 'SAVE_TEXTURES_WITH_MATERIALS') {
+                const currentGeosets = useModelStore.getState().modelData?.Geosets
+                const mergedGeosets = mergeGeosetMetadata(currentGeosets, actionPayload?.geosets)
+                useModelStore.getState().setVisualDataPatch({
+                    Textures: actionPayload?.textures || [],
+                    Materials: Array.isArray(actionPayload?.materials) ? actionPayload.materials : undefined,
+                    Geosets: mergedGeosets
+                });
             } else if (action === 'SET_TEXTURE_SAVE_MODE') {
                 useRendererStore.getState().setTextureSaveMode(actionPayload?.mode === 'save_as' ? 'save_as' : 'overwrite');
             } else if (action === 'SET_TEXTURE_SAVE_SUFFIX') {
@@ -2605,6 +2686,7 @@ const MainLayout: React.FC = () => {
         return {
             geosets,
             sequences: _modelData?.Sequences || [],
+            geosetAnims: _modelData?.GeosetAnims || [],
             geosetsAnims: _modelData?.GeosetAnims || [],
             globalSequences: _modelData?.GlobalSequences || [],
         };
@@ -2709,11 +2791,13 @@ const MainLayout: React.FC = () => {
         if (command === 'EXECUTE_MATERIAL_ACTION') {
             const { action, payload: actionPayload } = payload;
             if (action === 'SAVE_MATERIALS') {
-                useModelStore.getState().setTextures(actionPayload.textures);
-                useModelStore.getState().setMaterials(actionPayload.materials);
-                if (actionPayload.geosets) {
-                    useModelStore.getState().setGeosets(actionPayload.geosets);
-                }
+                const currentGeosets = useModelStore.getState().modelData?.Geosets
+                const mergedGeosets = mergeGeosetMetadata(currentGeosets, actionPayload.geosets)
+                useModelStore.getState().setVisualDataPatch({
+                    Textures: actionPayload.textures,
+                    Materials: actionPayload.materials,
+                    Geosets: mergedGeosets
+                });
             } else if (action === 'RELOAD_RENDERER') {
                 useModelStore.getState().triggerRendererReload();
             }
@@ -2743,6 +2827,19 @@ const MainLayout: React.FC = () => {
                     pruneModelKeyframes(modelData, start, end);
                 });
             }
+        } else if (command === 'APPLY_SEQUENCE_CHANGES') {
+            const { modelData, setSequences } = useModelStore.getState();
+            const nextSequences = Array.isArray(payload?.sequences) ? payload.sequences : [];
+            const deletedIntervals = Array.isArray(payload?.deletedIntervals) ? payload.deletedIntervals : [];
+            const shouldPrune = payload?.pruneKeyframes !== false;
+
+            if (modelData && shouldPrune) {
+                deletedIntervals.forEach(([start, end]: [number, number]) => {
+                    pruneModelKeyframes(modelData, start, end);
+                });
+            }
+
+            setSequences(nextSequences);
         }
     }, []);
 
@@ -2893,8 +2990,9 @@ const MainLayout: React.FC = () => {
             const materialManagerState = getMaterialManagerState();
 
             if (cameraManagerVisible) {
+                const rawCameras = Array.isArray((modelData as any)?.Cameras) ? (modelData as any).Cameras : [];
                 broadcastCameraManager({
-                    cameras: state.nodes.filter(n => n.type === NodeType.CAMERA),
+                    cameras: rawCameras.length > 0 ? rawCameras : state.nodes.filter(n => n.type === NodeType.CAMERA),
                     globalSequences: (modelData?.GlobalSequences || []) as number[]
                 });
             }
@@ -2912,6 +3010,7 @@ const MainLayout: React.FC = () => {
                 broadcastGeosetVisibilityTool({
                     geosets: strippedGeosets,
                     sequences: modelData?.Sequences || [],
+                    geosetAnims: modelData?.GeosetAnims || [],
                     geosetsAnims: modelData?.GeosetAnims || [],
                     globalSequences: modelData?.GlobalSequences || [],
                 });
@@ -3989,24 +4088,6 @@ const MainLayout: React.FC = () => {
         };
     }, []);
 
-    const handleCloseWithSave = async () => {
-        setCloseConfirmVisible(false);
-        const ok = modelPath ? await handleSave() : await handleSaveAs();
-        if (!ok) return;
-        bypassClosePromptRef.current = true;
-        getCurrentWindow().close();
-    };
-
-    const handleCloseWithoutSave = () => {
-        setCloseConfirmVisible(false);
-        bypassClosePromptRef.current = true;
-        getCurrentWindow().close();
-    };
-
-    const handleCloseCancel = () => {
-        setCloseConfirmVisible(false);
-    };
-
     // Helper function to get model name from path or default
     const getModelBaseName = (): string => {
         if (modelPath) {
@@ -4159,11 +4240,15 @@ const MainLayout: React.FC = () => {
             // This handles geosets that were emptied by split operations
             const hasVertices = geoset.Vertices && geoset.Vertices.length > 0
             const hasFaces = geoset.Faces && geoset.Faces.length > 0
+            const hasNormals = geoset.Normals && geoset.Normals.length > 0
+            const hasTv = Array.isArray(geoset.TVertices) && geoset.TVertices.length > 0
 
-            const isValid = hasVertices && hasFaces
+            const isValid = hasVertices && hasFaces && hasNormals && hasTv
 
             if (!isValid) {
-                console.warn(`[MainLayout] Removing empty Geoset ${index}: vertices=${geoset.Vertices?.length || 0}, faces=${geoset.Faces?.length || 0}`)
+                console.warn(
+                    `[MainLayout] Removing invalid Geoset ${index}: vertices=${geoset.Vertices?.length || 0}, faces=${geoset.Faces?.length || 0}, normals=${geoset.Normals?.length || 0}, tverts=${geoset.TVertices?.length || 0}`
+                )
             }
             return isValid
         })
@@ -4445,7 +4530,7 @@ const MainLayout: React.FC = () => {
                     } else if (editor === 'geoset') {
                         windowManager.openToolWindow('geosetEditor', '多边形管理器', 640, 480);
                     } else if (editor === 'geosetAnim') {
-                        windowManager.openToolWindow('geosetAnimManager', '多边形动画管理器', 800, 480);
+                        windowManager.openToolWindow('geosetAnimManager', '多边形动画管理器', 800, 560);
                     } else if (editor === 'globalSequence') {
                         windowManager.openToolWindow('globalSequenceManager', '全局动作管理器', 300, 360);
                     } else if (editor === 'modelOptimize') {
@@ -4772,7 +4857,7 @@ const MainLayout: React.FC = () => {
                                 showFPS={mainMode !== 'uv' && showFPS}
                                 playbackSpeed={playbackSpeed}
                                 viewPreset={viewPreset}
-                                onSetViewPreset={(type) => setViewPreset({ type, time: Date.now() })}
+                                onSetViewPreset={handleSetViewPreset}
                                 onAddCameraFromView={handleAddCameraFromView}
                                 />
                             </UVModeLayout>
@@ -4842,18 +4927,6 @@ const MainLayout: React.FC = () => {
                 )}
             </div>
             {/* ModelOptimizeModal relies on native OS window now, no local render needed unless reverting to wrapper mode */}
-            <Modal
-                open={closeConfirmVisible}
-                onCancel={handleCloseCancel}
-                title="未保存的修改"
-                footer={[
-                    <Button key="cancel" onClick={handleCloseCancel}>取消</Button>,
-                    <Button key="discard" onClick={handleCloseWithoutSave}>不保存</Button>,
-                    <Button key="save" type="primary" onClick={handleCloseWithSave}>保存并退出</Button>
-                ]}
-            >
-                <div>模型已修改，是否保存后再退出？</div>
-            </Modal>
             {/* Global Message Layer */}
             <GlobalMessageLayer />
         </div>
@@ -4861,24 +4934,6 @@ const MainLayout: React.FC = () => {
 }
 
 export default MainLayout
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

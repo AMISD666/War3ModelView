@@ -132,8 +132,6 @@ const blurActiveElementIfSafe = (event: KeyboardEvent): void => {
     // e.g. Space on a focused <button> would: (1) trigger our playPause handler,
     // then (2) trigger the button's native click → double-toggle, net no change.
     // Blurring first prevents the native click entirely.
-    if (event.key === 'Tab') return
-
     const el = document.activeElement
     if (!el || el === document.body) return
 

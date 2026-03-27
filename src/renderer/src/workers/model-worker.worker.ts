@@ -37,43 +37,57 @@ function decodeTGA(buffer: ArrayBuffer): ImageData {
     const bytesPerPixel = header.pixelDepth >> 3;
     const outputData = new Uint8ClampedArray(pixelCount * 4);
 
-    const data32 = new Uint32Array(outputData.buffer);
-
     let offset = 0;
     if (header.pixelDepth === 24) {
         for (let i = 0; i < pixelCount; i++) {
-            data32[i] = (255 << 24) | (tgaData[offset + 2] << 16) | (tgaData[offset + 1] << 8) | tgaData[offset];
+            const out = i * 4;
+            outputData[out] = tgaData[offset + 2];
+            outputData[out + 1] = tgaData[offset + 1];
+            outputData[out + 2] = tgaData[offset];
+            outputData[out + 3] = 255;
             offset += bytesPerPixel;
         }
     } else if (header.pixelDepth === 32) {
         for (let i = 0; i < pixelCount; i++) {
-            data32[i] = (tgaData[offset + 3] << 24) | (tgaData[offset + 2] << 16) | (tgaData[offset + 1] << 8) | tgaData[offset];
+            const out = i * 4;
+            outputData[out] = tgaData[offset + 2];
+            outputData[out + 1] = tgaData[offset + 1];
+            outputData[out + 2] = tgaData[offset];
+            outputData[out + 3] = tgaData[offset + 3];
             offset += bytesPerPixel;
         }
     } else if (header.pixelDepth === 8) {
         for (let i = 0; i < pixelCount; i++) {
             const v = tgaData[offset];
-            data32[i] = (255 << 24) | (v << 16) | (v << 8) | v;
+            const out = i * 4;
+            outputData[out] = v;
+            outputData[out + 1] = v;
+            outputData[out + 2] = v;
+            outputData[out + 3] = 255;
             offset += bytesPerPixel;
         }
     } else {
         // Unsupported pixel depth, fill with black or throw error
         for (let i = 0; i < pixelCount; i++) {
-            data32[i] = 0xFF000000; // Opaque black
+            const out = i * 4;
+            outputData[out] = 0;
+            outputData[out + 1] = 0;
+            outputData[out + 2] = 0;
+            outputData[out + 3] = 255;
         }
     }
 
     // Flip vertically if origin is bottom-left
     const isTopLeft = (header.imageDesc & 0x20) !== 0;
     if (!isTopLeft) {
-        const rowPixels = header.width;
-        const tmp = new Uint32Array(rowPixels);
+        const rowBytes = header.width * 4;
+        const tmp = new Uint8ClampedArray(rowBytes);
         for (let y = 0; y < Math.floor(header.height / 2); y++) {
-            const topOff = y * rowPixels;
-            const botOff = (header.height - 1 - y) * rowPixels;
-            tmp.set(data32.subarray(topOff, topOff + rowPixels));
-            data32.copyWithin(topOff, botOff, botOff + rowPixels);
-            data32.set(tmp, botOff);
+            const topOff = y * rowBytes;
+            const botOff = (header.height - 1 - y) * rowBytes;
+            tmp.set(outputData.subarray(topOff, topOff + rowBytes));
+            outputData.copyWithin(topOff, botOff, botOff + rowBytes);
+            outputData.set(tmp, botOff);
         }
     }
 

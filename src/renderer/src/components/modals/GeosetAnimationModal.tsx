@@ -1,6 +1,7 @@
 ﻿import React, { useState, useEffect, useRef } from 'react'
-import { List, Checkbox, Button, Select, ColorPicker, Card, Typography, message } from 'antd'
+import { List, Checkbox, Button, Select, Card, Typography, message } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
+import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker'
 import { DraggableModal } from '../DraggableModal';
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
@@ -78,7 +79,14 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
         const currentAnims = isStandalone ? rpcState.geosetAnims : modelData?.GeosetAnims;
         const currentGeosets = isStandalone ? rpcState.geosets : modelData?.Geosets;
 
-        if (visible && currentAnims) {
+        if (!visible) {
+            setLocalAnims([])
+            setGeosets([])
+            setSelectedIndex(-1)
+            return
+        }
+
+        if (currentAnims) {
             // Deep clone GeosetAnims, converting Float32Array to regular arrays
             const clonedAnims = (currentAnims || []).map((anim: any) => {
                 const cloned: any = { ...anim }
@@ -103,7 +111,13 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
             setGeosets(currentGeosets || [])
             if (selectedIndex < 0 && clonedAnims.length > 0) {
                 setSelectedIndex(0)
+            } else if (clonedAnims.length === 0) {
+                setSelectedIndex(-1)
             }
+        } else {
+            setLocalAnims([])
+            setGeosets(Array.isArray(currentGeosets) ? currentGeosets : [])
+            setSelectedIndex(-1)
         }
     }, [visible, isStandalone ? rpcState.geosetAnims : modelData?.GeosetAnims, isStandalone ? rpcState.geosets : modelData?.Geosets])
 
@@ -160,20 +174,22 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
         if (!isStandalone) onClose()
     }
 
-    const updateLocalAnim = (index: number, updates: any) => {
+    const updateLocalAnim = (index: number, updates: any, persist: boolean = true) => {
         const newAnims = [...localAnims]
         newAnims[index] = { ...newAnims[index], ...updates }
         setLocalAnims(newAnims)
-        saveToBackend(newAnims)
+        if (persist) {
+            saveToBackend(newAnims)
+        }
     }
 
     const selectedAnim = selectedIndex >= 0 ? localAnims[selectedIndex] : null
 
-    const handleColorChange = (color: any) => {
+    const handleColorChange = (color: any, persist: boolean = true) => {
         if (selectedIndex < 0) return
         const rgb = color.toRgb()
         const newColor = [rgb.r / 255, rgb.g / 255, rgb.b / 255]
-        updateLocalAnim(selectedIndex, { Color: newColor })
+        updateLocalAnim(selectedIndex, { Color: newColor }, persist)
     }
 
     const handleAlphaChange = (val: number | null) => {
@@ -425,7 +441,9 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
                                             <span style={{ color: '#b0b0b0', fontSize: '12px' }}>颜色:</span>
                                             <ColorPicker
                                                 value={getColor(selectedAnim)}
-                                                onChange={handleColorChange}
+                                                onChange={(color) => handleColorChange(color, false)}
+                                                onChangeComplete={(color) => handleColorChange(color, true)}
+                                                placement="rightTop"
                                             />
                                         </div>
                                     )}

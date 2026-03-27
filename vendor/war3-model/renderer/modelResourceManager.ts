@@ -44,10 +44,22 @@ export class ModelResourceManager {
     }
 
     public initGL(gl: WebGL2RenderingContext | WebGLRenderingContext) {
+        // WebGLTexture objects are context-bound.
+        // Reusing textures created by a previous context causes:
+        // INVALID_OPERATION: bindTexture: object does not belong to this context
+        if (this.gl && this.gl !== gl) {
+            this.textures.clear();
+            this.buffers.clear();
+        }
         this.gl = gl;
     }
 
     public initDevice(device: GPUDevice) {
+        // GPUTexture/GPUBuffer are device-bound; never reuse across devices.
+        if (this.device && this.device !== device) {
+            this.gpuTextures.clear();
+            this.gpuBuffers.clear();
+        }
         this.device = device;
     }
 
@@ -72,7 +84,8 @@ export class ModelResourceManager {
     private initBuffers(model: Model, softwareSkinning: boolean) {
         if (!this.gl) return;
         const gl = this.gl;
-        const isHD = model.Geosets?.some(it => (it.SkinWeights?.length ?? 0) > 0);
+        const geosets = Array.isArray(model?.Geosets) ? model.Geosets : [];
+        const isHD = geosets.some(it => (it?.SkinWeights?.length ?? 0) > 0);
         const BONE_SENTINEL = 65535; // Sentinel value for "no bone" - must match shader expectation
 
         const buffers: ModelBuffers = {
@@ -86,8 +99,13 @@ export class ModelResourceManager {
             wireframeIndexBuffer: []
         };
 
-        for (let i = 0; i < model.Geosets.length; ++i) {
-            const geoset = model.Geosets[i];
+        if (geosets.length === 0) {
+            this.buffers.set(model, buffers);
+            return;
+        }
+
+        for (let i = 0; i < geosets.length; ++i) {
+            const geoset = geosets[i];
 
             buffers.vertexBuffer[i] = gl.createBuffer()!;
             gl.bindBuffer(gl.ARRAY_BUFFER, buffers.vertexBuffer[i]);
@@ -139,7 +157,8 @@ export class ModelResourceManager {
     private initGPUBuffers(model: Model) {
         if (!this.device) return;
         const device = this.device;
-        const isHD = model.Geosets?.some(it => (it.SkinWeights?.length ?? 0) > 0);
+        const geosets = Array.isArray(model?.Geosets) ? model.Geosets : [];
+        const isHD = geosets.some(it => (it?.SkinWeights?.length ?? 0) > 0);
         const BONE_SENTINEL = 65535; // Sentinel value for "no bone" - must match shader expectation
 
 
@@ -154,8 +173,13 @@ export class ModelResourceManager {
             wireframeIndexBuffer: []
         };
 
-        for (let i = 0; i < model.Geosets.length; ++i) {
-            const geoset = model.Geosets[i];
+        if (geosets.length === 0) {
+            this.gpuBuffers.set(model, buffers);
+            return;
+        }
+
+        for (let i = 0; i < geosets.length; ++i) {
+            const geoset = geosets[i];
 
             buffers.vertexBuffer[i] = device.createBuffer({
                 label: `vertex ${i}`,

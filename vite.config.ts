@@ -5,7 +5,6 @@ import { resolve } from 'path'
 // Vite config for renderer process (used by Tauri)
 export default defineConfig({
     plugins: [react()],
-
     // Same configuration as electron.vite.config.ts renderer section
     resolve: {
         alias: {

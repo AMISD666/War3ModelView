@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { thumbnailEventBus } from './ThumbnailEventBus';
+import { thumbnailAnimationCache } from './thumbnailAnimationCache';
 
 interface AnimatedPreviewProps {
     fullPath?: string;
@@ -26,6 +27,11 @@ export const AnimatedPreview: React.FC<AnimatedPreviewProps> = React.memo(({
     const hostRef = useRef<HTMLDivElement>(null);
     const bitmapRef = useRef<ImageBitmap | null>(null);
     const rafRef = useRef<number | null>(null);
+    const cachedAnimationRafRef = useRef<number | null>(null);
+    const cachedFramesRef = useRef<ImageBitmap[] | null>(null);
+    const cachedFrameIndexRef = useRef<number>(0);
+    const cachedLastFrameTimeRef = useRef<number>(0);
+    const liveBitmapSeenRef = useRef<boolean>(!!bitmap);
     const hasBitmapRef = useRef<boolean>(false);
     const [hasBitmap, setHasBitmap] = useState<boolean>(() => {
         if (bitmap) return true;
@@ -67,6 +73,42 @@ export const AnimatedPreview: React.FC<AnimatedPreviewProps> = React.memo(({
         });
     };
 
+    const stopCachedPlayback = () => {
+        if (typeof window !== 'undefined' && cachedAnimationRafRef.current !== null) {
+            window.cancelAnimationFrame(cachedAnimationRafRef.current);
+        }
+        cachedAnimationRafRef.current = null;
+        cachedLastFrameTimeRef.current = 0;
+    };
+
+    const startCachedPlayback = () => {
+        if (typeof window === 'undefined') return;
+        if (cachedAnimationRafRef.current !== null) return;
+        if (!cachedFramesRef.current || cachedFramesRef.current.length < 2) return;
+
+        const frameIntervalMs = 1000 / 12;
+        const tick = (ts: number) => {
+            if (liveBitmapSeenRef.current) {
+                cachedAnimationRafRef.current = null;
+                return;
+            }
+            const frames = cachedFramesRef.current;
+            if (!frames || frames.length < 2) {
+                cachedAnimationRafRef.current = null;
+                return;
+            }
+            if (!cachedLastFrameTimeRef.current || (ts - cachedLastFrameTimeRef.current) >= frameIntervalMs) {
+                cachedLastFrameTimeRef.current = ts;
+                cachedFrameIndexRef.current = (cachedFrameIndexRef.current + 1) % frames.length;
+                bitmapRef.current = frames[cachedFrameIndexRef.current];
+                scheduleDraw();
+            }
+            cachedAnimationRafRef.current = window.requestAnimationFrame(tick);
+        };
+
+        cachedAnimationRafRef.current = window.requestAnimationFrame(tick);
+    };
+
     const syncCanvasResolution = () => {
         const canvas = canvasRef.current;
         const host = hostRef.current;
@@ -99,12 +141,16 @@ export const AnimatedPreview: React.FC<AnimatedPreviewProps> = React.memo(({
     useEffect(() => {
         bitmapRef.current = bitmap || null;
         if (bitmap) {
+            liveBitmapSeenRef.current = true;
+            stopCachedPlayback();
             if (!hasBitmapRef.current) {
                 hasBitmapRef.current = true;
                 setHasBitmap(true);
             }
             scheduleDraw();
         } else if (!fullPath) {
+            liveBitmapSeenRef.current = false;
+            stopCachedPlayback();
             hasBitmapRef.current = false;
             setHasBitmap(false);
         }
@@ -115,13 +161,31 @@ export const AnimatedPreview: React.FC<AnimatedPreviewProps> = React.memo(({
 
         const existing = thumbnailEventBus.getBitmap(fullPath) || null;
         bitmapRef.current = existing;
+        liveBitmapSeenRef.current = !!existing;
         hasBitmapRef.current = !!existing;
         setHasBitmap(!!existing);
         if (existing) {
             scheduleDraw();
+        } else {
+            void thumbnailAnimationCache.loadClip(fullPath).then((frames) => {
+                if (liveBitmapSeenRef.current || !frames || frames.length === 0) {
+                    return;
+                }
+                cachedFramesRef.current = frames;
+                cachedFrameIndexRef.current = 0;
+                bitmapRef.current = frames[0];
+                if (!hasBitmapRef.current) {
+                    hasBitmapRef.current = true;
+                    setHasBitmap(true);
+                }
+                scheduleDraw();
+                startCachedPlayback();
+            });
         }
 
         const handleUpdate = (nextBitmap: ImageBitmap) => {
+            liveBitmapSeenRef.current = true;
+            stopCachedPlayback();
             bitmapRef.current = nextBitmap;
             if (!hasBitmapRef.current) {
                 hasBitmapRef.current = true;
@@ -132,6 +196,7 @@ export const AnimatedPreview: React.FC<AnimatedPreviewProps> = React.memo(({
 
         thumbnailEventBus.on(`update:${fullPath}`, handleUpdate);
         return () => {
+            stopCachedPlayback();
             thumbnailEventBus.off(`update:${fullPath}`, handleUpdate);
         };
     }, [fullPath]);
@@ -161,6 +226,7 @@ export const AnimatedPreview: React.FC<AnimatedPreviewProps> = React.memo(({
                     rafRef.current = null;
                 }
             }
+            stopCachedPlayback();
         };
     }, [width, height]);
 

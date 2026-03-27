@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { Typography, Select, Button, ColorPicker, Input, Tooltip } from 'antd'
+import { Typography, Select, Button, Input, Tooltip } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
+import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker'
+import { GlobalSequenceSelect } from '../common/GlobalSequenceSelect'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useModelStore } from '../../store/modelStore'
 import { useHistoryStore } from '../../store/historyStore'
@@ -258,6 +260,16 @@ const GeosetAnimPanel: React.FC = () => {
         return [1, 1, 1]
     }, [activeGeosetAnim, currentFrame])
 
+    const alphaGlobalSeqId = useMemo(() => {
+        const raw = activeGeosetAnim?.Alpha?.GlobalSeqId
+        return typeof raw === 'number' ? raw : null
+    }, [activeGeosetAnim])
+
+    const colorGlobalSeqId = useMemo(() => {
+        const raw = activeGeosetAnim?.Color?.GlobalSeqId
+        return typeof raw === 'number' ? raw : null
+    }, [activeGeosetAnim])
+
     const hasExactGeosetAlphaKey = useMemo(() => {
         if (!activeGeosetAnim || !isAnimTrack(activeGeosetAnim.Alpha)) return false
         const frame = Math.round(currentFrame)
@@ -397,6 +409,31 @@ const GeosetAnimPanel: React.FC = () => {
         })
     }, [selectedGeosetIds, commitGeosetAnims])
 
+    const updateTrackGlobalSequence = useCallback((field: 'Alpha' | 'Color', globalSeqId: number | null) => {
+        if (selectedGeosetIds.length === 0) return
+        commitGeosetAnims(`Set Geoset ${field} Global Sequence`, (nextAnims) => {
+            selectedGeosetIds.forEach((geosetId) => {
+                let index = nextAnims.findIndex((anim: any) => Number(anim?.GeosetId) === Number(geosetId))
+                if (index < 0) {
+                    nextAnims.push({ GeosetId: geosetId, Alpha: 1, Color: [1, 1, 1], Flags: 0, UseColor: true, DropShadow: false })
+                    index = nextAnims.length - 1
+                }
+
+                const currentAnim = { ...nextAnims[index] }
+                const currentTrack = currentAnim[field]
+                const defaultVector = field === 'Alpha' ? [1] : [1, 1, 1]
+                const track = isAnimTrack(currentTrack)
+                    ? { ...currentTrack, Keys: field === 'Alpha' ? normalizeScalarKeys(currentTrack.Keys) : normalizeColorKeys(currentTrack.Keys) }
+                    : { LineType: 1, GlobalSeqId: null, Keys: [{ Frame: 0, Vector: defaultVector, InTan: [...defaultVector].map(() => 0), OutTan: [...defaultVector].map(() => 0) }] }
+
+                track.GlobalSeqId = globalSeqId
+                currentAnim[field] = track
+                if (field === 'Color') currentAnim.UseColor = true
+                nextAnims[index] = currentAnim
+            })
+        })
+    }, [selectedGeosetIds, commitGeosetAnims])
+
     const handleSaveKeyframeEditor = useCallback((animVector: any) => {
         if (!editingGeosetField || activeGeosetId === null) return
         commitGeosetAnims(`Edit Geoset ${editingGeosetField}`, (nextAnims) => {
@@ -489,6 +526,14 @@ const GeosetAnimPanel: React.FC = () => {
                         <Button size="small" onClick={handleInsertGeosetAlphaKey} disabled={selectedGeosetIds.length === 0} style={{ background: '#333', borderColor: '#444', color: '#ddd' }}>插帧</Button>
                         <Button size="small" onClick={handleDeleteGeosetAlphaKey} disabled={selectedGeosetIds.length === 0} style={{ background: '#333', borderColor: '#444', color: '#ddd' }}>删帧</Button>
                     </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr', gap: 6, alignItems: 'center', marginTop: 6 }}>
+                        <Text style={{ color: '#666', fontSize: 11 }}>全局序列</Text>
+                        <GlobalSequenceSelect
+                            size="small"
+                            value={alphaGlobalSeqId}
+                            onChange={(value) => updateTrackGlobalSequence('Alpha', value)}
+                        />
+                    </div>
                 </div>
 
                 {/* Color */}
@@ -502,6 +547,14 @@ const GeosetAnimPanel: React.FC = () => {
                         <Input size="small" value={geosetColorText} onChange={(e) => setGeosetColorText(e.target.value)} onBlur={() => applyStaticColor(parseColorToNormalized(geosetColorText, [1, 1, 1]))} style={{ flex: 1, fontSize: 11 }} />
                         <Button size="small" onClick={handleInsertGeosetColorKey} disabled={selectedGeosetIds.length === 0} style={{ background: '#333', borderColor: '#444', color: '#ddd' }}>插帧</Button>
                     </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr', gap: 6, alignItems: 'center', marginTop: 6 }}>
+                        <Text style={{ color: '#666', fontSize: 11 }}>全局序列</Text>
+                        <GlobalSequenceSelect
+                            size="small"
+                            value={colorGlobalSeqId}
+                            onChange={(value) => updateTrackGlobalSequence('Color', value)}
+                        />
+                    </div>
                 </div>
             </div>
 
@@ -510,4 +563,3 @@ const GeosetAnimPanel: React.FC = () => {
 }
 
 export default React.memo(GeosetAnimPanel)
-

@@ -1,5 +1,6 @@
 import { emit, listen } from '@tauri-apps/api/event';
 import { WebviewWindow, getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
+import { LogicalSize } from '@tauri-apps/api/dpi';
 import { markStandalonePerf } from './standalonePerf';
 
 type OpenToolWindowOptions = {
@@ -21,6 +22,14 @@ class WindowManager {
     private hydrationWaiters: Map<string, Array<(hydrated: boolean) => void>> = new Map();
     private hydrationListeners: Map<string, () => void> = new Map();
 
+    private async applyWindowBounds(win: WebviewWindow, width: number, height: number): Promise<void> {
+        const size = new LogicalSize(width, height);
+        await Promise.allSettled([
+            win.setSize(size),
+            win.setMinSize(size),
+        ]);
+    }
+
     private resolveHydration(windowId: string, hydrated: boolean): void {
         this.hydrationState.set(windowId, hydrated);
         const waiters = this.hydrationWaiters.get(windowId);
@@ -39,7 +48,7 @@ class WindowManager {
         }).then((unlisten) => {
             this.hydrationListeners.set(windowId, unlisten);
         }).catch((error) => {
-            console.error(`[WindowManager] Failed to listen for hydration on ${windowId}:`, error);
+            // console.error(`[WindowManager] Failed to listen for hydration on ${windowId}:`, error);
         });
     }
 
@@ -178,6 +187,7 @@ class WindowManager {
                 console.log(`[WindowManager] Recovered existing native window: ${windowId}`);
                 markStandalonePerf('window_recovered', { windowId, title });
                 this.activeWindows.set(windowId, existingWin);
+                await this.applyWindowBounds(existingWin, width, height);
                 this.visibilityCache.set(windowId, await existingWin.isVisible().catch(() => false));
                 this.hydrationState.set(windowId, false);
 
@@ -257,6 +267,7 @@ class WindowManager {
 
         if (win) {
             try {
+                await this.applyWindowBounds(win, width, height);
                 await this.prepareWindowForShow(windowId, hadExistingWindow, resolvedOptions);
 
                 console.log(`[WindowManager] Showing window: ${windowId}`);
@@ -271,6 +282,7 @@ class WindowManager {
                 await this.preloadToolWindow(windowId, title, width, height);
                 const freshWin = this.activeWindows.get(windowId);
                 if (freshWin) {
+                    await this.applyWindowBounds(freshWin, width, height);
                     await this.prepareWindowForShow(windowId, false, resolvedOptions, { reopened: true });
 
                     await freshWin.show();
@@ -301,6 +313,10 @@ class WindowManager {
     }
 
     async isToolWindowVisible(windowId: string): Promise<boolean> {
+        if (this.visibilityCache.has(windowId)) {
+            return this.visibilityCache.get(windowId) === true;
+        }
+
         const win = await this.resolveToolWindow(windowId);
         if (!win) {
             this.visibilityCache.set(windowId, false);
