@@ -23,9 +23,8 @@ const { Text } = Typography
 
 type GizmoMode = 'translate' | 'rotate' | 'scale'
 type GizmoAxis = 'x' | 'y' | 'xy' | null
-
 const CANVAS_W = 280
-const CANVAS_H = 190
+const CANVAS_H = 280
 const BASE_UNIT_SCALE = 120
 const ORIGIN_PADDING_X = 28
 const ORIGIN_PADDING_Y = 24
@@ -34,10 +33,10 @@ const GIZMO_XY_BOX_SIZE = 12
 const GIZMO_XY_BOX_OFFSET = 14
 
 const INTERPOLATION_OPTIONS = [
-    { label: '无插值', value: 0 },
-    { label: '线性', value: 1 },
-    { label: '埃尔米特', value: 2 },
-    { label: '贝塞尔', value: 3 }
+    { label: 'None', value: 0 },
+    { label: 'Linear', value: 1 },
+    { label: 'Hermite', value: 2 },
+    { label: 'Bezier', value: 3 }
 ]
 
 const deepClone = <T,>(value: T): T => {
@@ -179,7 +178,7 @@ type DragHud = {
 
 const TextureAnimGizmoPanel: React.FC = () => {
     const { modelData, modelPath, currentFrame, setTextureAnims } = useModelStore()
-    const { selectedTextureAnimIndex, setSelectedTextureAnimIndex } = useSelectionStore()
+    const { selectedTextureAnimIndex, setSelectedTextureAnimIndex, timelineKeyframeDisplayMode } = useSelectionStore()
     const textureAnims = Array.isArray((modelData as any)?.TextureAnims) ? ((modelData as any).TextureAnims as any[]) : []
     const frame = Math.round(currentFrame)
 
@@ -193,7 +192,11 @@ const TextureAnimGizmoPanel: React.FC = () => {
     const [activeAxis, setActiveAxis] = useState<GizmoAxis>(null)
     const [liveDelta, setLiveDelta] = useState({ x: 0, y: 0 })
     const [dragHud, setDragHud] = useState<DragHud | null>(null)
-    const [panelCollapsed, setPanelCollapsed] = useState(false)
+    const [panelCollapsed, setPanelCollapsed] = useState(true)
+
+    useEffect(() => {
+        setPanelCollapsed(timelineKeyframeDisplayMode !== 'textureAnim')
+    }, [timelineKeyframeDisplayMode])
     const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
     const dragRef = useRef<DragState>({
@@ -990,14 +993,22 @@ const TextureAnimGizmoPanel: React.FC = () => {
                             <Button size="small" type={gizmoMode === 'scale' ? 'primary' : 'default'} icon={<ExpandOutlined />} onClick={() => setGizmoMode('scale')} />
                         </Tooltip>
                     </div>
-                    <Button
-                        size="small"
-                        type="primary"
-                        icon={<CheckOutlined />}
-                        onClick={() => commitForm(form, '写入贴图动画关键帧', gizmoMode)}
-                    >
-                        插帧
-                    </Button>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        <Button
+                            size="small"
+                            onClick={openTrackEditorFromGlobalSeq}
+                            style={{ fontSize: 11, color: '#1890ff', borderColor: '#1890ff', background: 'transparent' }}
+                        >
+                            动画编辑
+                        </Button>
+                        <Button
+                            size="small"
+                            onClick={() => commitForm(form, '写入贴图动画关键帧', gizmoMode)}
+                            style={{ background: '#333', borderColor: '#444', color: '#ddd' }}
+                        >
+                            K帧
+                        </Button>
+                    </div>
                 </div>
 
                 {/* Canvas Area */}
@@ -1052,31 +1063,21 @@ const TextureAnimGizmoPanel: React.FC = () => {
                     <InputNumber size="small" value={inputY} onChange={onChangeInputY} disabled={gizmoMode === 'rotate'} style={{ width: '100%' }} />
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '50px 1fr', gap: 8, alignItems: 'center' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '50px 1fr 50px 120px', gap: 8, alignItems: 'center' }}>
                     <Text style={{ color: '#888', fontSize: 11 }}>全局序列</Text>
                     <GlobalSequenceSelect
                         size="small"
                         style={{ width: '100%' }}
-                        value={activeTrackMeta.globalSeqId}
+                        value={activeTrackMeta.globalSeqId === -1 ? null : activeTrackMeta.globalSeqId}
                         onChange={(value) => updateTrackMeta({ GlobalSeqId: value ?? -1 })}
                     />
                     <Text style={{ color: '#888', fontSize: 11 }}>插值类型</Text>
-                    <div style={{ display: 'flex', gap: 4 }}>
-                        <Select
-                            size="small"
-                            style={{ flex: 1 }}
-                            value={activeTrackMeta.interpolationType}
-                            options={INTERPOLATION_OPTIONS}
-                            onChange={(value) => updateTrackMeta({ InterpolationType: Number(value) })}
-                        />
-                        <Button
-                            size="small"
-                            onClick={openTrackEditorFromGlobalSeq}
-                            style={{ background: '#333', borderColor: '#444', color: '#ddd', fontSize: 11 }}
-                        >
-                            TXT
-                        </Button>
-                    </div>
+                    <Select
+                        size="small"
+                        value={activeTrackMeta.interpolationType}
+                        options={INTERPOLATION_OPTIONS}
+                        onChange={(value) => updateTrackMeta({ InterpolationType: Number(value) })}
+                    />
                 </div>
             </div>
         </RightFloatingPanelShell>

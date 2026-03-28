@@ -96,7 +96,8 @@ type MaterialManagerRpcState = {
 }
 
 type MaterialManagerPatch = {
-    pickedGeosetIndex: number | null
+    pickedGeosetIndex?: number | null
+    selectedMaterialIndex?: number | null
 }
 
 const mergeStandalonePerfEntries = (
@@ -1960,6 +1961,7 @@ const MainLayout: React.FC = () => {
             snapshotVersion: cache.snapshotVersion,
             snapshot: cache.snapshot,
             pickedGeosetIndex: useSelectionStore.getState().pickedGeosetIndex ?? null,
+            selectedMaterialIndex: useSelectionStore.getState().selectedMaterialIndex ?? null,
         }
     }, [])
     const clearStandalonePerfEntries = useCallback(() => {
@@ -3094,35 +3096,44 @@ const MainLayout: React.FC = () => {
         });
 
         let prevPickedGeosetIndex = useSelectionStore.getState().pickedGeosetIndex;
+        let prevSelectedMaterialIndex = useSelectionStore.getState().selectedMaterialIndex;
         const unsubscribeSelection = useSelectionStore.subscribe((selectionState) => {
-            if (selectionState.pickedGeosetIndex !== prevPickedGeosetIndex) {
+            const geosetChanged = selectionState.pickedGeosetIndex !== prevPickedGeosetIndex;
+            const materialChanged = selectionState.selectedMaterialIndex !== prevSelectedMaterialIndex;
+
+            if (geosetChanged || materialChanged) {
                 prevPickedGeosetIndex = selectionState.pickedGeosetIndex;
+                prevSelectedMaterialIndex = selectionState.selectedMaterialIndex;
 
                 const liveModelState = useModelStore.getState();
                 const modelData = liveModelState.modelData;
                 const pickedGeosetIndex = selectionState.pickedGeosetIndex;
+                const selectedMaterialIndex = selectionState.selectedMaterialIndex;
                 const strippedGeosets = stripGeosetData(modelData?.Geosets);
 
-                rpcRefs.current.broadcastGeosetEditor({
-                    geosets: strippedGeosets,
-                    materialsCount: modelData?.Materials?.length || 0,
-                    selectedIndex: pickedGeosetIndex ?? liveModelState.selectedGeosetIndex ?? 0,
-                    pickedGeosetIndex,
-                });
+                if (geosetChanged) {
+                    rpcRefs.current.broadcastGeosetEditor({
+                        geosets: strippedGeosets,
+                        materialsCount: modelData?.Materials?.length || 0,
+                        selectedIndex: pickedGeosetIndex ?? liveModelState.selectedGeosetIndex ?? 0,
+                        pickedGeosetIndex,
+                    });
 
-                rpcRefs.current.broadcastTextureManagerPatch({
-                    pickedGeosetIndex,
-                });
+                    rpcRefs.current.broadcastTextureManagerPatch({
+                        pickedGeosetIndex,
+                    });
+
+                    rpcRefs.current.broadcastGeosetAnimManager({
+                        geosets: strippedGeosets.map(g => ({ index: (g as any).index })),
+                        geosetAnims: modelData?.GeosetAnims || [],
+                        globalSequences: modelData?.GlobalSequences || [],
+                        pickedGeosetIndex,
+                    });
+                }
 
                 rpcRefs.current.broadcastMaterialManagerPatch({
-                    pickedGeosetIndex,
-                });
-
-                rpcRefs.current.broadcastGeosetAnimManager({
-                    geosets: strippedGeosets.map(g => ({ index: (g as any).index })),
-                    geosetAnims: modelData?.GeosetAnims || [],
-                    globalSequences: modelData?.GlobalSequences || [],
-                    pickedGeosetIndex,
+                    ...(geosetChanged && { pickedGeosetIndex }),
+                    ...(materialChanged && { selectedMaterialIndex }),
                 });
             }
         });
@@ -4831,7 +4842,18 @@ const MainLayout: React.FC = () => {
                 {/* Center - 3D Viewer or Animation/UV Mode Layout */}
                 <div id="main-viewer-host" style={{ flex: 1, position: 'relative', backgroundColor, minWidth: 0 }}>
                     <Suspense fallback={<div style={{ position: 'absolute', inset: 0, backgroundColor }} />}>
-                        <AnimationModeLayout isActive={mainMode === 'animation'}>
+                        <AnimationModeLayout
+                            isActive={mainMode === 'animation'}
+                            rightPanelAddon={
+                                showGeosetVisibility ? (
+                                    <GeosetVisibilityPanel
+                                        visible={true}
+                                        onClose={() => setShowGeosetVisibility(false)}
+                                        docked
+                                    />
+                                ) : null
+                            }
+                        >
                             <UVModeLayout
 
                                 modelPath={modelPath}
@@ -4865,12 +4887,6 @@ const MainLayout: React.FC = () => {
                             </UVModeLayout>
                         </AnimationModeLayout>
                     </Suspense>
-
-
-                    <GeosetVisibilityPanel
-                        visible={showGeosetVisibility}
-                        onClose={() => setShowGeosetVisibility(false)}
-                    />
 
                     {isLoading && (
                         <div style={{

@@ -12,6 +12,7 @@ import { windowManager } from '../utils/WindowManager';
 interface GeosetVisibilityPanelProps {
     visible: boolean;
     onClose: () => void;
+    docked?: boolean;
 }
 
 const DEFAULT_PANEL_SIZE = { width: 220, height: 300 };
@@ -51,7 +52,7 @@ const getDefaultPanelPosition = (width: number, height: number) => {
     return clampPanelPosition(anchorX, anchorY, width, height);
 };
 
-export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ visible, onClose }) => {
+export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ visible, onClose, docked }) => {
     const pickedGeosetIndex = useSelectionStore((state) => state.pickedGeosetIndex);
     const {
         modelData,
@@ -531,33 +532,42 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
             <div
                 ref={panelRef}
                 style={{
-                    position: 'fixed',
-                    left: position.x,
-                    top: position.y,
-                    width: isMinimized ? 160 : size.width,
-                    height: isMinimized ? 'auto' : size.height,
-                    backgroundColor: 'rgba(30, 30, 30, 0.95)',
-                    border: '1px solid rgba(80, 80, 80, 0.6)',
-                    borderRadius: 4,
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
-                    zIndex: 1000,
-                    userSelect: 'none',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    overflow: 'hidden'
+                    ...(docked ? {
+                        width: '100%',
+                        height: '100%',
+                        flexShrink: 0,
+                        backgroundColor: '#2b2b2b',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        overflow: 'hidden'
+                    } : {
+                        position: 'fixed',
+                        left: position.x,
+                        top: position.y,
+                        width: isMinimized ? 160 : size.width,
+                        height: isMinimized ? 'auto' : size.height,
+                        backgroundColor: 'rgba(30, 30, 30, 0.95)',
+                        border: '1px solid rgba(80, 80, 80, 0.6)',
+                        borderRadius: 4,
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+                        zIndex: 1000,
+                        userSelect: 'none',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        overflow: 'hidden'
+                    })
                 }}
             >
-                {/* Title Bar */}
                 <div
-                    onMouseDown={handleMouseDown}
+                    onMouseDown={docked ? undefined : handleMouseDown}
                     style={{
-                        backgroundColor: 'rgba(40, 40, 40, 0.95)',
-                        padding: '5px 8px',
+                        background: docked ? 'linear-gradient(180deg, #3a3a3a 0%, #242424 100%)' : 'rgba(40, 40, 40, 0.95)',
+                        padding: '6px 12px',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'space-between',
-                        cursor: isDragging ? 'grabbing' : 'grab',
-                        borderBottom: '1px solid rgba(60, 60, 60, 0.8)',
+                        cursor: docked ? 'default' : (isDragging ? 'grabbing' : 'grab'),
+                        borderBottom: '1px solid #111',
                         flexShrink: 0
                     }}
                 >
@@ -619,19 +629,21 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                         )}
                     </div>
                     <div style={{ display: 'flex', gap: 4 }}>
-                        <button
-                            className="panel-control-btn"
-                            onClick={() => setIsMinimized(!isMinimized)}
-                            style={{
-                                background: 'none',
-                                border: 'none',
-                                color: '#aaa',
-                                cursor: 'pointer',
-                                padding: 2
-                            }}
-                        >
-                            <MinusOutlined style={{ fontSize: 11 }} />
-                        </button>
+                        {!docked && (
+                            <button
+                                className="panel-control-btn"
+                                onClick={() => setIsMinimized(!isMinimized)}
+                                style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    color: '#aaa',
+                                    cursor: 'pointer',
+                                    padding: 2
+                                }}
+                            >
+                                <MinusOutlined style={{ fontSize: 11 }} />
+                            </button>
+                        )}
                         <button
                             className="panel-control-btn"
                             onClick={onClose}
@@ -680,10 +692,11 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                                         onClick={(e) => handleItemClick(index, e)}
                                         onContextMenu={(e) => handleContextMenu(e, index)}
                                         style={{
+                                            width: docked ? 'calc(50% - 2px)' : 'auto',
                                             display: 'flex',
                                             alignItems: 'center',
                                             gap: '2px',
-                                            padding: '3px 6px',
+                                            padding: '4px 4px',
                                             cursor: 'pointer',
                                             backgroundColor: isSelected
                                                 ? 'rgba(50, 120, 220, 0.6)'
@@ -756,7 +769,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                 )}
 
                 {/* Resize Handles */}
-                {!isMinimized && (
+                {!isMinimized && !docked && (
                     <>
                         <div
                             className="resize-handle"

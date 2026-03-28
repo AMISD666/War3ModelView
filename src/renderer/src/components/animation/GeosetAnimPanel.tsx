@@ -12,6 +12,13 @@ import RightFloatingPanelShell from './RightFloatingPanelShell'
 
 const { Text } = Typography
 
+const INTERPOLATION_OPTIONS = [
+    { label: 'None', value: 0 },
+    { label: 'Linear', value: 1 },
+    { label: 'Hermite', value: 2 },
+    { label: 'Bezier', value: 3 }
+]
+
 // --- 转换工具函数 ---
 
 const isAnimTrack = (value: any): value is { Keys: any[]; LineType?: number; GlobalSeqId?: number | null } => {
@@ -184,10 +191,12 @@ const normalizedColorToRgbText = (color: [number, number, number]) => {
 const GeosetAnimPanel: React.FC = () => {
     const {
         animationSubMode,
-        pickedGeosetIndex
+        pickedGeosetIndex,
+        timelineKeyframeDisplayMode
     } = useSelectionStore()
 
     const modelData = useModelStore(state => state.modelData)
+    const setHoveredGeosetId = useModelStore(state => state.setHoveredGeosetId)
     const currentFrame = useModelStore(state => state.currentFrame)
     const selectedGeosetIndex = useModelStore(state => state.selectedGeosetIndex)
     const selectedGeosetIndices = useModelStore(state => state.selectedGeosetIndices)
@@ -199,7 +208,11 @@ const GeosetAnimPanel: React.FC = () => {
     const [geosetColorInput, setGeosetColorInput] = useState<[number, number, number]>([1, 1, 1])
     const [geosetColorText, setGeosetColorText] = useState<string>('rgb(255, 255, 255)')
     const [editingGeosetField, setEditingGeosetField] = useState<'Alpha' | 'Color' | null>(null)
-    const [collapsed, setCollapsed] = useState(false)
+    const [collapsed, setCollapsed] = useState(true)
+
+    useEffect(() => {
+        setCollapsed(timelineKeyframeDisplayMode !== 'geosetAnim')
+    }, [timelineKeyframeDisplayMode])
 
     const geosetIds = useMemo(() => {
         const geosets = (modelData as any)?.Geosets
@@ -265,9 +278,19 @@ const GeosetAnimPanel: React.FC = () => {
         return typeof raw === 'number' ? raw : null
     }, [activeGeosetAnim])
 
+    const alphaInterpolationType = useMemo(() => {
+        const raw = activeGeosetAnim?.Alpha?.InterpolationType
+        return typeof raw === 'number' ? raw : 1
+    }, [activeGeosetAnim])
+
     const colorGlobalSeqId = useMemo(() => {
         const raw = activeGeosetAnim?.Color?.GlobalSeqId
         return typeof raw === 'number' ? raw : null
+    }, [activeGeosetAnim])
+
+    const colorInterpolationType = useMemo(() => {
+        const raw = activeGeosetAnim?.Color?.InterpolationType
+        return typeof raw === 'number' ? raw : 1
     }, [activeGeosetAnim])
 
     const hasExactGeosetAlphaKey = useMemo(() => {
@@ -409,9 +432,9 @@ const GeosetAnimPanel: React.FC = () => {
         })
     }, [selectedGeosetIds, commitGeosetAnims])
 
-    const updateTrackGlobalSequence = useCallback((field: 'Alpha' | 'Color', globalSeqId: number | null) => {
+    const updateTrackMeta = useCallback((field: 'Alpha' | 'Color', meta: { GlobalSeqId?: number | null; InterpolationType?: number }) => {
         if (selectedGeosetIds.length === 0) return
-        commitGeosetAnims(`Set Geoset ${field} Global Sequence`, (nextAnims) => {
+        commitGeosetAnims(`Set Geoset ${field} Meta`, (nextAnims) => {
             selectedGeosetIds.forEach((geosetId) => {
                 let index = nextAnims.findIndex((anim: any) => Number(anim?.GeosetId) === Number(geosetId))
                 if (index < 0) {
@@ -426,7 +449,9 @@ const GeosetAnimPanel: React.FC = () => {
                     ? { ...currentTrack, Keys: field === 'Alpha' ? normalizeScalarKeys(currentTrack.Keys) : normalizeColorKeys(currentTrack.Keys) }
                     : { LineType: 1, GlobalSeqId: null, Keys: [{ Frame: 0, Vector: defaultVector, InTan: [...defaultVector].map(() => 0), OutTan: [...defaultVector].map(() => 0) }] }
 
-                track.GlobalSeqId = globalSeqId
+                if (meta.GlobalSeqId !== undefined) track.GlobalSeqId = meta.GlobalSeqId === -1 ? null : meta.GlobalSeqId
+                if (meta.InterpolationType !== undefined) track.InterpolationType = meta.InterpolationType
+                
                 currentAnim[field] = track
                 if (field === 'Color') currentAnim.UseColor = true
                 nextAnims[index] = currentAnim
@@ -503,56 +528,114 @@ const GeosetAnimPanel: React.FC = () => {
                 {/* Geoset Selector */}
                 <div>
                     <Text style={{ color: '#888', fontSize: 11 }}>选择多边形组</Text>
-                    <Select
-                        size="small"
-                        style={{ width: '100%', marginTop: 4 }}
-                        mode="multiple"
-                        maxTagCount={2}
-                        value={selectedGeosetIds}
-                        options={geosetIds.map((id) => ({ label: `Geoset ${id}`, value: id }))}
-                        onChange={(v) => setSelectedGeosetIndices(v as number[])}
-                        placeholder="选择多边形组..."
-                    />
+                    <div style={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        gap: '4px',
+                        marginTop: 6,
+                        maxHeight: 140,
+                        overflowY: 'auto',
+                        paddingRight: 4
+                    }}>
+                        {geosetIds.map((id) => {
+                            const isSelected = selectedGeosetIds.includes(id)
+                            return (
+                                <div
+                                    key={id}
+                                    onMouseEnter={() => setHoveredGeosetId(id)}
+                                    onMouseLeave={() => setHoveredGeosetId(null)}
+                                    onClick={(e) => {
+                                        const isMulti = e.ctrlKey || e.metaKey || e.shiftKey
+                                        if (isMulti) {
+                                            if (isSelected) {
+                                                setSelectedGeosetIndices(selectedGeosetIds.filter(i => i !== id))
+                                            } else {
+                                                setSelectedGeosetIndices([...selectedGeosetIds, id].sort((a,b)=>a-b))
+                                            }
+                                        } else {
+                                            // 单选：如果已经只选中这一项，再点就取消
+                                            if (isSelected && selectedGeosetIds.length === 1) {
+                                                setSelectedGeosetIndices([])
+                                            } else {
+                                                setSelectedGeosetIndices([id])
+                                            }
+                                        }
+                                    }}
+                                    style={{
+                                        width: 'calc(25% - 3px)', // 4 per row
+                                        padding: '4px',
+                                        backgroundColor: isSelected ? 'rgba(50, 120, 220, 0.6)' : 'rgba(100, 100, 100, 0.2)',
+                                        border: isSelected ? '1px solid #4a90e2' : '1px solid #444',
+                                        borderRadius: '4px',
+                                        cursor: 'pointer',
+                                        textAlign: 'center',
+                                        fontSize: 11,
+                                        color: isSelected ? '#fff' : '#aaa',
+                                        userSelect: 'none',
+                                        transition: 'all 0.15s ease'
+                                    }}
+                                    title={`Geoset ${id}`}
+                                >
+                                    {String(id)}
+                                </div>
+                            )
+                        })}
+                    </div>
                 </div>
 
                 {/* Alpha */}
                 <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <Text style={{ color: '#888', fontSize: 11 }}>透明度 {hasExactGeosetAlphaKey && <span style={{ color: '#52c41a' }}>●</span>}</Text>
-                        <Button size="small" type="text" onClick={() => openEditor('Alpha')} disabled={selectedGeosetIds.length !== 1} style={{ fontSize: 10, color: '#1890ff', padding: 0, height: 18 }}>轨道编辑</Button>
                     </div>
                     <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-                        <InputNumber size="small" min={0} max={1} step={0.05} value={geosetAlphaInput} onChange={(v) => { setGeosetAlphaInput(v ?? 1); applyStaticAlpha(v ?? 1) }} style={{ flex: 1 }} />
-                        <Button size="small" onClick={handleInsertGeosetAlphaKey} disabled={selectedGeosetIds.length === 0} style={{ background: '#333', borderColor: '#444', color: '#ddd' }}>插帧</Button>
-                        <Button size="small" onClick={handleDeleteGeosetAlphaKey} disabled={selectedGeosetIds.length === 0} style={{ background: '#333', borderColor: '#444', color: '#ddd' }}>删帧</Button>
+                        <InputNumber size="small" min={0} max={1} step={0.01} precision={2} value={geosetAlphaInput} onChange={(v) => { setGeosetAlphaInput(v ?? 1); applyStaticAlpha(v ?? 1) }} style={{ width: 80 }} />
+                        <div style={{ flex: 1 }} />
+                        <Button size="small" onClick={handleInsertGeosetAlphaKey} disabled={selectedGeosetIds.length === 0} style={{ background: '#333', borderColor: '#444', color: '#ddd' }}>K帧</Button>
+                        <Button size="small" onClick={() => openEditor('Alpha')} disabled={selectedGeosetIds.length !== 1} style={{ fontSize: 11, color: '#1890ff', borderColor: '#1890ff', background: 'transparent' }}>轨道编辑</Button>
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr', gap: 6, alignItems: 'center', marginTop: 6 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '50px 1fr 50px 120px', gap: 6, alignItems: 'center', marginTop: 6 }}>
                         <Text style={{ color: '#666', fontSize: 11 }}>全局序列</Text>
                         <GlobalSequenceSelect
                             size="small"
                             value={alphaGlobalSeqId}
-                            onChange={(value) => updateTrackGlobalSequence('Alpha', value)}
+                            onChange={(value) => updateTrackMeta('Alpha', { GlobalSeqId: value })}
+                        />
+                        <Text style={{ color: '#666', fontSize: 11 }}>插值类型</Text>
+                        <Select
+                            size="small"
+                            value={alphaInterpolationType}
+                            options={INTERPOLATION_OPTIONS}
+                            onChange={(value) => updateTrackMeta('Alpha', { InterpolationType: value })}
                         />
                     </div>
                 </div>
 
                 {/* Color */}
                 <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 12 }}>
                         <Text style={{ color: '#888', fontSize: 11 }}>颜色 {hasExactGeosetColorKey && <span style={{ color: '#52c41a' }}>●</span>}</Text>
-                        <Button size="small" type="text" onClick={() => openEditor('Color')} disabled={selectedGeosetIds.length !== 1} style={{ fontSize: 10, color: '#1890ff', padding: 0, height: 18 }}>轨道编辑</Button>
                     </div>
                     <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
                         <ColorPicker size="small" format="rgb" value={geosetColorText} onChange={(c) => setGeosetColorInput(parseColorToNormalized(c, [1, 1, 1]))} onChangeComplete={(c) => applyStaticColor(parseColorToNormalized(c, [1, 1, 1]))} />
-                        <Input size="small" value={geosetColorText} onChange={(e) => setGeosetColorText(e.target.value)} onBlur={() => applyStaticColor(parseColorToNormalized(geosetColorText, [1, 1, 1]))} style={{ flex: 1, fontSize: 11 }} />
-                        <Button size="small" onClick={handleInsertGeosetColorKey} disabled={selectedGeosetIds.length === 0} style={{ background: '#333', borderColor: '#444', color: '#ddd' }}>插帧</Button>
+                        <Input size="small" value={geosetColorText} onChange={(e) => setGeosetColorText(e.target.value)} onBlur={() => applyStaticColor(parseColorToNormalized(geosetColorText, [1, 1, 1]))} style={{ width: 140, fontSize: 11 }} />
+                        <div style={{ flex: 1 }} />
+                        <Button size="small" onClick={handleInsertGeosetColorKey} disabled={selectedGeosetIds.length === 0} style={{ background: '#333', borderColor: '#444', color: '#ddd' }}>K帧</Button>
+                        <Button size="small" onClick={() => openEditor('Color')} disabled={selectedGeosetIds.length !== 1} style={{ fontSize: 11, color: '#1890ff', borderColor: '#1890ff', background: 'transparent' }}>轨道编辑</Button>
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr', gap: 6, alignItems: 'center', marginTop: 6 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '50px 1fr 50px 120px', gap: 6, alignItems: 'center', marginTop: 6 }}>
                         <Text style={{ color: '#666', fontSize: 11 }}>全局序列</Text>
                         <GlobalSequenceSelect
                             size="small"
                             value={colorGlobalSeqId}
-                            onChange={(value) => updateTrackGlobalSequence('Color', value)}
+                            onChange={(value) => updateTrackMeta('Color', { GlobalSeqId: value })}
+                        />
+                        <Text style={{ color: '#666', fontSize: 11 }}>插值类型</Text>
+                        <Select
+                            size="small"
+                            value={colorInterpolationType}
+                            options={INTERPOLATION_OPTIONS}
+                            onChange={(value) => updateTrackMeta('Color', { InterpolationType: value })}
                         />
                     </div>
                 </div>

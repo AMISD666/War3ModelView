@@ -12,14 +12,15 @@ import MaterialAnimPanel from './MaterialAnimPanel'
 interface AnimationModeLayoutProps {
     isActive: boolean
     children: React.ReactNode
+    rightPanelAddon?: React.ReactNode
 }
 
 const AnimationModeLayout: React.FC<AnimationModeLayoutProps> = ({
     isActive,
-    children
+    children,
+    rightPanelAddon
 }) => {
     const animationSubMode = useSelectionStore((state) => state.animationSubMode)
-    const timelineKeyframeDisplayMode = useSelectionStore((state) => state.timelineKeyframeDisplayMode)
     const isBindingMode = animationSubMode === 'binding'
     const setPlaying = useModelStore((state) => state.setPlaying)
     const [viewport, setViewport] = useState(() => ({
@@ -48,14 +49,16 @@ const AnimationModeLayout: React.FC<AnimationModeLayoutProps> = ({
     const LEFT_PANEL_WIDTH = clamp(Math.round(viewport.width * 0.18), 160, 260)
     const BOTTOM_PANEL_HEIGHT = clamp(Math.round(viewport.height * 0.2), 130, 180)
     const SEQUENCE_PANEL_HEIGHT = clamp(Math.round(viewport.height * 0.55), 170, 250)
+    const RIGHT_PANEL_WIDTH = clamp(Math.round(viewport.width * 0.2), 280, 360)
 
     const actualBottomHeight = isBindingMode ? 0 : BOTTOM_PANEL_HEIGHT
+    const showKeyframePanels = isActive && !isBindingMode && animationSubMode === 'keyframe'
+    const rightAddonWidth = rightPanelAddon ? 200 : 0
+    const actualRightWidth = (showKeyframePanels ? RIGHT_PANEL_WIDTH : 0) + rightAddonWidth
+
     const viewerLeft = isActive ? LEFT_PANEL_WIDTH : 0
+    const viewerRight = actualRightWidth
     const viewerBottom = isActive ? actualBottomHeight + (isBindingMode ? 0 : 4) : 0
-    const showTextureAnimGizmo = isActive && !isBindingMode && animationSubMode === 'keyframe' && timelineKeyframeDisplayMode === 'textureAnim'
-    const showParticleAnimPanel = isActive && !isBindingMode && animationSubMode === 'keyframe' && timelineKeyframeDisplayMode === 'particle'
-    const showGeosetAnimPanel = isActive && !isBindingMode && animationSubMode === 'keyframe' && timelineKeyframeDisplayMode === 'geosetAnim'
-    const showMaterialAnimPanel = isActive && !isBindingMode && animationSubMode === 'keyframe' && timelineKeyframeDisplayMode === 'material'
 
     return (
         <div
@@ -71,7 +74,7 @@ const AnimationModeLayout: React.FC<AnimationModeLayoutProps> = ({
                     position: 'absolute',
                     top: 0,
                     left: viewerLeft,
-                    right: 0,
+                    right: viewerRight,
                     bottom: viewerBottom
                 }}
             >
@@ -115,7 +118,7 @@ const AnimationModeLayout: React.FC<AnimationModeLayoutProps> = ({
                     style={{
                         position: 'absolute',
                         left: LEFT_PANEL_WIDTH,
-                        right: 0,
+                        right: showKeyframePanels ? RIGHT_PANEL_WIDTH : 0,
                         bottom: 0,
                         height: BOTTOM_PANEL_HEIGHT,
                         display: isBindingMode ? 'none' : 'flex',
@@ -127,59 +130,57 @@ const AnimationModeLayout: React.FC<AnimationModeLayoutProps> = ({
                         <TimelinePanel isActive={isActive && !isBindingMode} />
                     </div>
                 </div>
-
-                {showTextureAnimGizmo && (
-                    <div
-                        style={{
-                            position: 'absolute',
-                            right: 10,
-                            bottom: BOTTOM_PANEL_HEIGHT + 10,
-                            zIndex: 6
-                        }}
-                    >
-                        <TextureAnimGizmoPanel />
-                    </div>
-                )}
-
-                {showParticleAnimPanel && (
-                    <div
-                        style={{
-                            position: 'absolute',
-                            right: 10,
-                            bottom: BOTTOM_PANEL_HEIGHT + 10,
-                            zIndex: 6
-                        }}
-                    >
-                        <ParticleAnimKeyframePanel />
-                    </div>
-                )}
-
-                {showGeosetAnimPanel && (
-                    <div
-                        style={{
-                            position: 'absolute',
-                            right: 10,
-                            bottom: BOTTOM_PANEL_HEIGHT + 10,
-                            zIndex: 6
-                        }}
-                    >
-                        <GeosetAnimPanel />
-                    </div>
-                )}
-
-                {showMaterialAnimPanel && (
-                    <div
-                        style={{
-                            position: 'absolute',
-                            right: 10,
-                            bottom: BOTTOM_PANEL_HEIGHT + 10,
-                            zIndex: 6
-                        }}
-                    >
-                        <MaterialAnimPanel />
-                    </div>
-                )}
             </div>
+
+            {/* Left extra column for GeosetVisibilityPanel */}
+            {!!rightPanelAddon && (
+                <div
+                    style={{
+                        position: 'absolute',
+                        top: 0,
+                        right: showKeyframePanels ? RIGHT_PANEL_WIDTH : 0,
+                        width: rightAddonWidth,
+                        bottom: viewerBottom,
+                        backgroundColor: '#2b2b2b',
+                        borderLeft: '1px solid #444',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        zIndex: 9
+                    }}
+                >
+                    {rightPanelAddon}
+                </div>
+            )}
+
+            {/* Main right column for Keyframes */}
+            {showKeyframePanels && (
+                <div
+                    style={{
+                        position: 'absolute',
+                        top: 0,
+                        right: 0,
+                        width: RIGHT_PANEL_WIDTH,
+                        bottom: 0,
+                        backgroundColor: '#2b2b2b',
+                        borderLeft: '1px solid #444',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        padding: '8px 6px',
+                        gap: 8,
+                        overflowY: 'auto',
+                        overflowX: 'hidden',
+                        zIndex: 10,
+                        alignItems: 'stretch'
+                    }}
+                >
+                    <>
+                        <TextureAnimGizmoPanel />
+                        <ParticleAnimKeyframePanel />
+                        <GeosetAnimPanel />
+                        <MaterialAnimPanel />
+                    </>
+                </div>
+            )}
         </div>
     )
 }

@@ -25,17 +25,16 @@ const RightFloatingPanelShell: React.FC<RightFloatingPanelShellProps> = ({
     return (
         <div
             style={{
-                width: 320,
+                width: '100%',
                 background: 'rgba(24, 24, 24, 0.95)',
                 border: '1px solid #3a3a3a',
                 borderRadius: 6,
-                padding: '8px 10px',
                 color: '#ddd',
                 display: 'flex',
                 flexDirection: 'column',
-                gap: collapsed ? 0 : 8,
                 boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
                 pointerEvents: 'auto',
+                overflow: 'hidden',
                 ...style
             }}
         >
@@ -45,13 +44,16 @@ const RightFloatingPanelShell: React.FC<RightFloatingPanelShellProps> = ({
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
-                    minHeight: 24,
+                    minHeight: 32,
+                    padding: '0 10px',
+                    background: 'linear-gradient(90deg, #3a3a3a 0%, #242424 100%)',
+                    borderBottom: collapsed ? 'none' : '1px solid #1f1f1f',
                     userSelect: 'none'
                 }}
             >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ color: '#bfbfbf', fontSize: 13, fontWeight: 500 }}>{title}</span>
-                    {status && <div style={{ fontSize: 12, color: '#888' }}>{status}</div>}
+                    <span style={{ color: '#eaeaea', fontSize: 13, fontWeight: 500 }}>{title}</span>
+                    {status && <div style={{ fontSize: 12, color: '#999' }}>{status}</div>}
                 </div>
 
                 <Tooltip title={collapsed ? '展开面板' : '折叠面板'}>
@@ -72,9 +74,11 @@ const RightFloatingPanelShell: React.FC<RightFloatingPanelShellProps> = ({
             {!collapsed && (
                 <div
                     style={{
+                        padding: '10px',
                         display: 'flex',
                         flexDirection: 'column',
-                        gap: 10,
+                        gap: 8,
+                        background: 'rgba(24, 24, 24, 0.95)',
                         animation: 'fadeIn 0.2s ease-out'
                     }}
                 >

@@ -1,4 +1,4 @@
-﻿import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Button, Typography } from 'antd'
 
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
@@ -18,8 +18,8 @@ const PARTICLE_TRACKS = [
     { label: '变化', propName: 'Variation', fallback: 0, step: 0.1, precision: MAX_DECIMAL_PLACES },
     { label: '纬度', propName: 'Latitude', fallback: 0, step: 0.1, precision: MAX_DECIMAL_PLACES },
     { label: '长', propName: 'Length', fallback: 0, step: 0.1, precision: MAX_DECIMAL_PLACES },
-    { label: '宽', propName: 'Width', fallback: 0, step: 0.1, precision: MAX_DECIMAL_PLACES },
-    { label: '重力', propName: 'Gravity', fallback: 0, step: 0.1, precision: MAX_DECIMAL_PLACES }
+    { label: '重力', propName: 'Gravity', fallback: 0, step: 0.1, precision: MAX_DECIMAL_PLACES },
+    { label: '宽', propName: 'Width', fallback: 0, step: 0.1, precision: MAX_DECIMAL_PLACES }
 ] as const
 
 type ParticleTrackProp = typeof PARTICLE_TRACKS[number]['propName']
@@ -124,10 +124,15 @@ const ParticleAnimKeyframePanel: React.FC = () => {
     const nodes = useModelStore((state) => state.nodes)
     const currentFrame = useModelStore((state) => state.currentFrame)
     const replaceNodes = useModelStore((state) => state.replaceNodes)
-    const { selectedNodeIds } = useSelectionStore()
+    const selectedNodeIds = useSelectionStore((state) => state.selectedNodeIds)
+    const timelineKeyframeDisplayMode = useSelectionStore((state) => state.timelineKeyframeDisplayMode)
 
     const [inputs, setInputs] = useState<Record<ParticleTrackProp, number>>(DEFAULT_INPUTS)
-    const [collapsed, setCollapsed] = useState(false)
+    const [collapsed, setCollapsed] = useState(true)
+
+    useEffect(() => {
+        setCollapsed(timelineKeyframeDisplayMode !== 'particle')
+    }, [timelineKeyframeDisplayMode])
 
     const selectedParticleIds = useMemo(() => {
         const particleIdSet = new Set<number>(
@@ -257,7 +262,6 @@ const ParticleAnimKeyframePanel: React.FC = () => {
             status={`已选 ${selectedParticleIds.length}`}
             collapsed={collapsed}
             onToggleCollapse={() => setCollapsed(!collapsed)}
-            style={{ width: 280 }}
         >
             {selectedParticleIds.length === 0 ? (
                 <div style={{ color: '#777', fontSize: 12, padding: '4px 2px' }}>
@@ -265,12 +269,12 @@ const ParticleAnimKeyframePanel: React.FC = () => {
                 </div>
             ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '8px 10px' }}>
                         {PARTICLE_TRACKS.map((track) => (
-                            <div key={track.propName} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                <Text style={{ color: '#888', fontSize: 11, width: 56, flexShrink: 0 }}>
+                            <div key={track.propName} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                <Text style={{ color: '#888', fontSize: 11, width: 44, flexShrink: 0, textAlign: 'right' }}>
                                     {track.label}
-                                    {exactKeyByProp[track.propName] && <span style={{ color: '#52c41a', marginLeft: 4 }}>●</span>}
+                                    {exactKeyByProp[track.propName] && <span style={{ color: '#52c41a', marginLeft: 2 }}>●</span>}
                                 </Text>
                                 <InputNumber
                                     size="small"
@@ -279,21 +283,20 @@ const ParticleAnimKeyframePanel: React.FC = () => {
                                     step={track.step}
                                     value={inputs[track.propName]}
                                     onChange={(value) => handleInputChange(track.propName, value)}
-                                    style={{ flex: 1 }}
+                                    style={{ flex: 1, minWidth: 0 }}
                                 />
                                 <button
                                     onClick={() => handleInsertSingleKey(track.propName)}
                                     style={{
-                                        padding: '1px 5px',
+                                        padding: '1px 4px',
                                         background: 'transparent',
                                         border: '1px solid #555',
                                         borderRadius: 3,
                                         color: '#aaa',
                                         cursor: 'pointer',
-                                        fontSize: 11,
+                                        fontSize: 10,
                                         lineHeight: 1.4,
-                                        flexShrink: 0,
-                                        whiteSpace: 'nowrap'
+                                        flexShrink: 0
                                     }}
                                 >
                                     K帧
@@ -318,4 +321,3 @@ const ParticleAnimKeyframePanel: React.FC = () => {
 }
 
 export default React.memo(ParticleAnimKeyframePanel)
-

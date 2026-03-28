@@ -102,11 +102,16 @@ const MaterialAnimPanel: React.FC = () => {
         selectedMaterialIndex,
         selectedMaterialIndices,
         setSelectedMaterialIndex,
-        setSelectedMaterialIndices
+        setSelectedMaterialIndices,
+        timelineKeyframeDisplayMode
     } = useSelectionStore()
 
-    const [collapsed, setCollapsed] = useState(false)
+    const [collapsed, setCollapsed] = useState(true)
     const [editingField, setEditingField] = useState<'TextureID' | 'Alpha' | null>(null)
+
+    useEffect(() => {
+        setCollapsed(timelineKeyframeDisplayMode !== 'material')
+    }, [timelineKeyframeDisplayMode])
 
     const materials = useMemo(() => Array.isArray((modelData as any)?.Materials) ? ((modelData as any).Materials as any[]) : [], [modelData])
     const textures = useMemo(() => Array.isArray((modelData as any)?.Textures) ? ((modelData as any).Textures as any[]) : [], [modelData])
@@ -341,7 +346,6 @@ const MaterialAnimPanel: React.FC = () => {
             status={selectedIds.length > 0 ? `已选 ${selectedIds.length}` : '未选择'}
             collapsed={collapsed}
             onToggleCollapse={() => setCollapsed(!collapsed)}
-            style={{ width: 440 }}
         >
             {materials.length === 0 ? (
                 <div style={{ color: '#777', fontSize: 12 }}>当前模型没有材质</div>
@@ -349,48 +353,73 @@ const MaterialAnimPanel: React.FC = () => {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                     <div style={rowStyle}>
                         <Text style={fieldLabelStyle}>材质</Text>
-                        <Select
-                            size="small"
-                            mode="multiple"
-                            maxTagCount="responsive"
-                            value={selectedIds}
-                            onChange={(values) => {
-                                const next = (values as number[]).filter((value) => value >= 0 && value < materials.length)
-                                setSelectedMaterialIndices(next)
-                                setSelectedMaterialIndex(next[0] ?? null)
-                            }}
-                            options={materials.map((material, index) => ({
-                                label: `材质 ${index} (${Array.isArray(material?.Layers) ? material.Layers.length : 0} 层)`,
-                                value: index
-                            }))}
-                            placeholder="选择材质"
-                            style={{ flex: 1, minWidth: 0 }}
-                        />
+                        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexWrap: 'wrap', gap: '4px', maxHeight: 140, overflowY: 'auto', paddingRight: 4 }}>
+                            {materials.map((material, index) => {
+                                const isSelected = selectedIds.includes(index)
+                                return (
+                                    <div
+                                        key={index}
+                                        onClick={(e) => {
+                                            const isMulti = e.ctrlKey || e.metaKey || e.shiftKey
+                                            if (isMulti) {
+                                                if (isSelected) {
+                                                    const next = selectedIds.filter(i => i !== index)
+                                                    setSelectedMaterialIndices(next)
+                                                    setSelectedMaterialIndex(next.length > 0 ? next[0] : null)
+                                                } else {
+                                                    const next = [...selectedIds, index].sort((a,b)=>a-b)
+                                                    setSelectedMaterialIndices(next)
+                                                    setSelectedMaterialIndex(next[0])
+                                                }
+                                            } else {
+                                                // 单选：如果已经只选中这一项，再点就取消
+                                                if (isSelected && selectedIds.length === 1) {
+                                                    setSelectedMaterialIndices([])
+                                                    setSelectedMaterialIndex(null)
+                                                } else {
+                                                    setSelectedMaterialIndices([index])
+                                                    setSelectedMaterialIndex(index)
+                                                }
+                                            }
+                                        }}
+                                        style={{
+                                            width: 'calc(25% - 3px)', // 4 per row
+                                            padding: '4px',
+                                            backgroundColor: isSelected ? 'rgba(50, 120, 220, 0.6)' : 'rgba(100, 100, 100, 0.2)',
+                                            border: isSelected ? '1px solid #4a90e2' : '1px solid #444',
+                                            borderRadius: '4px',
+                                            cursor: 'pointer',
+                                            textAlign: 'center',
+                                            fontSize: 11,
+                                            color: isSelected ? '#fff' : '#aaa',
+                                            userSelect: 'none',
+                                            transition: 'all 0.15s ease'
+                                        }}
+                                        title={`材质 ${index} (${Array.isArray(material?.Layers) ? material.Layers.length : 0} 层)`}
+                                    >
+                                        {String(index)}
+                                    </div>
+                                )
+                            })}
+                        </div>
                         <Button size="small" icon={<EditOutlined />} onClick={openMaterialManager} />
                     </div>
 
                     <div style={{ ...rowStyle, marginTop: 4 }}>
                         <Text style={fieldLabelStyle}>贴图ID</Text>
-                        {hasTextureTrack ? (
-                            <Button size="small" style={{ flex: 1 }} onClick={() => openEditor('TextureID')}>
-                                编辑动画轨道
-                            </Button>
-                        ) : (
-                            <Select
-                                size="small"
-                                value={currentTextureId}
-                                onChange={(value) => updateStaticField('TextureID', value)}
-                                options={textureOptions}
-                                style={{ flex: 1, minWidth: 0 }}
-                            />
-                        )}
-                        {!hasTextureTrack && (
-                            <Button size="small" onClick={() => openEditor('TextureID')}>
-                                动画编辑
-                            </Button>
-                        )}
-                        <Button size="small" onClick={() => insertTrackKey('TextureID')}>
+                        <Select
+                            size="small"
+                            value={currentTextureId}
+                            onChange={(value) => updateStaticField('TextureID', value)}
+                            options={textureOptions}
+                            style={{ width: 120 }}
+                        />
+                        <div style={{ flex: 1 }} />
+                        <Button size="small" onClick={() => insertTrackKey('TextureID')} disabled={selectedIds.length === 0} style={{ background: '#333', borderColor: '#444', color: '#ddd' }}>
                             K帧
+                        </Button>
+                        <Button size="small" onClick={() => openEditor('TextureID')} disabled={selectedIds.length !== 1} style={{ fontSize: 11, color: '#1890ff', borderColor: '#1890ff', background: 'transparent' }}>
+                            动画编辑
                         </Button>
                     </div>
 
@@ -414,24 +443,22 @@ const MaterialAnimPanel: React.FC = () => {
 
                     <div style={{ ...rowStyle, marginTop: 4 }}>
                         <Text style={fieldLabelStyle}>透明度</Text>
-                        {hasAlphaTrack ? (
-                            <Button size="small" style={{ flex: 1 }} onClick={() => openEditor('Alpha')}>
-                                编辑动画轨道
-                            </Button>
-                        ) : (
-                            <InputNumber
-                                size="small"
-                                value={currentAlpha}
-                                onChange={(value) => updateStaticField('Alpha', value)}
-                                min={0}
-                                max={1}
-                                step={0.01}
-                                precision={3}
-                                style={{ flex: 1, minWidth: 0 }}
-                            />
-                        )}
-                        <Button size="small" onClick={() => insertTrackKey('Alpha')}>
+                        <InputNumber
+                            size="small"
+                            value={currentAlpha}
+                            onChange={(value) => updateStaticField('Alpha', value)}
+                            min={0}
+                            max={1}
+                            step={0.01}
+                            precision={3}
+                            style={{ width: 80 }}
+                        />
+                        <div style={{ flex: 1 }} />
+                        <Button size="small" onClick={() => insertTrackKey('Alpha')} disabled={selectedIds.length === 0} style={{ background: '#333', borderColor: '#444', color: '#ddd' }}>
                             K帧
+                        </Button>
+                        <Button size="small" onClick={() => openEditor('Alpha')} disabled={selectedIds.length !== 1} style={{ fontSize: 11, color: '#1890ff', borderColor: '#1890ff', background: 'transparent' }}>
+                            动画编辑
                         </Button>
                     </div>
 

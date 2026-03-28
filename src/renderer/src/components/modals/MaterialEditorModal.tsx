@@ -133,7 +133,8 @@ interface MaterialManagerRpcState {
 }
 
 interface MaterialManagerPatch {
-    pickedGeosetIndex: number | null
+    pickedGeosetIndex?: number | null
+    selectedMaterialIndex?: number | null
 }
 
 const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onClose, isStandalone }) => {
@@ -157,14 +158,20 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         initialRpcState,
         {
             applyPatch: (previousState, patch) => {
-                const nextPickedGeosetIndex = patch?.pickedGeosetIndex ?? null
-                if (previousState.pickedGeosetIndex === nextPickedGeosetIndex) {
-                    return previousState
+                let nextState = { ...previousState }
+                let changed = false
+
+                if (patch?.pickedGeosetIndex !== undefined && previousState.pickedGeosetIndex !== patch.pickedGeosetIndex) {
+                    nextState.pickedGeosetIndex = patch.pickedGeosetIndex
+                    changed = true
                 }
-                return {
-                    ...previousState,
-                    pickedGeosetIndex: nextPickedGeosetIndex,
+
+                if (patch?.selectedMaterialIndex !== undefined && previousState.selectedMaterialIndex !== patch.selectedMaterialIndex) {
+                    nextState.selectedMaterialIndex = patch.selectedMaterialIndex
+                    changed = true
                 }
+
+                return changed ? nextState : previousState
             }
         }
     )
@@ -265,13 +272,28 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         if (!visible) return
         if (isStandalone) {
             if (Number.isInteger(rpcState.selectedMaterialIndex) && rpcState.selectedMaterialIndex !== null) {
+                // Ignore picking if the user explicitly picked a material
                 setSelectedMaterialIndex(rpcState.selectedMaterialIndex)
                 setSelectedLayerIndex(0)
+                setTimeout(() => {
+                    scrollMaterialToItem(rpcState.selectedMaterialIndex!)
+                    scrollLayerToItem(0)
+                }, 0)
             } else {
                 focusMaterialForGeoset(rpcState.pickedGeosetIndex)
             }
         } else {
-            focusMaterialForGeoset(useSelectionStore.getState().pickedGeosetIndex)
+            const standaloneState = useSelectionStore.getState()
+            if (Number.isInteger(standaloneState.selectedMaterialIndex) && standaloneState.selectedMaterialIndex !== null) {
+                setSelectedMaterialIndex(standaloneState.selectedMaterialIndex)
+                setSelectedLayerIndex(0)
+                setTimeout(() => {
+                    scrollMaterialToItem(standaloneState.selectedMaterialIndex!)
+                    scrollLayerToItem(0)
+                }, 0)
+            } else {
+                focusMaterialForGeoset(standaloneState.pickedGeosetIndex)
+            }
         }
     }, [visible, isStandalone, rpcState.pickedGeosetIndex, rpcState.selectedMaterialIndex, focusMaterialForGeoset])
     const textureDropZoneRef = React.useRef<HTMLDivElement>(null)
