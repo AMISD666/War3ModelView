@@ -13,6 +13,7 @@ import {
     TEXTURE_ADJUSTMENTS_KEY,
     TextureAdjustments
 } from '../../utils/textureAdjustments'
+import { invokeReadMpqFile } from '../../utils/mpqPerf'
 import { createTextureDecodeCacheKey, getCachedDecodedTexture, setCachedDecodedTexture } from './textureDecodeCache'
 
 export interface TextureLoadResult {
@@ -132,7 +133,7 @@ export function isMPQPath(path: string): boolean {
  */
 export async function loadTextureFromMPQ(texturePath: string): Promise<ImageData | null> {
     try {
-        const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: normalizePath(texturePath) })
+        const mpqData = await invokeReadMpqFile<Uint8Array>(normalizePath(texturePath), 'textureLoader.loadTextureFromMPQ')
 
         if (mpqData && mpqData.length > 0) {
             const blp = decodeBLP(mpqData.buffer as ArrayBuffer)
@@ -454,7 +455,7 @@ export async function loadTextureForRenderer(
 
     // Strategy 2: Try MPQ
     try {
-        const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: normalizePath(texturePath) })
+        const mpqData = await invokeReadMpqFile<Uint8Array>(normalizePath(texturePath), 'textureLoader.loadTextureForRenderer')
         if (mpqData && mpqData.length > 0) {
             const imageData = decodeTextureData(mpqData.buffer as ArrayBuffer, texturePath);
             if (imageData && renderer.setTextureImageData) {
@@ -669,7 +670,7 @@ export async function decodeTexture(
 
     // Strategy 2: Try MPQ
     try {
-        const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: normalizePath(texturePath) })
+        const mpqData = await invokeReadMpqFile<Uint8Array>(normalizePath(texturePath), 'textureLoader.decodeTexture.primaryMpq')
         if (mpqData && mpqData.length > 0) {
             const imageData = await decodeBuffer(mpqData.buffer as ArrayBuffer)
             if (!imageData) {
@@ -684,7 +685,7 @@ export async function decodeTexture(
 
     // Strategy 3: If not a standard MPQ path, try MPQ anyway as fallback (sometimes custom paths are in MPQ)
     try {
-        const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: normalizePath(texturePath) })
+        const mpqData = await invokeReadMpqFile<Uint8Array>(normalizePath(texturePath), 'textureLoader.decodeTexture.fallbackMpq')
         if (mpqData && mpqData.length > 0) {
             const imageData = await decodeBuffer(mpqData.buffer as ArrayBuffer)
             if (!imageData) {

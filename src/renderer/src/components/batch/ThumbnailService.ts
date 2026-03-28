@@ -10,6 +10,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { REPLACEABLE_TEXTURES, normalizePath } from '../viewer/textureLoader';
 import { getEnvironmentManager } from '../viewer/EnvironmentManager';
 import { useRendererStore } from '../../store/rendererStore';
+import { invokeReadMpqFile } from '../../utils/mpqPerf';
 
 // We import the worker using Vite's ?worker suffix
 // @ts-ignore
@@ -715,7 +716,7 @@ class ThumbnailService {
 
         for (const col of colors) {
             try {
-                const data = await invoke<Uint8Array>('read_mpq_file', { path: col.path });
+                const data = await invokeReadMpqFile<Uint8Array>(col.path, 'ThumbnailService.initTeamColors');
                 if (data && data.length > 0) {
                     const blp = decodeBLP(data.buffer as ArrayBuffer);
                     const mip = getBLPImageData(blp, 0);

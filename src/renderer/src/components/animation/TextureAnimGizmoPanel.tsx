@@ -17,6 +17,7 @@ import { listen } from '@tauri-apps/api/event'
 import { windowManager } from '../../utils/windowManager'
 import { GlobalSequenceSelect } from '../common/GlobalSequenceSelect'
 import RightFloatingPanelShell from './RightFloatingPanelShell'
+import { invokeReadMpqFile } from '../../utils/mpqPerf'
 
 const { Text } = Typography
 
@@ -286,7 +287,7 @@ const TextureAnimGizmoPanel: React.FC = () => {
             }
 
             try {
-                const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: normalizePath(previewTexturePath) })
+                const mpqData = await invokeReadMpqFile<Uint8Array>(normalizePath(previewTexturePath), 'TextureAnimGizmoPanel.preview')
                 const buffer = toArrayBuffer(mpqData)
                 if (buffer && buffer.byteLength > 0) {
                     const imageData = decodeTextureData(buffer, previewTexturePath)
@@ -1083,5 +1084,4 @@ const TextureAnimGizmoPanel: React.FC = () => {
 }
 
 export default React.memo(TextureAnimGizmoPanel)
-
 

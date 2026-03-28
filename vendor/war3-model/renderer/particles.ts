@@ -30,6 +30,7 @@ const emitterOrientationMat3 = mat3.create();
 const particlePlaneNormal = vec3.create();
 const cameraDirectionZ = vec3.create();
 const worldUnitZ = vec3.fromValues(0, 0, 1);
+const identityEmitterMatrix = mat4.create();
 
 /**
  * Helper to check particle emitter flags from both Flags bitmask and individual boolean properties.
@@ -58,6 +59,12 @@ function hasParticleFlag(props: ParticleEmitter2, flag: ParticleEmitter2Flags): 
         default:
             return false;
     }
+}
+
+function getEmitterMatrix(rendererData: RendererData, objectId: number): mat4 {
+    const nodeWrapper = rendererData?.nodes?.[objectId];
+    const matrix = nodeWrapper?.matrix;
+    return matrix || identityEmitterMatrix;
 }
 
 
@@ -975,7 +982,7 @@ export class ParticlesController {
             while (emitter.emission >= 1000) {
                 emitter.emission -= 1000;
                 emitter.particles.push(
-                    this.createParticle(emitter, this.rendererData.nodes[emitter.props.ObjectId].matrix)
+                    this.createParticle(emitter, getEmitterMatrix(this.rendererData, emitter.props.ObjectId))
                 );
             }
         }
@@ -1147,7 +1154,7 @@ export class ParticlesController {
         const isModelSpace = hasParticleFlag(emitter.props, ParticleEmitter2Flags.ModelSpace);
 
         if (isModelSpace) {
-            const currentEmitterMatrix = this.rendererData.nodes[emitter.props.ObjectId].matrix;
+            const currentEmitterMatrix = getEmitterMatrix(this.rendererData, emitter.props.ObjectId);
             vec3.transformMat4(particleWorldPos, particle.pos, currentEmitterMatrix);
             mat4.getRotation(emitterRotationQuat, currentEmitterMatrix);
             mat4.getScaling(emitterScaleVec, currentEmitterMatrix);
@@ -1171,7 +1178,7 @@ export class ParticlesController {
                     vec3.set(particleHeadVec, baseX * cosA - baseY * sinA, baseX * sinA + baseY * cosA, 0);
 
                     if (isModelSpace) {
-                        const currentEmitterMatrix = this.rendererData.nodes[emitter.props.ObjectId].matrix;
+                        const currentEmitterMatrix = getEmitterMatrix(this.rendererData, emitter.props.ObjectId);
                         mat4.getRotation(emitterRotationQuat, currentEmitterMatrix);
                         vec3.transformQuat(particlePlaneNormal, worldUnitZ, emitterRotationQuat);
                     } else {

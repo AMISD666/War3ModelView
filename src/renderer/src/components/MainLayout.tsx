@@ -92,6 +92,7 @@ type MaterialManagerRpcState = {
     snapshotVersion: number
     snapshot: MaterialManagerSnapshot
     pickedGeosetIndex: number | null
+    selectedMaterialIndex: number | null
 }
 
 type MaterialManagerPatch = {
@@ -1908,6 +1909,7 @@ const MainLayout: React.FC = () => {
             snapshotVersion: cache.snapshotVersion,
             snapshot: cache.snapshot,
             pickedGeosetIndex: useSelectionStore.getState().pickedGeosetIndex ?? null,
+            selectedMaterialIndex: useSelectionStore.getState().selectedMaterialIndex ?? null,
         }
     }, [])
 
@@ -4934,7 +4936,6 @@ const MainLayout: React.FC = () => {
 }
 
 export default MainLayout
-
 
 
 

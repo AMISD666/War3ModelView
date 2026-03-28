@@ -31,6 +31,7 @@ import {
     buildTextureDefinitionSignature,
     remapMaterialsAfterTextureRemoval
 } from '../../utils/materialTextureRelations'
+import { invokeReadMpqFile } from '../../utils/mpqPerf'
 
 const { Text } = Typography
 
@@ -1049,7 +1050,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
             if (isMpqPath && isSupported) {
                 try {
                     const mpqPath = normalizedImagePath
-                    const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: mpqPath })
+                    const mpqData = await invokeReadMpqFile<Uint8Array>(mpqPath, 'TextureEditorModal.preview.mpqPath')
                     if (isStale()) return
 
                     const mpqBuffer = toArrayBuffer(mpqData)
@@ -1125,7 +1126,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
 
             if (!loaded && isSupported && !isReplaceable) {
                 try {
-                    const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: normalizedImagePath })
+                    const mpqData = await invokeReadMpqFile<Uint8Array>(normalizedImagePath, 'TextureEditorModal.preview.fallbackMpq')
                     if (isStale()) return
 
                     const mpqBuffer = toArrayBuffer(mpqData)
@@ -1921,7 +1922,6 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
 }
 
 export default TextureEditorModal
-
 
 
 

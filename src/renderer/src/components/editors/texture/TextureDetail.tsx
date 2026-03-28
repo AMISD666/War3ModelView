@@ -2,8 +2,8 @@
 import { Input, Checkbox, Button } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { readFile } from '@tauri-apps/plugin-fs'
-import { invoke } from '@tauri-apps/api/core'
 import { decodeTextureData, normalizePath } from '../../viewer/textureLoader'
+import { invokeReadMpqFile } from '../../../utils/mpqPerf'
 
 interface TextureDetailProps {
     texture: any
@@ -92,7 +92,7 @@ const TextureDetail: React.FC<TextureDetailProps> = ({ texture, modelPath, onUpd
                     // fall through to MPQ
                 }
                 try {
-                    const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: normalizePath(imagePath) })
+                    const mpqData = await invokeReadMpqFile<Uint8Array>(normalizePath(imagePath), 'TextureDetail.preview')
                     const mpqBuffer = toArrayBuffer(mpqData)
                     if (mpqBuffer && mpqBuffer.byteLength > 0) {
                         const imageData = decodeTextureData(mpqBuffer, imagePath)
@@ -220,4 +220,3 @@ const TextureDetail: React.FC<TextureDetailProps> = ({ texture, modelPath, onUpd
 }
 
 export default TextureDetail
-

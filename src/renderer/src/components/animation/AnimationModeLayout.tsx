@@ -7,6 +7,7 @@ import { useModelStore } from '../../store/modelStore'
 import TextureAnimGizmoPanel from './TextureAnimGizmoPanel'
 import ParticleAnimKeyframePanel from './ParticleAnimKeyframePanel'
 import GeosetAnimPanel from './GeosetAnimPanel'
+import MaterialAnimPanel from './MaterialAnimPanel'
 
 interface AnimationModeLayoutProps {
     isActive: boolean
@@ -54,6 +55,7 @@ const AnimationModeLayout: React.FC<AnimationModeLayoutProps> = ({
     const showTextureAnimGizmo = isActive && !isBindingMode && animationSubMode === 'keyframe' && timelineKeyframeDisplayMode === 'textureAnim'
     const showParticleAnimPanel = isActive && !isBindingMode && animationSubMode === 'keyframe' && timelineKeyframeDisplayMode === 'particle'
     const showGeosetAnimPanel = isActive && !isBindingMode && animationSubMode === 'keyframe' && timelineKeyframeDisplayMode === 'geosetAnim'
+    const showMaterialAnimPanel = isActive && !isBindingMode && animationSubMode === 'keyframe' && timelineKeyframeDisplayMode === 'material'
 
     return (
         <div
@@ -162,6 +164,19 @@ const AnimationModeLayout: React.FC<AnimationModeLayoutProps> = ({
                         }}
                     >
                         <GeosetAnimPanel />
+                    </div>
+                )}
+
+                {showMaterialAnimPanel && (
+                    <div
+                        style={{
+                            position: 'absolute',
+                            right: 10,
+                            bottom: BOTTOM_PANEL_HEIGHT + 10,
+                            zIndex: 6
+                        }}
+                    >
+                        <MaterialAnimPanel />
                     </div>
                 )}
             </div>

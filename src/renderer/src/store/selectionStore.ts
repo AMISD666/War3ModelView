@@ -12,7 +12,7 @@ export interface SelectionId {
 export type AppMode = 'view' | 'geometry' | 'uv' | 'animation' | 'batch';
 export type GeometrySubMode = 'vertex' | 'face' | 'group';
 export type TransformMode = 'translate' | 'rotate' | 'scale' | null;
-export type KeyframeDisplayMode = 'node' | 'geosetAnim' | 'particle' | 'textureAnim';
+export type KeyframeDisplayMode = 'node' | 'geosetAnim' | 'particle' | 'textureAnim' | 'material';
 export type TimelineGlobalSequenceFilter = number | null;
 
 export type SelectionMode = 'object' | 'vertex' | 'face' | 'group'; // Deprecated in favor of AppMode + SubMode, keeping for compatibility for now
@@ -29,6 +29,9 @@ interface SelectionState {
     transformMode: TransformMode;
     multiMoveMode: 'relative' | 'worldUniform';
     selectedTextureAnimIndex: number | null;
+    selectedMaterialIndex: number | null;
+    selectedMaterialIndices: number[];
+    selectedMaterialLayerIndex: number | null;
 
     setMainMode: (mode: AppMode) => void;
     setGeometrySubMode: (mode: GeometrySubMode) => void;
@@ -38,6 +41,9 @@ interface SelectionState {
     setTransformMode: (mode: TransformMode) => void;
     setMultiMoveMode: (mode: 'relative' | 'worldUniform') => void;
     setSelectedTextureAnimIndex: (index: number | null) => void;
+    setSelectedMaterialIndex: (index: number | null) => void;
+    setSelectedMaterialIndices: (indices: number[]) => void;
+    setSelectedMaterialLayerIndex: (index: number | null) => void;
 
     // Legacy (to be refactored)
     selectionMode: SelectionMode;
@@ -102,6 +108,9 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
     transformMode: 'translate',
     multiMoveMode: 'relative',
     selectedTextureAnimIndex: null,
+    selectedMaterialIndex: null,
+    selectedMaterialIndices: [],
+    selectedMaterialLayerIndex: null,
 
     setMainMode: (mode) => {
         set({ mainMode: mode });
@@ -138,6 +147,15 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
     },
     setSelectedTextureAnimIndex: (index) => {
         set({ selectedTextureAnimIndex: index });
+    },
+    setSelectedMaterialIndex: (index) => {
+        set({ selectedMaterialIndex: index });
+    },
+    setSelectedMaterialIndices: (indices) => {
+        set({ selectedMaterialIndices: indices });
+    },
+    setSelectedMaterialLayerIndex: (index) => {
+        set({ selectedMaterialLayerIndex: index });
     },
 
     // Legacy Init
@@ -302,7 +320,10 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
             selectedVertexIds: [],
             selectedFaceIds: [],
             isPickingParent: false,
-            pickedGeosetIndex: null
+            pickedGeosetIndex: null,
+            selectedMaterialIndex: null,
+            selectedMaterialIndices: [],
+            selectedMaterialLayerIndex: null
         });
     },
 
@@ -316,6 +337,9 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
             transformMode: 'translate',
             multiMoveMode: 'relative',
             selectedTextureAnimIndex: null,
+            selectedMaterialIndex: null,
+            selectedMaterialIndices: [],
+            selectedMaterialLayerIndex: null,
             selectionMode: 'object',
             selectedNodeIds: [],
             selectedVertexIds: [],

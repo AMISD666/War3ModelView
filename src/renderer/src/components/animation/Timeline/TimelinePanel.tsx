@@ -44,8 +44,18 @@ const OFFSET_SCALING = 40
 const CONTEXT_MENU_WIDTH = 170
 const CONTEXT_MENU_HEIGHT = 160
 
-const makeKeyframeUid = (ownerType: 'node' | 'geoset' | 'textureAnim', ownerId: number, type: string, frame: number) =>
+const makeKeyframeUid = (ownerType: 'node' | 'geoset' | 'textureAnim' | 'materialLayer', ownerId: number, type: string, frame: number) =>
     `${ownerType}-${ownerId}-${type}-${frame}`
+
+const MATERIAL_LAYER_OWNER_MULTIPLIER = 100000
+
+const encodeMaterialLayerOwnerId = (materialIndex: number, layerIndex: number) =>
+    materialIndex * MATERIAL_LAYER_OWNER_MULTIPLIER + layerIndex
+
+const decodeMaterialLayerOwnerId = (ownerId: number) => ({
+    materialIndex: Math.floor(ownerId / MATERIAL_LAYER_OWNER_MULTIPLIER),
+    layerIndex: ownerId % MATERIAL_LAYER_OWNER_MULTIPLIER
+})
 
 const PARTICLE_TRACK_INFOS = [
     { type: 'ParticleVisibility', propName: 'Visibility' },
@@ -137,7 +147,8 @@ const getTrackGlobalSeqId = (track: any): number => {
 
 const NODE_KEYFRAME_TYPES = ['Translation', 'Rotation', 'Scaling'] as const
 const GEOSET_ANIM_KEYFRAME_TYPES = ['GeosetAlpha', 'GeosetColor'] as const
-const KEYFRAME_DISPLAY_MODE_ORDER: KeyframeDisplayMode[] = ['node', 'geosetAnim', 'particle', 'textureAnim']
+const MATERIAL_KEYFRAME_TYPES = ['MaterialTextureID', 'MaterialAlpha'] as const
+const KEYFRAME_DISPLAY_MODE_ORDER: KeyframeDisplayMode[] = ['node', 'geosetAnim', 'particle', 'textureAnim', 'material']
 
 const KEYFRAME_DISPLAY_MODE_CONFIG: Record<KeyframeDisplayMode, {
     label: string
@@ -168,6 +179,12 @@ const KEYFRAME_DISPLAY_MODE_CONFIG: Record<KeyframeDisplayMode, {
         tooltip: '关键帧显示: 贴图动画参数，可以控制贴图的平移、旋转、缩放',
         buttonColor: '#5a2e70',
         laneTypes: ['TexTranslation', 'TexRotation', 'TexScaling']
+    },
+    material: {
+        label: '材质模式',
+        tooltip: '关键帧显示: 材质层透明度与贴图 ID 动态轨道',
+        buttonColor: '#7a5d14',
+        laneTypes: [...MATERIAL_KEYFRAME_TYPES]
     }
 }
 
@@ -231,7 +248,7 @@ const getLaneMetrics = (displayMode: KeyframeDisplayMode, canvasHeight: number):
     }
 }
 
-type KeyframeOwnerType = 'node' | 'geoset' | 'textureAnim'
+type KeyframeOwnerType = 'node' | 'geoset' | 'textureAnim' | 'materialLayer'
 
 type TimelineClipboardKeyframe = {
     ownerType: KeyframeOwnerType
@@ -315,6 +332,17 @@ const getTextureAnimTrackInfo = (type: string): { propName: 'Translation' | 'Rot
     return { propName: hit.propName, vectorSize: hit.vectorSize, color: hit.color }
 }
 
+const MATERIAL_TRACK_INFOS = [
+    { type: 'MaterialTextureID', propName: 'TextureID', vectorSize: 1 as const, color: '#faad14' },
+    { type: 'MaterialAlpha', propName: 'Alpha', vectorSize: 1 as const, color: '#36cfc9' }
+] as const
+
+const getMaterialTrackInfo = (type: string): { propName: 'TextureID' | 'Alpha'; vectorSize: 1; color: string } | null => {
+    const hit = MATERIAL_TRACK_INFOS.find((item) => item.type === type)
+    if (!hit) return null
+    return { propName: hit.propName, vectorSize: hit.vectorSize, color: hit.color }
+}
+
 const toVectorArray = (value: any, vectorSize: number, fallback: number[]) => {
     if (Array.isArray(value)) {
         const out = [...value]
@@ -374,6 +402,42 @@ const cloneTextureAnimsForKeyframes = (input: any[]) => {
     }))
 }
 
+const cloneMaterialsForKeyframes = (input: any[]) => {
+    if (typeof structuredClone === 'function') {
+        return structuredClone(input)
+    }
+    return input.map((material: any) => ({
+        ...material,
+        Layers: Array.isArray(material?.Layers)
+            ? material.Layers.map((layer: any) => ({
+                ...layer,
+                TextureID: isAnimTrack(layer?.TextureID)
+                    ? {
+                        ...layer.TextureID,
+                        Keys: layer.TextureID.Keys.map((key: any) => ({
+                            ...key,
+                            Vector: Array.isArray(key?.Vector) ? [...key.Vector] : key?.Vector,
+                            InTan: Array.isArray(key?.InTan) ? [...key.InTan] : key?.InTan,
+                            OutTan: Array.isArray(key?.OutTan) ? [...key.OutTan] : key?.OutTan
+                        }))
+                    }
+                    : layer?.TextureID,
+                Alpha: isAnimTrack(layer?.Alpha)
+                    ? {
+                        ...layer.Alpha,
+                        Keys: layer.Alpha.Keys.map((key: any) => ({
+                            ...key,
+                            Vector: Array.isArray(key?.Vector) ? [...key.Vector] : key?.Vector,
+                            InTan: Array.isArray(key?.InTan) ? [...key.InTan] : key?.InTan,
+                            OutTan: Array.isArray(key?.OutTan) ? [...key.OutTan] : key?.OutTan
+                        }))
+                    }
+                    : layer?.Alpha
+            }))
+            : material?.Layers
+    }))
+}
+
 // Singleton loop counter for TimelinePanel (MUST be at module scope, not inside component)
 let globalTimelineLoopId = 0
 
@@ -399,6 +463,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         setFrame,
         setGeosetAnims,
         setTextureAnims,
+        setMaterials,
     } = useModelStore()
 
     const {
@@ -406,6 +471,12 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         pickedGeosetIndex,
         selectedTextureAnimIndex,
         setSelectedTextureAnimIndex,
+        selectedMaterialIndex,
+        selectedMaterialIndices,
+        selectedMaterialLayerIndex,
+        setSelectedMaterialIndex,
+        setSelectedMaterialIndices,
+        setSelectedMaterialLayerIndex,
         timelineKeyframeDisplayMode,
         setTimelineKeyframeDisplayMode,
         timelineGlobalSequenceFilter,
@@ -483,7 +554,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         { label: '全部轨道', value: '__all__' },
         { label: '普通动作', value: '__sequence__' },
         ...globalSequences.map((duration, index) => ({
-            label: `全局序列 ${index} (${duration}ms)`,
+            label: ` ${index} (${duration}ms)`,
             value: String(index)
         }))
     ]), [globalSequences])
@@ -568,6 +639,53 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             setSelectedTextureAnimIndex(0)
         }
     }, [keyframeDisplayMode, modelData, selectedTextureAnimIndex, setSelectedTextureAnimIndex])
+
+    useEffect(() => {
+        if (keyframeDisplayMode !== 'material') return
+        const materials = Array.isArray((modelData as any)?.Materials)
+            ? ((modelData as any).Materials as any[])
+            : []
+        if (materials.length === 0) {
+            if (selectedMaterialIndex !== null) setSelectedMaterialIndex(null)
+            if (selectedMaterialIndices.length > 0) setSelectedMaterialIndices([])
+            if (selectedMaterialLayerIndex !== null) setSelectedMaterialLayerIndex(null)
+            return
+        }
+
+        const pickedMaterialIndex = (() => {
+            const geosets = Array.isArray((modelData as any)?.Geosets) ? ((modelData as any).Geosets as any[]) : []
+            if (pickedGeosetIndex === null || pickedGeosetIndex < 0 || pickedGeosetIndex >= geosets.length) return null
+            const materialId = Number(geosets[pickedGeosetIndex]?.MaterialID)
+            return Number.isFinite(materialId) && materialId >= 0 && materialId < materials.length ? materialId : null
+        })()
+
+        const nextMaterialIds = selectedMaterialIndices.filter((id) => id >= 0 && id < materials.length)
+        if (nextMaterialIds.length === 0) {
+            const next = (
+                pickedMaterialIndex !== null
+                    ? pickedMaterialIndex
+                    : (selectedMaterialIndex !== null && selectedMaterialIndex >= 0 && selectedMaterialIndex < materials.length
+                        ? selectedMaterialIndex
+                        : 0)
+            )
+            setSelectedMaterialIndices([next])
+            if (selectedMaterialIndex !== next) setSelectedMaterialIndex(next)
+        } else if (selectedMaterialIndex !== nextMaterialIds[0]) {
+            setSelectedMaterialIndex(nextMaterialIds[0])
+        }
+
+        if (selectedMaterialLayerIndex !== 0) setSelectedMaterialLayerIndex(0)
+    }, [
+        keyframeDisplayMode,
+        modelData,
+        pickedGeosetIndex,
+        selectedMaterialIndex,
+        selectedMaterialIndices,
+        selectedMaterialLayerIndex,
+        setSelectedMaterialIndex,
+        setSelectedMaterialIndices,
+        setSelectedMaterialLayerIndex
+    ])
 
     const matchesTimelineGlobalSequenceFilter = useCallback((track: any) => {
         if (timelineGlobalSequenceFilter === null) return true
@@ -696,8 +814,50 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             }
         }
 
+        if (keyframeDisplayMode === 'material') {
+            const materials = Array.isArray((modelData as any)?.Materials)
+                ? ((modelData as any).Materials as any[])
+                : []
+            const materialIds = selectedMaterialIndices.length > 0
+                ? selectedMaterialIndices
+                : (typeof selectedMaterialIndex === 'number' ? [selectedMaterialIndex] : [])
+            materialIds.forEach((materialIndex) => {
+                if (materialIndex < 0 || materialIndex >= materials.length) return
+                const layerIndex = 0
+                const layer = materials[materialIndex]?.Layers?.[layerIndex]
+                const ownerId = encodeMaterialLayerOwnerId(materialIndex, layerIndex)
+                MATERIAL_TRACK_INFOS.forEach(({ type, propName, color }) => {
+                    const track = layer?.[propName]
+                    if (!isAnimTrack(track) || !matchesTimelineGlobalSequenceFilter(track)) return
+                    track.Keys.forEach((k: any) => {
+                        keyframes.push({
+                            frame: Number(k.Frame),
+                            ownerType: 'materialLayer',
+                            ownerId,
+                            type,
+                            uid: makeKeyframeUid('materialLayer', ownerId, type, Number(k.Frame)),
+                            color
+                        })
+                    })
+                })
+            })
+        }
+
         activeKeyframesRef.current = keyframes
-    }, [modelData, selectedNodeIds, modelNodes, selectedGeosetIndex, selectedGeosetIndices, pickedGeosetIndex, selectedTextureAnimIndex, keyframeDisplayMode, matchesTimelineGlobalSequenceFilter])
+    }, [
+        modelData,
+        selectedNodeIds,
+        modelNodes,
+        selectedGeosetIndex,
+        selectedGeosetIndices,
+        pickedGeosetIndex,
+        selectedTextureAnimIndex,
+        selectedMaterialIndex,
+        selectedMaterialIndices,
+        selectedMaterialLayerIndex,
+        keyframeDisplayMode,
+        matchesTimelineGlobalSequenceFilter
+    ])
 
     const didInitialAutoFitRef = useRef(false)
 
@@ -1336,29 +1496,36 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         nodesSnapshot: any[],
         geosetAnimsSnapshot: any[],
         textureAnimsSnapshot: any[],
-        options?: { nodeChanged?: boolean; geosetChanged?: boolean; textureChanged?: boolean }
+        materialsSnapshot: any[],
+        options?: { nodeChanged?: boolean; geosetChanged?: boolean; textureChanged?: boolean; materialChanged?: boolean }
     ) => {
         const replaceNodes = useModelStore.getState().replaceNodes
         const nodeChanged = options?.nodeChanged ?? true
         const geosetChanged = options?.geosetChanged ?? true
         const textureChanged = options?.textureChanged ?? true
+        const materialChanged = options?.materialChanged ?? true
 
-        if (nodeChanged && geosetChanged && textureChanged) {
+        if (nodeChanged && geosetChanged && textureChanged && materialChanged) {
             replaceNodes(nodesSnapshot, { triggerReload: false })
             setGeosetAnims(geosetAnimsSnapshot)
             setTextureAnims(textureAnimsSnapshot)
+            setMaterials(materialsSnapshot)
             return
         }
-        if (nodeChanged && !geosetChanged && !textureChanged) {
+        if (nodeChanged && !geosetChanged && !textureChanged && !materialChanged) {
             replaceNodes(nodesSnapshot)
             return
         }
-        if (!nodeChanged && geosetChanged && !textureChanged) {
+        if (!nodeChanged && geosetChanged && !textureChanged && !materialChanged) {
             setGeosetAnims(geosetAnimsSnapshot)
             return
         }
-        if (!nodeChanged && !geosetChanged && textureChanged) {
+        if (!nodeChanged && !geosetChanged && textureChanged && !materialChanged) {
             setTextureAnims(textureAnimsSnapshot)
+            return
+        }
+        if (!nodeChanged && !geosetChanged && !textureChanged && materialChanged) {
+            setMaterials(materialsSnapshot)
             return
         }
         if (nodeChanged) {
@@ -1370,7 +1537,10 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         if (textureChanged) {
             setTextureAnims(textureAnimsSnapshot)
         }
-    }, [setGeosetAnims, setTextureAnims])
+        if (materialChanged) {
+            setMaterials(materialsSnapshot)
+        }
+    }, [setGeosetAnims, setMaterials, setTextureAnims])
 
     // Helper: Get keyframe data for selected UIDs
     const getSelectedKeyframeData = useCallback(() => {
@@ -1382,6 +1552,9 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             : []
         const textureAnims = Array.isArray((state.modelData as any)?.TextureAnims)
             ? ((state.modelData as any).TextureAnims as any[])
+            : []
+        const materials = Array.isArray((state.modelData as any)?.Materials)
+            ? ((state.modelData as any).Materials as any[])
             : []
 
         activeKeyframesRef.current.forEach((kf) => {
@@ -1456,6 +1629,30 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                     inTan: Array.isArray(key.InTan) ? [...key.InTan] : key.InTan,
                     outTan: Array.isArray(key.OutTan) ? [...key.OutTan] : key.OutTan
                 })
+                return
+            }
+
+            if (kf.ownerType === 'materialLayer') {
+                const materialTrack = getMaterialTrackInfo(kf.type)
+                if (!materialTrack) return
+                const { materialIndex, layerIndex } = decodeMaterialLayerOwnerId(Number(kf.ownerId))
+                const track = materials[materialIndex]?.Layers?.[layerIndex]?.[materialTrack.propName]
+                if (!isAnimTrack(track)) return
+
+                const keyIndex = track.Keys.findIndex((k: any) => k.Frame === kf.frame)
+                if (keyIndex === -1) return
+
+                const key = track.Keys[keyIndex]
+                result.push({
+                    ownerType: 'materialLayer',
+                    ownerId: Number(kf.ownerId),
+                    type: kf.type,
+                    frame: kf.frame,
+                    keyIndex,
+                    value: Array.isArray(key.Vector) ? [...key.Vector] : key.Vector,
+                    inTan: Array.isArray(key.InTan) ? [...key.InTan] : key.InTan,
+                    outTan: Array.isArray(key.OutTan) ? [...key.OutTan] : key.OutTan
+                })
             }
         })
         return result
@@ -1514,15 +1711,21 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const textureAnims = Array.isArray((state.modelData as any)?.TextureAnims)
             ? ((state.modelData as any).TextureAnims as any[])
             : []
+        const materials = Array.isArray((state.modelData as any)?.Materials)
+            ? ((state.modelData as any).Materials as any[])
+            : []
         const oldNodes = cloneNodesForKeyframes(nodes)
         const nodesCopy = cloneNodesForKeyframes(nodes)
         const oldGeosetAnims = cloneGeosetAnimsForKeyframes(geosetAnims)
         const geosetAnimsCopy = cloneGeosetAnimsForKeyframes(geosetAnims)
         const oldTextureAnims = cloneTextureAnimsForKeyframes(textureAnims)
         const textureAnimsCopy = cloneTextureAnimsForKeyframes(textureAnims)
+        const oldMaterials = cloneMaterialsForKeyframes(materials)
+        const materialsCopy = cloneMaterialsForKeyframes(materials)
         let nodeChanged = false
         let geosetChanged = false
         let textureChanged = false
+        let materialChanged = false
 
         const grouped = new Map<string, { ownerType: KeyframeOwnerType, ownerId: number, type: string, frames: number[] }>()
         keyframeData.forEach(kf => {
@@ -1571,18 +1774,33 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 if (track.Keys.length === 0 && textureAnim) {
                     delete textureAnim[textureTrack.propName]
                 }
+                return
+            }
+
+            if (ownerType === 'materialLayer') {
+                const materialTrack = getMaterialTrackInfo(type)
+                if (!materialTrack) return
+                const { materialIndex, layerIndex } = decodeMaterialLayerOwnerId(Number(ownerId))
+                const track = materialsCopy[materialIndex]?.Layers?.[layerIndex]?.[materialTrack.propName]
+                if (!isAnimTrack(track)) return
+                track.Keys = track.Keys.filter((k: any) => !frames.includes(k.Frame))
+                materialChanged = true
+                if (track.Keys.length === 0 && materialsCopy[materialIndex]?.Layers?.[layerIndex]) {
+                    const layer = materialsCopy[materialIndex].Layers[layerIndex]
+                    layer[materialTrack.propName] = materialTrack.propName === 'TextureID' ? 0 : 1
+                }
             }
         })
 
-        if (!nodeChanged && !geosetChanged && !textureChanged) return
+        if (!nodeChanged && !geosetChanged && !textureChanged && !materialChanged) return
 
         useHistoryStore.getState().push({
             name: `删除 ${keyframeData.length} 个关键帧`,
-            undo: () => applyKeyframeSnapshots(oldNodes, oldGeosetAnims, oldTextureAnims, { nodeChanged, geosetChanged, textureChanged }),
-            redo: () => applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, { nodeChanged, geosetChanged, textureChanged })
+            undo: () => applyKeyframeSnapshots(oldNodes, oldGeosetAnims, oldTextureAnims, oldMaterials, { nodeChanged, geosetChanged, textureChanged, materialChanged }),
+            redo: () => applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, materialsCopy, { nodeChanged, geosetChanged, textureChanged, materialChanged })
         })
 
-        applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, { nodeChanged, geosetChanged, textureChanged })
+        applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, materialsCopy, { nodeChanged, geosetChanged, textureChanged, materialChanged })
         setSelectedKeyframeUids(new Set())
     }, [selectedKeyframeUids, getSelectedKeyframeData, applyKeyframeSnapshots])
 
@@ -1630,15 +1848,21 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const textureAnims = Array.isArray((state.modelData as any)?.TextureAnims)
             ? ((state.modelData as any).TextureAnims as any[])
             : []
+        const materials = Array.isArray((state.modelData as any)?.Materials)
+            ? ((state.modelData as any).Materials as any[])
+            : []
         const oldNodes = cloneNodesForKeyframes(nodes)
         const nodesCopy = cloneNodesForKeyframes(nodes)
         const oldGeosetAnims = cloneGeosetAnimsForKeyframes(geosetAnims)
         const geosetAnimsCopy = cloneGeosetAnimsForKeyframes(geosetAnims)
         const oldTextureAnims = cloneTextureAnimsForKeyframes(textureAnims)
         const textureAnimsCopy = cloneTextureAnimsForKeyframes(textureAnims)
+        const oldMaterials = cloneMaterialsForKeyframes(materials)
+        const materialsCopy = cloneMaterialsForKeyframes(materials)
         let nodeChanged = false
         let geosetChanged = false
         let textureChanged = false
+        let materialChanged = false
 
         source.keyframes.forEach(kf => {
             const targetFrame = kf.frame + offset
@@ -1733,18 +1957,43 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                     track.Keys.sort((a: any, b: any) => a.Frame - b.Frame)
                 }
                 textureChanged = true
+                return
+            }
+
+            if (kf.ownerType === 'materialLayer') {
+                const materialTrack = getMaterialTrackInfo(kf.type)
+                if (!materialTrack) return
+                const { materialIndex, layerIndex } = decodeMaterialLayerOwnerId(Number(kf.ownerId))
+                if (!materialsCopy[materialIndex]?.Layers?.[layerIndex]) return
+                const layer = materialsCopy[materialIndex].Layers[layerIndex]
+                if (!isAnimTrack(layer[materialTrack.propName])) {
+                    layer[materialTrack.propName] = { InterpolationType: 1, GlobalSeqId: -1, Keys: [] }
+                }
+                const track = layer[materialTrack.propName]
+                const existingIdx = track.Keys.findIndex((k: any) => k.Frame === targetFrame)
+                const vector = toVectorArray(kf.value, 1, [materialTrack.propName === 'TextureID' ? 0 : 1])
+                const newKey: any = { Frame: targetFrame, Vector: vector }
+                if (Array.isArray(kf.inTan)) newKey.InTan = [...kf.inTan]
+                if (Array.isArray(kf.outTan)) newKey.OutTan = [...kf.outTan]
+                if (existingIdx >= 0) {
+                    track.Keys[existingIdx] = newKey
+                } else {
+                    track.Keys.push(newKey)
+                    track.Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                }
+                materialChanged = true
             }
         })
 
-        if (!nodeChanged && !geosetChanged && !textureChanged) return
+        if (!nodeChanged && !geosetChanged && !textureChanged && !materialChanged) return
 
         useHistoryStore.getState().push({
             name: `粘贴 ${source.keyframes.length} 个关键帧`,
-            undo: () => applyKeyframeSnapshots(oldNodes, oldGeosetAnims, oldTextureAnims, { nodeChanged, geosetChanged, textureChanged }),
-            redo: () => applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, { nodeChanged, geosetChanged, textureChanged })
+            undo: () => applyKeyframeSnapshots(oldNodes, oldGeosetAnims, oldTextureAnims, oldMaterials, { nodeChanged, geosetChanged, textureChanged, materialChanged }),
+            redo: () => applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, materialsCopy, { nodeChanged, geosetChanged, textureChanged, materialChanged })
         })
 
-        applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, { nodeChanged, geosetChanged, textureChanged })
+        applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, materialsCopy, { nodeChanged, geosetChanged, textureChanged, materialChanged })
 
         if (effectiveClipboard.source === 'clipboard' && source.isCut) {
             setClipboardKeyframes(null)
@@ -1782,15 +2031,21 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const textureAnims = Array.isArray((state.modelData as any)?.TextureAnims)
             ? ((state.modelData as any).TextureAnims as any[])
             : []
+        const materials = Array.isArray((state.modelData as any)?.Materials)
+            ? ((state.modelData as any).Materials as any[])
+            : []
         const oldNodes = cloneNodesForKeyframes(nodes)
         const nodesCopy = cloneNodesForKeyframes(nodes)
         const oldGeosetAnims = cloneGeosetAnimsForKeyframes(geosetAnims)
         const geosetAnimsCopy = cloneGeosetAnimsForKeyframes(geosetAnims)
         const oldTextureAnims = cloneTextureAnimsForKeyframes(textureAnims)
         const textureAnimsCopy = cloneTextureAnimsForKeyframes(textureAnims)
+        const oldMaterials = cloneMaterialsForKeyframes(materials)
+        const materialsCopy = cloneMaterialsForKeyframes(materials)
         let nodeChanged = false
         let geosetChanged = false
         let textureChanged = false
+        let materialChanged = false
 
         source.keyframes.forEach(kf => {
             const targetFrame = Math.round(targetStart + (kf.frame - sourceStart) * scale)
@@ -1885,18 +2140,43 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                     track.Keys.sort((a: any, b: any) => a.Frame - b.Frame)
                 }
                 textureChanged = true
+                return
+            }
+
+            if (kf.ownerType === 'materialLayer') {
+                const materialTrack = getMaterialTrackInfo(kf.type)
+                if (!materialTrack) return
+                const { materialIndex, layerIndex } = decodeMaterialLayerOwnerId(Number(kf.ownerId))
+                if (!materialsCopy[materialIndex]?.Layers?.[layerIndex]) return
+                const layer = materialsCopy[materialIndex].Layers[layerIndex]
+                if (!isAnimTrack(layer[materialTrack.propName])) {
+                    layer[materialTrack.propName] = { InterpolationType: 1, GlobalSeqId: -1, Keys: [] }
+                }
+                const track = layer[materialTrack.propName]
+                const existingIdx = track.Keys.findIndex((k: any) => k.Frame === targetFrame)
+                const vector = toVectorArray(kf.value, 1, [materialTrack.propName === 'TextureID' ? 0 : 1])
+                const newKey: any = { Frame: targetFrame, Vector: vector }
+                if (Array.isArray(kf.inTan)) newKey.InTan = [...kf.inTan]
+                if (Array.isArray(kf.outTan)) newKey.OutTan = [...kf.outTan]
+                if (existingIdx >= 0) {
+                    track.Keys[existingIdx] = newKey
+                } else {
+                    track.Keys.push(newKey)
+                    track.Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                }
+                materialChanged = true
             }
         })
 
-        if (!nodeChanged && !geosetChanged && !textureChanged) return
+        if (!nodeChanged && !geosetChanged && !textureChanged && !materialChanged) return
 
         useHistoryStore.getState().push({
             name: `缩放粘贴 ${source.keyframes.length} 个关键帧`,
-            undo: () => applyKeyframeSnapshots(oldNodes, oldGeosetAnims, oldTextureAnims, { nodeChanged, geosetChanged, textureChanged }),
-            redo: () => applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, { nodeChanged, geosetChanged, textureChanged })
+            undo: () => applyKeyframeSnapshots(oldNodes, oldGeosetAnims, oldTextureAnims, oldMaterials, { nodeChanged, geosetChanged, textureChanged, materialChanged }),
+            redo: () => applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, materialsCopy, { nodeChanged, geosetChanged, textureChanged, materialChanged })
         })
 
-        applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, { nodeChanged, geosetChanged, textureChanged })
+        applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, materialsCopy, { nodeChanged, geosetChanged, textureChanged, materialChanged })
 
         if (effectiveClipboard.source === 'clipboard' && source.isCut) {
             setClipboardKeyframes(null)
@@ -2196,15 +2476,21 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 const textureAnims = Array.isArray((state.modelData as any)?.TextureAnims)
                     ? ((state.modelData as any).TextureAnims as any[])
                     : []
+                const materials = Array.isArray((state.modelData as any)?.Materials)
+                    ? ((state.modelData as any).Materials as any[])
+                    : []
                 const oldNodes = cloneNodesForKeyframes(nodes)
                 const nodesCopy = cloneNodesForKeyframes(nodes)
                 const oldGeosetAnims = cloneGeosetAnimsForKeyframes(geosetAnims)
                 const geosetAnimsCopy = cloneGeosetAnimsForKeyframes(geosetAnims)
                 const oldTextureAnims = cloneTextureAnimsForKeyframes(textureAnims)
                 const textureAnimsCopy = cloneTextureAnimsForKeyframes(textureAnims)
+                const oldMaterials = cloneMaterialsForKeyframes(materials)
+                const materialsCopy = cloneMaterialsForKeyframes(materials)
                 let nodeChanged = false
                 let geosetChanged = false
                 let textureChanged = false
+                let materialChanged = false
 
                 interactionRef.current.dragKeyframeData.forEach(kfData => {
                     const newFrame = Math.round(scaleAnchor + (kfData.originalFrame - scaleAnchor) * dragScale)
@@ -2256,6 +2542,23 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                             track.Keys[keyIdx].Frame = newFrame
                             textureChanged = true
                         }
+                        return
+                    }
+
+                    if (kfData.ownerType === 'materialLayer') {
+                        const materialTrack = getMaterialTrackInfo(kfData.type)
+                        if (!materialTrack) return
+                        const { materialIndex, layerIndex } = decodeMaterialLayerOwnerId(Number(kfData.ownerId))
+                        const track = materialsCopy[materialIndex]?.Layers?.[layerIndex]?.[materialTrack.propName]
+                        if (!isAnimTrack(track)) return
+                        let keyIdx = kfData.keyIndex
+                        if (keyIdx < 0 || keyIdx >= track.Keys.length) {
+                            keyIdx = track.Keys.findIndex((k: any) => k.Frame === kfData.originalFrame)
+                        }
+                        if (keyIdx >= 0) {
+                            track.Keys[keyIdx].Frame = newFrame
+                            materialChanged = true
+                        }
                     }
                 })
 
@@ -2288,17 +2591,28 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                         if (isAnimTrack(track)) {
                             track.Keys.sort((a: any, b: any) => a.Frame - b.Frame)
                         }
+                        return
+                    }
+
+                    if (kfData.ownerType === 'materialLayer') {
+                        const materialTrack = getMaterialTrackInfo(kfData.type)
+                        if (!materialTrack) return
+                        const { materialIndex, layerIndex } = decodeMaterialLayerOwnerId(Number(kfData.ownerId))
+                        const track = materialsCopy[materialIndex]?.Layers?.[layerIndex]?.[materialTrack.propName]
+                        if (isAnimTrack(track)) {
+                            track.Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                        }
                     }
                 })
 
-                if (nodeChanged || geosetChanged || textureChanged) {
+                if (nodeChanged || geosetChanged || textureChanged || materialChanged) {
                     useHistoryStore.getState().push({
                         name: `缩放 ${interactionRef.current.dragKeyframeData.length} 个关键帧`,
-                        undo: () => applyKeyframeSnapshots(oldNodes, oldGeosetAnims, oldTextureAnims, { nodeChanged, geosetChanged, textureChanged }),
-                        redo: () => applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, { nodeChanged, geosetChanged, textureChanged })
+                        undo: () => applyKeyframeSnapshots(oldNodes, oldGeosetAnims, oldTextureAnims, oldMaterials, { nodeChanged, geosetChanged, textureChanged, materialChanged }),
+                        redo: () => applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, materialsCopy, { nodeChanged, geosetChanged, textureChanged, materialChanged })
                     })
 
-                    applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, { nodeChanged, geosetChanged, textureChanged })
+                    applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, materialsCopy, { nodeChanged, geosetChanged, textureChanged, materialChanged })
                 }
 
                 // Keep selection on the transformed keyframes.
@@ -2317,15 +2631,21 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 const textureAnims = Array.isArray((state.modelData as any)?.TextureAnims)
                     ? ((state.modelData as any).TextureAnims as any[])
                     : []
+                const materials = Array.isArray((state.modelData as any)?.Materials)
+                    ? ((state.modelData as any).Materials as any[])
+                    : []
                 const oldNodes = cloneNodesForKeyframes(nodes)
                 const nodesCopy = cloneNodesForKeyframes(nodes)
                 const oldGeosetAnims = cloneGeosetAnimsForKeyframes(geosetAnims)
                 const geosetAnimsCopy = cloneGeosetAnimsForKeyframes(geosetAnims)
                 const oldTextureAnims = cloneTextureAnimsForKeyframes(textureAnims)
                 const textureAnimsCopy = cloneTextureAnimsForKeyframes(textureAnims)
+                const oldMaterials = cloneMaterialsForKeyframes(materials)
+                const materialsCopy = cloneMaterialsForKeyframes(materials)
                 let nodeChanged = false
                 let geosetChanged = false
                 let textureChanged = false
+                let materialChanged = false
 
                 interactionRef.current.dragKeyframeData.forEach(kfData => {
                     const newFrame = kfData.originalFrame + frameOffset
@@ -2378,6 +2698,24 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                             track.Keys[keyIdx].Frame = newFrame
                             textureChanged = true
                         }
+                        return
+                    }
+
+                    if (kfData.ownerType === 'materialLayer') {
+                        const materialTrack = getMaterialTrackInfo(kfData.type)
+                        if (!materialTrack) return
+                        const { materialIndex, layerIndex } = decodeMaterialLayerOwnerId(Number(kfData.ownerId))
+                        const track = materialsCopy[materialIndex]?.Layers?.[layerIndex]?.[materialTrack.propName]
+                        if (!isAnimTrack(track)) return
+
+                        let keyIdx = kfData.keyIndex
+                        if (keyIdx < 0 || keyIdx >= track.Keys.length) {
+                            keyIdx = track.Keys.findIndex((k: any) => k.Frame === kfData.originalFrame)
+                        }
+                        if (keyIdx >= 0) {
+                            track.Keys[keyIdx].Frame = newFrame
+                            materialChanged = true
+                        }
                     }
                 })
 
@@ -2410,17 +2748,28 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                         if (isAnimTrack(track)) {
                             track.Keys.sort((a: any, b: any) => a.Frame - b.Frame)
                         }
+                        return
+                    }
+
+                    if (kfData.ownerType === 'materialLayer') {
+                        const materialTrack = getMaterialTrackInfo(kfData.type)
+                        if (!materialTrack) return
+                        const { materialIndex, layerIndex } = decodeMaterialLayerOwnerId(Number(kfData.ownerId))
+                        const track = materialsCopy[materialIndex]?.Layers?.[layerIndex]?.[materialTrack.propName]
+                        if (isAnimTrack(track)) {
+                            track.Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                        }
                     }
                 })
 
-                if (nodeChanged || geosetChanged || textureChanged) {
+                if (nodeChanged || geosetChanged || textureChanged || materialChanged) {
                     useHistoryStore.getState().push({
                         name: `移动 ${interactionRef.current.dragKeyframeData.length} 个关键帧`,
-                        undo: () => applyKeyframeSnapshots(oldNodes, oldGeosetAnims, oldTextureAnims, { nodeChanged, geosetChanged, textureChanged }),
-                        redo: () => applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, { nodeChanged, geosetChanged, textureChanged })
+                        undo: () => applyKeyframeSnapshots(oldNodes, oldGeosetAnims, oldTextureAnims, oldMaterials, { nodeChanged, geosetChanged, textureChanged, materialChanged }),
+                        redo: () => applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, materialsCopy, { nodeChanged, geosetChanged, textureChanged, materialChanged })
                     })
 
-                    applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, { nodeChanged, geosetChanged, textureChanged })
+                    applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, materialsCopy, { nodeChanged, geosetChanged, textureChanged, materialChanged })
                 }
 
                 // Keep selection on the moved keyframes.

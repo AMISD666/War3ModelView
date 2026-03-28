@@ -864,7 +864,7 @@ export class RibbonsController {
         first[1] -= heightBelow;
         second[1] += heightAbove;
 
-        const emitterMatrix: mat4 = this.rendererData.nodes[emitter.props.ObjectId].matrix;
+        const emitterMatrix: mat4 = this.rendererData?.nodes?.[emitter.props.ObjectId]?.matrix || mat4.create();
         vec3.transformMat4(first, first, emitterMatrix);
         vec3.transformMat4(second, second, emitterMatrix);
 

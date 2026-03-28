@@ -7,6 +7,7 @@ import { mkdir, writeFile } from '@tauri-apps/plugin-fs';
 import { parseMDL, parseMDX } from 'war3-model';
 import { useModelStore } from '../../store/modelStore';
 import { useSelectionStore } from '../../store/selectionStore';
+import { invokeReadMpqFile } from '../../utils/mpqPerf';
 
 const { Text } = Typography;
 
@@ -470,7 +471,7 @@ export const MpqBrowserPanel: React.FC<MpqBrowserPanelProps> = ({ onClose }) => 
     }, [contextMenu.visible]);
 
     const readMpqBytes = useCallback(async (path: string): Promise<Uint8Array | null> => {
-        const payload = await invoke<any>('read_mpq_file', { path }).catch(() => null);
+        const payload = await invokeReadMpqFile<any>(path, 'MpqBrowserPanel.preview').catch(() => null);
         const bytes = toUint8Array(payload);
         if (!bytes || bytes.byteLength === 0) return null;
         return bytes;

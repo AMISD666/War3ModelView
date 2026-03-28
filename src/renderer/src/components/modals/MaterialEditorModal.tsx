@@ -129,6 +129,7 @@ interface MaterialManagerRpcState {
     snapshotVersion: number
     snapshot: MaterialManagerSnapshot
     pickedGeosetIndex: number | null
+    selectedMaterialIndex: number | null
 }
 
 interface MaterialManagerPatch {
@@ -148,6 +149,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             modelPath: '',
         },
         pickedGeosetIndex: null,
+        selectedMaterialIndex: null,
     }
 
     const { state: rpcState, emitCommand } = useRpcClient<MaterialManagerRpcState, MaterialManagerPatch>(
@@ -262,11 +264,16 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     useEffect(() => {
         if (!visible) return
         if (isStandalone) {
-            focusMaterialForGeoset(rpcState.pickedGeosetIndex)
+            if (Number.isInteger(rpcState.selectedMaterialIndex) && rpcState.selectedMaterialIndex !== null) {
+                setSelectedMaterialIndex(rpcState.selectedMaterialIndex)
+                setSelectedLayerIndex(0)
+            } else {
+                focusMaterialForGeoset(rpcState.pickedGeosetIndex)
+            }
         } else {
             focusMaterialForGeoset(useSelectionStore.getState().pickedGeosetIndex)
         }
-    }, [visible, isStandalone, rpcState.pickedGeosetIndex, focusMaterialForGeoset])
+    }, [visible, isStandalone, rpcState.pickedGeosetIndex, rpcState.selectedMaterialIndex, focusMaterialForGeoset])
     const textureDropZoneRef = React.useRef<HTMLDivElement>(null)
     const layerTextureDropSurfaceRef = React.useRef<HTMLDivElement>(null)
     const detailsDropSurfaceRef = React.useRef<HTMLDivElement>(null)

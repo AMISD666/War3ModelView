@@ -27,6 +27,30 @@ type SummaryRow = {
     skippedSnapshotCount: number
 }
 
+type ViewerFrameSummary = {
+    windowLabel: string
+    avgTotalMs: number
+    maxTotalMs: number
+    slowFrameCount: number
+    avgUpdateMs: number
+    avgSceneMs: number
+    avgOverlayMs: number
+    latestAt: number
+}
+
+type MpqReadSummary = {
+    source: string
+    count: number
+    successCount: number
+    failureCount: number
+    avgMs: number
+    maxMs: number
+    avgBytes: number
+    repeatedPathReads: number
+    uniquePathCount: number
+    latestAt: number
+}
+
 const getTargetWindowLabel = (entry: StandalonePerfEntry): string => {
     const detailWindowId = entry.detail?.windowId
     return typeof detailWindowId === 'string' && detailWindowId.length > 0
@@ -117,6 +141,40 @@ const buildSummaryRows = (entries: StandalonePerfEntry[]): SummaryRow[] => {
         .sort((left, right) => right.latestAt - left.latestAt)
 }
 
+const buildViewerFrameSummaries = (entries: StandalonePerfEntry[]): ViewerFrameSummary[] => (
+    entries
+        .filter(entry => entry.mark === 'viewer_frame_profile')
+        .map((entry) => ({
+            windowLabel: getTargetWindowLabel(entry),
+            avgTotalMs: Number(entry.detail?.avgTotalMs ?? 0),
+            maxTotalMs: Number(entry.detail?.maxTotalMs ?? 0),
+            slowFrameCount: Number(entry.detail?.slowFrameCount ?? 0),
+            avgUpdateMs: Number(entry.detail?.avgUpdateMs ?? 0),
+            avgSceneMs: Number(entry.detail?.avgSceneMs ?? 0),
+            avgOverlayMs: Number(entry.detail?.avgOverlayMs ?? 0),
+            latestAt: entry.epochMs,
+        }))
+        .sort((left, right) => right.latestAt - left.latestAt)
+)
+
+const buildMpqReadSummaries = (entries: StandalonePerfEntry[]): MpqReadSummary[] => (
+    entries
+        .filter(entry => entry.mark === 'mpq_read_stats')
+        .map((entry) => ({
+            source: String(entry.detail?.source ?? 'unknown'),
+            count: Number(entry.detail?.count ?? 0),
+            successCount: Number(entry.detail?.successCount ?? 0),
+            failureCount: Number(entry.detail?.failureCount ?? 0),
+            avgMs: Number(entry.detail?.avgMs ?? 0),
+            maxMs: Number(entry.detail?.maxMs ?? 0),
+            avgBytes: Number(entry.detail?.avgBytes ?? 0),
+            repeatedPathReads: Number(entry.detail?.repeatedPathReads ?? 0),
+            uniquePathCount: Number(entry.detail?.uniquePathCount ?? 0),
+            latestAt: entry.epochMs,
+        }))
+        .sort((left, right) => right.latestAt - left.latestAt)
+)
+
 const summaryCardStyle: React.CSSProperties = {
     minWidth: 220,
     flex: '1 1 220px',
@@ -150,6 +208,8 @@ const rowStyle: React.CSSProperties = {
 
 const StandalonePerfModal: React.FC<StandalonePerfModalProps> = ({ open, onClose, onClear, entries }) => {
     const summaryRows = buildSummaryRows(entries)
+    const viewerFrameSummaries = buildViewerFrameSummaries(entries)
+    const mpqReadSummaries = buildMpqReadSummaries(entries)
     const latestEntryLabel = entries[0] ? `${getTargetWindowLabel(entries[0])} / ${entries[0].mark}` : '--'
 
     return (
@@ -225,6 +285,56 @@ const StandalonePerfModal: React.FC<StandalonePerfModalProps> = ({ open, onClose
                                     <div>{`patch ${row.patchSentCount} / received ${row.patchReceivedCount}`}</div>
                                     <div>{`direct ${row.directEmitCount} / fallback ${row.fallbackCount}`}</div>
                                     <div>{`skip ${row.skippedSnapshotCount} / total ${row.eventCount}`}</div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+
+            <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>渲染帧摘要</div>
+                {viewerFrameSummaries.length === 0 ? (
+                    <div style={{ color: '#8c8c8c' }}>当前还没有收到 `viewer_frame_profile` 事件。</div>
+                ) : (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+                        {viewerFrameSummaries.slice(0, 6).map((row) => (
+                            <div key={`${row.windowLabel}-${row.latestAt}`} style={summaryCardStyle}>
+                                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>{row.windowLabel}</div>
+                                <div style={labelStyle}>平均帧耗时</div>
+                                <div style={{ color: '#f0f0f0', marginBottom: 8 }}>{formatDuration(row.avgTotalMs)}</div>
+                                <div style={labelStyle}>最大帧耗时</div>
+                                <div style={{ color: '#f0f0f0', marginBottom: 8 }}>{formatDuration(row.maxTotalMs)}</div>
+                                <div style={labelStyle}>阶段均值</div>
+                                <div style={{ color: '#f0f0f0', fontFamily: 'Consolas, monospace', fontSize: 12, lineHeight: 1.7 }}>
+                                    <div>{`update ${formatDuration(row.avgUpdateMs)}`}</div>
+                                    <div>{`scene ${formatDuration(row.avgSceneMs)}`}</div>
+                                    <div>{`overlay ${formatDuration(row.avgOverlayMs)}`}</div>
+                                    <div>{`slow ${row.slowFrameCount}`}</div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+
+            <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>MPQ 读取摘要</div>
+                {mpqReadSummaries.length === 0 ? (
+                    <div style={{ color: '#8c8c8c' }}>当前还没有收到 `mpq_read_stats` 事件。</div>
+                ) : (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+                        {mpqReadSummaries.slice(0, 8).map((row) => (
+                            <div key={`${row.source}-${row.latestAt}`} style={summaryCardStyle}>
+                                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, wordBreak: 'break-all' }}>{row.source}</div>
+                                <div style={labelStyle}>平均读取耗时</div>
+                                <div style={{ color: '#f0f0f0', marginBottom: 8 }}>{formatDuration(row.avgMs)}</div>
+                                <div style={labelStyle}>调用统计</div>
+                                <div style={{ color: '#f0f0f0', fontFamily: 'Consolas, monospace', fontSize: 12, lineHeight: 1.7 }}>
+                                    <div>{`count ${row.count} / ok ${row.successCount}`}</div>
+                                    <div>{`fail ${row.failureCount} / max ${formatDuration(row.maxMs)}`}</div>
+                                    <div>{`avgBytes ${row.avgBytes}`}</div>
+                                    <div>{`repeat ${row.repeatedPathReads} / uniq ${row.uniquePathCount}`}</div>
                                 </div>
                             </div>
                         ))}

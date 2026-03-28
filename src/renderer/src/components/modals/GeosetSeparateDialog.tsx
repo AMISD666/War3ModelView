@@ -6,6 +6,7 @@ import { decodeBLP, getBLPImageData } from 'war3-model';
 import { readFile } from '@tauri-apps/plugin-fs';
 import { invoke } from '@tauri-apps/api/core';
 import { MaterialLayerOptions, LayerConfig, DEFAULT_LAYER_CONFIG } from './MaterialLayerOptions';
+import { invokeReadMpqFile } from '../../utils/mpqPerf';
 
 type MaterialMode = 'keep' | 'new' | 'existing';
 
@@ -121,7 +122,7 @@ export const GeosetSeparateDialog: React.FC<GeosetSeparateDialogProps> = ({
                         buffer = fileData.buffer;
                     } catch {
                         try {
-                            const mpqResult: number[] = await invoke('read_mpq_file', { path: texturePath.replace(/\//g, '\\') });
+                            const mpqResult: number[] = await invokeReadMpqFile<number[]>(texturePath.replace(/\//g, '\\'), 'GeosetSeparateDialog.preview');
                             buffer = new Uint8Array(mpqResult).buffer;
                         } catch {
                             buffer = null;

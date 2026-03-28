@@ -27,6 +27,7 @@ import {
     CompressOutlined
 } from '@ant-design/icons'
 import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker'
+import { invokeReadMpqFile } from '../../utils/mpqPerf'
 
 interface UVEditorProps {
     modelPath: string | null
@@ -1170,7 +1171,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
                         buffer = data.buffer
                     } catch {
                         try {
-                            const mpqData = await invoke<number[]>('read_mpq_file', { path: texture.Image })
+                            const mpqData = await invokeReadMpqFile<number[]>(texture.Image, 'UVEditor.texturePreview')
                             if (mpqData) {
                                 buffer = new Uint8Array(mpqData).buffer
                             }

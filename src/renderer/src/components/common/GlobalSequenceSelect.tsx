@@ -44,7 +44,7 @@ export const GlobalSequenceSelect: React.FC<GlobalSequenceSelectProps> = ({
     const options = [
         { label: '(空)', value: -1 },
         ...sequences.map((dur, idx) => ({
-            label: `全局序列 ${idx} (${dur}ms)`,
+            label: ` ${idx} (${dur}ms)`,
             value: idx
         }))
     ];
@@ -131,7 +131,7 @@ export const GlobalSequenceSelect: React.FC<GlobalSequenceSelectProps> = ({
                                 color: '#5a9cff'
                             }}
                         >
-                            新建全局序列
+                            新建全局
                         </Button>
                         <Divider style={{ margin: '4px 0', borderColor: '#484848' }} />
                         {menu}

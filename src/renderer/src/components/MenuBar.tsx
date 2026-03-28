@@ -488,7 +488,6 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             <span>多边形动画管理器</span>
                             <span style={{ color: '#888', fontSize: '11px' }}>E</span>
                         </div>
-                        <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
                         <div
                             style={itemStyle}
                             onMouseEnter={hoverStyle}
@@ -551,6 +550,15 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             <span style={{ color: '#888', fontSize: '11px' }}>L</span>
                         </div>
                         <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
+                        <div
+                            style={itemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={() => { onShowStandalonePerf(); closeMenu() }}
+                        >
+                            <span>独立窗口性能打点</span>
+                            <span>{showStandalonePerf ? '✓' : ''}</span>
+                        </div>
                         <div
                             style={itemStyle}
                             onMouseEnter={hoverStyle}

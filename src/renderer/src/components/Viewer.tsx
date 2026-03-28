@@ -69,6 +69,8 @@ import { GeosetSeparateDialog } from './modals/GeosetSeparateDialog'
 import { LayerConfig, layerConfigToMaterialLayer } from './modals/MaterialLayerOptions'
 import { NodeType } from '../types/node'
 import { registerShortcutHandler } from '../shortcuts/manager'
+import { markStandalonePerf } from '../utils/standalonePerf'
+import { invokeReadMpqFile } from '../utils/mpqPerf'
 
 // Singleton loop counter to prevent runaway FPS
 let globalRenderLoopId = 0
@@ -176,6 +178,46 @@ const WEBGL_CONTEXT_ATTRIBUTES: WebGLContextAttributes = {
   preserveDrawingBuffer: false
 }
 
+type ViewerFramePerfSample = {
+  totalMs: number
+  clearMs: number
+  cameraMs: number
+  stateMs: number
+  updateMs: number
+  sceneMs: number
+  overlayMs: number
+}
+
+type ViewerFramePerfAggregate = {
+  samples: number
+  totalMs: number
+  maxTotalMs: number
+  slowFrameCount: number
+  clearMs: number
+  cameraMs: number
+  stateMs: number
+  updateMs: number
+  sceneMs: number
+  overlayMs: number
+  lastSlowEmitMs: number
+}
+
+const createViewerFramePerfAggregate = (): ViewerFramePerfAggregate => ({
+  samples: 0,
+  totalMs: 0,
+  maxTotalMs: 0,
+  slowFrameCount: 0,
+  clearMs: 0,
+  cameraMs: 0,
+  stateMs: 0,
+  updateMs: 0,
+  sceneMs: 0,
+  overlayMs: 0,
+  lastSlowEmitMs: 0,
+})
+
+const roundPerfValue = (value: number): number => Number(value.toFixed(2))
+
 const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   const {
   modelPath,
@@ -230,6 +272,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   const animationFrameId = useRef<number | null>(null)
   const shouldRunRenderLoop = useRef<boolean>(true) // Flag to stop RAF loop on cleanup
   const lastRenderErrorReportTimeRef = useRef<number>(0)
+  const framePerfRef = useRef<ViewerFramePerfAggregate>(createViewerFramePerfAggregate())
   const lastFpsTime = useRef<number>(performance.now())
   const lastFrameTime = useRef<number>(performance.now())
   const frameCount = useRef<number>(0)
@@ -249,6 +292,65 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   } | null>(null)
   const backgroundTextureResolveRunningRef = useRef(false)
   const attemptedMissingTexturePathsRef = useRef<Set<string>>(new Set())
+
+  const flushFramePerfSummary = useCallback((reason: string, force = false) => {
+    const bucket = framePerfRef.current
+    if (bucket.samples === 0) return
+    if (!force && bucket.samples < 90) return
+
+    markStandalonePerf('viewer_frame_profile', {
+      reason,
+      samples: bucket.samples,
+      avgTotalMs: roundPerfValue(bucket.totalMs / bucket.samples),
+      maxTotalMs: roundPerfValue(bucket.maxTotalMs),
+      slowFrameCount: bucket.slowFrameCount,
+      avgClearMs: roundPerfValue(bucket.clearMs / bucket.samples),
+      avgCameraMs: roundPerfValue(bucket.cameraMs / bucket.samples),
+      avgStateMs: roundPerfValue(bucket.stateMs / bucket.samples),
+      avgUpdateMs: roundPerfValue(bucket.updateMs / bucket.samples),
+      avgSceneMs: roundPerfValue(bucket.sceneMs / bucket.samples),
+      avgOverlayMs: roundPerfValue(bucket.overlayMs / bucket.samples),
+      isPlaying: isPlayingRef.current,
+      modelPath: modelPath || '',
+    })
+
+    framePerfRef.current = createViewerFramePerfAggregate()
+  }, [modelPath])
+
+  const recordFramePerfSample = useCallback((sample: ViewerFramePerfSample, detail?: Record<string, unknown>) => {
+    const bucket = framePerfRef.current
+    bucket.samples += 1
+    bucket.totalMs += sample.totalMs
+    bucket.maxTotalMs = Math.max(bucket.maxTotalMs, sample.totalMs)
+    bucket.clearMs += sample.clearMs
+    bucket.cameraMs += sample.cameraMs
+    bucket.stateMs += sample.stateMs
+    bucket.updateMs += sample.updateMs
+    bucket.sceneMs += sample.sceneMs
+    bucket.overlayMs += sample.overlayMs
+    if (sample.totalMs >= 16.7) {
+      bucket.slowFrameCount += 1
+    }
+
+    const now = performance.now()
+    if (sample.totalMs >= 33 && now - bucket.lastSlowEmitMs >= 1000) {
+      bucket.lastSlowEmitMs = now
+      markStandalonePerf('viewer_slow_frame', {
+        totalMs: roundPerfValue(sample.totalMs),
+        clearMs: roundPerfValue(sample.clearMs),
+        cameraMs: roundPerfValue(sample.cameraMs),
+        stateMs: roundPerfValue(sample.stateMs),
+        updateMs: roundPerfValue(sample.updateMs),
+        sceneMs: roundPerfValue(sample.sceneMs),
+        overlayMs: roundPerfValue(sample.overlayMs),
+        ...detail,
+      })
+    }
+
+    if (bucket.samples >= 90) {
+      flushFramePerfSummary('periodic')
+    }
+  }, [flushFramePerfSummary])
 
   useEffect(() => {
     return () => {
@@ -734,7 +836,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       }
 
       try {
-        const mpqData = await invoke<Uint8Array>('read_mpq_file', { path: normalizedImagePath })
+        const mpqData = await invokeReadMpqFile<Uint8Array>(normalizedImagePath, 'Viewer.readTextureSource')
         if (mpqData && mpqData.length > 0) {
           return decodeTextureData(mpqData.buffer as ArrayBuffer, imagePath)
         }
@@ -1528,7 +1630,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
     const loadTexture = async (path: string, id: number) => {
       try {
-        const mpqPayload = await invoke<any>('read_mpq_file', { path }).catch(() => null)
+        const mpqPayload = await invokeReadMpqFile<any>(path, 'Viewer.loadTeamColorTextures').catch(() => null)
         const mpqData = toUint8Array(mpqPayload)
 
         if (mpqData && mpqData.length > 0) {
@@ -3146,7 +3248,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         try {
           return await readFile(assetPath)
         } catch {
-          const mpqPayload = await invoke<any>('read_mpq_file', { path: assetPath }).catch(() => null)
+          const mpqPayload = await invokeReadMpqFile<any>(assetPath, 'Viewer.loadBackgroundAsset').catch(() => null)
           const mpqBytes = toUint8Array(mpqPayload)
           if (!mpqBytes || mpqBytes.byteLength === 0) {
             throw new Error(`无法读取资源文件: ${assetPath}`)
@@ -3815,6 +3917,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         }
 
         try {
+          const framePerfStart = performance.now()
+          let stageStart = framePerfStart
 
           const canvas = canvasRef.current
           const mdlRenderer = rendererRef.current
@@ -3832,6 +3936,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             gl.clearColor(r, g, b, 1.0)
             gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
           }
+          const clearMs = performance.now() - stageStart
+          stageStart = performance.now()
           const delta = time - lastFrameTime.current
           lastFrameTime.current = time
 
@@ -3878,6 +3984,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
             mat4.perspective(pMatrix, Math.PI / 4, canvas.width / canvas.height, 1, 100000)
           }
+          const cameraMs = performance.now() - stageStart
+          stageStart = performance.now()
 
           const { geometrySubMode, transformMode, selectedVertexIds, selectedFaceIds, animationSubMode: currentAnimationSubMode, mainMode: currentMainMode, isGlobalTransformMode } = useSelectionStore.getState()
           const previewTransform = previewTransformRef.current
@@ -3887,6 +3995,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             animationIndex === -1 ||
             currentMainMode === 'geometry' ||
             (currentMainMode === 'animation' && currentAnimationSubMode === 'binding')
+          const stateMs = performance.now() - stageStart
+          stageStart = performance.now()
 
           // Debug logs commented out to reduce console noise
           // if (time - lastFpsTime.current > 1000) {
@@ -4033,6 +4143,10 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             // Do not write renderer frame back to store here, otherwise it fights timeline
             // dragging and can lock scrubbing around the first processed frame.
           }
+          const updateMs = performance.now() - stageStart
+          const sceneStageStart = performance.now()
+          let sceneMs = 0
+          let overlayStageStart = sceneStageStart
 
 
           // === Camera Frustum Rendering ===
@@ -4272,6 +4386,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 mdlRenderer.rendererData.geosetAlpha[index] = alpha
               })
             }
+            sceneMs = performance.now() - sceneStageStart
+            overlayStageStart = performance.now()
 
             // === Hover Highlight ===
             // If a geoset is hovered, render a highlight overlay
@@ -4995,6 +5111,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           if (gl) {
             axisIndicator.current.render(gl as WebGLRenderingContext, baseMvMatrix || mvMatrix, canvas.width, canvas.height)
           }
+          const overlayMs = performance.now() - overlayStageStart
 
           frameCount.current++
           if (time - lastFpsTime.current >= 1000) {
@@ -5002,6 +5119,20 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             frameCount.current = 0
             lastFpsTime.current = time
           }
+          recordFramePerfSample({
+            totalMs: performance.now() - framePerfStart,
+            clearMs,
+            cameraMs,
+            stateMs,
+            updateMs,
+            sceneMs,
+            overlayMs,
+          }, {
+            mainMode: currentMainMode,
+            animationSubMode: currentAnimationSubMode,
+            transformMode: transformMode || 'none',
+            playing: isPlayingRef.current,
+          })
           // NOTE: requestAnimationFrame is called AFTER the catch block, not here!
         } catch (e: any) {
           const now = performance.now()
@@ -5039,6 +5170,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         // CRITICAL: Set THIS closure's flag to false
         // Only affects this specific render function, not new ones
         console.log('[Viewer] Cleanup: stopping RAF loop for mode:', appMainMode)
+        flushFramePerfSummary('cleanup', true)
         runState.shouldRun = false
         if (animationFrameId.current) {
           cancelAnimationFrame(animationFrameId.current)
@@ -5049,7 +5181,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     return undefined
     // PERFORMANCE: animationSubMode is read via getState() inside render, so don't include in deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [renderer, appMainMode, animationIndex])
+  }, [renderer, appMainMode, animationIndex, flushFramePerfSummary, recordFramePerfSample])
 
   useEffect(() => {
     // Guard: Only set sequence if renderer is fully initialized with valid rendererData
