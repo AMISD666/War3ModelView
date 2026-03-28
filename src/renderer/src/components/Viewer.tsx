@@ -2907,7 +2907,57 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
       // Use accurate ray-triangle intersection to find closest geoset
       const geosets = rendererRef.current.model.Geosets || []
-      const result = pickClosestGeoset(cameraPos, rayDir, geosets)
+
+      // Build skinned vertices for animation-aware picking
+      const rendererNodes = rendererRef.current.rendererData?.nodes
+      let skinnedVerticesMap: Map<number, Float32Array> | undefined
+      if (rendererNodes) {
+        // Build ObjectId → matrix lookup
+        const nodeMatrixByObjectId = new Map<number, Float32Array | number[]>()
+        for (const nodeWrapper of rendererNodes as any[]) {
+          const objId = nodeWrapper?.node?.ObjectId
+          const mtx = nodeWrapper?.matrix || nodeWrapper?.worldMatrix
+          if (objId !== undefined && mtx) {
+            nodeMatrixByObjectId.set(Number(objId), mtx)
+          }
+        }
+
+        skinnedVerticesMap = new Map()
+        for (let gi = 0; gi < geosets.length; gi++) {
+          const geoset = geosets[gi]
+          if (!geoset.Vertices || !geoset.VertexGroup || !geoset.Groups) continue
+          const bindVerts = geoset.Vertices
+          const vertCount = bindVerts.length / 3
+          const skinned = new Float32Array(bindVerts.length)
+          for (let vi = 0; vi < vertCount; vi++) {
+            const groupIndex = geoset.VertexGroup[vi]
+            const boneIds = geoset.Groups[groupIndex]
+            const bx = bindVerts[vi * 3], by = bindVerts[vi * 3 + 1], bz = bindVerts[vi * 3 + 2]
+            if (boneIds && boneIds.length > 0) {
+              let sx = 0, sy = 0, sz = 0, validBones = 0
+              for (const boneId of boneIds) {
+                const mtx = nodeMatrixByObjectId.get(Number(boneId))
+                if (!mtx) continue
+                sx += mtx[0] * bx + mtx[4] * by + mtx[8] * bz + mtx[12]
+                sy += mtx[1] * bx + mtx[5] * by + mtx[9] * bz + mtx[13]
+                sz += mtx[2] * bx + mtx[6] * by + mtx[10] * bz + mtx[14]
+                validBones++
+              }
+              if (validBones > 0) {
+                const inv = 1 / validBones
+                skinned[vi * 3] = sx * inv; skinned[vi * 3 + 1] = sy * inv; skinned[vi * 3 + 2] = sz * inv
+              } else {
+                skinned[vi * 3] = bx; skinned[vi * 3 + 1] = by; skinned[vi * 3 + 2] = bz
+              }
+            } else {
+              skinned[vi * 3] = bx; skinned[vi * 3 + 1] = by; skinned[vi * 3 + 2] = bz
+            }
+          }
+          skinnedVerticesMap.set(gi, skinned)
+        }
+      }
+
+      const result = pickClosestGeoset(cameraPos, rayDir, geosets, skinnedVerticesMap)
       if (result !== null) {
         console.log('[Viewer] Ctrl+Click picked geoset:', result.geosetIndex, 'at distance:', result.distance)
         setPickedGeosetIndex(result.geosetIndex)
@@ -4390,44 +4440,97 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             overlayStageStart = performance.now()
 
             // === Hover Highlight ===
-            // If a geoset is hovered, render a highlight overlay
+            // If a geoset is hovered, render a highlight overlay using animated (skinned) vertex positions
             if (hoveredGeosetId !== null && mdlRenderer.model.Geosets && mdlRenderer.model.Geosets[hoveredGeosetId]) {
-              const isWireframeMode = showWireframeRef.current
+              const geoset = mdlRenderer.model.Geosets[hoveredGeosetId]
+              if (geoset && geoset.Faces && geoset.Vertices) {
+                // Build skinned vertex positions using bone matrices from rendererData.nodes
+                const bindVerts = geoset.Vertices
+                const vertCount = bindVerts.length / 3
+                let skinnedVerts = bindVerts // fallback to bind pose
 
-              if (isWireframeMode && gl && debugRenderer.current) {
-                // In wireframe mode, draw red wireframe for hovered geoset using debugRenderer
-                const geoset = mdlRenderer.model.Geosets[hoveredGeosetId]
-                if (geoset && geoset.Faces && geoset.Vertices) {
+                const rendererNodes = mdlRenderer.rendererData?.nodes
+                if (rendererNodes && geoset.VertexGroup && geoset.Groups) {
+                  const skinned = new Float32Array(bindVerts.length)
+                  // Build ObjectId → matrix lookup from rendererData.nodes
+                  const nodeMatrixByObjectId = new Map<number, Float32Array | number[]>()
+                  for (const nodeWrapper of rendererNodes as any[]) {
+                    const objId = nodeWrapper?.node?.ObjectId
+                    const mtx = nodeWrapper?.matrix || nodeWrapper?.worldMatrix
+                    if (objId !== undefined && mtx) {
+                      nodeMatrixByObjectId.set(Number(objId), mtx)
+                    }
+                  }
+
+                  const tempIn = new Float32Array(3)
+                  const tempOut = new Float32Array(3)
+
+                  for (let vi = 0; vi < vertCount; vi++) {
+                    const groupIndex = geoset.VertexGroup[vi]
+                    const boneIds = geoset.Groups[groupIndex]
+                    const bx = bindVerts[vi * 3]
+                    const by = bindVerts[vi * 3 + 1]
+                    const bz = bindVerts[vi * 3 + 2]
+
+                    if (boneIds && boneIds.length > 0) {
+                      // Average transform across all bones in this group
+                      let sx = 0, sy = 0, sz = 0
+                      let validBones = 0
+                      for (const boneId of boneIds) {
+                        const mtx = nodeMatrixByObjectId.get(Number(boneId))
+                        if (!mtx) continue
+                        // mat4 transform: out = M * in (column-major 4x4)
+                        const ox = mtx[0] * bx + mtx[4] * by + mtx[8] * bz + mtx[12]
+                        const oy = mtx[1] * bx + mtx[5] * by + mtx[9] * bz + mtx[13]
+                        const oz = mtx[2] * bx + mtx[6] * by + mtx[10] * bz + mtx[14]
+                        sx += ox; sy += oy; sz += oz
+                        validBones++
+                      }
+                      if (validBones > 0) {
+                        const inv = 1 / validBones
+                        skinned[vi * 3] = sx * inv
+                        skinned[vi * 3 + 1] = sy * inv
+                        skinned[vi * 3 + 2] = sz * inv
+                      } else {
+                        skinned[vi * 3] = bx
+                        skinned[vi * 3 + 1] = by
+                        skinned[vi * 3 + 2] = bz
+                      }
+                    } else {
+                      skinned[vi * 3] = bx
+                      skinned[vi * 3 + 1] = by
+                      skinned[vi * 3 + 2] = bz
+                    }
+                  }
+                  skinnedVerts = skinned
+                }
+
+                const faces = geoset.Faces
+                const isWireframeMode = showWireframeRef.current
+
+                if (isWireframeMode && gl && debugRenderer.current) {
                   const linePositions: number[] = []
-                  const faces = geoset.Faces
-                  const verts = geoset.Vertices
                   for (let i = 0; i < faces.length; i += 3) {
                     const i1 = faces[i] * 3, i2 = faces[i + 1] * 3, i3 = faces[i + 2] * 3
-                    linePositions.push(verts[i1], verts[i1 + 1], verts[i1 + 2], verts[i2], verts[i2 + 1], verts[i2 + 2])
-                    linePositions.push(verts[i2], verts[i2 + 1], verts[i2 + 2], verts[i3], verts[i3 + 1], verts[i3 + 2])
-                    linePositions.push(verts[i3], verts[i3 + 1], verts[i3 + 2], verts[i1], verts[i1 + 1], verts[i1 + 2])
+                    linePositions.push(skinnedVerts[i1], skinnedVerts[i1 + 1], skinnedVerts[i1 + 2], skinnedVerts[i2], skinnedVerts[i2 + 1], skinnedVerts[i2 + 2])
+                    linePositions.push(skinnedVerts[i2], skinnedVerts[i2 + 1], skinnedVerts[i2 + 2], skinnedVerts[i3], skinnedVerts[i3 + 1], skinnedVerts[i3 + 2])
+                    linePositions.push(skinnedVerts[i3], skinnedVerts[i3 + 1], skinnedVerts[i3 + 2], skinnedVerts[i1], skinnedVerts[i1 + 1], skinnedVerts[i1 + 2])
                   }
                   gl.disable(gl.DEPTH_TEST)
                   debugRenderer.current.renderLines(gl as WebGLRenderingContext, mvMatrix, pMatrix, linePositions, [1, 0, 0, 1])
                   gl.enable(gl.DEPTH_TEST)
-                }
-              } else {
-                // Non-wireframe mode: render a pure-color overlay (no material influence)
-                const geoset = mdlRenderer.model.Geosets[hoveredGeosetId]
-                if (geoset && geoset.Faces && geoset.Vertices) {
+                } else {
                   const { hoverColor } = useRendererStore.getState()
                   const hoverColorRgb = hexToRgb(hoverColor)
                   const positions: number[] = []
-                  const faces = geoset.Faces
-                  const verts = geoset.Vertices
                   for (let i = 0; i < faces.length; i += 3) {
                     const i1 = faces[i] * 3
                     const i2 = faces[i + 1] * 3
                     const i3 = faces[i + 2] * 3
                     positions.push(
-                      verts[i1], verts[i1 + 1], verts[i1 + 2],
-                      verts[i2], verts[i2 + 1], verts[i2 + 2],
-                      verts[i3], verts[i3 + 1], verts[i3 + 2]
+                      skinnedVerts[i1], skinnedVerts[i1 + 1], skinnedVerts[i1 + 2],
+                      skinnedVerts[i2], skinnedVerts[i2 + 1], skinnedVerts[i2 + 2],
+                      skinnedVerts[i3], skinnedVerts[i3 + 1], skinnedVerts[i3 + 2]
                     )
                   }
                   gl.disable(gl.DEPTH_TEST)
@@ -4876,7 +4979,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
           }
 
-          if (gl && ((currentMainMode === 'geometry' && geometrySubMode === 'vertex') ||
+          if (gl && (currentMainMode === 'view' ||
+            (currentMainMode === 'geometry' && geometrySubMode === 'vertex') ||
             (currentMainMode === 'animation' && currentAnimationSubMode === 'binding'))) {
             // Get geoset visibility state from modelStore
             const { hiddenGeosetIds, forceShowAllGeosets, hoveredGeosetId } = useModelStore.getState()

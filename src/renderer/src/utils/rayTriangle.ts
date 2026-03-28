@@ -70,7 +70,8 @@ export interface GeosetPickResult {
 export function pickClosestGeoset(
     rayOrigin: vec3,
     rayDir: vec3,
-    geosets: any[]
+    geosets: any[],
+    skinnedVerticesMap?: Map<number, Float32Array | number[]>
 ): GeosetPickResult | null {
     let closestHit: GeosetPickResult | null = null;
 
@@ -78,7 +79,8 @@ export function pickClosestGeoset(
         const geoset = geosets[geosetIndex];
         if (!geoset.Vertices || !geoset.Faces) continue;
 
-        const vertices = geoset.Vertices;
+        // Use skinned vertices if available, otherwise bind-pose
+        const vertices = skinnedVerticesMap?.get(geosetIndex) ?? geoset.Vertices;
         const faces = geoset.Faces;
         const numFaces = faces.length / 3;
 
