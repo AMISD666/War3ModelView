@@ -44,6 +44,8 @@ import {
 import { windowManager } from '../utils/WindowManager'
 import { useRpcServer } from '../hooks/useRpc'
 import { STANDALONE_PERF_EVENT, StandalonePerfEntry, markStandalonePerf } from '../utils/standalonePerf'
+import { parseModelBuffer, mergeGeosets, mergeAnimations } from '../utils/modelMerge'
+import { readFile, copyFile } from '@tauri-apps/plugin-fs'
 
 /**
  * Normalize model data before saving to ensure typed arrays are correct.
@@ -107,13 +109,13 @@ const mergeStandalonePerfEntries = (
     const seen = new Set<string>()
     const merged: StandalonePerfEntry[] = []
 
-    ;[...incomingEntries, ...previousEntries].forEach((entry) => {
-        if (!entry || seen.has(entry.entryId)) {
-            return
-        }
-        seen.add(entry.entryId)
-        merged.push(entry)
-    })
+        ;[...incomingEntries, ...previousEntries].forEach((entry) => {
+            if (!entry || seen.has(entry.entryId)) {
+                return
+            }
+            seen.add(entry.entryId)
+            merged.push(entry)
+        })
 
     return merged.slice(0, MAX_STANDALONE_PERF_ENTRIES)
 }
@@ -1966,7 +1968,7 @@ const MainLayout: React.FC = () => {
     }, [])
     const clearStandalonePerfEntries = useCallback(() => {
         setStandalonePerfEntries([])
-        ; (window as StandalonePerfHostWindow).__standalonePerfEntries = []
+            ; (window as StandalonePerfHostWindow).__standalonePerfEntries = []
     }, [])
 
     useEffect(() => {
@@ -2128,6 +2130,79 @@ const MainLayout: React.FC = () => {
     useEffect(() => {
         broadcastModelOptimize(getModelOptimizeState());
     }, [modelOptimizeRunning, modelOptimizeLastResult, getModelOptimizeState, broadcastModelOptimize]);
+
+    // ---- Model Merge RPC Server ----
+    const getModelMergeState = useCallback(() => {
+        const store = useModelStore.getState();
+        return {
+            modelPath: store.modelPath || '',
+            modelData: null, // Don't send full model data over RPC, too large
+        };
+    }, []);
+
+    const handleModelMergeCommand = useCallback(async (command: string, payload: any) => {
+        if (command === 'APPLY_MERGED_MODEL_PATH' && payload?.model2Path && payload?.mergeMode) {
+            const currentModel = useModelStore.getState().modelData;
+            const currentPath = useModelStore.getState().modelPath;
+            const snapshotBefore = currentModel ? structuredClone(currentModel) : null;
+
+            try {
+                // Read model2 directly from disk in MainLayout to prevent RPC serialization from destroying TypedArrays
+                const buffer = await readFile(payload.model2Path);
+                const arrayBuffer = buffer instanceof ArrayBuffer ? buffer : (buffer as Uint8Array).buffer;
+                const model2Data = parseModelBuffer(arrayBuffer, payload.model2Path);
+
+                let mergedModel: any = null;
+                if (payload.mergeMode === 'geosets') {
+                    mergedModel = mergeGeosets(currentModel, model2Data);
+
+                    // Physical Texture Copy Logic for Geosets Mode
+                    if (currentPath && payload.model2Path) {
+                        const dir1 = currentPath.substring(0, Math.max(currentPath.lastIndexOf('\\'), currentPath.lastIndexOf('/')));
+                        const dir2 = payload.model2Path.substring(0, Math.max(payload.model2Path.lastIndexOf('\\'), payload.model2Path.lastIndexOf('/')));
+                        
+                        if (dir1 !== dir2 && Array.isArray(model2Data.Textures)) {
+                            for (const tex of model2Data.Textures) {
+                                if (tex.Image) {
+                                    try {
+                                        const srcPath = dir2.endsWith('\\') || dir2.endsWith('/') ? `${dir2}${tex.Image}` : `${dir2}\\${tex.Image}`;
+                                        const destPath = dir1.endsWith('\\') || dir1.endsWith('/') ? `${dir1}${tex.Image}` : `${dir1}\\${tex.Image}`;
+                                        await copyFile(srcPath, destPath);
+                                        console.log(`[ModelMerge] Copied texture: ${tex.Image}`);
+                                    } catch(e) {
+                                        // Ignore, might be an MPQ texture or already exists
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    mergedModel = mergeAnimations(currentModel, model2Data);
+                }
+
+                setZustandModelData(mergedModel, currentPath || null);
+                // Force renderer to fully reload the model (new geosets/bones need re-parsing)
+                useModelStore.setState(s => ({ rendererReloadTrigger: s.rendererReloadTrigger + 1 }));
+                useHistoryStore.getState().push({
+                    name: '模型合并',
+                    undo: () => {
+                        setZustandModelData(snapshotBefore ? structuredClone(snapshotBefore) : null, currentPath || null);
+                        useModelStore.setState(s => ({ rendererReloadTrigger: s.rendererReloadTrigger + 1 }));
+                    },
+                    redo: () => {
+                        setZustandModelData(structuredClone(mergedModel), currentPath || null);
+                        useModelStore.setState(s => ({ rendererReloadTrigger: s.rendererReloadTrigger + 1 }));
+                    }
+                });
+                showMessage('success', '模型合并', '模型合并完成');
+            } catch (err) {
+                console.error('[ModelMerge] Failed to execute merge on main window:', err);
+                showMessage('error', '模型合并失败', String(err));
+            }
+        }
+    }, [setZustandModelData]);
+
+    useRpcServer('modelMerge', getModelMergeState, handleModelMergeCommand);
 
     useEffect(() => {
         if (!modelData || standaloneWarmupStartedRef.current) return
@@ -4549,6 +4624,8 @@ const MainLayout: React.FC = () => {
                     } else if (editor === 'modelOptimize') {
                         // Open as native window using the WindowManager
                         windowManager.openToolWindow('modelOptimize', '模型优化', 320, 520);
+                    } else if (editor === 'modelMerge') {
+                        windowManager.openToolWindow('modelMerge', '模型合并', 560, 500);
                     } else if (editor === 'geosetVisibility') {
                         setShowGeosetVisibility(!showGeosetVisibility)
                     } else {
@@ -4861,28 +4938,28 @@ const MainLayout: React.FC = () => {
                             >
                                 <Viewer
                                     ref={viewerRef as any}
-                                modelPath={modelPath}
-                                modelData={modelData}
-                                teamColor={teamColor}
-                                showGrid={showGridXY}
-                                showNodes={mainMode !== 'uv' && showNodes}
-                                showSkeleton={mainMode !== 'uv' && showSkeleton}
-                                showCollisionShapes={mainMode !== 'uv' && showCollisionShapes}
-                                showCameras={mainMode !== 'uv' && showCameras}
-                                showLights={mainMode !== 'uv' && mainMode !== 'animation' && showLights}
-                                showAttachments={mainMode !== 'uv' && showAttachments}
-                                showWireframe={mainMode !== 'uv' && renderMode === 'wireframe'}
-                                onToggleWireframe={() => setRenderMode(renderMode === 'textured' ? 'wireframe' : 'textured')}
-                                backgroundColor={backgroundColor}
-                                animationIndex={currentSequence}
-                                isPlaying={mainMode !== 'uv' && isPlaying}
-                                onTogglePlay={() => setPlaying(!isPlaying)}
-                                onModelLoaded={handleModelLoaded}
-                                showFPS={mainMode !== 'uv' && showFPS}
-                                playbackSpeed={playbackSpeed}
-                                viewPreset={viewPreset}
-                                onSetViewPreset={handleSetViewPreset}
-                                onAddCameraFromView={handleAddCameraFromView}
+                                    modelPath={modelPath}
+                                    modelData={modelData}
+                                    teamColor={teamColor}
+                                    showGrid={showGridXY}
+                                    showNodes={mainMode !== 'uv' && showNodes}
+                                    showSkeleton={mainMode !== 'uv' && showSkeleton}
+                                    showCollisionShapes={mainMode !== 'uv' && showCollisionShapes}
+                                    showCameras={mainMode !== 'uv' && showCameras}
+                                    showLights={mainMode !== 'uv' && mainMode !== 'animation' && showLights}
+                                    showAttachments={mainMode !== 'uv' && showAttachments}
+                                    showWireframe={mainMode !== 'uv' && renderMode === 'wireframe'}
+                                    onToggleWireframe={() => setRenderMode(renderMode === 'textured' ? 'wireframe' : 'textured')}
+                                    backgroundColor={backgroundColor}
+                                    animationIndex={currentSequence}
+                                    isPlaying={mainMode !== 'uv' && isPlaying}
+                                    onTogglePlay={() => setPlaying(!isPlaying)}
+                                    onModelLoaded={handleModelLoaded}
+                                    showFPS={mainMode !== 'uv' && showFPS}
+                                    playbackSpeed={playbackSpeed}
+                                    viewPreset={viewPreset}
+                                    onSetViewPreset={handleSetViewPreset}
+                                    onAddCameraFromView={handleAddCameraFromView}
                                 />
                             </UVModeLayout>
                         </AnimationModeLayout>

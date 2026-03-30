@@ -192,6 +192,22 @@ class ThumbnailAnimationCache {
         }
         return false;
     }
+
+    public prune(activeKeys: Set<string>): void {
+        for (const [key, frames] of this.memoryClips.entries()) {
+            if (activeKeys.has(key)) continue;
+            for (const frame of frames) {
+                try { frame.close(); } catch { }
+            }
+            this.memoryClips.delete(key);
+        }
+
+        for (const key of Array.from(this.pendingFrames.keys())) {
+            if (!activeKeys.has(key)) {
+                this.pendingFrames.delete(key);
+            }
+        }
+    }
 }
 
 export const thumbnailAnimationCache = new ThumbnailAnimationCache();

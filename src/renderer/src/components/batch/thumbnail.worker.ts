@@ -341,6 +341,7 @@ self.onmessage = async (e) => {
         });
         renderers.clear();
         textureRefCount.clear();
+        uploadedTexturePaths.clear();
 
         self.postMessage({ type: 'CLEARED' });
     } else if (type === 'PRUNE') {
@@ -813,11 +814,12 @@ async function render(
         }
     }
     if (
+        usesReplaceableTeamTextures(cacheItem.texturePaths) &&
         teamColorData &&
         Object.keys(teamColorData).length > 0 &&
         (
             cacheItem.appliedTeamColor !== teamColor ||
-            usesReplaceableTeamTextures(cacheItem.texturePaths)
+            !cacheItem.teamColorData
         )
     ) {
         await applyReplaceableTexturesToRenderer(renderer, teamColorData, teamColor);

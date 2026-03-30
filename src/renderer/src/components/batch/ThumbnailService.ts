@@ -357,7 +357,7 @@ class ThumbnailService {
                             worker.postMessage(msg, xfer);
                             if (textureImages && Object.keys(textureImages).length > 0) {
                                 this.workerTextureSync[i].add(fullPath);
-                                this.getTextureSyncKeys(fullPath, Object.keys(textureImages)).forEach((key) => this.workerSharedTextureSync[i].add(key));
+                                this.getWorkerTextureSyncKeys(fullPath, Object.keys(textureImages)).forEach((key) => this.workerSharedTextureSync[i].add(key));
                             } else {
                                 this.workerTextureSync[i].delete(fullPath);
                             }
@@ -749,7 +749,7 @@ class ThumbnailService {
         let bestScore = Number.POSITIVE_INFINITY;
         let bestOverlap = -1;
         const preferredSet = fullPath && preferredTexturePaths && preferredTexturePaths.length > 0
-            ? new Set(preferredTexturePaths.map((path) => this.getTextureCacheKey(fullPath, path)))
+            ? new Set(this.getWorkerTextureSyncKeys(fullPath, preferredTexturePaths))
             : null;
 
         for (const i of indices) {
@@ -1291,6 +1291,14 @@ class ThumbnailService {
         return texturePaths.map((texturePath) => this.getTextureCacheKey(modelPath, texturePath));
     }
 
+    private getWorkerTextureSyncKey(modelPath: string, texturePath: string): string {
+        return `${normalizePath(modelPath).toLowerCase()}::${this.getTextureCacheKey(modelPath, texturePath)}`;
+    }
+
+    private getWorkerTextureSyncKeys(modelPath: string, texturePaths: string[]): string[] {
+        return texturePaths.map((texturePath) => this.getWorkerTextureSyncKey(modelPath, texturePath));
+    }
+
     private getModelDirectoryKey(modelPath: string): string {
         const normalizedModel = normalizePath(modelPath).toLowerCase();
         const lastSlash = normalizedModel.lastIndexOf('\\');
@@ -1321,9 +1329,9 @@ class ThumbnailService {
 
     private getBatchRenderSize(): number {
         const activeCount = this.activeBatchPaths.size;
-        if (activeCount >= 50) return 112;
-        if (activeCount >= 25) return 128;
-        return 160;
+        if (activeCount >= 50) return 96;
+        if (activeCount >= 25) return 112;
+        return 144;
     }
 
     private getBatchPreloadLimit(totalModels: number): number {
@@ -2091,7 +2099,7 @@ class ThumbnailService {
             }
             const texturePaths = modelInfo?.texturePaths || [];
             const hasAllCachedTextures = texturePaths.length === 0 || texturePaths.every((path) => !!textureImages[path]);
-            const textureSyncKeys = this.getTextureSyncKeys(fullPath, texturePaths);
+            const textureSyncKeys = this.getWorkerTextureSyncKeys(fullPath, texturePaths);
             const allTexturesAlreadyShared = textureSyncKeys.length > 0 && textureSyncKeys.every((key) => sharedTextureSync.has(key));
             const requiresTeamColorRefresh = this.usesReplaceableTeamTextures(texturePaths);
             const readyStage = this.modelReadyStage.get(fullPath);
@@ -2108,7 +2116,7 @@ class ThumbnailService {
             }
 
             const unsyncedTextureImages = Object.keys(textureImages).length > 0
-                ? Object.fromEntries(Object.entries(textureImages).filter(([path]) => !sharedTextureSync.has(this.getTextureCacheKey(fullPath, path))))
+                ? Object.fromEntries(Object.entries(textureImages).filter(([path]) => !sharedTextureSync.has(this.getWorkerTextureSyncKey(fullPath, path))))
                 : {};
             const includeTexturePayload = Object.keys(unsyncedTextureImages).length > 0 && (!this.workerTextureSync[workerIndex].has(fullPath) || !allTexturesAlreadyShared);
             const includeTeamColorPayload = Object.keys(teamColorData).length > 0 && (teamColorChangedForWorker || !isLoaded || requiresTeamColorRefresh);
@@ -2149,7 +2157,7 @@ class ThumbnailService {
                     const xfer1 = this.collectTransferables(msg1.payload);
                     worker.postMessage(msg1, xfer1);
                     if (includeTexturePayload) {
-                        this.getTextureSyncKeys(fullPath, Object.keys(unsyncedTextureImages)).forEach((key) => sharedTextureSync.add(key));
+                        this.getWorkerTextureSyncKeys(fullPath, Object.keys(unsyncedTextureImages)).forEach((key) => sharedTextureSync.add(key));
                     }
                     if (includeTeamColorPayload) {
                         this.workerTeamColorSync[workerIndex].set(fullPath, renderState.teamColor);
@@ -2177,7 +2185,7 @@ class ThumbnailService {
 
                     if (includeTexturePayload) {
                         this.workerTextureSync[workerIndex].add(fullPath);
-                        this.getTextureSyncKeys(fullPath, Object.keys(unsyncedTextureImages)).forEach((key) => sharedTextureSync.add(key));
+                        this.getWorkerTextureSyncKeys(fullPath, Object.keys(unsyncedTextureImages)).forEach((key) => sharedTextureSync.add(key));
                     } else if (allTexturesAlreadyShared) {
                         this.workerTextureSync[workerIndex].add(fullPath);
                     } else {

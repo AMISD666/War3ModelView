@@ -1,4 +1,4 @@
-﻿import React from 'react'
+import React from 'react'
 import { Alert } from 'antd'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import CameraManagerModal from '../modals/CameraManagerModal'
@@ -11,6 +11,7 @@ import GlobalSequenceModal from '../modals/GlobalSequenceModal'
 import GeosetVisibilityToolModal from '../modals/GeosetVisibilityToolModal'
 import TextureEditorModal from '../modals/TextureEditorModal'
 import ModelOptimizeModal from '../modals/ModelOptimizeModal'
+import ModelMergeModal from '../modals/ModelMergeModal'
 import KeyframeEditor from '../editors/KeyframeEditor'
 
 export const isStandaloneToolWindowLabel = (windowLabel: string | null | undefined): boolean => {
@@ -25,6 +26,7 @@ export const isStandaloneToolWindowLabel = (windowLabel: string | null | undefin
         || windowLabel === 'globalSequenceManager'
         || windowLabel === 'geosetVisibilityTool'
         || windowLabel === 'modelOptimize'
+        || windowLabel === 'modelMerge'
         || windowLabel.startsWith('keyframeEditor_')
 }
 
@@ -79,6 +81,10 @@ const StandaloneToolWindowRouter: React.FC<StandaloneToolWindowRouterProps> = ({
 
     if (windowLabel === 'modelOptimize') {
         return <ModelOptimizeModal visible={true} onClose={handleHide} modelData={null} isStandalone={true} />
+    }
+
+    if (windowLabel === 'modelMerge') {
+        return <ModelMergeModal visible={true} onClose={handleHide} isStandalone={true} />
     }
 
     if (windowLabel.startsWith('keyframeEditor_')) {

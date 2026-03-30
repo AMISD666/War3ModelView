@@ -12,8 +12,12 @@
         "windows": [
             {
                 "title": "咕咕War3模型编辑器 测试版1.3.3",
-                "width": 1200,
-                "height": 800,
+                "width": 1280,
+                "height": 820,
+                "minWidth": 900,
+                "minHeight": 600,
+                "center": true,
+                "resizable": true,
                 "visible": true,
                 "dragDropEnabled": true
             }

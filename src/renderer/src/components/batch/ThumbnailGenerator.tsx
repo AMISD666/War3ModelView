@@ -5,7 +5,6 @@ import { useSelectionStore } from '../../store/selectionStore';
 const BATCH_MAX_WORKER_FPS = 144;
 const BATCH_MAX_WORKER_FRAME_INTERVAL_MS = 1000 / BATCH_MAX_WORKER_FPS;
 const INITIAL_RENDER_WORKER_LIMIT = 12;
-
 function pickPreferredAnimation(animations: string[]): string | undefined {
     if (animations.length === 0) return undefined;
 
@@ -164,6 +163,7 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
                     const selectedAnimName = selectedAnimationsRef.current[item.fullPath];
                     const animList = modelAnimationsRef.current[item.fullPath] || thumbnailService.getCachedAnimations(item.fullPath) || [];
                     const animIndex = resolveAnimationIndex(animList, selectedAnimName);
+
                     const frameTime = shouldAnimateFrames ? performance.now() : 0;
 
                     thumbnailService.renderFrameWithSharedState(
@@ -172,7 +172,6 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
                         animIndex,
                         !isAnimating,
                         {
-                            // The first N cards on each page wait for textures to avoid placeholder magenta.
                             preferFastFirstFrame: !textureFirstFramePathsRef.current.has(item.fullPath),
                             prioritize: selectedPath === item.fullPath,
                             spinEnabled: selfSpinEnabled,

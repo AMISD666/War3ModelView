@@ -17,7 +17,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::{ipc::Response, Emitter, Manager, State};
+use tauri::{ipc::Response, Emitter, LogicalSize, Manager, State, WebviewWindow};
 use texture_decode::{decode_texture_bytes_with_max_dimension, get_texture_candidate_paths, normalize_path};
 use texture_encode::encode_texture_image;
 
@@ -28,6 +28,11 @@ static DEBUG_CONSOLE_ENABLED: AtomicBool = AtomicBool::new(false);
 static CLI_ARGS_CONSUMED: AtomicBool = AtomicBool::new(false);
 static PENDING_FILES: once_cell::sync::Lazy<std::sync::Mutex<Vec<String>>> =
     once_cell::sync::Lazy::new(|| std::sync::Mutex::new(Vec::new()));
+
+const MAIN_WINDOW_MIN_WIDTH: f64 = 900.0;
+const MAIN_WINDOW_MIN_HEIGHT: f64 = 600.0;
+const MAIN_WINDOW_DEFAULT_WIDTH: f64 = 1280.0;
+const MAIN_WINDOW_DEFAULT_HEIGHT: f64 = 820.0;
 
 const TEXTURE_PATH_CACHE_LIMIT: usize = 8192;
 const TEXTURE_RESULT_CACHE_LIMIT: usize = 1024;
@@ -1729,6 +1734,12 @@ fn main() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_shell::init())
+        .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                apply_main_window_layout(&window)?;
+            }
+            Ok(())
+        })
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             // Restore and focus main window (unminimize if needed, show if hidden)
             if let Some(window) = app.get_webview_window("main") {
@@ -1829,4 +1840,37 @@ fn main() {
             }
             _ => {}
         });
+}
+
+fn apply_main_window_layout(window: &WebviewWindow) -> tauri::Result<()> {
+    let min_size = LogicalSize::new(MAIN_WINDOW_MIN_WIDTH, MAIN_WINDOW_MIN_HEIGHT);
+    window.set_min_size(Some(min_size))?;
+
+    let target_size = if let Some(monitor) = window.current_monitor()? {
+        let scale_factor = monitor.scale_factor();
+        let monitor_size = monitor.size();
+        let monitor_width = f64::from(monitor_size.width) / scale_factor;
+        let monitor_height = f64::from(monitor_size.height) / scale_factor;
+
+        let available_width = (monitor_width - 80.0).max(MAIN_WINDOW_MIN_WIDTH);
+        let available_height = (monitor_height - 80.0).max(MAIN_WINDOW_MIN_HEIGHT);
+
+        let width = (monitor_width * 0.84)
+            .min(available_width)
+            .min(1600.0)
+            .max(MAIN_WINDOW_MIN_WIDTH);
+        let height = (monitor_height * 0.86)
+            .min(available_height)
+            .min(1100.0)
+            .max(MAIN_WINDOW_MIN_HEIGHT);
+
+        LogicalSize::new(width, height)
+    } else {
+        LogicalSize::new(MAIN_WINDOW_DEFAULT_WIDTH, MAIN_WINDOW_DEFAULT_HEIGHT)
+    };
+
+    window.set_size(target_size)?;
+    window.center()?;
+
+    Ok(())
 }
