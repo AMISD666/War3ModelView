@@ -70,8 +70,8 @@ export const BatchManager: React.FC<BatchManagerProps> = ({
     const batchReset = useBatchStore(state => state.reset);
 
     // UI state
-    const FIXED_CARD_SIZE = 160;
-    const CARD_GAP = 12;
+    const FIXED_CARD_SIZE = 220;
+    const CARD_GAP = 15;
     const [currentPage, setCurrentPage] = useState(1);
     const [pageSize, setPageSize] = useState<number>(() => {
         if (typeof window === 'undefined') return 50;
