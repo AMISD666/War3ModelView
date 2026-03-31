@@ -7,7 +7,7 @@ import { SmartInputNumber as InputNumber } from '@renderer/components/common/Sma
 import { useHistoryStore } from '../../store/historyStore'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
-import { windowManager } from '../../utils/windowManager'
+import { windowManager } from '../../utils/WindowManager'
 import { GlobalSequenceSelect } from '../common/GlobalSequenceSelect'
 import RightFloatingPanelShell from './RightFloatingPanelShell'
 

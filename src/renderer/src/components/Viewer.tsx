@@ -4,7 +4,7 @@ import { decodeBLP, getBLPImageData, ModelRenderer } from 'war3-model'
 import ModelWorker from '../workers/model-worker.worker?worker'
 import TextureAdjustWorker from '../workers/texture-adjust.worker?worker'
 import { SimpleOrbitCamera } from '../utils/SimpleOrbitCamera'
-import { decodeTextureData, getTextureCandidatePaths, loadAllTextures, normalizePath } from './viewer/textureLoader'
+import { decodeTextureData, getTextureCandidatePaths, loadAllTextures, normalizePath, prepareModelForTextureLoad } from './viewer/textureLoader'
 import { createModelParseCacheKey, getCachedParsedModel, setCachedParsedModel } from './viewer/modelParseCache'
 import { validateAllParticleEmitters } from './viewer/particleValidator'
 import { checkForStructuralChanges } from './viewer/modelSync'
@@ -169,7 +169,8 @@ const getTextureDecodeWorkerCount = (): number => {
   if (typeof navigator === 'undefined') return 2
   const cores = Number(navigator.hardwareConcurrency || 4)
   if (!Number.isFinite(cores) || cores <= 2) return 2
-  return Math.max(2, Math.min(4, Math.floor(cores / 2)))
+  // 多核机器略增 Worker 数以并行解码 BLP/TGA，上限 6 避免过多线程切换
+  return Math.max(2, Math.min(6, Math.floor(cores / 2)))
 }
 
 const WEBGL_CONTEXT_ATTRIBUTES: WebGLContextAttributes = {
@@ -1621,8 +1622,9 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     }
   }
 
-  const loadTeamColorTextures = async (colorIndex: number) => {
-    if (!renderer) return
+  /** 必须传入当前要写入的渲染器实例；勿依赖 React state（loadModel 过程中 state 可能仍为 null 或旧引用） */
+  const loadTeamColorTextures = async (targetRenderer: any, colorIndex: number) => {
+    if (!targetRenderer) return
 
     const idStr = colorIndex.toString().padStart(2, '0')
     const teamColorPath = `ReplaceableTexturesTeamColorTeamColor${idStr}.blp`
@@ -1637,11 +1639,11 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           const blp = decodeBLP(toTightArrayBuffer(mpqData) as any)
           const blpMip = getBLPImageData(blp, 0)
 
-          // CRITICAL: Use premultiplyAlpha:'none' 鈥?Canvas or default createImageBitmap destroys RGB on transparent pixels
+          // CRITICAL: Use premultiplyAlpha:'none' — Canvas or default createImageBitmap destroys RGB on transparent pixels
           const idata = new ImageData(new Uint8ClampedArray(blpMip.data), blpMip.width, blpMip.height)
           const img = await createImageBitmap(idata, { premultiplyAlpha: 'none' })
-          if (renderer.setReplaceableTexture) {
-            renderer.setReplaceableTexture(id, img)
+          if (targetRenderer.setReplaceableTexture) {
+            targetRenderer.setReplaceableTexture(id, img)
           }
         } else {
           console.warn(`[Viewer] Failed to load replaceable texture: ${path}`)
@@ -1651,8 +1653,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       }
     }
 
-    await loadTexture(teamColorPath, 1)
-    await loadTexture(teamGlowPath, 2)
+    // 两张替换贴图互不依赖，并行可缩短单模型加载总耗时
+    await Promise.all([loadTexture(teamColorPath, 1), loadTexture(teamGlowPath, 2)])
   }
 
   // Render compatibility fix based on mdx-m3-viewer:
@@ -1818,7 +1820,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           const currentMissing = useRendererStore.getState().missingTextures
           const nextMissing = currentMissing.filter((path) => !resolved.has(path))
           useRendererStore.getState().setMissingTextures(nextMissing)
-          await loadTeamColorTextures(teamColor)
+          await loadTeamColorTextures(renderer, teamColor)
         }
         console.log(
           `[Viewer] Missing texture resolve finished in ${(performance.now() - resolveStart).toFixed(1)}ms, resolved=${resolved.size}/${unresolved.length}`
@@ -3412,6 +3414,16 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         // console.log('[Viewer] First ParticleEmitter2:', model.ParticleEmitters2[0])
       }
 
+      // 与 WebGL/ModelRenderer 初始化并行：Rust 侧批量读贴图（invoke 已发起即与后续 JS 重叠）
+      const textureLoadContext = prepareModelForTextureLoad(model, {})
+      const batchPayloadPromise =
+        textureLoadContext.effectiveTexturePaths.length > 0
+          ? invoke<Uint8Array>('load_textures_batch_bin', {
+              modelPath: path,
+              texturePaths: textureLoadContext.effectiveTexturePaths
+            })
+          : undefined
+
       ignoreNextModelDataUpdate.current = true
       onModelLoaded(model)
 
@@ -3433,23 +3445,28 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       console.log(`[Viewer] Renderer Init took ${(performance.now() - rendererStart).toFixed(1)}ms`)
 
       setLoadingStatus('加载贴图资源...')
-      // Load textures using concurrent loader with mipmap optimization (max 512px)
-      const textureResults = await loadAllTextures(
-        model,
-        newRenderer,
-        path,
-        textureWorkers,
-        512,
-        { yieldUploads: false }
-      )
+      // 模型贴图与队伍色替换贴图互不依赖，并行缩短首帧前等待时间
+      const [textureResults] = await Promise.all([
+        loadAllTextures(
+          model,
+          newRenderer,
+          path,
+          textureWorkers,
+          512,
+          {
+            yieldUploads: false,
+            textureLoadContext,
+            batchPayloadPromise
+          }
+        ),
+        loadTeamColorTextures(newRenderer, teamColor)
+      ])
 
       // Track missing textures or unsupported formats for warning UI
       const missingPaths = textureResults
         .filter(r => !r.loaded)
         .map(r => r.path)
       useRendererStore.getState().setMissingTextures(missingPaths)
-
-      await loadTeamColorTextures(teamColor)
 
       if (usedFallback && typeof (newRenderer as any).setSequence === 'function') {
         ; (newRenderer as any).setSequence(0)
@@ -3524,6 +3541,16 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       validateAllParticleEmitters(sanitizedModel)
       console.log('[Viewer] Step 1: Particle validation complete')
 
+      // 与 loadModel 一致：提前发起 Rust 批量读贴图，与后续 WebGL 初始化重叠
+      const textureLoadContextReload = prepareModelForTextureLoad(sanitizedModel, {})
+      const batchPayloadPromiseReload =
+        textureLoadContextReload.effectiveTexturePaths.length > 0
+          ? invoke<Uint8Array>('load_textures_batch_bin', {
+              modelPath: safeModelPath,
+              texturePaths: textureLoadContextReload.effectiveTexturePaths
+            })
+          : undefined
+
       console.log('[Viewer] Step 2: Creating ModelRenderer...')
       const rendererStart = performance.now()
       const { model: rendererModelWithSequences, usedFallback } = ensureRendererSequences(rendererModelWithNodes)
@@ -3545,15 +3572,15 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
       // Load textures using concurrent loader with mipmap optimization
       console.log('[Viewer] Step 6: Loading textures...')
-      const textureResults = await loadAllTextures(
-        sanitizedModel,
-        newRenderer,
-        safeModelPath,
-        textureWorkers,
-        512,
-        { yieldUploads: false }
-      )
-      console.log('[Viewer] Step 6: Textures loaded')
+      const [textureResults] = await Promise.all([
+        loadAllTextures(sanitizedModel, newRenderer, safeModelPath, textureWorkers, 512, {
+          yieldUploads: false,
+          textureLoadContext: textureLoadContextReload,
+          batchPayloadPromise: batchPayloadPromiseReload
+        }),
+        loadTeamColorTextures(newRenderer, teamColor)
+      ])
+      console.log('[Viewer] Step 6: Textures + team colors loaded')
 
       // Keep missing texture warning in sync after a full reload
       const missingPaths = textureResults
@@ -3564,10 +3591,6 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         })
         .map(r => r.path)
       useRendererStore.getState().setMissingTextures(missingPaths)
-
-      console.log('[Viewer] Step 7: Loading team color textures...')
-      await loadTeamColorTextures(teamColor)
-      console.log('[Viewer] Step 7: Team colors loaded')
 
       // Set renderer AFTER textures are loaded to avoid race condition where
       // render loop starts before textures are available in GPU
@@ -3729,6 +3752,10 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           // WebGPU path requires sampler array length to keep up with Textures length.
           // Missing sampler can crash render pass and freeze RAF loop after texture import.
           ensureWebGpuTextureSamplers(renderer, renderer.model.Textures)
+          // 仅改 Flags（笼罩宽/高）时不会走 loadAllTextures，须把 WRAP 同步到已有 GPU 纹理
+          if (typeof (renderer as any).syncTextureWrapParametersFromModel === 'function') {
+            ;(renderer as any).syncTextureWrapParametersFromModel()
+          }
 
           // Load any new textures asynchronously
           if (newTextures.length > 0) {

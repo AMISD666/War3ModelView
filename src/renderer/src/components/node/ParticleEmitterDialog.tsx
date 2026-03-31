@@ -4,7 +4,7 @@ import { Button, Checkbox, Form, Input } from 'antd';
 
 import { DraggableModal } from '../DraggableModal';
 import { listen } from '@tauri-apps/api/event';
-import { windowManager } from '../../utils/windowManager';
+import { windowManager } from '../../utils/WindowManager';
 import { useHistoryStore } from '../../store/historyStore';
 import { useModelStore } from '../../store/modelStore';
 import type { ParticleEmitterNode } from '../../types/node';

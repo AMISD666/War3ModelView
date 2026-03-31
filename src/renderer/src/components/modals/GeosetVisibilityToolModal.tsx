@@ -1,11 +1,11 @@
-﻿import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { Checkbox, Dropdown, Input, message, Typography, type MenuProps } from 'antd'
 import { DraggableModal } from '../DraggableModal'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useHistoryStore } from '../../store/historyStore'
 import { listen } from '@tauri-apps/api/event'
-import { windowManager } from '../../utils/windowManager'
+import { windowManager } from '../../utils/WindowManager'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useRpcClient } from '../../hooks/useRpc'
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
@@ -196,6 +196,7 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
     const [editingGeosetId, setEditingGeosetId] = useState<number | null>(null)
     const editingGeosetIdRef = React.useRef<number | null>(null)
     const localAnimsRef = React.useRef<any[]>([])
+    const lastGeosetAnimSourceSigRef = React.useRef('')
 
     useEffect(() => {
         editingGeosetIdRef.current = editingGeosetId
@@ -278,7 +279,16 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
     }
 
     useEffect(() => {
-        if (!visible) return
+        if (!visible) {
+            lastGeosetAnimSourceSigRef.current = ''
+            return
+        }
+
+        const sig = JSON.stringify(geosetAnimSource)
+        if (sig === lastGeosetAnimSourceSigRef.current) {
+            return
+        }
+        lastGeosetAnimSourceSigRef.current = sig
 
         const clonedAnims = geosetAnimSource.map((anim: any) => {
             const cloned = { ...anim }

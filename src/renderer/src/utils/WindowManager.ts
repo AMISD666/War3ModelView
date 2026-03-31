@@ -1,7 +1,12 @@
 import { emit, listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 import { WebviewWindow, getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
 import { LogicalSize } from '@tauri-apps/api/dpi';
 import { markStandalonePerf } from './standalonePerf';
+import { chooseRpcEmitEncoding } from './rpcSerialization';
+
+/** 超过此 JSON 字符长度则走 Rust invoke 投递，避免超大对象在 JS emit 路径反复序列化 */
+const RPC_INVOKE_EMIT_THRESHOLD_CHARS = 48 * 1024
 
 type OpenToolWindowOptions = {
     waitForHydration?: boolean;
@@ -52,6 +57,43 @@ class WindowManager {
         });
     }
 
+    /** 移除 hydration 监听，避免销毁后仍占用事件 */
+    private removeHydrationListener(windowId: string): void {
+        const unlisten = this.hydrationListeners.get(windowId);
+        if (!unlisten) return;
+        try {
+            unlisten();
+        } catch (e) {
+            console.warn(`[WindowManager] removeHydrationListener(${windowId}):`, e);
+        }
+        this.hydrationListeners.delete(windowId);
+    }
+
+    private clearToolWindowState(windowId: string): void {
+        this.hydrationWaiters.delete(windowId);
+        this.visibilityCache.delete(windowId);
+        this.hydrationState.delete(windowId);
+        this.activeWindows.delete(windowId);
+    }
+
+    /** 子窗口创建失败或异常后必须销毁，否则 Rust 侧仍占用 label，下次无法打开 */
+    private async destroyWebviewWindow(windowId: string, win?: WebviewWindow | null): Promise<void> {
+        this.removeHydrationListener(windowId);
+        this.clearToolWindowState(windowId);
+        try {
+            if (win) {
+                await win.destroy();
+                return;
+            }
+            const existing = await WebviewWindow.getByLabel(windowId);
+            if (existing) {
+                await existing.destroy();
+            }
+        } catch (e) {
+            console.warn(`[WindowManager] destroyWebviewWindow(${windowId}):`, e);
+        }
+    }
+
     private waitForHydration(windowId: string, timeoutMs: number = 800): Promise<boolean> {
         if (this.hydrationState.get(windowId)) {
             return Promise.resolve(true);
@@ -94,7 +136,7 @@ class WindowManager {
         const keyframeWindow = this.isKeyframeWindow(windowId);
         return {
             waitForHydration: options?.waitForHydration ?? !keyframeWindow,
-            hydrationTimeoutMs: options?.hydrationTimeoutMs ?? (keyframeWindow ? 0 : 180),
+            hydrationTimeoutMs: options?.hydrationTimeoutMs ?? (keyframeWindow ? 0 : 120),
             syncMode: options?.syncMode ?? (keyframeWindow ? 'never' : 'existing_only'),
         };
     }
@@ -156,7 +198,57 @@ class WindowManager {
         return win;
     }
 
+    /** 仅对可能很大的 RPC 快照做一次 JSON.stringify，小 payload 仍走 Webview emit，避免无谓开销 */
+    private isLikelyLargeRpcPayload(payload: unknown): boolean {
+        if (payload == null || typeof payload !== 'object') return false
+        const p = payload as Record<string, unknown>
+        if (p.modelData != null) return true
+        if (Array.isArray(p.materials) && p.materials.length > 0) return true
+        if (Array.isArray(p.Materials) && p.Materials.length > 0) return true
+        if (Array.isArray(p.textures) && p.textures.length > 3) return true
+        if (Array.isArray(p.Textures) && p.Textures.length > 3) return true
+        if (Array.isArray(p.geosets) && p.geosets.length > 0) return true
+        if (Array.isArray(p.Geosets) && p.Geosets.length > 0) return true
+        if (typeof p.snapshotVersion === 'number') return true
+        return Object.keys(p).length > 12
+    }
+
     async emitToolWindowEvent(windowId: string, eventName: string, payload: any): Promise<void> {
+        if (this.isLikelyLargeRpcPayload(payload)) {
+            try {
+                const choice = chooseRpcEmitEncoding(payload)
+                if (choice.mode === 'msgpack' && choice.msgpackB64) {
+                    await invoke('emit_to_webview_msgpack_b64', {
+                        label: windowId,
+                        event: eventName,
+                        payloadB64: choice.msgpackB64,
+                    })
+                    markStandalonePerf('invoke_emit_msgpack', {
+                        windowId,
+                        eventName,
+                        b64Chars: choice.msgpackB64.length,
+                    })
+                    return
+                }
+                const json = choice.json ?? JSON.stringify(payload)
+                if (json.length >= RPC_INVOKE_EMIT_THRESHOLD_CHARS) {
+                    await invoke('emit_to_webview_json_payload', {
+                        label: windowId,
+                        event: eventName,
+                        payloadJson: json,
+                    })
+                    markStandalonePerf('invoke_emit_large_payload', {
+                        windowId,
+                        eventName,
+                        chars: json.length,
+                    })
+                    return
+                }
+            } catch (e) {
+                console.warn('[WindowManager] 大负载 invoke（MessagePack/JSON）失败，回退到 Webview.emit:', e)
+            }
+        }
+
         const win = await this.resolveToolWindow(windowId);
         if (!win) {
             markStandalonePerf('global_emit_fallback', { windowId, eventName, reason: 'window_not_found' });
@@ -221,8 +313,7 @@ class WindowManager {
 
             win.once('tauri://error', (e) => {
                 console.error(`[WindowManager] Tauri error for window "${windowId}":`, JSON.stringify(e));
-                this.activeWindows.delete(windowId);
-                this.visibilityCache.delete(windowId);
+                void this.destroyWebviewWindow(windowId, win);
             });
 
             await win.onCloseRequested(async (event) => {
@@ -277,8 +368,7 @@ class WindowManager {
                 await win.setFocus();
             } catch (e) {
                 console.error(`[WindowManager] Failed to show window ${windowId}:`, e);
-                this.activeWindows.delete(windowId);
-                this.visibilityCache.delete(windowId);
+                await this.destroyWebviewWindow(windowId, win);
                 await this.preloadToolWindow(windowId, title, width, height);
                 const freshWin = this.activeWindows.get(windowId);
                 if (freshWin) {

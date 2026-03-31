@@ -15,6 +15,7 @@ use model_manifest::{build_manifest_row, ModelManifestRow};
 use mpq_manager::MpqManager;
 use rayon::prelude::*;
 use serde::Serialize;
+use serde_json::json;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -233,6 +234,43 @@ fn debug_log(message: String) {
         return;
     }
     println!("{}", message);
+}
+
+/// 独立窗口 RPC：主窗口已通过 MessagePack 编码为 base64，Rust 仅包装为 JSON 对象后 emit（子窗口再解码）。
+#[tauri::command]
+fn emit_to_webview_msgpack_b64(
+    app: tauri::AppHandle,
+    label: String,
+    event: String,
+    payload_b64: String,
+) -> Result<(), String> {
+    let v = json!({
+        "__rpcEncoding": "msgpack",
+        "__rpcPayload": payload_b64
+    });
+    let win = app
+        .get_webview_window(&label)
+        .ok_or_else(|| format!("未找到窗口: {}", label))?;
+    win.emit(&event, v).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 独立窗口 RPC：主窗口通过 invoke 传入 UTF-8 JSON 字符串，Rust 解析一次后以 Value 投递目标 Webview，
+/// 减轻超大对象在 JS `emit` 路径下被多次序列化/拷贝的开销。
+#[tauri::command]
+fn emit_to_webview_json_payload(
+    app: tauri::AppHandle,
+    label: String,
+    event: String,
+    payload_json: String,
+) -> Result<(), String> {
+    let v: serde_json::Value = serde_json::from_str(&payload_json)
+        .map_err(|e| format!("JSON 解析失败: {}", e))?;
+    let win = app
+        .get_webview_window(&label)
+        .ok_or_else(|| format!("未找到窗口: {}", label))?;
+    win.emit(&event, v).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -1957,6 +1995,8 @@ fn main() {
             detect_warcraft_path,
             toggle_console,
             debug_log,
+            emit_to_webview_msgpack_b64,
+            emit_to_webview_json_payload,
             // Activation Commands
             get_machine_id,
             get_activation_status,

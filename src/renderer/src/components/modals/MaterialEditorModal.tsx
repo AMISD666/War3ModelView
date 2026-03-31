@@ -5,7 +5,7 @@ import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { DraggableModal } from '../DraggableModal'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { windowManager } from '../../utils/windowManager'
+import { windowManager } from '../../utils/WindowManager'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useHistoryStore } from '../../store/historyStore'
@@ -352,6 +352,10 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         return nextMaterials
     }, [])
 
+    /** 用材质+贴图数据签名判断是否真的变化；勿仅用 snapshotVersion（会周期性递增并重置本地状态、打断输入焦点） */
+    const lastMaterialsSignatureRef = React.useRef<string | null>(null)
+    /** 独立窗口：当前已加载的模型路径，用于区分「同模型下编辑回传」与「切换模型需整表重载」 */
+    const lastStandaloneModelPathRef = React.useRef<string>('')
     const lastRpcMaterialsRef = React.useRef<any>(null)
     const lastHandledPickedGeosetRef = React.useRef<number | null | undefined>(undefined)
 
@@ -387,11 +391,32 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             const currentTextures = modelData?.Textures || []
             const texturesChanged = JSON.stringify(currentTextures) !== JSON.stringify(localTexturesRef.current)
             // In standalone mode, rpcState.materials starts empty and arrives asynchronously.
-            // We must re-initialize when a fresh, non-empty array arrives.
-            const rpcDataChanged = isStandalone && rpcState.snapshotVersion !== lastRpcMaterialsRef.current
+            // 仅当材质/贴图数据相对上次快照真的变化时才全量重载，勿依赖 snapshotVersion 单独触发
+            const materialsSignature = hasMaterials
+                ? JSON.stringify({ m: modelData!.Materials, t: modelData!.Textures || [] })
+                : ''
+            const materialsDataChanged = lastMaterialsSignatureRef.current !== materialsSignature
 
-            if (hasMaterials && (!isInitialized.current || rpcDataChanged)) {
+            const pathStr = String(modelPath || '')
+            // 独立窗口：编辑图层 Alpha 等会 emit 保存，RPC 回传后 signature 必变；若再 normalize+setLocalMaterials 会重挂载列表/输入框导致失焦且数值被冲成 0
+            const skipStandaloneFullReload =
+                isStandalone &&
+                isInitialized.current &&
+                lastStandaloneModelPathRef.current !== '' &&
+                lastStandaloneModelPathRef.current === pathStr
+
+            if (hasMaterials && (!isInitialized.current || materialsDataChanged)) {
+                if (skipStandaloneFullReload) {
+                    // 仅同步签名与贴图列表（主窗口若只改贴图路径仍需反映），不整表重置材质以免打断输入
+                    lastMaterialsSignatureRef.current = materialsSignature
+                    lastRpcMaterialsRef.current = rpcState.snapshotVersion
+                    if (texturesChanged) {
+                        setLocalTextures(JSON.parse(JSON.stringify(currentTextures)))
+                    }
+                } else {
                 console.log('[MaterialEditorModal] Initializing local materials from store. Count:', modelData.Materials.length)
+                lastMaterialsSignatureRef.current = materialsSignature
+                lastStandaloneModelPathRef.current = pathStr
                 lastRpcMaterialsRef.current = isStandalone ? rpcState.snapshotVersion : modelData.Materials
                 originalMaterialsRef.current = JSON.parse(JSON.stringify(modelData.Materials))
                 originalTexturesRef.current = JSON.parse(JSON.stringify(modelData.Textures || []))
@@ -423,6 +448,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                     setSelectedLayerIndex(nextLayerIndex)
                 }
                 isInitialized.current = true
+                }
             } else if (hasMaterials && texturesChanged && !isStandalone) {
                 setLocalTextures(JSON.parse(JSON.stringify(currentTextures)))
             } else if (!hasMaterials) {
@@ -432,6 +458,8 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                 setLocalTextures([])
                 setIsTextureDropActive(false)
                 isInitialized.current = false
+                lastMaterialsSignatureRef.current = null
+                lastStandaloneModelPathRef.current = ''
                 lastRpcMaterialsRef.current = isStandalone ? rpcState.snapshotVersion : null
                 if (isCommittingRef.current) {
                     isCommittingRef.current = false
@@ -448,6 +476,8 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             setLocalTextures([])
             setIsTextureDropActive(false)
             isInitialized.current = false
+            lastMaterialsSignatureRef.current = null
+            lastStandaloneModelPathRef.current = ''
             lastRpcMaterialsRef.current = null
             if (isCommittingRef.current) {
                 isCommittingRef.current = false
@@ -457,7 +487,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             didRealtimePreviewRef.current = false
             didRealtimeTexturePreviewRef.current = false
         }
-    }, [visible, modelData, isStandalone, selectedMaterialIndex, selectedLayerIndex, rpcState.snapshotVersion])
+    }, [visible, modelData, isStandalone, selectedMaterialIndex, selectedLayerIndex])
 
     // Subscribe to Ctrl+Click geoset picking - auto-select material
     useEffect(() => {
@@ -504,7 +534,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         return () => {
             if (unsubscribe) unsubscribe();
         };
-    }, [visible, modelData, localMaterials, selectedMaterialIndex, selectedLayerIndex, isStandalone ? rpcState.pickedGeosetIndex : null, isStandalone ? rpcState.snapshotVersion : null])
+    }, [visible, modelData, localMaterials, selectedMaterialIndex, selectedLayerIndex, isStandalone ? rpcState.pickedGeosetIndex : null])
 
     const handleOk = () => {
         // Convert boolean flags back to Shading bitmask before saving

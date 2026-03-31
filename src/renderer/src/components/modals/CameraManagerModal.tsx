@@ -8,7 +8,7 @@ import { DraggableModal } from '../DraggableModal';
 import { useHistoryStore } from '../../store/historyStore';
 import { CameraNode, NodeType } from '../../types/node';
 import { listen } from '@tauri-apps/api/event';
-import { windowManager } from '../../utils/windowManager';
+import { windowManager } from '../../utils/WindowManager';
 import { useRpcClient } from '../../hooks/useRpc';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 

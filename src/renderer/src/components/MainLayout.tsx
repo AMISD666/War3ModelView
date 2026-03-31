@@ -14,7 +14,6 @@ const GeosetEditorModal = React.lazy(() => import('./modals/GeosetEditorModal'))
 const GlobalSequenceModal = React.lazy(() => import('./modals/GlobalSequenceModal'))
 const TransformModelDialog = React.lazy(() => import('./node/TransformModelDialog').then(m => ({ default: m.TransformModelDialog })))
 const ModelOptimizeModal = React.lazy(() => import('./modals/ModelOptimizeModal'))
-const StandalonePerfModal = React.lazy(() => import('./modals/StandalonePerfModal'))
 const Viewer = React.lazy(() => import('./Viewer'))
 const AnimationPanel = React.lazy(() => import('./AnimationPanel'))
 const EditorPanel = React.lazy(() => import('./EditorPanel'))
@@ -33,7 +32,7 @@ import { GlobalMessageLayer } from './GlobalMessageLayer'
 import { showMessage, showConfirm } from '../store/messageStore'
 import { registerShortcutHandler } from '../shortcuts/manager'
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { emit, listen as listenEvent } from '@tauri-apps/api/event'
+import { emit } from '@tauri-apps/api/event'
 import { Button } from 'antd';
 import {
     applyTextureAdjustments,
@@ -43,7 +42,7 @@ import {
 } from '../utils/textureAdjustments'
 import { windowManager } from '../utils/WindowManager'
 import { useRpcServer } from '../hooks/useRpc'
-import { STANDALONE_PERF_EVENT, StandalonePerfEntry, markStandalonePerf } from '../utils/standalonePerf'
+import { markStandalonePerf } from '../utils/standalonePerf'
 import { parseModelBuffer, mergeGeosets, mergeAnimations } from '../utils/modelMerge'
 import { readFile, copyFile } from '@tauri-apps/plugin-fs'
 
@@ -55,12 +54,7 @@ import { readFile, copyFile } from '@tauri-apps/plugin-fs'
  * Uses structuredClone to preserve existing typed arrays while only converting
  * regular arrays that need to be typed arrays.
  */
-const MAX_STANDALONE_PERF_ENTRIES = 400
 const AUTO_UPDATE_CHECK_DATE_KEY = 'lastAutoUpdateCheck'
-
-type StandalonePerfHostWindow = Window & {
-    __standalonePerfEntries?: StandalonePerfEntry[]
-}
 
 type TextureManagerSnapshot = {
     textures: any[]
@@ -100,24 +94,6 @@ type MaterialManagerRpcState = {
 type MaterialManagerPatch = {
     pickedGeosetIndex?: number | null
     selectedMaterialIndex?: number | null
-}
-
-const mergeStandalonePerfEntries = (
-    previousEntries: StandalonePerfEntry[],
-    incomingEntries: StandalonePerfEntry[]
-): StandalonePerfEntry[] => {
-    const seen = new Set<string>()
-    const merged: StandalonePerfEntry[] = []
-
-        ;[...incomingEntries, ...previousEntries].forEach((entry) => {
-            if (!entry || seen.has(entry.entryId)) {
-                return
-            }
-            seen.add(entry.entryId)
-            merged.push(entry)
-        })
-
-    return merged.slice(0, MAX_STANDALONE_PERF_ENTRIES)
 }
 
 function prepareModelDataForSave(modelData: any): any {
@@ -1817,8 +1793,6 @@ const MainLayout: React.FC = () => {
     const [showGeosetModal, setShowGeosetModal] = useState<boolean>(false)
     const [showModelOptimizeModal, setShowModelOptimizeModal] = useState<boolean>(false)
     const [showAbout, setShowAbout] = useState<boolean>(false)
-    const [showStandalonePerf, setShowStandalonePerf] = useState<boolean>(false)
-    const [standalonePerfEntries, setStandalonePerfEntries] = useState<StandalonePerfEntry[]>([])
     const [modelOptimizeRunning, setModelOptimizeRunning] = useState<boolean>(false)
     const [modelOptimizeLastResult, setModelOptimizeLastResult] = useState<string>('')
     const modelOptimizeRunningRef = useRef(false)
@@ -1966,37 +1940,6 @@ const MainLayout: React.FC = () => {
             selectedMaterialIndex: useSelectionStore.getState().selectedMaterialIndex ?? null,
         }
     }, [])
-    const clearStandalonePerfEntries = useCallback(() => {
-        setStandalonePerfEntries([])
-            ; (window as StandalonePerfHostWindow).__standalonePerfEntries = []
-    }, [])
-
-    useEffect(() => {
-        const perfWindow = window as StandalonePerfHostWindow
-        if (Array.isArray(perfWindow.__standalonePerfEntries) && perfWindow.__standalonePerfEntries.length > 0) {
-            setStandalonePerfEntries((previousEntries) => mergeStandalonePerfEntries(
-                previousEntries,
-                [...perfWindow.__standalonePerfEntries].reverse()
-            ))
-        }
-
-        let unsubscribe: (() => void) | undefined
-
-        listenEvent<StandalonePerfEntry>(STANDALONE_PERF_EVENT, (event) => {
-            setStandalonePerfEntries((previousEntries) => mergeStandalonePerfEntries(previousEntries, [event.payload]))
-        }).then((unlisten) => {
-            unsubscribe = unlisten
-        }).catch((error) => {
-            console.error('[MainLayout] Failed to listen for standalone perf events:', error)
-        })
-
-        return () => {
-            if (unsubscribe) {
-                unsubscribe()
-            }
-        }
-    }, [])
-
     // RPC Server for modelOptimize standalone window
     const getModelOptimizeState = useCallback(() => {
         let total = 0;
@@ -2445,7 +2388,7 @@ const MainLayout: React.FC = () => {
                         processedHotOpenPaths.current.add(cliPath);
                         openModelAsTab(cliPath);
                         // Small delay between tabs to allow state to settle
-                        await new Promise(resolve => setTimeout(resolve, 100));
+                        await new Promise(resolve => setTimeout(resolve, 40));
                     }
                 }
             } catch (e) {
@@ -2984,38 +2927,6 @@ const MainLayout: React.FC = () => {
             hasModelData: !!modelData,
         }).catch(() => { })
     }, [activeTabId, modelPath, modelData])
-    useEffect(() => {
-        let cancelled = false
-
-        const pushActiveModelSnapshots = async () => {
-            const [textureManagerVisible, materialManagerVisible] = await Promise.all([
-                windowManager.isToolWindowVisible('textureManager'),
-                windowManager.isToolWindowVisible('materialManager'),
-            ])
-
-            if (cancelled) {
-                return
-            }
-
-            if (textureManagerVisible) {
-                const textureManagerState = getTextureManagerState()
-                standaloneSnapshotDispatchRef.current.textureManager = textureManagerState.snapshotVersion
-                broadcastTextureManager(textureManagerState)
-            }
-
-            if (materialManagerVisible) {
-                const materialManagerState = getMaterialManagerState()
-                standaloneSnapshotDispatchRef.current.materialManager = materialManagerState.snapshotVersion
-                broadcastMaterialManager(materialManagerState)
-            }
-        }
-
-        void pushActiveModelSnapshots()
-
-        return () => {
-            cancelled = true
-        }
-    }, [activeTabId, modelPath, modelData, broadcastTextureManager, getTextureManagerState, broadcastMaterialManager, getMaterialManagerState])
 
     // Push state to the standalone window whenever the model changes
     // Optimized with selective synchronization (Data Stripping)
@@ -3163,7 +3074,7 @@ const MainLayout: React.FC = () => {
 
                 if (isInitialLoad) {
                     console.log('[MainLayout] Initial model load detected, deferring IPC broadcast for smoothness');
-                    setTimeout(() => { void performBroadcast(useModelStore.getState()); }, 250);
+                    setTimeout(() => { void performBroadcast(useModelStore.getState()); }, 100);
                 } else {
                     void performBroadcast(state);
                 }
@@ -3216,7 +3127,7 @@ const MainLayout: React.FC = () => {
         // Initial broadcast after a short delay to ensure preloading started
         setTimeout(() => {
             void performBroadcast(useModelStore.getState());
-        }, 500);
+        }, 120);
 
         return () => {
             unsubscribe();
@@ -4092,7 +4003,10 @@ const MainLayout: React.FC = () => {
                 return true;
             }),
             registerShortcutHandler('editor.textureManager', () => {
-                windowManager.openToolWindow('textureManager', '贴图管理器', 920, 480);
+                windowManager.openToolWindow('textureManager', '贴图管理器', 920, 480).catch((err) => {
+                    console.error('[MainLayout] 打开贴图管理器失败:', err);
+                    showMessage('error', '贴图管理器', `无法打开：${err instanceof Error ? err.message : String(err)}`);
+                });
                 return true;
             }),
             registerShortcutHandler('editor.textureAnimManager', () => {
@@ -4605,7 +4519,10 @@ const MainLayout: React.FC = () => {
                     } else if (editor === 'geosetVisibilityTool') {
                         windowManager.openToolWindow('geosetVisibilityTool', '多边形动作显隐工具', 980, 560);
                     } else if (editor === 'texture') {
-                        windowManager.openToolWindow('textureManager', '贴图管理器', 920, 480);
+                        windowManager.openToolWindow('textureManager', '贴图管理器', 920, 480).catch((err) => {
+                            console.error('[MainLayout] 打开贴图管理器失败:', err);
+                            showMessage('error', '贴图管理器', `无法打开：${err instanceof Error ? err.message : String(err)}`);
+                        });
                     } else if (editor === 'textureAnim') {
                         windowManager.openToolWindow('textureAnimManager', '贴图动画管理器', 800, 480);
                     } else if (editor === 'sequence') {
@@ -4637,8 +4554,6 @@ const MainLayout: React.FC = () => {
                 onSetMainMode={setMainMode}
                 showDebugConsole={showDebugConsole}
                 onToggleDebugConsole={() => setShowDebugConsole(!showDebugConsole)}
-                showStandalonePerf={showStandalonePerf}
-                onShowStandalonePerf={() => setShowStandalonePerf(true)}
                 onShowAbout={() => setShowAbout(true)}
                 onRecalculateNormals={() => {
                     useModelStore.getState().recalculateNormals();
@@ -4714,15 +4629,6 @@ const MainLayout: React.FC = () => {
                 }}
                 onCopyModel={handleCopyModel}
             />
-
-            <Suspense fallback={null}>
-                <StandalonePerfModal
-                    open={showStandalonePerf}
-                    onClose={() => setShowStandalonePerf(false)}
-                    onClear={clearStandalonePerfEntries}
-                    entries={standalonePerfEntries}
-                />
-            </Suspense>
 
             {/* About Dialog */}
             {showAbout && (

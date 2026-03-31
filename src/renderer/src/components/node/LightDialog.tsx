@@ -6,7 +6,7 @@ import { DraggableModal } from '../DraggableModal';
 import { useModelStore } from '../../store/modelStore';
 import { useHistoryStore } from '../../store/historyStore';
 import { listen } from '@tauri-apps/api/event';
-import { windowManager } from '../../utils/windowManager';
+import { windowManager } from '../../utils/WindowManager';
 import type { LightNode } from '../../types/node';
 import type { Color } from 'antd/es/color-picker';
 

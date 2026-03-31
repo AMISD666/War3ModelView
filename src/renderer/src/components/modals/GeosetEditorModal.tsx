@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { List, Button, Select, Card, Typography, message } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { DraggableModal } from '../DraggableModal';
@@ -25,6 +25,8 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
     const [_hasChanges, setHasChanges] = useState(false)
     const listRef = useRef<HTMLDivElement>(null)
     const lastHandledStandalonePickedRef = useRef<number | null | undefined>(undefined)
+    /** RPC 每次同步可能产生新数组引用，用签名避免无谓重置 localGeosets、打断输入焦点 */
+    const lastSourceGeosetSigRef = useRef('')
 
     // RPC Sync for standalone mode
     const { state: rpcState, emitCommand } = useRpcClient<any>('geosetEditor', { geosets: [], materialsCount: 0, selectedIndex: -1, pickedGeosetIndex: null });
@@ -43,31 +45,39 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
         }
     }
 
-    // Initialize local state when modal opens
+    // Initialize local state when modal opens（仅当数据源内容相对上次真的变化时重建本地副本）
     useEffect(() => {
-        if (visible) {
-            if (sourceGeosets.length > 0) {
-                setLocalGeosets(JSON.parse(JSON.stringify(sourceGeosets)))
-            } else {
-                setLocalGeosets([])
-            }
-
-            const standaloneIndex =
-                typeof rpcState.pickedGeosetIndex === 'number'
-                    ? rpcState.pickedGeosetIndex
-                    : (typeof rpcState.selectedIndex === 'number' ? rpcState.selectedIndex : -1)
-
-            // Use persistent selection from store if available, otherwise default to first
-            const { selectedGeosetIndex } = useModelStore.getState()
-            if (isStandalone && standaloneIndex >= 0 && standaloneIndex < sourceGeosets.length) {
-                setSelectedIndex(standaloneIndex)
-            } else if (selectedGeosetIndex !== null && selectedGeosetIndex >= 0 && selectedGeosetIndex < sourceGeosets.length) {
-                setSelectedIndex(selectedGeosetIndex)
-            } else {
-                setSelectedIndex(sourceGeosets.length > 0 ? 0 : -1)
-            }
-            setHasChanges(false)
+        if (!visible) {
+            lastSourceGeosetSigRef.current = ''
+            return
         }
+
+        const sig = JSON.stringify(sourceGeosets)
+        if (sig === lastSourceGeosetSigRef.current) {
+            return
+        }
+        lastSourceGeosetSigRef.current = sig
+
+        if (sourceGeosets.length > 0) {
+            setLocalGeosets(JSON.parse(JSON.stringify(sourceGeosets)))
+        } else {
+            setLocalGeosets([])
+        }
+
+        const standaloneIndex =
+            typeof rpcState.pickedGeosetIndex === 'number'
+                ? rpcState.pickedGeosetIndex
+                : (typeof rpcState.selectedIndex === 'number' ? rpcState.selectedIndex : -1)
+
+        const { selectedGeosetIndex } = useModelStore.getState()
+        if (isStandalone && standaloneIndex >= 0 && standaloneIndex < sourceGeosets.length) {
+            setSelectedIndex(standaloneIndex)
+        } else if (selectedGeosetIndex !== null && selectedGeosetIndex >= 0 && selectedGeosetIndex < sourceGeosets.length) {
+            setSelectedIndex(selectedGeosetIndex)
+        } else {
+            setSelectedIndex(sourceGeosets.length > 0 ? 0 : -1)
+        }
+        setHasChanges(false)
     }, [visible, sourceGeosets, isStandalone, rpcState.selectedIndex, rpcState.pickedGeosetIndex])
 
     // Subscribe to Ctrl+Click geoset picking - auto-select geoset
@@ -149,9 +159,34 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
     }));
 
     const innerContent = (
-        <div style={{ display: 'flex', height: isStandalone ? 'calc(100vh - 32px)' : '320px', backgroundColor: '#1e1e1e', padding: '12px', gap: '16px' }}>
+        <div
+            style={{
+                display: 'flex',
+                // 独立窗口：在标题栏下用 flex 撑满，避免 calc(100vh-32px) 与真实布局不一致导致整窗滚动条与底部黑边
+                flex: isStandalone ? 1 : undefined,
+                minHeight: isStandalone ? 0 : undefined,
+                height: isStandalone ? undefined : '320px',
+                backgroundColor: '#1e1e1e',
+                padding: '12px',
+                gap: '16px',
+                boxSizing: 'border-box',
+            }}
+        >
             {/* List (Left) */}
-            <div ref={listRef} style={{ flex: 1, minWidth: '300px', overflowY: 'auto', display: 'flex', flexDirection: 'column', backgroundColor: '#2a2a2a', border: '1px solid #333', borderRadius: '6px' }}>
+            <div
+                ref={listRef}
+                style={{
+                    flex: 1,
+                    minWidth: '300px',
+                    minHeight: 0,
+                    overflowY: 'auto',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    backgroundColor: '#2a2a2a',
+                    border: '1px solid #333',
+                    borderRadius: '6px',
+                }}
+            >
                 <div style={{ padding: '8px 12px', borderBottom: '1px solid #333', color: '#e0e0e0', fontSize: '13px', fontWeight: 500, backgroundColor: '#252525', borderTopLeftRadius: '6px', borderTopRightRadius: '6px' }}>
                     多边形列表
                 </div>
@@ -187,8 +222,18 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
                 />
             </div>
 
-            {/* Details (Right) */}
-            <div style={{ width: '280px', overflowY: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+            {/* Details (Right)：属性区固定较矮，不需要纵向滚动条 */}
+            <div
+                style={{
+                    width: '280px',
+                    flexShrink: 0,
+                    overflow: 'hidden',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'flex-start',
+                    alignSelf: 'stretch',
+                }}
+            >
                 {selectedGeoset ? (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', width: '100%' }}>
                         <Card
@@ -241,7 +286,16 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
     if (isStandalone) {
         return (
             <StandaloneWindowFrame title="多边形管理器" onClose={() => getCurrentWindow().hide()}>
-                <div style={{ flex: 1, overflowY: 'auto' }}>
+                <div
+                    style={{
+                        flex: 1,
+                        minHeight: 0,
+                        overflow: 'hidden',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        backgroundColor: '#1e1e1e',
+                    }}
+                >
                     {innerContent}
                 </div>
             </StandaloneWindowFrame>

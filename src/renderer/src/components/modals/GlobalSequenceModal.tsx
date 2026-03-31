@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { Button, InputNumber } from 'antd'
 import { PlusOutlined, DeleteOutlined, CheckOutlined } from '@ant-design/icons'
 import { useModelStore } from '../../store/modelStore'
@@ -29,8 +29,14 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({
     const globalSequences: number[] = isStandalone ? (rpcState.globalSequences || []) : storeGlobalSequences
 
     const [localSeqs, setLocalSeqs] = useState<number[]>([])
+    const lastGlobalSeqSigRef = useRef('')
 
     useEffect(() => {
+        const sig = JSON.stringify(globalSequences)
+        if (sig === lastGlobalSeqSigRef.current) {
+            return
+        }
+        lastGlobalSeqSigRef.current = sig
         setLocalSeqs([...globalSequences])
     }, [globalSequences])
 

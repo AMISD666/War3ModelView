@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Button } from 'antd';
 import { MasterDetailLayout } from '../MasterDetailLayout';
 import { useModelStore } from '../../store/modelStore';
@@ -7,7 +7,7 @@ import { useSelectionStore } from '../../store/selectionStore';
 import { DraggableModal } from '../DraggableModal';
 import DynamicField from '../node/DynamicField';
 import { listen } from '@tauri-apps/api/event';
-import { windowManager } from '../../utils/windowManager';
+import { windowManager } from '../../utils/WindowManager';
 
 import { useRpcClient } from '../../hooks/useRpc';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -33,6 +33,7 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
 
     const [selectedIndex, setSelectedIndex] = useState<number>(-1);
     const [localAnims, setLocalAnims] = useState<any[]>([]);
+    const lastSourceAnimsSigRef = useRef('');
 
     // Editor State
     const [editingBlock, setEditingBlock] = useState<{ index: number, field: string } | null>(null);
@@ -48,23 +49,30 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
             setLocalAnims([]);
             setSelectedIndex(-1);
             setEditingBlock(null);
+            lastSourceAnimsSigRef.current = '';
             return;
         }
+
+        const sig = JSON.stringify(sourceAnims ?? null);
+        if (sig === lastSourceAnimsSigRef.current) {
+            return;
+        }
+        lastSourceAnimsSigRef.current = sig;
 
         if (Array.isArray(sourceAnims)) {
             setLocalAnims([...sourceAnims]);
             if (sourceAnims.length === 0) {
                 setSelectedIndex(-1);
                 setEditingBlock(null);
-            } else if (selectedIndex >= sourceAnims.length) {
-                setSelectedIndex(sourceAnims.length - 1);
+            } else {
+                setSelectedIndex((prev) => (prev >= sourceAnims.length ? sourceAnims.length - 1 : prev));
             }
         } else {
             setLocalAnims([]);
             setSelectedIndex(-1);
             setEditingBlock(null);
         }
-    }, [visible, sourceAnims, selectedIndex]);
+    }, [visible, sourceAnims]);
 
     const saveToBackend = (action: string, payload: any, newAnims: any[]) => {
         setLocalAnims(newAnims);

@@ -204,6 +204,9 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
     const localTexturesRef = useRef<LocalTexture[]>([])
     const adjustmentsByTextureIdRef = useRef<Record<string, TextureAdjustments>>({})
     const pendingTextureSaveTimeoutRef = useRef<number | null>(null)
+    /** 路径框正在编辑时，禁止用父级/RPC 状态覆盖输入，避免失焦与截断输入 */
+    const pathInputEditingRef = useRef(false)
+    const pathInputSelectedIndexRef = useRef(-1)
 
     // Helper to scroll to selected item
     const scrollToItem = (index: number) => {
@@ -245,8 +248,23 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         lastSelectedIndexRef.current = selectedIndex
     }, [selectedIndex])
 
-    // 当选中项切换时，把路径同步到本地输入缓冲
+    // 路径输入：仅在切换选中项或外部数据更新且未在编辑时同步到输入框；保存仅在失焦/Enter 时 commitPathInput
     useEffect(() => {
+        const indexChanged = pathInputSelectedIndexRef.current !== selectedIndex
+        pathInputSelectedIndexRef.current = selectedIndex
+
+        if (indexChanged) {
+            pathInputEditingRef.current = false
+        }
+
+        if (pathInputEditingRef.current) {
+            return
+        }
+
+        if (selectedIndex < 0) {
+            setPathInputValue('')
+            return
+        }
         setPathInputValue(selectedTexture?.Image ?? '')
     }, [selectedIndex, selectedTexture?.__editorId, selectedTexture?.Image])
 
@@ -487,32 +505,50 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         if (data && data.Textures && data.Textures.length > 0) {
             const textureSignature = buildTextureDefinitionSignature(data.Textures)
             const snapshotChanged = isStandalone && lastStandaloneSnapshotVersionRef.current !== rpcState.snapshotVersion
+            // 仅当贴图定义真正变化时全量重置；snapshotVersion 会周期性递增，不应单独触发重置（否则会重建 __editorId、打断路径输入焦点）
             const texturesChanged =
                 !isInitializedRef.current ||
-                snapshotChanged ||
                 lastTexturesSignatureRef.current !== textureSignature
 
             if (!texturesChanged) {
+                if (isStandalone && snapshotChanged) {
+                    lastStandaloneSnapshotVersionRef.current = rpcState.snapshotVersion
+                }
                 return
             }
             const cloned = JSON.parse(JSON.stringify(data.Textures))
             const nextAdjustments: Record<string, TextureAdjustments> = {}
-            const withReplaceables = cloned.map((t: any) => {
+            const prevSnapshot = localTexturesRef.current
+            const textureItemIdentityKey = (x: any) =>
+                JSON.stringify({
+                    image: x?.Image ?? '',
+                    replaceableId: x?.ReplaceableId ?? 0,
+                    flags: x?.Flags ?? 0,
+                })
+            const withReplaceables = cloned.map((t: any, i: number) => {
+                const prevT = i < prevSnapshot.length ? prevSnapshot[i] : null
+                const withStableId =
+                    prevT &&
+                    typeof prevT.__editorId === 'string' &&
+                    textureItemIdentityKey(prevT) === textureItemIdentityKey(t)
+                        ? { ...t, __editorId: prevT.__editorId }
+                        : t
+
                 if (!t?.Image && t?.ReplaceableId === 1) {
-                    const texture = ensureLocalTexture({ ...t, Image: 'ReplaceableTextures\\TeamColor\\TeamColor00.blp' })
+                    const texture = ensureLocalTexture({ ...withStableId, Image: 'ReplaceableTextures\\TeamColor\\TeamColor00.blp' })
                     if (t?.[TEXTURE_ADJUSTMENTS_KEY]) {
                         nextAdjustments[texture.__editorId] = normalizeTextureAdjustments(t[TEXTURE_ADJUSTMENTS_KEY])
                     }
                     return texture
                 }
                 if (!t?.Image && t?.ReplaceableId === 2) {
-                    const texture = ensureLocalTexture({ ...t, Image: 'ReplaceableTextures\\TeamGlow\\TeamGlow00.blp' })
+                    const texture = ensureLocalTexture({ ...withStableId, Image: 'ReplaceableTextures\\TeamGlow\\TeamGlow00.blp' })
                     if (t?.[TEXTURE_ADJUSTMENTS_KEY]) {
                         nextAdjustments[texture.__editorId] = normalizeTextureAdjustments(t[TEXTURE_ADJUSTMENTS_KEY])
                     }
                     return texture
                 }
-                const texture = ensureLocalTexture(t)
+                const texture = ensureLocalTexture(withStableId)
                 if (t?.[TEXTURE_ADJUSTMENTS_KEY]) {
                     nextAdjustments[texture.__editorId] = normalizeTextureAdjustments(t[TEXTURE_ADJUSTMENTS_KEY])
                 }
@@ -1702,10 +1738,15 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
                                             <Input
                                                 value={pathInputValue}
                                                 onChange={(e) => setPathInputValue(e.target.value)}
-                                                onBlur={commitPathInput}
+                                                onFocus={() => {
+                                                    pathInputEditingRef.current = true
+                                                }}
+                                                onBlur={() => {
+                                                    commitPathInput()
+                                                    pathInputEditingRef.current = false
+                                                }}
                                                 onKeyDown={(e) => {
                                                     if (e.key === 'Enter') {
-                                                        commitPathInput();
                                                         (e.target as HTMLInputElement).blur()
                                                     }
                                                 }}

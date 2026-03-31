@@ -6,7 +6,7 @@ import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker';
 
 import { DraggableModal } from '../DraggableModal';
 import { listen } from '@tauri-apps/api/event';
-import { windowManager } from '../../utils/windowManager';
+import { windowManager } from '../../utils/WindowManager';
 import type { Color } from 'antd/es/color-picker';
 import type { ParticleEmitter2Node } from '../../types/node';
 import { useModelStore } from '../../store/modelStore';

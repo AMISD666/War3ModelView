@@ -1,7 +1,8 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, startTransition } from 'react';
 import { emit, listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { debugLog } from '../utils/debugLog';
+import { normalizeRpcSyncPayload } from '../utils/rpcSerialization';
 import { markStandalonePerf } from '../utils/standalonePerf';
 import { windowManager } from '../utils/WindowManager';
 
@@ -14,6 +15,17 @@ interface RpcClientOptions<TState, TPatch> {
     applyPatch?: (previousState: TState, patch: TPatch) => TState
 }
 
+/** 默认合并连续全量同步的间隔（毫秒）；略短以配合 invoke 大负载路径，独立窗口体感更跟手 */
+export const RPC_DEFAULT_BROADCAST_DEBOUNCE_MS = 20
+
+export type UseRpcServerOptions = {
+    /**
+     * 对 broadcastSync 做 trailing 防抖；0 表示每次立即发送（旧行为）。
+     * rpc-req / rpc-ready / broadcastPatch 不受影响。
+     */
+    broadcastDebounceMs?: number
+}
+
 /**
  * useRpcServer - Hook for the MAIN window (data source)
  * @param windowId The identifier for the target window to sync with
@@ -23,10 +35,17 @@ interface RpcClientOptions<TState, TPatch> {
 export function useRpcServer<TState, TPatch = never>(
     windowId: string,
     getLatestState: () => TState,
-    onCommand?: (command: string, payload: any) => void
+    onCommand?: (command: string, payload: any) => void,
+    options?: UseRpcServerOptions
 ) {
     const getLatestStateRef = useRef(getLatestState);
     const onCommandRef = useRef(onCommand);
+    const debounceMs =
+        options?.broadcastDebounceMs !== undefined
+            ? options.broadcastDebounceMs
+            : RPC_DEFAULT_BROADCAST_DEBOUNCE_MS
+    const broadcastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+    const pendingBroadcastRef = useRef<TState | null>(null)
 
     useEffect(() => {
         getLatestStateRef.current = getLatestState;
@@ -88,15 +107,58 @@ export function useRpcServer<TState, TPatch = never>(
         }
     }, [windowId]);
 
-    const broadcastSync = useCallback((state: TState) => {
-        debugLog(`[RPC Server][${windowId}] Broadcasting state. Object keys: ${Object.keys(state as any).join(',')}`);
+    const flushPendingBroadcast = useCallback(() => {
+        broadcastTimerRef.current = null
+        const pending = pendingBroadcastRef.current
+        if (pending === null) return
+        pendingBroadcastRef.current = null
+        debugLog(`[RPC Server][${windowId}] Flushing debounced broadcast. Object keys: ${Object.keys(pending as any).join(',')}`)
         markStandalonePerf('snapshot_sent', {
             windowId,
             source: 'broadcast',
-            keyCount: getPayloadKeyCount(state),
-        });
-        void windowManager.emitToolWindowSync(windowId, state);
-    }, [windowId]);
+            keyCount: getPayloadKeyCount(pending),
+            debounced: true,
+        })
+        void windowManager.emitToolWindowSync(windowId, pending)
+    }, [windowId])
+
+    useEffect(() => {
+        return () => {
+            if (broadcastTimerRef.current !== null) {
+                clearTimeout(broadcastTimerRef.current)
+                broadcastTimerRef.current = null
+            }
+            if (pendingBroadcastRef.current !== null) {
+                const pending = pendingBroadcastRef.current
+                pendingBroadcastRef.current = null
+                void windowManager.emitToolWindowSync(windowId, pending)
+            }
+        }
+    }, [windowId])
+
+    const broadcastSync = useCallback(
+        (state: TState) => {
+            debugLog(
+                `[RPC Server][${windowId}] Queue broadcast state. Object keys: ${Object.keys(state as any).join(',')}`
+            )
+            pendingBroadcastRef.current = state
+
+            if (debounceMs <= 0) {
+                if (broadcastTimerRef.current !== null) {
+                    clearTimeout(broadcastTimerRef.current)
+                    broadcastTimerRef.current = null
+                }
+                flushPendingBroadcast()
+                return
+            }
+
+            if (broadcastTimerRef.current !== null) {
+                clearTimeout(broadcastTimerRef.current)
+            }
+            broadcastTimerRef.current = setTimeout(flushPendingBroadcast, debounceMs)
+        },
+        [windowId, debounceMs, flushPendingBroadcast]
+    )
 
     const broadcastPatch = useCallback((patch: TPatch) => {
         markStandalonePerf('patch_sent', {
@@ -184,20 +246,35 @@ export function useRpcClient<TState, TPatch = never>(
             });
         };
 
-        listen<TState>(`rpc-sync-${windowId}`, (event) => {
-            debugLog(`[RPC Client][${windowId}] Received state sync: ${Object.keys(event.payload as any).join(',')}`);
-            hasReceivedData = true;
-            clearBootstrapTimeouts();
-
+        listen<unknown>(`rpc-sync-${windowId}`, (event) => {
             const snapshotId = ++receivedSnapshotCounterRef.current;
-            pendingSnapshotIdRef.current = snapshotId;
-            markStandalonePerf('snapshot_received', {
-                windowId,
-                snapshotId,
-                keyCount: getPayloadKeyCount(event.payload),
-            });
 
-            setState(event.payload);
+            void (async () => {
+                const decoded = await normalizeRpcSyncPayload<TState>(event.payload);
+                if (!isMounted) return;
+                // 异步解码完成顺序可能乱序，只应用仍与「当前最新接收序号」一致的那次快照
+                if (snapshotId !== receivedSnapshotCounterRef.current) return;
+
+                const keyPreview =
+                    decoded && typeof decoded === 'object'
+                        ? Object.keys(decoded as Record<string, unknown>).join(',')
+                        : '';
+                debugLog(`[RPC Client][${windowId}] Received state sync: ${keyPreview}`);
+                hasReceivedData = true;
+                clearBootstrapTimeouts();
+
+                pendingSnapshotIdRef.current = snapshotId;
+                markStandalonePerf('snapshot_received', {
+                    windowId,
+                    snapshotId,
+                    keyCount: getPayloadKeyCount(decoded),
+                });
+
+                startTransition(() => {
+                    if (!isMounted) return;
+                    setState(decoded);
+                });
+            })();
         }).then(unlisten => {
             if (!isMounted) {
                 unlisten();

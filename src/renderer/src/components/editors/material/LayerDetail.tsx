@@ -3,7 +3,7 @@ import { Checkbox, Button, Select, Space } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { EditOutlined } from '@ant-design/icons'
 import { listen } from '@tauri-apps/api/event'
-import { windowManager } from '../../../utils/windowManager'
+import { windowManager } from '../../../utils/WindowManager'
 import { useModelStore } from '../../../store/modelStore'
 import TextureAnimationManagerModal from '../../modals/TextureAnimationManagerModal'
 

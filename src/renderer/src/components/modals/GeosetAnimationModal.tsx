@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { List, Checkbox, Button, Select, Card, Typography, message } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker'
@@ -11,7 +11,7 @@ import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useRpcClient } from '../../hooks/useRpc'
 import { listen } from '@tauri-apps/api/event'
-import { windowManager } from '../../utils/windowManager'
+import { windowManager } from '../../utils/WindowManager'
 
 const { Text } = Typography
 const { Option } = Select
@@ -31,6 +31,7 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
     const [selectedIndex, setSelectedIndex] = useState<number>(-1)
     const [geosets, setGeosets] = useState<any[]>([])
     const listRef = useRef<HTMLDivElement>(null)
+    const lastAnimGeoSigRef = useRef('')
 
     const scrollToItem = (index: number) => {
         if (listRef.current && index >= 0) {
@@ -74,7 +75,7 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
     const [editingField, setEditingField] = useState<string | null>(null)
     const [editingVectorSize, setEditingVectorSize] = useState(1)
 
-    // Initialize local state when modal opens
+    // Initialize local state when modal opens（仅当 RPC/模型数据内容真的变化时重建，避免周期性同步打断编辑）
     useEffect(() => {
         const currentAnims = isStandalone ? rpcState.geosetAnims : modelData?.GeosetAnims;
         const currentGeosets = isStandalone ? rpcState.geosets : modelData?.Geosets;
@@ -83,8 +84,15 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
             setLocalAnims([])
             setGeosets([])
             setSelectedIndex(-1)
+            lastAnimGeoSigRef.current = ''
             return
         }
+
+        const sig = JSON.stringify({ a: currentAnims, g: currentGeosets })
+        if (sig === lastAnimGeoSigRef.current) {
+            return
+        }
+        lastAnimGeoSigRef.current = sig
 
         if (currentAnims) {
             // Deep clone GeosetAnims, converting Float32Array to regular arrays
@@ -353,7 +361,17 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
 
     const innerContent = (
         <>
-            <div style={{ display: 'flex', height: '450px', border: '1px solid #4a4a4a', backgroundColor: '#252525' }}>
+            <div
+                style={{
+                    display: 'flex',
+                    // 嵌入 DraggableModal 时保持固定高度；独立窗口须撑满标题栏下区域，避免底部露出黑边
+                    flex: isStandalone ? 1 : undefined,
+                    minHeight: isStandalone ? 0 : undefined,
+                    height: isStandalone ? undefined : '450px',
+                    border: '1px solid #4a4a4a',
+                    backgroundColor: '#252525',
+                }}
+            >
                 {/* List (Left) */}
                 <div ref={listRef} style={{ width: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', backgroundColor: '#333333', borderRight: '1px solid #4a4a4a' }}>
                     <div style={{ padding: '8px', borderBottom: '1px solid #4a4a4a' }}>
@@ -546,7 +564,16 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
     if (isStandalone) {
         return (
             <StandaloneWindowFrame title="多边形动画管理器" onClose={onClose}>
-                <div style={{ flex: 1, overflowY: 'auto' }}>
+                <div
+                    style={{
+                        flex: 1,
+                        minHeight: 0,
+                        overflow: 'hidden',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        backgroundColor: '#252525',
+                    }}
+                >
                     {innerContent}
                 </div>
             </StandaloneWindowFrame>

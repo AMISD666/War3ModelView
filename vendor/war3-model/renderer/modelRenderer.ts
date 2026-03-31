@@ -1059,6 +1059,45 @@ export class ModelRenderer {
     }
 
     /**
+     * 将 model.Textures 的 Flags（WrapWidth/WrapHeight）同步到已上传的 GPU 纹理 / WebGPU sampler。
+     * 仅改 Flags、不重新上传像素时必须调用，否则环绕模式要等全量重载才生效。
+     */
+    public syncTextureWrapParametersFromModel(): void {
+        if (!this.model?.Textures) return;
+
+        if (this.gl) {
+            for (const tex of this.model.Textures) {
+                const path = tex.Image;
+                if (!path) continue;
+                const glTexture = ModelResourceManager.getInstance().getTexture(path);
+                if (!glTexture) continue;
+                const flags = typeof tex.Flags === 'number' ? tex.Flags : 0;
+                this.gl.bindTexture(this.gl.TEXTURE_2D, glTexture);
+                this.setTextureParameters(flags, true);
+                this.gl.bindTexture(this.gl.TEXTURE_2D, null);
+            }
+        }
+
+        if (this.device && this.rendererData.gpuSamplers && Array.isArray(this.model.Textures)) {
+            for (let i = 0; i < this.model.Textures.length; i++) {
+                const texture = this.model.Textures[i];
+                const flags = typeof texture.Flags === 'number' ? texture.Flags : 0;
+                const addressModeU: GPUAddressMode = flags & TextureFlags.WrapWidth ? 'repeat' : 'clamp-to-edge';
+                const addressModeV: GPUAddressMode = flags & TextureFlags.WrapHeight ? 'repeat' : 'clamp-to-edge';
+                this.rendererData.gpuSamplers[i] = this.device.createSampler({
+                    label: `texture sampler ${i}`,
+                    minFilter: 'linear',
+                    magFilter: 'linear',
+                    mipmapFilter: 'linear',
+                    maxAnisotropy: 16,
+                    addressModeU,
+                    addressModeV
+                });
+            }
+        }
+    }
+
+    /**
      * Set texture data from optimized Rust backend payload (DXT or RGBA)
      * @returns true if texture was loaded successfully, false if renderer not ready
      */

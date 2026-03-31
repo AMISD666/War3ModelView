@@ -57,8 +57,6 @@ interface MenuBarProps {
     onSetMainMode: (mode: 'view' | 'geometry' | 'uv' | 'animation' | 'batch') => void
     showDebugConsole: boolean
     onToggleDebugConsole: () => void
-    showStandalonePerf: boolean
-    onShowStandalonePerf: () => void
     onShowAbout: () => void
     onShowChangelog: () => void
     onRecalculateNormals: () => void
@@ -114,8 +112,6 @@ const MenuBar: React.FC<MenuBarProps> = ({
     onSetMainMode,
     showDebugConsole,
     onToggleDebugConsole,
-    showStandalonePerf,
-    onShowStandalonePerf,
     onShowAbout,
     onShowChangelog,
     onRecalculateNormals,
@@ -550,15 +546,6 @@ const MenuBar: React.FC<MenuBarProps> = ({
                             <span style={{ color: '#888', fontSize: '11px' }}>L</span>
                         </div>
                         <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onShowStandalonePerf(); closeMenu() }}
-                        >
-                            <span>独立窗口性能打点</span>
-                            <span>{showStandalonePerf ? '✓' : ''}</span>
-                        </div>
                         <div
                             style={itemStyle}
                             onMouseEnter={hoverStyle}

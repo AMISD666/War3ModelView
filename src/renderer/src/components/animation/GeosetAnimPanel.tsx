@@ -7,7 +7,7 @@ import { useSelectionStore } from '../../store/selectionStore'
 import { useModelStore } from '../../store/modelStore'
 import { useHistoryStore } from '../../store/historyStore'
 import { listen } from '@tauri-apps/api/event'
-import { windowManager } from '../../utils/windowManager'
+import { windowManager } from '../../utils/WindowManager'
 import RightFloatingPanelShell from './RightFloatingPanelShell'
 
 const { Text } = Typography

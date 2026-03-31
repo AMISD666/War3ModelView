@@ -1034,64 +1034,66 @@ async function decodeBatchWithWorkerPool(
     return decoded
 }
 
-export async function loadAllTextures(
+/** 与 loadAllTextures 内部一致的贴图加载上下文，供 Viewer 在创建渲染器前预取 Rust 批量读取 */
+export type TextureLoadContext = {
+    effectiveTexturePaths: string[]
+    alphaRequiredTexturePaths: Set<string>
+    textureAdjustmentsByPath: Map<string, TextureAdjustments>
+}
+
+/**
+ * 解析 Replaceable、收集路径与 Alpha 需求（会修改 model 上的贴图路径）
+ * 与 loadAllTextures 首段逻辑保持一致
+ */
+export function prepareModelForTextureLoad(
     model: any,
-    renderer: any,
-    modelPath: string,
-    worker?: WorkerLike | WorkerLike[],
-    maxDimension?: number,
-    options?: {
-        yieldUploads?: boolean
-        workerDecodeMinTextures?: number
-        workerDecodeMinBytes?: number
-        targetPaths?: string[]
+    options?: { targetPaths?: string[] }
+): TextureLoadContext {
+    const empty: TextureLoadContext = {
+        effectiveTexturePaths: [],
+        alphaRequiredTexturePaths: new Set<string>(),
+        textureAdjustmentsByPath: new Map<string, TextureAdjustments>()
     }
-): Promise<TextureLoadResult[]> {
-    const results: TextureLoadResult[] = []
-
-    if (!model.Textures) {
-        return results
+    if (!model?.Textures) {
+        return empty
     }
 
-    // Resolve Replaceable IDs and mutate model data
     model.Textures.forEach((texture: any) => {
         if ((!texture.Image || texture.Image === '') && texture.ReplaceableId !== 0) {
-            const replaceablePath = REPLACEABLE_TEXTURES[texture.ReplaceableId];
+            const replaceablePath = REPLACEABLE_TEXTURES[texture.ReplaceableId]
             if (replaceablePath !== undefined) {
-                texture.Image = `ReplaceableTextures\\${replaceablePath}.blp`;
+                texture.Image = `ReplaceableTextures\\${replaceablePath}.blp`
             }
         }
-    });
+    })
 
-    const texturePaths = new Set<string>(model.Textures
-        .map((texture: any) => texture.Image as string)
-        .filter((path: string) => !!path));
+    const texturePaths = new Set<string>(
+        model.Textures.map((texture: any) => texture.Image as string).filter((path: string) => !!path)
+    )
 
-    // SCAN EMITTERS FOR TEXTURES (v1 Particle Emitters)
     if (model.ParticleEmitters) {
         model.ParticleEmitters.forEach((emitter: any) => {
             if (emitter.FileName && typeof emitter.FileName === 'string') {
-                texturePaths.add(emitter.FileName);
+                texturePaths.add(emitter.FileName)
             }
-        });
+        })
     }
 
-    // SCAN EMITTERS FOR REPLACEABLE TEXTURES (v2 Particle Emitters)
     if (model.ParticleEmitters2) {
         model.ParticleEmitters2.forEach((emitter: any) => {
             if (emitter.ReplaceableId > 0 && (emitter.TextureID === -1 || emitter.TextureID === undefined)) {
-                const replaceablePath = REPLACEABLE_TEXTURES[emitter.ReplaceableId];
+                const replaceablePath = REPLACEABLE_TEXTURES[emitter.ReplaceableId]
                 if (replaceablePath !== undefined) {
-                    const fullPath = `ReplaceableTextures\\${replaceablePath}.blp`;
-                    texturePaths.add(fullPath);
+                    const fullPath = `ReplaceableTextures\\${replaceablePath}.blp`
+                    texturePaths.add(fullPath)
                 }
             }
-        });
+        })
     }
 
-    const uniqueTexturePaths: string[] = Array.from(texturePaths);
+    const uniqueTexturePaths: string[] = Array.from(texturePaths)
     if (uniqueTexturePaths.length === 0) {
-        return results
+        return empty
     }
 
     const targetPathSet = new Set((options?.targetPaths || []).filter(Boolean))
@@ -1103,41 +1105,39 @@ export async function loadAllTextures(
         effectiveTexturePaths = [...fromModel, ...extras]
     }
     if (effectiveTexturePaths.length === 0) {
-        return results
+        return empty
     }
 
-    const alphaRequiredTexturePaths = new Set<string>();
+    const alphaRequiredTexturePaths = new Set<string>()
 
     if (model.Materials) {
         model.Materials.forEach((material: any) => {
             if (material.Layers) {
                 material.Layers.forEach((layer: any) => {
-                    // FilterMode > 0 indicates transparency/blending (e.g., Transparent, Blend, Additive)
                     if (layer.FilterMode > 0 && layer.TextureID !== undefined && model.Textures[layer.TextureID]) {
-                        const img = model.Textures[layer.TextureID].Image;
-                        if (img) alphaRequiredTexturePaths.add(img);
+                        const img = model.Textures[layer.TextureID].Image
+                        if (img) alphaRequiredTexturePaths.add(img)
                     }
-                });
+                })
             }
-        });
+        })
     }
 
     if (model.ParticleEmitters2) {
         model.ParticleEmitters2.forEach((emitter: any) => {
             if (emitter.TextureID !== undefined && model.Textures[emitter.TextureID]) {
-                const img = model.Textures[emitter.TextureID].Image;
-                if (img) alphaRequiredTexturePaths.add(img);
+                const img = model.Textures[emitter.TextureID].Image
+                if (img) alphaRequiredTexturePaths.add(img)
             }
-        });
+        })
     }
 
-    // Include v1 Particle Emitters as they also rely heavily on alpha
     if (model.ParticleEmitters) {
         model.ParticleEmitters.forEach((emitter: any) => {
             if (emitter.FileName && typeof emitter.FileName === 'string') {
-                alphaRequiredTexturePaths.add(emitter.FileName);
+                alphaRequiredTexturePaths.add(emitter.FileName)
             }
-        });
+        })
     }
 
     const textureAdjustmentsByPath = new Map<string, TextureAdjustments>()
@@ -1151,15 +1151,58 @@ export async function loadAllTextures(
         }
     }
 
+    return {
+        effectiveTexturePaths,
+        alphaRequiredTexturePaths,
+        textureAdjustmentsByPath
+    }
+}
+
+export async function loadAllTextures(
+    model: any,
+    renderer: any,
+    modelPath: string,
+    worker?: WorkerLike | WorkerLike[],
+    maxDimension?: number,
+    options?: {
+        yieldUploads?: boolean
+        workerDecodeMinTextures?: number
+        workerDecodeMinBytes?: number
+        targetPaths?: string[]
+        /** 若已由 prepareModelForTextureLoad 准备，则不再重复解析路径与修改 model */
+        textureLoadContext?: TextureLoadContext
+        /** 与 textureLoadContext 配合：提前发起的 Rust 批量读，可与 WebGL 初始化并行 */
+        batchPayloadPromise?: Promise<Uint8Array>
+    }
+): Promise<TextureLoadResult[]> {
+    const results: TextureLoadResult[] = []
+
+    if (!model.Textures) {
+        return results
+    }
+
+    const ctx =
+        options?.textureLoadContext ??
+        prepareModelForTextureLoad(model, { targetPaths: options?.targetPaths })
+
+    const { effectiveTexturePaths, alphaRequiredTexturePaths, textureAdjustmentsByPath } = ctx
+
+    if (effectiveTexturePaths.length === 0) {
+        return results
+    }
+
     const decodedTextures = new Map<string, DecodedTextureImage>()
     const decodeCacheKeys = new Map<string, string>()
     const workers = normalizeWorkers(worker)
 
     try {
-        const payload = await invoke<Uint8Array>('load_textures_batch_bin', {
-            modelPath,
-            texturePaths: effectiveTexturePaths
-        })
+        const payload =
+            options?.batchPayloadPromise != null
+                ? await options.batchPayloadPromise
+                : await invoke<Uint8Array>('load_textures_batch_bin', {
+                      modelPath,
+                      texturePaths: effectiveTexturePaths
+                  })
         const decodedBatch = parseTextureBytesPayload(payload, effectiveTexturePaths)
         const entries = Array.from(decodedBatch.entries())
         const uncachedEntries: Array<[string, Uint8Array]> = []
@@ -1181,8 +1224,9 @@ export async function loadAllTextures(
         }
 
         const totalBytes = uncachedEntries.reduce((sum, [, bytes]) => sum + bytes.byteLength, 0)
-        const workerDecodeMinTextures = options?.workerDecodeMinTextures ?? 6
-        const workerDecodeMinBytes = options?.workerDecodeMinBytes ?? (5 * 1024 * 1024)
+        // 降低门槛：多数角色模贴图数量在 3～5 张且单张不大，走 Worker 池并行解码可明显缩短主线程阻塞
+        const workerDecodeMinTextures = options?.workerDecodeMinTextures ?? 3
+        const workerDecodeMinBytes = options?.workerDecodeMinBytes ?? Math.floor(1.5 * 1024 * 1024)
         const useWorkerPool =
             workers.length > 0 &&
             uncachedEntries.length >= workerDecodeMinTextures &&
@@ -1270,6 +1314,5 @@ export async function loadTeamColorTextures(
         }
     }
 
-    await loadReplaceable(teamColorPath, 1)
-    await loadReplaceable(teamGlowPath, 2)
+    await Promise.all([loadReplaceable(teamColorPath, 1), loadReplaceable(teamGlowPath, 2)])
 }
