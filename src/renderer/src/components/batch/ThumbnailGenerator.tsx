@@ -30,6 +30,7 @@ function resolveAnimationIndex(animations: string[], selectedName?: string): num
 
 interface ThumbnailGeneratorProps {
     queue: { name: string; fullPath: string }[];
+    activePaths?: string[];
     onThumbnailReady: (fullPath: string, bitmap: ImageBitmap, animations?: string[]) => void;
     onItemProcessed: (fullPath: string) => void;
     isAnimating?: boolean;
@@ -44,6 +45,7 @@ interface ThumbnailGeneratorProps {
 
 export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
     queue,
+    activePaths = [],
     onThumbnailReady,
     onItemProcessed,
     isAnimating = true,
@@ -115,12 +117,16 @@ export const ThumbnailGenerator: React.FC<ThumbnailGeneratorProps> = ({
         const queueWasEmpty = lastQueueRef.current.length === 0;
 
         if (queue.length > 0 && (queueWasEmpty || hasNewItems)) {
-            processedPaths.current = [];
+            const queueSet = new Set(currentQueuePaths);
+            processedPaths.current = activePaths.filter((path) => !queueSet.has(path));
             textureFirstFramePathsRef.current = new Set(currentQueuePaths);
+        } else if (queue.length === 0) {
+            processedPaths.current = [...activePaths];
+            textureFirstFramePathsRef.current = new Set();
         }
 
         lastQueueRef.current = currentQueuePaths;
-    }, [queue]);
+    }, [queue, activePaths]);
 
     useEffect(() => {
         let active = true;

@@ -6,10 +6,12 @@ mod app_settings;
 mod copy_utils;
 mod delete_utils;
 mod mpq_manager;
+mod model_manifest;
 mod texture_decode;
 mod texture_encode;
 
 use base64::Engine;
+use model_manifest::{build_manifest_row, ModelManifestRow};
 use mpq_manager::MpqManager;
 use rayon::prelude::*;
 use serde::Serialize;
@@ -443,6 +445,13 @@ fn scan_model_files_first_page_bin(root: String, page_size: usize) -> Result<Res
 struct BatchScanPayload {
     scan_id: String,
     files: Vec<String>,
+    manifests: Vec<ModelManifestRow>,
+}
+
+fn is_replaceable_team_texture_path(texture_path: &str) -> bool {
+    let normalized = normalize_path(texture_path).to_lowercase();
+    normalized.starts_with("replaceabletextures\\teamcolor\\")
+        || normalized.starts_with("replaceabletextures\\teamglow\\")
 }
 
 fn collect_model_files_streaming(root: String, page_size: usize, on_first_page: impl Fn(Vec<String>) + Send + 'static, on_complete: impl Fn(Vec<String>) + Send + 'static) {
@@ -540,18 +549,19 @@ fn scan_model_files_streamed(
     }
 
     let first_page = discovered.clone();
-    let first_page_results: Vec<(String, f64, Vec<u8>)> = first_page
+    let first_page_results: Vec<(String, f64, Vec<u8>, ModelManifestRow)> = first_page
         .into_par_iter()
         .map(|path| {
             let start = std::time::Instant::now();
             let data = std::fs::read(&path).unwrap_or_default();
-            (path, start.elapsed().as_secs_f64() * 1000.0, data)
+            let manifest = build_manifest_row(PathBuf::from(&path).as_path(), &data);
+            (path, start.elapsed().as_secs_f64() * 1000.0, data, manifest)
         })
         .collect();
 
     let mut payload: Vec<u8> = Vec::new();
     payload.extend_from_slice(&(first_page_results.len() as u32).to_le_bytes());
-    for (path, read_ms, data) in first_page_results {
+    for (path, read_ms, data, manifest) in first_page_results {
         let path_bytes = path.as_bytes();
         payload.extend_from_slice(&(path_bytes.len() as u32).to_le_bytes());
         payload.extend_from_slice(path_bytes);
@@ -559,6 +569,18 @@ fn scan_model_files_streamed(
         payload.extend_from_slice(&(data.len() as u32).to_le_bytes());
         if !data.is_empty() {
             payload.extend_from_slice(&data);
+        }
+        payload.extend_from_slice(&(manifest.animations.len() as u32).to_le_bytes());
+        for animation in manifest.animations {
+            let animation_bytes = animation.as_bytes();
+            payload.extend_from_slice(&(animation_bytes.len() as u32).to_le_bytes());
+            payload.extend_from_slice(animation_bytes);
+        }
+        payload.extend_from_slice(&(manifest.texture_paths.len() as u32).to_le_bytes());
+        for texture_path in manifest.texture_paths {
+            let texture_path_bytes = texture_path.as_bytes();
+            payload.extend_from_slice(&(texture_path_bytes.len() as u32).to_le_bytes());
+            payload.extend_from_slice(texture_path_bytes);
         }
     }
 
@@ -592,11 +614,21 @@ fn scan_model_files_streamed(
             }
         }
 
+        let manifests: Vec<ModelManifestRow> = discovered
+            .par_iter()
+            .map(|path| {
+                let path_buf = PathBuf::from(path);
+                let data = std::fs::read(&path_buf).unwrap_or_default();
+                build_manifest_row(path_buf.as_path(), &data)
+            })
+            .collect();
+
         let _ = app.emit(
             "batch-scan-complete",
             BatchScanPayload {
                 scan_id,
                 files: discovered,
+                manifests,
             },
         );
     });
@@ -835,6 +867,142 @@ fn load_textures_batch_thumb_rgba(
             payload.push(0u8);
             payload.extend_from_slice(&0u32.to_le_bytes());
             payload.extend_from_slice(&0u32.to_le_bytes());
+            payload.extend_from_slice(&0u32.to_le_bytes());
+        }
+    }
+
+    Ok(Response::new(payload))
+}
+
+#[tauri::command]
+fn load_batch_page_bundle(
+    model_paths: Vec<String>,
+    state: State<'_, MpqManager>,
+    cache: State<'_, TextureBatchCache>,
+) -> Result<Response, String> {
+    let unique_model_paths: Vec<String> = model_paths
+        .into_iter()
+        .filter(|path| !path.trim().is_empty())
+        .collect();
+
+    let model_results: Vec<(String, bool, f64, Vec<u8>, ModelManifestRow)> = unique_model_paths
+        .par_iter()
+        .map(|path| {
+            let start = std::time::Instant::now();
+            match std::fs::read(path) {
+                Ok(data) => {
+                    let manifest = build_manifest_row(PathBuf::from(path).as_path(), &data);
+                    (
+                        path.clone(),
+                        true,
+                        start.elapsed().as_secs_f64() * 1000.0,
+                        data,
+                        manifest,
+                    )
+                }
+                Err(_) => (
+                    path.clone(),
+                    false,
+                    start.elapsed().as_secs_f64() * 1000.0,
+                    Vec::new(),
+                    ModelManifestRow {
+                        full_path: path.clone(),
+                        file_name: PathBuf::from(path)
+                            .file_name()
+                            .and_then(|v| v.to_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        animations: Vec::new(),
+                        texture_paths: Vec::new(),
+                        byte_len: 0,
+                        modified_unix_ms: 0,
+                    },
+                ),
+            }
+        })
+        .collect();
+
+    let texture_requests: Vec<(String, String)> = model_results
+        .iter()
+        .flat_map(|(model_path, found, _read_ms, _data, manifest)| {
+            if !found {
+                return Vec::new();
+            }
+            manifest
+                .texture_paths
+                .iter()
+                .filter(|texture_path| !is_replaceable_team_texture_path(texture_path))
+                .cloned()
+                .map(|texture_path| (model_path.clone(), texture_path))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
+    let texture_results: Vec<(String, String, Option<Arc<Vec<u8>>>)> = texture_requests
+        .into_par_iter()
+        .map(|(model_path, texture_path)| {
+            let normalized_model_path = normalize_path(&model_path);
+            let normalized_model_path_lc = normalized_model_path.to_lowercase();
+            let normalized_texture_path = normalize_path(&texture_path);
+            let normalized_texture_path_lc = normalized_texture_path.to_lowercase();
+            let skip_fs = normalized_model_path.starts_with("dropped:") || normalized_model_path.is_empty();
+            let bytes = load_texture_bytes_with_source_key(
+                &normalized_model_path,
+                &normalized_model_path_lc,
+                &normalized_texture_path,
+                &normalized_texture_path_lc,
+                skip_fs,
+                &state,
+                &cache,
+            )
+            .map(|(bytes, _source_key)| bytes);
+            (model_path, normalized_texture_path, bytes)
+        })
+        .collect();
+
+    let mut payload: Vec<u8> = Vec::new();
+    payload.extend_from_slice(&(model_results.len() as u32).to_le_bytes());
+
+    for (path, found, read_ms, data, manifest) in model_results {
+        let path_bytes = path.as_bytes();
+        payload.extend_from_slice(&(path_bytes.len() as u32).to_le_bytes());
+        payload.extend_from_slice(path_bytes);
+        payload.push(if found { 1u8 } else { 0u8 });
+        payload.extend_from_slice(&read_ms.to_le_bytes());
+        payload.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        if !data.is_empty() {
+            payload.extend_from_slice(&data);
+        }
+        payload.extend_from_slice(&(manifest.animations.len() as u32).to_le_bytes());
+        for animation in manifest.animations {
+            let animation_bytes = animation.as_bytes();
+            payload.extend_from_slice(&(animation_bytes.len() as u32).to_le_bytes());
+            payload.extend_from_slice(animation_bytes);
+        }
+        payload.extend_from_slice(&(manifest.texture_paths.len() as u32).to_le_bytes());
+        for texture_path in manifest.texture_paths {
+            let texture_bytes = texture_path.as_bytes();
+            payload.extend_from_slice(&(texture_bytes.len() as u32).to_le_bytes());
+            payload.extend_from_slice(texture_bytes);
+        }
+    }
+
+    payload.extend_from_slice(&(texture_results.len() as u32).to_le_bytes());
+    for (model_path, texture_path, bytes) in texture_results {
+        let model_path_bytes = model_path.as_bytes();
+        payload.extend_from_slice(&(model_path_bytes.len() as u32).to_le_bytes());
+        payload.extend_from_slice(model_path_bytes);
+
+        let texture_path_bytes = texture_path.as_bytes();
+        payload.extend_from_slice(&(texture_path_bytes.len() as u32).to_le_bytes());
+        payload.extend_from_slice(texture_path_bytes);
+
+        if let Some(bytes) = bytes {
+            payload.push(1u8);
+            payload.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            payload.extend_from_slice(bytes.as_slice());
+        } else {
+            payload.push(0u8);
             payload.extend_from_slice(&0u32.to_le_bytes());
         }
     }
@@ -1783,6 +1951,7 @@ fn main() {
             scan_model_files_streamed,
             load_textures_batch_bin,
             load_textures_batch_thumb_rgba,
+            load_batch_page_bundle,
             clear_texture_batch_cache,
             encode_texture_image,
             detect_warcraft_path,

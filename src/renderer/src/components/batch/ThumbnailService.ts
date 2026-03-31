@@ -37,11 +37,28 @@ interface CachedModelInfo {
     buffer: ArrayBuffer;
     animations: string[];
     texturePaths: string[];
+    manifestReady: boolean;
+}
+
+interface ManifestMetadata {
+    animations: string[];
+    texturePaths: string[];
+}
+
+type CachedTextureAsset = ArrayBuffer | ImageData;
+
+interface BatchPageBundleModelEntry {
+    fullPath: string;
+    found: boolean;
+    readMs: number;
+    buffer: ArrayBuffer;
+    animations: string[];
+    texturePaths: string[];
 }
 
 interface CachedResources {
     modelInfo: CachedModelInfo;
-    textureImages: Record<string, ArrayBuffer>;
+    textureImages: Record<string, CachedTextureAsset>;
 }
 
 interface TextureLoadMetrics {
@@ -114,16 +131,6 @@ interface WorkerPreloadedPayload {
     };
 }
 
-interface WorkerMetadataPayload {
-    fullPath: string;
-    generation?: number;
-    animations?: string[];
-    texturePaths?: string[];
-    metrics?: {
-        parseMs?: number;
-    };
-}
-
 interface LocalFileReadDetailed {
     path: string;
     found: boolean;
@@ -137,11 +144,12 @@ class ThumbnailService {
     private workerBusy: boolean[] = [];
     private callbacks: Map<string, (res: RenderResult) => void> = new Map();
     private modelCache: Map<string, CachedModelInfo> = new Map();
-    private textureCache: Map<string, Record<string, ArrayBuffer>> = new Map();
+    private manifestCache: Map<string, ManifestMetadata> = new Map();
+    private textureCache: Map<string, Record<string, CachedTextureAsset>> = new Map();
     private resourceLoading: Map<string, Promise<CachedResources>> = new Map();
-    private textureLoading: Map<string, Promise<Record<string, ArrayBuffer>>> = new Map();
-    private sharedTextureCache: Map<string, ArrayBuffer> = new Map();
-    private sharedTextureLoading: Map<string, Promise<ArrayBuffer | null>> = new Map();
+    private textureLoading: Map<string, Promise<Record<string, CachedTextureAsset>>> = new Map();
+    private sharedTextureCache: Map<string, CachedTextureAsset> = new Map();
+    private sharedTextureLoading: Map<string, Promise<CachedTextureAsset | null>> = new Map();
     private textureTaskQueue: Array<() => void> = [];
     private textureTaskRunning = 0;
     private readonly MAX_TEXTURE_TASK_CONCURRENCY = Math.max(
@@ -181,12 +189,6 @@ class ThumbnailService {
     private preloadCallbacks: Map<string, () => void> = new Map();
     private preloadRequestGeneration: Map<string, number> = new Map();
     private renderRequestGeneration: Map<string, number> = new Map();
-    private metadataCallbacks: Map<string, () => void> = new Map();
-    private metadataRequestGeneration: Map<string, number> = new Map();
-    private metadataLoading: Map<string, Promise<void>> = new Map();
-    private metadataWorkers: Worker[] = [];
-    private metadataWorkerBusy: boolean[] = [];
-    private metadataWorkerCount = 0;
     private preloadingPaths: Set<string> = new Set();
     private perfLoggedStages: Map<string, Set<string>> = new Map();
 
@@ -196,7 +198,6 @@ class ThumbnailService {
                 void this.ensureTeamColorsLoaded(state.teamColor);
             }
         });
-        this.metadataWorkerCount = Math.max(2, Math.min(4, Math.max(2, Math.floor(this.workerCount / 3))));
         for (let i = 0; i < this.workerCount; i++) {
             const worker = new ThumbnailWorker();
             this.workers.push(worker);
@@ -231,13 +232,15 @@ class ThumbnailService {
                     }
                     const existingModelInfo = this.modelCache.get(fullPath);
                     if (existingModelInfo) {
+                        existingModelInfo.manifestReady = true;
                         const nextAnimations = (animations && animations.length > 0) ? animations : existingModelInfo.animations;
                         const nextTexturePaths = (texturePaths && texturePaths.length > 0) ? texturePaths : existingModelInfo.texturePaths;
                         if (nextAnimations !== existingModelInfo.animations || nextTexturePaths !== existingModelInfo.texturePaths) {
                             this.touchMainCache(fullPath, {
                                 ...existingModelInfo,
                                 animations: nextAnimations,
-                                texturePaths: nextTexturePaths
+                                texturePaths: nextTexturePaths,
+                                manifestReady: true
                             });
                         }
 
@@ -306,12 +309,6 @@ class ThumbnailService {
                         this.preloadRequestGeneration.delete(fullPath);
                         this.preloadingPaths.delete(fullPath);
                     }
-                    if (fullPath && this.metadataCallbacks.has(fullPath)) {
-                        this.metadataCallbacks.get(fullPath)?.();
-                        this.metadataCallbacks.delete(fullPath);
-                        this.metadataRequestGeneration.delete(fullPath);
-                    }
-
                     // Check for "missing cache" error and retry
                     if (typeof error === 'string' && error.includes('Model data missing')) {
                         console.log(`[ThumbnailService] Cache miss for ${fullPath}, retrying with full payload...`);
@@ -330,16 +327,17 @@ class ThumbnailService {
                             const envPayload = this.getEnvironmentLightPayload();
                             const includeTeamColorPayload = Object.keys(this.teamColorData).length > 0;
                             const retryGeneration = this.renderRequestGeneration.get(fullPath) ?? this.pageGenerationByPath.get(fullPath) ?? this.activeBatchGeneration;
-                            // Clone textures for transfer (originals stay in cache)
                             const clonedTextures = textureImages && Object.keys(textureImages).length > 0
-                                ? Object.fromEntries(Object.entries(textureImages).map(([k, v]) => [k, v.slice(0)]))
+                                ? Object.fromEntries(Object.entries(textureImages).map(([k, v]) => [k, this.cloneTextureAsset(v)]))
                                 : undefined;
+                            const texturePayload = clonedTextures ? this.splitTexturePayload(clonedTextures) : {};
                             const msg = {
                                 type: 'RENDER',
                                 payload: {
                                     fullPath,
                                     modelBuffer: modelInfo.buffer,
-                                    ...(clonedTextures ? { textureRawData: clonedTextures, textureMaxDimension: this.getDecodeMaxDimension() } : {}),
+                                    ...(texturePayload.textureImages ? { textureImages: texturePayload.textureImages } : {}),
+                                    ...(texturePayload.textureRawData ? { textureRawData: texturePayload.textureRawData, textureMaxDimension: this.getDecodeMaxDimension() } : {}),
                                     ...(includeTeamColorPayload ? { teamColorData: this.teamColorData } : {}),
                                     generation: retryGeneration,
                                     frame: 0,
@@ -357,7 +355,6 @@ class ThumbnailService {
                             worker.postMessage(msg, xfer);
                             if (textureImages && Object.keys(textureImages).length > 0) {
                                 this.workerTextureSync[i].add(fullPath);
-                                this.getWorkerTextureSyncKeys(fullPath, Object.keys(textureImages)).forEach((key) => this.workerSharedTextureSync[i].add(key));
                             } else {
                                 this.workerTextureSync[i].delete(fullPath);
                             }
@@ -374,7 +371,6 @@ class ThumbnailService {
                         this.modelWorkerAffinity.delete(fullPath);
                     }
                     this.workerTextureSync[i].clear();
-                    this.workerSharedTextureSync[i].clear();
                     this.workerTeamColorSync[i].delete(fullPath);
                     const cb = this.callbacks.get(fullPath);
                     if (cb) {
@@ -387,7 +383,6 @@ class ThumbnailService {
                     this.workerBusy[i] = false;
                     this.workerModelCache[i] = [];
                     this.workerTextureSync[i].clear();
-                    this.workerSharedTextureSync[i].clear();
                     this.workerTeamColorSync[i].clear();
                 }
                 else if (type === 'EVICTED') {
@@ -406,34 +401,6 @@ class ThumbnailService {
                 else if (type === 'WARMED') {
                     this.workerBusy[i] = false;
                 }
-                else if (type === 'METADATA') {
-                    const { fullPath, generation, animations, texturePaths, metrics } = payload as WorkerMetadataPayload;
-                    const expectedGeneration = this.metadataRequestGeneration.get(fullPath);
-                    if (generation !== undefined && expectedGeneration !== undefined && generation !== expectedGeneration) {
-                        this.workerBusy[i] = false;
-                        return;
-                    }
-                    const existingModelInfo = this.modelCache.get(fullPath);
-                    if (existingModelInfo) {
-                        const nextAnimations = (animations && animations.length > 0) ? animations : existingModelInfo.animations;
-                        const nextTexturePaths = (texturePaths && texturePaths.length > 0) ? texturePaths : existingModelInfo.texturePaths;
-                        if (nextAnimations !== existingModelInfo.animations || nextTexturePaths !== existingModelInfo.texturePaths) {
-                            this.touchMainCache(fullPath, {
-                                ...existingModelInfo,
-                                animations: nextAnimations,
-                                texturePaths: nextTexturePaths
-                            });
-                        }
-                        this.modelReadyStage.set(fullPath, 'manifest-ready');
-                    }
-                    this.recordModelPerf(fullPath, {
-                        modelParseMs: Math.max(metrics?.parseMs ?? 0, this.getOrCreateModelPerf(fullPath).modelParseMs)
-                    });
-                    this.metadataCallbacks.get(fullPath)?.();
-                    this.metadataCallbacks.delete(fullPath);
-                    this.metadataRequestGeneration.delete(fullPath);
-                    this.workerBusy[i] = false;
-                }
                 else if (type === 'PRELOADED') {
                     const { fullPath, generation, animations, texturePaths, metrics } = payload as WorkerPreloadedPayload;
                     const expectedGeneration = this.preloadRequestGeneration.get(fullPath);
@@ -447,13 +414,15 @@ class ThumbnailService {
                     }
                     const existingModelInfo = this.modelCache.get(fullPath);
                     if (existingModelInfo) {
+                        existingModelInfo.manifestReady = true;
                         const nextAnimations = (animations && animations.length > 0) ? animations : existingModelInfo.animations;
                         const nextTexturePaths = (texturePaths && texturePaths.length > 0) ? texturePaths : existingModelInfo.texturePaths;
                         if (nextAnimations !== existingModelInfo.animations || nextTexturePaths !== existingModelInfo.texturePaths) {
                             this.touchMainCache(fullPath, {
                                 ...existingModelInfo,
                                 animations: nextAnimations,
-                                texturePaths: nextTexturePaths
+                                texturePaths: nextTexturePaths,
+                                manifestReady: true
                             });
                         }
 
@@ -507,58 +476,6 @@ class ThumbnailService {
             worker.postMessage({ type: 'WARMUP' });
         }
 
-        for (let i = 0; i < this.metadataWorkerCount; i++) {
-            const worker = new ThumbnailWorker();
-            this.metadataWorkers.push(worker);
-            this.metadataWorkerBusy.push(false);
-            worker.onmessage = (e: MessageEvent) => {
-                const { type, payload } = e.data;
-
-                if (type === 'METADATA') {
-                    const { fullPath, generation, animations, texturePaths, metrics } = payload as WorkerMetadataPayload;
-                    const expectedGeneration = this.metadataRequestGeneration.get(fullPath);
-                    if (generation !== undefined && expectedGeneration !== undefined && generation !== expectedGeneration) {
-                        this.metadataWorkerBusy[i] = false;
-                        return;
-                    }
-                    const existingModelInfo = this.modelCache.get(fullPath);
-                    if (existingModelInfo) {
-                        const nextAnimations = (animations && animations.length > 0) ? animations : existingModelInfo.animations;
-                        const nextTexturePaths = (texturePaths && texturePaths.length > 0) ? texturePaths : existingModelInfo.texturePaths;
-                        if (nextAnimations !== existingModelInfo.animations || nextTexturePaths !== existingModelInfo.texturePaths) {
-                            this.touchMainCache(fullPath, {
-                                ...existingModelInfo,
-                                animations: nextAnimations,
-                                texturePaths: nextTexturePaths
-                            });
-                        }
-                        this.modelReadyStage.set(fullPath, 'manifest-ready');
-                    }
-                    this.recordModelPerf(fullPath, {
-                        modelParseMs: Math.max(metrics?.parseMs ?? 0, this.getOrCreateModelPerf(fullPath).modelParseMs)
-                    });
-                    this.metadataCallbacks.get(fullPath)?.();
-                    this.metadataCallbacks.delete(fullPath);
-                    this.metadataRequestGeneration.delete(fullPath);
-                    this.metadataWorkerBusy[i] = false;
-                }
-                else if (type === 'ERROR') {
-                    const { fullPath, generation } = payload || {};
-                    const expectedGeneration = fullPath ? this.metadataRequestGeneration.get(fullPath) : undefined;
-                    const staleError = generation !== undefined && expectedGeneration !== undefined && generation !== expectedGeneration;
-                    if (staleError) {
-                        this.metadataWorkerBusy[i] = false;
-                        return;
-                    }
-                    if (fullPath && this.metadataCallbacks.has(fullPath)) {
-                        this.metadataCallbacks.get(fullPath)?.();
-                        this.metadataCallbacks.delete(fullPath);
-                        this.metadataRequestGeneration.delete(fullPath);
-                    }
-                    this.metadataWorkerBusy[i] = false;
-                }
-            };
-        }
     }
 
     private async preloadModelToWorker(fullPath: string, modelInfo?: CachedModelInfo): Promise<void> {
@@ -579,18 +496,19 @@ class ThumbnailService {
                 workerIndex = this.getAvailableWorkerIndex(fullPath, { allowFallback: true });
             }
 
-            let strictTexturePayload: Record<string, ArrayBuffer> | undefined;
-            let strictTeamColorData: Record<string, ArrayBuffer> | undefined;
+            let strictTexturePayload: Record<string, CachedTextureAsset> | undefined;
+            let strictTeamColorData: Record<number, ImageData> | undefined;
             let strictTeamColor: number | undefined;
             if (texturePaths.length > 0 && this.requiresStrictTextureInit(texturePaths)) {
                 const textureImages = this.textureCache.get(fullPath) || {};
-                const hasAllTextures = texturePaths.every((path) => !!textureImages[path]);
+                const ordinaryTexturePaths = this.getOrdinaryTexturePaths(texturePaths);
+                const hasAllTextures = ordinaryTexturePaths.every((path) => !!textureImages[path]);
                 if (hasAllTextures) {
                     const renderState = useRendererStore.getState();
                     strictTeamColor = renderState.teamColor;
                     strictTeamColorData = await this.ensureTeamColorsLoaded(strictTeamColor);
                     strictTexturePayload = Object.fromEntries(
-                        Object.entries(textureImages).map(([k, v]) => [k, v instanceof ArrayBuffer ? v.slice(0) : v])
+                        Object.entries(textureImages).map(([k, v]) => [k, this.cloneTextureAsset(v)])
                     );
                 }
             }
@@ -608,8 +526,14 @@ class ThumbnailService {
                 };
 
                 if (strictTexturePayload && Object.keys(strictTexturePayload).length > 0) {
-                    payload.textureRawData = strictTexturePayload;
-                    payload.textureMaxDimension = this.getDecodeMaxDimension();
+                    const texturePayload = this.splitTexturePayload(strictTexturePayload);
+                    if (texturePayload.textureImages) {
+                        payload.textureImages = texturePayload.textureImages;
+                    }
+                    if (texturePayload.textureRawData) {
+                        payload.textureRawData = texturePayload.textureRawData;
+                        payload.textureMaxDimension = this.getDecodeMaxDimension();
+                    }
                 }
                 if (strictTeamColorData && Object.keys(strictTeamColorData).length > 0) {
                     payload.teamColorData = strictTeamColorData;
@@ -747,25 +671,11 @@ class ThumbnailService {
     private chooseLeastLoadedWorker(indices: number[], fullPath?: string, preferredTexturePaths?: string[]): number {
         let best = indices[0];
         let bestScore = Number.POSITIVE_INFINITY;
-        let bestOverlap = -1;
-        const preferredSet = fullPath && preferredTexturePaths && preferredTexturePaths.length > 0
-            ? new Set(this.getWorkerTextureSyncKeys(fullPath, preferredTexturePaths))
-            : null;
 
         for (const i of indices) {
-            let overlap = 0;
-            if (preferredSet && preferredSet.size > 0) {
-                for (const path of preferredSet) {
-                    if (this.workerSharedTextureSync[i].has(path)) {
-                        overlap += 1;
-                    }
-                }
-            }
-            // Prefer workers with lighter hot cache to reduce memory churn.
-            const score = this.workerModelCache[i].length * 2 + this.workerTextureSync[i].size + Math.floor(this.workerSharedTextureSync[i].size / 8);
-            if (overlap > bestOverlap || (overlap === bestOverlap && score < bestScore)) {
+            const score = this.workerModelCache[i].length * 2 + this.workerTextureSync[i].size;
+            if (score < bestScore) {
                 best = i;
-                bestOverlap = overlap;
                 bestScore = score;
             }
         }
@@ -885,11 +795,35 @@ class ThumbnailService {
         return results;
     }
 
+    private applyManifestMetadata(fullPath: string, modelInfo: CachedModelInfo): CachedModelInfo {
+        const manifest = this.manifestCache.get(fullPath);
+        if (!manifest) {
+            return modelInfo;
+        }
+
+        let changed = false;
+        if (modelInfo.animations.length === 0 && manifest.animations.length > 0) {
+            modelInfo.animations = manifest.animations;
+            changed = true;
+        }
+        if (modelInfo.texturePaths.length === 0 && manifest.texturePaths.length > 0) {
+            modelInfo.texturePaths = manifest.texturePaths;
+            changed = true;
+        }
+        modelInfo.manifestReady = true;
+        if (changed || modelInfo.manifestReady) {
+            this.modelReadyStage.set(fullPath, 'manifest-ready');
+        }
+        return modelInfo;
+    }
+
     private storeLoadedModelBuffer(fullPath: string, buffer: ArrayBuffer, modelReadMs: number, logMessage: string): CachedModelInfo {
+        const manifest = this.manifestCache.get(fullPath);
         const modelInfo: CachedModelInfo = {
             buffer,
-            animations: [],
-            texturePaths: []
+            animations: manifest?.animations ?? [],
+            texturePaths: manifest?.texturePaths ?? [],
+            manifestReady: !!manifest
         };
         this.recordModelPerf(fullPath, {
             modelReadMs,
@@ -897,10 +831,31 @@ class ThumbnailService {
         });
         this.logPerfStageOnce(fullPath, 'read', logMessage);
         this.touchMainCache(fullPath, modelInfo);
+        if (modelInfo.manifestReady) {
+            this.modelReadyStage.set(fullPath, 'manifest-ready');
+        }
         return modelInfo;
     }
 
-    public primeModelBuffers(entries: Array<{ fullPath: string; buffer: ArrayBuffer; readMs?: number }>) {
+    public primeManifestRows(rows: Array<{ fullPath: string; animations?: string[]; texturePaths?: string[] }>) {
+        for (const row of rows) {
+            if (!row?.fullPath) continue;
+            const manifest: ManifestMetadata = {
+                animations: Array.isArray(row.animations) ? row.animations.filter(Boolean) : [],
+                texturePaths: Array.isArray(row.texturePaths) ? row.texturePaths.filter(Boolean) : []
+            };
+            this.manifestCache.set(row.fullPath, manifest);
+
+            const existing = this.modelCache.get(row.fullPath);
+            if (existing) {
+                const updated = this.applyManifestMetadata(row.fullPath, existing);
+                this.touchMainCache(row.fullPath, updated);
+            }
+        }
+    }
+
+    public primeModelBuffers(entries: Array<{ fullPath: string; buffer: ArrayBuffer; readMs?: number; animations?: string[]; texturePaths?: string[] }>) {
+        this.primeManifestRows(entries);
         for (const entry of entries) {
             if (!entry?.fullPath || !entry.buffer) continue;
             if (this.modelCache.has(entry.fullPath)) continue;
@@ -912,6 +867,144 @@ class ThumbnailService {
                 readMs,
                 `read=${readMs.toFixed(1)}ms backend=${readMs.toFixed(1)}ms invoke=0.0ms decode=0.0ms bytes=${entry.buffer.byteLength} mode=first-page-bin`
             );
+        }
+    }
+
+    public async loadBatchPageBundle(fullPaths: string[]): Promise<void> {
+        const unique = Array.from(new Set(fullPaths.filter(Boolean)));
+        if (unique.length === 0) {
+            return;
+        }
+
+        const textDecoder = new TextDecoder();
+        const parseStringList = (bytes: Uint8Array, view: DataView, offsetRef: { value: number }) => {
+            const items: string[] = [];
+            if (offsetRef.value + 4 > bytes.byteLength) {
+                return items;
+            }
+            const count = view.getUint32(offsetRef.value, true);
+            offsetRef.value += 4;
+            for (let i = 0; i < count; i++) {
+                if (offsetRef.value + 4 > bytes.byteLength) {
+                    break;
+                }
+                const len = view.getUint32(offsetRef.value, true);
+                offsetRef.value += 4;
+                if (offsetRef.value + len > bytes.byteLength) {
+                    break;
+                }
+                items.push(textDecoder.decode(bytes.subarray(offsetRef.value, offsetRef.value + len)));
+                offsetRef.value += len;
+            }
+            return items;
+        };
+
+        const payload = await invoke<Uint8Array>('load_batch_page_bundle', { modelPaths: unique });
+        const bytes = this.toUint8Array(payload);
+        if (!bytes || bytes.byteLength < 4) {
+            return;
+        }
+
+        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        const offsetRef = { value: 0 };
+        const modelCount = view.getUint32(offsetRef.value, true);
+        offsetRef.value += 4;
+
+        const models: BatchPageBundleModelEntry[] = [];
+        for (let i = 0; i < modelCount; i++) {
+            if (offsetRef.value + 5 > bytes.byteLength) {
+                break;
+            }
+            const pathLen = view.getUint32(offsetRef.value, true);
+            offsetRef.value += 4;
+            if (offsetRef.value + pathLen + 13 > bytes.byteLength) {
+                break;
+            }
+            const fullPath = textDecoder.decode(bytes.subarray(offsetRef.value, offsetRef.value + pathLen));
+            offsetRef.value += pathLen;
+            const found = view.getUint8(offsetRef.value) === 1;
+            offsetRef.value += 1;
+            const readMs = view.getFloat64(offsetRef.value, true);
+            offsetRef.value += 8;
+            const dataLen = view.getUint32(offsetRef.value, true);
+            offsetRef.value += 4;
+            if (offsetRef.value + dataLen > bytes.byteLength) {
+                break;
+            }
+            const dataSlice = bytes.subarray(offsetRef.value, offsetRef.value + dataLen);
+            const buffer = dataSlice.buffer.slice(dataSlice.byteOffset, dataSlice.byteOffset + dataSlice.byteLength);
+            offsetRef.value += dataLen;
+            const animations = parseStringList(bytes, view, offsetRef);
+            const texturePaths = parseStringList(bytes, view, offsetRef);
+            models.push({ fullPath, found, readMs, buffer, animations, texturePaths });
+        }
+
+        const modelTextureMap = new Map<string, Record<string, CachedTextureAsset>>();
+        if (offsetRef.value + 4 <= bytes.byteLength) {
+            const textureCount = view.getUint32(offsetRef.value, true);
+            offsetRef.value += 4;
+            for (let i = 0; i < textureCount; i++) {
+                if (offsetRef.value + 4 > bytes.byteLength) {
+                    break;
+                }
+                const ownerPathLen = view.getUint32(offsetRef.value, true);
+                offsetRef.value += 4;
+                if (offsetRef.value + ownerPathLen + 4 > bytes.byteLength) {
+                    break;
+                }
+                const ownerPath = textDecoder.decode(bytes.subarray(offsetRef.value, offsetRef.value + ownerPathLen));
+                offsetRef.value += ownerPathLen;
+
+                const texturePathLen = view.getUint32(offsetRef.value, true);
+                offsetRef.value += 4;
+                if (offsetRef.value + texturePathLen + 5 > bytes.byteLength) {
+                    break;
+                }
+                const texturePath = textDecoder.decode(bytes.subarray(offsetRef.value, offsetRef.value + texturePathLen));
+                offsetRef.value += texturePathLen;
+                const found = view.getUint8(offsetRef.value) === 1;
+                offsetRef.value += 1;
+                const dataLen = view.getUint32(offsetRef.value, true);
+                offsetRef.value += 4;
+                if (offsetRef.value + dataLen > bytes.byteLength) {
+                    break;
+                }
+                const dataSlice = bytes.subarray(offsetRef.value, offsetRef.value + dataLen);
+                offsetRef.value += dataLen;
+
+                if (!found || dataLen === 0) {
+                    continue;
+                }
+
+                const buffer = dataSlice.buffer.slice(dataSlice.byteOffset, dataSlice.byteOffset + dataSlice.byteLength);
+                const perModelTextures = modelTextureMap.get(ownerPath) || {};
+                perModelTextures[texturePath] = buffer;
+                modelTextureMap.set(ownerPath, perModelTextures);
+            }
+        }
+
+        this.primeManifestRows(models);
+        for (const entry of models) {
+            if (!entry.found || !entry.buffer) {
+                continue;
+            }
+            this.markFirstTouch(entry.fullPath);
+            this.storeLoadedModelBuffer(
+                entry.fullPath,
+                entry.buffer,
+                entry.readMs,
+                `read=${entry.readMs.toFixed(1)}ms backend=${entry.readMs.toFixed(1)}ms invoke=0.0ms decode=0.0ms bytes=${entry.buffer.byteLength} mode=page-bundle`
+            );
+
+            const textures = modelTextureMap.get(entry.fullPath);
+            if (textures && Object.keys(textures).length > 0) {
+                this.textureCache.set(entry.fullPath, textures);
+            }
+
+            const effectiveTexturePaths = this.getOrdinaryTexturePaths(entry.texturePaths);
+            if (effectiveTexturePaths.length === 0 || effectiveTexturePaths.every((texturePath) => !!textures?.[texturePath])) {
+                this.modelReadyStage.set(entry.fullPath, 'textures-ready');
+            }
         }
     }
 
@@ -948,92 +1041,24 @@ class ThumbnailService {
         const targets = Array.from(new Set(fullPaths.filter((fullPath) => {
             const modelInfo = this.modelCache.get(fullPath);
             if (!modelInfo) return false;
-            return modelInfo.animations.length === 0 || modelInfo.texturePaths.length === 0;
+            this.applyManifestMetadata(fullPath, modelInfo);
+            return !modelInfo.manifestReady;
         })));
         if (targets.length === 0) return;
-
-        let cursor = 0;
-        const concurrency = Math.max(1, Math.min(this.workerCount, targets.length));
-        const workerLoop = async () => {
-            while (cursor < targets.length) {
-                const fullPath = targets[cursor++];
-                const modelInfo = this.modelCache.get(fullPath);
-                if (!modelInfo) continue;
-                await this.dispatchMetadataLoad(fullPath, modelInfo);
-            }
-        };
-
-        await Promise.all(Array.from({ length: concurrency }, () => workerLoop()));
-    }
-
-    private getAvailableMetadataWorkerIndex(): number {
-        for (let i = 0; i < this.metadataWorkerCount; i++) {
-            if (!this.metadataWorkerBusy[i]) {
-                return i;
-            }
+        for (const fullPath of targets) {
+            const modelInfo = this.modelCache.get(fullPath);
+            if (!modelInfo) continue;
+            this.ensureModelMetadata(fullPath, modelInfo);
         }
-        return -1;
-    }
-
-    private dispatchMetadataLoad(fullPath: string, modelInfo: CachedModelInfo): Promise<void> {
-        if (modelInfo.texturePaths.length > 0 && modelInfo.animations.length > 0) {
-            return Promise.resolve();
-        }
-
-        const existing = this.metadataLoading.get(fullPath);
-        if (existing) {
-            return existing;
-        }
-
-        let promise!: Promise<void>;
-        promise = (async () => {
-            let workerIndex = this.getAvailableMetadataWorkerIndex();
-            while (workerIndex === -1) {
-                await new Promise((resolve) => setTimeout(resolve, 2));
-                workerIndex = this.getAvailableMetadataWorkerIndex();
-            }
-
-            const generation = this.pageGenerationByPath.get(fullPath) ?? this.activeBatchGeneration;
-            this.metadataWorkerBusy[workerIndex] = true;
-            this.metadataRequestGeneration.set(fullPath, generation);
-
-            await new Promise<void>((resolve) => {
-                this.metadataCallbacks.set(fullPath, resolve);
-                this.metadataWorkers[workerIndex].postMessage({
-                    type: 'METADATA',
-                    payload: {
-                        fullPath,
-                        modelBuffer: modelInfo.buffer,
-                        generation
-                    }
-                });
-            });
-        })().finally(() => {
-            if (this.metadataLoading.get(fullPath) === promise) {
-                this.metadataLoading.delete(fullPath);
-            }
-        });
-
-        this.metadataLoading.set(fullPath, promise);
-        return promise;
     }
 
     private async ensureModelMetadataReady(fullPath: string, modelInfo: CachedModelInfo): Promise<CachedModelInfo> {
-        if (modelInfo.texturePaths.length > 0 && modelInfo.animations.length > 0) {
-            return modelInfo;
-        }
-
-        await this.dispatchMetadataLoad(fullPath, modelInfo);
-        const refreshed = this.modelCache.get(fullPath);
-        if (refreshed && refreshed.texturePaths.length > 0 && refreshed.animations.length > 0) {
-            return refreshed;
-        }
-
-        return this.ensureModelMetadata(fullPath, refreshed ?? modelInfo);
+        return this.ensureModelMetadata(fullPath, modelInfo);
     }
 
     private ensureModelMetadata(fullPath: string, modelInfo: CachedModelInfo): CachedModelInfo {
-        if (modelInfo.texturePaths.length > 0 && modelInfo.animations.length > 0) {
+        this.applyManifestMetadata(fullPath, modelInfo);
+        if (modelInfo.manifestReady) {
             return modelInfo;
         }
 
@@ -1047,6 +1072,7 @@ class ThumbnailService {
         if (modelInfo.texturePaths.length === 0) {
             modelInfo.texturePaths = parsed.texturePaths;
         }
+        modelInfo.manifestReady = true;
 
         this.recordModelPerf(fullPath, {
             modelParseMs: Math.max(parseMs, this.getOrCreateModelPerf(fullPath).modelParseMs)
@@ -1058,119 +1084,18 @@ class ThumbnailService {
     private async warmPageTextures(fullPaths: string[]): Promise<void> {
         const uniqueModelPaths = Array.from(new Set(fullPaths.filter(Boolean)));
         if (uniqueModelPaths.length === 0) return;
-
-        const resolverByKey = new Map<string, (value: ArrayBuffer | null) => void>();
-        const groups = new Map<string, { ownerPath: string; texturePaths: string[] }>();
-
         for (const fullPath of uniqueModelPaths) {
             const modelInfo = this.modelCache.get(fullPath);
-            if (!modelInfo) continue;
-
-            const enriched = this.ensureModelMetadata(fullPath, modelInfo);
-            const seenPaths = new Set<string>();
-            for (const texturePath of enriched.texturePaths) {
-                if (!texturePath || seenPaths.has(texturePath)) continue;
-                seenPaths.add(texturePath);
-
-                const key = this.getTextureCacheKey(fullPath, texturePath);
-                if (this.sharedTextureCache.has(key)) {
-                    continue;
-                }
-
-                const inflight = this.sharedTextureLoading.get(key);
-                if (inflight) {
-                    continue;
-                }
-
-                const ownerGroupKey = this.getTextureOwnerGroupKey(fullPath, texturePath);
-                let ownerTargets = groups.get(ownerGroupKey);
-                if (!ownerTargets) {
-                    ownerTargets = { ownerPath: fullPath, texturePaths: [] };
-                    groups.set(ownerGroupKey, ownerTargets);
-                }
-                ownerTargets.texturePaths.push(texturePath);
-
-                const pending = new Promise<ArrayBuffer | null>((resolve) => {
-                    resolverByKey.set(key, resolve);
-                });
-                this.sharedTextureLoading.set(key, pending);
-            }
-        }
-
-        if (groups.size === 0) {
-            return;
-        }
-
-        const groupTasks = Array.from(groups.values()).map(({ ownerPath, texturePaths }) =>
-            this.withTextureTaskSlot(async () => {
-                try {
-                    const payload = await invoke<Uint8Array>('load_textures_batch_bin', {
-                        modelPath: ownerPath,
-                        texturePaths
-                    });
-                    const rawBinaryMap = this.parseTextureBytesPayload(payload, texturePaths);
-                    const unresolvedPaths: string[] = [];
-                    for (const texturePath of texturePaths) {
-                        const key = this.getTextureCacheKey(ownerPath, texturePath);
-                        const data = rawBinaryMap.get(texturePath);
-                        if (!data || data.byteLength === 0) {
-                            unresolvedPaths.push(texturePath);
-                            continue;
-                        }
-                        const buffer = (data.byteOffset === 0 && data.byteLength === data.buffer.byteLength)
-                            ? data.buffer
-                            : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-                        this.touchSharedTextureCache(key, buffer.slice(0));
-                        resolverByKey.get(key)?.(buffer.slice(0));
-                    }
-                    if (unresolvedPaths.length > 0) {
-                        const fallback = await this.loadMissingMpqTextures(unresolvedPaths);
-                        for (const texturePath of unresolvedPaths) {
-                            const key = this.getTextureCacheKey(ownerPath, texturePath);
-                            const buffer = fallback.resolved.get(texturePath);
-                            if (buffer && buffer.byteLength > 0) {
-                                this.touchSharedTextureCache(key, buffer.slice(0));
-                                resolverByKey.get(key)?.(buffer.slice(0));
-                            } else {
-                                resolverByKey.get(key)?.(null);
-                            }
-                        }
-                    }
-                } catch {
-                    for (const texturePath of texturePaths) {
-                        const key = this.getTextureCacheKey(ownerPath, texturePath);
-                        resolverByKey.get(key)?.(null);
-                    }
-                } finally {
-                    for (const texturePath of texturePaths) {
-                        const key = this.getTextureCacheKey(ownerPath, texturePath);
-                        this.sharedTextureLoading.delete(key);
-                    }
-                }
-            })
-        );
-
-        await Promise.all(groupTasks);
-
-        for (const fullPath of uniqueModelPaths) {
-            const modelInfo = this.modelCache.get(fullPath);
-            if (!modelInfo || modelInfo.texturePaths.length === 0) {
+            if (!modelInfo) {
                 continue;
             }
-
-            const textureImages: Record<string, ArrayBuffer> = {};
-            for (const texturePath of modelInfo.texturePaths) {
-                const key = this.getTextureCacheKey(fullPath, texturePath);
-                const shared = this.sharedTextureCache.get(key);
-                if (shared) {
-                    textureImages[texturePath] = shared;
-                }
+            const effectiveTexturePaths = this.getOrdinaryTexturePaths(this.ensureModelMetadata(fullPath, modelInfo).texturePaths);
+            if (effectiveTexturePaths.length === 0) {
+                this.modelReadyStage.set(fullPath, 'textures-ready');
+                continue;
             }
-
-            if (Object.keys(textureImages).length > 0) {
-                this.textureCache.set(fullPath, textureImages);
-            }
-            if (modelInfo.texturePaths.length === 0 || modelInfo.texturePaths.every((path) => !!textureImages[path])) {
+            const textureImages = await this.loadTextureImages(fullPath, effectiveTexturePaths);
+            if (effectiveTexturePaths.length === 0 || effectiveTexturePaths.every((path) => !!textureImages[path])) {
                 this.modelReadyStage.set(fullPath, 'textures-ready');
             } else {
                 this.modelReadyStage.set(fullPath, 'manifest-ready');
@@ -1225,6 +1150,7 @@ class ThumbnailService {
     }
 
     private logPerfStageOnce(fullPath: string, stage: string, message: string) {
+        if (stage === 'read') return;
         let stages = this.perfLoggedStages.get(fullPath);
         if (!stages) {
             stages = new Set<string>();
@@ -1296,7 +1222,9 @@ class ThumbnailService {
     }
 
     private getWorkerTextureSyncKeys(modelPath: string, texturePaths: string[]): string[] {
-        return texturePaths.map((texturePath) => this.getWorkerTextureSyncKey(modelPath, texturePath));
+        return texturePaths
+            .filter((texturePath) => !this.isReplaceableTeamTexturePath(texturePath))
+            .map((texturePath) => this.getWorkerTextureSyncKey(modelPath, texturePath));
     }
 
     private getModelDirectoryKey(modelPath: string): string {
@@ -1329,9 +1257,9 @@ class ThumbnailService {
 
     private getBatchRenderSize(): number {
         const activeCount = this.activeBatchPaths.size;
-        if (activeCount >= 50) return 96;
-        if (activeCount >= 25) return 112;
-        return 144;
+        if (activeCount >= 50) return 192;
+        if (activeCount >= 25) return 224;
+        return 288;
     }
 
     private getBatchPreloadLimit(totalModels: number): number {
@@ -1349,28 +1277,31 @@ class ThumbnailService {
         });
     }
 
+    private isReplaceableTeamTexturePath(texturePath: string): boolean {
+        const normalized = normalizePath(texturePath).toLowerCase();
+        return normalized.startsWith('replaceabletextures\\teamcolor\\') ||
+            normalized.startsWith('replaceabletextures\\teamglow\\');
+    }
+
+    private getOrdinaryTexturePaths(texturePaths: string[]): string[] {
+        return texturePaths.filter((texturePath) => !this.isReplaceableTeamTexturePath(texturePath));
+    }
+
     private requiresStrictTextureInit(texturePaths: string[]): boolean {
         return this.usesReplaceableTeamTextures(texturePaths);
     }
 
     private rebuildWorkerTextureSyncState(workerIndex: number) {
-        const shared = this.workerSharedTextureSync[workerIndex];
         const syncedModels = this.workerTextureSync[workerIndex];
-        shared.clear();
         syncedModels.clear();
 
         for (const fullPath of this.workerModelCache[workerIndex]) {
             const modelInfo = this.modelCache.get(fullPath);
-            const texturePaths = modelInfo?.texturePaths || [];
+            const texturePaths = (modelInfo?.texturePaths || []).filter((texturePath) => !this.isReplaceableTeamTexturePath(texturePath));
             if (texturePaths.length === 0) {
                 syncedModels.add(fullPath);
             }
         }
-    }
-
-    private getImageDataBytes(image: ImageData | ArrayBuffer): number {
-        if (image instanceof ArrayBuffer) return image.byteLength;
-        return image.width * image.height * 4;
     }
 
     private getEnvironmentLightPayload(): {
@@ -1411,18 +1342,13 @@ class ThumbnailService {
     }
 
     private getDecodeMaxDimension(): number {
-        const sharedTextureMB = this.sharedTextureTotalBytes / (1024 * 1024);
-        if (sharedTextureMB > 160 || this.textureTaskQueue.length > 10) {
-            return 96;
+        if (this.textureTaskQueue.length > 10) {
+            return 192;
         }
-        if (
-            sharedTextureMB > 112 ||
-            this.textureTaskQueue.length > 4 ||
-            this.textureTaskRunning >= this.MAX_TEXTURE_TASK_CONCURRENCY
-        ) {
-            return 128;
+        if (this.textureTaskQueue.length > 4 || this.textureTaskRunning >= this.MAX_TEXTURE_TASK_CONCURRENCY) {
+            return 256;
         }
-        return 160;
+        return 320;
     }
 
     /**
@@ -1437,32 +1363,6 @@ class ThumbnailService {
             }
         }
         return buffers;
-    }
-
-    private touchSharedTextureCache(key: string, image: ImageData | ArrayBuffer) {
-        if (this.sharedTextureCache.has(key)) {
-            this.sharedTextureCache.delete(key);
-            const oldBytes = this.sharedTextureCacheBytes.get(key) || 0;
-            this.sharedTextureCacheBytes.delete(key);
-            this.sharedTextureTotalBytes = Math.max(0, this.sharedTextureTotalBytes - oldBytes);
-        }
-        this.sharedTextureCache.set(key, image);
-        const newBytes = this.getImageDataBytes(image);
-        this.sharedTextureCacheBytes.set(key, newBytes);
-        this.sharedTextureTotalBytes += newBytes;
-
-        while (
-            this.sharedTextureCache.size > this.SHARED_TEXTURE_CACHE_LIMIT ||
-            this.sharedTextureTotalBytes > this.SHARED_TEXTURE_CACHE_MAX_BYTES
-        ) {
-            const oldestKey = this.sharedTextureCache.keys().next().value as string | undefined;
-            if (!oldestKey) break;
-            this.sharedTextureCache.delete(oldestKey);
-            this.sharedTextureLoading.delete(oldestKey);
-            const oldestBytes = this.sharedTextureCacheBytes.get(oldestKey) || 0;
-            this.sharedTextureCacheBytes.delete(oldestKey);
-            this.sharedTextureTotalBytes = Math.max(0, this.sharedTextureTotalBytes - oldestBytes);
-        }
     }
 
     private async withTextureTaskSlot<T>(task: () => Promise<T>, onQueueWait?: (waitMs: number) => void): Promise<T> {
@@ -1535,6 +1435,65 @@ class ThumbnailService {
         return decoded;
     }
 
+    private parseTextureThumbRgbaPayload(payload: any, texturePaths: string[]): Map<string, ImageData> {
+        const decoded = new Map<string, ImageData>();
+        const bytes = this.toUint8Array(payload);
+        if (!bytes || bytes.byteLength < 4) return decoded;
+
+        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        let offset = 0;
+        const count = view.getUint32(offset, true);
+        offset += 4;
+
+        const total = Math.min(count, texturePaths.length);
+        for (let i = 0; i < total; i++) {
+            if (offset + 13 > bytes.byteLength) break;
+            const status = view.getUint8(offset);
+            offset += 1;
+            const width = view.getUint32(offset, true);
+            offset += 4;
+            const height = view.getUint32(offset, true);
+            offset += 4;
+            const dataLen = view.getUint32(offset, true);
+            offset += 4;
+            if (dataLen > 0 && offset + dataLen <= bytes.byteLength && status === 1 && width > 0 && height > 0) {
+                const slice = bytes.subarray(offset, offset + dataLen);
+                decoded.set(texturePaths[i], new ImageData(new Uint8ClampedArray(slice), width, height));
+            }
+            offset += dataLen;
+        }
+
+        return decoded;
+    }
+
+    private cloneTextureAsset(asset: CachedTextureAsset): CachedTextureAsset {
+        if (asset instanceof ArrayBuffer) {
+            return asset.slice(0);
+        }
+        return new ImageData(new Uint8ClampedArray(asset.data), asset.width, asset.height);
+    }
+
+    private splitTexturePayload(textureImages: Record<string, CachedTextureAsset>): {
+        textureImages?: Record<string, ImageData>;
+        textureRawData?: Record<string, ArrayBuffer>;
+    } {
+        const imagePayload: Record<string, ImageData> = {};
+        const rawPayload: Record<string, ArrayBuffer> = {};
+
+        for (const [path, asset] of Object.entries(textureImages)) {
+            if (asset instanceof ArrayBuffer) {
+                rawPayload[path] = asset.slice(0);
+            } else {
+                imagePayload[path] = new ImageData(new Uint8ClampedArray(asset.data), asset.width, asset.height);
+            }
+        }
+
+        return {
+            textureImages: Object.keys(imagePayload).length > 0 ? imagePayload : undefined,
+            textureRawData: Object.keys(rawPayload).length > 0 ? rawPayload : undefined
+        };
+    }
+
     private async loadMissingMpqTextures(texturePaths: string[]): Promise<{
         resolved: Map<string, ArrayBuffer>;
         elapsedMs: number;
@@ -1569,7 +1528,7 @@ class ThumbnailService {
         };
     }
 
-    private touchMainCache(fullPath: string, modelInfo: CachedModelInfo, textures?: Record<string, ArrayBuffer>) {
+    private touchMainCache(fullPath: string, modelInfo: CachedModelInfo, textures?: Record<string, CachedTextureAsset>) {
         if (this.modelCache.has(fullPath)) {
             this.modelCache.delete(fullPath);
             const oldBytes = this.modelCacheBytes.get(fullPath) || 0;
@@ -1715,8 +1674,8 @@ class ThumbnailService {
         };
     }
 
-    private async loadTextureImages(fullPath: string, texturePaths: string[]): Promise<Record<string, ArrayBuffer>> {
-        const uniqueTexturePaths = Array.from(new Set(texturePaths.filter(Boolean)));
+    private async loadTextureImages(fullPath: string, texturePaths: string[]): Promise<Record<string, CachedTextureAsset>> {
+        const uniqueTexturePaths = Array.from(new Set(texturePaths.filter((texturePath) => !!texturePath && !this.isReplaceableTeamTexturePath(texturePath))));
         const cached = this.textureCache.get(fullPath);
         if (uniqueTexturePaths.length === 0) {
             if (cached) {
@@ -1765,48 +1724,16 @@ class ThumbnailService {
                 totalMs: 0
             };
             const totalStart = performance.now();
-            const textureImages: Record<string, ArrayBuffer> = cached ? { ...cached } : {};
+            const textureImages: Record<string, CachedTextureAsset> = cached ? { ...cached } : {};
             metrics.resolvedCount = Object.keys(textureImages).length;
-            const pendingSharedPromises: Promise<void>[] = [];
             const loadTargets: string[] = [];
-            const keyByPath = new Map<string, string>();
-            const resolverByKey = new Map<string, (value: ArrayBuffer | null) => void>();
 
             uniqueTexturePaths.forEach((path) => {
-                const key = this.getTextureCacheKey(fullPath, path);
-                keyByPath.set(path, key);
-
                 if (textureImages[path]) {
                     return;
                 }
 
-                const sharedCached = this.sharedTextureCache.get(key);
-                if (sharedCached) {
-                    this.touchSharedTextureCache(key, sharedCached);
-                    textureImages[path] = sharedCached;
-                    metrics.sharedHitCount += 1;
-                    metrics.resolvedCount += 1;
-                    return;
-                }
-
-                const loadingPromise = this.sharedTextureLoading.get(key);
-                if (loadingPromise) {
-                    pendingSharedPromises.push(
-                        loadingPromise.then((image) => {
-                            if (image) {
-                                textureImages[path] = image;
-                                metrics.resolvedCount += 1;
-                            }
-                        })
-                    );
-                    return;
-                }
-
                 loadTargets.push(path);
-                const pending = new Promise<ArrayBuffer | null>((resolve) => {
-                    resolverByKey.set(key, resolve);
-                });
-                this.sharedTextureLoading.set(key, pending);
             });
 
             try {
@@ -1820,16 +1747,11 @@ class ThumbnailService {
                                     unresolvedPaths.push(path);
                                     continue;
                                 }
-                                // Store raw bytes — worker will decode
                                 const buffer = (data.byteOffset === 0 && data.byteLength === data.buffer.byteLength)
                                     ? data.buffer
                                     : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
                                 textureImages[path] = buffer;
                                 metrics.resolvedCount += 1;
-                                const key = keyByPath.get(path)!;
-                                // Clone for shared cache (originals will be transferred to worker)
-                                this.touchSharedTextureCache(key, buffer.slice(0));
-                                resolverByKey.get(key)?.(buffer.slice(0));
                             }
                             return unresolvedPaths;
                         };
@@ -1848,25 +1770,19 @@ class ThumbnailService {
                                 metrics.batchLoadMs += fallback.elapsedMs;
                                 metrics.decodeMs += fallback.decodeMs;
                                 for (const path of unresolvedPaths) {
-                                    const key = keyByPath.get(path)!;
                                     const buffer = fallback.resolved.get(path);
                                     if (buffer && buffer.byteLength > 0) {
                                         textureImages[path] = buffer;
                                         metrics.resolvedCount += 1;
-                                        this.touchSharedTextureCache(key, buffer.slice(0));
-                                        resolverByKey.get(key)?.(buffer.slice(0));
                                     } else {
                                         metrics.missCount += 1;
-                                        resolverByKey.get(key)?.(null);
                                     }
                                 }
                             }
                         } catch (err) {
                             console.warn('[ThumbnailService] Binary batch texture load failed:', err);
-                            for (const path of loadTargets) {
-                                const key = keyByPath.get(path)!;
+                            for (const _path of loadTargets) {
                                 metrics.missCount += 1;
-                                resolverByKey.get(key)?.(null);
                             }
                         } finally {
                             const elapsed = performance.now() - fsBatchStart;
@@ -1878,16 +1794,7 @@ class ThumbnailService {
                     });
                 }
 
-                if (pendingSharedPromises.length > 0) {
-                    await Promise.all(pendingSharedPromises);
-                }
             } finally {
-                for (const [key, resolve] of resolverByKey) {
-                    if (!this.sharedTextureCache.has(key)) {
-                        resolve(null);
-                    }
-                    this.sharedTextureLoading.delete(key);
-                }
             }
 
             metrics.totalMs = performance.now() - totalStart;
@@ -1937,10 +1844,9 @@ class ThumbnailService {
         const unique = Array.from(new Set(fullPaths.filter(Boolean)));
         if (unique.length === 0) return;
         await this.loadModelInfoBatch(unique);
-        await this.loadModelMetadataBatch(unique);
         for (const fullPath of unique) {
             const modelInfo = this.modelCache.get(fullPath);
-            if (modelInfo && (modelInfo.animations.length === 0 || modelInfo.texturePaths.length === 0)) {
+            if (modelInfo && !modelInfo.manifestReady) {
                 this.ensureModelMetadata(fullPath, modelInfo);
             }
         }
@@ -2074,7 +1980,6 @@ class ThumbnailService {
             const texturesCached = this.textureCache.get(fullPath);
             let textureImages = texturesCached || {};
             const alreadyTextureSynced = this.workerTextureSync[workerIndex].has(fullPath);
-            const sharedTextureSync = this.workerSharedTextureSync[workerIndex];
             const syncedTeamColor = this.workerTeamColorSync[workerIndex].get(fullPath);
             const teamColorChangedForWorker = syncedTeamColor !== renderState.teamColor;
             const renderPayload = {
@@ -2094,31 +1999,30 @@ class ThumbnailService {
             if (!isLoaded || !modelInfo || needsTexturePreparation) {
                 modelInfo = await this.loadModelInfo(fullPath);
             }
-            if (modelInfo && (modelInfo.texturePaths.length === 0 || modelInfo.animations.length === 0)) {
-                modelInfo = await this.ensureModelMetadataReady(fullPath, modelInfo);
+            if (modelInfo && !modelInfo.manifestReady) {
+                modelInfo = this.ensureModelMetadata(fullPath, modelInfo);
             }
             const texturePaths = modelInfo?.texturePaths || [];
-            const hasAllCachedTextures = texturePaths.length === 0 || texturePaths.every((path) => !!textureImages[path]);
-            const textureSyncKeys = this.getWorkerTextureSyncKeys(fullPath, texturePaths);
-            const allTexturesAlreadyShared = textureSyncKeys.length > 0 && textureSyncKeys.every((key) => sharedTextureSync.has(key));
+            const ordinaryTexturePaths = this.getOrdinaryTexturePaths(texturePaths);
+            const hasAllCachedTextures = ordinaryTexturePaths.length === 0 || ordinaryTexturePaths.every((path) => !!textureImages[path]);
             const requiresTeamColorRefresh = this.usesReplaceableTeamTextures(texturePaths);
             const readyStage = this.modelReadyStage.get(fullPath);
-            if (allTexturesAlreadyShared && hasAllCachedTextures) {
+            if (hasAllCachedTextures) {
                 this.workerTextureSync[workerIndex].add(fullPath);
             }
 
             if ((!hasAllCachedTextures) && !alreadyTextureSynced) {
-                if (texturePaths.length > 0) {
+                if (ordinaryTexturePaths.length > 0) {
                     textureImages = await this.loadTextureImages(fullPath, texturePaths);
                 }
-            } else if (texturePaths.length > 0 && readyStage !== 'textures-ready') {
+            } else if (ordinaryTexturePaths.length > 0 && readyStage !== 'textures-ready') {
                 textureImages = await this.loadTextureImages(fullPath, texturePaths);
             }
 
             const unsyncedTextureImages = Object.keys(textureImages).length > 0
-                ? Object.fromEntries(Object.entries(textureImages).filter(([path]) => !sharedTextureSync.has(this.getWorkerTextureSyncKey(fullPath, path))))
+                ? textureImages
                 : {};
-            const includeTexturePayload = Object.keys(unsyncedTextureImages).length > 0 && (!this.workerTextureSync[workerIndex].has(fullPath) || !allTexturesAlreadyShared);
+            const includeTexturePayload = Object.keys(unsyncedTextureImages).length > 0 && !this.workerTextureSync[workerIndex].has(fullPath);
             const includeTeamColorPayload = Object.keys(teamColorData).length > 0 && (teamColorChangedForWorker || !isLoaded || requiresTeamColorRefresh);
             const prepareMs = Math.max(0, performance.now() - requestStartMs);
 
@@ -2134,18 +2038,20 @@ class ThumbnailService {
                 if (isLoaded) {
                     if (includeTexturePayload) {
                         this.workerTextureSync[workerIndex].add(fullPath);
-                    } else if (allTexturesAlreadyShared) {
+                    } else if (hasAllCachedTextures) {
                         this.workerTextureSync[workerIndex].add(fullPath);
                     }
                     // Clone textureRawData for Transferable (originals stay in textureCache)
                     const clonedTexPayload = includeTexturePayload
-                        ? Object.fromEntries(Object.entries(unsyncedTextureImages).map(([k, v]) => [k, v instanceof ArrayBuffer ? v.slice(0) : v]))
+                        ? Object.fromEntries(Object.entries(unsyncedTextureImages).map(([k, v]) => [k, this.cloneTextureAsset(v)]))
                         : undefined;
+                    const texturePayload = clonedTexPayload ? this.splitTexturePayload(clonedTexPayload) : {};
                     const msg1 = {
                         type: 'RENDER',
                         payload: {
                             fullPath,
-                            ...(clonedTexPayload ? { textureRawData: clonedTexPayload, textureMaxDimension: this.getDecodeMaxDimension() } : {}),
+                            ...(texturePayload.textureImages ? { textureImages: texturePayload.textureImages } : {}),
+                            ...(texturePayload.textureRawData ? { textureRawData: texturePayload.textureRawData, textureMaxDimension: this.getDecodeMaxDimension() } : {}),
                             ...(includeTeamColorPayload ? { teamColorData } : {}),
                             generation,
                             frame,
@@ -2156,21 +2062,20 @@ class ThumbnailService {
                     };
                     const xfer1 = this.collectTransferables(msg1.payload);
                     worker.postMessage(msg1, xfer1);
-                    if (includeTexturePayload) {
-                        this.getWorkerTextureSyncKeys(fullPath, Object.keys(unsyncedTextureImages)).forEach((key) => sharedTextureSync.add(key));
-                    }
                     if (includeTeamColorPayload) {
                         this.workerTeamColorSync[workerIndex].set(fullPath, renderState.teamColor);
                     }
                 } else {
                     // Initial full payload — clone textureRawData for Transferable
                     const clonedTexPayload2 = includeTexturePayload
-                        ? Object.fromEntries(Object.entries(unsyncedTextureImages).map(([k, v]) => [k, v instanceof ArrayBuffer ? v.slice(0) : v]))
+                        ? Object.fromEntries(Object.entries(unsyncedTextureImages).map(([k, v]) => [k, this.cloneTextureAsset(v)]))
                         : undefined;
+                    const texturePayload2 = clonedTexPayload2 ? this.splitTexturePayload(clonedTexPayload2) : {};
                     const payloadData = {
                         fullPath,
                         modelBuffer: modelInfo!.buffer,
-                        ...(clonedTexPayload2 ? { textureRawData: clonedTexPayload2, textureMaxDimension: this.getDecodeMaxDimension() } : {}),
+                        ...(texturePayload2.textureImages ? { textureImages: texturePayload2.textureImages } : {}),
+                        ...(texturePayload2.textureRawData ? { textureRawData: texturePayload2.textureRawData, textureMaxDimension: this.getDecodeMaxDimension() } : {}),
                         ...(includeTeamColorPayload ? { teamColorData } : {}),
                         generation,
                         frame,
@@ -2185,8 +2090,7 @@ class ThumbnailService {
 
                     if (includeTexturePayload) {
                         this.workerTextureSync[workerIndex].add(fullPath);
-                        this.getWorkerTextureSyncKeys(fullPath, Object.keys(unsyncedTextureImages)).forEach((key) => sharedTextureSync.add(key));
-                    } else if (allTexturesAlreadyShared) {
+                    } else if (hasAllCachedTextures) {
                         this.workerTextureSync[workerIndex].add(fullPath);
                     } else {
                         this.workerTextureSync[workerIndex].delete(fullPath);
@@ -2259,191 +2163,12 @@ class ThumbnailService {
         }
     }
 
-    public getPerfSnapshot() {
-        const worker = this.getWorkerStats();
-        const records = Array.from(this.modelPerf.values());
-
-        const sum = records.reduce((acc, rec) => {
-            acc.modelReadMs += rec.modelReadMs;
-            acc.modelParseMs += rec.modelParseMs;
-            acc.textureTotalMs += rec.textureTotalMs;
-            acc.textureBatchLoadMs += rec.textureBatchLoadMs;
-            acc.textureBatchMpqLoadMs += rec.textureBatchMpqLoadMs;
-            acc.textureBatchFsLoadMs += rec.textureBatchFsLoadMs;
-            acc.textureQueueWaitMs += rec.textureQueueWaitMs;
-            acc.textureDecodeMs += rec.textureDecodeMs;
-            acc.textureFallbackLoadMs += rec.textureFallbackLoadMs;
-            acc.prepareMs += rec.prepareMs;
-            acc.workerRenderMs += rec.workerRenderMs;
-            acc.endToEndMs += rec.endToEndMs;
-            acc.modelTotalLoadMs += this.getModelTotalLoadMs(rec);
-            acc.textureCount += rec.textureCount;
-            acc.textureResolvedCount += rec.textureResolvedCount;
-            acc.textureSharedHitCount += rec.textureSharedHitCount;
-            acc.textureMissCount += rec.textureMissCount;
-            return acc;
-        }, {
-            modelReadMs: 0,
-            modelParseMs: 0,
-            textureTotalMs: 0,
-            textureBatchLoadMs: 0,
-            textureBatchMpqLoadMs: 0,
-            textureBatchFsLoadMs: 0,
-            textureQueueWaitMs: 0,
-            textureDecodeMs: 0,
-            textureFallbackLoadMs: 0,
-            prepareMs: 0,
-            workerRenderMs: 0,
-            endToEndMs: 0,
-            modelTotalLoadMs: 0,
-            textureCount: 0,
-            textureResolvedCount: 0,
-            textureSharedHitCount: 0,
-            textureMissCount: 0
-        });
-
-        const recordCount = Math.max(1, records.length);
-        const avgModelReadMs = sum.modelReadMs / recordCount;
-        const avgModelParseMs = sum.modelParseMs / recordCount;
-        const avgTextureMs = sum.textureTotalMs / recordCount;
-        const avgTextureBatchMs = sum.textureBatchLoadMs / recordCount;
-        const avgTextureBatchMpqMs = sum.textureBatchMpqLoadMs / recordCount;
-        const avgTextureBatchFsMs = sum.textureBatchFsLoadMs / recordCount;
-        const avgTextureQueueMs = sum.textureQueueWaitMs / recordCount;
-        const avgTextureDecodeMs = sum.textureDecodeMs / recordCount;
-        const avgTextureFallbackMs = sum.textureFallbackLoadMs / recordCount;
-        const avgPrepareMs = sum.prepareMs / recordCount;
-        const avgWorkerRenderMs = sum.workerRenderMs / recordCount;
-        const avgEndToEndMs = sum.endToEndMs / recordCount;
-        const avgModelTotalLoadMs = sum.modelTotalLoadMs / recordCount;
-
-        const textureLoadBase = Math.max(1e-6, avgModelReadMs + avgModelParseMs + avgTextureMs);
-        const textureLoadRatioPct = (avgTextureMs / textureLoadBase) * 100;
-        const textureCoveragePct = sum.textureCount > 0 ? (sum.textureResolvedCount / Math.max(1, sum.textureCount)) * 100 : 100;
-        const sharedTextureHitRatePct = sum.textureCount > 0 ? (sum.textureSharedHitCount / Math.max(1, sum.textureCount)) * 100 : 0;
-
-        let hotspotModelName = '';
-        let hotspotStage: 'texture' | 'parse' | 'read' | 'worker' | 'none' = 'none';
-        let hotspotMs = 0;
-        if (records.length > 0) {
-            const hotspot = [...records].sort((a, b) => b.endToEndMs - a.endToEndMs)[0];
-            hotspotModelName = hotspot.fileName;
-            const candidates: Array<{ stage: 'texture' | 'parse' | 'read' | 'worker'; value: number }> = [
-                { stage: 'texture', value: hotspot.textureTotalMs },
-                { stage: 'parse', value: hotspot.modelParseMs },
-                { stage: 'read', value: hotspot.modelReadMs },
-                { stage: 'worker', value: hotspot.workerRenderMs }
-            ];
-            const top = candidates.sort((a, b) => b.value - a.value)[0];
-            hotspotStage = top?.stage ?? 'none';
-            hotspotMs = top?.value ?? 0;
-        }
-
-        return {
-            workersBusy: worker.busy,
-            workersTotal: worker.total,
-            modelCache: this.modelCache.size,
-            modelCacheBytesMB: this.modelCacheTotalBytes / (1024 * 1024),
-            textureCache: this.textureCache.size,
-            sharedTextureCache: this.sharedTextureCache.size,
-            sharedTextureCacheBytesMB: this.sharedTextureTotalBytes / (1024 * 1024),
-            modelLoading: this.resourceLoading.size,
-            textureLoading: this.textureLoading.size,
-            textureTaskRunning: this.textureTaskRunning,
-            textureTaskPending: this.textureTaskQueue.length,
-            decodeDimension: this.getDecodeMaxDimension(),
-            avgModelReadMs,
-            avgModelParseMs,
-            avgTextureMs,
-            avgTextureBatchMs,
-            avgTextureBatchMpqMs,
-            avgTextureBatchFsMs,
-            avgTextureQueueMs,
-            avgTextureDecodeMs,
-            avgTextureFallbackMs,
-            avgPrepareMs,
-            avgWorkerRenderMs,
-            avgEndToEndMs,
-            avgModelTotalLoadMs,
-            textureLoadRatioPct,
-            textureCoveragePct,
-            sharedTextureHitRatePct,
-            hotspotModelName,
-            hotspotStage,
-            hotspotMs
-        };
-    }
-
-    public exportPerfLog(activePaths?: string[]) {
-        const activeSet = activePaths && activePaths.length > 0 ? new Set(activePaths) : null;
-        const records = Array.from(this.modelPerf.values())
-            .filter((record) => !activeSet || activeSet.has(record.fullPath))
-            .map((record) => {
-                const modelTotalLoadMs = this.getModelTotalLoadMs(record);
-                const stages: Array<{ stage: string; value: number }> = [
-                    { stage: 'read', value: record.modelReadMs },
-                    { stage: 'parse', value: record.modelParseMs },
-                    { stage: 'texture', value: record.textureTotalMs },
-                    { stage: 'prepare', value: record.prepareMs },
-                    { stage: 'draw', value: record.workerDrawMs },
-                    { stage: 'transfer', value: record.workerTransferMs }
-                ];
-                const topStage = stages.sort((a, b) => b.value - a.value)[0] || { stage: 'unknown', value: 0 };
-                return {
-                    ...record,
-                    modelTotalLoadMs,
-                    suspectedBottleneckStage: topStage.stage,
-                    suspectedBottleneckMs: topStage.value
-                };
-            })
-            .sort((a, b) => b.endToEndMs - a.endToEndMs);
-
-        const count = Math.max(1, records.length);
-        const summary = records.reduce((acc, record) => {
-            acc.modelReadMs += record.modelReadMs;
-            acc.modelParseMs += record.modelParseMs;
-            acc.textureTotalMs += record.textureTotalMs;
-            acc.prepareMs += record.prepareMs;
-            acc.workerDrawMs += record.workerDrawMs;
-            acc.workerTransferMs += record.workerTransferMs;
-            acc.endToEndMs += record.endToEndMs;
-            acc.modelTotalLoadMs += record.modelTotalLoadMs;
-            return acc;
-        }, {
-            modelReadMs: 0,
-            modelParseMs: 0,
-            textureTotalMs: 0,
-            prepareMs: 0,
-            workerDrawMs: 0,
-            workerTransferMs: 0,
-            endToEndMs: 0,
-            modelTotalLoadMs: 0
-        });
-
-        return {
-            generatedAt: new Date().toISOString(),
-            activePathsCount: activeSet?.size ?? records.length,
-            summary: {
-                count: records.length,
-                avgModelReadMs: summary.modelReadMs / count,
-                avgModelParseMs: summary.modelParseMs / count,
-                avgTextureMs: summary.textureTotalMs / count,
-                avgPrepareMs: summary.prepareMs / count,
-                avgWorkerDrawMs: summary.workerDrawMs / count,
-                avgWorkerTransferMs: summary.workerTransferMs / count,
-                avgEndToEndMs: summary.endToEndMs / count,
-                avgModelTotalLoadMs: summary.modelTotalLoadMs / count
-            },
-            snapshot: this.getPerfSnapshot(),
-            records
-        };
-    }
-
     public clearAll() {
         this.activeBatchPaths.clear();
-        this.activeBatchGeneration = 0;
+        this.activeBatchGeneration += 1;
         this.pageGenerationByPath.clear();
         this.modelCache.clear();
+        this.manifestCache.clear();
         this.modelCacheBytes.clear();
         this.modelCacheTotalBytes = 0;
         this.textureCache.clear();
@@ -2460,13 +2185,13 @@ class ThumbnailService {
         this.teamColorsLoadingByIndex.clear();
         this.modelReadyStage.clear();
         this.modelPerf.clear();
+        this.callbacks.clear();
         this.renderRequestMetrics.clear();
         this.firstTouchMetrics.clear();
+        this.preloadCallbacks.clear();
+        this.preloadingPaths.clear();
         this.renderRequestGeneration.clear();
         this.preloadRequestGeneration.clear();
-        this.metadataRequestGeneration.clear();
-        this.metadataCallbacks.clear();
-        this.metadataLoading.clear();
         this.modelWorkerAffinity.clear();
         this.perfLoggedStages.clear();
         this.workerModelCache.forEach((_, i) => this.workerModelCache[i] = []);
@@ -2480,5 +2205,3 @@ class ThumbnailService {
 }
 
 export const thumbnailService = new ThumbnailService();
-
-

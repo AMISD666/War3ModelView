@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::model_manifest::extract_texture_paths;
+
 #[allow(dead_code)]
 pub fn delete_model_with_shared_textures(model_path: &str) -> Result<String, String> {
     let paths = vec![model_path.to_string()];
@@ -141,88 +143,5 @@ fn resolve_texture_path(model_dir: &Path, tex_path: &str) -> Option<PathBuf> {
         }
     }
 
-    None
-}
-
-fn extract_texture_paths(data: &[u8], model_path: &Path) -> Vec<String> {
-    let mut paths = Vec::new();
-    let ext = model_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-
-    if ext == "mdx" {
-        if let Some(texs_pos) = find_chunk(data, b"TEXS") {
-            let chunk_size = u32::from_le_bytes([
-                data[texs_pos + 4],
-                data[texs_pos + 5],
-                data[texs_pos + 6],
-                data[texs_pos + 7],
-            ]) as usize;
-            let chunk_data = &data[texs_pos + 8..texs_pos + 8 + chunk_size];
-
-            let entry_size = 268;
-            for i in (0..chunk_data.len()).step_by(entry_size) {
-                if i + entry_size > chunk_data.len() {
-                    break;
-                }
-                let path_bytes = &chunk_data[i + 4..i + 4 + 260];
-                if let Some(null_pos) = path_bytes.iter().position(|&b| b == 0) {
-                    if let Ok(path_str) = std::str::from_utf8(&path_bytes[..null_pos]) {
-                        let trimmed = path_str.trim();
-                        if !trimmed.is_empty() {
-                            paths.push(
-                                trimmed
-                                    .replace("\\", "/")
-                                    .replace("/", std::path::MAIN_SEPARATOR_STR),
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    } else if ext == "mdl" {
-        if let Ok(text) = std::str::from_utf8(data) {
-            for line in text.lines() {
-                let line = line.trim();
-                if line.starts_with("Image ") {
-                    if let Some(start) = line.find('"') {
-                        if let Some(end) = line.rfind('"') {
-                            if end > start {
-                                let path_str = &line[start + 1..end];
-                                if !path_str.is_empty() {
-                                    paths.push(
-                                        path_str.replace("\\", std::path::MAIN_SEPARATOR_STR),
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    paths
-}
-
-fn find_chunk(data: &[u8], chunk_id: &[u8; 4]) -> Option<usize> {
-    let mut pos = 0;
-    if data.len() >= 4 && &data[0..4] == b"MDLX" {
-        pos = 4;
-    }
-    while pos + 8 <= data.len() {
-        if &data[pos..pos + 4] == chunk_id {
-            return Some(pos);
-        }
-        if pos + 8 > data.len() {
-            break;
-        }
-        let chunk_size =
-            u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
-                as usize;
-        pos += 8 + chunk_size;
-    }
     None
 }

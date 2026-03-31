@@ -260,31 +260,6 @@ self.onmessage = async (e) => {
                 }
             });
         }
-    } else if (type === 'METADATA') {
-        try {
-            const result = parseMetadataPayload(payload.fullPath, payload.modelBuffer);
-            self.postMessage({
-                type: 'METADATA',
-                payload: {
-                    fullPath: payload.fullPath,
-                    generation: payload.generation,
-                    animations: result.animations,
-                    texturePaths: result.texturePaths,
-                    metrics: result.metrics
-                }
-            });
-        } catch (err: any) {
-            console.error('[Worker] Metadata parse failed:', err);
-            self.postMessage({
-                type: 'ERROR',
-                payload: {
-                    fullPath: payload.fullPath,
-                    generation: payload.generation,
-                    error: String(err),
-                    stack: err.stack
-                }
-            });
-        }
     } else if (type === 'PRELOAD') {
         try {
             const result = await render({ ...payload, preloadOnly: true });

@@ -137,25 +137,11 @@ fn decode_blp(bytes: &[u8], max_dimension: Option<u32>) -> Result<DecodedImage, 
 
     match compression {
         0 => {
-            // JPEG-compressed BLP1
-            let jpeg_header_size = read_u32_le(bytes, BLP_HEADER_SIZE)? as usize;
-            let jpeg_header_start = BLP_HEADER_SIZE + 4;
-            let jpeg_header_end = jpeg_header_start + jpeg_header_size;
-            if jpeg_header_end > bytes.len() {
-                return Err("BLP JPEG header out of range".to_string());
-            }
-
-            let mip_offset = offsets[mip_level] as usize;
-            let mip_size = sizes[mip_level] as usize;
-            if mip_size == 0 || mip_offset + mip_size > bytes.len() {
-                return Err(format!("BLP mip{mip_level} out of range"));
-            }
-
-            let mut jpeg = Vec::with_capacity(jpeg_header_size + mip_size);
-            jpeg.extend_from_slice(&bytes[jpeg_header_start..jpeg_header_end]);
-            jpeg.extend_from_slice(&bytes[mip_offset..mip_offset + mip_size]);
-
-            let img = image::load_from_memory_with_format(&jpeg, ImageFormat::Jpeg)
+            // Warcraft BLP1 JPEG uses Blizzard-specific channel semantics.
+            // Decode through the dedicated BLP implementation instead of the generic JPEG path.
+            let img = blp::AnyImage::from_buffer(bytes)
+                .map_err(|e| format!("BLP JPEG parse failed: {e:?}"))?
+                .into_dynamic()
                 .map_err(|e| format!("BLP JPEG decode failed: {e:?}"))?;
             let rgba = img.to_rgba8();
             downscale_decoded_if_needed(DecodedImage {
