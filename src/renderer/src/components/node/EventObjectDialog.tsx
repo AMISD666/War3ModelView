@@ -1,9 +1,10 @@
-﻿import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
+import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import React, { useEffect, useState } from 'react';
 import { Form, Button, Select, Space } from 'antd';
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
 import { GlobalSequenceSelect } from '../common/GlobalSequenceSelect';
 import { DraggableModal } from '../DraggableModal';
+import { NodeEditorStandaloneShell } from '../common/NodeEditorStandaloneShell';
 import { useModelStore } from '../../store/modelStore';
 import type { EventObjectNode } from '../../types/node';
 
@@ -13,6 +14,10 @@ interface EventObjectDialogProps {
     visible: boolean;
     nodeId: number | null;
     onClose: () => void;
+    isStandalone?: boolean;
+    standaloneNode?: EventObjectNode | null;
+    standaloneEmit?: (command: string, payload?: any) => void;
+    standaloneModelData?: { Sequences?: any[] } | null;
 }
 
 // Fieldset style matching the reference
@@ -39,9 +44,18 @@ const inputStyle: React.CSSProperties = {
     color: '#fff'
 };
 
-const EventObjectDialog: React.FC<EventObjectDialogProps> = ({ visible, nodeId, onClose }) => {
+const EventObjectDialog: React.FC<EventObjectDialogProps> = ({
+    visible,
+    nodeId,
+    onClose,
+    isStandalone,
+    standaloneNode,
+    standaloneEmit,
+    standaloneModelData,
+}) => {
     const [form] = Form.useForm();
-    const { getNodeById, updateNode, modelData } = useModelStore();
+    const { getNodeById, updateNode, modelData: storeModelData } = useModelStore();
+    const modelData = isStandalone ? standaloneModelData : storeModelData;
     const [eventFrames, setEventFrames] = useState<number[]>([]);
     const [newFrame, setNewFrame] = useState<number>(0);
     const [selectedFrameIndex, setSelectedFrameIndex] = useState<number | null>(null);
@@ -51,33 +65,50 @@ const EventObjectDialog: React.FC<EventObjectDialogProps> = ({ visible, nodeId, 
     // Get sequences for reference
     const sequences = modelData?.Sequences || [];
 
-    useEffect(() => {
-        if (visible && currentNode) {
-            const track = currentNode.EventTrack;
-            let frames: number[] = [];
-            if (track) {
-                if (track instanceof Uint32Array) {
-                    frames = Array.from(track);
-                } else if (Array.isArray(track)) {
-                    frames = track;
-                }
-            }
-            setEventFrames(frames);
-            setNewFrame(0);
-            setSelectedFrameIndex(null);
+    const formHydratedForNodeIdRef = React.useRef<number | null>(null);
 
-            form.setFieldsValue({
-                GlobalSequenceId: currentNode.GlobalSequenceId ?? -1,
-            });
-        } else if (visible) {
+    useEffect(() => {
+        if (!visible) {
+            formHydratedForNodeIdRef.current = null;
+            return;
+        }
+        if (nodeId === null) return;
+        if (formHydratedForNodeIdRef.current === nodeId) return;
+
+        const sourceNode: EventObjectNode | null = isStandalone
+            ? (standaloneNode as EventObjectNode | null)
+            : ((useModelStore.getState().getNodeById(nodeId) as EventObjectNode | undefined) ?? null);
+
+        if (!sourceNode) {
+            formHydratedForNodeIdRef.current = nodeId;
             setEventFrames([]);
             setNewFrame(0);
             setSelectedFrameIndex(null);
-            form.setFieldsValue({
-                GlobalSequenceId: -1,
-            });
+            form.setFieldsValue({ GlobalSequenceId: -1 });
+            return;
         }
-    }, [currentNode, visible, form]);
+
+        formHydratedForNodeIdRef.current = nodeId;
+
+        const currentNode = sourceNode;
+
+        const track = currentNode.EventTrack;
+        let frames: number[] = [];
+        if (track) {
+            if (track instanceof Uint32Array) {
+                frames = Array.from(track);
+            } else if (Array.isArray(track)) {
+                frames = track;
+            }
+        }
+        setEventFrames(frames);
+        setNewFrame(0);
+        setSelectedFrameIndex(null);
+
+        form.setFieldsValue({
+            GlobalSequenceId: currentNode.GlobalSequenceId ?? -1,
+        });
+    }, [visible, nodeId, isStandalone, standaloneNode, form]);
 
     const handleAddFrame = () => {
         if (!eventFrames.includes(newFrame)) {
@@ -105,7 +136,7 @@ const EventObjectDialog: React.FC<EventObjectDialogProps> = ({ visible, nodeId, 
                 GlobalSequenceId: values.GlobalSequenceId >= 0 ? values.GlobalSequenceId : undefined,
             };
 
-            updateNode(nodeId, updatedNode);
+            applyNodeToStore(updatedNode);
             onClose();
         } catch (e) {
             console.error("Validation failed", e);
@@ -123,18 +154,7 @@ const EventObjectDialog: React.FC<EventObjectDialogProps> = ({ visible, nodeId, 
     };
 
 
-    return (
-        <DraggableModal
-            title="事件物体"
-            open={visible}
-            onOk={handleOk}
-            onCancel={onClose}
-            footer={null}
-            width={450}
-            maskClosable={false}
-            wrapClassName="dark-theme-modal"
-            styles={{ body: { padding: '12px 16px', backgroundColor: '#1f1f1f', color: '#ccc' } }}
-        >
+    const eventFormInner = (
             <Form form={form} layout="vertical">
                 {/* 事件跟踪 Section */}
                 <fieldset style={{ ...fieldsetStyle, minHeight: 140 }}>
@@ -244,6 +264,25 @@ const EventObjectDialog: React.FC<EventObjectDialogProps> = ({ visible, nodeId, 
                     <Button onClick={onClose} style={{ minWidth: 70 }}>取 消</Button>
                 </div>
             </Form>
+    );
+
+    if (isStandalone) {
+        return <NodeEditorStandaloneShell>{eventFormInner}</NodeEditorStandaloneShell>;
+    }
+
+    return (
+        <DraggableModal
+            title="事件物体"
+            open={visible}
+            onOk={handleOk}
+            onCancel={onClose}
+            footer={null}
+            width={450}
+            maskClosable={false}
+            wrapClassName="dark-theme-modal"
+            styles={{ body: { padding: '12px 16px', backgroundColor: '#1f1f1f', color: '#ccc' } }}
+        >
+            {eventFormInner}
         </DraggableModal>
     );
 };

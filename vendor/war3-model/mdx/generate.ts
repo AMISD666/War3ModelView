@@ -9,19 +9,41 @@ const BIG_ENDIAN = true;
 const NONE = -1;
 
 class Stream {
-    private readonly ab: ArrayBuffer;
-    private readonly uint: Uint8Array;
-    private readonly view: DataView;
+    private buf: Uint8Array;
+    private uint: Uint8Array;
+    private view: DataView;
     private pos: number;
 
-    constructor(arrayBuffer: ArrayBuffer) {
-        this.ab = arrayBuffer;
-        this.uint = new Uint8Array(this.ab);
-        this.view = new DataView(this.ab);
+    /** 可扩容写入流，避免 byteLength 与真实写入不一致时 DataView 越界 */
+    constructor(initialCapacity: number) {
+        const cap = Math.max(64, Math.floor(initialCapacity));
+        this.buf = new Uint8Array(cap);
+        this.uint = this.buf;
+        this.view = new DataView(this.buf.buffer);
         this.pos = 0;
     }
 
+    private ensure(n: number): void {
+        if (this.pos + n <= this.buf.length) {
+            return;
+        }
+        let newLen = this.buf.length;
+        while (this.pos + n > newLen) {
+            newLen *= 2;
+        }
+        const next = new Uint8Array(newLen);
+        next.set(this.buf.subarray(0, this.pos));
+        this.buf = next;
+        this.uint = this.buf;
+        this.view = new DataView(this.buf.buffer);
+    }
+
+    public toArrayBuffer(): ArrayBuffer {
+        return this.buf.slice(0, this.pos).buffer;
+    }
+
     public keyword(keyword: string): void {
+        this.ensure(4);
         this.uint[this.pos] = keyword.charCodeAt(0);
         this.uint[this.pos + 1] = keyword.charCodeAt(1);
         this.uint[this.pos + 2] = keyword.charCodeAt(2);
@@ -31,26 +53,31 @@ class Stream {
     }
 
     public uint8(num: number): void {
+        this.ensure(1);
         this.view.setUint8(this.pos, num);
         this.pos += 1;
     }
 
     public uint16(num: number): void {
+        this.ensure(2);
         this.view.setUint16(this.pos, num, BIG_ENDIAN);
         this.pos += 2;
     }
 
     public int32(num: number): void {
+        this.ensure(4);
         this.view.setInt32(this.pos, num, BIG_ENDIAN);
         this.pos += 4;
     }
 
     public uint32(num: number): void {
+        this.ensure(4);
         this.view.setUint32(this.pos, num, BIG_ENDIAN);
         this.pos += 4;
     }
 
     public float32(num: number): void {
+        this.ensure(4);
         this.view.setFloat32(this.pos, num, BIG_ENDIAN);
         this.pos += 4;
     }
@@ -86,6 +113,7 @@ class Stream {
     }
 
     public str(str: string, len: number): void {
+        this.ensure(len);
         for (let i = 0; i < len; ++i, ++this.pos) {
             this.uint[this.pos] = i < str.length ? str.charCodeAt(i) : 0;
         }
@@ -158,6 +186,15 @@ function byteLengthAnimVector(animVector: AnimVector, type: AnimVectorType): num
             4 * animVectorSize[type] *
             (animVector.LineType === LineType.Hermite || animVector.LineType === LineType.Bezier ? 3 : 1)
         );
+}
+
+/** 仅当为有效 AnimVector 时才写 KRVS/KRHA 等块（undefined 不是 number，旧逻辑会误判并崩溃） */
+function isAnimVectorValue(val: unknown): val is AnimVector {
+    return (
+        val !== null &&
+        typeof val === 'object' &&
+        Array.isArray((val as AnimVector).Keys)
+    );
 }
 
 
@@ -717,7 +754,7 @@ function byteLengthGeosetAnim(anim: GeosetAnim): number {
         4 /* Flags */ +
         4 * 3 /* static Color */ +
         4 /* GeosetId */ +
-        (typeof anim.Alpha !== 'number' ?
+        (isAnimVectorValue(anim.Alpha) ?
             4 /* keyword */ + byteLengthAnimVector(anim.Alpha, AnimVectorType.FLOAT1) :
             0
         ) +
@@ -760,7 +797,7 @@ function generateGeosetAnims(model: Model, stream: Stream): void {
         }
         stream.int32(anim.GeosetId !== null ? anim.GeosetId : NONE);
 
-        if (anim.Alpha !== null && typeof anim.Alpha !== 'number') {
+        if (isAnimVectorValue(anim.Alpha)) {
             stream.keyword('KGAO');
             stream.animVector(anim.Alpha, AnimVectorType.FLOAT1);
         }
@@ -1344,23 +1381,11 @@ function byteLengthRibbonEmitter(emitter: RibbonEmitter): number {
         4 /* Columns */ +
         4 /* MaterialID */ +
         4 /* Gravity */ +
-        (emitter.Visibility ? 4 /* keyword */ + byteLengthAnimVector(emitter.Visibility, AnimVectorType.FLOAT1) : 0) +
-        (typeof emitter.HeightAbove !== 'number' ?
-            4 /* keyword */ + byteLengthAnimVector(emitter.HeightAbove, AnimVectorType.FLOAT1) :
-            0
-        ) +
-        (typeof emitter.HeightBelow !== 'number' ?
-            4 /* keyword */ + byteLengthAnimVector(emitter.HeightBelow, AnimVectorType.FLOAT1) :
-            0
-        ) +
-        (typeof emitter.Alpha !== 'number' ?
-            4 /* keyword */ + byteLengthAnimVector(emitter.Alpha, AnimVectorType.FLOAT1) :
-            0
-        ) +
-        (typeof emitter.TextureSlot !== 'number' ?
-            4 /* keyword */ + byteLengthAnimVector(emitter.TextureSlot, AnimVectorType.FLOAT1) :
-            0
-        );
+        (isAnimVectorValue(emitter.Visibility) ? 4 /* keyword */ + byteLengthAnimVector(emitter.Visibility, AnimVectorType.FLOAT1) : 0) +
+        (isAnimVectorValue(emitter.HeightAbove) ? 4 /* keyword */ + byteLengthAnimVector(emitter.HeightAbove, AnimVectorType.FLOAT1) : 0) +
+        (isAnimVectorValue(emitter.HeightBelow) ? 4 /* keyword */ + byteLengthAnimVector(emitter.HeightBelow, AnimVectorType.FLOAT1) : 0) +
+        (isAnimVectorValue(emitter.Alpha) ? 4 /* keyword */ + byteLengthAnimVector(emitter.Alpha, AnimVectorType.FLOAT1) : 0) +
+        (isAnimVectorValue(emitter.TextureSlot) ? 4 /* keyword */ + byteLengthAnimVector(emitter.TextureSlot, AnimVectorType.INT1) : 0);
 }
 
 function byteLengthRibbonEmitters(model: Model): number {
@@ -1403,23 +1428,23 @@ function generateRibbonEmitters(model: Model, stream: Stream): void {
         stream.int32(emitter.MaterialID);
         stream.float32(emitter.Gravity);
 
-        if (emitter.Visibility) {
+        if (isAnimVectorValue(emitter.Visibility)) {
             stream.keyword('KRVS');
             stream.animVector(emitter.Visibility, AnimVectorType.FLOAT1);
         }
-        if (typeof emitter.HeightAbove !== 'number') {
+        if (isAnimVectorValue(emitter.HeightAbove)) {
             stream.keyword('KRHA');
             stream.animVector(emitter.HeightAbove, AnimVectorType.FLOAT1);
         }
-        if (typeof emitter.HeightBelow !== 'number') {
+        if (isAnimVectorValue(emitter.HeightBelow)) {
             stream.keyword('KRHB');
             stream.animVector(emitter.HeightBelow, AnimVectorType.FLOAT1);
         }
-        if (typeof emitter.Alpha !== 'number') {
+        if (isAnimVectorValue(emitter.Alpha)) {
             stream.keyword('KRAL');
             stream.animVector(emitter.Alpha, AnimVectorType.FLOAT1);
         }
-        if (typeof emitter.TextureSlot !== 'number') {
+        if (isAnimVectorValue(emitter.TextureSlot)) {
             stream.keyword('KRTX');
             stream.animVector(emitter.TextureSlot, AnimVectorType.INT1);
         }
@@ -1789,8 +1814,8 @@ export function generate(model: Model): ArrayBuffer {
         totalLength += lenFunc(model);
     }
 
-    const res = new ArrayBuffer(totalLength);
-    const stream = new Stream(res);
+    const hint = Number.isFinite(totalLength) && totalLength > 0 ? totalLength : 65536;
+    const stream = new Stream(hint);
 
     stream.keyword('MDLX');
 
@@ -1798,5 +1823,5 @@ export function generate(model: Model): ArrayBuffer {
         generator(model, stream);
     }
 
-    return res;
+    return stream.toArrayBuffer();
 }

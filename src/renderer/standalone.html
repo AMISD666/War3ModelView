@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" href="data:," />
+  <title>工具窗口</title>
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self' ipc: http://ipc.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' ipc: http://ipc.localhost;" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"
+    media="print" onload="this.media='all'" />
+  <style>
+    body {
+      background-color: #1e1e1e;
+      margin: 0;
+      overflow: hidden;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="root"></div>
+  <!-- 独立入口：不加载主应用 App，减少与 index 共享的依赖与解析路径 -->
+  <script type="module" src="/src/standalone-main.tsx"></script>
+</body>
+
+</html>

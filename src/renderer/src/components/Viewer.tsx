@@ -68,9 +68,15 @@ import { MissingTextureWarning } from './MissingTextureWarning'
 import { GeosetSeparateDialog } from './modals/GeosetSeparateDialog'
 import { LayerConfig, layerConfigToMaterialLayer } from './modals/MaterialLayerOptions'
 import { NodeType } from '../types/node'
+import { openNodeEditor } from '../utils/nodeEditorOpen'
+import { nodeTypeToEditorKind } from '../types/nodeEditorRpc'
 import { registerShortcutHandler } from '../shortcuts/manager'
 import { markStandalonePerf } from '../utils/standalonePerf'
 import { invokeReadMpqFile } from '../utils/mpqPerf'
+import {
+  markNodeManagerListScrollFromTree,
+  markNodeManagerListScrollFromViewer,
+} from '../utils/nodeManagerListScrollBridge'
 
 // Singleton loop counter to prevent runaway FPS
 let globalRenderLoopId = 0
@@ -2698,9 +2704,11 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         const current = useSelectionStore.getState().selectedNodeIds
         const combined = Array.from(new Set([...current, ...newSelection]))
         console.log('[Viewer] Ctrl+Box select - combining with existing:', current, '=> combined:', combined)
+        markNodeManagerListScrollFromViewer()
         selectNodes(combined)
       } else {
         console.log('[Viewer] Box select - setting new selection:', newSelection)
+        markNodeManagerListScrollFromViewer()
         selectNodes(newSelection)
       }
     } else if ((mainMode === 'geometry' && (geometrySubMode === 'vertex' || geometrySubMode === 'group')) || (mainMode === 'animation' && animationSubMode === 'binding')) {
@@ -3071,6 +3079,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           setIsPickingParent(false) // Exit picking mode after setting parent
           return
         }
+        markNodeManagerListScrollFromViewer()
         selectNode(closestNodeId, isCtrl) // Support multi-select with Ctrl
         return // Stop here if we hit a node
       } else if (!isCtrl && animationSubMode !== 'binding') {
@@ -3635,7 +3644,9 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     const hasChanged = rendererReloadTrigger !== lastReloadTrigger.current
 
     if (!isInitialMount && hasChanged) {
-      console.log('[Viewer] Model data sync triggered, trigger:', rendererReloadTrigger)
+      if (import.meta.env.DEV) {
+        console.log('[Viewer] Model data sync triggered, trigger:', rendererReloadTrigger)
+      }
 
       // Sync model data to renderer without recreating the entire renderer
       // This is the LIGHTWEIGHT SYNC approach - only updates internal data arrays
@@ -3694,7 +3705,9 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         } else {
           renderer.model.ParticleEmitters2 = nextEmitters
         }
-        console.log('[Viewer] Synced ParticleEmitters2:', renderer.model.ParticleEmitters2.length, 'emitters')
+        if (import.meta.env.DEV) {
+          console.log('[Viewer] Synced ParticleEmitters2:', renderer.model.ParticleEmitters2.length, 'emitters')
+        }
 
         // === RIBBON EMITTERS ===
         if (modelData.RibbonEmitters) {
@@ -3914,7 +3927,9 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           renderer.model.PivotPoints = modelData.PivotPoints
         }
 
-        console.log('[Viewer] Lightweight sync complete')
+        if (import.meta.env.DEV) {
+          console.log('[Viewer] Lightweight sync complete')
+        }
       }
     }
     lastReloadTrigger.current = rendererReloadTrigger
@@ -4694,8 +4709,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 nodeRenderModeRef.current === 'wireframe' ? 'wireframe' : 'solid'
               )
 
-              // Keyframe mode: visualize ParticleEmitter2 Width/Length as a box centered on emitter pivot.
-              if (currentMainMode === 'animation' && currentAnimationSubMode === 'keyframe' && selectedNodeIds.length > 0) {
+              // 粒子发射器2：在视图/动画等模式下显示宽长矩形框与发射方向（与 particles.ts 中局部 +Z 初速一致）
+              if (selectedNodeIds.length > 0) {
                 try {
                   const storeNodes = useModelStore.getState().nodes as any[]
                   const selectedIdNums = selectedNodeIds
@@ -4767,10 +4782,22 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                     }
 
                     const tempCorner = vec3.create()
+                    const pivotWorld = vec3.create()
+                    const emitDir = vec3.create()
+                    const tipPt = vec3.create()
+                    const basePt = vec3.create()
+                    const sideA = vec3.create()
+                    const sideB = vec3.create()
+                    const cornerPt = vec3.create()
+                    const tmpDir4 = vec4.create()
+                    const localEmitZ = vec4.fromValues(0, 0, 1, 0)
                     const linePositions: number[] = []
                     const minVisualAxis = 2 // Keep tiny Width/Length still visible.
+                    const rdNodes = mdlRenderer.rendererData.nodes as any
                     for (const nodeId of selectedIdNums) {
-                      const nodeWrapper = (mdlRenderer.rendererData.nodes as any[]).find((n: any) => Number(n?.node?.ObjectId) === nodeId)
+                      const nodeWrapper =
+                        rdNodes[nodeId] ??
+                        (mdlRenderer.rendererData.nodes as any[]).find((n: any) => Number(n?.node?.ObjectId) === nodeId)
                       const storeNode = storeNodeById.get(nodeId)
                       const pe2Node = pe2ById.get(nodeId)
                       const nodeData = (nodeWrapper?.node || storeNode) as any
@@ -4819,6 +4846,39 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                       // Cross lines help visibility when the rectangle is small or edge-on.
                       pushLine(worldCorners[0], worldCorners[2])
                       pushLine(worldCorners[1], worldCorners[3])
+
+                      // 发射方向：与 particles.ts createParticle 中 localDirection (0,0,1) 经节点矩阵变换一致
+                      vec3.set(tempCorner, pivot[0], pivot[1], pivot[2])
+                      vec3.transformMat4(pivotWorld, tempCorner, nodeMatrix)
+                      vec4.transformMat4(tmpDir4, localEmitZ, nodeMatrix)
+                      vec3.set(emitDir, tmpDir4[0], tmpDir4[1], tmpDir4[2])
+                      const dirLen = vec3.length(emitDir)
+                      if (dirLen > 1e-6) {
+                        vec3.scale(emitDir, emitDir, 1 / dirLen)
+                        const arrowLen = Math.max(nodeSize * 0.9, Math.min(halfW, halfL) * 0.65)
+                        vec3.scaleAndAdd(tipPt, pivotWorld, emitDir, arrowLen)
+                        pushLine(
+                          [pivotWorld[0], pivotWorld[1], pivotWorld[2]],
+                          [tipPt[0], tipPt[1], tipPt[2]]
+                        )
+                        const headBack = Math.min(arrowLen * 0.22, halfW * 0.45)
+                        vec3.scaleAndAdd(basePt, tipPt, emitDir, -headBack)
+                        vec3.set(tempCorner, Math.abs(emitDir[1]) < 0.99 ? 0 : 1, Math.abs(emitDir[1]) < 0.99 ? 1 : 0, 0)
+                        vec3.cross(sideA, emitDir, tempCorner)
+                        vec3.normalize(sideA, sideA)
+                        vec3.cross(sideB, emitDir, sideA)
+                        vec3.normalize(sideB, sideB)
+                        const hr = headBack * 0.55
+                        const headPts: Array<[number, number]> = [[hr, hr], [hr, -hr], [-hr, hr], [-hr, -hr]]
+                        for (const [sx, sy] of headPts) {
+                          vec3.scaleAndAdd(cornerPt, basePt, sideA, sx)
+                          vec3.scaleAndAdd(cornerPt, cornerPt, sideB, sy)
+                          pushLine(
+                            [tipPt[0], tipPt[1], tipPt[2]],
+                            [cornerPt[0], cornerPt[1], cornerPt[2]]
+                          )
+                        }
+                      }
                     }
 
                     if (linePositions.length > 0) {
@@ -7147,6 +7207,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     if (mainMode !== 'animation') return false
     const node = getPrimarySelectedNode()
     if (!node || node.Parent === undefined || node.Parent === null || node.Parent < 0) return false
+    markNodeManagerListScrollFromTree()
     selectNode(node.Parent)
     return true
   }
@@ -7159,6 +7220,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     const children = stableStoreNodes.filter((n) => n.Parent === node.ObjectId)
     if (children.length === 0) return false
     children.sort((a, b) => a.ObjectId - b.ObjectId)
+    markNodeManagerListScrollFromTree()
     selectNode(children[0].ObjectId)
     return true
   }
@@ -7179,6 +7241,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       }
     }
     if (collected.length === 0) return false
+    markNodeManagerListScrollFromTree()
     selectNodes(collected)
     return true
   }
@@ -7186,11 +7249,17 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   const editSelectedNode = (): boolean => {
     const node = getPrimarySelectedNode()
     if (!node) return false
-    useUIStore.getState().setNodeDialogVisible(true, node.ObjectId)
+    const kind = nodeTypeToEditorKind(node.type)
+    if (kind) {
+      void openNodeEditor(kind, node.ObjectId)
+    } else {
+      void openNodeEditor('genericNode', node.ObjectId)
+    }
     return true
   }
 
   const deleteSelectedNode = (): boolean => {
+    setNodeContextMenu(null)
     const node = getPrimarySelectedNode()
     if (!node) return false
     useModelStore.getState().deleteNode(node.ObjectId)
@@ -7627,6 +7696,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                   const cam = cameraList[idx];
                   // Select the camera node instead of switching view
                   // usage of selectNode(id, multiSelect)
+                  markNodeManagerListScrollFromTree();
                   useSelectionStore.getState().selectNode(cam.ObjectId);
                 }
               }}

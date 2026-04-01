@@ -30,6 +30,7 @@ import { useCommandManager } from '../utils/CommandManager';
 import { BindVerticesCommand } from '../commands/BindVerticesCommand';
 import { NodeType } from '../types/node';
 import { getNodeIcon } from '../utils/nodeUtils';
+import { markNodeManagerListScrollFromTree } from '../utils/nodeManagerListScrollBridge';
 
 interface ViewerToolbarProps {
     onRecalculateNormals?: () => void
@@ -305,6 +306,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         // Select the newly created bone if we can find it after reordering.
         const created = useModelStore.getState().nodes.find((n: any) => n.type === NodeType.BONE && n.Name === uniqueName)
         if (created) {
+            markNodeManagerListScrollFromTree();
             useSelectionStore.getState().selectNode(created.ObjectId, false)
         }
 

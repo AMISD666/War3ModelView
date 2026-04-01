@@ -1,4 +1,4 @@
-﻿import React from 'react'
+import React from 'react'
 import { InputNumber } from 'antd'
 import type { InputNumberProps } from 'antd'
 
@@ -58,6 +58,7 @@ export const SmartInputNumber = React.forwardRef<any, SmartInputNumberProps>((pr
         <InputNumber
             ref={ref}
             controls={false}
+            stringMode
             precision={maxDecimals}
             formatter={(value, info) => {
                 if (typeof formatter === 'function') {
@@ -68,12 +69,12 @@ export const SmartInputNumber = React.forwardRef<any, SmartInputNumberProps>((pr
                 }
                 return formatDisplayNumber(value, maxDecimals)
             }}
-            parser={(value) => {
-                if (typeof parser === 'function') {
-                    return parser(value)
-                }
-                return normalizeNumericInput(value, maxDecimals) as any
-            }}
+            // 不传默认 parser 时走 rc-input-number 内置解析，避免手写 parser 把中间态解析成 NaN/0（节点参数等 Form 输入一敲就变 0）
+            parser={
+                typeof parser === 'function'
+                    ? parser
+                    : undefined
+            }
             {...rest}
         />
     )

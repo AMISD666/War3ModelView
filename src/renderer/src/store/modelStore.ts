@@ -28,6 +28,28 @@ type SetModelDataOptions = {
     skipModelRebuild?: boolean;
 };
 
+/** 独立材质管理器编辑预览：未保存前不写入权威 modelData，仅保存/另存为时提交 */
+export type MaterialManagerPreview = {
+    materials: any[];
+    textures: any[];
+    geosets?: any[];
+};
+
+/** 将材质预览合并到模型数据（用于主界面 Viewer 等展示） */
+export function mergeMaterialManagerPreview(
+    modelData: ModelData | null,
+    preview: MaterialManagerPreview | null
+): ModelData | null {
+    if (!modelData) return null;
+    if (!preview) return modelData;
+    return {
+        ...modelData,
+        Materials: preview.materials,
+        Textures: preview.textures,
+        ...(preview.geosets !== undefined ? { Geosets: preview.geosets } : {}),
+    };
+}
+
 const pickDefaultSequenceIndex = (sequences: any[]) => {
     if (!Array.isArray(sequences) || sequences.length === 0) return -1;
     const standRegex = /stand/i;
@@ -152,6 +174,7 @@ interface ModelState {
     deleteNode: (objectId: number) => void;
 
     // Dirty tracking
+    dirtyTabs: Record<string, boolean>;
     markTabDirty: (tabId?: string | null) => void;
     markTabSaved: (tabId?: string | null) => void;
     isTabDirty: (tabId?: string | null) => boolean;
@@ -193,6 +216,13 @@ interface ModelState {
     setGeosets: (geosets: any[]) => void;
     setMaterials: (materials: any[]) => void;
     setVisualDataPatch: (patch: { Textures?: any[]; Materials?: any[]; Geosets?: any[]; TextureAnims?: any[] }) => void;
+
+    /** 独立材质窗：预览层（不落盘到 modelData，保存时由 getModelDataForSave 合并并 commit） */
+    materialManagerPreview: MaterialManagerPreview | null;
+    setMaterialManagerPreview: (payload: MaterialManagerPreview) => void;
+    clearMaterialManagerPreview: () => void;
+    /** 保存成功后调用：将预览写入 modelData 并清空预览 */
+    commitMaterialManagerPreviewToModel: () => void;
     setTextureAnims: (anims: any[]) => void;
     addTextureAnim: () => void;
     removeTextureAnim: (index: number) => void;
@@ -240,13 +270,6 @@ interface ModelState {
     closeTab: (tabId: string) => void;
     setActiveTab: (tabId: string) => void;
     getModelDataForSave: (forceReorder?: boolean) => ModelData | null;
-
-    // Dirty tracking
-    dirtyTabs: Record<string, boolean>;
-    markTabDirty: (tabId?: string | null) => void;
-    markTabSaved: (tabId?: string | null) => void;
-    isTabDirty: (tabId?: string | null) => boolean;
-    isAnyTabDirty: () => boolean;
 }
 
 /**
@@ -907,6 +930,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
     clipboardNode: null,
     clipboardPayload: null,
 
+    materialManagerPreview: null as MaterialManagerPreview | null,
+
     // Renderer reload trigger
     rendererReloadTrigger: 0,
 
@@ -1029,7 +1054,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 hiddenGeosetIds: nextHiddenGeosetIds,
                 forceShowAllGeosets: true,
                 selectedGeosetIndex: null,
-                selectedGeosetIndices: []
+                selectedGeosetIndices: [],
+                materialManagerPreview: null,
             };
 
             const activeTabId = state.activeTabId
@@ -1079,13 +1105,23 @@ export const useModelStore = create<ModelState>((set, get) => ({
             }
         }
 
-        const base = updateModelDataWithNodes(state.modelData, nodesForSave as any[], false);
+        let base = updateModelDataWithNodes(state.modelData, nodesForSave as any[], false);
         if (!base) return null;
 
         if (forceReorder || needsReorderForSave(base)) {
-            return updateModelDataWithNodes(state.modelData, nodesForSave as any[], true);
+            base = updateModelDataWithNodes(state.modelData, nodesForSave as any[], true);
         }
+        if (!base) return null;
 
+        const p = state.materialManagerPreview;
+        if (p) {
+            return {
+                ...base,
+                Materials: p.materials,
+                Textures: p.textures,
+                ...(p.geosets !== undefined ? { Geosets: p.geosets } : {}),
+            };
+        }
         return base;
     },
 
@@ -1955,33 +1991,69 @@ export const useModelStore = create<ModelState>((set, get) => ({
             : state.tabs;
         return { modelData: updatedModelData, tabs: updatedTabs, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
     }),
+
+    setMaterialManagerPreview: (payload) => set((state) => ({
+        materialManagerPreview: {
+            materials: payload.materials,
+            textures: payload.textures,
+            geosets: payload.geosets,
+        },
+        rendererReloadTrigger: state.rendererReloadTrigger + 1,
+        ...markActiveTabDirtyState(state),
+    })),
+
+    clearMaterialManagerPreview: () => set((state) => {
+        if (!state.materialManagerPreview) return {};
+        return {
+            materialManagerPreview: null,
+            rendererReloadTrigger: state.rendererReloadTrigger + 1,
+        };
+    }),
+
+    commitMaterialManagerPreviewToModel: () => set((state) => {
+        const p = state.materialManagerPreview;
+        if (!p || !state.modelData) {
+            return { materialManagerPreview: null };
+        }
+        const updatedModelData = {
+            ...state.modelData,
+            Materials: p.materials,
+            Textures: p.textures,
+            ...(p.geosets !== undefined ? { Geosets: p.geosets } : {}),
+        };
+        const updatedTabs = state.activeTabId
+            ? state.tabs.map((tab) => {
+                if (tab.id !== state.activeTabId) {
+                    return tab;
+                }
+                return {
+                    ...tab,
+                    snapshot: {
+                        ...tab.snapshot,
+                        modelData: updatedModelData,
+                        modelPath: state.modelPath,
+                        nodes: sanitizeNodesArray(state.nodes),
+                        sequences: [...state.sequences],
+                        currentSequence: state.currentSequence,
+                        currentFrame: state.currentFrame,
+                        hiddenGeosetIds: [...state.hiddenGeosetIds],
+                        lastActive: Date.now(),
+                    },
+                };
+            })
+            : state.tabs;
+        return {
+            modelData: updatedModelData,
+            tabs: updatedTabs,
+            materialManagerPreview: null,
+            rendererReloadTrigger: state.rendererReloadTrigger + 1,
+        };
+    }),
+
     setTextureAnims: (anims) => set((state) => {
         const updatedModelData = state.modelData ? { ...state.modelData, TextureAnims: anims } : state.modelData;
         return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
     }),
-
-    markTabDirty: (tabId) => set((state) => {
-        const id = tabId ?? state.activeTabId
-        if (!id) return state
-        return { dirtyTabs: { ...state.dirtyTabs, [id]: true } }
-    }),
-    markTabSaved: (tabId) => set((state) => {
-        const id = tabId ?? state.activeTabId
-        if (!id) return state
-        const next = { ...state.dirtyTabs }
-        delete next[id]
-        return { dirtyTabs: next }
-    }),
-    isTabDirty: (tabId) => {
-        const state = get()
-        const id = tabId ?? state.activeTabId
-        if (!id) return false
-        return !!state.dirtyTabs[id]
-    },
-    isAnyTabDirty: () => {
-        const state = get()
-        return Object.values(state.dirtyTabs).some(Boolean)
-    },
 
     addTextureAnim: () => {
         set((state) => {
@@ -2770,7 +2842,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 translation: [0, 0, 0],
                 rotation: [0, 0, 0],
                 scale: [1, 1, 1]
-            }
+            },
+            materialManagerPreview: null,
         });
     }
 }));

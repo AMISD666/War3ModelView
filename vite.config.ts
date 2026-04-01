@@ -23,7 +23,14 @@ export default defineConfig({
     // Build output
     build: {
         outDir: resolve(__dirname, 'out/renderer'),
-        emptyOutDir: true
+        emptyOutDir: true,
+        rollupOptions: {
+            // 主入口与独立工具窗分离，便于按入口拆 chunk、减轻单窗首屏 JS
+            input: {
+                main: resolve(__dirname, 'src/renderer/index.html'),
+                standalone: resolve(__dirname, 'src/renderer/standalone.html'),
+            },
+        },
     },
 
     // Root directory for renderer code

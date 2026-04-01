@@ -1,4 +1,4 @@
-﻿import {
+import {
     ParticleEmitter2, ParticleEmitter2FilterMode, ParticleEmitter2Flags,
     ParticleEmitter2FramesFlags
 } from '../model';
@@ -1357,6 +1357,8 @@ export class ParticlesController {
         // Default white color and full opacity
         const defaultColor = [1, 1, 1];
         const defaultAlpha = 255;
+
+        // SegmentColor：MDX 解析后为 RGB 顺序，与着色器顶点色一致，不做 R/B 交换（此前交换会导致红蓝对调）
 
         // Get safe color values
         const getColor = (idx: number): number[] => {

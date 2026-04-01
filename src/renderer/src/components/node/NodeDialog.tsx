@@ -4,9 +4,10 @@
  */
 
 import React, { useEffect, useState } from 'react'
-import { Form, Input, Select, Checkbox, Row, Col, Card, Button } from 'antd'
+import { Form, Input, Select, Checkbox, Button } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { DraggableModal } from '../DraggableModal'
+import { NodeEditorStandaloneShell } from '../common/NodeEditorStandaloneShell'
 import { listen } from '@tauri-apps/api/event'
 import { windowManager } from '../../utils/WindowManager'
 import type { ModelNode } from '../../types/node'
@@ -19,15 +20,52 @@ interface NodeDialogProps {
     visible: boolean
     nodeId: number | null
     onClose: () => void
+    isStandalone?: boolean
+    standaloneNode?: ModelNode | null
+    standaloneEmit?: (command: string, payload?: any) => void
+    standaloneModelData?: { GlobalSequences?: any[]; Sequences?: any[] } | null
+    standaloneAllNodes?: ModelNode[]
 }
 
-const NodeDialog: React.FC<NodeDialogProps> = ({ visible, nodeId, onClose }) => {
+const NodeDialog: React.FC<NodeDialogProps> = ({
+    visible,
+    nodeId,
+    onClose,
+    isStandalone,
+    standaloneNode,
+    standaloneEmit,
+    standaloneModelData,
+    standaloneAllNodes,
+}) => {
     const [form] = Form.useForm()
-    const { getNodeById, updateNode, getAllNodes, modelData } = useModelStore()
+    const { getNodeById, updateNode, getAllNodes, modelData: storeModelData } = useModelStore()
+    const modelData = isStandalone ? standaloneModelData : storeModelData
 
     // 获取当前编辑的节点
-    const currentNode = nodeId !== null ? getNodeById(nodeId) : null
-    const allNodes = getAllNodes()
+    const currentNode =
+        nodeId !== null
+            ? (isStandalone ? (standaloneNode ?? null) : getNodeById(nodeId))
+            : null
+    const allNodes = isStandalone ? (standaloneAllNodes ?? []) : getAllNodes()
+
+    const applyNodeToStore = React.useCallback(
+        (next: ModelNode, history?: { name: string; undoNode: any; redoNode: any }) => {
+            if (nodeId === null) return
+            if (isStandalone && standaloneEmit) {
+                standaloneEmit('APPLY_NODE_UPDATE', { objectId: nodeId, node: next, history })
+                return
+            }
+            if (history) {
+                useHistoryStore.getState().push({
+                    name: history.name,
+                    undo: () => updateNode(nodeId, history.undoNode),
+                    redo: () => updateNode(nodeId, history.redoNode),
+                })
+            }
+            updateNode(nodeId, next)
+        },
+        [isStandalone, standaloneEmit, nodeId, updateNode]
+    )
     // Extract global sequence durations (handle both object {Duration} and raw number formats)
     const globalSequences: number[] = (modelData?.GlobalSequences || []).map((gs: any) =>
         typeof gs === 'number' ? gs : (gs.Duration ?? 0)
@@ -41,32 +79,42 @@ const NodeDialog: React.FC<NodeDialogProps> = ({ visible, nodeId, onClose }) => 
     // Keyframe editor state
     const [currentEditingProp, setCurrentEditingProp] = useState<string>('')
 
-    // 当节点改变时，更新表单值
+    const formHydratedForNodeIdRef = React.useRef<number | null>(null)
+
+    // 仅在打开或切换 nodeId 时灌入表单，避免 store 更新导致失焦与数值被刷掉
     useEffect(() => {
-        if (currentNode) {
-            form.setFieldsValue({
-                name: currentNode.Name,
-                parent: currentNode.Parent,
-                objectId: currentNode.ObjectId,
-                // Direct 1:1 PivotPoint mapping - no swap
-                pivotX: currentNode.PivotPoint?.[0] || 0,
-                pivotY: currentNode.PivotPoint?.[1] || 0,
-                pivotZ: currentNode.PivotPoint?.[2] || 0,
-                dontInheritTranslation: currentNode.DontInherit?.Translation || false,
-                dontInheritRotation: currentNode.DontInherit?.Rotation || false,
-                dontInheritScaling: currentNode.DontInherit?.Scaling || false,
-                billboarded: currentNode.Billboarded || false,
-                billboardedLockX: currentNode.BillboardedLockX || false,
-                billboardedLockY: currentNode.BillboardedLockY || false,
-                billboardedLockZ: currentNode.BillboardedLockZ || false,
-                cameraAnchored: currentNode.CameraAnchored || false
-            })
-            // Load transform animation data
-            setTranslationAnim(currentNode.Translation || null)
-            setRotationAnim(currentNode.Rotation || null)
-            setScalingAnim(currentNode.Scaling || null)
+        if (!visible) {
+            formHydratedForNodeIdRef.current = null
+            return
         }
-    }, [currentNode, form])
+        if (nodeId === null) return
+        if (formHydratedForNodeIdRef.current === nodeId) return
+        const node = isStandalone ? standaloneNode : useModelStore.getState().getNodeById(nodeId)
+        if (!node) return
+        formHydratedForNodeIdRef.current = nodeId
+        const currentNode = node
+        form.setFieldsValue({
+            name: currentNode.Name,
+            parent: currentNode.Parent,
+            objectId: currentNode.ObjectId,
+            // Direct 1:1 PivotPoint mapping - no swap
+            pivotX: currentNode.PivotPoint?.[0] || 0,
+            pivotY: currentNode.PivotPoint?.[1] || 0,
+            pivotZ: currentNode.PivotPoint?.[2] || 0,
+            dontInheritTranslation: currentNode.DontInherit?.Translation || false,
+            dontInheritRotation: currentNode.DontInherit?.Rotation || false,
+            dontInheritScaling: currentNode.DontInherit?.Scaling || false,
+            billboarded: currentNode.Billboarded || false,
+            billboardedLockX: currentNode.BillboardedLockX || false,
+            billboardedLockY: currentNode.BillboardedLockY || false,
+            billboardedLockZ: currentNode.BillboardedLockZ || false,
+            cameraAnchored: currentNode.CameraAnchored || false
+        })
+        // Load transform animation data
+        setTranslationAnim(currentNode.Translation || null)
+        setRotationAnim(currentNode.Rotation || null)
+        setScalingAnim(currentNode.Scaling || null)
+    }, [visible, nodeId, isStandalone, standaloneNode, form])
 
     // 处理保存
     const handleSave = async () => {
@@ -88,7 +136,7 @@ const NodeDialog: React.FC<NodeDialogProps> = ({ visible, nodeId, onClose }) => 
                 ...currentNode,
                 Name: values.name,
                 Parent: values.parent,
-                PivotPoint: [values.pivotX, values.pivotY, values.pivotZ],
+                PivotPoint: [Number(values.pivotX), Number(values.pivotY), Number(values.pivotZ)],
                 DontInherit: {
                     Translation: values.dontInheritTranslation,
                     Rotation: values.dontInheritRotation,
@@ -110,13 +158,11 @@ const NodeDialog: React.FC<NodeDialogProps> = ({ visible, nodeId, onClose }) => 
                 const oldNode = currentNode
                 const newNode = updatedNode
 
-                useHistoryStore.getState().push({
+                applyNodeToStore(updatedNode, {
                     name: `Edit Node "${values.name}"`,
-                    undo: () => updateNode(nodeId, oldNode),
-                    redo: () => updateNode(nodeId, newNode)
+                    undoNode: oldNode,
+                    redoNode: newNode,
                 })
-
-                updateNode(nodeId, updatedNode)
             }
             onClose()
         } catch (error) {
@@ -194,21 +240,71 @@ const NodeDialog: React.FC<NodeDialogProps> = ({ visible, nodeId, onClose }) => 
     // 添加"无父节点"选项
     parentOptions.unshift({ label: '无父节点', value: -1 })
 
-    return (
-        <DraggableModal
-            title={`编辑节点: ${currentNode?.Name || ''}`}
-            open={visible}
-            onOk={handleSave}
-            onCancel={onClose}
-            width={600}
-            okText="保存"
-            cancelText="取消"
-            wrapClassName="dark-theme-modal"
-            maskClosable={false}
-        >
+    const lookupNode = (id: number): ModelNode | undefined => {
+        if (isStandalone && standaloneAllNodes && standaloneAllNodes.length > 0) {
+            return standaloneAllNodes.find((n) => n.ObjectId === id)
+        }
+        return getNodeById(id)
+    }
+
+    const gb: React.CSSProperties = {
+        border: '1px solid #3a3a3a',
+        borderRadius: 4,
+        padding: '8px 10px',
+        backgroundColor: '#252525',
+        minWidth: 0,
+        boxSizing: 'border-box',
+    }
+    const gbTitle: React.CSSProperties = {
+        fontSize: 11,
+        color: '#9a9a9a',
+        marginBottom: 6,
+        fontWeight: 600,
+    }
+
+    const pivotRow = (axis: string, field: 'pivotX' | 'pivotY' | 'pivotZ') => (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
+            <span style={{ width: 14, flexShrink: 0, color: '#aaa', fontSize: 12 }}>{axis}</span>
+            <Form.Item name={field} noStyle>
+                <InputNumber style={{ width: '100%', minWidth: 0 }} step={0.1} precision={4} />
+            </Form.Item>
+        </div>
+    )
+
+    const transformRow = (
+        label: string,
+        anim: boolean,
+        prop: 'Translation' | 'Rotation' | 'Scaling',
+        title: string,
+        vec: number
+    ) => (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 1 }}>
+            <span style={{ width: 28, flexShrink: 0, fontSize: 11, color: '#bbb' }}>{label}</span>
+            <Checkbox
+                checked={anim}
+                onChange={(e) => handleDynamicToggle(prop, e.target.checked)}
+                style={{ color: '#ccc', fontSize: 11 }}
+            >
+                动态
+            </Checkbox>
+            <Button
+                size="small"
+                onClick={() => handleOpenKeyframeEditor(prop, title, vec)}
+                disabled={!anim}
+                style={{ flex: 1, minWidth: 0, padding: '0 4px', fontSize: 11 }}
+            >
+                关键帧
+            </Button>
+        </div>
+    )
+
+    const nodeFormInner = (
             <Form
+                className="node-dialog-form-compact node-dialog-form-grid2"
                 form={form}
                 layout="vertical"
+                size="small"
+                style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
                 initialValues={{
                     parent: -1,
                     pivotX: 0,
@@ -224,172 +320,195 @@ const NodeDialog: React.FC<NodeDialogProps> = ({ visible, nodeId, onClose }) => 
                     cameraAnchored: false
                 }}
             >
-                {/* Basic Info */}
-                <Card size="small" title="基础信息" style={{ marginBottom: 16 }}>
+                {/* 图2 第1行：名字 + 父/ID */}
+                <div style={gb}>
+                    <div style={gbTitle}>名字</div>
                     <Form.Item
-                        label="节点名称"
                         name="name"
                         rules={[{ required: true, message: '请输入节点名称' }]}
+                        style={{ marginBottom: 8 }}
                     >
-                        <Input placeholder="输入节点名称" maxLength={80} />
+                        <Input placeholder="节点名称" maxLength={80} size="small" />
                     </Form.Item>
-                    <Row gutter={16}>
-                        <Col span={12}>
-                            <Form.Item label="父节点" name="parent">
+                    {/* flex 子项需 minWidth:0 + basis 0，否则 Select 抢不到剩余宽度；ID 用定宽壳避免 InputNumber 被撑满一行 */}
+                    <div
+                        className="node-dialog-parent-id-row"
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 4,
+                            flexWrap: 'nowrap',
+                            width: '100%',
+                        }}
+                    >
+                        <span style={{ flexShrink: 0, fontSize: 12, color: '#888', width: 26 }}>父节点</span>
+                        <div style={{ flex: '1 1 0%', minWidth: 0, width: 0 }}>
+                            <Form.Item name="parent" noStyle style={{ marginBottom: 0, width: '100%' }}>
                                 <Select
                                     options={parentOptions}
                                     showSearch
-                                    placeholder="选择父节点"
+                                    placeholder="父节点"
+                                    size="small"
+                                    style={{ width: '100%', minWidth: 0 }}
                                     filterOption={(input, option) =>
                                         (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
                                     }
                                 />
                             </Form.Item>
-                        </Col>
-                        <Col span={12}>
-                            <Form.Item label="Object ID" name="objectId">
-                                <InputNumber disabled style={{ width: '100%' }} />
-                            </Form.Item>
-                        </Col>
-                    </Row>
-                </Card>
-
-                <Card size="small" title={
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span>轴心点 (Pivot Point)</span>
-                        <Button
-                            size="small"
-                            type="link"
-                            style={{ padding: 0, height: 'auto' }}
-                            onClick={() => {
-                                const parentId = form.getFieldValue('parent');
-                                if (parentId === -1 || parentId === undefined) {
-                                    // Root or no parent
-                                    form.setFieldsValue({ pivotX: 0, pivotY: 0, pivotZ: 0 });
-                                } else {
-                                    const parentNode = getNodeById(parentId);
-                                    if (parentNode && parentNode.PivotPoint) {
-                                        form.setFieldsValue({
-                                            pivotX: parentNode.PivotPoint[0] || 0,
-                                            pivotY: parentNode.PivotPoint[1] || 0,
-                                            pivotZ: parentNode.PivotPoint[2] || 0
-                                        });
-                                    }
-                                }
+                        </div>
+                        <span style={{ flexShrink: 0, fontSize: 12, color: '#888', width: 16 }}>ID</span>
+                        <div
+                            style={{
+                                flex: '0 0 50px',
+                                width: 60,
+                                minWidth: 60,
+                                maxWidth: 60,
+                                overflow: 'hidden',
                             }}
                         >
-                            复制父节点轴心
+                            <Form.Item name="objectId" noStyle style={{ marginBottom: 0, width: '100%' }}>
+                                <InputNumber
+                                    disabled
+                                    size="small"
+                                    controls={false}
+                                    style={{
+                                        width: '100%',
+                                        maxWidth: '100%',
+                                        fontVariantNumeric: 'tabular-nums',
+                                        paddingInline: 4,
+                                    }}
+                                />
+                            </Form.Item>
+                        </div>
+                    </div>
+                </div>
+
+                {/* 图2 第2行：左轴心 | 右变换 */}
+                <div
+                    style={{
+                        display: 'flex',
+                        gap: 10,
+                        alignItems: 'stretch',
+                        minHeight: 0,
+                    }}
+                >
+                    <div style={{ ...gb, flex: 1, display: 'flex', flexDirection: 'column', marginBottom: 0 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                            <span style={{ ...gbTitle, marginBottom: 0 }}>轴心点</span>
+                            <Button
+                                type="link"
+                                size="small"
+                                style={{ padding: 0, height: 'auto', fontSize: 11 }}
+                                onClick={() => {
+                                    const parentId = form.getFieldValue('parent');
+                                    if (parentId === -1 || parentId === undefined) {
+                                        form.setFieldsValue({ pivotX: 0, pivotY: 0, pivotZ: 0 });
+                                    } else {
+                                        const parentNode = lookupNode(parentId);
+                                        if (parentNode && parentNode.PivotPoint) {
+                                            form.setFieldsValue({
+                                                pivotX: parentNode.PivotPoint[0] || 0,
+                                                pivotY: parentNode.PivotPoint[1] || 0,
+                                                pivotZ: parentNode.PivotPoint[2] || 0
+                                            });
+                                        }
+                                    }
+                                }}
+                            >
+                                复制父轴心
+                            </Button>
+                        </div>
+                        {pivotRow('X', 'pivotX')}
+                        {pivotRow('Y', 'pivotY')}
+                        {pivotRow('Z', 'pivotZ')}
+                    </div>
+                    <div style={{ ...gb, flex: 1, display: 'flex', flexDirection: 'column', marginBottom: 0 }}>
+                        <div style={gbTitle}>变换</div>
+                        {transformRow('位移', !!translationAnim, 'Translation', '位移动画 (Translation)', 3)}
+                        {transformRow('旋转', !!rotationAnim, 'Rotation', '旋转动画 (Rotation)', 4)}
+                        {transformRow('缩放', !!scalingAnim, 'Scaling', '缩放动画 (Scaling)', 3)}
+                    </div>
+                </div>
+
+                {/* 图2 第3行：左标记列表 | 右确定/取消 */}
+                <div style={{ display: 'flex', gap: 10, alignItems: 'stretch', minHeight: 0 }}>
+                    <div style={{ ...gb, flex: 1, marginBottom: 0, minWidth: 0 }}>
+                        <div style={gbTitle}>标记</div>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5 }}>
+                                <Form.Item name="dontInheritTranslation" valuePropName="checked" noStyle>
+                                    <Checkbox style={{ fontSize: 11, lineHeight: 1.4 }}>不继承位移</Checkbox>
+                                </Form.Item>
+                                <Form.Item name="dontInheritRotation" valuePropName="checked" noStyle>
+                                    <Checkbox style={{ fontSize: 11, lineHeight: 1.4 }}>不继承旋转</Checkbox>
+                                </Form.Item>
+                                <Form.Item name="dontInheritScaling" valuePropName="checked" noStyle>
+                                    <Checkbox style={{ fontSize: 11, lineHeight: 1.4 }}>不继承缩放</Checkbox>
+                                </Form.Item>
+                                <Form.Item name="cameraAnchored" valuePropName="checked" noStyle>
+                                    <Checkbox style={{ fontSize: 11, lineHeight: 1.4 }}>相机锚定</Checkbox>
+                                </Form.Item>
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5 }}>
+                                <Form.Item name="billboarded" valuePropName="checked" noStyle>
+                                    <Checkbox style={{ fontSize: 11, lineHeight: 1.4 }}>广告板</Checkbox>
+                                </Form.Item>
+                                <Form.Item name="billboardedLockX" valuePropName="checked" noStyle>
+                                    <Checkbox style={{ fontSize: 11, lineHeight: 1.4 }}>广告板锁定 X 轴</Checkbox>
+                                </Form.Item>
+                                <Form.Item name="billboardedLockY" valuePropName="checked" noStyle>
+                                    <Checkbox style={{ fontSize: 11, lineHeight: 1.4 }}>广告板锁定 Y 轴</Checkbox>
+                                </Form.Item>
+                                <Form.Item name="billboardedLockZ" valuePropName="checked" noStyle>
+                                    <Checkbox style={{ fontSize: 11, lineHeight: 1.4 }}>广告板锁定 Z 轴</Checkbox>
+                                </Form.Item>
+                            </div>
+                        </div>
+                    </div>
+                    <div
+                        style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            justifyContent: 'flex-end',
+                            gap: 8,
+                            flexShrink: 0,
+                            width: 70,
+                            paddingBottom: 0,
+                        }}
+                    >
+                        <Button type="primary" size="small" block onClick={() => void handleSave()}>
+                            保存
+                        </Button>
+                        <Button size="small" block onClick={onClose}>
+                            取消
                         </Button>
                     </div>
-                } style={{ marginBottom: 16 }}>
-                    <div style={{ display: 'flex', gap: 10 }}>
-                        <Form.Item name="pivotX" label="X" style={{ flex: 1, marginBottom: 0 }}>
-                            <InputNumber style={{ width: '100%' }} step={0.1} precision={4} />
-                        </Form.Item>
-                        <Form.Item name="pivotY" label="Y" style={{ flex: 1, marginBottom: 0 }}>
-                            <InputNumber style={{ width: '100%' }} step={0.1} precision={4} />
-                        </Form.Item>
-                        <Form.Item name="pivotZ" label="Z" style={{ flex: 1, marginBottom: 0 }}>
-                            <InputNumber style={{ width: '100%' }} step={0.1} precision={4} />
-                        </Form.Item>
-                    </div>
-                </Card>
-
-                {/* Transform Animations */}
-                <Card size="small" title="变换 (Transform)" style={{ marginBottom: 16 }}>
-                    <div style={{ display: 'flex', gap: 16 }}>
-                        {/* Translation */}
-                        <div style={{ flex: 1, border: '1px solid #484848', padding: '8px', borderRadius: 4, backgroundColor: '#2b2b2b' }}>
-                            <div style={{ marginBottom: 6, fontSize: 12, color: '#ccc' }}>位移 (Translation)</div>
-                            <Checkbox
-                                checked={!!translationAnim}
-                                onChange={(e) => handleDynamicToggle('Translation', e.target.checked)}
-                                style={{ color: '#ccc', fontSize: 12, marginBottom: 6 }}
-                            >
-                                动态化
-                            </Checkbox>
-                            <Button
-                                block
-                                size="small"
-                                onClick={() => handleOpenKeyframeEditor('Translation', '位移动画 (Translation)', 3)}
-                                disabled={!translationAnim}
-                                style={{ backgroundColor: '#444', color: translationAnim ? '#fff' : '#888', borderColor: '#555' }}
-                            >
-                                编辑关键帧
-                            </Button>
-                        </div>
-
-                        {/* Rotation */}
-                        <div style={{ flex: 1, border: '1px solid #484848', padding: '8px', borderRadius: 4, backgroundColor: '#2b2b2b' }}>
-                            <div style={{ marginBottom: 6, fontSize: 12, color: '#ccc' }}>旋转 (Rotation)</div>
-                            <Checkbox
-                                checked={!!rotationAnim}
-                                onChange={(e) => handleDynamicToggle('Rotation', e.target.checked)}
-                                style={{ color: '#ccc', fontSize: 12, marginBottom: 6 }}
-                            >
-                                动态化
-                            </Checkbox>
-                            <Button
-                                block
-                                size="small"
-                                onClick={() => handleOpenKeyframeEditor('Rotation', '旋转动画 (Rotation)', 4)}
-                                disabled={!rotationAnim}
-                                style={{ backgroundColor: '#444', color: rotationAnim ? '#fff' : '#888', borderColor: '#555' }}
-                            >
-                                编辑关键帧
-                            </Button>
-                        </div>
-
-                        {/* Scaling */}
-                        <div style={{ flex: 1, border: '1px solid #484848', padding: '8px', borderRadius: 4, backgroundColor: '#2b2b2b' }}>
-                            <div style={{ marginBottom: 6, fontSize: 12, color: '#ccc' }}>缩放 (Scaling)</div>
-                            <Checkbox
-                                checked={!!scalingAnim}
-                                onChange={(e) => handleDynamicToggle('Scaling', e.target.checked)}
-                                style={{ color: '#ccc', fontSize: 12, marginBottom: 6 }}
-                            >
-                                动态化
-                            </Checkbox>
-                            <Button
-                                block
-                                size="small"
-                                onClick={() => handleOpenKeyframeEditor('Scaling', '缩放动画 (Scaling)', 3)}
-                                disabled={!scalingAnim}
-                                style={{ backgroundColor: '#444', color: scalingAnim ? '#fff' : '#888', borderColor: '#555' }}
-                            >
-                                编辑关键帧
-                            </Button>
-                        </div>
-                    </div>
-                </Card>
-
-                {/* Flags */}
-                <Row gutter={16}>
-                    <Col span={12}>
-                        <Card size="small" title="继承设置 (DontInherit)">
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                                <Form.Item name="dontInheritTranslation" valuePropName="checked" noStyle><Checkbox>位移 (Translation)</Checkbox></Form.Item>
-                                <Form.Item name="dontInheritRotation" valuePropName="checked" noStyle><Checkbox>旋转 (Rotation)</Checkbox></Form.Item>
-                                <Form.Item name="dontInheritScaling" valuePropName="checked" noStyle><Checkbox>缩放 (Scaling)</Checkbox></Form.Item>
-                            </div>
-                        </Card>
-                    </Col>
-                    <Col span={12}>
-                        <Card size="small" title="广告板 & 其他">
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                                <Form.Item name="billboarded" valuePropName="checked" noStyle>
-                                    <Checkbox>启用广告板</Checkbox>
-                                </Form.Item>
-                                <Form.Item name="cameraAnchored" valuePropName="checked" noStyle><Checkbox>相机锚定</Checkbox></Form.Item>
-                                <div style={{ borderTop: '1px solid #444', margin: '4px 0' }}></div>
-                                <Form.Item name="billboardedLockX" valuePropName="checked" noStyle><Checkbox>锁定 X 轴</Checkbox></Form.Item>
-                                <Form.Item name="billboardedLockY" valuePropName="checked" noStyle><Checkbox>锁定 Y 轴</Checkbox></Form.Item>
-                                <Form.Item name="billboardedLockZ" valuePropName="checked" noStyle><Checkbox>锁定 Z 轴</Checkbox></Form.Item>
-                            </div>
-                        </Card>
-                    </Col>
-                </Row>
+                </div>
             </Form>
+    )
+
+    if (isStandalone) {
+        return (
+            <NodeEditorStandaloneShell dense>
+                <div style={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
+                    {nodeFormInner}
+                </div>
+            </NodeEditorStandaloneShell>
+        )
+    }
+
+    return (
+        <DraggableModal
+            title={`编辑节点: ${currentNode?.Name || ''}`}
+            open={visible}
+            onCancel={onClose}
+            footer={null}
+            width={500}
+            wrapClassName="dark-theme-modal"
+            maskClosable={false}
+            styles={{ body: { padding: '12px 14px' } }}
+        >
+            {nodeFormInner}
         </DraggableModal>
     )
 }

@@ -8,6 +8,7 @@ import { useHistoryStore } from '../../store/historyStore'
 import { SetNodeParentCommand } from '../../commands/SetNodeParentCommand'
 import { useCommandManager } from '../../utils/CommandManager'
 import { GlobalSequenceSelect } from '../common/GlobalSequenceSelect'
+import { markNodeManagerListScrollFromTree } from '../../utils/nodeManagerListScrollBridge'
 
 
 const { Text } = Typography
@@ -294,11 +295,16 @@ const BoneParameterPanel: React.FC = () => {
     const transAddRefs = useRef<{ x: HTMLInputElement | null, y: HTMLInputElement | null, z: HTMLInputElement | null }>({ x: null, y: null, z: null })
     const rotAddRefs = useRef<{ x: HTMLInputElement | null, y: HTMLInputElement | null, z: HTMLInputElement | null }>({ x: null, y: null, z: null })
     const scaleAddRefs = useRef<{ x: HTMLInputElement | null, y: HTMLInputElement | null, z: HTMLInputElement | null }>({ x: null, y: null, z: null })
-    const isEditingRef = useRef(false)
+    /** 节点参数区块：任一输入框聚焦时不同步（避免点击 X→Y 时 blur 先于 focus 导致 isEditing 误判并刷成 0） */
+    const nodeParamsSectionRef = useRef<HTMLDivElement | null>(null)
 
     // 同步到输入框
     useEffect(() => {
-        if (isEditingRef.current) return
+        const active = typeof document !== 'undefined' ? document.activeElement : null
+        // 仅当焦点在区块内的原生 input 上时跳过（避免 Select 下拉挂到 body 时误跳过；并修复多输入框间切换时的焦点顺序问题）
+        if (active instanceof HTMLInputElement && nodeParamsSectionRef.current?.contains(active)) {
+            return
+        }
         if (transRefs.current.x) transRefs.current.x.value = formatInputNumber(translationDisplay[0] || 0, 4)
         if (transRefs.current.y) transRefs.current.y.value = formatInputNumber(translationDisplay[1] || 0, 4)
         if (transRefs.current.z) transRefs.current.z.value = formatInputNumber(translationDisplay[2] || 0, 4)
@@ -330,8 +336,6 @@ const BoneParameterPanel: React.FC = () => {
         window.addEventListener('resize', onResize)
         return () => window.removeEventListener('resize', onResize)
     }, [])
-
-    const handleFocus = useCallback(() => { isEditingRef.current = true }, [])
 
     // 核心提交逻辑
     const commitProp = useCallback((propName: 'Translation' | 'Rotation' | 'Scaling', newVector: number[]) => {
@@ -409,7 +413,6 @@ const BoneParameterPanel: React.FC = () => {
         } else {
             commitProp('Translation', val)
         }
-        isEditingRef.current = false
     }
 
     const handleCommitRot = () => {
@@ -420,7 +423,6 @@ const BoneParameterPanel: React.FC = () => {
         ]
         const q = eulerToQuat(e)
         commitProp('Rotation', q)
-        isEditingRef.current = false
     }
 
     const handleCommitScale = () => {
@@ -430,7 +432,6 @@ const BoneParameterPanel: React.FC = () => {
             parseFloat(scaleRefs.current.z?.value || '1') || 1
         ]
         commitProp('Scaling', val)
-        isEditingRef.current = false
     }
 
 
@@ -523,7 +524,6 @@ const BoneParameterPanel: React.FC = () => {
                             type="text"
                             inputMode="decimal"
                             disabled={disabled}
-                            onFocus={handleFocus}
                             onBlur={onCommit}
                             onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') onCommit() }}
                             style={{
@@ -565,7 +565,6 @@ const BoneParameterPanel: React.FC = () => {
                             inputMode="decimal"
                             disabled={disabled}
                             placeholder="+叠加值"
-                            onFocus={handleFocus}
                             onBlur={applyAdditiveValue}
                             onKeyDown={(e) => {
                                 e.stopPropagation()
@@ -629,7 +628,7 @@ const BoneParameterPanel: React.FC = () => {
                 </div>
 
                 {/* 节点参数 */}
-                <div style={{ padding: compactUi.sectionPadding, borderBottom: '1px solid #444' }}>
+                <div ref={nodeParamsSectionRef} style={{ padding: compactUi.sectionPadding, borderBottom: '1px solid #444' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <Text strong style={{ color: '#fff', fontSize: compactUi.sectionTitleSize }}>节点参数</Text>
                         <div style={{ display: 'flex', gap: compactUi.toggleGap }}>
@@ -824,7 +823,10 @@ const BoneParameterPanel: React.FC = () => {
                         ) : (
                             <div style={{ marginTop: 10 }}>
                                 {boundBones.map(bone => (
-                                    <div key={bone.index} onClick={() => selectNodes([bone.index])}
+                                    <div key={bone.index} onClick={() => {
+                                        markNodeManagerListScrollFromTree()
+                                        selectNodes([bone.index])
+                                    }}
                                         style={{
                                             padding: '6px 8px', cursor: 'pointer', fontSize: '12px', marginBottom: 2, borderRadius: 2, display: 'flex', alignItems: 'center',
                                             backgroundColor: selectedNodeIds.includes(bone.index) ? 'rgba(24, 144, 255, 0.3)' : 'transparent',

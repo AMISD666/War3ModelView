@@ -1,4 +1,4 @@
-﻿import React from 'react'
+import React from 'react'
 import ReactDOM from 'react-dom/client'
 import 'antd/dist/reset.css'
 import './assets/index.css'
@@ -6,17 +6,6 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { markStandalonePerf } from './utils/standalonePerf'
 
 const App = React.lazy(() => import('./App'))
-const ModelOptimizeModal = React.lazy(() => import('./components/modals/ModelOptimizeModal'))
-const CameraManagerModal = React.lazy(() => import('./components/modals/CameraManagerModal'))
-const GeosetEditorModal = React.lazy(() => import('./components/modals/GeosetEditorModal'))
-const GeosetVisibilityToolModal = React.lazy(() => import('./components/modals/GeosetVisibilityToolModal'))
-const GeosetAnimationModal = React.lazy(() => import('./components/modals/GeosetAnimationModal'))
-const TextureEditorModal = React.lazy(() => import('./components/modals/TextureEditorModal'))
-const TextureAnimationManagerModal = React.lazy(() => import('./components/modals/TextureAnimationManagerModal'))
-const MaterialEditorModal = React.lazy(() => import('./components/modals/MaterialEditorModal'))
-const SequenceEditorModal = React.lazy(() => import('./components/modals/SequenceEditorModal'))
-const GlobalSequenceModal = React.lazy(() => import('./components/modals/GlobalSequenceModal'))
-const KeyframeEditor = React.lazy(() => import('./components/editors/KeyframeEditor'))
 
 const installBrowserGuards = () => {
     window.addEventListener(
@@ -53,123 +42,20 @@ const installBrowserGuards = () => {
 
 installBrowserGuards()
 
-const searchParams = new URLSearchParams(window.location.search)
-const targetWindow = searchParams.get('window')
-
-markStandalonePerf(targetWindow ? 'standalone_entry_selected' : 'main_entry_selected', {
-    targetWindow: targetWindow || 'main',
+markStandalonePerf('main_entry_selected', {
+    targetWindow: 'main',
 })
 
-const renderWithinSuspense = (node: React.ReactNode) => (
+const RootComponent = (
     <React.Suspense fallback={null}>
-        {node}
+        <App />
     </React.Suspense>
 )
 
-let RootComponent = renderWithinSuspense(<App />)
-
-if (targetWindow === 'modelOptimize') {
-    RootComponent = renderWithinSuspense(
-        <ModelOptimizeModal
-            visible={true}
-            onClose={() => getCurrentWindow().hide()}
-            modelData={null}
-            isStandalone={true}
-        />
-    )
-} else if (targetWindow === 'cameraManager') {
-    RootComponent = renderWithinSuspense(
-        <CameraManagerModal
-            visible={true}
-            onClose={() => getCurrentWindow().hide()}
-            isStandalone={true}
-        />
-    )
-} else if (targetWindow === 'geosetEditor') {
-    RootComponent = renderWithinSuspense(
-        <GeosetEditorModal
-            visible={true}
-            onClose={() => getCurrentWindow().hide()}
-            isStandalone={true}
-        />
-    )
-} else if (targetWindow === 'geosetVisibilityTool') {
-    RootComponent = renderWithinSuspense(
-        <GeosetVisibilityToolModal
-            visible={true}
-            onClose={() => getCurrentWindow().hide()}
-            isStandalone={true}
-        />
-    )
-} else if (targetWindow === 'geosetAnimManager') {
-    RootComponent = renderWithinSuspense(
-        <GeosetAnimationModal
-            visible={true}
-            onClose={() => getCurrentWindow().hide()}
-            isStandalone={true}
-        />
-    )
-} else if (targetWindow === 'textureManager') {
-    RootComponent = renderWithinSuspense(
-        <TextureEditorModal
-            visible={true}
-            onClose={() => getCurrentWindow().hide()}
-            isStandalone={true}
-        />
-    )
-} else if (targetWindow === 'textureAnimManager') {
-    RootComponent = renderWithinSuspense(
-        <TextureAnimationManagerModal
-            visible={true}
-            onClose={() => getCurrentWindow().hide()}
-            isStandalone={true}
-        />
-    )
-} else if (targetWindow === 'materialManager') {
-    RootComponent = renderWithinSuspense(
-        <MaterialEditorModal
-            visible={true}
-            onClose={() => getCurrentWindow().hide()}
-            isStandalone={true}
-        />
-    )
-} else if (targetWindow === 'sequenceManager') {
-    RootComponent = renderWithinSuspense(
-        <SequenceEditorModal
-            visible={true}
-            onClose={() => getCurrentWindow().hide()}
-            isStandalone={true}
-        />
-    )
-} else if (targetWindow === 'globalSequenceManager') {
-    RootComponent = renderWithinSuspense(
-        <GlobalSequenceModal
-            visible={true}
-            onClose={() => getCurrentWindow().hide()}
-            isStandalone={true}
-        />
-    )
-} else if (targetWindow?.startsWith('keyframeEditor')) {
-    RootComponent = renderWithinSuspense(
-        <KeyframeEditor
-            visible={true}
-            onCancel={() => getCurrentWindow().hide()}
-            onOk={() => { }}
-            initialData={null}
-            isStandalone={true}
-        />
-    )
-}
-
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(RootComponent)
 
-if (targetWindow) {
+requestAnimationFrame(() => {
     const skeleton = document.getElementById('app-skeleton')
     if (skeleton) skeleton.remove()
-} else {
-    requestAnimationFrame(() => {
-        const skeleton = document.getElementById('app-skeleton')
-        if (skeleton) skeleton.remove()
-        getCurrentWindow().show().catch(() => { })
-    })
-}
+    getCurrentWindow().show().catch(() => {})
+})

@@ -1,8 +1,9 @@
-﻿import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
-import React, { useEffect, useState } from 'react';
+import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
+import React, { useCallback, useEffect, useState } from 'react';
 import { Form, Select, Button, Row, Col, Checkbox } from 'antd';
 import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker';
 import { DraggableModal } from '../DraggableModal';
+import { NodeEditorStandaloneShell } from '../common/NodeEditorStandaloneShell';
 import { useModelStore } from '../../store/modelStore';
 import type { RibbonEmitterNode } from '../../types/node';
 import type { Color } from 'antd/es/color-picker';
@@ -13,6 +14,10 @@ interface RibbonEmitterDialogProps {
     visible: boolean;
     nodeId: number | null;
     onClose: () => void;
+    isStandalone?: boolean;
+    standaloneNode?: RibbonEmitterNode | null;
+    standaloneEmit?: (command: string, payload?: any) => void;
+    standaloneModelData?: { Materials?: any[]; Textures?: any[]; GlobalSequences?: any[]; Sequences?: any[] } | null;
 }
 
 // Fieldset style matching the reference
@@ -83,11 +88,37 @@ const DynamicField = ({
     </fieldset>
 );
 
-const RibbonEmitterDialog: React.FC<RibbonEmitterDialogProps> = ({ visible, nodeId, onClose }) => {
+const RibbonEmitterDialog: React.FC<RibbonEmitterDialogProps> = ({
+    visible,
+    nodeId,
+    onClose,
+    isStandalone,
+    standaloneNode,
+    standaloneEmit,
+    standaloneModelData,
+}) => {
     const [form] = Form.useForm();
-    const { getNodeById, updateNode, modelData } = useModelStore();
+    const { getNodeById, updateNode, modelData: storeModelData } = useModelStore();
+    const modelData = isStandalone ? standaloneModelData : storeModelData;
 
-    const currentNode = nodeId !== null ? getNodeById(nodeId) as RibbonEmitterNode : null;
+    const currentNode =
+        nodeId !== null
+            ? (isStandalone
+                ? (standaloneNode as RibbonEmitterNode | null)
+                : (getNodeById(nodeId) as RibbonEmitterNode))
+            : null;
+
+    const applyNodeToStore = useCallback(
+        (next: RibbonEmitterNode) => {
+            if (nodeId === null) return;
+            if (isStandalone && standaloneEmit) {
+                standaloneEmit('APPLY_NODE_UPDATE', { objectId: nodeId, node: next });
+                return;
+            }
+            updateNode(nodeId, next);
+        },
+        [isStandalone, standaloneEmit, nodeId, updateNode]
+    );
 
     // Dynamic states for each property
     const [dynamicProps, setDynamicProps] = useState<Record<string, boolean>>({});
@@ -145,57 +176,88 @@ const RibbonEmitterDialog: React.FC<RibbonEmitterDialogProps> = ({ visible, node
     const isAnimVector = (val: any): boolean =>
         val !== null && val !== undefined && typeof val === 'object' && ('Keys' in val || Array.isArray(val?.Keys));
 
-    // Helper: Get static value or default for AnimVector
-    const getStaticOrDefault = (val: any, defaultVal: number): number => {
-        if (isAnimVector(val)) return defaultVal;
-        return typeof val === 'number' ? val : defaultVal;
+    /** 从 AnimVector 或未动画数值读取静态显示值（用于表单），避免动态化字段被错误显示为 0 */
+    const getStaticValue = (val: any, defaultVal: number): number => {
+        if (isAnimVector(val)) {
+            const keys = val.Keys;
+            if (!Array.isArray(keys) || keys.length === 0) return defaultVal;
+            const vec = keys[0]?.Vector ?? keys[0]?.Value;
+            if (Array.isArray(vec) || ArrayBuffer.isView(vec)) {
+                const n = Number((vec as any)[0]);
+                return Number.isFinite(n) ? n : defaultVal;
+            }
+            if (vec !== undefined && vec !== null) {
+                const n = Number(vec);
+                return Number.isFinite(n) ? n : defaultVal;
+            }
+            return defaultVal;
+        }
+        if (typeof val === 'number' && Number.isFinite(val)) return val;
+        const n = Number(val);
+        return Number.isFinite(n) ? n : defaultVal;
     };
 
-    useEffect(() => {
-        if (visible && currentNode) {
-            // Detect AnimVector properties and set dynamic flags
-            const newDynamicProps: Record<string, boolean> = {
-                Alpha: isAnimVector(currentNode.Alpha),
-                Visibility: isAnimVector((currentNode as any).Visibility),
-                HeightAbove: isAnimVector(currentNode.HeightAbove),
-                HeightBelow: isAnimVector(currentNode.HeightBelow),
-                TextureSlot: isAnimVector(currentNode.TextureSlot),
-                Color: isAnimVector(currentNode.Color),
-            };
-            setDynamicProps(newDynamicProps);
-
-            form.setFieldsValue({
-                HeightAbove: getStaticOrDefault(currentNode.HeightAbove, 0),
-                HeightBelow: getStaticOrDefault(currentNode.HeightBelow, 0),
-                Alpha: getStaticOrDefault(currentNode.Alpha, 1),
-                Visibility: getStaticOrDefault((currentNode as any).Visibility, 1),
-                TextureSlot: getStaticOrDefault(currentNode.TextureSlot, 0),
-                Color: toAntdColor(Array.isArray(currentNode.Color) ? currentNode.Color : undefined),
-                MaterialID: currentNode.MaterialID ?? -1,
-                EmissionRate: currentNode.EmissionRate ?? 0,
-                LifeSpan: currentNode.LifeSpan ?? 0,
-                Rows: currentNode.Rows ?? 1,
-                Columns: currentNode.Columns ?? 1,
-                Gravity: currentNode.Gravity ?? 0,
-            });
-        } else if (visible) {
-            form.setFieldsValue({
-                HeightAbove: 0,
-                HeightBelow: 0,
-                Alpha: 1,
-                Visibility: 1,
-                TextureSlot: 0,
-                Color: 'rgb(255, 255, 255)',
-                MaterialID: -1,
-                EmissionRate: 0,
-                LifeSpan: 0,
-                Rows: 1,
-                Columns: 1,
-                Gravity: 0,
-            });
-            setDynamicProps({});
+    const colorToFormString = (c: any): string => {
+        if (isAnimVector(c)) {
+            const keys = c.Keys;
+            if (!Array.isArray(keys) || keys.length === 0) return 'rgb(255, 255, 255)';
+            const vec = keys[0]?.Vector ?? keys[0]?.Value;
+            if (Array.isArray(vec) && vec.length >= 3) {
+                return `rgb(${Math.round(Number(vec[0]) * 255)}, ${Math.round(Number(vec[1]) * 255)}, ${Math.round(Number(vec[2]) * 255)})`;
+            }
         }
-    }, [currentNode, visible, form]);
+        if (Array.isArray(c) && c.length >= 3) {
+            return toAntdColor([c[0], c[1], c[2]] as [number, number, number]);
+        }
+        return 'rgb(255, 255, 255)';
+    };
+
+    const formHydratedForNodeIdRef = React.useRef<number | null>(null);
+
+    useEffect(() => {
+        if (!visible) {
+            formHydratedForNodeIdRef.current = null;
+            return;
+        }
+        if (nodeId === null) return;
+        if (formHydratedForNodeIdRef.current === nodeId) return;
+
+        const sourceNode: RibbonEmitterNode | null = isStandalone
+            ? (standaloneNode as RibbonEmitterNode | null)
+            : (useModelStore.getState().getNodeById(nodeId) as RibbonEmitterNode | undefined) ?? null;
+
+        if (!sourceNode) return;
+
+        formHydratedForNodeIdRef.current = nodeId;
+
+        const currentNode = sourceNode;
+
+        // Detect AnimVector properties and set dynamic flags
+        const newDynamicProps: Record<string, boolean> = {
+            Alpha: isAnimVector(currentNode.Alpha),
+            Visibility: isAnimVector((currentNode as any).Visibility),
+            HeightAbove: isAnimVector(currentNode.HeightAbove),
+            HeightBelow: isAnimVector(currentNode.HeightBelow),
+            TextureSlot: isAnimVector(currentNode.TextureSlot),
+            Color: isAnimVector(currentNode.Color),
+        };
+        setDynamicProps(newDynamicProps);
+
+        form.setFieldsValue({
+            HeightAbove: getStaticValue(currentNode.HeightAbove, 0),
+            HeightBelow: getStaticValue(currentNode.HeightBelow, 0),
+            Alpha: getStaticValue(currentNode.Alpha, 1),
+            Visibility: getStaticValue((currentNode as any).Visibility, 1),
+            TextureSlot: getStaticValue(currentNode.TextureSlot, 0),
+            Color: colorToFormString(currentNode.Color),
+            MaterialID: currentNode.MaterialID ?? -1,
+            EmissionRate: currentNode.EmissionRate ?? 0,
+            LifeSpan: currentNode.LifeSpan ?? 0,
+            Rows: currentNode.Rows ?? 1,
+            Columns: currentNode.Columns ?? 1,
+            Gravity: currentNode.Gravity ?? 0,
+        });
+    }, [visible, nodeId, isStandalone, standaloneNode, form]);
 
     const handleOk = async () => {
         try {
@@ -224,12 +286,12 @@ const RibbonEmitterDialog: React.FC<RibbonEmitterDialogProps> = ({ visible, node
 
             const updatedNode: RibbonEmitterNode = {
                 ...currentNode,
-                HeightAbove: preserveAnimOrUseStatic('HeightAbove', values.HeightAbove, getStaticOrDefault(currentAny.HeightAbove, 0)),
-                HeightBelow: preserveAnimOrUseStatic('HeightBelow', values.HeightBelow, getStaticOrDefault(currentAny.HeightBelow, 0)),
-                Alpha: preserveAnimOrUseStatic('Alpha', values.Alpha, getStaticOrDefault(currentAny.Alpha, 1)),
-                Visibility: preserveAnimOrUseStatic('Visibility', values.Visibility, getStaticOrDefault(currentAny.Visibility, 1)),
+                HeightAbove: preserveAnimOrUseStatic('HeightAbove', values.HeightAbove, getStaticValue(currentAny.HeightAbove, 0)),
+                HeightBelow: preserveAnimOrUseStatic('HeightBelow', values.HeightBelow, getStaticValue(currentAny.HeightBelow, 0)),
+                Alpha: preserveAnimOrUseStatic('Alpha', values.Alpha, getStaticValue(currentAny.Alpha, 1)),
+                Visibility: preserveAnimOrUseStatic('Visibility', values.Visibility, getStaticValue(currentAny.Visibility, 1)),
                 Color: (dynamicProps.Color && isAnimVector(currentAny.Color)) ? currentAny.Color : fromAntdColor(values.Color),
-                TextureSlot: preserveAnimOrUseStatic('TextureSlot', values.TextureSlot, getStaticOrDefault(currentAny.TextureSlot, 0)),
+                TextureSlot: preserveAnimOrUseStatic('TextureSlot', values.TextureSlot, getStaticValue(currentAny.TextureSlot, 0)),
                 EmissionRate: toFiniteNumber(values.EmissionRate, toFiniteNumber(currentAny.EmissionRate, 10)),
                 MaterialID: materialIdRaw >= 0 ? materialIdRaw : undefined,
                 LifeSpan: toFiniteNumber(values.LifeSpan, toFiniteNumber(currentAny.LifeSpan, 1)),
@@ -238,25 +300,14 @@ const RibbonEmitterDialog: React.FC<RibbonEmitterDialogProps> = ({ visible, node
                 Gravity: toFiniteNumber(values.Gravity, toFiniteNumber(currentAny.Gravity, 0)),
             };
 
-            updateNode(nodeId, updatedNode);
+            applyNodeToStore(updatedNode);
             onClose();
         } catch (e) {
             console.error("Validation failed", e);
         }
     };
 
-    return (
-        <DraggableModal
-            title="丝带发射器"
-            open={visible}
-            onOk={handleOk}
-            onCancel={onClose}
-            footer={null}
-            width={550}
-            maskClosable={false}
-            wrapClassName="dark-theme-modal"
-            styles={{ body: { padding: '12px 16px', backgroundColor: '#1f1f1f', color: '#ccc' } }}
-        >
+    const ribbonFormInner = (
             <Form form={form} layout="vertical">
                 {/* Row 1: 颜色 | 透明度 | 可见度 */}
                 <Row gutter={8}>
@@ -439,6 +490,25 @@ const RibbonEmitterDialog: React.FC<RibbonEmitterDialogProps> = ({ visible, node
                     </Row>
                 </fieldset>
             </Form>
+    );
+
+    if (isStandalone) {
+        return <NodeEditorStandaloneShell>{ribbonFormInner}</NodeEditorStandaloneShell>;
+    }
+
+    return (
+        <DraggableModal
+            title="丝带发射器"
+            open={visible}
+            onOk={handleOk}
+            onCancel={onClose}
+            footer={null}
+            width={550}
+            maskClosable={false}
+            wrapClassName="dark-theme-modal"
+            styles={{ body: { padding: '12px 16px', backgroundColor: '#1f1f1f', color: '#ccc' } }}
+        >
+            {ribbonFormInner}
         </DraggableModal>
     );
 };

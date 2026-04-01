@@ -13,6 +13,7 @@ import TextureEditorModal from '../modals/TextureEditorModal'
 import ModelOptimizeModal from '../modals/ModelOptimizeModal'
 import ModelMergeModal from '../modals/ModelMergeModal'
 import KeyframeEditor from '../editors/KeyframeEditor'
+import NodeEditorStandalone from './NodeEditorStandalone'
 
 export const isStandaloneToolWindowLabel = (windowLabel: string | null | undefined): boolean => {
     if (!windowLabel) return false
@@ -27,6 +28,7 @@ export const isStandaloneToolWindowLabel = (windowLabel: string | null | undefin
         || windowLabel === 'geosetVisibilityTool'
         || windowLabel === 'modelOptimize'
         || windowLabel === 'modelMerge'
+        || windowLabel === 'nodeEditor'
         || windowLabel.startsWith('keyframeEditor_')
 }
 
@@ -85,6 +87,10 @@ const StandaloneToolWindowRouter: React.FC<StandaloneToolWindowRouterProps> = ({
 
     if (windowLabel === 'modelMerge') {
         return <ModelMergeModal visible={true} onClose={handleHide} isStandalone={true} />
+    }
+
+    if (windowLabel === 'nodeEditor') {
+        return <NodeEditorStandalone />
     }
 
     if (windowLabel.startsWith('keyframeEditor_')) {

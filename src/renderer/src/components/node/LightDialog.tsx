@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { Form, Select, Button, Row, Col, Checkbox } from 'antd';
 import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker';
 import { DraggableModal } from '../DraggableModal';
+import { NodeEditorStandaloneShell } from '../common/NodeEditorStandaloneShell';
 import { useModelStore } from '../../store/modelStore';
 import { useHistoryStore } from '../../store/historyStore';
 import { listen } from '@tauri-apps/api/event';
@@ -16,6 +17,10 @@ interface LightDialogProps {
     visible: boolean;
     nodeId: number | null;
     onClose: () => void;
+    isStandalone?: boolean;
+    standaloneNode?: LightNode | null;
+    standaloneEmit?: (command: string, payload?: any) => void;
+    standaloneModelData?: { Textures?: any[]; GlobalSequences?: any[]; Sequences?: any[] } | null;
 }
 
 // Property mapping for animations (propName -> animKey on node)
@@ -51,11 +56,42 @@ const getStaticValue = (val: any, defaultVal: any = 0): any => {
     return val ?? defaultVal;
 };
 
-const LightDialog: React.FC<LightDialogProps> = ({ visible, nodeId, onClose }) => {
+const LightDialog: React.FC<LightDialogProps> = ({
+    visible,
+    nodeId,
+    onClose,
+    isStandalone,
+    standaloneNode,
+    standaloneEmit,
+    standaloneModelData,
+}) => {
     const [form] = Form.useForm();
-    const { getNodeById, updateNode, modelData } = useModelStore();
+    const { getNodeById, updateNode, modelData: storeModelData } = useModelStore();
+    const modelData = isStandalone ? standaloneModelData : storeModelData;
 
-    const currentNode = nodeId !== null ? getNodeById(nodeId) as LightNode : null;
+    const currentNode =
+        nodeId !== null
+            ? (isStandalone ? (standaloneNode as LightNode | null) : (getNodeById(nodeId) as LightNode))
+            : null;
+
+    const applyNodeToStore = React.useCallback(
+        (next: any, history?: { name: string; undoNode: any; redoNode: any }) => {
+            if (nodeId === null) return;
+            if (isStandalone && standaloneEmit) {
+                standaloneEmit('APPLY_NODE_UPDATE', { objectId: nodeId, node: next, history });
+                return;
+            }
+            if (history) {
+                useHistoryStore.getState().push({
+                    name: history.name,
+                    undo: () => updateNode(nodeId, history.undoNode),
+                    redo: () => updateNode(nodeId, history.redoNode),
+                });
+            }
+            updateNode(nodeId, next);
+        },
+        [isStandalone, standaloneEmit, nodeId, updateNode]
+    );
 
     // Animation State (same pattern as ParticleEmitter2Dialog)
     const [animDataMap, setAnimDataMap] = useState<Record<string, any>>({});
@@ -98,59 +134,68 @@ const LightDialog: React.FC<LightDialogProps> = ({ visible, nodeId, onClose }) =
         return [r, g, b];
     };
 
+    const formHydratedForNodeIdRef = React.useRef<number | null>(null);
+
     useEffect(() => {
-        if (visible) {
-            const defaults = {
-                LightType: 'Omnidirectional',
-                AttenuationStart: 0,
-                AttenuationEnd: 500,
-                Intensity: 1,
-                AmbientIntensity: 0,
-                Visibility: 1,
-                Color: 'rgb(255, 255, 255)',
-                AmbientColor: 'rgb(255, 255, 255)',
-            };
-
-            const newAnimDataMap: Record<string, any> = {};
-
-            if (currentNode) {
-                let lightTypeValue = currentNode.LightType;
-                if (typeof lightTypeValue === 'number') {
-                    const typeNames = ['Omnidirectional', 'Directional', 'Ambient'];
-                    lightTypeValue = typeNames[lightTypeValue] as any;
-                }
-
-                // Check for animated properties and load them
-                Object.entries(PROP_TO_ANIM_KEY).forEach(([propName, animKey]) => {
-                    const value = (currentNode as any)[propName];
-                    if (isAnimVector(value)) {
-                        newAnimDataMap[propName] = value;
-                    }
-                    // Also check the anim key itself (if stored separately)
-                    const animValue = (currentNode as any)[animKey];
-                    if (isAnimVector(animValue)) {
-                        newAnimDataMap[propName] = animValue;
-                    }
-                });
-
-                form.setFieldsValue({
-                    LightType: lightTypeValue ?? defaults.LightType,
-                    // Use static value extraction for form fields
-                    AttenuationStart: getStaticValue(currentNode.AttenuationStart, defaults.AttenuationStart),
-                    AttenuationEnd: getStaticValue(currentNode.AttenuationEnd, defaults.AttenuationEnd),
-                    Intensity: getStaticValue(currentNode.Intensity, defaults.Intensity),
-                    AmbientIntensity: getStaticValue(currentNode.AmbientIntensity, defaults.AmbientIntensity),
-                    Visibility: getStaticValue((currentNode as any).Visibility, defaults.Visibility),
-                    Color: toAntdColor(currentNode.Color),
-                    AmbientColor: toAntdColor(currentNode.AmbientColor),
-                });
-            } else {
-                form.setFieldsValue(defaults);
-            }
-
-            setAnimDataMap(newAnimDataMap);
+        if (!visible) {
+            formHydratedForNodeIdRef.current = null;
+            return;
         }
-    }, [currentNode, visible, form]);
+        if (nodeId === null) return;
+        if (formHydratedForNodeIdRef.current === nodeId) return;
+
+        const sourceNode: LightNode | null = isStandalone
+            ? (standaloneNode as LightNode | null)
+            : (useModelStore.getState().getNodeById(nodeId) as LightNode | undefined) ?? null;
+
+        if (!sourceNode) return;
+
+        formHydratedForNodeIdRef.current = nodeId;
+
+        const defaults = {
+            LightType: 'Omnidirectional',
+            AttenuationStart: 0,
+            AttenuationEnd: 500,
+            Intensity: 1,
+            AmbientIntensity: 0,
+            Visibility: 1,
+            Color: 'rgb(255, 255, 255)',
+            AmbientColor: 'rgb(255, 255, 255)',
+        };
+
+        const newAnimDataMap: Record<string, any> = {};
+
+        const currentNode = sourceNode;
+        let lightTypeValue = currentNode.LightType;
+        if (typeof lightTypeValue === 'number') {
+            const typeNames = ['Omnidirectional', 'Directional', 'Ambient'];
+            lightTypeValue = typeNames[lightTypeValue] as any;
+        }
+
+        Object.entries(PROP_TO_ANIM_KEY).forEach(([propName, animKey]) => {
+            const value = (currentNode as any)[propName];
+            if (isAnimVector(value)) {
+                newAnimDataMap[propName] = value;
+            }
+            const animValue = (currentNode as any)[animKey];
+            if (isAnimVector(animValue)) {
+                newAnimDataMap[propName] = animValue;
+            }
+        });
+
+        form.setFieldsValue({
+            LightType: lightTypeValue ?? defaults.LightType,
+            AttenuationStart: getStaticValue(currentNode.AttenuationStart, defaults.AttenuationStart),
+            AttenuationEnd: getStaticValue(currentNode.AttenuationEnd, defaults.AttenuationEnd),
+            Intensity: getStaticValue(currentNode.Intensity, defaults.Intensity),
+            AmbientIntensity: getStaticValue(currentNode.AmbientIntensity, defaults.AmbientIntensity),
+            Visibility: getStaticValue((currentNode as any).Visibility, defaults.Visibility),
+            Color: toAntdColor(currentNode.Color),
+            AmbientColor: toAntdColor(currentNode.AmbientColor),
+        });
+
+        setAnimDataMap(newAnimDataMap);
+    }, [visible, nodeId, isStandalone, standaloneNode, form]);
 
     const handleOk = async () => {
         try {
@@ -202,14 +247,11 @@ const LightDialog: React.FC<LightDialogProps> = ({ visible, nodeId, onClose }) =
                 }
             });
 
-            // History
-            useHistoryStore.getState().push({
+            applyNodeToStore(updatedNode, {
                 name: `Edit Light`,
-                undo: () => updateNode(nodeId, currentNode),
-                redo: () => updateNode(nodeId, updatedNode)
+                undoNode: currentNode,
+                redoNode: updatedNode,
             });
-
-            updateNode(nodeId, updatedNode);
             onClose();
         } catch (e) {
             console.error("Validation failed", e);
@@ -399,18 +441,7 @@ const LightDialog: React.FC<LightDialogProps> = ({ visible, nodeId, onClose }) =
         );
     };
 
-    return (
-        <DraggableModal
-            title="光照"
-            open={visible}
-            onOk={handleOk}
-            onCancel={onClose}
-            footer={null}
-            width={700}
-            maskClosable={false}
-            wrapClassName="dark-theme-modal"
-            styles={{ body: { padding: '12px 16px', backgroundColor: '#1f1f1f', color: '#ccc' } }}
-        >
+    const lightFormInner = (
             <Form form={form} layout="vertical">
                 {/* Row 1: 颜色 | 环境色 | 衰减开始 */}
                 <div style={{ display: 'flex', gap: 8 }}>
@@ -466,6 +497,25 @@ const LightDialog: React.FC<LightDialogProps> = ({ visible, nodeId, onClose }) =
                     </div>
                 </div>
             </Form>
+    );
+
+    if (isStandalone) {
+        return <NodeEditorStandaloneShell>{lightFormInner}</NodeEditorStandaloneShell>;
+    }
+
+    return (
+        <DraggableModal
+            title="光照"
+            open={visible}
+            onOk={handleOk}
+            onCancel={onClose}
+            footer={null}
+            width={700}
+            maskClosable={false}
+            wrapClassName="dark-theme-modal"
+            styles={{ body: { padding: '12px 16px', backgroundColor: '#1f1f1f', color: '#ccc' } }}
+        >
+            {lightFormInner}
         </DraggableModal>
     );
 };

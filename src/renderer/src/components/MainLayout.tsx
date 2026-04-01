@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef, Suspense } from 'react'
+import React, { useState, useCallback, useEffect, useRef, Suspense, useMemo } from 'react'
 import type { ViewerRef } from './Viewer'
 import MenuBar from './MenuBar'
 // Lazy load modal components for faster startup
@@ -22,7 +22,7 @@ import { GeosetVisibilityPanel } from './GeosetVisibilityPanel'
 import { open } from '@tauri-apps/plugin-dialog'
 import { generateMDL, generateMDX } from 'war3-model'
 import { getRecentFiles, addRecentFile, clearRecentFiles, RecentFile } from '../services/historyService'
-import { useModelStore } from '../store/modelStore'
+import { useModelStore, mergeMaterialManagerPreview } from '../store/modelStore'
 import { NodeType } from '../types/node'
 import { useUIStore } from '../store/uiStore'
 import { useSelectionStore } from '../store/selectionStore'
@@ -41,6 +41,7 @@ import {
     TEXTURE_ADJUSTMENTS_KEY
 } from '../utils/textureAdjustments'
 import { windowManager } from '../utils/WindowManager'
+import type { NodeEditorRpcState } from '../types/nodeEditorRpc'
 import { useRpcServer } from '../hooks/useRpc'
 import { markStandalonePerf } from '../utils/standalonePerf'
 import { parseModelBuffer, mergeGeosets, mergeAnimations } from '../utils/modelMerge'
@@ -1800,6 +1801,11 @@ const MainLayout: React.FC = () => {
 
     // Use modelData directly from store to ensure updates from NodeManager are reflected
     const modelData = useModelStore(state => state.modelData)
+    const materialManagerPreview = useModelStore(state => state.materialManagerPreview)
+    const viewerModelData = useMemo(
+        () => mergeMaterialManagerPreview(modelData, materialManagerPreview),
+        [modelData, materialManagerPreview]
+    )
     const standaloneWarmupStartedRef = useRef(false)
     const textureManagerSnapshotCacheRef = useRef({
         snapshotVersion: 0,
@@ -1842,7 +1848,70 @@ const MainLayout: React.FC = () => {
     const standaloneSnapshotDispatchRef = useRef({
         textureManager: -1,
         materialManager: -1,
+        nodeEditor: -1,
     })
+
+    const nodeEditorSnapshotCacheRef = useRef({
+        snapshotVersion: 0,
+        sessionKey: '',
+        lastNodeJson: '',
+    })
+
+    const ensureNodeEditorSnapshotState = useCallback((): NodeEditorRpcState => {
+        const session = windowManager.getPendingNodeEditorSession()
+        const cache = nodeEditorSnapshotCacheRef.current
+        if (!session) {
+            return {
+                snapshotVersion: 0,
+                kind: '',
+                objectId: -1,
+                node: null,
+                textures: [],
+                materials: [],
+                globalSequences: [],
+                sequences: [],
+                modelPath: '',
+                renameInitialName: '',
+                allNodes: [],
+            }
+        }
+        const live = useModelStore.getState()
+        const node = live.getNodeById(session.objectId)
+        let nodeJson = ''
+        try {
+            nodeJson = node ? JSON.stringify(node) : 'null'
+        } catch {
+            nodeJson = String(Date.now())
+        }
+        const sessionKey = `${session.kind}:${session.objectId}`
+        if (cache.sessionKey !== sessionKey || cache.lastNodeJson !== nodeJson) {
+            cache.snapshotVersion += 1
+            cache.sessionKey = sessionKey
+            cache.lastNodeJson = nodeJson
+        }
+        const md = live.modelData
+        let cloned: any = null
+        if (node) {
+            try {
+                cloned = structuredClone(node)
+            } catch {
+                cloned = JSON.parse(JSON.stringify(node))
+            }
+        }
+        return {
+            snapshotVersion: cache.snapshotVersion,
+            kind: session.kind,
+            objectId: session.objectId,
+            node: cloned,
+            textures: md?.Textures ?? [],
+            materials: md?.Materials ?? [],
+            globalSequences: md?.GlobalSequences ?? [],
+            sequences: md?.Sequences ?? [],
+            modelPath: live.modelPath ?? '',
+            renameInitialName: node?.Name ?? '',
+            allNodes: live.nodes ?? [],
+        }
+    }, [])
 
 
     const ensureTextureManagerSnapshotState = useCallback((): TextureManagerRpcState => {
@@ -1893,11 +1962,12 @@ const MainLayout: React.FC = () => {
     const ensureMaterialManagerSnapshotState = useCallback((): MaterialManagerRpcState => {
         const liveModelState = useModelStore.getState()
         const liveModelData = liveModelState.modelData
+        const preview = liveModelState.materialManagerPreview
         const cache = materialManagerSnapshotCacheRef.current
         const nextSourceRefs = {
-            materials: liveModelData?.Materials || null,
-            textures: liveModelData?.Textures || null,
-            geosets: liveModelData?.Geosets || null,
+            materials: preview?.materials ?? liveModelData?.Materials ?? null,
+            textures: preview?.textures ?? liveModelData?.Textures ?? null,
+            geosets: preview?.geosets ?? liveModelData?.Geosets ?? null,
             globalSequences: liveModelData?.GlobalSequences || null,
             sequences: liveModelData?.Sequences || null,
             textureAnims: liveModelData?.TextureAnims || null,
@@ -1917,9 +1987,9 @@ const MainLayout: React.FC = () => {
             cache.snapshotVersion += 1
             cache.sourceRefs = nextSourceRefs
             cache.snapshot = {
-                materials: liveModelData?.Materials || [],
-                textures: liveModelData?.Textures || [],
-                geosets: stripGeosetData(liveModelData?.Geosets),
+                materials: preview?.materials ?? liveModelData?.Materials ?? [],
+                textures: preview?.textures ?? liveModelData?.Textures ?? [],
+                geosets: stripGeosetData(preview?.geosets ?? liveModelData?.Geosets),
                 globalSequences: liveModelData?.GlobalSequences || [],
                 sequences: liveModelData?.Sequences || [],
                 textureAnims: liveModelData?.TextureAnims || [],
@@ -2815,10 +2885,11 @@ const MainLayout: React.FC = () => {
             if (action === 'SAVE_MATERIALS') {
                 const currentGeosets = useModelStore.getState().modelData?.Geosets
                 const mergedGeosets = mergeGeosetMetadata(currentGeosets, actionPayload.geosets)
-                useModelStore.getState().setVisualDataPatch({
-                    Textures: actionPayload.textures,
-                    Materials: actionPayload.materials,
-                    Geosets: mergedGeosets
+                // 仅更新预览层；写入权威 modelData 在「保存/另存为」时 commit
+                useModelStore.getState().setMaterialManagerPreview({
+                    textures: actionPayload.textures,
+                    materials: actionPayload.materials,
+                    geosets: mergedGeosets,
                 });
             } else if (action === 'RELOAD_RENDERER') {
                 useModelStore.getState().triggerRendererReload();
@@ -2831,6 +2902,43 @@ const MainLayout: React.FC = () => {
         getMaterialManagerState,
         handleMaterialCommand
     );
+
+    const handleNodeEditorCommand = useCallback((command: string, payload: any) => {
+        if (command === 'APPLY_NODE_UPDATE') {
+            const objectId = payload?.objectId
+            const node = payload?.node
+            const history = payload?.history
+            if (typeof objectId !== 'number' || node == null) {
+                return
+            }
+            if (history && typeof history.name === 'string') {
+                useHistoryStore.getState().push({
+                    name: history.name,
+                    undo: () => useModelStore.getState().updateNode(objectId, history.undoNode),
+                    redo: () => useModelStore.getState().updateNode(objectId, history.redoNode),
+                })
+            }
+            useModelStore.getState().updateNode(objectId, node)
+            return
+        }
+        if (command === 'RENAME_NODE') {
+            const objectId = payload?.objectId
+            const name = payload?.name
+            if (typeof objectId === 'number' && typeof name === 'string') {
+                useModelStore.getState().renameNode(objectId, name)
+            }
+        }
+    }, [])
+
+    const getNodeEditorState = useCallback(() => {
+        return ensureNodeEditorSnapshotState()
+    }, [ensureNodeEditorSnapshotState])
+
+    const { broadcastSync: broadcastNodeEditor } = useRpcServer<NodeEditorRpcState>(
+        'nodeEditor',
+        getNodeEditorState,
+        handleNodeEditorCommand
+    )
 
     const getSequenceManagerState = useCallback(() => {
         const state = useModelStore.getState();
@@ -2900,6 +3008,7 @@ const MainLayout: React.FC = () => {
         broadcastTextureManager, broadcastTextureManagerPatch, getTextureManagerState,
         broadcastTextureAnimManager, getTextureAnimManagerState,
         broadcastMaterialManager, broadcastMaterialManagerPatch, getMaterialManagerState,
+        broadcastNodeEditor, getNodeEditorState,
         broadcastSequenceManager, getSequenceManagerState,
         broadcastGlobalSeqManager, getGlobalSeqManagerState,
         lastBroadcastTime: 0
@@ -2914,6 +3023,7 @@ const MainLayout: React.FC = () => {
             broadcastTextureManager, broadcastTextureManagerPatch, getTextureManagerState,
             broadcastTextureAnimManager, getTextureAnimManagerState,
             broadcastMaterialManager, broadcastMaterialManagerPatch, getMaterialManagerState,
+            broadcastNodeEditor, getNodeEditorState,
             broadcastSequenceManager, getSequenceManagerState,
             broadcastGlobalSeqManager, getGlobalSeqManagerState,
             lastBroadcastTime: rpcRefs.current.lastBroadcastTime
@@ -2945,6 +3055,7 @@ const MainLayout: React.FC = () => {
                 materialManagerVisible,
                 sequenceManagerVisible,
                 globalSeqVisible,
+                nodeEditorVisible,
             ] = await Promise.all([
                 windowManager.isToolWindowVisible('cameraManager'),
                 windowManager.isToolWindowVisible('geosetEditor'),
@@ -2955,9 +3066,10 @@ const MainLayout: React.FC = () => {
                 windowManager.isToolWindowVisible('materialManager'),
                 windowManager.isToolWindowVisible('sequenceManager'),
                 windowManager.isToolWindowVisible('globalSequenceManager'),
+                windowManager.isToolWindowVisible('nodeEditor'),
             ]);
 
-            if (!cameraManagerVisible && !geosetEditorVisible && !geosetVisibilityVisible && !geosetAnimVisible && !textureManagerVisible && !textureAnimVisible && !materialManagerVisible && !sequenceManagerVisible && !globalSeqVisible) {
+            if (!cameraManagerVisible && !geosetEditorVisible && !geosetVisibilityVisible && !geosetAnimVisible && !textureManagerVisible && !textureAnimVisible && !materialManagerVisible && !sequenceManagerVisible && !globalSeqVisible && !nodeEditorVisible) {
                 return;
             }
 
@@ -2969,6 +3081,7 @@ const MainLayout: React.FC = () => {
                 broadcastTextureManager,
                 broadcastTextureAnimManager,
                 broadcastMaterialManager,
+                broadcastNodeEditor,
                 broadcastSequenceManager,
                 broadcastGlobalSeqManager,
             } = rpcRefs.current;
@@ -2978,6 +3091,7 @@ const MainLayout: React.FC = () => {
             const pickedGeosetIndex = useSelectionStore.getState().pickedGeosetIndex;
             const textureManagerState = getTextureManagerState();
             const materialManagerState = getMaterialManagerState();
+            const nodeEditorState = getNodeEditorState();
 
             if (cameraManagerVisible) {
                 const rawCameras = Array.isArray((modelData as any)?.Cameras) ? (modelData as any).Cameras : [];
@@ -3061,6 +3175,19 @@ const MainLayout: React.FC = () => {
                 broadcastGlobalSeqManager({
                     globalSequences: (modelData?.GlobalSequences || []) as number[]
                 });
+            }
+
+            if (nodeEditorVisible) {
+                if (standaloneSnapshotDispatchRef.current.nodeEditor !== nodeEditorState.snapshotVersion) {
+                    standaloneSnapshotDispatchRef.current.nodeEditor = nodeEditorState.snapshotVersion
+                    broadcastNodeEditor(nodeEditorState);
+                } else {
+                    markStandalonePerf('snapshot_broadcast_skipped', {
+                        windowId: 'nodeEditor',
+                        snapshotVersion: nodeEditorState.snapshotVersion,
+                        reason: 'snapshot_version_unchanged',
+                    })
+                }
             }
         };
 
@@ -3783,6 +3910,7 @@ const MainLayout: React.FC = () => {
                 }
             }
 
+            useModelStore.getState().commitMaterialManagerPreviewToModel();
             useHistoryStore.getState().markSaved();
             useModelStore.getState().markTabSaved();
             showMessage('success', '保存成功', '模型已保存')
@@ -3884,6 +4012,7 @@ const MainLayout: React.FC = () => {
                         console.error('Failed to clear texture cache:', e);
                     }
                 }
+                useModelStore.getState().commitMaterialManagerPreviewToModel();
                 // Update store with new path if needed, but for now just alert
                 useHistoryStore.getState().markSaved();
                 useModelStore.getState().markTabSaved();
@@ -3931,7 +4060,6 @@ const MainLayout: React.FC = () => {
                 || uiState.showModelInfo
                 || uiState.showVertexEditor
                 || uiState.showFaceEditor
-                || uiState.showNodeDialog
                 || uiState.showCreateNodeDialog
                 || uiState.showTransformModelDialog;
 
@@ -4845,7 +4973,7 @@ const MainLayout: React.FC = () => {
                                 <Viewer
                                     ref={viewerRef as any}
                                     modelPath={modelPath}
-                                    modelData={modelData}
+                                    modelData={viewerModelData}
                                     teamColor={teamColor}
                                     showGrid={showGridXY}
                                     showNodes={mainMode !== 'uv' && showNodes}

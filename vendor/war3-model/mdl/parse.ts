@@ -1167,6 +1167,13 @@ function parseParticleEmitter2(state: State, model: Model): void {
 
                 const colorArr = new Float32Array(3);
                 parseArray(state, colorArr, 0);
+                // 与 generateColorProp 一致：MDL 文件里 Color 为 BGR；MDX 内存为 RGB，此处转为 RGB
+                const b = colorArr[0];
+                const g = colorArr[1];
+                const r = colorArr[2];
+                colorArr[0] = r;
+                colorArr[1] = g;
+                colorArr[2] = b;
 
                 colors.push(colorArr);
 

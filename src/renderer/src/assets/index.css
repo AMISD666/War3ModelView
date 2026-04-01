@@ -387,6 +387,61 @@ body,
     color: #e8e8e8 !important;
 }
 
+/* Radio / 单选（独立节点编辑窗等非 Modal 容器内同样生效） */
+.dark-theme-modal .ant-radio-wrapper {
+    color: #e8e8e8 !important;
+}
+
+.dark-theme-modal .ant-radio-wrapper .ant-radio + span {
+    color: inherit !important;
+}
+
+/* 分割线、描述列表等辅助文案 */
+.dark-theme-modal .ant-divider {
+    border-color: #4a4a4a !important;
+}
+
+.dark-theme-modal .ant-divider-inner-text {
+    color: #e8e8e8 !important;
+}
+
+.dark-theme-modal .ant-descriptions-item-label,
+.dark-theme-modal .ant-descriptions-item-content {
+    color: #e8e8e8 !important;
+}
+
+/* 独立节点编辑内容区：默认继承浅字，避免裸文本落回浏览器黑字 */
+.node-editor-standalone-panel.dark-theme-modal {
+    color: #e8e8e8;
+}
+
+/* 通用节点编辑：紧凑表单，减少纵向占位 */
+.node-dialog-form-compact.ant-form-small .ant-form-item {
+    margin-bottom: 6px !important;
+}
+
+.node-dialog-form-compact .ant-form-item-label > label {
+    font-size: 12px;
+    height: 22px;
+}
+
+/* 图2 网格：表单项间距（与 Form gap 配合） */
+.node-dialog-form-grid2.ant-form-small .ant-form-item {
+    margin-bottom: 6px !important;
+}
+
+/* 父节点行：强制下拉吃满 flex 剩余宽度，ID 槽不随 ant 默认 min-width 膨胀 */
+.node-dialog-parent-id-row .ant-select,
+.node-dialog-parent-id-row .ant-select-selector {
+    width: 100% !important;
+    min-width: 0 !important;
+}
+.node-dialog-parent-id-row .ant-input-number {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+}
+
 /* Button in Modal */
 .dark-theme-modal .ant-btn-default {
     background-color: #333333 !important;

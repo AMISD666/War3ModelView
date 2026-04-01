@@ -1,6 +1,7 @@
 import { shortcutActions, shortcutActionMap, ShortcutAction, ShortcutContext } from './actions'
 import { getDefaultBindings, useShortcutStore } from '../store/shortcutStore'
 import { isTextInputActive, normalizeKeyComboFromEvent, normalizeKeyCombo } from './utils'
+import { tryConsumeNodeManagerDeleteKey } from '../utils/nodeManagerShortcutBridge'
 import { useSelectionStore } from '../store/selectionStore'
 
 type ShortcutHandler = (payload: { event: KeyboardEvent; action: ShortcutAction; combo: string }) => boolean | void
@@ -160,6 +161,11 @@ const hasMatchingShortcut = (event: KeyboardEvent): boolean => {
 }
 
 export const handleGlobalShortcutKeyDown = (event: KeyboardEvent): void => {
+    // 节点管理器内 Delete 必须早于 blur / 时间轴 Delete，否则会失焦或误删关键帧
+    if (tryConsumeNodeManagerDeleteKey(event)) {
+        event.preventDefault()
+        return
+    }
     // CRITICAL: blur the focused element BEFORE dispatching the shortcut.
     // If a button/focusable element is focused, pressing Space would:
     //   1. trigger our shortcut handler (e.g. toggling play), AND

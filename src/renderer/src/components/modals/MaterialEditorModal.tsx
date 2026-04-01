@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { Button, List, Card, Checkbox, Select, Typography, message } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
@@ -67,12 +67,19 @@ function normalizeMaterialsForUI(materials: any[]): any[] {
  */
 function denormalizeMaterialsForSave(materials: any[]): any[] {
     return materials.map(material => {
-        let renderMode = material.RenderMode ?? 0;
-        if (material.ConstantColor) renderMode |= 1;
-        if (material.SortPrimsFarZ) renderMode |= 16;
-        if (material.FullResolution) renderMode |= 32;
+        // 在原有 RenderMode 位上按布尔覆盖；勿从 0 重建，否则未出现在 UI 的位会丢失，进而搞乱图层显示与 Alpha 等
+        let renderMode = material.RenderMode ?? 0
+        if (material.ConstantColor !== undefined) {
+            renderMode = (renderMode & ~1) | (material.ConstantColor ? 1 : 0)
+        }
+        if (material.SortPrimsFarZ !== undefined) {
+            renderMode = (renderMode & ~16) | (material.SortPrimsFarZ ? 16 : 0)
+        }
+        if (material.FullResolution !== undefined) {
+            renderMode = (renderMode & ~32) | (material.FullResolution ? 32 : 0)
+        }
 
-        const { ConstantColor, SortPrimsFarZ, FullResolution, __editorMaterialId, ...materialRest } = material;
+        const { ConstantColor, SortPrimsFarZ, FullResolution, __editorMaterialId, ...materialRest } = material
 
         return {
             ...materialRest,
@@ -80,33 +87,29 @@ function denormalizeMaterialsForSave(materials: any[]): any[] {
             PriorityPlane: material.PriorityPlane ?? 0,
             RenderMode: renderMode,
             Layers: (material.Layers || []).map((layer: any) => {
-                // Rebuild Shading bitmask from boolean flags
-                let shading = 0;
-                if (layer.Unshaded) shading |= 1;
-                if (layer.SphereEnvMap) shading |= 2;
-                if (layer.TwoSided) shading |= 16;
-                if (layer.Unfogged) shading |= 32;
-                if (layer.NoDepthTest) shading |= 64;
-                if (layer.NoDepthSet) shading |= 128;
+                // 在原有 Shading 位上按布尔覆盖；新建图层或部分字段未带齐时仍保留模型里的位标志
+                let shading = typeof layer.Shading === 'number' ? layer.Shading : 0
+                if (layer.Unshaded !== undefined) shading = (shading & ~1) | (layer.Unshaded ? 1 : 0)
+                if (layer.SphereEnvMap !== undefined) shading = (shading & ~2) | (layer.SphereEnvMap ? 2 : 0)
+                if (layer.TwoSided !== undefined) shading = (shading & ~16) | (layer.TwoSided ? 16 : 0)
+                if (layer.Unfogged !== undefined) shading = (shading & ~32) | (layer.Unfogged ? 32 : 0)
+                if (layer.NoDepthTest !== undefined) shading = (shading & ~64) | (layer.NoDepthTest ? 64 : 0)
+                if (layer.NoDepthSet !== undefined) shading = (shading & ~128) | (layer.NoDepthSet ? 128 : 0)
 
-                // Create clean layer without UI-only boolean properties
-                const { Unshaded, SphereEnvMap, TwoSided, Unfogged, NoDepthTest, NoDepthSet, __editorLayerId, ...cleanLayer } = layer;
+                const { Unshaded, SphereEnvMap, TwoSided, Unfogged, NoDepthTest, NoDepthSet, __editorLayerId, ...cleanLayer } = layer
 
                 return {
                     ...cleanLayer,
-                    // Core required properties with defaults
                     FilterMode: layer.FilterMode ?? 0,
                     Shading: shading,
                     CoordId: layer.CoordId ?? 0,
                     Alpha: layer.Alpha ?? 1,
-                    // TextureID - can be number or AnimVector
                     TextureID: layer.TextureID ?? 0,
-                    // TVertexAnimId - null or a valid index (not undefined)
                     TVertexAnimId: layer.TVertexAnimId === undefined ? null : layer.TVertexAnimId,
-                };
-            })
-        };
-    });
+                }
+            }),
+        }
+    })
 }
 
 interface MaterialEditorModalProps {
@@ -176,6 +179,9 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         }
     )
 
+    /** 独立窗：已从 RPC 快照加载本地材质列表前，禁止向主进程发 SAVE_MATERIALS，否则空数组会写入预览层并遮挡权威模型 */
+    const isInitialized = React.useRef(false)
+
     const rpcSnapshot = rpcState.snapshot
     const directModelData = useModelStore((state) => state.modelData)
     const directModelPath = useModelStore((state) => state.modelPath)
@@ -183,19 +189,34 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const directSetTextures = useModelStore((state) => state.setTextures)
     const directSetVisualDataPatch = useModelStore((state) => state.setVisualDataPatch)
 
-    const modelData = isStandalone ? {
-        Materials: rpcSnapshot.materials,
-        Textures: rpcSnapshot.textures,
-        Geosets: rpcSnapshot.geosets,
-        GlobalSequences: rpcSnapshot.globalSequences,
-        Sequences: rpcSnapshot.sequences,
-        TextureAnims: rpcSnapshot.textureAnims
-    } : directModelData
+    // 独立窗：RPC 快照对象需稳定引用；勿把 directModelData 放进依赖，否则主窗口任意更新都会重建并触发死循环
+    const standaloneModelData = useMemo(
+        () => ({
+            Materials: rpcSnapshot.materials,
+            Textures: rpcSnapshot.textures,
+            Geosets: rpcSnapshot.geosets,
+            GlobalSequences: rpcSnapshot.globalSequences,
+            Sequences: rpcSnapshot.sequences,
+            TextureAnims: rpcSnapshot.textureAnims,
+        }),
+        [
+            rpcState.snapshotVersion,
+            rpcSnapshot.materials,
+            rpcSnapshot.textures,
+            rpcSnapshot.geosets,
+            rpcSnapshot.globalSequences,
+            rpcSnapshot.sequences,
+            rpcSnapshot.textureAnims,
+        ]
+    )
+
+    const modelData = isStandalone ? standaloneModelData : directModelData
 
     const modelPath = isStandalone ? rpcSnapshot.modelPath : directModelPath
 
     const setMaterials = (materials: any[]) => {
         if (isStandalone) {
+            if (!isInitialized.current) return
             emitCommand('EXECUTE_MATERIAL_ACTION', { action: 'SAVE_MATERIALS', payload: { materials, textures: modelTexturesRef.current } })
         } else {
             directSetMaterials(materials)
@@ -206,6 +227,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         modelTexturesRef.current = textures
         setLocalTextures(textures)
         if (isStandalone) {
+            if (!isInitialized.current) return
             const materialsForSave = denormalizeMaterialsForSave(localMaterialsRef.current)
             emitCommand('EXECUTE_MATERIAL_ACTION', { action: 'SAVE_MATERIALS', payload: { materials: materialsForSave, textures } })
         } else {
@@ -219,6 +241,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             setLocalTextures(patch.Textures)
         }
         if (isStandalone) {
+            if (!isInitialized.current) return
             emitCommand('EXECUTE_MATERIAL_ACTION', {
                 action: 'SAVE_MATERIALS',
                 payload: {
@@ -264,7 +287,6 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         }, 0)
     }, [])
 
-    const isInitialized = React.useRef(false)
     const materialListRef = React.useRef<HTMLDivElement>(null)
     const layerListRef = React.useRef<HTMLDivElement>(null)
 
@@ -314,6 +336,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 
     const syncStandaloneMaterials = React.useCallback((nextMaterialsUi: any[], nextTextures?: any[], nextGeosets?: any[]) => {
         if (!isStandalone) return
+        if (!isInitialized.current) return
         const materialsForSave = denormalizeMaterialsForSave(cloneDeep(nextMaterialsUi))
         emitCommand('EXECUTE_MATERIAL_ACTION', {
             action: 'SAVE_MATERIALS',
@@ -347,6 +370,13 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const applyMaterialsChange = React.useCallback((updater: (previous: any[]) => any[]) => {
         const previousMaterials = cloneDeep(localMaterialsRef.current || [])
         const nextMaterials = updater(previousMaterials)
+        // 原地修改并返回同一引用时，React 会认为 state 未变而跳过渲染（新建图层等会失效）
+        if (nextMaterials === previousMaterials) {
+            const snapshot = cloneDeep(nextMaterials)
+            localMaterialsRef.current = snapshot
+            setLocalMaterials(snapshot)
+            return snapshot
+        }
         localMaterialsRef.current = nextMaterials
         setLocalMaterials(nextMaterials)
         return nextMaterials
@@ -452,6 +482,12 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             } else if (hasMaterials && texturesChanged && !isStandalone) {
                 setLocalTextures(JSON.parse(JSON.stringify(currentTextures)))
             } else if (!hasMaterials) {
+                // 独立窗口：用户可能已点「新建材质」，本地已有数据但主进程尚未回传 RPC，此时勿清空列表
+                const standalonePending =
+                    isStandalone && Array.isArray(localMaterialsRef.current) && localMaterialsRef.current.length > 0
+                if (standalonePending) {
+                    // 等待下一次 rpcSnapshot 带上 Materials 后再走正常同步
+                } else {
                 setLocalMaterials([])
                 setSelectedMaterialIndex(-1)
                 setSelectedLayerIndex(-1)
@@ -468,6 +504,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                 originalTexturesRef.current = null
                 didRealtimePreviewRef.current = false
                 didRealtimeTexturePreviewRef.current = false
+                }
             }
         } else {
             setLocalMaterials([])
@@ -487,7 +524,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             didRealtimePreviewRef.current = false
             didRealtimeTexturePreviewRef.current = false
         }
-    }, [visible, modelData, isStandalone, selectedMaterialIndex, selectedLayerIndex])
+    }, [visible, modelData, isStandalone, selectedMaterialIndex, selectedLayerIndex, rpcState.snapshotVersion])
 
     // Subscribe to Ctrl+Click geoset picking - auto-select material
     useEffect(() => {
@@ -598,13 +635,15 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             didRealtimePreviewRef.current = true
             const materialsForSave = denormalizeMaterialsForSave(newMaterials)
             if (isStandalone) {
-                emitCommand('EXECUTE_MATERIAL_ACTION', {
-                    action: 'SAVE_MATERIALS',
-                    payload: {
-                        materials: materialsForSave,
-                        textures: modelTexturesRef.current
-                    }
-                })
+                if (isInitialized.current) {
+                    emitCommand('EXECUTE_MATERIAL_ACTION', {
+                        action: 'SAVE_MATERIALS',
+                        payload: {
+                            materials: materialsForSave,
+                            textures: modelTexturesRef.current
+                        }
+                    })
+                }
             } else {
                 setMaterials(materialsForSave)
             }
@@ -626,13 +665,15 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             didRealtimePreviewRef.current = true
             const materialsForSave = denormalizeMaterialsForSave(newMaterials)
             if (isStandalone) {
-                emitCommand('EXECUTE_MATERIAL_ACTION', {
-                    action: 'SAVE_MATERIALS',
-                    payload: {
-                        materials: materialsForSave,
-                        textures: modelTexturesRef.current
-                    }
-                })
+                if (isInitialized.current) {
+                    emitCommand('EXECUTE_MATERIAL_ACTION', {
+                        action: 'SAVE_MATERIALS',
+                        payload: {
+                            materials: materialsForSave,
+                            textures: modelTexturesRef.current
+                        }
+                    })
+                }
             } else {
                 setMaterials(materialsForSave)
             }

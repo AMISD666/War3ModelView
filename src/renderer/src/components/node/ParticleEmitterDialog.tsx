@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Button, Checkbox, Form, Input } from 'antd';
 
 import { DraggableModal } from '../DraggableModal';
+import { NodeEditorStandaloneShell } from '../common/NodeEditorStandaloneShell';
 import { listen } from '@tauri-apps/api/event';
 import { windowManager } from '../../utils/WindowManager';
 import { useHistoryStore } from '../../store/historyStore';
@@ -13,6 +14,10 @@ interface ParticleEmitterDialogProps {
     visible: boolean;
     nodeId: number | null;
     onClose: () => void;
+    isStandalone?: boolean;
+    standaloneNode?: ParticleEmitterNode | null;
+    standaloneEmit?: (command: string, payload?: any) => void;
+    standaloneModelData?: { Textures?: any[]; GlobalSequences?: any[]; Sequences?: any[] } | null;
 }
 
 const EMITTER_USES_MDL = 32768;
@@ -24,14 +29,23 @@ const isAnimVector = (val: any): boolean => {
 
 const getStaticValue = (val: any, defaultVal: number = 0): number => {
     if (isAnimVector(val)) {
-        const firstKey = val.Keys?.[0];
+        const keys = val.Keys;
+        if (!Array.isArray(keys) || keys.length === 0) return defaultVal;
+        const firstKey = keys[0];
         const vec = firstKey?.Vector ?? firstKey?.Value;
         if (Array.isArray(vec) || ArrayBuffer.isView(vec)) {
-            return Number((vec as any)[0] ?? defaultVal);
+            const n = Number((vec as any)[0]);
+            return Number.isFinite(n) ? n : defaultVal;
         }
-        return Number(vec ?? defaultVal);
+        if (vec !== undefined && vec !== null) {
+            const n = Number(vec);
+            return Number.isFinite(n) ? n : defaultVal;
+        }
+        return defaultVal;
     }
-    return Number(val ?? defaultVal);
+    if (typeof val === 'number' && Number.isFinite(val)) return val;
+    const n = Number(val);
+    return Number.isFinite(n) ? n : defaultVal;
 };
 
 type NumericField = {
@@ -43,11 +57,44 @@ type NumericField = {
     step?: number;
 };
 
-const ParticleEmitterDialog: React.FC<ParticleEmitterDialogProps> = ({ visible, nodeId, onClose }) => {
+const ParticleEmitterDialog: React.FC<ParticleEmitterDialogProps> = ({
+    visible,
+    nodeId,
+    onClose,
+    isStandalone,
+    standaloneNode,
+    standaloneEmit,
+    standaloneModelData,
+}) => {
     const [form] = Form.useForm();
-    const { getNodeById, updateNode, modelData } = useModelStore();
+    const { getNodeById, updateNode, modelData: storeModelData } = useModelStore();
+    const modelData = isStandalone ? standaloneModelData : storeModelData;
 
-    const currentNode = nodeId !== null ? (getNodeById(nodeId) as ParticleEmitterNode) : null;
+    const currentNode =
+        nodeId !== null
+            ? (isStandalone
+                ? (standaloneNode as ParticleEmitterNode | null)
+                : (getNodeById(nodeId) as ParticleEmitterNode))
+            : null;
+
+    const applyNodeToStore = React.useCallback(
+        (next: ParticleEmitterNode, history?: { name: string; undoNode: any; redoNode: any }) => {
+            if (nodeId === null) return;
+            if (isStandalone && standaloneEmit) {
+                standaloneEmit('APPLY_NODE_UPDATE', { objectId: nodeId, node: next, history });
+                return;
+            }
+            if (history) {
+                useHistoryStore.getState().push({
+                    name: history.name,
+                    undo: () => updateNode(nodeId, history.undoNode),
+                    redo: () => updateNode(nodeId, history.redoNode),
+                });
+            }
+            updateNode(nodeId, next);
+        },
+        [isStandalone, standaloneEmit, nodeId, updateNode]
+    );
 
     const [animDataMap, setAnimDataMap] = useState<Record<string, any>>({});
     const [currentEditingProp, setCurrentEditingProp] = useState<string | null>(null);
@@ -127,8 +174,25 @@ const ParticleEmitterDialog: React.FC<ParticleEmitterDialogProps> = ({ visible, 
         }
     };
 
+    const formHydratedForNodeIdRef = React.useRef<number | null>(null);
+
     useEffect(() => {
-        if (!visible) return;
+        if (!visible) {
+            formHydratedForNodeIdRef.current = null;
+            return;
+        }
+        if (nodeId === null) return;
+        if (formHydratedForNodeIdRef.current === nodeId) return;
+
+        const sourceNode = isStandalone
+            ? (standaloneNode as ParticleEmitterNode | null)
+            : (useModelStore.getState().getNodeById(nodeId) as ParticleEmitterNode | undefined) ?? null;
+
+        if (!sourceNode) return;
+
+        formHydratedForNodeIdRef.current = nodeId;
+
+        const currentNode = sourceNode;
 
         const defaults = {
             Path: '',
@@ -145,34 +209,30 @@ const ParticleEmitterDialog: React.FC<ParticleEmitterDialogProps> = ({ visible, 
 
         const newAnimDataMap: Record<string, any> = {};
 
-        if (currentNode) {
-            const flags = Number((currentNode as any).Flags ?? 0);
-            const path = (currentNode as any).Path ?? (currentNode as any).FileName ?? '';
+        const flags = Number((currentNode as any).Flags ?? 0);
+        const path = (currentNode as any).Path ?? (currentNode as any).FileName ?? '';
 
-            for (const f of numericFields) {
-                const val = (currentNode as any)[f.name];
-                if (isAnimVector(val)) newAnimDataMap[f.name] = val;
-            }
-
-            form.setFieldsValue({
-                ...defaults,
-                Path: path,
-                UsesMdl: (flags & EMITTER_USES_MDL) !== 0,
-                UsesTga: (flags & EMITTER_USES_TGA) !== 0,
-                EmissionRate: getStaticValue((currentNode as any).EmissionRate, defaults.EmissionRate),
-                LifeSpan: getStaticValue((currentNode as any).LifeSpan, defaults.LifeSpan),
-                InitVelocity: getStaticValue((currentNode as any).InitVelocity, defaults.InitVelocity),
-                Gravity: getStaticValue((currentNode as any).Gravity, defaults.Gravity),
-                Longitude: getStaticValue((currentNode as any).Longitude, defaults.Longitude),
-                Latitude: getStaticValue((currentNode as any).Latitude, defaults.Latitude),
-                Visibility: getStaticValue((currentNode as any).Visibility, defaults.Visibility),
-            });
-        } else {
-            form.setFieldsValue(defaults);
+        for (const f of numericFields) {
+            const val = (currentNode as any)[f.name];
+            if (isAnimVector(val)) newAnimDataMap[f.name] = val;
         }
 
+        form.setFieldsValue({
+            ...defaults,
+            Path: path,
+            UsesMdl: (flags & EMITTER_USES_MDL) !== 0,
+            UsesTga: (flags & EMITTER_USES_TGA) !== 0,
+            EmissionRate: getStaticValue((currentNode as any).EmissionRate, defaults.EmissionRate),
+            LifeSpan: getStaticValue((currentNode as any).LifeSpan, defaults.LifeSpan),
+            InitVelocity: getStaticValue((currentNode as any).InitVelocity, defaults.InitVelocity),
+            Gravity: getStaticValue((currentNode as any).Gravity, defaults.Gravity),
+            Longitude: getStaticValue((currentNode as any).Longitude, defaults.Longitude),
+            Latitude: getStaticValue((currentNode as any).Latitude, defaults.Latitude),
+            Visibility: getStaticValue((currentNode as any).Visibility, defaults.Visibility),
+        });
+
         setAnimDataMap(newAnimDataMap);
-    }, [visible, currentNode, form, numericFields]);
+    }, [visible, nodeId, isStandalone, standaloneNode, form, numericFields]);
 
     const handleOk = async () => {
         try {
@@ -201,13 +261,11 @@ const ParticleEmitterDialog: React.FC<ParticleEmitterDialogProps> = ({ visible, 
                 }
             }
 
-            useHistoryStore.getState().push({
+            applyNodeToStore(updatedNode, {
                 name: '编辑粒子系统',
-                undo: () => updateNode(nodeId, currentNode),
-                redo: () => updateNode(nodeId, updatedNode),
+                undoNode: currentNode,
+                redoNode: updatedNode,
             });
-
-            updateNode(nodeId, updatedNode);
             onClose();
         } catch (e) {
             console.error('Validation failed', e);
@@ -256,24 +314,7 @@ const ParticleEmitterDialog: React.FC<ParticleEmitterDialogProps> = ({ visible, 
         );
     };
 
-    return (
-        <>
-            <DraggableModal
-                title="I型粒子发射器"
-                open={visible}
-                onCancel={onClose}
-                footer={(
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-                        <Button onClick={handleOk} type="primary" size="small">确定</Button>
-                        <Button onClick={onClose} size="small">取消</Button>
-                    </div>
-                )}
-                width={540}
-                resizable={false}
-                maskClosable={false}
-                wrapClassName="pe1-dialog"
-                styles={{ body: { padding: 10 } }}
-            >
+    const pe1Form = (
                 <Form form={form} layout="vertical">
                     <div className="pe1-grid">
                         <NumericGroup field={numericFields[0]} />
@@ -309,6 +350,41 @@ const ParticleEmitterDialog: React.FC<ParticleEmitterDialogProps> = ({ visible, 
                         </fieldset>
                     </div>
                 </Form>
+    );
+
+    if (isStandalone) {
+        return (
+            <NodeEditorStandaloneShell>
+                <>
+                    {pe1Form}
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, paddingTop: 8 }}>
+                        <Button onClick={handleOk} type="primary" size="small">确定</Button>
+                        <Button onClick={onClose} size="small">取消</Button>
+                    </div>
+                </>
+            </NodeEditorStandaloneShell>
+        );
+    }
+
+    return (
+        <>
+            <DraggableModal
+                title="I型粒子发射器"
+                open={visible}
+                onCancel={onClose}
+                footer={(
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                        <Button onClick={handleOk} type="primary" size="small">确定</Button>
+                        <Button onClick={onClose} size="small">取消</Button>
+                    </div>
+                )}
+                width={540}
+                resizable={false}
+                maskClosable={false}
+                wrapClassName="pe1-dialog"
+                styles={{ body: { padding: 10 } }}
+            >
+                {pe1Form}
             </DraggableModal>
         </>
     );

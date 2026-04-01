@@ -1,10 +1,10 @@
-﻿
+
 /**
  * 节点管理器窗口组件
  */
 
 import React, { useMemo, useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
-import { Tree, Input, Space, Button, Tooltip, message, Modal, Menu } from 'antd';
+import { Tree, Input, Space, Button, Tooltip, message, Menu } from 'antd';
 import {
     PlusOutlined,
     EditOutlined,
@@ -23,22 +23,21 @@ import { useUIStore } from '../../store/uiStore';
 import { NodeType } from '../../types/node';
 import { buildTreeData, filterTreeNodes, getExpandedKeys, getAncestorKeys } from '../../utils/treeUtils';
 import { canDeleteNode, getNodeIcon, getNodeTypeName, isNodeManagerType } from '../../utils/nodeUtils';
-import { RenameNodeDialog } from './RenameNodeDialog';
-import ParticleEmitterDialog from './ParticleEmitterDialog';
-import ParticleEmitter2Dialog from './ParticleEmitter2Dialog';
-import CollisionShapeDialog from './CollisionShapeDialog';
-import LightDialog from './LightDialog';
-
-import EventObjectDialog from './EventObjectDialog';
-import RibbonEmitterDialog from './RibbonEmitterDialog';
 import { createParticleEmitter2FromPreset, listParticleEmitter2Presets, ParticleEmitter2PresetSummary } from '../../services/particleEmitter2PresetService';
+import { openNodeEditor } from '../../utils/nodeEditorOpen';
+import { registerNodeManagerDeleteKeyListener } from '../../utils/nodeManagerShortcutBridge';
+import {
+    markNodeManagerListScrollFromTree,
+    shouldScrollNodeManagerToSelection,
+} from '../../utils/nodeManagerListScrollBridge';
+import { isTextInputActive } from '../../shortcuts/utils';
 
 const { Search } = Input;
 
 export const NodeManagerWindow: React.FC = () => {
-    const { nodes, modelData, deleteNode, reparentNodes, setClipboardNode, pasteNode, renameNode, clipboardNode, addNode } = useModelStore();
+    const { nodes, modelData, deleteNode, reparentNodes, setClipboardNode, pasteNode, clipboardNode, addNode } = useModelStore();
     const { selectedNodeIds, selectNode, clearNodeSelection, mainMode } = useSelectionStore();
-    const { setNodeDialogVisible, setCreateNodeDialogVisible } = useUIStore();
+    const { setCreateNodeDialogVisible } = useUIStore();
 
     const [searchText, setSearchText] = useState('');
     const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
@@ -67,16 +66,6 @@ export const NodeManagerWindow: React.FC = () => {
         };
     }, []);
 
-    // Rename Dialog State
-    const [renameVisible, setRenameVisible] = useState(false);
-    const [renamingNodeId, setRenamingNodeId] = useState<number | null>(null);
-    const [renamingNodeName, setRenamingNodeName] = useState('');
-    const [peDialogVisible, setPeDialogVisible] = useState(false);
-    const [pe2DialogVisible, setPe2DialogVisible] = useState(false);
-    const [collisionDialogVisible, setCollisionDialogVisible] = useState(false);
-    const [lightDialogVisible, setLightDialogVisible] = useState(false);
-    const [eventDialogVisible, setEventDialogVisible] = useState(false);
-    const [ribbonDialogVisible, setRibbonDialogVisible] = useState(false);
     const [particleEmitterPresets, setParticleEmitterPresets] = useState<ParticleEmitter2PresetSummary[]>([]);
 
     // Mouse-based Drag-Drop State (replaces HTML5 drag-drop to work with Tauri dragDropEnabled)
@@ -93,6 +82,14 @@ export const NodeManagerWindow: React.FC = () => {
 
     // Ref for tree wrapper
     const treeWrapperRef = React.useRef<HTMLDivElement>(null);
+    /** 节点管理器根容器：用于 Del 快捷键仅在面板内生效 */
+    const nodeManagerRootRef = React.useRef<HTMLDivElement>(null);
+
+    // 右键菜单（需早于 handleDelete，以便删除时关闭菜单）
+    const [contextMenuVisible, setContextMenuVisible] = useState(false);
+    const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 });
+    const [contextMenuNodeId, setContextMenuNodeId] = useState<number | null>(null);
+    const contextMenuRef = React.useRef<HTMLDivElement>(null);
 
     // Keep refs in sync with state
     React.useEffect(() => {
@@ -154,7 +151,16 @@ export const NodeManagerWindow: React.FC = () => {
         }
     }, [searchText, treeData, nodeManagerNodes.length]);
 
+    /** 选中后让树区域获得焦点，便于 activeElement 落在管理器内、Delete 可被识别 */
+    const focusTreeSurface = useCallback(() => {
+        requestAnimationFrame(() => {
+            treeWrapperRef.current?.focus({ preventScroll: true });
+        });
+    }, []);
+
     const handleSelect: TreeProps['onSelect'] = (_selectedKeys, info) => {
+        // 树内点击：禁止自动滚动列表（视口选中节点时由 Viewer 单独打开滚动）
+        markNodeManagerListScrollFromTree();
         // Strictly control selection logic
         const nodeId = parseInt(info.node.key as string);
         const isMulti = info.nativeEvent.ctrlKey || info.nativeEvent.metaKey;
@@ -166,6 +172,7 @@ export const NodeManagerWindow: React.FC = () => {
             // Click: Replace selection (Single Select)
             selectNode(nodeId, false);
         }
+        focusTreeSurface();
     };
 
     const handleExpand: TreeProps['onExpand'] = (expandedKeysValue) => {
@@ -219,10 +226,11 @@ export const NodeManagerWindow: React.FC = () => {
             message.warning('只能编辑一个节点');
             return;
         }
-        setNodeDialogVisible(true, selectedNodeIds[0]);
+        void openNodeEditor('genericNode', selectedNodeIds[0]);
     };
 
-    const handleDelete = (nodeId?: number) => {
+    const handleDelete = useCallback((nodeId?: number) => {
+        setContextMenuVisible(false);
         const targetId = nodeId ?? (selectedNodeIds.length > 0 ? selectedNodeIds[0] : null);
         if (targetId === null) {
             message.warning('请先选择要删除的节点');
@@ -233,19 +241,25 @@ export const NodeManagerWindow: React.FC = () => {
             message.error(checkResult.reason);
             return;
         }
-        Modal.confirm({
-            title: '确认删除',
-            content: '确定要删除节点 ' + targetId + ' 吗？此操作不可恢复。',
-            okText: '删除',
-            okType: 'danger',
-            cancelText: '取消',
-            onOk: () => {
-                deleteNode(targetId);
-                clearNodeSelection();
-                message.success('节点已删除');
-            }
+        deleteNode(targetId);
+        clearNodeSelection();
+        message.success('节点已删除');
+    }, [selectedNodeIds, nodes, modelData?.Geosets, deleteNode, clearNodeSelection]);
+
+    // Delete：经 nodeManagerShortcutBridge 在全局快捷键之前消费，避免与时间轴/几何抢键
+    useEffect(() => {
+        return registerNodeManagerDeleteKeyListener((e) => {
+            if (e.key !== 'Delete' && e.code !== 'Delete') return false;
+            if (e.repeat) return false;
+            if (isTextInputActive()) return false;
+            const active = document.activeElement;
+            if (active instanceof HTMLSelectElement) return false;
+            const root = nodeManagerRootRef.current;
+            if (!root || !active || !root.contains(active)) return false;
+            handleDelete();
+            return true;
         });
-    };
+    }, [handleDelete]);
 
     // Verify environment drag support
     // Drag diagnostics removed as per user request
@@ -405,7 +419,7 @@ export const NodeManagerWindow: React.FC = () => {
                 label: '编辑节点',
                 icon: <EditOutlined />,
                 onClick: () => {
-                    setNodeDialogVisible(true, nodeId);
+                    void openNodeEditor('genericNode', nodeId);
                 }
             }
         ];
@@ -415,42 +429,42 @@ export const NodeManagerWindow: React.FC = () => {
                 key: 'edit_particle',
                 label: '编辑粒子系统',
                 icon: <FireOutlined />,
-                onClick: () => setPe2DialogVisible(true)
+                onClick: () => void openNodeEditor('particleEmitter2', nodeId)
             });
         } else if (node.type === NodeType.RIBBON_EMITTER) {
             items.push({
                 key: 'edit_ribbon',
                 label: '编辑丝带',
                 icon: <FireOutlined />,
-                onClick: () => setRibbonDialogVisible(true)
+                onClick: () => void openNodeEditor('ribbonEmitter', nodeId)
             });
         } else if (node.type === NodeType.PARTICLE_EMITTER) {
             items.push({
                 key: 'edit_particle_1',
                 label: '编辑粒子系统',
                 icon: <FireOutlined />,
-                onClick: () => setPeDialogVisible(true)
+                onClick: () => void openNodeEditor('particleEmitter', nodeId)
             });
         } else if (node.type === NodeType.COLLISION_SHAPE) {
             items.push({
                 key: 'edit_collision',
                 label: '编辑碰撞形状',
                 icon: <BlockOutlined />,
-                onClick: () => setCollisionDialogVisible(true)
+                onClick: () => void openNodeEditor('collisionShape', nodeId)
             });
         } else if (node.type === NodeType.LIGHT) {
             items.push({
                 key: 'edit_light',
                 label: '编辑灯光',
                 icon: <BulbOutlined />,
-                onClick: () => setLightDialogVisible(true)
+                onClick: () => void openNodeEditor('light', nodeId)
             });
         } else if (node.type === NodeType.EVENT_OBJECT) {
             items.push({
                 key: 'edit_event',
                 label: '编辑事件对象',
                 icon: <SoundOutlined />,
-                onClick: () => setEventDialogVisible(true)
+                onClick: () => void openNodeEditor('eventObject', nodeId)
             });
         }
 
@@ -635,9 +649,7 @@ export const NodeManagerWindow: React.FC = () => {
                 key: 'rename',
                 label: '重命名',
                 onClick: () => {
-                    setRenamingNodeId(nodeId);
-                    setRenamingNodeName(node.Name);
-                    setRenameVisible(true);
+                    void openNodeEditor('rename', nodeId);
                 }
             },
             {
@@ -652,20 +664,15 @@ export const NodeManagerWindow: React.FC = () => {
         return items;
     };
 
-    // Context Menu State
-    const [contextMenuVisible, setContextMenuVisible] = useState(false);
-    const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 });
-    const [contextMenuNodeId, setContextMenuNodeId] = useState<number | null>(null);
-    const contextMenuRef = React.useRef<HTMLDivElement>(null);
-
-
     const handleRightClick: TreeProps['onRightClick'] = ({ event, node }) => {
         event.preventDefault();
         const nodeId = parseInt(node.key as string);
         setContextMenuNodeId(nodeId);
 
         // Auto-select the node on right click
+        markNodeManagerListScrollFromTree();
         selectNode(nodeId);
+        focusTreeSurface();
 
         const x = event.clientX;
         const y = event.clientY;
@@ -709,35 +716,35 @@ export const NodeManagerWindow: React.FC = () => {
     }, [contextMenuVisible, contextMenuItems, contextMenuPosition.x, contextMenuPosition.y]);
 
     const handleNodeDoubleClick = (node: any) => {
+        markNodeManagerListScrollFromTree();
         // Open specialized editor based on node type
         switch (node.type) {
             case NodeType.PARTICLE_EMITTER:
                 selectNode(node.ObjectId);
-                setPeDialogVisible(true);
+                void openNodeEditor('particleEmitter', node.ObjectId);
                 break;
             case NodeType.PARTICLE_EMITTER_2:
                 selectNode(node.ObjectId);
-                setPe2DialogVisible(true);
+                void openNodeEditor('particleEmitter2', node.ObjectId);
                 break;
             case NodeType.LIGHT:
                 selectNode(node.ObjectId);
-                setLightDialogVisible(true);
+                void openNodeEditor('light', node.ObjectId);
                 break;
             case NodeType.COLLISION_SHAPE:
                 selectNode(node.ObjectId);
-                setCollisionDialogVisible(true);
+                void openNodeEditor('collisionShape', node.ObjectId);
                 break;
             case NodeType.EVENT_OBJECT:
                 selectNode(node.ObjectId);
-                setEventDialogVisible(true);
+                void openNodeEditor('eventObject', node.ObjectId);
                 break;
             case NodeType.RIBBON_EMITTER:
                 selectNode(node.ObjectId);
-                setRibbonDialogVisible(true);
+                void openNodeEditor('ribbonEmitter', node.ObjectId);
                 break;
             default:
-                // For other node types (Bone, Helper, Attachment, etc.), open generic node dialog
-                setNodeDialogVisible(true, node.ObjectId);
+                void openNodeEditor('genericNode', node.ObjectId);
                 break;
         }
     };
@@ -754,6 +761,7 @@ export const NodeManagerWindow: React.FC = () => {
     useEffect(() => {
         if (mainMode !== 'animation') return;
         if (selectedNodeIds.length === 0) return;
+        if (!shouldScrollNodeManagerToSelection) return;
         const targetId = selectedNodeIds[0];
         const wrapper = treeWrapperRef.current;
         if (!wrapper) return;
@@ -768,6 +776,7 @@ export const NodeManagerWindow: React.FC = () => {
 
     return (
         <div
+            ref={nodeManagerRootRef}
             style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: '8px', overflow: 'hidden' }}
             onContextMenu={(e) => e.preventDefault()}
         >
@@ -794,6 +803,7 @@ export const NodeManagerWindow: React.FC = () => {
 
             <div
                 ref={treeWrapperRef}
+                tabIndex={-1}
                 className="node-manager-tree-wrapper"
                 style={{
                     flex: 1,
@@ -801,7 +811,8 @@ export const NodeManagerWindow: React.FC = () => {
                     border: '1px solid #303030',
                     borderRadius: '2px',
                     backgroundColor: '#1e1e1e',
-                    padding: '4px'
+                    padding: '4px',
+                    outline: 'none',
                 }}
                 onContextMenu={(e) => {
                     e.preventDefault();
@@ -1003,51 +1014,6 @@ export const NodeManagerWindow: React.FC = () => {
                 )
             }
 
-            <RenameNodeDialog
-                visible={renameVisible}
-                nodeId={renamingNodeId}
-                currentName={renamingNodeName}
-                onRename={(newName) => {
-                    if (renamingNodeId !== null) {
-                        renameNode(renamingNodeId, newName);
-                        setRenameVisible(false);
-                        message.success('重命名成功');
-                    }
-                }}
-                onCancel={() => setRenameVisible(false)}
-            />
-
-            <ParticleEmitterDialog
-                visible={peDialogVisible}
-                nodeId={selectedNodeIds.length > 0 ? selectedNodeIds[0] : null}
-                onClose={() => setPeDialogVisible(false)}
-            />
-
-            <ParticleEmitter2Dialog
-                visible={pe2DialogVisible}
-                nodeId={selectedNodeIds.length > 0 ? selectedNodeIds[0] : null}
-                onClose={() => setPe2DialogVisible(false)}
-            />
-            <CollisionShapeDialog
-                visible={collisionDialogVisible}
-                nodeId={selectedNodeIds.length > 0 ? selectedNodeIds[0] : null}
-                onClose={() => setCollisionDialogVisible(false)}
-            />
-            <LightDialog
-                visible={lightDialogVisible}
-                nodeId={selectedNodeIds.length > 0 ? selectedNodeIds[0] : null}
-                onClose={() => setLightDialogVisible(false)}
-            />
-            <EventObjectDialog
-                visible={eventDialogVisible}
-                nodeId={selectedNodeIds.length > 0 ? selectedNodeIds[0] : null}
-                onClose={() => setEventDialogVisible(false)}
-            />
-            <RibbonEmitterDialog
-                visible={ribbonDialogVisible}
-                nodeId={selectedNodeIds.length > 0 ? selectedNodeIds[0] : null}
-                onClose={() => setRibbonDialogVisible(false)}
-            />
         </div >
     );
 };

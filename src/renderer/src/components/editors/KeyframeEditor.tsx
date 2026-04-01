@@ -10,6 +10,11 @@ import { emit } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { CloseOutlined } from '@ant-design/icons'
 import { GlobalSequenceSelect } from '../common/GlobalSequenceSelect'
+import {
+    cloneAnimVectorForIpc,
+    isKeyframeAnimVectorIntTrack,
+    vectorToPlainArray,
+} from '../../utils/animVectorIpc'
 
 const { TextArea } = Input
 
@@ -446,42 +451,53 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
         setText(newText)
     }
 
+    // 将关键帧向量转为普通 number[]（含 MsgPack 解码后的 Uint8Array → 按 float/int 还原）
+    const vectorToNumberArray = (raw: any, normalizedSize: number, nameForIntTrack: string = fieldName): number[] => {
+        const patchQuatW128 = (nums: number[]): number[] => {
+            if (
+                normalizedSize === 4 &&
+                nums.length === 4 &&
+                nums[0] === 0 &&
+                nums[1] === 0 &&
+                nums[2] === 0 &&
+                nums[3] === 128
+            ) {
+                return [0, 0, 0, 1]
+            }
+            return nums
+        }
+        const isInt = isKeyframeAnimVectorIntTrack(nameForIntTrack)
+        if (raw === undefined || raw === null) {
+            return new Array(normalizedSize).fill(0)
+        }
+        if (typeof raw === 'number') {
+            const out = new Array(normalizedSize).fill(0)
+            out[0] = raw
+            return patchQuatW128(out)
+        }
+        const plain = vectorToPlainArray(raw, { isInt })
+        if (plain.length === 0) {
+            return new Array(normalizedSize).fill(0)
+        }
+        const padded = [...plain]
+        while (padded.length < normalizedSize) padded.push(0)
+        return patchQuatW128(padded.slice(0, normalizedSize))
+    }
+
     // Helper to normalize keys (handle Frame/Time and Vector/Value aliases)
-    const normalizeKeys = (keys: any[], vSize: number = vectorSize): any[] => {
+    const normalizeKeys = (keys: any[], vSize: number = vectorSize, nameForIntTrack: string = fieldName): any[] => {
         const normalizedSize = Number.isFinite(vSize) && vSize > 0 ? vSize : vectorSize
         if (!Array.isArray(keys)) return []
         return keys.map(k => {
-            let vector = k.Vector ?? k.Value
-
-            if (vector === undefined || vector === null) {
-                vector = new Array(normalizedSize).fill(0)
-            } else if (typeof vector === 'number') {
-                vector = [vector]
-            } else if (Array.isArray(vector)) {
-                vector = [...vector]
-            } else if (typeof vector === 'object') {
-                const objKeys = Object.keys(vector).sort((a, b) => parseInt(a) - parseInt(b))
-                vector = objKeys.map(key => vector[key])
-                if (vector.length === 0) {
-                    vector = new Array(normalizedSize).fill(0)
-                }
-            } else {
-                vector = new Array(normalizedSize).fill(0)
-            }
-
-            while (vector.length < normalizedSize) vector.push(0)
-            vector = vector.slice(0, normalizedSize)
-
-            const inTan = Array.isArray(k.InTan) ? [...k.InTan] : new Array(normalizedSize).fill(0)
-            const outTan = Array.isArray(k.OutTan) ? [...k.OutTan] : new Array(normalizedSize).fill(0)
-            while (inTan.length < normalizedSize) inTan.push(0)
-            while (outTan.length < normalizedSize) outTan.push(0)
+            const vector = vectorToNumberArray(k.Vector ?? k.Value, normalizedSize, nameForIntTrack)
+            const inTan = vectorToNumberArray(k.InTan, normalizedSize, nameForIntTrack)
+            const outTan = vectorToNumberArray(k.OutTan, normalizedSize, nameForIntTrack)
 
             return {
                 Frame: k.Frame ?? k.Time ?? 0,
                 Vector: vector,
-                InTan: inTan.slice(0, normalizedSize),
-                OutTan: outTan.slice(0, normalizedSize)
+                InTan: inTan,
+                OutTan: outTan
             }
         })
     }
@@ -535,17 +551,34 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
             const payload = event.payload as any;
             if (!payload) return;
 
-            if (payload.targetWindowId && payload.targetWindowId !== currentWindowLabel) {
+            const tid = payload.targetWindowId as string | undefined;
+            if (tid && currentWindowLabel && tid.toLowerCase() !== String(currentWindowLabel).toLowerCase()) {
                 return;
             }
 
             console.log(`[KeyframeEditor] ${currentWindowLabel} accepted IPC_KEYFRAME_INIT`);
-            const initData = payload.initialData;
-            const vSize = payload.vectorSize || 1;
-            const fName = payload.fieldName || '';
+            // 优先用 initialDataJson：主进程已用 JSON 字符串传递，避免嵌套对象跨 WebView 时 float 被错成 128 等整数
+            const vSize = payload.vectorSize || 1
+            const fName = payload.fieldName || ''
+            const intOpts = { isInt: isKeyframeAnimVectorIntTrack(fName) }
+
+            let rawInit: unknown = undefined
+            if (typeof payload.initialDataJson === 'string' && payload.initialDataJson.length > 0) {
+                try {
+                    rawInit = JSON.parse(payload.initialDataJson)
+                } catch {
+                    rawInit = payload.initialData
+                }
+            } else {
+                rawInit = payload.initialData
+            }
+            const initData =
+                rawInit && typeof rawInit === 'object' && Array.isArray((rawInit as any).Keys)
+                    ? (cloneAnimVectorForIpc(rawInit, intOpts) as any)
+                    : rawInit
             const titleStr = payload.title || 'Keyframe Editor';
             const normalizedInitData = initData && Array.isArray(initData.Keys)
-                ? { ...initData, Keys: normalizeKeys(initData.Keys, vSize) }
+                ? { ...initData, Keys: normalizeKeys(initData.Keys, vSize, fName) }
                 : initData;
 
             setStandaloneData({
@@ -562,7 +595,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
             setGlobalSeqId(initData?.GlobalSeqId ?? null);
 
             if (normalizedInitData && normalizedInitData.Keys && normalizedInitData.Keys.length > 0) {
-                setText(generateText(normalizedInitData.Keys, initData.LineType || 0, vSize));
+                setText(generateText(normalizedInitData.Keys, (initData as any)?.LineType ?? 0, vSize));
             } else {
                 const defVector = vSize === 4 ? [0, 0, 0, 1] : new Array(vSize).fill(titleStr.includes('Scale') ? 1 : (fName.includes('Alpha') ? 1 : 0));
                 setText(generateText([{ Frame: 0, Vector: defVector, InTan: new Array(vSize).fill(0), OutTan: new Array(vSize).fill(0) }], 0, vSize));

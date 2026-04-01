@@ -4,6 +4,8 @@ import { WebviewWindow, getAllWebviewWindows } from '@tauri-apps/api/webviewWind
 import { LogicalSize } from '@tauri-apps/api/dpi';
 import { markStandalonePerf } from './standalonePerf';
 import { chooseRpcEmitEncoding } from './rpcSerialization';
+import { isKeyframeAnimVectorIntTrack, serializeAnimVectorForKeyframeIpc } from './animVectorIpc';
+import type { NodeEditorKind } from '../types/nodeEditorRpc';
 
 /** 超过此 JSON 字符长度则走 Rust invoke 投递，避免超大对象在 JS emit 路径反复序列化 */
 const RPC_INVOKE_EMIT_THRESHOLD_CHARS = 48 * 1024
@@ -21,6 +23,9 @@ type ResolvedOpenToolWindowOptions = {
 };
 
 class WindowManager {
+    /** 打开 nodeEditor 子窗前写入，供主窗口 getNodeEditorState 拼装快照 */
+    private pendingNodeEditorSession: { kind: NodeEditorKind; objectId: number } | null = null;
+
     private activeWindows: Map<string, WebviewWindow> = new Map();
     private visibilityCache: Map<string, boolean> = new Map();
     private hydrationState: Map<string, boolean> = new Map();
@@ -297,7 +302,8 @@ class WindowManager {
         console.log(`[WindowManager] Creating new window: ${windowId} (${title})`);
         try {
             const win = new WebviewWindow(windowId, {
-                url: `${window.location.origin}/?window=${windowId}`,
+                // 使用独立 HTML 入口，避免加载主应用 main.tsx / App 依赖链
+                url: `${window.location.origin}/standalone.html?window=${encodeURIComponent(windowId)}`,
                 title,
                 width,
                 height,
@@ -334,6 +340,22 @@ class WindowManager {
 
     async openMaterialManager(): Promise<void> {
         await this.openToolWindow('materialManager', '材质管理器', 760, 450);
+    }
+
+    /** 设置待打开的节点编辑会话（随后应调用 openNodeEditorWindow） */
+    setPendingNodeEditorSession(kind: NodeEditorKind, objectId: number): void {
+        this.pendingNodeEditorSession = { kind, objectId };
+    }
+
+    getPendingNodeEditorSession(): { kind: NodeEditorKind; objectId: number } | null {
+        return this.pendingNodeEditorSession;
+    }
+
+    /**
+     * 独立 WebView 节点编辑器：单例 windowId=nodeEditor，种类由 pending 会话决定。
+     */
+    async openNodeEditorWindow(title: string, width: number, height: number): Promise<void> {
+        await this.openToolWindow('nodeEditor', title, width, height);
     }
 
     async openToolWindow(
@@ -425,11 +447,44 @@ class WindowManager {
             syncMode: 'never',
         });
 
+        const ipcPayload =
+            payload &&
+            typeof payload === 'object' &&
+            payload.initialData != null &&
+            typeof payload.initialData === 'object' &&
+            Array.isArray((payload.initialData as any).Keys)
+                ? {
+                    ...payload,
+                    initialData: undefined,
+                    initialDataJson: serializeAnimVectorForKeyframeIpc(payload.initialData, {
+                        isInt: isKeyframeAnimVectorIntTrack(payload.fieldName),
+                    }),
+                }
+                : payload;
+
+        // 关键帧：整段走 Rust emit_to_webview_json_payload（与大型 RPC 相同），避免 JS WebviewWindow.emit
+        // 在 Tauri 边界上对嵌套字段序列化时把 float（如四元数 w=1）错成 128 等异常整数
+        const payloadJson = JSON.stringify(ipcPayload);
+        let invokeOk = false;
         for (const delay of [0, 50, 150]) {
             if (delay > 0) {
                 await new Promise((resolve) => setTimeout(resolve, delay));
             }
-            await emit('IPC_KEYFRAME_INIT', payload).catch(() => { });
+            try {
+                await invoke('emit_to_webview_json_payload', {
+                    label: windowId,
+                    event: 'IPC_KEYFRAME_INIT',
+                    payloadJson,
+                });
+                invokeOk = true;
+                break;
+            } catch (e) {
+                console.warn('[WindowManager] 关键帧 IPC 走 invoke 失败，将重试:', e);
+            }
+        }
+        if (!invokeOk) {
+            console.warn('[WindowManager] 关键帧 IPC invoke 多次失败，回退 emitToolWindowEvent');
+            await this.emitToolWindowEvent(windowId, 'IPC_KEYFRAME_INIT', ipcPayload).catch(() => {});
         }
     }
 

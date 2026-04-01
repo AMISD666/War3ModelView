@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 集成了 Ant Design 和 Zustand的新版 MainLayout - 支持可调整大小的节点管理器
  * 
  * CRITICAL: Only ONE MainLayoutOld is rendered to avoid war3-model shared state corruption.
@@ -18,7 +18,6 @@ import { handleGlobalShortcutKeyDown } from '../shortcuts/manager';
 
 const MainLayoutOld = lazy(() => import('./MainLayout'));
 const NodeManagerWindow = lazy(() => import('./node/NodeManagerWindow').then(m => ({ default: m.NodeManagerWindow })));
-const NodeDialog = lazy(() => import('./node/NodeDialog'));
 const CreateNodeDialog = lazy(() => import('./node/CreateNodeDialog').then(m => ({ default: m.CreateNodeDialog })));
 const ViewSettingsWindow = lazy(() => import('./ViewSettingsWindow').then(m => ({ default: m.ViewSettingsWindow })));
 const BatchManager = lazy(() => import('./batch/BatchManager').then(m => ({ default: m.BatchManager })));
@@ -31,10 +30,7 @@ export const MainLayoutNew: React.FC = () => {
     const {
         showNodeManager,
         showMpqBrowser,
-        showNodeDialog,
         showCreateNodeDialog,
-        editingNodeId,
-        setNodeDialogVisible,
         setShowNodeManager,
         setShowMpqBrowser
     } = useUIStore();
@@ -423,15 +419,6 @@ export const MainLayoutNew: React.FC = () => {
                 </div>
             </div>
 
-            {showNodeDialog && (
-                <Suspense fallback={null}>
-                    <NodeDialog
-                        visible={showNodeDialog}
-                        nodeId={editingNodeId}
-                        onClose={() => setNodeDialogVisible(false)}
-                    />
-                </Suspense>
-            )}
             {showCreateNodeDialog && (
                 <Suspense fallback={null}>
                     <CreateNodeDialog />

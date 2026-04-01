@@ -1,4 +1,4 @@
-﻿/**
+/**
  * useSelection - Selection logic for the Viewer component
  * Handles box selection and single-click selection for vertices, faces, and nodes
  */
@@ -10,6 +10,7 @@ import { useModelStore } from '../../../store/modelStore'
 import { pickClosestGeoset } from '../../../utils/rayTriangle'
 import type { CameraState } from '../types'
 import { SimpleOrbitCamera } from '../../../utils/SimpleOrbitCamera'
+import { markNodeManagerListScrollFromViewer } from '../../../utils/nodeManagerListScrollBridge'
 
 export interface UseSelectionParams {
     rendererRef: React.MutableRefObject<any>
@@ -208,8 +209,10 @@ export function useSelection({
             if (isCtrl) {
                 const current = useSelectionStore.getState().selectedNodeIds
                 const combined = Array.from(new Set([...current, ...newSelection]))
+                markNodeManagerListScrollFromViewer()
                 selectNodes(combined)
             } else {
+                markNodeManagerListScrollFromViewer()
                 selectNodes(newSelection)
             }
         }
@@ -328,6 +331,7 @@ export function useSelection({
             }
 
             if (closestNodeId !== -1) {
+                markNodeManagerListScrollFromViewer()
                 selectNode(closestNodeId, isCtrl)
                 return
             } else if (!isCtrl && animationSubMode !== 'binding') {

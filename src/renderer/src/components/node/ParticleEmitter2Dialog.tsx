@@ -1,10 +1,11 @@
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Form, Checkbox, Select, Button, Input } from 'antd';
 import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker';
 
 import { DraggableModal } from '../DraggableModal';
+import { NodeEditorStandaloneShell } from '../common/NodeEditorStandaloneShell';
 import { listen } from '@tauri-apps/api/event';
 import { windowManager } from '../../utils/WindowManager';
 import type { Color } from 'antd/es/color-picker';
@@ -19,6 +20,12 @@ interface ParticleEmitter2DialogProps {
     visible: boolean;
     nodeId: number | null;
     onClose: () => void;
+    /** 独立 WebView：无 Zustand，经 RPC 同步 */
+    isStandalone?: boolean;
+    standaloneNode?: ParticleEmitter2Node | null;
+    standaloneEmit?: (command: string, payload?: any) => void;
+    standaloneModelData?: { Textures?: any[]; GlobalSequences?: any[]; Sequences?: any[] } | null;
+    standaloneModelPath?: string;
 }
 
 // Property mapping for animations
@@ -39,29 +46,80 @@ const isAnimVector = (val: any): boolean => {
 
 const getStaticValue = (val: any, defaultVal: number = 0): number => {
     if (isAnimVector(val)) {
-        const firstKey = val.Keys?.[0];
+        const keys = val.Keys;
+        if (!Array.isArray(keys) || keys.length === 0) return defaultVal;
+        const firstKey = keys[0];
         const vec = firstKey?.Vector ?? firstKey?.Value;
         if (Array.isArray(vec)) {
-            return Number(vec[0] ?? defaultVal);
+            const n = Number(vec[0]);
+            return Number.isFinite(n) ? n : defaultVal;
         }
-        return Number(vec ?? defaultVal);
+        if (vec !== undefined && vec !== null) {
+            const n = Number(vec);
+            return Number.isFinite(n) ? n : defaultVal;
+        }
+        return defaultVal;
     }
-    return Number(val ?? defaultVal);
+    if (typeof val === 'number' && Number.isFinite(val)) return val;
+    const n = Number(val);
+    return Number.isFinite(n) ? n : defaultVal;
 };
 
-const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible, nodeId, onClose }) => {
+const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
+    visible,
+    nodeId,
+    onClose,
+    isStandalone,
+    standaloneNode,
+    standaloneEmit,
+    standaloneModelData,
+    standaloneModelPath,
+}) => {
     const [form] = Form.useForm();
-    const { getNodeById, updateNode, modelData, modelPath } = useModelStore();
+    const { getNodeById, updateNode, modelData: storeModelData, modelPath: storeModelPath } = useModelStore();
+    const modelData = isStandalone ? standaloneModelData : storeModelData;
+    const modelPath = isStandalone ? (standaloneModelPath ?? '') : storeModelPath;
     const [isTextureDropActive, setIsTextureDropActive] = useState(false);
 
-    const currentNode = nodeId !== null ? getNodeById(nodeId) as ParticleEmitter2Node : null;
+    const currentNode =
+        nodeId !== null
+            ? (isStandalone
+                ? (standaloneNode as ParticleEmitter2Node | null)
+                : (getNodeById(nodeId) as ParticleEmitter2Node))
+            : null;
+
+    const applyNodeToStore = React.useCallback(
+        (next: ParticleEmitter2Node, history?: { name: string; undoNode: any; redoNode: any }) => {
+            if (nodeId === null) return;
+            if (isStandalone && standaloneEmit) {
+                standaloneEmit('APPLY_NODE_UPDATE', { objectId: nodeId, node: next, history });
+                return;
+            }
+            if (history) {
+                useHistoryStore.getState().push({
+                    name: history.name,
+                    undo: () => updateNode(nodeId, history.undoNode),
+                    redo: () => updateNode(nodeId, history.redoNode),
+                });
+            }
+            updateNode(nodeId, next);
+        },
+        [isStandalone, standaloneEmit, nodeId, updateNode]
+    );
     const initialNodeRef = React.useRef<ParticleEmitter2Node | null>(null);
     const isCommittingRef = React.useRef(false);
     const didRealtimePreviewRef = React.useRef(false);
-    const suppressNextSyncRef = React.useRef(false);
+    /** 仅在打开对话框或切换 nodeId 时灌入表单，避免 updateNode 导致 currentNode 引用变化而反复 setFieldsValue（失焦、数值被刷成 0） */
+    const formHydratedForNodeIdRef = React.useRef<number | null>(null);
 
     // Animation State
     const [animDataMap, setAnimDataMap] = useState<Record<string, any>>({});
+    /** 供 rAF 预览刷新读取，避免闭包拿到过期的 animDataMap */
+    const animDataMapRef = useRef<Record<string, any>>({});
+    /** 表单初始 setFieldsValue 完成后才允许 onValuesChange 驱动主窗口预览，避免打开时连发 updateNode */
+    const allowLivePreviewRef = useRef(false);
+    const previewRafRef = useRef<number | null>(null);
+    const pendingPreviewRef = useRef(false);
     const [currentEditingProp, setCurrentEditingProp] = useState<string | null>(null);
     const [presetModalOpen, setPresetModalOpen] = useState(false);
     const [presetName, setPresetName] = useState('');
@@ -98,28 +156,67 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
         return [r, g, b];
     };
 
-    // Load data into form with DEFAULTS
+    useEffect(() => {
+        animDataMapRef.current = animDataMap;
+    }, [animDataMap]);
+
+    useEffect(() => {
+        if (!visible || !currentNode) {
+            allowLivePreviewRef.current = false;
+            return;
+        }
+        // 下一帧再开实时预览，避开首帧 setFieldsValue 触发的 onValuesChange
+        const t = window.setTimeout(() => {
+            allowLivePreviewRef.current = true;
+        }, 0);
+        return () => {
+            clearTimeout(t);
+            allowLivePreviewRef.current = false;
+        };
+    }, [visible, currentNode?.ObjectId]);
+
+    useEffect(() => {
+        return () => {
+            if (previewRafRef.current != null) {
+                cancelAnimationFrame(previewRafRef.current);
+                previewRafRef.current = null;
+            }
+            pendingPreviewRef.current = false;
+        };
+    }, []);
+
+    // Load data into form with DEFAULTS（仅首次打开本节点时灌入，不因 store 每次 updateNode 而重灌）
     useEffect(() => {
         if (!visible) {
             setIsTextureDropActive(false);
             initialNodeRef.current = null;
             isCommittingRef.current = false;
             didRealtimePreviewRef.current = false;
-            suppressNextSyncRef.current = false;
+            allowLivePreviewRef.current = false;
+            formHydratedForNodeIdRef.current = null;
             return;
         }
 
-        if (suppressNextSyncRef.current) {
-            suppressNextSyncRef.current = false;
+        if (nodeId === null) return;
+
+        if (formHydratedForNodeIdRef.current === nodeId) {
             return;
         }
 
-        if (visible) {
-            if (!initialNodeRef.current && currentNode) {
-                initialNodeRef.current = JSON.parse(JSON.stringify(currentNode));
-            }
-            // Defaults as requested
-            const defaults = {
+        const sourceNode: ParticleEmitter2Node | null = isStandalone
+            ? (standaloneNode as ParticleEmitter2Node | null)
+            : (useModelStore.getState().getNodeById(nodeId) as ParticleEmitter2Node | undefined) ?? null;
+
+        if (!sourceNode) return;
+
+        formHydratedForNodeIdRef.current = nodeId;
+
+        const currentNode = sourceNode;
+        if (!initialNodeRef.current && currentNode) {
+            initialNodeRef.current = JSON.parse(JSON.stringify(currentNode));
+        }
+
+        const defaults = {
                 Visibility: 1,
                 EmissionRate: 0,
                 Speed: 0,
@@ -160,115 +257,111 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
                 Squirt: false,
                 Head: true,
                 Tail: false,
-            };
+        };
 
-            const newAnimDataMap: Record<string, any> = {};
+        const newAnimDataMap: Record<string, any> = {};
 
-            if (currentNode) {
-                // Helper to parse interval array [start, end, repeat] or object format {"0":..,"1":..,"2":..}
-                // Object format occurs after save due to zustand/spread operations converting arrays
-                const parseInterval = (value: any): [number, number, number] => {
-                    if (Array.isArray(value)) {
-                        return [value[0] ?? 0, value[1] ?? 0, value[2] ?? 1];
-                    }
-                    // Handle object format {"0": n, "1": n, "2": n} from array-to-object conversion
-                    if (value && typeof value === 'object' && '0' in value) {
-                        return [value['0'] ?? 0, value['1'] ?? 0, value['2'] ?? 1];
-                    }
-                    // Old format: single number treated as start, end=0, repeat=1
-                    return [typeof value === 'number' ? value : 0, 0, 1];
-                };
-
-                console.log('[ParticleDialog] Loading UV anims:', JSON.stringify({
-                    LifeSpanUVAnim: currentNode.LifeSpanUVAnim,
-                    DecayUVAnim: currentNode.DecayUVAnim,
-                    TailUVAnim: currentNode.TailUVAnim,
-                    TailDecayUVAnim: currentNode.TailDecayUVAnim
-                }));
-
-                const headLifeSpan = parseInterval(currentNode.LifeSpanUVAnim);
-                const headDecay = parseInterval(currentNode.DecayUVAnim);
-                const tailLifeSpan = parseInterval(currentNode.TailUVAnim);
-                const tailDecay = parseInterval(currentNode.TailDecayUVAnim);
-
-                console.log('[ParticleDialog] Parsed UV anims:', JSON.stringify({ headLifeSpan, headDecay, tailLifeSpan, tailDecay }));
-
-                form.setFieldsValue({
-                    ...defaults,
-                    ...currentNode,
-                    // Ensure Visibility always has a value (currentNode may have undefined)
-                    Visibility: getStaticValue((currentNode as any).Visibility, defaults.Visibility),
-                    EmissionRate: getStaticValue((currentNode as any).EmissionRate, defaults.EmissionRate),
-                    Speed: getStaticValue((currentNode as any).Speed, defaults.Speed),
-                    Variation: getStaticValue((currentNode as any).Variation, defaults.Variation),
-                    Latitude: getStaticValue((currentNode as any).Latitude, defaults.Latitude),
-                    Width: getStaticValue((currentNode as any).Width, defaults.Width),
-                    Length: getStaticValue((currentNode as any).Length, defaults.Length),
-                    Gravity: getStaticValue((currentNode as any).Gravity, defaults.Gravity),
-                    // Override complex types
-                    Seg1Color: toAntdColor(currentNode.SegmentColor?.[0]),
-                    Seg1Alpha: currentNode.Alpha?.[0] ?? defaults.Seg1Alpha,
-                    Seg1Scaling: currentNode.ParticleScaling?.[0] ?? defaults.Seg1Scaling,
-
-                    Seg2Color: toAntdColor(currentNode.SegmentColor?.[1]),
-                    Seg2Alpha: currentNode.Alpha?.[1] ?? defaults.Seg2Alpha,
-                    Seg2Scaling: currentNode.ParticleScaling?.[1] ?? defaults.Seg2Scaling,
-
-                    Seg3Color: toAntdColor(currentNode.SegmentColor?.[2]),
-                    Seg3Alpha: currentNode.Alpha?.[2] ?? defaults.Seg3Alpha,
-                    Seg3Scaling: currentNode.ParticleScaling?.[2] ?? defaults.Seg3Scaling,
-
-                    // HeadLifeSpan/Decay/TailLifeSpan/Decay parsed from arrays
-                    HeadLifeSpanStart: headLifeSpan[0],
-                    HeadLifeSpanEnd: headLifeSpan[1],
-                    HeadLifeSpanRepeat: headLifeSpan[2],
-                    HeadDecayStart: headDecay[0],
-                    HeadDecayEnd: headDecay[1],
-                    HeadDecayRepeat: headDecay[2],
-                    TailLifeSpanStart: tailLifeSpan[0],
-                    TailLifeSpanEnd: tailLifeSpan[1],
-                    TailLifeSpanRepeat: tailLifeSpan[2],
-                    TailDecayStart: tailDecay[0],
-                    TailDecayEnd: tailDecay[1],
-                    TailDecayRepeat: tailDecay[2],
-                });
-
-                // Load existing animation data
-                Object.entries(PROP_TO_ANIM_KEY).forEach(([propName, animKey]) => {
-                    const value = (currentNode as any)[propName];
-                    if (isAnimVector(value)) {
-                        newAnimDataMap[propName] = value;
-                    }
-                    const animData = (currentNode as any)[animKey];
-                    if (isAnimVector(animData)) {
-                        newAnimDataMap[propName] = animData;
-                    }
-                });
-            } else {
-                form.setFieldsValue(defaults);
+        const parseInterval = (value: any): [number, number, number] => {
+            if (Array.isArray(value)) {
+                return [value[0] ?? 0, value[1] ?? 0, value[2] ?? 1];
             }
-            setAnimDataMap(newAnimDataMap);
-        }
-    }, [currentNode, visible, form]);
+            if (value && typeof value === 'object' && '0' in value) {
+                return [value['0'] ?? 0, value['1'] ?? 0, value['2'] ?? 1];
+            }
+            return [typeof value === 'number' ? value : 0, 0, 1];
+        };
+
+        const headLifeSpan = parseInterval(currentNode.LifeSpanUVAnim);
+        const headDecay = parseInterval(currentNode.DecayUVAnim);
+        const tailLifeSpan = parseInterval(currentNode.TailUVAnim);
+        const tailDecay = parseInterval(currentNode.TailDecayUVAnim);
+
+        const cn = currentNode as any;
+        form.setFieldsValue({
+            ...defaults,
+            TextureID: cn.TextureID ?? defaults.TextureID,
+            FilterMode: cn.FilterMode ?? defaults.FilterMode,
+            Rows: cn.Rows ?? defaults.Rows,
+            Columns: cn.Columns ?? defaults.Columns,
+            PriorityPlane: cn.PriorityPlane ?? defaults.PriorityPlane,
+            ReplaceableId: cn.ReplaceableId ?? defaults.ReplaceableId,
+            TailLength: cn.TailLength ?? defaults.TailLength,
+            Time: cn.Time ?? defaults.Time,
+            LifeSpan: cn.LifeSpan ?? defaults.LifeSpan,
+            Unshaded: cn.Unshaded ?? defaults.Unshaded,
+            Unfogged: cn.Unfogged ?? defaults.Unfogged,
+            SortPrimsFarZ: cn.SortPrimsFarZ ?? defaults.SortPrimsFarZ,
+            LineEmitter: cn.LineEmitter ?? defaults.LineEmitter,
+            ModelSpace: cn.ModelSpace ?? defaults.ModelSpace,
+            XYQuad: cn.XYQuad ?? defaults.XYQuad,
+            Squirt: cn.Squirt ?? defaults.Squirt,
+            Head: cn.Head ?? defaults.Head,
+            Tail: cn.Tail ?? defaults.Tail,
+            Visibility: getStaticValue(cn.Visibility, defaults.Visibility),
+            EmissionRate: getStaticValue(cn.EmissionRate, defaults.EmissionRate),
+            Speed: getStaticValue(cn.Speed, defaults.Speed),
+            Variation: getStaticValue(cn.Variation, defaults.Variation),
+            Latitude: getStaticValue(cn.Latitude, defaults.Latitude),
+            Width: getStaticValue(cn.Width, defaults.Width),
+            Length: getStaticValue(cn.Length, defaults.Length),
+            Gravity: getStaticValue(cn.Gravity, defaults.Gravity),
+            Seg1Color: toAntdColor(currentNode.SegmentColor?.[0]),
+            Seg1Alpha: currentNode.Alpha?.[0] ?? defaults.Seg1Alpha,
+            Seg1Scaling: currentNode.ParticleScaling?.[0] ?? defaults.Seg1Scaling,
+            Seg2Color: toAntdColor(currentNode.SegmentColor?.[1]),
+            Seg2Alpha: currentNode.Alpha?.[1] ?? defaults.Seg2Alpha,
+            Seg2Scaling: currentNode.ParticleScaling?.[1] ?? defaults.Seg2Scaling,
+            Seg3Color: toAntdColor(currentNode.SegmentColor?.[2]),
+            Seg3Alpha: currentNode.Alpha?.[2] ?? defaults.Seg3Alpha,
+            Seg3Scaling: currentNode.ParticleScaling?.[2] ?? defaults.Seg3Scaling,
+            HeadLifeSpanStart: headLifeSpan[0],
+            HeadLifeSpanEnd: headLifeSpan[1],
+            HeadLifeSpanRepeat: headLifeSpan[2],
+            HeadDecayStart: headDecay[0],
+            HeadDecayEnd: headDecay[1],
+            HeadDecayRepeat: headDecay[2],
+            TailLifeSpanStart: tailLifeSpan[0],
+            TailLifeSpanEnd: tailLifeSpan[1],
+            TailLifeSpanRepeat: tailLifeSpan[2],
+            TailDecayStart: tailDecay[0],
+            TailDecayEnd: tailDecay[1],
+            TailDecayRepeat: tailDecay[2],
+        });
+
+        Object.entries(PROP_TO_ANIM_KEY).forEach(([propName, animKey]) => {
+            const value = (currentNode as any)[propName];
+            if (isAnimVector(value)) {
+                newAnimDataMap[propName] = value;
+            }
+            const animData = (currentNode as any)[animKey];
+            if (isAnimVector(animData)) {
+                newAnimDataMap[propName] = animData;
+            }
+        });
+        setAnimDataMap(newAnimDataMap);
+    }, [visible, nodeId, isStandalone, standaloneNode]);
 
     const applyRealtimeTexture = (textureId: number) => {
         if (nodeId === null || !currentNode) return;
         const textureCount = modelData?.Textures?.length || 0;
         if (textureId >= textureCount && textureId !== -1) return;
-        const sourceNode = (getNodeById(nodeId) as ParticleEmitter2Node) || currentNode;
+        const sourceNode = isStandalone
+            ? (currentNode as ParticleEmitter2Node)
+            : ((getNodeById(nodeId) as ParticleEmitter2Node) || currentNode);
         const safeTextureId = Number.isInteger(textureId) ? textureId : -1;
         const previewNode: ParticleEmitter2Node = {
             ...sourceNode,
             TextureID: safeTextureId,
         };
-        suppressNextSyncRef.current = true;
         didRealtimePreviewRef.current = true;
-        updateNode(nodeId, previewNode);
+        applyNodeToStore(previewNode);
         form.setFieldValue('TextureID', safeTextureId);
     };
 
-    const buildUpdatedNodeFromValues = (values: any): ParticleEmitter2Node | null => {
+    const buildUpdatedNodeFromValues = useCallback((values: any): ParticleEmitter2Node | null => {
         if (!currentNode) return null;
+
+        const animMap = animDataMapRef.current;
 
         const updatedNode: ParticleEmitter2Node = {
             ...currentNode,
@@ -317,10 +410,10 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
 
         dynamicProps.forEach(({ prop }) => {
             const animKey = PROP_TO_ANIM_KEY[prop];
-            if (animDataMap[prop]) {
-                (updatedNode as any)[prop] = animDataMap[prop];
+            if (animMap[prop]) {
+                (updatedNode as any)[prop] = animMap[prop];
                 if (animKey) {
-                    (updatedNode as any)[animKey] = animDataMap[prop];
+                    (updatedNode as any)[animKey] = animMap[prop];
                 }
             } else {
                 (updatedNode as any)[prop] = Number(values[prop]);
@@ -331,19 +424,42 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
         });
 
         Object.entries(PROP_TO_ANIM_KEY).forEach(([propName, animKey]) => {
-            if (animDataMap[propName]) {
-                (updatedNode as any)[animKey] = animDataMap[propName];
+            if (animMap[propName]) {
+                (updatedNode as any)[animKey] = animMap[propName];
             } else {
                 delete (updatedNode as any)[animKey];
             }
         });
 
         return updatedNode;
-    };
+    }, [currentNode]);
+
+    const flushPreview = useCallback(() => {
+        previewRafRef.current = null;
+        if (!allowLivePreviewRef.current || !pendingPreviewRef.current || nodeId === null || !currentNode) {
+            pendingPreviewRef.current = false;
+            return;
+        }
+        pendingPreviewRef.current = false;
+        const values = form.getFieldsValue();
+        const updatedNode = buildUpdatedNodeFromValues(values);
+        if (!updatedNode) return;
+        didRealtimePreviewRef.current = true;
+        applyNodeToStore(updatedNode);
+    }, [nodeId, currentNode, form, buildUpdatedNodeFromValues, applyNodeToStore]);
+
+    const schedulePreview = useCallback(() => {
+        if (!allowLivePreviewRef.current || nodeId === null) return;
+        pendingPreviewRef.current = true;
+        if (previewRafRef.current != null) return;
+        previewRafRef.current = requestAnimationFrame(() => {
+            flushPreview();
+        });
+    }, [nodeId, flushPreview]);
 
     const handleCancel = () => {
         if (!isCommittingRef.current && didRealtimePreviewRef.current && initialNodeRef.current && nodeId !== null) {
-            updateNode(nodeId, initialNodeRef.current);
+            applyNodeToStore(initialNodeRef.current as ParticleEmitter2Node);
         }
         setPresetModalOpen(false);
         onClose();
@@ -391,14 +507,12 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
             if (!updatedNode) return;
 
             const oldNode = initialNodeRef.current || currentNode;
-            useHistoryStore.getState().push({
-                name: `Edit Particle Emitter`,
-                undo: () => updateNode(nodeId, oldNode),
-                redo: () => updateNode(nodeId, updatedNode)
-            });
-
             isCommittingRef.current = true;
-            updateNode(nodeId, updatedNode);
+            applyNodeToStore(updatedNode, {
+                name: `Edit Particle Emitter`,
+                undoNode: oldNode,
+                redoNode: updatedNode,
+            });
             onClose();
         } catch (e) {
             console.error("Validation failed", e);
@@ -412,11 +526,16 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
             const payload = event.payload as any;
             if (payload && payload.callerId === 'ParticleEmitter2Dialog') {
                 if (currentEditingProp) {
-                    setAnimDataMap((prev) => ({
-                        ...prev,
-                        [currentEditingProp]: payload.data,
-                    }));
+                    setAnimDataMap((prev) => {
+                        const next = {
+                            ...prev,
+                            [currentEditingProp]: payload.data,
+                        };
+                        animDataMapRef.current = next;
+                        return next;
+                    });
                     setCurrentEditingProp(null);
+                    schedulePreview();
                 }
             }
         });
@@ -424,7 +543,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
         return () => {
             unlisten.then(f => f());
         };
-    }, [currentEditingProp]);
+    }, [currentEditingProp, schedulePreview]);
 
     const handleOpenKeyframeEditor = (propName: string, title: string) => {
         setCurrentEditingProp(propName);
@@ -450,21 +569,25 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
 
     const handleDynamicChange = (propName: string, checked: boolean) => {
         if (checked) {
-            // Initialize empty animation if none exists
             if (!animDataMap[propName]) {
-                setAnimDataMap(prev => ({
-                    ...prev,
-                    [propName]: { Keys: [], LineType: 0, GlobalSeqId: null }
-                }));
+                setAnimDataMap((prev) => {
+                    const next = {
+                        ...prev,
+                        [propName]: { Keys: [], LineType: 0, GlobalSeqId: null },
+                    };
+                    animDataMapRef.current = next;
+                    return next;
+                });
             }
         } else {
-            // Remove animation
-            setAnimDataMap(prev => {
+            setAnimDataMap((prev) => {
                 const copy = { ...prev };
                 delete copy[propName];
+                animDataMapRef.current = copy;
                 return copy;
             });
         }
+        schedulePreview();
     };
 
     // --- New Components ---
@@ -687,20 +810,14 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
     }));
     textureOptions.unshift({ label: '(None)', value: -1 });
 
-    return (
-        <DraggableModal
-            title="II型粒子发射器"
-            open={visible}
-            onOk={handleOk}
-            onCancel={handleCancel}
-            footer={null} // Hide default footer
-            width={850}
-            style={{ top: 20 }}
-            maskClosable={false}
-            wrapClassName="dark-theme-modal"
-            styles={{ body: { padding: '8px 12px', backgroundColor: '#1f1f1f', color: '#ccc' } }}
-        >
-            <Form form={form} layout="vertical">
+    const pe2FormEl = (
+            <Form
+                form={form}
+                layout="vertical"
+                onValuesChange={() => {
+                    schedulePreview();
+                }}
+            >
                 {/* --- TOP SECTION --- */}
                 <div style={{ display: 'flex', gap: 8 }}>
                     {/* Row 1 Params (Fit 5 items) */}
@@ -813,7 +930,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
                                         <span style={{ marginRight: 4, fontSize: 12, width: 60 }}>持续时间:</span>
-                                        <Form.Item name="LifeSpan" noStyle><InputNumber size="small" style={{ flex: 1 }} precision={1} /></Form.Item>
+                                        <Form.Item name="LifeSpan" noStyle><InputNumber size="small" style={{ flex: 1 }} precision={2} step={0.01} /></Form.Item>
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
                                         <span style={{ marginRight: 4, fontSize: 12, width: 60 }}>优先平面:</span>
@@ -870,7 +987,9 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
                     </div>
                 </div>
             </Form>
-            {presetModalOpen && typeof document !== 'undefined' ? createPortal(
+    );
+
+    const pe2PresetPortal = presetModalOpen && typeof document !== 'undefined' ? createPortal(
                 <div
                     onMouseDown={(e) => e.stopPropagation()}
                     onClick={(e) => e.stopPropagation()}
@@ -902,7 +1021,32 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({ visible
                     </DraggableModal>
                 </div>,
                 document.body
-            ) : null}
+            ) : null;
+
+    if (isStandalone) {
+        return (
+            <>
+                <NodeEditorStandaloneShell>{pe2FormEl}</NodeEditorStandaloneShell>
+                {pe2PresetPortal}
+            </>
+        );
+    }
+
+    return (
+        <DraggableModal
+            title="II型粒子发射器"
+            open={visible}
+            onOk={handleOk}
+            onCancel={handleCancel}
+            footer={null} // Hide default footer
+            width={850}
+            style={{ top: 20 }}
+            maskClosable={false}
+            wrapClassName="dark-theme-modal"
+            styles={{ body: { padding: '8px 12px', backgroundColor: '#1f1f1f', color: '#ccc' } }}
+        >
+            {pe2FormEl}
+            {pe2PresetPortal}
         </DraggableModal>
     );
 };

@@ -1,7 +1,8 @@
-﻿import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
-import React, { useEffect } from 'react';
+import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
+import React, { useCallback, useEffect } from 'react';
 import { Form, Radio, Button, Row, Col } from 'antd';
 import { DraggableModal } from '../DraggableModal';
+import { NodeEditorStandaloneShell } from '../common/NodeEditorStandaloneShell';
 import { useModelStore } from '../../store/modelStore';
 import type { CollisionShapeNode } from '../../types/node';
 
@@ -9,6 +10,9 @@ interface CollisionShapeDialogProps {
     visible: boolean;
     nodeId: number | null;
     onClose: () => void;
+    isStandalone?: boolean;
+    standaloneNode?: CollisionShapeNode | null;
+    standaloneEmit?: (command: string, payload?: any) => void;
 }
 
 // Fieldset style matching the reference
@@ -36,15 +40,65 @@ const inputStyle: React.CSSProperties = {
     width: '100%'
 };
 
-const CollisionShapeDialog: React.FC<CollisionShapeDialogProps> = ({ visible, nodeId, onClose }) => {
+const CollisionShapeDialog: React.FC<CollisionShapeDialogProps> = ({
+    visible,
+    nodeId,
+    onClose,
+    isStandalone,
+    standaloneNode,
+    standaloneEmit,
+}) => {
     const [form] = Form.useForm();
     const { getNodeById, updateNode } = useModelStore();
 
-    const currentNode = nodeId !== null ? getNodeById(nodeId) as CollisionShapeNode : null;
+    const currentNode =
+        nodeId !== null
+            ? (isStandalone
+                ? (standaloneNode as CollisionShapeNode | null)
+                : (getNodeById(nodeId) as CollisionShapeNode))
+            : null;
+
+    const applyNodeToStore = useCallback(
+        (next: CollisionShapeNode) => {
+            if (nodeId === null) return;
+            if (isStandalone && standaloneEmit) {
+                standaloneEmit('APPLY_NODE_UPDATE', { objectId: nodeId, node: next });
+                return;
+            }
+            updateNode(nodeId, next);
+        },
+        [isStandalone, standaloneEmit, nodeId, updateNode]
+    );
+
+    const formHydratedForNodeIdRef = React.useRef<number | null>(null);
 
     useEffect(() => {
-        if (visible && currentNode) {
-            // Handle Vertices which can be Float32Array(3) for sphere or Float32Array(6) for box
+        if (!visible) {
+            formHydratedForNodeIdRef.current = null;
+            return;
+        }
+        if (nodeId === null) return;
+        if (formHydratedForNodeIdRef.current === nodeId) return;
+
+        const sourceNode: CollisionShapeNode | null = isStandalone
+            ? (standaloneNode as CollisionShapeNode | null)
+            : (useModelStore.getState().getNodeById(nodeId) as CollisionShapeNode | undefined) ?? null;
+
+        if (!sourceNode) {
+            formHydratedForNodeIdRef.current = nodeId;
+            form.setFieldsValue({
+                ShapeType: 'Box',
+                BoundsRadius: 60,
+                V1X: -50, V1Y: -50, V1Z: 0,
+                V2X: 50, V2Y: 50, V2Z: 100,
+            });
+            return;
+        }
+
+        formHydratedForNodeIdRef.current = nodeId;
+        const currentNode = sourceNode;
+
+        // Handle Vertices which can be Float32Array(3) for sphere or Float32Array(6) for box
             // or fallback to Vertex1/Vertex2
             let vertex1: [number, number, number] = [0, 0, 0];
             let vertex2: [number, number, number] = [0, 0, 0];
@@ -90,15 +144,7 @@ const CollisionShapeDialog: React.FC<CollisionShapeDialogProps> = ({ visible, no
                 V2Y: round2(vertex2[1] ?? 0),
                 V2Z: round2(vertex2[2] ?? 0),
             });
-        } else if (visible) {
-            form.setFieldsValue({
-                ShapeType: 'Box',
-                BoundsRadius: 60,
-                V1X: -50, V1Y: -50, V1Z: 0,
-                V2X: 50, V2Y: 50, V2Z: 100,
-            });
-        }
-    }, [currentNode, visible, form]);
+    }, [visible, nodeId, isStandalone, standaloneNode, form]);
 
     const shapeType = Form.useWatch('ShapeType', form);
 
@@ -121,25 +167,14 @@ const CollisionShapeDialog: React.FC<CollisionShapeDialogProps> = ({ visible, no
                 BoundsRadius: !isBox ? values.BoundsRadius : undefined,
             };
 
-            updateNode(nodeId, updatedNode);
+            applyNodeToStore(updatedNode);
             onClose();
         } catch (e) {
             console.error("Validation failed", e);
         }
     };
 
-    return (
-        <DraggableModal
-            title="碰撞形状"
-            open={visible}
-            onOk={handleOk}
-            onCancel={onClose}
-            footer={null}
-            width={380}
-            maskClosable={false}
-            wrapClassName="dark-theme-modal"
-            styles={{ body: { padding: '12px 16px', backgroundColor: '#1f1f1f', color: '#ccc' } }}
-        >
+    const formInner = (
             <Form form={form} layout="vertical">
                 {/* 类型 Section */}
                 <fieldset style={fieldsetStyle}>
@@ -224,6 +259,25 @@ const CollisionShapeDialog: React.FC<CollisionShapeDialogProps> = ({ visible, no
                     <Button onClick={onClose} style={{ minWidth: 70 }}>取 消</Button>
                 </div>
             </Form>
+    );
+
+    if (isStandalone) {
+        return <NodeEditorStandaloneShell>{formInner}</NodeEditorStandaloneShell>;
+    }
+
+    return (
+        <DraggableModal
+            title="碰撞形状"
+            open={visible}
+            onOk={handleOk}
+            onCancel={onClose}
+            footer={null}
+            width={380}
+            maskClosable={false}
+            wrapClassName="dark-theme-modal"
+            styles={{ body: { padding: '12px 16px', backgroundColor: '#1f1f1f', color: '#ccc' } }}
+        >
+            {formInner}
         </DraggableModal>
     );
 };

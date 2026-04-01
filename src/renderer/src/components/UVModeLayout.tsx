@@ -1,7 +1,7 @@
-﻿import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react'
+import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import UVEditor from './editors/UVEditor'
 import TextureGeosetSelector from './editors/TextureGeosetSelector'
-import { useModelStore } from '../store/modelStore'
+import { useModelStore, mergeMaterialManagerPreview } from '../store/modelStore'
 
 interface UVModeOverlayProps {
     modelPath: string | null
@@ -32,17 +32,22 @@ const UVModeLayout: React.FC<UVModeOverlayProps & { children: React.ReactNode }>
 
     const containerRef = useRef<HTMLDivElement>(null)
     const modelData = useModelStore(state => state.modelData)
+    const materialManagerPreview = useModelStore(state => state.materialManagerPreview)
+    const effectiveModelData = useMemo(
+        () => mergeMaterialManagerPreview(modelData, materialManagerPreview),
+        [modelData, materialManagerPreview]
+    )
     const selectedGeosetIndex = useModelStore(state => state.selectedGeosetIndex)
     const setSelectedGeosetIndex = useModelStore(state => state.setSelectedGeosetIndex)
 
     // Build geosetId -> textureId mapping for quick lookup
     const geosetToTextureMap = useMemo(() => {
         const map = new Map<number, number>()
-        if (!modelData || !modelData.Geosets || !modelData.Materials) return map
+        if (!effectiveModelData || !effectiveModelData.Geosets || !effectiveModelData.Materials) return map
 
-        modelData.Geosets.forEach((geoset: any, geosetIndex: number) => {
-            if (geoset.MaterialID === -1 || !modelData.Materials || geoset.MaterialID >= modelData.Materials.length) return
-            const material = modelData.Materials[geoset.MaterialID]
+        effectiveModelData.Geosets.forEach((geoset: any, geosetIndex: number) => {
+            if (geoset.MaterialID === -1 || !effectiveModelData.Materials || geoset.MaterialID >= effectiveModelData.Materials.length) return
+            const material = effectiveModelData.Materials[geoset.MaterialID]
             // Use first valid texture from material layers
             material?.Layers?.forEach((layer: any) => {
                 if (!map.has(geosetIndex) && typeof layer.TextureID === 'number' && layer.TextureID >= 0) {
@@ -51,7 +56,7 @@ const UVModeLayout: React.FC<UVModeOverlayProps & { children: React.ReactNode }>
             })
         })
         return map
-    }, [modelData])
+    }, [effectiveModelData])
 
     // Sync Ctrl+click geoset picking from 3D view to UV texture/geoset selection
     useEffect(() => {
@@ -186,7 +191,7 @@ const UVModeLayout: React.FC<UVModeOverlayProps & { children: React.ReactNode }>
                         zIndex: 15
                     }}>
                         <TextureGeosetSelector
-                            modelData={modelData}
+                            modelData={effectiveModelData}
                             selectedTextureId={selectedTextureId}
                             onSelectTexture={handleSelectTexture}
                             visibleGeosetIds={visibleGeosetIds}
