@@ -22,7 +22,7 @@ import { GeosetVisibilityPanel } from './GeosetVisibilityPanel'
 import { open } from '@tauri-apps/plugin-dialog'
 import { generateMDL, generateMDX } from 'war3-model'
 import { getRecentFiles, addRecentFile, clearRecentFiles, RecentFile } from '../services/historyService'
-import { useModelStore, mergeMaterialManagerPreview } from '../store/modelStore'
+import { useModelStore, mergeMaterialManagerPreview, mergeNodeEditorPreview } from '../store/modelStore'
 import { NodeType } from '../types/node'
 import { useUIStore } from '../store/uiStore'
 import { useSelectionStore } from '../store/selectionStore'
@@ -34,6 +34,7 @@ import { registerShortcutHandler } from '../shortcuts/manager'
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { emit } from '@tauri-apps/api/event'
 import { Button } from 'antd';
+import AppErrorBoundary from './common/AppErrorBoundary'
 import {
     applyTextureAdjustments,
     normalizeTextureAdjustments,
@@ -41,11 +42,20 @@ import {
     TEXTURE_ADJUSTMENTS_KEY
 } from '../utils/textureAdjustments'
 import { windowManager } from '../utils/WindowManager'
-import type { NodeEditorRpcState } from '../types/nodeEditorRpc'
+import {
+    NODE_EDITOR_COMMANDS,
+    type ApplyNodeUpdatePayload,
+    type ClearNodePreviewPayload,
+    type NodeEditorCommand,
+    type NodeEditorNodePayload,
+    type NodeEditorRpcState,
+    type RenameNodePayload,
+} from '../types/nodeEditorRpc'
 import { useRpcServer } from '../hooks/useRpc'
 import { markStandalonePerf } from '../utils/standalonePerf'
 import { parseModelBuffer, mergeGeosets, mergeAnimations } from '../utils/modelMerge'
 import { readFile, copyFile } from '@tauri-apps/plugin-fs'
+import { uiText } from '../constants/uiText'
 
 /**
  * Normalize model data before saving to ensure typed arrays are correct.
@@ -1802,9 +1812,10 @@ const MainLayout: React.FC = () => {
     // Use modelData directly from store to ensure updates from NodeManager are reflected
     const modelData = useModelStore(state => state.modelData)
     const materialManagerPreview = useModelStore(state => state.materialManagerPreview)
+    const nodeEditorPreview = useModelStore(state => state.nodeEditorPreview)
     const viewerModelData = useMemo(
-        () => mergeMaterialManagerPreview(modelData, materialManagerPreview),
-        [modelData, materialManagerPreview]
+        () => mergeNodeEditorPreview(mergeMaterialManagerPreview(modelData, materialManagerPreview), nodeEditorPreview),
+        [modelData, materialManagerPreview, nodeEditorPreview]
     )
     const standaloneWarmupStartedRef = useRef(false)
     const textureManagerSnapshotCacheRef = useRef({
@@ -2903,14 +2914,33 @@ const MainLayout: React.FC = () => {
         handleMaterialCommand
     );
 
-    const handleNodeEditorCommand = useCallback((command: string, payload: any) => {
-        if (command === 'APPLY_NODE_UPDATE') {
-            const objectId = payload?.objectId
-            const node = payload?.node
-            const history = payload?.history
+    const handleNodeEditorCommand = useCallback((command: string, payload: unknown) => {
+        if (command === NODE_EDITOR_COMMANDS.previewNodeUpdate) {
+            const previewPayload = payload as NodeEditorNodePayload | undefined
+            const objectId = previewPayload?.objectId
+            const node = previewPayload?.node
+            if (typeof objectId === 'number' && node != null) {
+                useModelStore.getState().setNodeEditorPreview({ objectId, node })
+            }
+            return
+        }
+        if (command === NODE_EDITOR_COMMANDS.clearNodePreview) {
+            const clearPayload = payload as ClearNodePreviewPayload | undefined
+            if (clearPayload && clearPayload.objectId !== null && typeof clearPayload.objectId !== 'number') {
+                return
+            }
+            useModelStore.getState().clearNodeEditorPreview()
+            return
+        }
+        if (command === NODE_EDITOR_COMMANDS.applyNodeUpdate) {
+            const applyPayload = payload as ApplyNodeUpdatePayload | undefined
+            const objectId = applyPayload?.objectId
+            const node = applyPayload?.node
+            const history = applyPayload?.history
             if (typeof objectId !== 'number' || node == null) {
                 return
             }
+            useModelStore.getState().clearNodeEditorPreview()
             if (history && typeof history.name === 'string') {
                 useHistoryStore.getState().push({
                     name: history.name,
@@ -2921,14 +2951,15 @@ const MainLayout: React.FC = () => {
             useModelStore.getState().updateNode(objectId, node)
             return
         }
-        if (command === 'RENAME_NODE') {
-            const objectId = payload?.objectId
-            const name = payload?.name
+        if (command === NODE_EDITOR_COMMANDS.renameNode) {
+            const renamePayload = payload as RenameNodePayload | undefined
+            const objectId = renamePayload?.objectId
+            const name = renamePayload?.name
             if (typeof objectId === 'number' && typeof name === 'string') {
                 useModelStore.getState().renameNode(objectId, name)
             }
         }
-    }, [])
+    }, []) as (command: NodeEditorCommand, payload: unknown) => void
 
     const getNodeEditorState = useCallback(() => {
         return ensureNodeEditorSnapshotState()
@@ -4781,8 +4812,8 @@ const MainLayout: React.FC = () => {
                         textAlign: 'center',
                         border: '1px solid #555'
                     }} onClick={e => e.stopPropagation()}>
-                        <h3 style={{ marginTop: 0, marginBottom: '15px' }}>关于</h3>
-                        <p style={{ fontSize: '18px', margin: '10px 0' }}>咕咕War3模型编辑器 v1.0.0</p>
+                        <h3 style={{ marginTop: 0, marginBottom: '15px' }}>{uiText.about.title}</h3>
+                        <p style={{ fontSize: '18px', margin: '10px 0' }}>{uiText.app.name} {uiText.app.version}</p>
 
                         {/* Activation Status */}
                         <div style={{
@@ -4792,7 +4823,7 @@ const MainLayout: React.FC = () => {
                             borderRadius: '4px',
                             textAlign: 'left'
                         }}>
-                            <div style={{ marginBottom: '8px', color: '#aaa', fontSize: '12px' }}>授权状态</div>
+                            <div style={{ marginBottom: '8px', color: '#aaa', fontSize: '12px' }}>{uiText.about.activationStatus}</div>
                             {activationStatus ? (
                                 activationStatus.is_activated ? (
                                     <>
@@ -4813,28 +4844,28 @@ const MainLayout: React.FC = () => {
                                                 color: activationStatus.level >= 2 ? '#ffc53d' : '#52c41a'
                                             }}>
                                                 {activationStatus.license_type === 'PERM'
-                                                    ? '永久'
+                                                    ? uiText.about.permanent
                                                     : activationStatus.license_type === 'QQ'
-                                                        ? 'QQ群验证'
-                                                        : '时限'}
+                                                        ? uiText.about.qqVerification
+                                                        : uiText.about.timeLimited}
                                             </span>
                                         </div>
                                         {(activationStatus.license_type === 'TIME' || activationStatus.license_type === 'QQ') && activationStatus.days_remaining !== null && (
                                             <div style={{ color: activationStatus.days_remaining <= 7 ? '#ff7875' : '#eee', fontSize: '13px' }}>
-                                                {activationStatus.license_type === 'QQ' ? '复验日期' : '到期日期'}: {activationStatus.expiration_date} (剩余 {activationStatus.days_remaining} 天)
+                                                {activationStatus.license_type === 'QQ' ? uiText.about.reviewDate : uiText.about.expirationDate}: {activationStatus.expiration_date} (剩余 {activationStatus.days_remaining} 天)
                                             </div>
                                         )}
                                         {activationStatus.level < 2 && (
                                             <div style={{ marginTop: '8px', fontSize: '12px', color: '#888' }}>
-                                                输入高级版激活码可升级
+                                                {uiText.about.upgradeHint}
                                             </div>
                                         )}
                                     </>
                                 ) : (
-                                    <div style={{ color: '#ff7875' }}>未激活</div>
+                                    <div style={{ color: '#ff7875' }}>{uiText.about.inactive}</div>
                                 )
                             ) : (
-                                <div style={{ color: '#888' }}>加载中...</div>
+                                <div style={{ color: '#888' }}>{uiText.about.loading}</div>
                             )}
                         </div>
 
@@ -4847,14 +4878,14 @@ const MainLayout: React.FC = () => {
                             textAlign: 'left'
                         }}>
                             <div style={{ marginBottom: '8px', color: '#aaa', fontSize: '12px' }}>
-                                {activationStatus?.is_activated ? '升级/更换激活码' : '输入激活码'}
+                                {activationStatus?.is_activated ? uiText.about.replaceActivationCode : uiText.about.enterActivationCode}
                             </div>
                             <div style={{ display: 'flex', gap: '8px' }}>
                                 <input
                                     type="text"
                                     value={activationCode}
                                     onChange={(e) => setActivationCode(e.target.value)}
-                                    placeholder="请输入激活码"
+                                    placeholder={uiText.about.activationPlaceholder}
                                     style={{
                                         flex: 1,
                                         padding: '6px 10px',
@@ -4883,7 +4914,7 @@ const MainLayout: React.FC = () => {
                                         fontSize: '13px'
                                     }}
                                 >
-                                    {activationLoading ? '验证中...' : '激活'}
+                                    {activationLoading ? uiText.about.activating : uiText.about.activate}
                                 </button>
                             </div>
                             {activationError && (
@@ -4904,7 +4935,7 @@ const MainLayout: React.FC = () => {
                                 borderRadius: '4px',
                             }}
                         >
-                            确定
+                            {uiText.about.confirm}
                         </button>
                     </div>
                 </div>
@@ -4913,24 +4944,30 @@ const MainLayout: React.FC = () => {
 
             {showTextureAnimModal && (
                 <Suspense fallback={null}>
-                    <TextureAnimationManagerModal
-                        visible={showTextureAnimModal}
-                        onClose={() => setShowTextureAnimModal(false)}
-                    />
+                    <AppErrorBoundary scope="Texture Animation Manager" compact>
+                        <TextureAnimationManagerModal
+                            visible={showTextureAnimModal}
+                            onClose={() => setShowTextureAnimModal(false)}
+                        />
+                    </AppErrorBoundary>
                 </Suspense>
             )}
             {showSequenceModal && (
                 <Suspense fallback={null}>
-                    <SequenceEditorModal
-                        visible={showSequenceModal}
-                        onClose={() => setShowSequenceModal(false)}
-                    />
+                    <AppErrorBoundary scope="Sequence Editor" compact>
+                        <SequenceEditorModal
+                            visible={showSequenceModal}
+                            onClose={() => setShowSequenceModal(false)}
+                        />
+                    </AppErrorBoundary>
                 </Suspense>
             )}
 
             {showTransformModelDialog && (
                 <Suspense fallback={null}>
-                    <TransformModelDialog />
+                    <AppErrorBoundary scope="Transform Model" compact>
+                        <TransformModelDialog />
+                    </AppErrorBoundary>
                 </Suspense>
             )}
 
@@ -4952,52 +4989,54 @@ const MainLayout: React.FC = () => {
 
                 {/* Center - 3D Viewer or Animation/UV Mode Layout */}
                 <div id="main-viewer-host" style={{ flex: 1, position: 'relative', backgroundColor, minWidth: 0 }}>
-                    <Suspense fallback={<div style={{ position: 'absolute', inset: 0, backgroundColor }} />}>
-                        <AnimationModeLayout
-                            isActive={mainMode === 'animation'}
-                            rightPanelAddon={
-                                showGeosetVisibility ? (
-                                    <GeosetVisibilityPanel
-                                        visible={true}
-                                        onClose={() => setShowGeosetVisibility(false)}
-                                        docked
-                                    />
-                                ) : null
-                            }
-                        >
-                            <UVModeLayout
-
-                                modelPath={modelPath}
-                                isActive={mainMode === 'uv'}
+                    <AppErrorBoundary scope="Main Viewer" compact>
+                        <Suspense fallback={<div style={{ position: 'absolute', inset: 0, backgroundColor }} />}>
+                            <AnimationModeLayout
+                                isActive={mainMode === 'animation'}
+                                rightPanelAddon={
+                                    showGeosetVisibility ? (
+                                        <GeosetVisibilityPanel
+                                            visible={true}
+                                            onClose={() => setShowGeosetVisibility(false)}
+                                            docked
+                                        />
+                                    ) : null
+                                }
                             >
-                                <Viewer
-                                    ref={viewerRef as any}
+                                <UVModeLayout
+
                                     modelPath={modelPath}
-                                    modelData={viewerModelData}
-                                    teamColor={teamColor}
-                                    showGrid={showGridXY}
-                                    showNodes={mainMode !== 'uv' && showNodes}
-                                    showSkeleton={mainMode !== 'uv' && showSkeleton}
-                                    showCollisionShapes={mainMode !== 'uv' && showCollisionShapes}
-                                    showCameras={mainMode !== 'uv' && showCameras}
-                                    showLights={mainMode !== 'uv' && mainMode !== 'animation' && showLights}
-                                    showAttachments={mainMode !== 'uv' && showAttachments}
-                                    showWireframe={mainMode !== 'uv' && renderMode === 'wireframe'}
-                                    onToggleWireframe={() => setRenderMode(renderMode === 'textured' ? 'wireframe' : 'textured')}
-                                    backgroundColor={backgroundColor}
-                                    animationIndex={currentSequence}
-                                    isPlaying={mainMode !== 'uv' && isPlaying}
-                                    onTogglePlay={() => setPlaying(!isPlaying)}
-                                    onModelLoaded={handleModelLoaded}
-                                    showFPS={mainMode !== 'uv' && showFPS}
-                                    playbackSpeed={playbackSpeed}
-                                    viewPreset={viewPreset}
-                                    onSetViewPreset={handleSetViewPreset}
-                                    onAddCameraFromView={handleAddCameraFromView}
-                                />
-                            </UVModeLayout>
-                        </AnimationModeLayout>
-                    </Suspense>
+                                    isActive={mainMode === 'uv'}
+                                >
+                                    <Viewer
+                                        ref={viewerRef as any}
+                                        modelPath={modelPath}
+                                        modelData={viewerModelData}
+                                        teamColor={teamColor}
+                                        showGrid={showGridXY}
+                                        showNodes={mainMode !== 'uv' && showNodes}
+                                        showSkeleton={mainMode !== 'uv' && showSkeleton}
+                                        showCollisionShapes={mainMode !== 'uv' && showCollisionShapes}
+                                        showCameras={mainMode !== 'uv' && showCameras}
+                                        showLights={mainMode !== 'uv' && mainMode !== 'animation' && showLights}
+                                        showAttachments={mainMode !== 'uv' && showAttachments}
+                                        showWireframe={mainMode !== 'uv' && renderMode === 'wireframe'}
+                                        onToggleWireframe={() => setRenderMode(renderMode === 'textured' ? 'wireframe' : 'textured')}
+                                        backgroundColor={backgroundColor}
+                                        animationIndex={currentSequence}
+                                        isPlaying={mainMode !== 'uv' && isPlaying}
+                                        onTogglePlay={() => setPlaying(!isPlaying)}
+                                        onModelLoaded={handleModelLoaded}
+                                        showFPS={mainMode !== 'uv' && showFPS}
+                                        playbackSpeed={playbackSpeed}
+                                        viewPreset={viewPreset}
+                                        onSetViewPreset={handleSetViewPreset}
+                                        onAddCameraFromView={handleAddCameraFromView}
+                                    />
+                                </UVModeLayout>
+                            </AnimationModeLayout>
+                        </Suspense>
+                    </AppErrorBoundary>
 
                     {isLoading && (
                         <div style={{
@@ -5013,7 +5052,7 @@ const MainLayout: React.FC = () => {
                             color: 'white',
                             zIndex: 10
                         }}>
-                            加载中...
+                            {uiText.app.loading}
                         </div>
                     )}
                 </div>
@@ -5063,11 +5102,6 @@ const MainLayout: React.FC = () => {
 }
 
 export default MainLayout
-
-
-
-
-
 
 
 

@@ -1,5 +1,6 @@
 import React from 'react';
 import { Button, Checkbox } from 'antd';
+import { uiText } from '../../constants/uiText';
 
 
 const fieldsetStyle: React.CSSProperties = {
@@ -46,7 +47,7 @@ const DynamicField: React.FC<DynamicFieldProps> = ({
                     onChange={(e) => onDynamicChange(e.target.checked)}
                     style={{ color: '#888', fontSize: 12 }}
                 >
-                    动态化
+                    {uiText.dynamicField.dynamic}
                 </Checkbox>
             </div>
             <Button

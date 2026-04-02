@@ -6,6 +6,7 @@ import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker';
 
 import { DraggableModal } from '../DraggableModal';
 import { NodeEditorStandaloneShell } from '../common/NodeEditorStandaloneShell';
+import AppErrorBoundary from '../common/AppErrorBoundary';
 import { listen } from '@tauri-apps/api/event';
 import { windowManager } from '../../utils/WindowManager';
 import type { Color } from 'antd/es/color-picker';
@@ -15,6 +16,9 @@ import { useHistoryStore } from '../../store/historyStore';
 import { getDraggedTextureIndex } from '../../utils/textureDragDrop';
 import { saveParticleEmitter2Preset } from '../../services/particleEmitter2PresetService';
 import { showMessage } from '../../store/messageStore';
+import { uiText } from '../../constants/uiText';
+import { useNodeEditorPreview } from '../../hooks/useNodeEditorPreview';
+import { NODE_EDITOR_COMMANDS, type NodeEditorCommandSender } from '../../types/nodeEditorRpc';
 
 interface ParticleEmitter2DialogProps {
     visible: boolean;
@@ -23,7 +27,7 @@ interface ParticleEmitter2DialogProps {
     /** 独立 WebView：无 Zustand，经 RPC 同步 */
     isStandalone?: boolean;
     standaloneNode?: ParticleEmitter2Node | null;
-    standaloneEmit?: (command: string, payload?: any) => void;
+    standaloneEmit?: NodeEditorCommandSender;
     standaloneModelData?: { Textures?: any[]; GlobalSequences?: any[]; Sequences?: any[] } | null;
     standaloneModelPath?: string;
 }
@@ -76,7 +80,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
     standaloneModelPath,
 }) => {
     const [form] = Form.useForm();
-    const { getNodeById, updateNode, modelData: storeModelData, modelPath: storeModelPath } = useModelStore();
+    const { getNodeById, updateNode, modelData: storeModelData, modelPath: storeModelPath, setNodeEditorPreview, clearNodeEditorPreview } = useModelStore();
     const modelData = isStandalone ? standaloneModelData : storeModelData;
     const modelPath = isStandalone ? (standaloneModelPath ?? '') : storeModelPath;
     const [isTextureDropActive, setIsTextureDropActive] = useState(false);
@@ -88,13 +92,14 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
                 : (getNodeById(nodeId) as ParticleEmitter2Node))
             : null;
 
-    const applyNodeToStore = React.useCallback(
+    const applyCommittedNode = React.useCallback(
         (next: ParticleEmitter2Node, history?: { name: string; undoNode: any; redoNode: any }) => {
             if (nodeId === null) return;
             if (isStandalone && standaloneEmit) {
-                standaloneEmit('APPLY_NODE_UPDATE', { objectId: nodeId, node: next, history });
+                standaloneEmit(NODE_EDITOR_COMMANDS.applyNodeUpdate, { objectId: nodeId, node: next, history });
                 return;
             }
+            clearNodeEditorPreview();
             if (history) {
                 useHistoryStore.getState().push({
                     name: history.name,
@@ -104,8 +109,15 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
             }
             updateNode(nodeId, next);
         },
-        [isStandalone, standaloneEmit, nodeId, updateNode]
+        [clearNodeEditorPreview, isStandalone, standaloneEmit, nodeId, updateNode]
     );
+    const clearPreviewNode = React.useCallback(() => {
+        if (isStandalone && standaloneEmit) {
+            standaloneEmit(NODE_EDITOR_COMMANDS.clearNodePreview, { objectId: nodeId });
+            return;
+        }
+        clearNodeEditorPreview();
+    }, [clearNodeEditorPreview, isStandalone, nodeId, standaloneEmit]);
     const initialNodeRef = React.useRef<ParticleEmitter2Node | null>(null);
     const isCommittingRef = React.useRef(false);
     const didRealtimePreviewRef = React.useRef(false);
@@ -117,9 +129,6 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
     /** 供 rAF 预览刷新读取，避免闭包拿到过期的 animDataMap */
     const animDataMapRef = useRef<Record<string, any>>({});
     /** 表单初始 setFieldsValue 完成后才允许 onValuesChange 驱动主窗口预览，避免打开时连发 updateNode */
-    const allowLivePreviewRef = useRef(false);
-    const previewRafRef = useRef<number | null>(null);
-    const pendingPreviewRef = useRef(false);
     const [currentEditingProp, setCurrentEditingProp] = useState<string | null>(null);
     const [presetModalOpen, setPresetModalOpen] = useState(false);
     const [presetName, setPresetName] = useState('');
@@ -160,31 +169,6 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
         animDataMapRef.current = animDataMap;
     }, [animDataMap]);
 
-    useEffect(() => {
-        if (!visible || !currentNode) {
-            allowLivePreviewRef.current = false;
-            return;
-        }
-        // 下一帧再开实时预览，避开首帧 setFieldsValue 触发的 onValuesChange
-        const t = window.setTimeout(() => {
-            allowLivePreviewRef.current = true;
-        }, 0);
-        return () => {
-            clearTimeout(t);
-            allowLivePreviewRef.current = false;
-        };
-    }, [visible, currentNode?.ObjectId]);
-
-    useEffect(() => {
-        return () => {
-            if (previewRafRef.current != null) {
-                cancelAnimationFrame(previewRafRef.current);
-                previewRafRef.current = null;
-            }
-            pendingPreviewRef.current = false;
-        };
-    }, []);
-
     // Load data into form with DEFAULTS（仅首次打开本节点时灌入，不因 store 每次 updateNode 而重灌）
     useEffect(() => {
         if (!visible) {
@@ -192,8 +176,8 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
             initialNodeRef.current = null;
             isCommittingRef.current = false;
             didRealtimePreviewRef.current = false;
-            allowLivePreviewRef.current = false;
             formHydratedForNodeIdRef.current = null;
+            clearPreviewNode();
             return;
         }
 
@@ -339,7 +323,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
             }
         });
         setAnimDataMap(newAnimDataMap);
-    }, [visible, nodeId, isStandalone, standaloneNode]);
+    }, [clearPreviewNode, visible, nodeId, isStandalone, standaloneNode]);
 
     const applyRealtimeTexture = (textureId: number) => {
         if (nodeId === null || !currentNode) return;
@@ -354,7 +338,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
             TextureID: safeTextureId,
         };
         didRealtimePreviewRef.current = true;
-        applyNodeToStore(previewNode);
+        pushPreviewNode(previewNode);
         form.setFieldValue('TextureID', safeTextureId);
     };
 
@@ -434,39 +418,35 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
         return updatedNode;
     }, [currentNode]);
 
-    const flushPreview = useCallback(() => {
-        previewRafRef.current = null;
-        if (!allowLivePreviewRef.current || !pendingPreviewRef.current || nodeId === null || !currentNode) {
-            pendingPreviewRef.current = false;
-            return;
-        }
-        pendingPreviewRef.current = false;
+    const buildPreviewNode = useCallback(() => {
         const values = form.getFieldsValue();
         const updatedNode = buildUpdatedNodeFromValues(values);
-        if (!updatedNode) return;
+        if (!updatedNode) return null;
         didRealtimePreviewRef.current = true;
-        applyNodeToStore(updatedNode);
-    }, [nodeId, currentNode, form, buildUpdatedNodeFromValues, applyNodeToStore]);
+        return updatedNode;
+    }, [form, buildUpdatedNodeFromValues]);
 
-    const schedulePreview = useCallback(() => {
-        if (!allowLivePreviewRef.current || nodeId === null) return;
-        pendingPreviewRef.current = true;
-        if (previewRafRef.current != null) return;
-        previewRafRef.current = requestAnimationFrame(() => {
-            flushPreview();
-        });
-    }, [nodeId, flushPreview]);
+    const { schedulePreview, pushPreviewNode } = useNodeEditorPreview<ParticleEmitter2Node>({
+        visible,
+        nodeId,
+        currentNodeObjectId: currentNode?.ObjectId ?? null,
+        isStandalone,
+        standaloneEmit,
+        setStorePreview: ({ objectId, node }) => setNodeEditorPreview({ objectId, node }),
+        clearStorePreview: clearNodeEditorPreview,
+        buildPreviewNode,
+    });
 
     const handleCancel = () => {
-        if (!isCommittingRef.current && didRealtimePreviewRef.current && initialNodeRef.current && nodeId !== null) {
-            applyNodeToStore(initialNodeRef.current as ParticleEmitter2Node);
+        if (!isCommittingRef.current && didRealtimePreviewRef.current) {
+            clearPreviewNode();
         }
         setPresetModalOpen(false);
         onClose();
     };
 
     const handleOpenPresetModal = () => {
-        setPresetName((currentNode?.Name || '').trim() || '粒子预设');
+        setPresetName((currentNode?.Name || '').trim() || uiText.particleEmitter2Dialog.presetDefaultName);
         setPresetModalOpen(true);
     };
 
@@ -486,7 +466,11 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
                 texture,
                 modelPath,
             });
-            showMessage('success', '保存成功', '粒子预设 "' + presetName.trim() + '" 已保存');
+            showMessage(
+                'success',
+                uiText.particleEmitter2Dialog.saveSuccessTitle,
+                `${uiText.particleEmitter2Dialog.saveSuccessDescriptionPrefix}${presetName.trim()}`
+            );
             setPresetModalOpen(false);
         } catch (e: any) {
             if (e?.errorFields) {
@@ -494,7 +478,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
             }
             const detail = e instanceof Error ? e.message : typeof e === 'string' ? e : (() => { try { return JSON.stringify(e); } catch { return String(e); } })();
             console.error('[ParticleEmitter2Dialog] 保存粒子预设失败:', e);
-            showMessage('error', '保存粒子预设失败', detail || '未知错误');
+            showMessage('error', uiText.particleEmitter2Dialog.saveFailureTitle, detail || uiText.particleEmitter2Dialog.unknownError);
             setIsSavingPreset(false);
         }
     };
@@ -508,7 +492,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
 
             const oldNode = initialNodeRef.current || currentNode;
             isCommittingRef.current = true;
-            applyNodeToStore(updatedNode, {
+            applyCommittedNode(updatedNode, {
                 name: `Edit Particle Emitter`,
                 undoNode: oldNode,
                 redoNode: updatedNode,
@@ -680,13 +664,13 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
                 fontSize: 12,
                 color: '#ccc'
             }}>
-                渲染
+                {uiText.particleEmitter2Dialog.rendering}
             </span>
 
             <div style={{ marginBottom: 12 }}>
                 <div style={{ marginBottom: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                    <span style={{ color: '#ccc' }}>贴图 ID:</span>
-                    <span style={{ color: '#7f7f7f', fontSize: 12 }}>可拖动替换贴图</span>
+                    <span style={{ color: '#ccc' }}>{uiText.particleEmitter2Dialog.textureId}:</span>
+                    <span style={{ color: '#7f7f7f', fontSize: 12 }}>{uiText.particleEmitter2Dialog.replaceTextureHint}</span>
                 </div>
                 <div
                     style={{
@@ -730,7 +714,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
             </div>
 
             <div>
-                <div style={{ marginBottom: 4, color: '#ccc' }}>过滤模式:</div>
+                <div style={{ marginBottom: 4, color: '#ccc' }}>Filter Mode:</div>
                 <Form.Item name="FilterMode" noStyle>
                     <Select options={[
                         { label: 'Blend', value: 0 },
@@ -785,17 +769,17 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
         <fieldset style={{ border: '1px solid #484848', padding: '10px 8px 6px', margin: 0, marginTop: 8, backgroundColor: '#2b2b2b' }}>
             <legend style={{ fontSize: 12, color: '#ccc', marginLeft: 8, padding: '0 4px', width: 'auto' }}>{title}</legend>
             <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
-                <span style={{ width: 40, color: '#ccc', fontSize: 12 }}>颜色:</span>
+                <span style={{ width: 40, color: '#ccc', fontSize: 12 }}>{uiText.particleEmitter2Dialog.color}:</span>
                 <ColorField name={`${prefix}Color`} />
             </div>
             <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
-                <span style={{ width: 40, color: '#ccc', fontSize: 12 }}>透明:</span>
+                <span style={{ width: 40, color: '#ccc', fontSize: 12 }}>{uiText.particleEmitter2Dialog.alpha}:</span>
                 <Form.Item name={`${prefix}Alpha`} noStyle>
                     <InputNumber min={0} max={255} size="small" style={{ flex: 1 }} />
                 </Form.Item>
             </div>
             <div style={{ display: 'flex', alignItems: 'center' }}>
-                <span style={{ width: 40, color: '#ccc', fontSize: 12 }}>缩放:</span>
+                <span style={{ width: 40, color: '#ccc', fontSize: 12 }}>{uiText.particleEmitter2Dialog.scaling}:</span>
                 <Form.Item name={`${prefix}Scaling`} noStyle>
                     <InputNumber step={1} precision={0} size="small" style={{ flex: 1 }} />
                 </Form.Item>
@@ -821,18 +805,18 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
                 {/* --- TOP SECTION --- */}
                 <div style={{ display: 'flex', gap: 8 }}>
                     {/* Row 1 Params (Fit 5 items) */}
-                    <BoxedNumericField label="可见度" name="Visibility" min={0} max={1} precision={1} width="20%" />
-                    <BoxedNumericField label="放射速率" name="EmissionRate" width="20%" />
-                    <BoxedNumericField label="速度" name="Speed" width="20%" />
-                    <BoxedNumericField label="变化" name="Variation" precision={2} width="20%" />
-                    <BoxedNumericField label="纬度" name="Latitude" precision={2} width="20%" />
+                    <BoxedNumericField label={uiText.particleEmitter2Dialog.visibility} name="Visibility" min={0} max={1} precision={1} width="20%" />
+                    <BoxedNumericField label={uiText.particleEmitter2Dialog.emissionRate} name="EmissionRate" width="20%" />
+                    <BoxedNumericField label={uiText.particleEmitter2Dialog.speed} name="Speed" width="20%" />
+                    <BoxedNumericField label={uiText.particleEmitter2Dialog.variation} name="Variation" precision={2} width="20%" />
+                    <BoxedNumericField label={uiText.particleEmitter2Dialog.latitude} name="Latitude" precision={2} width="20%" />
                 </div>
 
                 <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
                     {/* Row 2 Params */}
-                    <div style={{ width: '20%' }}><BoxedNumericField label="宽度" name="Width" /></div>
-                    <div style={{ width: '20%' }}><BoxedNumericField label="长度" name="Length" /></div>
-                    <div style={{ width: '20%' }}><BoxedNumericField label="重力" name="Gravity" /></div>
+                    <div style={{ width: '20%' }}><BoxedNumericField label={uiText.particleEmitter2Dialog.width} name="Width" /></div>
+                    <div style={{ width: '20%' }}><BoxedNumericField label={uiText.particleEmitter2Dialog.length} name="Length" /></div>
+                    <div style={{ width: '20%' }}><BoxedNumericField label={uiText.particleEmitter2Dialog.gravity} name="Gravity" /></div>
 
                     {/* Rendering Section */}
                     <div style={{ flex: 1 }}>
@@ -847,73 +831,73 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
                     <div style={{ flex: 1 }}>
                         {/* Segments */}
                         <div style={{ display: 'flex', gap: 8 }}>
-                            <div style={{ flex: 1 }}><SegmentBox title="第一部分" prefix="Seg1" /></div>
-                            <div style={{ flex: 1 }}><SegmentBox title="第二部分" prefix="Seg2" /></div>
-                            <div style={{ flex: 1 }}><SegmentBox title="第三部分" prefix="Seg3" /></div>
+                            <div style={{ flex: 1 }}><SegmentBox title={uiText.particleEmitter2Dialog.segment1} prefix="Seg1" /></div>
+                            <div style={{ flex: 1 }}><SegmentBox title={uiText.particleEmitter2Dialog.segment2} prefix="Seg2" /></div>
+                            <div style={{ flex: 1 }}><SegmentBox title={uiText.particleEmitter2Dialog.segment3} prefix="Seg3" /></div>
                         </div>
 
                         {/* Lifecycle - MDX uses HeadLifeSpan/HeadDecay/TailLifeSpan/TailDecay as interval arrays */}
                         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                             <div style={{ flex: 1 }}>
-                                <div style={{ fontWeight: 'bold', fontSize: 12, marginBottom: 4 }}>头部 (持续时间)</div>
+                                <div style={{ fontWeight: 'bold', fontSize: 12, marginBottom: 4 }}>{uiText.particleEmitter2Dialog.headerLifespan}</div>
                                 <div style={{ display: 'flex', alignItems: 'center', marginBottom: 2 }}>
-                                    <span style={{ width: 30, fontSize: 12 }}>开始:</span>
+                                    <span style={{ width: 30, fontSize: 12 }}>{uiText.particleEmitter2Dialog.start}:</span>
                                     <Form.Item name="HeadLifeSpanStart" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center', marginBottom: 2 }}>
-                                    <span style={{ width: 30, fontSize: 12 }}>结束:</span>
+                                    <span style={{ width: 30, fontSize: 12 }}>{uiText.particleEmitter2Dialog.end}:</span>
                                     <Form.Item name="HeadLifeSpanEnd" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center' }}>
-                                    <span style={{ width: 30, fontSize: 12 }}>重复:</span>
+                                    <span style={{ width: 30, fontSize: 12 }}>{uiText.particleEmitter2Dialog.repeat}:</span>
                                     <Form.Item name="HeadLifeSpanRepeat" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
                                 </div>
                             </div>
 
                             <div style={{ flex: 1 }}>
-                                <div style={{ fontWeight: 'bold', fontSize: 12, marginBottom: 4 }}>头部 (衰减)</div>
+                                <div style={{ fontWeight: 'bold', fontSize: 12, marginBottom: 4 }}>{uiText.particleEmitter2Dialog.headerDecay}</div>
                                 <div style={{ display: 'flex', alignItems: 'center', marginBottom: 2 }}>
-                                    <span style={{ width: 30, fontSize: 12 }}>开始:</span>
+                                    <span style={{ width: 30, fontSize: 12 }}>{uiText.particleEmitter2Dialog.start}:</span>
                                     <Form.Item name="HeadDecayStart" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center', marginBottom: 2 }}>
-                                    <span style={{ width: 30, fontSize: 12 }}>结束:</span>
+                                    <span style={{ width: 30, fontSize: 12 }}>{uiText.particleEmitter2Dialog.end}:</span>
                                     <Form.Item name="HeadDecayEnd" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center' }}>
-                                    <span style={{ width: 30, fontSize: 12 }}>重复:</span>
+                                    <span style={{ width: 30, fontSize: 12 }}>{uiText.particleEmitter2Dialog.repeat}:</span>
                                     <Form.Item name="HeadDecayRepeat" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
                                 </div>
                             </div>
 
                             <div style={{ flex: 1 }}>
-                                <div style={{ fontWeight: 'bold', fontSize: 12, marginBottom: 4 }}>尾部 (持续时间)</div>
+                                <div style={{ fontWeight: 'bold', fontSize: 12, marginBottom: 4 }}>{uiText.particleEmitter2Dialog.tailLifespan}</div>
                                 <div style={{ display: 'flex', alignItems: 'center', marginBottom: 2 }}>
-                                    <span style={{ width: 30, fontSize: 12 }}>开始:</span>
+                                    <span style={{ width: 30, fontSize: 12 }}>{uiText.particleEmitter2Dialog.start}:</span>
                                     <Form.Item name="TailLifeSpanStart" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center', marginBottom: 2 }}>
-                                    <span style={{ width: 30, fontSize: 12 }}>结束:</span>
+                                    <span style={{ width: 30, fontSize: 12 }}>{uiText.particleEmitter2Dialog.end}:</span>
                                     <Form.Item name="TailLifeSpanEnd" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center' }}>
-                                    <span style={{ width: 30, fontSize: 12 }}>重复:</span>
+                                    <span style={{ width: 30, fontSize: 12 }}>{uiText.particleEmitter2Dialog.repeat}:</span>
                                     <Form.Item name="TailLifeSpanRepeat" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
                                 </div>
                             </div>
 
                             <div style={{ flex: 1 }}>
-                                <div style={{ fontWeight: 'bold', fontSize: 12, marginBottom: 4 }}>尾部 (衰减)</div>
+                                <div style={{ fontWeight: 'bold', fontSize: 12, marginBottom: 4 }}>{uiText.particleEmitter2Dialog.tailDecay}</div>
                                 <div style={{ display: 'flex', alignItems: 'center', marginBottom: 2 }}>
-                                    <span style={{ width: 30, fontSize: 12 }}>开始:</span>
+                                    <span style={{ width: 30, fontSize: 12 }}>{uiText.particleEmitter2Dialog.start}:</span>
                                     <Form.Item name="TailDecayStart" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center', marginBottom: 2 }}>
-                                    <span style={{ width: 30, fontSize: 12 }}>结束:</span>
+                                    <span style={{ width: 30, fontSize: 12 }}>{uiText.particleEmitter2Dialog.end}:</span>
                                     <Form.Item name="TailDecayEnd" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center' }}>
-                                    <span style={{ width: 30, fontSize: 12 }}>重复:</span>
+                                    <span style={{ width: 30, fontSize: 12 }}>{uiText.particleEmitter2Dialog.repeat}:</span>
                                     <Form.Item name="TailDecayRepeat" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
                                 </div>
                             </div>
@@ -921,37 +905,37 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
 
                         {/* Other Params */}
                         <div style={{ border: '1px solid #484848', padding: '8px 12px', marginTop: 12, backgroundColor: '#2b2b2b' }}>
-                            <div style={{ position: 'relative', top: -16, backgroundColor: '#1f1f1f', padding: '0 4px', width: 'fit-content', color: '#ccc', fontSize: 12 }}>其他</div>
+                            <div style={{ position: 'relative', top: -16, backgroundColor: '#1f1f1f', padding: '0 4px', width: 'fit-content', color: '#ccc', fontSize: 12 }}>{uiText.particleEmitter2Dialog.other}</div>
                             <div style={{ marginTop: -8 }}>
                                 <div style={{ display: 'flex', gap: 16, marginBottom: 8 }}>
                                     <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
-                                        <span style={{ marginRight: 4, fontSize: 12, width: 30 }}>行数:</span>
+                                        <span style={{ marginRight: 4, fontSize: 12, width: 30 }}>{uiText.particleEmitter2Dialog.rows}:</span>
                                         <Form.Item name="Rows" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
-                                        <span style={{ marginRight: 4, fontSize: 12, width: 60 }}>持续时间:</span>
+                                        <span style={{ marginRight: 4, fontSize: 12, width: 60 }}>{uiText.particleEmitter2Dialog.lifeSpan}:</span>
                                         <Form.Item name="LifeSpan" noStyle><InputNumber size="small" style={{ flex: 1 }} precision={2} step={0.01} /></Form.Item>
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
-                                        <span style={{ marginRight: 4, fontSize: 12, width: 60 }}>优先平面:</span>
+                                        <span style={{ marginRight: 4, fontSize: 12, width: 60 }}>{uiText.particleEmitter2Dialog.priorityPlane}:</span>
                                         <Form.Item name="PriorityPlane" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
-                                        <span style={{ marginRight: 4, fontSize: 12, width: 30 }}>时间:</span>
+                                        <span style={{ marginRight: 4, fontSize: 12, width: 30 }}>{uiText.particleEmitter2Dialog.time}:</span>
                                         <Form.Item name="Time" noStyle><InputNumber size="small" style={{ flex: 1 }} precision={1} /></Form.Item>
                                     </div>
                                 </div>
                                 <div style={{ display: 'flex', gap: 16 }}>
                                     <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
-                                        <span style={{ marginRight: 4, fontSize: 12, width: 30 }}>列数:</span>
+                                        <span style={{ marginRight: 4, fontSize: 12, width: 30 }}>{uiText.particleEmitter2Dialog.columns}:</span>
                                         <Form.Item name="Columns" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
-                                        <span style={{ marginRight: 4, fontSize: 12, width: 60 }}>尾部长度:</span>
+                                        <span style={{ marginRight: 4, fontSize: 12, width: 60 }}>{uiText.particleEmitter2Dialog.tailLength}:</span>
                                         <Form.Item name="TailLength" noStyle><InputNumber size="small" style={{ flex: 1 }} precision={1} /></Form.Item>
                                     </div>
                                     <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
-                                        <span style={{ marginRight: 4, fontSize: 12, width: 60 }}>可替换ID:</span>
+                                        <span style={{ marginRight: 4, fontSize: 12, width: 60 }}>{uiText.particleEmitter2Dialog.replaceableId}:</span>
                                         <Form.Item name="ReplaceableId" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
                                     </div>
                                     <div style={{ flex: 1 }}></div> {/* Spacer */}
@@ -964,24 +948,24 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
                     <div style={{ width: 140, display: 'flex', flexDirection: 'column' }}>
                         {/* Flags */}
                         <div style={{ border: '1px solid #484848', padding: '6px 8px', flex: 1, backgroundColor: '#2b2b2b', marginTop: 8, position: 'relative' }}>
-                            <div style={{ fontWeight: 'bold', marginBottom: 4, paddingBottom: 4, borderBottom: '1px solid #444', color: '#ccc', fontSize: 12 }}>标记</div>
+                            <div style={{ fontWeight: 'bold', marginBottom: 4, paddingBottom: 4, borderBottom: '1px solid #444', color: '#ccc', fontSize: 12 }}>{uiText.particleEmitter2Dialog.flags}</div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                                <Form.Item name="Unshaded" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{'\u65e0\u9634\u5f71'}</Checkbox></Form.Item>
-                                <Form.Item name="Unfogged" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{'\u65e0\u96fe\u5316'}</Checkbox></Form.Item>
-                                <Form.Item name="LineEmitter" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{'\u7ebf\u53d1\u5c04\u5668'}</Checkbox></Form.Item>
-                                <Form.Item name="SortPrimsFarZ" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{'\u6cbfZ\u8f74\u8fdc\u5411\u6392\u5217\u539f\u59cb\u51e0\u4f55\u4f53'}</Checkbox></Form.Item>
-                                <Form.Item name="ModelSpace" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{'\u6a21\u578b\u7a7a\u95f4'}</Checkbox></Form.Item>
-                                <Form.Item name="XYQuad" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{'XY \u8c61\u9650'}</Checkbox></Form.Item>
-                                <Form.Item name="Squirt" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{'\u55b7\u5c04'}</Checkbox></Form.Item>
-                                <Form.Item name="Head" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{'\u5934\u90e8'}</Checkbox></Form.Item>
-                                <Form.Item name="Tail" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{'\u5c3e\u90e8'}</Checkbox></Form.Item>
+                                <Form.Item name="Unshaded" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{uiText.particleEmitter2Dialog.unshaded}</Checkbox></Form.Item>
+                                <Form.Item name="Unfogged" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{uiText.particleEmitter2Dialog.unfogged}</Checkbox></Form.Item>
+                                <Form.Item name="LineEmitter" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{uiText.particleEmitter2Dialog.lineEmitter}</Checkbox></Form.Item>
+                                <Form.Item name="SortPrimsFarZ" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{uiText.particleEmitter2Dialog.sortPrimsFarZ}</Checkbox></Form.Item>
+                                <Form.Item name="ModelSpace" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{uiText.particleEmitter2Dialog.modelSpace}</Checkbox></Form.Item>
+                                <Form.Item name="XYQuad" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{uiText.particleEmitter2Dialog.xyQuad}</Checkbox></Form.Item>
+                                <Form.Item name="Squirt" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{uiText.particleEmitter2Dialog.squirt}</Checkbox></Form.Item>
+                                <Form.Item name="Head" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{uiText.particleEmitter2Dialog.head}</Checkbox></Form.Item>
+                                <Form.Item name="Tail" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{uiText.particleEmitter2Dialog.tail}</Checkbox></Form.Item>
                             </div>
 
                             {/* Buttons inside Flags Box (Bottom) */}
                             <div style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                <Button onClick={handleOk} type="primary" size="small" block>确定</Button>
-                                <Button onClick={handleCancel} size="small" block>取消</Button>
-                                <Button onClick={handleOpenPresetModal} size="small" block>保存预设</Button>
+                                <Button onClick={handleOk} type="primary" size="small" block>{uiText.particleEmitter2Dialog.confirm}</Button>
+                                <Button onClick={handleCancel} size="small" block>{uiText.particleEmitter2Dialog.cancel}</Button>
+                                <Button onClick={handleOpenPresetModal} size="small" block>{uiText.particleEmitter2Dialog.savePreset}</Button>
                             </div>
                         </div>
                     </div>
@@ -995,7 +979,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
                     onClick={(e) => e.stopPropagation()}
                 >
                     <DraggableModal
-                        title="保存粒子预设"
+                        title={uiText.particleEmitter2Dialog.savePreset}
                         open={presetModalOpen}
                         onCancel={() => setPresetModalOpen(false)}
                         width={360}
@@ -1006,13 +990,13 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
                         styles={{ body: { padding: 16 } }}
                         footer={(
                             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-                                <Button size="small" onClick={() => setPresetModalOpen(false)}>取消</Button>
-                                <Button size="small" type="primary" loading={isSavingPreset} onClick={() => { void handleSavePreset() }}>确定</Button>
+                                <Button size="small" onClick={() => setPresetModalOpen(false)}>{uiText.particleEmitter2Dialog.cancel}</Button>
+                                <Button size="small" type="primary" loading={isSavingPreset} onClick={() => { void handleSavePreset() }}>{uiText.particleEmitter2Dialog.save}</Button>
                             </div>
                         )}
                     >
                         <Input
-                            placeholder="输入预设名称"
+                            placeholder={uiText.particleEmitter2Dialog.presetNamePlaceholder}
                             value={presetName}
                             onChange={(e) => setPresetName(e.target.value)}
                             onPressEnter={() => { void handleSavePreset() }}
@@ -1026,7 +1010,11 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
     if (isStandalone) {
         return (
             <>
-                <NodeEditorStandaloneShell>{pe2FormEl}</NodeEditorStandaloneShell>
+                <NodeEditorStandaloneShell>
+                    <AppErrorBoundary scope="Particle Emitter 2" compact>
+                        {pe2FormEl}
+                    </AppErrorBoundary>
+                </NodeEditorStandaloneShell>
                 {pe2PresetPortal}
             </>
         );
@@ -1034,7 +1022,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
 
     return (
         <DraggableModal
-            title="II型粒子发射器"
+            title={uiText.particleEmitter2Dialog.title}
             open={visible}
             onOk={handleOk}
             onCancel={handleCancel}
@@ -1045,7 +1033,9 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
             wrapClassName="dark-theme-modal"
             styles={{ body: { padding: '8px 12px', backgroundColor: '#1f1f1f', color: '#ccc' } }}
         >
-            {pe2FormEl}
+            <AppErrorBoundary scope="Particle Emitter 2" compact>
+                {pe2FormEl}
+            </AppErrorBoundary>
             {pe2PresetPortal}
         </DraggableModal>
     );

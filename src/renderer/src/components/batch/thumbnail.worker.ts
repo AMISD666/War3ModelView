@@ -373,13 +373,14 @@ async function applyTextureImagesToRenderer(
     if (!textureImages || !renderer?.setTextureImageData) return;
 
     for (const [path, img] of Object.entries(textureImages)) {
-        if (appliedTexturePaths.has(path)) continue;
+        const normalizedPath = path.replace(/\//g, '\\');
+        if (appliedTexturePaths.has(normalizedPath) || appliedTexturePaths.has(path)) continue;
         try {
             // CRITICAL: MUST set premultiplyAlpha to 'none' otherwise WebGL loses RGB data on transparent pixels!
             const bitmap = await createImageBitmap(img, { premultiplyAlpha: 'none' });
-            const rendererPath = texturePathAliases?.get(path) || path;
+            const rendererPath = texturePathAliases?.get(path) || texturePathAliases?.get(normalizedPath) || normalizedPath;
             renderer.setTextureImageData(rendererPath, [bitmap]);
-            appliedTexturePaths.add(path);
+            appliedTexturePaths.add(normalizedPath);
             uploadedTexturePaths.add(rendererPath);
         } catch (e) {
             console.warn(`[Worker] Failed to apply texture ${path}:`, e);
@@ -500,6 +501,11 @@ function namespaceModelTexturePaths(model: any, fullPath: string): Map<string, s
     const aliases = new Map<string, string>();
     const getAlias = (originalPath: string): string => {
         const normalizedOriginal = originalPath.replace(/\//g, '\\');
+        // ReplaceableTextures are global engine resources and must keep their original path.
+        // Rewriting them to batch:// aliases breaks team color/team glow resolution in batch mode.
+        if (normalizedOriginal.toLowerCase().startsWith('replaceabletextures\\')) {
+            return normalizedOriginal;
+        }
         const existing = aliases.get(normalizedOriginal);
         if (existing) return existing;
         const alias = createModelScopedTexturePath(fullPath, normalizedOriginal);

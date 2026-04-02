@@ -1,6 +1,6 @@
 import { NodeType } from './node'
 
-/** 独立节点编辑子窗与主窗口 RPC 使用的编辑器种类 */
+/** 独立节点编辑器的窗口类别。 */
 export type NodeEditorKind =
     | 'particleEmitter'
     | 'particleEmitter2'
@@ -11,12 +11,12 @@ export type NodeEditorKind =
     | 'genericNode'
     | 'rename'
 
-/** 主窗口广播给子窗的快照 */
+/** 主窗口广播给独立节点编辑器的快照。 */
 export interface NodeEditorRpcState {
     snapshotVersion: number
     kind: NodeEditorKind | ''
     objectId: number
-    /** 当前编辑节点的深拷贝，子窗以本地表单为准；仅首包用于初始化 */
+    /** 当前编辑节点的深拷贝，仅用于独立窗口初始化。 */
     node: any | null
     textures: any[]
     materials: any[]
@@ -25,18 +25,62 @@ export interface NodeEditorRpcState {
     modelPath: string
     renameInitialName: string
     allNodes: any[]
-    /** 与 modelData.PivotPoints 一致（稀疏数组），独立窗优先从此解析 PIVT，避免节点副本上错误的字节/序列化残留 */
+    /** 对应 modelData.PivotPoints，避免独立窗口从节点副本上读取到损坏的 PIVT 数据。 */
     pivotPoints: any[]
 }
 
-/** APPLY_NODE_UPDATE 可选历史记录（与主窗口 HistoryStore 行为一致） */
+/** APPLY_NODE_UPDATE 可选历史记录，行为与主窗口 HistoryStore 一致。 */
 export interface NodeEditorHistoryPayload {
     name: string
     undoNode: any
     redoNode: any
 }
 
-/** 根据节点类型映射到独立编辑器种类（无法映射时返回 null） */
+export interface NodeEditorNodePayload<TNode = any> {
+    objectId: number
+    node: TNode
+}
+
+export interface ApplyNodeUpdatePayload<TNode = any> extends NodeEditorNodePayload<TNode> {
+    history?: NodeEditorHistoryPayload
+}
+
+export interface ClearNodePreviewPayload {
+    objectId: number | null
+}
+
+export interface RenameNodePayload {
+    objectId: number
+    name: string
+}
+
+export const NODE_EDITOR_COMMANDS = {
+    applyNodeUpdate: 'APPLY_NODE_UPDATE',
+    previewNodeUpdate: 'PREVIEW_NODE_UPDATE',
+    clearNodePreview: 'CLEAR_NODE_PREVIEW',
+    renameNode: 'RENAME_NODE',
+} as const
+
+export type NodeEditorCommand = typeof NODE_EDITOR_COMMANDS[keyof typeof NODE_EDITOR_COMMANDS]
+
+export type NodeEditorCommandPayloadMap = {
+    APPLY_NODE_UPDATE: ApplyNodeUpdatePayload
+    PREVIEW_NODE_UPDATE: NodeEditorNodePayload
+    CLEAR_NODE_PREVIEW: ClearNodePreviewPayload
+    RENAME_NODE: RenameNodePayload
+}
+
+export type NodeEditorCommandEnvelope<TCommand extends NodeEditorCommand = NodeEditorCommand> = {
+    command: TCommand
+    payload: NodeEditorCommandPayloadMap[TCommand]
+}
+
+export type NodeEditorCommandSender = <TCommand extends NodeEditorCommand>(
+    command: TCommand,
+    payload: NodeEditorCommandPayloadMap[TCommand]
+) => void
+
+/** 根据节点类型映射到独立编辑器类别，无法映射时返回 null。 */
 export function nodeTypeToEditorKind(nodeType: NodeType): NodeEditorKind | null {
     switch (nodeType) {
         case NodeType.PARTICLE_EMITTER:
@@ -56,7 +100,7 @@ export function nodeTypeToEditorKind(nodeType: NodeType): NodeEditorKind | null 
     }
 }
 
-/** 窗口标题与默认尺寸（逻辑像素） */
+/** 独立窗口标题与默认逻辑像素尺寸。 */
 export function getNodeEditorWindowLayout(kind: NodeEditorKind): { title: string; w: number; h: number } {
     switch (kind) {
         case 'particleEmitter':

@@ -4,6 +4,7 @@ import { Form, Checkbox, ConfigProvider, theme, Row, Col, Divider } from 'antd';
 import { DraggableModal } from '../DraggableModal';
 import { useModelStore } from '../../store/modelStore';
 import { useUIStore } from '../../store/uiStore';
+import { uiText } from '../../constants/uiText';
 
 export const TransformModelDialog: React.FC = () => {
     const { showTransformModelDialog, setTransformModelDialogVisible } = useUIStore();
@@ -92,7 +93,7 @@ export const TransformModelDialog: React.FC = () => {
             }}
         >
             <DraggableModal
-                title="修改模型位置/旋转/大小"
+                title={uiText.transformModelDialog.title}
                 open={showTransformModelDialog}
                 onOk={handleOk}
                 onCancel={handleCancel}
@@ -103,7 +104,7 @@ export const TransformModelDialog: React.FC = () => {
                 <Form form={form} layout="horizontal" labelCol={{ span: 0 }} wrapperCol={{ span: 24 }}>
                     <div style={{ marginBottom: 16 }}>
                         <div style={{ fontSize: 13, fontWeight: 500, color: '#569cd6', marginBottom: 12, display: 'flex', alignItems: 'center' }}>
-                            <span style={{ marginRight: 8 }}>平移 (Translation)</span>
+                            <span style={{ marginRight: 8 }}>{uiText.transformModelDialog.translation}</span>
                             <div style={{ flex: 1, height: 1, background: 'linear-gradient(to right, #444, transparent)' }} />
                         </div>
                         <Row gutter={12}>
@@ -136,7 +137,7 @@ export const TransformModelDialog: React.FC = () => {
 
                     <div style={{ marginBottom: 16 }}>
                         <div style={{ fontSize: 13, fontWeight: 500, color: '#569cd6', marginBottom: 12, display: 'flex', alignItems: 'center' }}>
-                            <span style={{ marginRight: 8 }}>旋转 (Rotation)</span>
+                            <span style={{ marginRight: 8 }}>{uiText.transformModelDialog.rotation}</span>
                             <div style={{ flex: 1, height: 1, background: 'linear-gradient(to right, #444, transparent)' }} />
                         </div>
                         <Row gutter={12}>
@@ -169,7 +170,7 @@ export const TransformModelDialog: React.FC = () => {
 
                     <div>
                         <div style={{ fontSize: 13, fontWeight: 500, color: '#569cd6', marginBottom: 12, display: 'flex', alignItems: 'center' }}>
-                            <span style={{ marginRight: 8 }}>缩放 (Scale)</span>
+                            <span style={{ marginRight: 8 }}>{uiText.transformModelDialog.scale}</span>
                             <div style={{ flex: 1, height: 1, background: 'linear-gradient(to right, #444, transparent)' }} />
                         </div>
                         <Row gutter={12}>
@@ -219,7 +220,7 @@ export const TransformModelDialog: React.FC = () => {
                                 onChange={(e) => setSyncScale(e.target.checked)}
                                 style={{ fontSize: 12, color: '#aaa' }}
                             >
-                                同步缩放比例
+                                {uiText.transformModelDialog.syncScale}
                             </Checkbox>
                         </Form.Item>
                     </div>
@@ -228,4 +229,3 @@ export const TransformModelDialog: React.FC = () => {
         </ConfigProvider>
     );
 };
-

@@ -1291,6 +1291,23 @@ class ThumbnailService {
         return this.usesReplaceableTeamTextures(texturePaths);
     }
 
+    private invalidateWorkerState(workerIndex: number) {
+        this.workerModelCache[workerIndex] = [];
+        this.workerTextureSync[workerIndex].clear();
+        this.workerSharedTextureSync[workerIndex].clear();
+        this.workerTeamColorSync[workerIndex].clear();
+        for (const [path, affinity] of Array.from(this.modelWorkerAffinity.entries())) {
+            if (affinity === workerIndex) {
+                this.modelWorkerAffinity.delete(path);
+            }
+        }
+        try {
+            this.workers[workerIndex]?.postMessage({ type: 'CLEAR' });
+        } catch {
+            // Ignore reset failures; the next render will repopulate this worker as needed.
+        }
+    }
+
     private rebuildWorkerTextureSyncState(workerIndex: number) {
         const syncedModels = this.workerTextureSync[workerIndex];
         syncedModels.clear();
@@ -1963,7 +1980,9 @@ class ThumbnailService {
             console.warn(`[ThumbnailService] Worker ${workerIndex} timed out on ${fullPath}. Resetting.`);
             this.workerBusy[workerIndex] = false;
             this.renderRequestMetrics.delete(fullPath);
+            this.renderRequestGeneration.delete(fullPath);
             this.clearFirstTouch(fullPath);
+            this.invalidateWorkerState(workerIndex);
             const cb = this.callbacks.get(fullPath);
             if (cb) {
                 cb({ bitmap: null as any, status: 'error' });

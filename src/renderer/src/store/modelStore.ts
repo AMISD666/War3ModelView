@@ -42,6 +42,11 @@ export type MaterialManagerPreview = {
     geosets?: any[];
 };
 
+export type NodeEditorPreview = {
+    objectId: number;
+    node: ModelNode;
+};
+
 /** 将材质预览合并到模型数据（用于主界面 Viewer 等展示） */
 export function mergeMaterialManagerPreview(
     modelData: ModelData | null,
@@ -61,6 +66,25 @@ export function mergeMaterialManagerPreview(
         next.Geosets = preview.geosets;
     }
     return next;
+}
+
+export function mergeNodeEditorPreview(
+    modelData: ModelData | null,
+    preview: NodeEditorPreview | null
+): ModelData | null {
+    if (!modelData || !preview) return modelData;
+
+    const nodes = extractNodesFromModel(modelData);
+    if (!Array.isArray(nodes) || nodes.length === 0) return modelData;
+
+    const hasTarget = nodes.some((node) => node.ObjectId === preview.objectId);
+    if (!hasTarget) return modelData;
+
+    const updatedNodes = nodes.map((node) =>
+        node.ObjectId === preview.objectId ? ({ ...preview.node } as ModelNode) : node
+    );
+
+    return updateModelDataWithNodes(modelData, updatedNodes, false);
 }
 
 const pickDefaultSequenceIndex = (sequences: any[]) => {
@@ -240,6 +264,9 @@ interface ModelState {
     clearMaterialManagerPreview: () => void;
     /** 保存成功后调用：将预览写入 modelData 并清空预览 */
     commitMaterialManagerPreviewToModel: () => void;
+    nodeEditorPreview: NodeEditorPreview | null;
+    setNodeEditorPreview: (payload: NodeEditorPreview) => void;
+    clearNodeEditorPreview: () => void;
     setTextureAnims: (anims: any[]) => void;
     addTextureAnim: () => void;
     removeTextureAnim: (index: number) => void;
@@ -1005,6 +1032,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
     clipboardPayload: null,
 
     materialManagerPreview: null as MaterialManagerPreview | null,
+    nodeEditorPreview: null as NodeEditorPreview | null,
 
     cachedRenderer: null,
 
@@ -1142,6 +1170,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 selectedGeosetIndex: null,
                 selectedGeosetIndices: [],
                 materialManagerPreview: null,
+                nodeEditorPreview: null,
             };
 
             const activeTabId = state.activeTabId
@@ -2139,6 +2168,19 @@ export const useModelStore = create<ModelState>((set, get) => ({
         };
     }),
 
+    setNodeEditorPreview: (payload) => set((state) => ({
+        nodeEditorPreview: payload,
+        rendererReloadTrigger: state.rendererReloadTrigger + 1,
+    })),
+
+    clearNodeEditorPreview: () => set((state) => {
+        if (!state.nodeEditorPreview) return {};
+        return {
+            nodeEditorPreview: null,
+            rendererReloadTrigger: state.rendererReloadTrigger + 1,
+        };
+    }),
+
     setTextureAnims: (anims) => set((state) => {
         const updatedModelData = state.modelData ? { ...state.modelData, TextureAnims: anims } : state.modelData;
         return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
@@ -3002,6 +3044,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 scale: [1, 1, 1]
             },
             materialManagerPreview: null,
+            nodeEditorPreview: null,
             diskSyncMeta: null,
         });
     }

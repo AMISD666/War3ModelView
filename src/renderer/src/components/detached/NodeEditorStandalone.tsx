@@ -2,8 +2,12 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { ConfigProvider, theme, type ThemeConfig } from 'antd'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useRpcClient } from '../../hooks/useRpc'
-import type { NodeEditorRpcState, NodeEditorKind } from '../../types/nodeEditorRpc'
-import { getNodeEditorWindowLayout } from '../../types/nodeEditorRpc'
+import {
+    NODE_EDITOR_COMMANDS,
+    getNodeEditorWindowLayout,
+    type NodeEditorKind,
+    type NodeEditorRpcState,
+} from '../../types/nodeEditorRpc'
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
 import ParticleEmitterDialog from '../node/ParticleEmitterDialog'
 import ParticleEmitter2Dialog from '../node/ParticleEmitter2Dialog'
@@ -14,7 +18,7 @@ import RibbonEmitterDialog from '../node/RibbonEmitterDialog'
 import NodeDialog from '../node/NodeDialog'
 import { RenameNodeDialog } from '../node/RenameNodeDialog'
 
-/** 与节点管理器等独立窗一致：深色底、浅灰/白字（独立 WebView 无主应用 ConfigProvider 时需自行包裹） */
+/** 独立节点编辑器的深色主题，避免脱离主应用 ConfigProvider 后样式回退。 */
 const nodeEditorStandaloneTheme: ThemeConfig = {
     algorithm: theme.darkAlgorithm,
     token: {
@@ -45,8 +49,8 @@ const initialRpcState: NodeEditorRpcState = {
 }
 
 /**
- * 独立 WebView：单窗口 nodeEditor，根据 RPC 快照中的 kind 渲染对应节点编辑 UI。
- * 外层使用 StandaloneWindowFrame，与其他独立管理器（如多边形管理器）一致。
+ * 独立 WebView 节点编辑器，根据 RPC 快照中的 kind 渲染对应的编辑界面。
+ * 外层沿用 StandaloneWindowFrame，和其他独立管理器窗口保持一致。
  */
 const NodeEditorStandalone: React.FC = () => {
     const { state, emitCommand } = useRpcClient<NodeEditorRpcState>('nodeEditor', initialRpcState)
@@ -114,7 +118,7 @@ const NodeEditorStandalone: React.FC = () => {
         return (
             <ConfigProvider theme={nodeEditorStandaloneTheme}>
                 <StandaloneWindowFrame title="节点编辑器" onClose={handleClose}>
-                    <div style={{ padding: 16, color: '#b0b0b0' }}>正在同步模型数据…</div>
+                    <div style={{ padding: 16, color: '#b0b0b0' }}>正在同步模型数据...</div>
                 </StandaloneWindowFrame>
             </ConfigProvider>
         )
@@ -124,7 +128,7 @@ const NodeEditorStandalone: React.FC = () => {
         return (
             <ConfigProvider theme={nodeEditorStandaloneTheme}>
                 <StandaloneWindowFrame title={frameTitle} onClose={handleClose}>
-                    <div style={{ padding: 16, color: '#b0b0b0' }}>正在加载节点…</div>
+                    <div style={{ padding: 16, color: '#b0b0b0' }}>正在加载节点...</div>
                 </StandaloneWindowFrame>
             </ConfigProvider>
         )
@@ -132,118 +136,121 @@ const NodeEditorStandalone: React.FC = () => {
 
     return (
         <ConfigProvider theme={nodeEditorStandaloneTheme}>
-        <StandaloneWindowFrame title={frameTitle} onClose={handleClose}>
-            <div
-                style={{
-                    flex: 1,
-                    minHeight: 0,
-                    overflow: 'hidden',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    backgroundColor: '#1e1e1e',
-                }}
-            >
-                {state.kind === 'particleEmitter' && (
-                    <ParticleEmitterDialog
-                        key={editorKey}
-                        visible={true}
-                        nodeId={state.objectId}
-                        onClose={handleClose}
-                        isStandalone={true}
-                        standaloneNode={frozenNode}
-                        standaloneEmit={emitCommand}
-                        standaloneModelData={standaloneModelData}
-                    />
-                )}
-                {state.kind === 'particleEmitter2' && (
-                    <ParticleEmitter2Dialog
-                        key={editorKey}
-                        visible={true}
-                        nodeId={state.objectId}
-                        onClose={handleClose}
-                        isStandalone={true}
-                        standaloneNode={frozenNode}
-                        standaloneEmit={emitCommand}
-                        standaloneModelData={standaloneModelData}
-                        standaloneModelPath={state.modelPath}
-                    />
-                )}
-                {state.kind === 'collisionShape' && (
-                    <CollisionShapeDialog
-                        key={editorKey}
-                        visible={true}
-                        nodeId={state.objectId}
-                        onClose={handleClose}
-                        isStandalone={true}
-                        standaloneNode={frozenNode}
-                        standaloneEmit={emitCommand}
-                    />
-                )}
-                {state.kind === 'light' && (
-                    <LightDialog
-                        key={editorKey}
-                        visible={true}
-                        nodeId={state.objectId}
-                        onClose={handleClose}
-                        isStandalone={true}
-                        standaloneNode={frozenNode}
-                        standaloneEmit={emitCommand}
-                        standaloneModelData={standaloneModelData}
-                    />
-                )}
-                {state.kind === 'eventObject' && (
-                    <EventObjectDialog
-                        key={editorKey}
-                        visible={true}
-                        nodeId={state.objectId}
-                        onClose={handleClose}
-                        isStandalone={true}
-                        standaloneNode={frozenNode}
-                        standaloneEmit={emitCommand}
-                        standaloneModelData={standaloneModelData}
-                    />
-                )}
-                {state.kind === 'ribbonEmitter' && (
-                    <RibbonEmitterDialog
-                        key={editorKey}
-                        visible={true}
-                        nodeId={state.objectId}
-                        onClose={handleClose}
-                        isStandalone={true}
-                        standaloneNode={frozenNode}
-                        standaloneEmit={emitCommand}
-                        standaloneModelData={standaloneModelData}
-                    />
-                )}
-                {state.kind === 'genericNode' && (
-                    <NodeDialog
-                        key={editorKey}
-                        visible={true}
-                        nodeId={state.objectId}
-                        onClose={handleClose}
-                        isStandalone={true}
-                        standaloneNode={frozenNode}
-                        standaloneEmit={emitCommand}
-                        standaloneModelData={standaloneModelData}
-                        standaloneAllNodes={state.allNodes}
-                    />
-                )}
-                {state.kind === 'rename' && (
-                    <RenameNodeDialog
-                        key={editorKey}
-                        visible={true}
-                        nodeId={state.objectId}
-                        currentName={state.renameInitialName}
-                        onRename={(newName) => {
-                            emitCommand('RENAME_NODE', { objectId: state.objectId, name: newName })
-                            void handleClose()
-                        }}
-                        onCancel={handleClose}
-                        isStandalone={true}
-                    />
-                )}
-            </div>
-        </StandaloneWindowFrame>
+            <StandaloneWindowFrame title={frameTitle} onClose={handleClose}>
+                <div
+                    style={{
+                        flex: 1,
+                        minHeight: 0,
+                        overflow: 'hidden',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        backgroundColor: '#1e1e1e',
+                    }}
+                >
+                    {state.kind === 'particleEmitter' && (
+                        <ParticleEmitterDialog
+                            key={editorKey}
+                            visible={true}
+                            nodeId={state.objectId}
+                            onClose={handleClose}
+                            isStandalone={true}
+                            standaloneNode={frozenNode}
+                            standaloneEmit={emitCommand}
+                            standaloneModelData={standaloneModelData}
+                        />
+                    )}
+                    {state.kind === 'particleEmitter2' && (
+                        <ParticleEmitter2Dialog
+                            key={editorKey}
+                            visible={true}
+                            nodeId={state.objectId}
+                            onClose={handleClose}
+                            isStandalone={true}
+                            standaloneNode={frozenNode}
+                            standaloneEmit={emitCommand}
+                            standaloneModelData={standaloneModelData}
+                            standaloneModelPath={state.modelPath}
+                        />
+                    )}
+                    {state.kind === 'collisionShape' && (
+                        <CollisionShapeDialog
+                            key={editorKey}
+                            visible={true}
+                            nodeId={state.objectId}
+                            onClose={handleClose}
+                            isStandalone={true}
+                            standaloneNode={frozenNode}
+                            standaloneEmit={emitCommand}
+                        />
+                    )}
+                    {state.kind === 'light' && (
+                        <LightDialog
+                            key={editorKey}
+                            visible={true}
+                            nodeId={state.objectId}
+                            onClose={handleClose}
+                            isStandalone={true}
+                            standaloneNode={frozenNode}
+                            standaloneEmit={emitCommand}
+                            standaloneModelData={standaloneModelData}
+                        />
+                    )}
+                    {state.kind === 'eventObject' && (
+                        <EventObjectDialog
+                            key={editorKey}
+                            visible={true}
+                            nodeId={state.objectId}
+                            onClose={handleClose}
+                            isStandalone={true}
+                            standaloneNode={frozenNode}
+                            standaloneEmit={emitCommand}
+                            standaloneModelData={standaloneModelData}
+                        />
+                    )}
+                    {state.kind === 'ribbonEmitter' && (
+                        <RibbonEmitterDialog
+                            key={editorKey}
+                            visible={true}
+                            nodeId={state.objectId}
+                            onClose={handleClose}
+                            isStandalone={true}
+                            standaloneNode={frozenNode}
+                            standaloneEmit={emitCommand}
+                            standaloneModelData={standaloneModelData}
+                        />
+                    )}
+                    {state.kind === 'genericNode' && (
+                        <NodeDialog
+                            key={editorKey}
+                            visible={true}
+                            nodeId={state.objectId}
+                            onClose={handleClose}
+                            isStandalone={true}
+                            standaloneNode={frozenNode}
+                            standaloneEmit={emitCommand}
+                            standaloneModelData={standaloneModelData}
+                            standaloneAllNodes={state.allNodes}
+                        />
+                    )}
+                    {state.kind === 'rename' && (
+                        <RenameNodeDialog
+                            key={editorKey}
+                            visible={true}
+                            nodeId={state.objectId}
+                            currentName={state.renameInitialName}
+                            onRename={(newName) => {
+                                emitCommand(NODE_EDITOR_COMMANDS.renameNode, {
+                                    objectId: state.objectId,
+                                    name: newName,
+                                })
+                                void handleClose()
+                            }}
+                            onCancel={handleClose}
+                            isStandalone={true}
+                        />
+                    )}
+                </div>
+            </StandaloneWindowFrame>
         </ConfigProvider>
     )
 }
