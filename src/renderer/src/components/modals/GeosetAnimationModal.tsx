@@ -12,6 +12,8 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useRpcClient } from '../../hooks/useRpc'
 import { listen } from '@tauri-apps/api/event'
 import { windowManager } from '../../utils/WindowManager'
+import { coercePivotFloat3 } from 'war3-model'
+import { toFloat32Array } from '../../utils/modelUtils'
 
 const { Text } = Typography
 const { Option } = Select
@@ -98,14 +100,18 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
             // Deep clone GeosetAnims, converting Float32Array to regular arrays
             const clonedAnims = (currentAnims || []).map((anim: any) => {
                 const cloned: any = { ...anim }
-                // Convert Color Float32Array to regular array
+                // 静态色：Float32Array / Uint8Array(msgpack) 用 coerce；勿对 12 字节 Uint8Array 只取前三个「字节」当 RGB
                 if (anim.Color instanceof Float32Array || ArrayBuffer.isView(anim.Color)) {
-                    cloned.Color = Array.from(anim.Color as ArrayLike<number>)
+                    const c = coercePivotFloat3(anim.Color as Float32Array | Uint8Array | number[])
+                    cloned.Color = c ? [c[0], c[1], c[2]] : [1, 1, 1]
                 } else if (Array.isArray(anim.Color)) {
                     cloned.Color = [...anim.Color]
-                } else if (anim.Color && typeof anim.Color === 'object') {
-                    // AnimVector (animated color)
+                } else if (anim.Color && typeof anim.Color === 'object' && Array.isArray((anim.Color as any).Keys)) {
                     cloned.Color = cloneAnimVector(anim.Color, 3)
+                } else if (anim.Color && typeof anim.Color === 'object') {
+                    const c = coercePivotFloat3(anim.Color as Float32Array | Uint8Array | number[])
+                    const t = c ?? toFloat32Array(anim.Color, 3)
+                    cloned.Color = [t[0], t[1], t[2]]
                 }
                 // Clone Alpha if it's an AnimVector
                 if (anim.Alpha && typeof anim.Alpha === 'object' && 'Keys' in anim.Alpha) {
@@ -236,13 +242,18 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
     }
 
     const getColor = (anim: any) => {
-        if (!anim || !anim.Color) return '#ffffff'
+        if (!anim || anim.Color == null) return '#ffffff'
         const colorData = anim.Color
-        if (colorData && colorData.length >= 3) {
-            const arr = Array.isArray(colorData) ? colorData : Array.from(colorData as ArrayLike<number>)
-            const r = arr[0] || 0
-            const g = arr[1] || 0
-            const b = arr[2] || 0
+        if (ArrayBuffer.isView(colorData)) {
+            const c = coercePivotFloat3(colorData as Float32Array | Uint8Array | number[])
+            if (c) {
+                return `rgb(${Math.round(c[0] * 255)}, ${Math.round(c[1] * 255)}, ${Math.round(c[2] * 255)})`
+            }
+        }
+        if (Array.isArray(colorData) && colorData.length >= 3) {
+            const r = Number(colorData[0]) || 0
+            const g = Number(colorData[1]) || 0
+            const b = Number(colorData[2]) || 0
             return `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`
         }
         return '#ffffff'
@@ -261,8 +272,14 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
 
         if (checked) {
             // Convert static color to AnimVector
-            const currentColor = anim.Color || [1, 1, 1]
-            let colorArr = Array.isArray(currentColor) ? currentColor : [1, 1, 1]
+            const currentColor = anim.Color ?? [1, 1, 1]
+            let colorArr: number[] = [1, 1, 1]
+            if (Array.isArray(currentColor)) {
+                colorArr = [Number(currentColor[0]), Number(currentColor[1]), Number(currentColor[2])]
+            } else if (currentColor instanceof Float32Array || ArrayBuffer.isView(currentColor)) {
+                const c = coercePivotFloat3(currentColor as Float32Array | Uint8Array | number[])
+                if (c) colorArr = [c[0], c[1], c[2]]
+            }
             const animVector = {
                 Keys: [{ Frame: 0, Vector: colorArr }],
                 LineType: 1,
@@ -272,9 +289,15 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
         } else {
             // Convert AnimVector to static color
             const currentColor = anim.Color
-            let staticColor = [1, 1, 1]
+            let staticColor: number[] = [1, 1, 1]
             if (currentColor && currentColor.Keys && currentColor.Keys.length > 0) {
-                staticColor = currentColor.Keys[0].Vector || [1, 1, 1]
+                const v = currentColor.Keys[0].Vector
+                if (ArrayBuffer.isView(v)) {
+                    const c = coercePivotFloat3(v as Float32Array | Uint8Array | number[])
+                    staticColor = c ? [c[0], c[1], c[2]] : [1, 1, 1]
+                } else if (Array.isArray(v)) {
+                    staticColor = [Number(v[0]), Number(v[1]), Number(v[2])]
+                }
             }
             updateLocalAnim(selectedIndex, { Color: staticColor })
         }

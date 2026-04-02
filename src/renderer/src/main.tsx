@@ -4,6 +4,7 @@ import 'antd/dist/reset.css'
 import './assets/index.css'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { markStandalonePerf } from './utils/standalonePerf'
+import AppErrorBoundary from './components/common/AppErrorBoundary'
 
 const App = React.lazy(() => import('./App'))
 
@@ -47,9 +48,11 @@ markStandalonePerf('main_entry_selected', {
 })
 
 const RootComponent = (
-    <React.Suspense fallback={null}>
-        <App />
-    </React.Suspense>
+    <AppErrorBoundary scope="应用入口">
+        <React.Suspense fallback={null}>
+            <App />
+        </React.Suspense>
+    </AppErrorBoundary>
 )
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(RootComponent)

@@ -1,10 +1,102 @@
-﻿/**
+/**
  * Node Utility Functions
  */
 
 import React from 'react';
 import { ApartmentOutlined } from '@ant-design/icons';
+import { coercePivotFloat3 } from 'war3-model';
+import type { ModelNode } from '../types/node';
 import { NodeType } from '../types/node';
+
+function pivotAxis(p: unknown, i: 0 | 1 | 2): number {
+    if (p == null) return 0;
+    const c = coercePivotFloat3(p as Float32Array | Uint8Array | number[]);
+    if (c) return Number(c[i]) || 0;
+    if (ArrayBuffer.isView(p)) {
+        const v = p as ArrayBufferView;
+        return Number(v[i]) || 0;
+    }
+    if (Array.isArray(p) && p.length > i) {
+        return Number(p[i]) || 0;
+    }
+    return 0;
+}
+
+/** 节点编辑：优先全局 PivotPoints[ObjectId]，除非 ignorePivotTable（例如表单里用本地输入替换当前节点轴心） */
+export function resolvePivotTripletForNodeEditor(
+    node: ModelNode,
+    pivotPointsSparse?: unknown[] | null,
+    options?: { ignorePivotTable?: boolean }
+): [number, number, number] {
+    const oid = node.ObjectId;
+    if (
+        !options?.ignorePivotTable &&
+        typeof oid === 'number' &&
+        Array.isArray(pivotPointsSparse)
+    ) {
+        const raw = pivotPointsSparse[oid];
+        const t = coercePivotFloat3(raw as Float32Array | Uint8Array | number[]);
+        if (t) return [Number(t[0]), Number(t[1]), Number(t[2])];
+    }
+    const n = coercePivotFloat3(node.PivotPoint as Float32Array | Uint8Array | number[]);
+    if (n) return [Number(n[0]), Number(n[1]), Number(n[2])];
+    return [pivotAxis(node.PivotPoint, 0), pivotAxis(node.PivotPoint, 1), pivotAxis(node.PivotPoint, 2)];
+}
+
+/**
+ * 沿父链累加 PIVT（仅平移，不含旋转/缩放），与部分编辑器「位置」列的近似算法一致
+ */
+export function getPivotChainSum(
+    node: ModelNode,
+    allNodes: ModelNode[],
+    pivotPointsSparse?: unknown[] | null
+): [number, number, number] {
+    const pos = resolvePivotTripletForNodeEditor(node, pivotPointsSparse);
+    let current = allNodes.find((n) => n.ObjectId === node.Parent);
+    while (current) {
+        const pp = resolvePivotTripletForNodeEditor(current, pivotPointsSparse);
+        pos[0] += pp[0];
+        pos[1] += pp[1];
+        pos[2] += pp[2];
+        if (current.Parent === -1 || current.Parent === undefined) break;
+        current = allNodes.find((n) => n.ObjectId === current?.Parent);
+    }
+    return pos;
+}
+
+/** 表单编辑时用当前输入值替换节点 PIVT 再算父链累加 */
+export function getPivotChainSumWithLocalPivot(
+    node: ModelNode,
+    localPivot: [number, number, number],
+    allNodes: ModelNode[],
+    pivotPointsSparse?: unknown[] | null
+): [number, number, number] {
+    const fake = { ...node, PivotPoint: localPivot as ModelNode['PivotPoint'] };
+    // 当前节点用本地输入，不读全局表；父链仍读表，避免节点副本上错误轴心
+    const pos = resolvePivotTripletForNodeEditor(fake as ModelNode, pivotPointsSparse, {
+        ignorePivotTable: true,
+    });
+    let current = allNodes.find((n) => n.ObjectId === fake.Parent);
+    while (current) {
+        const pp = resolvePivotTripletForNodeEditor(current, pivotPointsSparse);
+        pos[0] += pp[0];
+        pos[1] += pp[1];
+        pos[2] += pp[2];
+        if (current.Parent === -1 || current.Parent === undefined) break;
+        current = allNodes.find((n) => n.ObjectId === current?.Parent);
+    }
+    return pos;
+}
+
+/**
+ * Magos 等工具里「模型单位」标尺常见：原始 PIVT ÷ 38.4（仅作对照，各轴/导出路径可能仍有偏差）
+ */
+export const WC3_PIVOT_DISPLAY_SCALE = 38.4;
+
+export function pivotPivtToMagosLikeScale(pivot: [number, number, number]): [number, number, number] {
+    const s = WC3_PIVOT_DISPLAY_SCALE;
+    return [pivot[0] / s, pivot[1] / s, pivot[2] / s];
+}
 
 /**
  * 获取节点类型对应的图标

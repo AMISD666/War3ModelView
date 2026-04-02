@@ -45,10 +45,10 @@ export const getCachedParsedModel = (key: string): any | null => {
 }
 
 export const setCachedParsedModel = (key: string, model: any): void => {
-  // Worker 解析结果是独占引用，此处直接缓存可避免一次全量深拷贝，显著加快「冷解析」写入缓存的速度
+  // 必须深拷贝后再缓存：onModelLoaded / store 会原地修改同一份解析结果，若缓存引用则「关标签未保存再打开」会读到被污染的对象
   const entry: ParsedModelCacheEntry = {
     cachedAt: Date.now(),
-    model
+    model: cloneModel(model)
   }
 
   parsedModelCache.set(key, entry)

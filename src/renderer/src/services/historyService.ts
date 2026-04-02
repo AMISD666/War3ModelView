@@ -40,6 +40,17 @@ export function addRecentFile(path: string): RecentFile[] {
     return updated;
 }
 
+/** 最近文件条目中的路径替换（例如同目录 MDL/MDX 互转后更新历史） */
+export function replaceRecentModelPath(oldPath: string, newPath: string): RecentFile[] {
+    if (!newPath) return getRecentFiles();
+    const filtered = getRecentFiles().filter(f => f.path !== oldPath && f.path !== newPath);
+    const name = newPath.replace(/\\/g, '/').split('/').pop() || newPath;
+    const entry: RecentFile = { path: newPath, name, time: Date.now() };
+    const updated = [entry, ...filtered].slice(0, MAX_HISTORY);
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
+    return updated;
+}
+
 /** 清空历史记录 */
 export function clearRecentFiles(): void {
     localStorage.removeItem(HISTORY_KEY);

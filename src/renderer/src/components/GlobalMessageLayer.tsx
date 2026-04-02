@@ -92,14 +92,20 @@ export const GlobalMessageLayer: React.FC = () => {
                         open={true}
                         width={msg.width || 400}
                         onCancel={handleClose}
-                        footer={msg.footer === null ? null : (
-                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-                                <Button onClick={handleClose}>{msg.cancelText || '取消'}</Button>
-                                <Button type="primary" onClick={handleOk}>
-                                    {msg.okText || '确定'}
-                                </Button>
-                            </div>
-                        )}
+                        footer={
+                            msg.footer === null
+                                ? null
+                                : msg.footer !== undefined
+                                    ? msg.footer
+                                    : (
+                                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                                            <Button onClick={handleClose}>{msg.cancelText || '取消'}</Button>
+                                            <Button type="primary" onClick={handleOk}>
+                                                {msg.okText || '确定'}
+                                            </Button>
+                                        </div>
+                                    )
+                        }
                         wrapClassName="message-modal"
                         minWidth={300}
                         minHeight={150}

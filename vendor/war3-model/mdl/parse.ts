@@ -5,6 +5,7 @@ import {
     LightType, TVertexAnim, RibbonEmitter, ParticleEmitter2FilterMode, ParticleEmitter, ParticleEmitterFlags, NodeType,
     EventObject, Sequence, ModelInfo, Geoset, GeosetAnimInfo, FaceFX, BindPose, ParticleEmitterPopcorn, ParticleEmitterPopcornFlags
 } from '../model';
+import { applySequentialPivotPoints } from '../pivotUtils';
 import { LAYER_TEXTURE_NAME_MAP } from '../renderer/util';
 
 class State {
@@ -390,7 +391,18 @@ function parseAnimVector(state: State, type: AnimVectorType): AnimVector {
                 throwError(state, 'expected frame number or GlobalSeqId');
             }
 
-            strictParseSymbol(state, ':');
+            // 标准 MDL：帧号后须为冒号；部分损坏/手改文件写成「帧, 值」缺冒号，在此容错
+            parseSpace(state);
+            const sep = state.char();
+            if (sep === ':' || sep === '\uFF1A') {
+                ++state.pos;
+                parseSpace(state);
+            } else if (sep === ',') {
+                ++state.pos;
+                parseSpace(state);
+            } else {
+                strictParseSymbol(state, ':');
+            }
 
             animVector.Keys.push(parseAnimKeyframe(state, frame, type, animVector.LineType));
         }
@@ -864,7 +876,7 @@ function parsePivotPoints(state: State, model: Model): void {
 
     strictParseSymbol(state, '}');
 
-    model.PivotPoints = res;
+    model.PivotPointsSequential = res;
 }
 
 function parseEventObject(state: State, model: Model): void {
@@ -1665,8 +1677,11 @@ export function parse(str: string): Model {
         }
     }
 
+    applySequentialPivotPoints(model);
+
     for (let i = 0; i < model.Nodes.length; ++i) {
-        if (model.PivotPoints[i]) {
+        // 与 mdx/parse 一致：稀疏 Nodes 时避免对 undefined 赋值
+        if (model.Nodes[i] && model.PivotPoints[i]) {
             model.Nodes[i].PivotPoint = model.PivotPoints[i];
         }
     }

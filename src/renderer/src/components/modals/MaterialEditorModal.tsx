@@ -13,6 +13,7 @@ import { getDraggedTextureIndex } from '../../utils/textureDragDrop'
 import { useRpcClient } from '../../hooks/useRpc'
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
 import { markStandalonePerf, markStandalonePerfOnce } from '../../utils/standalonePerf'
+import { MATERIAL_FILTER_MODE_OPTIONS } from '../../constants/filterModes'
 
 const { Text } = Typography
 
@@ -1020,16 +1021,6 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const selectedMaterial = selectedMaterialIndex >= 0 ? localMaterials[selectedMaterialIndex] : null
     const selectedLayer = selectedMaterial && selectedLayerIndex >= 0 && selectedMaterial.Layers ? selectedMaterial.Layers[selectedLayerIndex] : null
 
-    const filterModeOptions = [
-        { value: 0, label: 'None' },
-        { value: 1, label: 'Transparent' },
-        { value: 2, label: 'Blend' },
-        { value: 3, label: 'Additive' },
-        { value: 4, label: 'Add Alpha' },
-        { value: 5, label: 'Modulate' },
-        { value: 6, label: 'Modulate 2X' },
-    ]
-
     const SUPPORTED_TEXTURE_EXTENSIONS = new Set(['.blp', '.tga'])
 
     const isSupportedTextureFile = (path: string): boolean => {
@@ -1635,7 +1626,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                                                     style={{ width: '100%', fontSize: '12px' }}
                                                     value={selectedLayer.FilterMode}
                                                     onChange={(v) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { FilterMode: v }, true)}
-                                                    options={filterModeOptions}
+                                                    options={MATERIAL_FILTER_MODE_OPTIONS as any}
                                                     popupClassName="dark-theme-select-dropdown"
                                                 />
                                             </div>

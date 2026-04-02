@@ -8,6 +8,7 @@ import 'antd/dist/reset.css'
 import './assets/index.css'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { markStandalonePerf } from './utils/standalonePerf'
+import AppErrorBoundary from './components/common/AppErrorBoundary'
 
 const ModelOptimizeModal = React.lazy(() => import('./components/modals/ModelOptimizeModal'))
 const ModelMergeModal = React.lazy(() => import('./components/modals/ModelMergeModal'))
@@ -140,4 +141,8 @@ if (targetWindow === 'modelOptimize') {
     )
 }
 
-ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(RootComponent)
+ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
+    <AppErrorBoundary scope={`独立窗口: ${targetWindow || 'unknown'}`}>
+        {RootComponent}
+    </AppErrorBoundary>
+)

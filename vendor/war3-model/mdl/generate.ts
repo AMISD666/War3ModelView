@@ -5,6 +5,7 @@ import {
     ParticleEmitter2Flags, ParticleEmitter2FramesFlags, RibbonEmitter, EventObject, Camera, CollisionShape,
     CollisionShapeType, ParticleEmitter, ParticleEmitterFlags, FaceFX, BindPose, ParticleEmitterPopcorn, ParticleEmitterPopcornFlags
 } from '../model';
+import { pivotPointsInObjectIdOrder } from '../pivotUtils';
 import { LAYER_TEXTURE_ID_MAP } from '../renderer/util';
 
 const FLOAT_PRESICION = 5;
@@ -171,8 +172,16 @@ function generateLineType(lineType: LineType): string {
 }
 
 function generateAnimKeyFrame(key: AnimKeyframe, tabSize = 2, reverse = false) {
-    let res = generateTab(tabSize) + key.Frame + ': ' +
-        (key.Vector.length === 1 ? generateNumber(key.Vector[0]) : generateArray(key.Vector, reverse)) + ',\n';
+    const frame = Math.floor(Number(key?.Frame));
+    if (!Number.isFinite(frame)) {
+        return '';
+    }
+    const vec = key.Vector;
+    if (!vec || vec.length === 0) {
+        return '';
+    }
+    let res = generateTab(tabSize) + frame + ': ' +
+        (vec.length === 1 ? generateNumber(vec[0]) : generateArray(vec, reverse)) + ',\n';
 
     if (key.InTan/* or OutTan */) {
         res += generateTab(tabSize + 1) + 'InTan ' +
@@ -202,10 +211,16 @@ function generateAnimVectorProp(
             return generateFloatProp(name, val, true, tabSize);
         }
     } else {
-        return generateBlockStart(name, val.Keys.length, tabSize) +
+        const keyLines = val.Keys.map((key: AnimKeyframe) => generateAnimKeyFrame(key, tabSize + 1, reverse)).join('');
+        const keyCount = val.Keys.filter((key: AnimKeyframe) => {
+            const f = Math.floor(Number(key?.Frame));
+            const vec = key?.Vector;
+            return Number.isFinite(f) && vec && vec.length > 0;
+        }).length;
+        return generateBlockStart(name, keyCount, tabSize) +
             generateBooleanProp(generateLineType(val.LineType), tabSize + 1) +
             (val.GlobalSeqId !== null ? generateIntProp('GlobalSeqId', val.GlobalSeqId, null, tabSize + 1) : '') +
-            val.Keys.map(key => generateAnimKeyFrame(key, tabSize + 1, reverse)).join('') +
+            keyLines +
             generateBlockEnd(tabSize);
     }
 }
@@ -667,8 +682,13 @@ function generateAttachmentChunk(attachment: Attachment): string {
 }
 
 function generatePivotPoints(model: Model): string {
-    return generateBlockStart('PivotPoints', model.PivotPoints.length) +
-        model.PivotPoints.map(point => `${generateTab()}${generateArray(point)},\n`).join('') +
+    const ordered = pivotPointsInObjectIdOrder(model);
+    if (!ordered.length) {
+        return '';
+    }
+
+    return generateBlockStart('PivotPoints', ordered.length) +
+        ordered.map(point => `${generateTab()}${generateArray(point)},\n`).join('') +
         generateBlockEnd();
 }
 

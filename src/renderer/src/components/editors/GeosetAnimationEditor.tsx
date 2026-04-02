@@ -1,9 +1,10 @@
-﻿import React, { useState } from 'react'
+import React, { useState } from 'react'
 import { useModelStore } from '../../store/modelStore'
 import { Card, List, Checkbox, Button, Select, Typography } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker'
 import { PlusOutlined } from '@ant-design/icons'
+import { coercePivotFloat3 } from 'war3-model'
 
 const { Text } = Typography
 const { Option } = Select
@@ -52,12 +53,17 @@ const GeosetAnimationEditor: React.FC = () => {
 
     // Helper to get static color or default
     const getColor = (anim: any) => {
-        if (!anim || !anim.Color) return '#ffffff'
+        if (!anim || anim.Color == null) return '#ffffff'
+        if (ArrayBuffer.isView(anim.Color)) {
+            const c = coercePivotFloat3(anim.Color as Float32Array | Uint8Array | number[])
+            if (c) {
+                return `rgb(${Math.round(c[0] * 255)}, ${Math.round(c[1] * 255)}, ${Math.round(c[2] * 255)})`
+            }
+        }
         if (Array.isArray(anim.Color)) {
             const [r, g, b] = anim.Color
             return `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`
         }
-        // If dynamic, return white or maybe the first key's color
         return '#ffffff'
     }
 

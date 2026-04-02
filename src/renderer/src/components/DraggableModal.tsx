@@ -47,6 +47,33 @@ export const DraggableModal: React.FC<DraggableModalProps> = ({
         setZIndex((DraggableModal as any).zCounter = ((DraggableModal as any).zCounter || 1000) + 1);
     }, []);
 
+    /** 点击浮层内控件时不提升 z-index，避免 setState 整窗重渲染导致 ColorPicker 等弹层被卸载、滑块无法拖 */
+    const shouldSkipBringToFrontOnTarget = useCallback((target: EventTarget | null) => {
+        const el = target as HTMLElement | null;
+        if (!el?.closest) return false;
+        return !!el.closest(
+            [
+                '.ant-popover',
+                '.ant-dropdown',
+                '.ant-picker-dropdown',
+                '.ant-select-dropdown',
+                '.ant-color-picker-panel',
+                '.ant-tooltip',
+                '.ant-modal-root',
+                '.rc-color-picker-panel',
+                '[class*="color-picker"]',
+            ].join(',')
+        );
+    }, []);
+
+    const handlePanelMouseDown = useCallback(
+        (e: React.MouseEvent) => {
+            if (shouldSkipBringToFrontOnTarget(e.target)) return;
+            bringToFront();
+        },
+        [bringToFront, shouldSkipBringToFrontOnTarget]
+    );
+
     useEffect(() => {
         if (open) {
             bringToFront();
@@ -181,7 +208,7 @@ export const DraggableModal: React.FC<DraggableModalProps> = ({
                 overflow: 'hidden',
                 maxHeight: '90vh'
             }}
-            onMouseDown={bringToFront}
+            onMouseDown={handlePanelMouseDown}
         >
             {/* Header - Draggable */}
             <div

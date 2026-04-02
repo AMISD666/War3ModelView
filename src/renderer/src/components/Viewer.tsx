@@ -7,7 +7,8 @@ import { SimpleOrbitCamera } from '../utils/SimpleOrbitCamera'
 import { decodeTextureData, getTextureCandidatePaths, loadAllTextures, normalizePath, prepareModelForTextureLoad } from './viewer/textureLoader'
 import { createModelParseCacheKey, getCachedParsedModel, setCachedParsedModel } from './viewer/modelParseCache'
 import { validateAllParticleEmitters } from './viewer/particleValidator'
-import { checkForStructuralChanges } from './viewer/modelSync'
+import { describePe2AnimOrScalar, pe2PreviewDebugEnabled } from '../utils/pe2PreviewDebug'
+import { checkForStructuralChanges, syncParticleEmitters2InPlace } from './viewer/modelSync'
 import { getEnvironmentManager } from './viewer/EnvironmentManager'
 import { logModelInfo } from '../utils/debugLogger'
 import { hexToRgb } from './viewer/types'
@@ -1866,11 +1867,23 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     }
 
     if (model?.Nodes && model.Nodes.length > 0) {
+      // PIVT 必须按 ObjectId 索引，不能用 Nodes 数组下标（ObjectId 未必连续或与 i 相同）
       if (!model.PivotPoints) {
-        model.PivotPoints = model.Nodes.map((n: any) => {
+        const pivotPoints: Float32Array[] = []
+        let maxOid = -1
+        for (const n of model.Nodes) {
+          if (!n || typeof n.ObjectId !== 'number') continue
+          const oid = n.ObjectId
+          maxOid = Math.max(maxOid, oid)
           const p = n?.PivotPoint ?? [0, 0, 0]
-          return p instanceof Float32Array ? p : new Float32Array(p)
-        })
+          pivotPoints[oid] = p instanceof Float32Array ? p : new Float32Array(p)
+        }
+        for (let i = 0; i <= maxOid; i++) {
+          if (!pivotPoints[i]) {
+            pivotPoints[i] = new Float32Array([0, 0, 0])
+          }
+        }
+        model.PivotPoints = pivotPoints
       }
       return { model, usedFallback: false, defaultNodeId: model.Nodes[0].ObjectId ?? 0 }
     }
@@ -2154,6 +2167,14 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       needsRendererUpdateRef.current = true
     }
   }, [renderer, storeNodes]) // Now using proper Zustand selector for stable reference
+
+  // 与 Zustand 权威 modelData 对齐 PIVT：首帧加载后若仅热补丁 Nodes 未带 PivotPoints，粒子会误用 [0,0,0] 直到某次轻量同步
+  const storePivotPoints = useModelStore((s) => s.modelData?.PivotPoints)
+  useEffect(() => {
+    if (!rendererRef.current?.model || !storePivotPoints) return
+    rendererRef.current.model.PivotPoints = storePivotPoints as any
+    needsRendererUpdateRef.current = true
+  }, [renderer, storePivotPoints])
 
   // Handle Structural Changes (Add/Delete/Reorder Node)
   const structureUpdateTrigger = useModelStore(state => state.rendererReloadTrigger)
@@ -3689,24 +3710,46 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         // Sync ParticleEmitters2 array - always sync to handle deletions
         // Default to empty array if undefined to properly handle particle node deletion
         // CRITICAL: Validate particles BEFORE syncing to prevent crashes from invalid new particles
+        // 轻量同步时 viewerModelData 可能 Materials/Textures 为空数组（merge 或仅节点补丁），但 renderer 已含完整贴图；
+        // 若用 textureCount=0 校验会误改 TextureID，粒子立即消失。校验前浅克隆，避免原地改 Zustand 中的发射器引用。
+        let pe2ForSync: any[] | null = null
         if (modelData.ParticleEmitters2 && modelData.ParticleEmitters2.length > 0) {
+          const texturesForValidation =
+            (modelData.Textures && modelData.Textures.length > 0)
+              ? modelData.Textures
+              : (renderer.model?.Textures && renderer.model.Textures.length > 0)
+                ? renderer.model.Textures
+                : (modelData.Textures || [])
+          pe2ForSync = modelData.ParticleEmitters2.map((e: any) => ({ ...e }))
           validateAllParticleEmitters({
-            ParticleEmitters2: modelData.ParticleEmitters2,
-            Textures: modelData.Textures
+            ParticleEmitters2: pe2ForSync,
+            Textures: texturesForValidation,
           })
         }
-        const nextEmitters = modelData.ParticleEmitters2 || []
+        const nextEmitters = pe2ForSync ?? (modelData.ParticleEmitters2 || [])
         const currentEmitters = renderer.model.ParticleEmitters2 || []
         if (currentEmitters.length === nextEmitters.length) {
-          for (let i = 0; i < nextEmitters.length; i++) {
-            Object.assign(currentEmitters[i], nextEmitters[i])
-          }
+          syncParticleEmitters2InPlace(currentEmitters, nextEmitters)
           renderer.model.ParticleEmitters2 = currentEmitters
         } else {
           renderer.model.ParticleEmitters2 = nextEmitters
         }
         if (import.meta.env.DEV) {
           console.log('[Viewer] Synced ParticleEmitters2:', renderer.model.ParticleEmitters2.length, 'emitters')
+        }
+        if (pe2PreviewDebugEnabled()) {
+          const pe2List = renderer.model.ParticleEmitters2 || []
+          pe2List.forEach((em: any, i: number) => {
+            console.log(`[PE2预览] Viewer 轻量同步后 PE2[${i}]`, {
+              Name: em?.Name,
+              ObjectId: em?.ObjectId,
+              Visibility: describePe2AnimOrScalar(em?.Visibility),
+              VisibilityAnim: describePe2AnimOrScalar(em?.VisibilityAnim),
+              EmissionRate: describePe2AnimOrScalar(em?.EmissionRate),
+              LifeSpan: em?.LifeSpan,
+              TextureID: em?.TextureID,
+            })
+          })
         }
 
         // === RIBBON EMITTERS ===
@@ -3755,7 +3798,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         // === TEXTURES & MATERIALS ===
         // Keep Textures ahead of Materials so layers referencing a newly imported TextureID
         // never observe the old texture array during the same lightweight sync tick.
-        if (modelData.Textures) {
+        if (modelData.Textures && modelData.Textures.length > 0) {
           // Detect new textures that need to be loaded
           const oldTexturePaths = new Set(renderer.model.Textures?.map((t: any) => t.Image) || [])
           const newTextures = modelData.Textures.filter((t: any) => !oldTexturePaths.has(t.Image))
@@ -3802,6 +3845,10 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
               console.error('[Viewer] Error loading new textures via lightweight sync:', e)
             })
           }
+        } else if (Array.isArray(modelData.Textures) && modelData.Textures.length === 0) {
+          if (import.meta.env.DEV) {
+            console.debug('[Viewer] Skip applying empty Textures patch (keep renderer textures)')
+          }
         }
         if (Array.isArray(modelData.Materials) && modelData.Materials.length > 0) {
           console.log('[Viewer] Syncing materials. Count:', modelData.Materials.length)
@@ -3815,7 +3862,10 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             ; (renderer as any).modelInstance.ribbonsController.syncEmitters()
           }
         } else if (Array.isArray(modelData.Materials) && modelData.Materials.length === 0) {
-          console.warn('[Viewer] Skip applying empty Materials patch to prevent invisible model during texture-only sync')
+          // 无材质数组的模型或仅节点补丁时属正常，勿用 warn 误导为异常
+          if (import.meta.env.DEV) {
+            console.debug('[Viewer] Skip applying empty Materials patch (keep renderer materials)')
+          }
         }
         if (modelData.TextureAnims && Array.isArray(modelData.TextureAnims)) {
           renderer.model.TextureAnims = modelData.TextureAnims
@@ -5400,13 +5450,110 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     const modelData = useModelStore.getState().modelData as any
     const min = modelData?.Info?.MinimumExtent
     const max = modelData?.Info?.MaximumExtent
-    if (min && max && min.length >= 3 && max.length >= 3) {
+    const minX = Number(min?.[0])
+    const minY = Number(min?.[1])
+    const minZ = Number(min?.[2])
+    const maxX = Number(max?.[0])
+    const maxY = Number(max?.[1])
+    const maxZ = Number(max?.[2])
+    if (
+      Number.isFinite(minX) &&
+      Number.isFinite(minY) &&
+      Number.isFinite(minZ) &&
+      Number.isFinite(maxX) &&
+      Number.isFinite(maxY) &&
+      Number.isFinite(maxZ)
+    ) {
       return [
-        (min[0] + max[0]) * 0.5,
-        (min[1] + max[1]) * 0.5,
-        min[2]
+        (minX + maxX) * 0.5,
+        (minY + maxY) * 0.5,
+        minZ
       ]
     }
+
+    const renderer = rendererRef.current
+    const rendererNodes = renderer?.rendererData?.nodes
+    if (Array.isArray(rendererNodes) && rendererNodes.length > 0) {
+      let nodeMinX = Number.POSITIVE_INFINITY
+      let nodeMinY = Number.POSITIVE_INFINITY
+      let nodeMinZ = Number.POSITIVE_INFINITY
+      let nodeMaxX = Number.NEGATIVE_INFINITY
+      let nodeMaxY = Number.NEGATIVE_INFINITY
+      let nodeMaxZ = Number.NEGATIVE_INFINITY
+      let count = 0
+
+      for (const nodeWrapper of rendererNodes) {
+        const matrix = nodeWrapper?.matrix
+        if (!matrix) continue
+
+        let pivot = nodeWrapper?.node?.PivotPoint
+        const objectId = Number(nodeWrapper?.node?.ObjectId)
+        if ((!pivot || pivot.length < 3) && Number.isInteger(objectId)) {
+          pivot = renderer?.model?.PivotPoints?.[objectId]
+        }
+
+        const px = Number(pivot?.[0] ?? 0)
+        const py = Number(pivot?.[1] ?? 0)
+        const pz = Number(pivot?.[2] ?? 0)
+        if (!Number.isFinite(px) || !Number.isFinite(py) || !Number.isFinite(pz)) continue
+
+        const x = matrix[0] * px + matrix[4] * py + matrix[8] * pz + matrix[12]
+        const y = matrix[1] * px + matrix[5] * py + matrix[9] * pz + matrix[13]
+        const z = matrix[2] * px + matrix[6] * py + matrix[10] * pz + matrix[14]
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue
+
+        nodeMinX = Math.min(nodeMinX, x)
+        nodeMinY = Math.min(nodeMinY, y)
+        nodeMinZ = Math.min(nodeMinZ, z)
+        nodeMaxX = Math.max(nodeMaxX, x)
+        nodeMaxY = Math.max(nodeMaxY, y)
+        nodeMaxZ = Math.max(nodeMaxZ, z)
+        count++
+      }
+
+      if (count > 0) {
+        return [
+          (nodeMinX + nodeMaxX) * 0.5,
+          (nodeMinY + nodeMaxY) * 0.5,
+          nodeMinZ
+        ]
+      }
+    }
+
+    const pivotPoints = modelData?.PivotPoints
+    if (Array.isArray(pivotPoints) && pivotPoints.length > 0) {
+      let pivotMinX = Number.POSITIVE_INFINITY
+      let pivotMinY = Number.POSITIVE_INFINITY
+      let pivotMinZ = Number.POSITIVE_INFINITY
+      let pivotMaxX = Number.NEGATIVE_INFINITY
+      let pivotMaxY = Number.NEGATIVE_INFINITY
+      let pivotMaxZ = Number.NEGATIVE_INFINITY
+      let count = 0
+
+      for (const pivot of pivotPoints) {
+        const x = Number(pivot?.[0])
+        const y = Number(pivot?.[1])
+        const z = Number(pivot?.[2])
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue
+
+        pivotMinX = Math.min(pivotMinX, x)
+        pivotMinY = Math.min(pivotMinY, y)
+        pivotMinZ = Math.min(pivotMinZ, z)
+        pivotMaxX = Math.max(pivotMaxX, x)
+        pivotMaxY = Math.max(pivotMaxY, y)
+        pivotMaxZ = Math.max(pivotMaxZ, z)
+        count++
+      }
+
+      if (count > 0) {
+        return [
+          (pivotMinX + pivotMaxX) * 0.5,
+          (pivotMinY + pivotMaxY) * 0.5,
+          pivotMinZ
+        ]
+      }
+    }
+
     return [0, 0, 0]
   }
 

@@ -67,6 +67,52 @@ function getEmitterMatrix(rendererData: RendererData, objectId: number): mat4 {
     return matrix || identityEmitterMatrix;
 }
 
+const ZERO_PIVOT: [number, number, number] = [0, 0, 0];
+
+/** 解析发射器局部轴心：节点包装器 → 发射器 props → 全局 PIVT 表（避免热同步后 node 与 PE2 对象引用分裂导致误用 [0,0,0]） */
+function resolveEmitterPivot(rendererData: RendererData, emitterProps: ParticleEmitter2): [number, number, number] {
+    const oid = emitterProps.ObjectId;
+    if (typeof oid !== 'number' || oid < 0) {
+        return ZERO_PIVOT;
+    }
+
+    const fromAnyPivot = (p: unknown): [number, number, number] | null => {
+        if (p == null) {
+            return null;
+        }
+        if (ArrayBuffer.isView(p)) {
+            const v = p as ArrayBufferView;
+            if (v.length < 3) {
+                return null;
+            }
+            return [Number(v[0]), Number(v[1]), Number(v[2])];
+        }
+        if (Array.isArray(p) && p.length >= 3) {
+            return [Number(p[0]), Number(p[1]), Number(p[2])];
+        }
+        return null;
+    };
+
+    const wrap = rendererData.nodes?.[oid];
+    const fromNode = fromAnyPivot(wrap?.node?.PivotPoint as unknown);
+    if (fromNode) {
+        return fromNode;
+    }
+
+    const fromProps = fromAnyPivot((emitterProps as any).PivotPoint);
+    if (fromProps) {
+        return fromProps;
+    }
+
+    const globalPiv = (rendererData.model as { PivotPoints?: unknown[] })?.PivotPoints?.[oid];
+    const fromGlobal = fromAnyPivot(globalPiv);
+    if (fromGlobal) {
+        return fromGlobal;
+    }
+
+    return ZERO_PIVOT;
+}
+
 
 interface Particle {
     emitter: ParticleEmitterWrapper;
@@ -394,12 +440,13 @@ export class ParticlesController {
             return;
         }
 
+        // 仅按长度与槽位 ObjectId 判断结构变化。勿用 emitter.type !== FrameFlags：
+        // 轻量同步用 Object.assign 原地改 props 时，wrapper.type 可能未与 props.FrameFlags 同步，会误判为结构变化并整表销毁 → 粒子消失。
         const structuralMismatch =
             this.emitters.length !== particleEmitters.length ||
             this.emitters.some((emitter, index) => {
                 const nextProps = particleEmitters[index];
-                const nextType = nextProps.FrameFlags || 1;
-                return !nextProps || emitter.props.ObjectId !== nextProps.ObjectId || emitter.type !== nextType;
+                return !nextProps || emitter.props.ObjectId !== nextProps.ObjectId;
             });
 
         if (structuralMismatch) {
@@ -422,15 +469,18 @@ export class ParticlesController {
                 oldProps !== newProps ||
                 oldProps.LifeSpan !== newProps.LifeSpan ||
                 oldProps.FrameFlags !== newProps.FrameFlags ||
-                oldProps.EmissionRate !== newProps.EmissionRate;
+                oldProps.EmissionRate !== newProps.EmissionRate ||
+                oldProps.Speed !== newProps.Speed ||
+                oldProps.Variation !== newProps.Variation ||
+                oldProps.Latitude !== newProps.Latitude ||
+                oldProps.Width !== newProps.Width ||
+                oldProps.Length !== newProps.Length ||
+                oldProps.Gravity !== newProps.Gravity ||
+                oldProps.LineEmitter !== newProps.LineEmitter ||
+                oldProps.ModelSpace !== newProps.ModelSpace ||
+                oldProps.XYQuad !== newProps.XYQuad;
 
             if (propsChanged) {
-                this.emitters[i].type = newProps.FrameFlags || 1;
-                const emissionRate = newProps.EmissionRate;
-                const lifeSpan = newProps.LifeSpan || 1;
-                this.emitters[i].baseCapacity = Math.ceil(
-                    ModelInterp.maxAnimVectorVal(emissionRate) * lifeSpan
-                );
                 for (const particle of this.emitters[i].particles) {
                     this.particleStorage.push(particle);
                 }
@@ -439,6 +489,15 @@ export class ParticlesController {
                 this.emitters[i]._velocityLogged = false;
                 this.emitters[i]._needsInitialSync = false;
             }
+
+            // Object.assign 原地更新时 EmissionRate 引用可能不变 → propsChanged 为 false，但 Keys 已修复，须每帧重算容量
+            const emissionRate = newProps.EmissionRate;
+            const lifeSpan = newProps.LifeSpan || 1;
+            this.emitters[i].baseCapacity = Math.ceil(
+                ModelInterp.maxAnimVectorVal(emissionRate) * lifeSpan
+            );
+            // 每帧与 props 对齐 Head/Tail 位，避免 type 漂移导致渲染路径与数据不一致
+            this.emitters[i].type = newProps.FrameFlags || 1;
         }
     }
 
@@ -961,7 +1020,10 @@ export class ParticlesController {
     }
 
     private updateEmitter(emitter: ParticleEmitterWrapper, delta: number): void {
-        const visibility = this.interp.animVectorVal(emitter.props.Visibility, 1);
+        const p = emitter.props as any;
+        const visRaw =
+            p.Visibility !== undefined && p.Visibility !== null ? p.Visibility : p.VisibilityAnim;
+        const visibility = this.interp.animVectorVal(visRaw, 1);
 
         if (visibility > 0) {
             if (emitter.props.Squirt && typeof emitter.props.EmissionRate !== 'number') {
@@ -1051,8 +1113,7 @@ export class ParticlesController {
         const baseSpeed: number = this.interp.animVectorVal(emitter.props.Speed, 0);
         const isModelSpace = hasParticleFlag(emitter.props, ParticleEmitter2Flags.ModelSpace);
 
-        const emitterNode = this.rendererData.nodes[emitter.props.ObjectId];
-        const pivot = emitterNode?.node?.PivotPoint || [0, 0, 0];
+        const pivot = resolveEmitterPivot(this.rendererData, emitter.props);
 
         particle.emitter = emitter;
         particle.angle = 0;
@@ -1499,7 +1560,6 @@ export class ParticlesController {
         this.gl.drawElements(this.gl.TRIANGLES, emitter.particles.length * 6, this.gl.UNSIGNED_SHORT, 0);
     }
 }
-
 
 
 

@@ -41,6 +41,20 @@ const normalizeNumericInput = (raw: string | undefined, maxDecimals: number): st
     return text
 }
 
+const getBlurFallbackValue = (min: number | string | undefined, max: number | string | undefined): number => {
+    const minNum = min === undefined || min === null || min === '' ? undefined : Number(min)
+    const maxNum = max === undefined || max === null || max === '' ? undefined : Number(max)
+
+    let fallback = 0
+    if (Number.isFinite(minNum) && fallback < (minNum as number)) {
+        fallback = minNum as number
+    }
+    if (Number.isFinite(maxNum) && fallback > (maxNum as number)) {
+        fallback = maxNum as number
+    }
+    return fallback
+}
+
 type SmartInputNumberProps<T extends number | string = number> = InputNumberProps<T>
 
 export const SmartInputNumber = React.forwardRef<any, SmartInputNumberProps>((props, ref) => {
@@ -49,16 +63,29 @@ export const SmartInputNumber = React.forwardRef<any, SmartInputNumberProps>((pr
         formatter,
         parser,
         controls,
+        onBlur,
+        onChange,
+        min,
+        max,
         ...rest
     } = props
 
     const maxDecimals = Math.max(0, Math.min(typeof precision === 'number' ? precision : DEFAULT_MAX_DECIMALS, DEFAULT_MAX_DECIMALS))
+    const handleBlur: React.FocusEventHandler<HTMLInputElement> = (event) => {
+        if (event.target.value.trim() === '') {
+            const fallback = getBlurFallbackValue(min, max)
+            onChange?.(String(fallback) as any)
+        }
+        onBlur?.(event)
+    }
 
     return (
         <InputNumber
             ref={ref}
             controls={false}
             stringMode
+            min={min}
+            max={max}
             precision={maxDecimals}
             formatter={(value, info) => {
                 if (typeof formatter === 'function') {
@@ -75,6 +102,8 @@ export const SmartInputNumber = React.forwardRef<any, SmartInputNumberProps>((pr
                     ? parser
                     : undefined
             }
+            onChange={onChange}
+            onBlur={handleBlur}
             {...rest}
         />
     )

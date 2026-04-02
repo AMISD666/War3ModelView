@@ -386,6 +386,8 @@ export interface Model {
     Attachments: Attachment[];
     Nodes: Node[];
     PivotPoints: Float32Array[];
+    /** 解析中间态：PIVT/MDL 中按 ObjectId 顺序排列的 pivot，经 applySequentialPivotPoints 写入 PivotPoints */
+    PivotPointsSequential?: Float32Array[];
     EventObjects: EventObject[];
     CollisionShapes: CollisionShape[];
     GlobalSequences: number[];

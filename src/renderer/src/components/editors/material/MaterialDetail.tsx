@@ -3,6 +3,7 @@ import { Checkbox, Menu, Dropdown } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { showMessage } from '../../../store/messageStore'
+import { MATERIAL_FILTER_MODE_LABELS } from '../../../constants/filterModes'
 
 interface MaterialDetailProps {
     material: any
@@ -103,7 +104,7 @@ const MaterialDetail: React.FC<MaterialDetailProps> = ({ material, onUpdate, onS
                             >
                                 <span>Layer {i}</span>
                                 <span style={{ color: '#666', fontSize: 12 }}>
-                                    {['None', 'Transparent', 'Blend', 'Additive', 'Add Alpha', 'Modulate', 'Modulate 2X'][layer.FilterMode] || 'Unknown'}
+                                    {MATERIAL_FILTER_MODE_LABELS[layer.FilterMode] || 'Unknown'}
                                 </span>
                             </div>
                         </Dropdown>
@@ -165,4 +166,3 @@ const MaterialDetail: React.FC<MaterialDetailProps> = ({ material, onUpdate, onS
 }
 
 export default MaterialDetail
-

@@ -7,6 +7,21 @@ const findKeyframesRes = {
     right: null
 };
 
+/**
+ * 克隆/合并后 Keys 可能为 {0:kf,1:kf} 而非数组，findKeyframes 依赖 .length 会失败 → 发射率等恒为 0、粒子消失
+ */
+export function coalesceAnimVectorKeys(keys: any): AnimKeyframe[] | null {
+    if (keys == null) return null;
+    if (Array.isArray(keys)) return keys.length > 0 ? keys : null;
+    if (typeof keys === 'object') {
+        const nk = Object.keys(keys)
+            .filter((k) => /^\d+$/.test(k))
+            .sort((a, b) => Number(a) - Number(b));
+        if (nk.length > 0) return nk.map((k) => keys[k]);
+    }
+    return null;
+}
+
 export function lerp(left: number, right: number, t: number): number {
     return left * (1 - t) + right * t;
 }
@@ -36,11 +51,14 @@ function hermite(left: number, outTan: number, inTan: number, right: number, t: 
 export function findKeyframes(animVector: AnimVector, frame: number, from: number, to: number):
     null | { frame: number, left: AnimKeyframe, right: AnimKeyframe } {
     // Check for undefined/null animVector OR empty/invalid AnimVector (no Keys array)
-    if (!animVector || !animVector.Keys) {
+    if (!animVector || animVector.Keys == null) {
         return null;
     }
 
-    const array = animVector.Keys;
+    const array = coalesceAnimVectorKeys(animVector.Keys);
+    if (!array) {
+        return null;
+    }
     let first = 0;
     let count = array.length;
 

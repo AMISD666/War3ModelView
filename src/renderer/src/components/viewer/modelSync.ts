@@ -1,4 +1,4 @@
-﻿/**
+/**
  * modelSync - Model data synchronization utilities
  * Handles lightweight sync between store and renderer without full reloads
  */
@@ -98,6 +98,34 @@ export function checkForStructuralChanges(
 }
 
 /**
+ * 按 ObjectId 将 next 合并进 current，保持数组槽位与渲染器初次加载时一致。
+ * modelData 里 PE2 可能被按 ObjectId 排序，而 MDX 解析顺序不同；若按下标 Object.assign 会错配发射器（颜色/速度/重力错乱或粒子消失）。
+ */
+export function syncParticleEmitters2InPlace(currentEmitters: any[], nextEmitters: any[]): void {
+    if (currentEmitters.length !== nextEmitters.length) return
+    const nextById = new Map<number, any>()
+    for (const e of nextEmitters) {
+        if (e && typeof e.ObjectId === 'number' && !Number.isNaN(e.ObjectId)) {
+            nextById.set(e.ObjectId, e)
+        }
+    }
+    for (let i = 0; i < currentEmitters.length; i++) {
+        const em = currentEmitters[i]
+        const oid = em?.ObjectId
+        const next = typeof oid === 'number' ? nextById.get(oid) : undefined
+        if (!next) continue
+        Object.assign(em, next)
+        const anim = em.VisibilityAnim
+        if (anim != null && typeof anim === 'object' && anim.Keys != null) {
+            const v = em.Visibility
+            if (v == null || typeof v === 'number') {
+                em.Visibility = anim
+            }
+        }
+    }
+}
+
+/**
  * Perform lightweight sync of model data to renderer
  * Updates internal data arrays without recreating the renderer
  */
@@ -111,9 +139,7 @@ export function lightweightSync(renderer: any, modelData: any): void {
         const nextEmitters = modelData.ParticleEmitters2
         const currentEmitters = renderer.model.ParticleEmitters2 || []
         if (currentEmitters.length === nextEmitters.length) {
-            for (let i = 0; i < nextEmitters.length; i++) {
-                Object.assign(currentEmitters[i], nextEmitters[i])
-            }
+            syncParticleEmitters2InPlace(currentEmitters, nextEmitters)
             renderer.model.ParticleEmitters2 = currentEmitters
         } else {
             renderer.model.ParticleEmitters2 = nextEmitters

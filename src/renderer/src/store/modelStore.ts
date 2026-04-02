@@ -8,9 +8,16 @@ import { ModelData } from '../types/model';
 import { ModelNode, NodeType } from '../types/node';
 import { Tab, TabSnapshot } from '../types/store';
 import { useRendererStore } from './rendererStore';
-import { processDeathAnimation, processRemoveLights, pruneModelKeyframes } from '../utils/modelUtils';
+import {
+    processDeathAnimation,
+    processRemoveLights,
+    pruneModelKeyframes,
+    pivotVec3ToTuple,
+    resolvePivotForPersist,
+} from '../utils/modelUtils';
 import { calculateModelExtent, calculateModelNormals } from '../utils/geometryUtils';
 import { remapTextureRefWithMap } from '../utils/materialTextureRelations';
+import { getPivotChainSum } from '../utils/nodeUtils';
 
 const MAX_CACHED_RENDERERS = 5;
 
@@ -42,12 +49,18 @@ export function mergeMaterialManagerPreview(
 ): ModelData | null {
     if (!modelData) return null;
     if (!preview) return modelData;
-    return {
-        ...modelData,
-        Materials: preview.materials,
-        Textures: preview.textures,
-        ...(preview.geosets !== undefined ? { Geosets: preview.geosets } : {}),
-    };
+    // 预览层若为 [] 会覆盖权威 Materials/Textures，Viewer 同步后无贴图 → 粒子等不可见
+    const next: ModelData = { ...modelData };
+    if (Array.isArray(preview.materials) && preview.materials.length > 0) {
+        next.Materials = preview.materials;
+    }
+    if (Array.isArray(preview.textures) && preview.textures.length > 0) {
+        next.Textures = preview.textures;
+    }
+    if (preview.geosets !== undefined) {
+        next.Geosets = preview.geosets;
+    }
+    return next;
 }
 
 const pickDefaultSequenceIndex = (sequences: any[]) => {
@@ -142,6 +155,10 @@ interface ModelState {
 
     // Cached renderer for the current active tab
     cachedRenderer: any | null;
+
+    /** 与内存同步时的磁盘 mtime，用于检测外部程序是否改过同一文件 */
+    diskSyncMeta: { path: string; mtimeMs: number } | null;
+    setDiskSyncMeta: (path: string | null, mtimeMs: number | null) => void;
 
     // Renderer reload trigger - increment to force Viewer to reload
     rendererReloadTrigger: number;
@@ -269,6 +286,8 @@ interface ModelState {
     addTab: (path: string, modelData?: ModelData | null) => boolean;
     closeTab: (tabId: string) => void;
     setActiveTab: (tabId: string) => void;
+    /** 磁盘上模型文件改名/改后缀后同步当前标签与内存中的路径（不重新解析模型） */
+    replaceActiveTabDiskPath: (newPath: string) => void;
     getModelDataForSave: (forceReorder?: boolean) => ModelData | null;
 }
 
@@ -436,6 +455,20 @@ export function extractNodesFromModel(data: ModelData | null): ModelNode[] {
         });
     }
 
+    // PIVT 可能只在全局 PivotPoints 里；各节点数组浅拷贝出的对象若缺少 PivotPoint，
+    // 粒子渲染器会用 emitterNode.node.PivotPoint || [0,0,0] → 编辑颜色等参数后粒子会“整体偏移”。
+    const pivotTable = (d as { PivotPoints?: unknown }).PivotPoints
+    if (Array.isArray(pivotTable)) {
+        for (const n of nodes) {
+            const any = n as any
+            if (any == null || typeof any.ObjectId !== 'number') continue
+            if (any.PivotPoint !== undefined && any.PivotPoint !== null) continue
+            const p = pivotTable[any.ObjectId] as unknown
+            const triplet = pivotVec3ToTuple(p)
+            if (triplet) any.PivotPoint = triplet
+        }
+    }
+
     console.log('[ModelStore] Extracted nodes:', nodes.length, 'from keys:', Object.keys(data));
     return nodes;
 }
@@ -456,9 +489,10 @@ function updateModelDataWithNodes(
     const modelPivotPoints = (modelData as any).PivotPoints;
     const nodesWithFlags = nodes.map(node => {
         const n = node as any;
-        const pivotPoint = node.PivotPoint
-            ?? (typeof node.ObjectId === 'number' ? modelPivotPoints?.[node.ObjectId] : undefined)
-            ?? [0, 0, 0];
+        const pivotPoint = resolvePivotForPersist(
+            node.PivotPoint,
+            typeof node.ObjectId === 'number' ? modelPivotPoints?.[node.ObjectId] : undefined
+        );
         const baseFlags = typeof n.Flags === 'number' ? n.Flags : 0;
         let flags = baseFlags;
 
@@ -517,7 +551,29 @@ function updateModelDataWithNodes(
             const formattedNode = { ...node, Flags: flags, FrameFlags: frameFlags } as any;
 
             if (n.SegmentColor) {
-                formattedNode.SegmentColor = n.SegmentColor.map((c: any) => new Float32Array(c));
+                // 规范为 [0,1]³ 再写入 Float32Array，避免错误倍乘或非有限值导致渲染/保存异常
+                formattedNode.SegmentColor = n.SegmentColor.map((c: any) => {
+                    const a = Array.isArray(c) || ArrayBuffer.isView(c) ? c : null;
+                    if (!a || a.length < 3) {
+                        return new Float32Array([1, 1, 1]);
+                    }
+                    let r = Number(a[0]);
+                    let g = Number(a[1]);
+                    let b = Number(a[2]);
+                    if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) {
+                        return new Float32Array([1, 1, 1]);
+                    }
+                    if (r > 1.001 || g > 1.001 || b > 1.001) {
+                        r /= 255;
+                        g /= 255;
+                        b /= 255;
+                    }
+                    return new Float32Array([
+                        Math.min(1, Math.max(0, r)),
+                        Math.min(1, Math.max(0, g)),
+                        Math.min(1, Math.max(0, b)),
+                    ]);
+                });
             }
             if (n.Alpha) {
                 formattedNode.Alpha = new Uint8Array(n.Alpha);
@@ -621,7 +677,25 @@ function updateModelDataWithNodes(
     updated.Helpers = orderedNodes.filter(n => n.type === NodeType.HELPER);
     updated.Attachments = orderedNodes.filter(n => n.type === NodeType.ATTACHMENT);
     updated.ParticleEmitters = orderedNodes.filter(n => n.type === NodeType.PARTICLE_EMITTER);
-    updated.ParticleEmitters2 = orderedNodes.filter(n => n.type === NodeType.PARTICLE_EMITTER_2);
+    // 未重排 ObjectId 时保持 MDX 中 PE2 的数组顺序，避免与渲染器按槽位绑定的粒子实例错位
+    {
+        const pe2FromSorted = orderedNodes.filter(n => n.type === NodeType.PARTICLE_EMITTER_2);
+        const prevPe2 = (modelData as any).ParticleEmitters2 as any[] | undefined;
+        if (
+            !reorderIds &&
+            Array.isArray(prevPe2) &&
+            prevPe2.length === pe2FromSorted.length &&
+            pe2FromSorted.length > 0
+        ) {
+            const byId = new Map(pe2FromSorted.map((n: any) => [n.ObjectId, n]));
+            updated.ParticleEmitters2 = prevPe2.map((old: any) => {
+                const fresh = byId.get(old.ObjectId);
+                return fresh !== undefined ? fresh : old;
+            });
+        } else {
+            updated.ParticleEmitters2 = pe2FromSorted;
+        }
+    }
     updated.RibbonEmitters = orderedNodes.filter(n => n.type === NodeType.RIBBON_EMITTER);
     updated.EventObjects = orderedNodes.filter(n => n.type === NodeType.EVENT_OBJECT);
     updated.CollisionShapes = orderedNodes.filter(n => n.type === NodeType.COLLISION_SHAPE);
@@ -932,6 +1006,10 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
     materialManagerPreview: null as MaterialManagerPreview | null,
 
+    cachedRenderer: null,
+
+    diskSyncMeta: null,
+
     // Renderer reload trigger
     rendererReloadTrigger: 0,
 
@@ -970,6 +1048,14 @@ export const useModelStore = create<ModelState>((set, get) => ({
     isAnyTabDirty: () => {
         const state = get()
         return Object.values(state.dirtyTabs).some(Boolean)
+    },
+
+    setDiskSyncMeta: (path, mtimeMs) => {
+        if (!path || mtimeMs === null || mtimeMs === undefined) {
+            set({ diskSyncMeta: null })
+        } else {
+            set({ diskSyncMeta: { path, mtimeMs } })
+        }
     },
 
     // Global Preview Transform
@@ -1228,9 +1314,20 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
     updateNode: (objectId, updates) => {
         set((state) => {
-            const updatedNodes = state.nodes.map(node =>
-                node.ObjectId === objectId ? { ...node, ...updates } : node
-            );
+            const updatedNodes = state.nodes.map((node) => {
+                if (node.ObjectId !== objectId) return node;
+                let merged: ModelNode = { ...node, ...updates };
+                // 未显式改轴心时，用全局 PivotPoints 覆盖节点副本，避免粒子等热同步把 Float32 污染成 214,168,178
+                if (!('PivotPoint' in updates)) {
+                    const fromTable = pivotVec3ToTuple(
+                        (state.modelData as any)?.PivotPoints?.[objectId]
+                    );
+                    if (fromTable) {
+                        merged = { ...merged, PivotPoint: fromTable };
+                    }
+                }
+                return merged;
+            });
 
             // Update modelData WITHOUT reordering ObjectIds (preserve existing order)
             const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[], false);
@@ -1251,9 +1348,19 @@ export const useModelStore = create<ModelState>((set, get) => ({
     // Silent update - no renderer reload (for high-frequency keyframe edits)
     updateNodeSilent: (objectId, updates) => {
         set((state) => {
-            const updatedNodes = state.nodes.map(node =>
-                node.ObjectId === objectId ? { ...node, ...updates } : node
-            );
+            const updatedNodes = state.nodes.map((node) => {
+                if (node.ObjectId !== objectId) return node;
+                let merged: ModelNode = { ...node, ...updates };
+                if (!('PivotPoint' in updates)) {
+                    const fromTable = pivotVec3ToTuple(
+                        (state.modelData as any)?.PivotPoints?.[objectId]
+                    );
+                    if (fromTable) {
+                        merged = { ...merged, PivotPoint: fromTable };
+                    }
+                }
+                return merged;
+            });
 
             // No reordering
             const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[], false);
@@ -1718,24 +1825,6 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
     reparentNodes: (nodeIds: number[], newParentId: number) => {
         set((state) => {
-            // Helper: Get world position by walking up the parent chain
-            const getWorldPosition = (node: ModelNode, allNodes: ModelNode[]): [number, number, number] => {
-                const pos: [number, number, number] = [
-                    node.PivotPoint?.[0] || 0,
-                    node.PivotPoint?.[1] || 0,
-                    node.PivotPoint?.[2] || 0
-                ];
-                let current = allNodes.find(n => n.ObjectId === node.Parent);
-                while (current) {
-                    pos[0] += current.PivotPoint?.[0] || 0;
-                    pos[1] += current.PivotPoint?.[1] || 0;
-                    pos[2] += current.PivotPoint?.[2] || 0;
-                    if (current.Parent === -1 || current.Parent === undefined) break;
-                    current = allNodes.find(n => n.ObjectId === current?.Parent);
-                }
-                return pos;
-            };
-
             // Helper: Get all descendants of a node (for circular reference check)
             const getDescendants = (parentId: number, allNodes: ModelNode[]): number[] => {
                 const children = allNodes.filter(n => n.Parent === parentId);
@@ -1765,7 +1854,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             if (newParentId !== -1) {
                 const parentNode = state.nodes.find(n => n.ObjectId === newParentId);
                 if (parentNode) {
-                    parentWorldPos = getWorldPosition(parentNode, state.nodes);
+                    parentWorldPos = getPivotChainSum(parentNode, state.nodes, state.modelData?.PivotPoints as unknown[]);
                 }
             }
 
@@ -1776,7 +1865,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 }
 
                 // Get current world position
-                const worldPos = getWorldPosition(node, state.nodes);
+                const worldPos = getPivotChainSum(node, state.nodes, state.modelData?.PivotPoints as unknown[]);
 
                 // Calculate new local position (relative to new parent)
                 const newPivotPoint: [number, number, number] = [
@@ -2149,13 +2238,20 @@ export const useModelStore = create<ModelState>((set, get) => ({
     updateNodes: (updates) => {
         set((state) => {
             let hasChanges = false;
-            const updatedNodes = state.nodes.map(node => {
-                const update = updates.find(u => u.objectId === node.ObjectId);
-                if (update) {
-                    hasChanges = true;
-                    return { ...node, ...update.data };
+            const updatedNodes = state.nodes.map((node) => {
+                const update = updates.find((u) => u.objectId === node.ObjectId);
+                if (!update) return node;
+                hasChanges = true;
+                let merged: ModelNode = { ...node, ...update.data };
+                if (!('PivotPoint' in (update.data || {}))) {
+                    const fromTable = pivotVec3ToTuple(
+                        (state.modelData as any)?.PivotPoints?.[node.ObjectId]
+                    );
+                    if (fromTable) {
+                        merged = { ...merged, PivotPoint: fromTable };
+                    }
                 }
-                return node;
+                return merged;
             });
 
             if (!hasChanges) return {};
@@ -2553,6 +2649,68 @@ export const useModelStore = create<ModelState>((set, get) => ({
         set({ cameraStateRef: ref });
     },
 
+    replaceActiveTabDiskPath: (newPath) => {
+        set((state) => {
+            const patchPathsOnData = (data: ModelData | null): ModelData | null => {
+                if (!data) return null;
+                const next: any = { ...data };
+                next.__modelPath = newPath;
+                if (typeof next.path === 'string') {
+                    next.path = newPath;
+                }
+                return next;
+            };
+
+            // 路径后缀变化后必须丢弃 GL 缓存并从新路径读盘，否则会沿用旧缓存渲染器
+            const r = state.cachedRenderer;
+            if (r) {
+                try {
+                    (r as any).destroy();
+                } catch {
+                    /* 忽略 */
+                }
+            }
+
+            const activeTabId = state.activeTabId;
+            const nextModelData = patchPathsOnData(state.modelData);
+
+            if (!activeTabId) {
+                return {
+                    modelPath: newPath,
+                    modelData: nextModelData,
+                    cachedRenderer: null,
+                    diskSyncMeta: null,
+                    rendererReloadTrigger: state.rendererReloadTrigger + 1
+                };
+            }
+
+            const newName = newPath.split(/[\\/]/).pop() || 'Untitled';
+            const tabs = state.tabs.map((tab) => {
+                if (tab.id !== activeTabId) return tab;
+                return {
+                    ...tab,
+                    path: newPath,
+                    name: newName,
+                    snapshot: {
+                        ...tab.snapshot,
+                        modelPath: newPath,
+                        modelData: patchPathsOnData(tab.snapshot.modelData),
+                        renderer: null
+                    }
+                };
+            });
+
+            return {
+                modelPath: newPath,
+                modelData: nextModelData,
+                tabs,
+                cachedRenderer: null,
+                diskSyncMeta: null,
+                rendererReloadTrigger: state.rendererReloadTrigger + 1
+            };
+        });
+    },
+
     addTab: (path, modelData = null) => {
         const state = get();
 
@@ -2844,6 +3002,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 scale: [1, 1, 1]
             },
             materialManagerPreview: null,
+            diskSyncMeta: null,
         });
     }
 }));

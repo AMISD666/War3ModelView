@@ -25,6 +25,8 @@ export interface NodeEditorRpcState {
     modelPath: string
     renameInitialName: string
     allNodes: any[]
+    /** 与 modelData.PivotPoints 一致（稀疏数组），独立窗优先从此解析 PIVT，避免节点副本上错误的字节/序列化残留 */
+    pivotPoints: any[]
 }
 
 /** APPLY_NODE_UPDATE 可选历史记录（与主窗口 HistoryStore 行为一致） */
@@ -60,7 +62,7 @@ export function getNodeEditorWindowLayout(kind: NodeEditorKind): { title: string
         case 'particleEmitter':
             return { title: '粒子发射器', w: 640, h: 520 }
         case 'particleEmitter2':
-            return { title: '粒子发射器 II', w: 960, h: 720 }
+            return { title: '粒子发射器 II', w: 960, h: 740 }
         case 'collisionShape':
             return { title: '碰撞形状', w: 360, h: 400 }
         case 'light':
@@ -70,7 +72,7 @@ export function getNodeEditorWindowLayout(kind: NodeEditorKind): { title: string
         case 'ribbonEmitter':
             return { title: '丝带发射器', w: 560, h: 520 }
         case 'genericNode':
-            return { title: '编辑节点', w: 500, h: 450 }
+            return { title: '编辑节点', w: 400, h: 450 }
         case 'rename':
             return { title: '重命名节点', w: 400, h: 200 }
         default:

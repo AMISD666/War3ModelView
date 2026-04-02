@@ -3,6 +3,39 @@
  * Fixes production-only rendering issues caused by invalid/missing properties
  */
 
+/** 内存合并后 AnimVector.Keys 可能为 {0:kf,1:kf}，与 MDX 解析的数组不一致，会导致插值/发射率为 0 */
+function normalizeAnimVectorKeysInPlace(av: any): void {
+    if (!av || typeof av !== 'object' || av.Keys == null) return;
+    if (Array.isArray(av.Keys)) return;
+    if (typeof av.Keys === 'object') {
+        const nk = Object.keys(av.Keys)
+            .filter((k) => /^\d+$/.test(k))
+            .sort((a, b) => Number(a) - Number(b));
+        if (nk.length > 0) {
+            av.Keys = nk.map((k) => av.Keys[k]);
+        }
+    }
+}
+
+const PE2_ANIM_VECTOR_FIELDS = [
+    'EmissionRate',
+    'Speed',
+    'Variation',
+    'Latitude',
+    'Width',
+    'Length',
+    'Gravity',
+    'Visibility',
+    'EmissionRateAnim',
+    'SpeedAnim',
+    'VariationAnim',
+    'LatitudeAnim',
+    'WidthAnim',
+    'LengthAnim',
+    'GravityAnim',
+    'VisibilityAnim',
+] as const;
+
 /**
  * Validate and fix a single ParticleEmitter2
  * Ensures all required properties are present and properly formatted
@@ -36,6 +69,8 @@ export function validateParticleEmitter2(emitter: any, idx: number, textureCount
     // Default to Head if neither is set
     if (frameFlags === 0) frameFlags = 1
     emitter.FrameFlags = frameFlags
+
+    PE2_ANIM_VECTOR_FIELDS.forEach((f) => normalizeAnimVectorKeysInPlace(emitter[f]))
 
     // Fix 4: Convert arrays to typed arrays expected by war3-model renderer
     if (emitter.ParticleScaling && !(emitter.ParticleScaling instanceof Float32Array)) {

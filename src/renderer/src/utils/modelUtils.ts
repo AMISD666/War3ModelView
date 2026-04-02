@@ -1,4 +1,4 @@
-import { parseMDX, parseMDL, generateMDX, generateMDL } from 'war3-model';
+import { parseMDX, parseMDL, generateMDX, generateMDL, coercePivotFloat3 } from 'war3-model';
 
 /**
  * Checks if a value is an animation vector (contains keys).
@@ -50,9 +50,20 @@ export const buildAnimVector = (frames: number[], value: number, endValue?: numb
 
 /**
  * Helper to convert various vector types to Float32Array.
+ * Worker/IPC/持久化 可能把 Float32Array 序列成 Uint8Array；若走 Object.values 会按「字节」取前三个数（如 214,168,178），实为第一个 float 的 IEEE754 字节。
  */
 export const toFloat32Array = (value: any, size: number): Float32Array => {
     if (value instanceof Float32Array) return value;
+    if (value instanceof Uint8Array && value.byteLength >= size * 4) {
+        return new Float32Array(value.buffer, value.byteOffset, size);
+    }
+    if (
+        value instanceof Uint8Array &&
+        value.byteLength < size * 4 &&
+        value.buffer.byteLength >= value.byteOffset + size * 4
+    ) {
+        return new Float32Array(value.buffer, value.byteOffset, size);
+    }
     if (Array.isArray(value)) return new Float32Array(value);
     if (value && typeof value === 'object') {
         const arr = Object.values(value).map(Number);
@@ -61,6 +72,40 @@ export const toFloat32Array = (value: any, size: number): Float32Array => {
     }
     return new Float32Array(new Array(size).fill(0));
 };
+
+/** 从 PivotPoints 项或节点 PivotPoint 的异构类型解析三元组（避免 Uint8Array 被误当作 0..2 字节下标） */
+export function pivotVec3ToTuple(p: unknown): [number, number, number] | null {
+    const f = coercePivotFloat3(p as Float32Array | Uint8Array | number[]);
+    if (!f) return null;
+    return [Number(f[0]), Number(f[1]), Number(f[2])];
+}
+
+/** 是否像误把 IEEE754 字节当成三个坐标的 0–255 整数（如 214,168,178） */
+function looksLikeMisreadByteTriplet(t: [number, number, number]): boolean {
+    if (t[0] === 0 && t[1] === 0 && t[2] === 0) return false;
+    return t.every(
+        (x) => Number.isFinite(x) && Math.abs(x - Math.round(x)) < 1e-5 && x >= 0 && x <= 255
+    );
+}
+
+/** 是否像 WC3 世界坐标下的轴心（含小数或超出字节范围） */
+function looksLikeWorldPivotTriplet(t: [number, number, number]): boolean {
+    return t.some((x) => x < 0 || x > 255 || Math.abs(x - Math.round(x)) > 1e-5);
+}
+
+/**
+ * 写回 modelData 时合并节点轴心与全局 PivotPoints：优先纠正「字节误读」残留，避免污染 PivotPoints 表。
+ */
+export function resolvePivotForPersist(nodePivot: unknown, tablePivot: unknown): [number, number, number] {
+    const tTable = pivotVec3ToTuple(tablePivot);
+    const tNode = pivotVec3ToTuple(nodePivot);
+    if (tTable && tNode && looksLikeMisreadByteTriplet(tNode) && looksLikeWorldPivotTriplet(tTable)) {
+        return tTable;
+    }
+    if (tNode) return tNode;
+    if (tTable) return tTable;
+    return [0, 0, 0];
+}
 
 /**
  * Updates an animation vector to fade out during the death sequence.

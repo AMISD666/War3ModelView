@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { windowManager } from './utils/WindowManager'
 import { useRef } from 'react'
+import AppErrorBoundary from './components/common/AppErrorBoundary'
 
 const MainLayoutNew = lazy(() => import('./components/MainLayoutNew'))
 const ActivationModal = lazy(() => import('./components/modals/ActivationModal'))
@@ -102,7 +103,11 @@ function App(): JSX.Element {
     }
 
     if (standaloneWindowLabel) {
-        return <StandaloneToolWindowRouter windowLabel={standaloneWindowLabel} />
+        return (
+            <AppErrorBoundary scope="独立工具窗口">
+                <StandaloneToolWindowRouter windowLabel={standaloneWindowLabel} />
+            </AppErrorBoundary>
+        )
     }
 
     const shellFallback = (
@@ -131,17 +136,21 @@ function App(): JSX.Element {
 
     return (
         <>
-            <Suspense fallback={shellFallback}>
-                {shouldMountMainLayout ? <MainLayoutNew /> : shellFallback}
-            </Suspense>
+            <AppErrorBoundary scope="主应用">
+                <Suspense fallback={shellFallback}>
+                    {shouldMountMainLayout ? <MainLayoutNew /> : shellFallback}
+                </Suspense>
+            </AppErrorBoundary>
 
             {isActivated === false && (
-                <Suspense fallback={null}>
-                    <ActivationModal
-                        open={true}
-                        onActivated={handleActivated}
-                    />
-                </Suspense>
+                <AppErrorBoundary scope="激活弹窗" compact>
+                    <Suspense fallback={null}>
+                        <ActivationModal
+                            open={true}
+                            onActivated={handleActivated}
+                        />
+                    </Suspense>
+                </AppErrorBoundary>
             )}
         </>
     )

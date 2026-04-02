@@ -1,5 +1,5 @@
 import { AnimKeyframe, AnimVector } from '../model';
-import { findKeyframes, interpNum, interpVec3, interpQuat } from './interp';
+import { findKeyframes, interpNum, interpVec3, interpQuat, coalesceAnimVectorKeys } from './interp';
 import { vec3, quat } from 'gl-matrix';
 import { RendererData } from './rendererData';
 
@@ -15,14 +15,19 @@ export class ModelInterp {
             return vector;
         }
 
-        if (!vector || !Array.isArray(vector.Keys) || vector.Keys.length === 0) {
+        if (!vector || vector.Keys == null) {
             return 0;
         }
 
-        let max = vector.Keys[0]?.Vector?.[0] ?? 0;
+        const keysArr = coalesceAnimVectorKeys(vector.Keys);
+        if (!keysArr || keysArr.length === 0) {
+            return 0;
+        }
 
-        for (let i = 1; i < vector.Keys.length; ++i) {
-            const v = vector.Keys[i]?.Vector?.[0];
+        let max = keysArr[0]?.Vector?.[0] ?? 0;
+
+        for (let i = 1; i < keysArr.length; ++i) {
+            const v = keysArr[i]?.Vector?.[0];
             if (typeof v === 'number' && v > max) {
                 max = v;
             }

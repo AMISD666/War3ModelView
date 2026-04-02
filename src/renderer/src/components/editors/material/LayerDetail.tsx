@@ -6,6 +6,7 @@ import { listen } from '@tauri-apps/api/event'
 import { windowManager } from '../../../utils/WindowManager'
 import { useModelStore } from '../../../store/modelStore'
 import TextureAnimationManagerModal from '../../modals/TextureAnimationManagerModal'
+import { MATERIAL_FILTER_MODE_OPTIONS } from '../../../constants/filterModes'
 
 interface LayerDetailProps {
     layer: any
@@ -88,16 +89,6 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
 
         void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload);
     }
-
-    const filterModeOptions = [
-        { value: 0, label: 'None' },
-        { value: 1, label: 'Transparent' },
-        { value: 2, label: 'Blend' },
-        { value: 3, label: 'Additive' },
-        { value: 4, label: 'Add Alpha' },
-        { value: 5, label: 'Modulate' },
-        { value: 6, label: 'Modulate 2X' },
-    ]
 
     const textureOptions = (modelData as any)?.Textures?.map((t: any, i: number) => ({
         value: i,
@@ -192,7 +183,7 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
                         style={{ width: '100%' }}
                         value={layer.FilterMode}
                         onChange={(v) => handleChange('FilterMode', v)}
-                        options={filterModeOptions}
+                        options={MATERIAL_FILTER_MODE_OPTIONS as any}
                     />
                 </div>
 
@@ -241,4 +232,3 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
 }
 
 export default LayerDetail
-

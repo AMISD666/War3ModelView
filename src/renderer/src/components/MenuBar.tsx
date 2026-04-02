@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react'
+﻿import React, { useState, useRef, useEffect } from 'react'
 import { Tooltip } from 'antd'
 import {
     AimOutlined,
@@ -15,19 +15,19 @@ import {
 import { useRendererStore } from '../store/rendererStore'
 import { useSelectionStore } from '../store/selectionStore'
 import { useUIStore } from '../store/uiStore'
-
+import { uiText } from '../constants/uiText'
 
 interface MenuBarProps {
     onOpen: () => void
+    onOpenMdlText: () => void
     onSave: () => void | Promise<boolean>
     onSaveAs: () => void | Promise<boolean>
+    onSwapMdlMdx: () => void | Promise<boolean>
     onExportMDL: () => void
     onExportMDX: () => void
     onOpenRecent: (path: string) => void
     recentFiles: { path: string; name: string; time: number }[]
     onClearRecentFiles: () => void
-    // onLoadMPQ removed
-    // mpqLoaded removed (accessed via store in ViewSettingsWindow)
     teamColor: number
     onSelectTeamColor: (color: number) => void
     showGrid: boolean
@@ -67,22 +67,22 @@ interface MenuBarProps {
     onCleanUnusedTextures: () => void
     onRepairModel: () => void
     onTransformModel: () => void
-    onAddDeathAnimation: () => void;
+    onAddDeathAnimation: () => void
     onRemoveLights: () => void
     onCopyModel: () => void
 }
 
 const MenuBar: React.FC<MenuBarProps> = ({
     onOpen,
+    onOpenMdlText,
     onSave,
     onSaveAs,
+    onSwapMdlMdx,
     onExportMDL,
     onExportMDX,
     onOpenRecent,
     recentFiles,
     onClearRecentFiles,
-    // onLoadMPQ,
-    // mpqLoaded,
     teamColor,
     onSelectTeamColor,
     showGrid,
@@ -99,8 +99,8 @@ const MenuBar: React.FC<MenuBarProps> = ({
     onToggleFPS,
     showGeosetVisibility,
     onToggleGeosetVisibility,
-    showCollisionShapes, // Add this
-    onToggleCollisionShapes, // Add this
+    showCollisionShapes,
+    onToggleCollisionShapes,
     showCameras,
     onToggleCameras,
     showLights,
@@ -127,7 +127,6 @@ const MenuBar: React.FC<MenuBarProps> = ({
     onCopyModel
 }) => {
     const [activeMenu, setActiveMenu] = useState<string | null>(null)
-    const [settingsSubMenu, setSettingsSubMenu] = useState<string | null>(null)
     const [showRecentMenu, setShowRecentMenu] = useState(false)
     const menuRef = useRef<HTMLDivElement>(null)
     const showMpqBrowser = useUIStore(state => state.showMpqBrowser)
@@ -135,22 +134,33 @@ const MenuBar: React.FC<MenuBarProps> = ({
     const showSettingsPanel = useRendererStore(state => state.showSettingsPanel)
     const setShowSettingsPanel = useRendererStore(state => state.setShowSettingsPanel)
     const {
-        showGridXY: quickShowGridXY, setShowGridXY: setQuickShowGridXY,
-        showGridXZ: quickShowGridXZ, setShowGridXZ: setQuickShowGridXZ,
-        showGridYZ: quickShowGridYZ, setShowGridYZ: setQuickShowGridYZ,
+        showGridXY: quickShowGridXY,
+        setShowGridXY: setQuickShowGridXY,
+        showGridXZ: quickShowGridXZ,
+        setShowGridXZ: setQuickShowGridXZ,
+        showGridYZ: quickShowGridYZ,
+        setShowGridYZ: setQuickShowGridYZ,
         showVerticesByMode,
         setShowVerticesForMode,
         showVerticesInAnimationBinding,
         showVerticesInAnimationKeyframe,
         setShowVerticesForAnimationSubMode,
-        showNodes: quickShowNodes, setShowNodes: setQuickShowNodes,
-        nodeRenderMode, setNodeRenderMode,
-        showSkeleton: quickShowSkeleton, setShowSkeleton: setQuickShowSkeleton,
-        showGeosetVisibility: quickShowGeosetVisibility, setShowGeosetVisibility: setQuickShowGeosetVisibility,
-        showCollisionShapes: quickShowCollisionShapes, setShowCollisionShapes: setQuickShowCollisionShapes,
-        showLights: quickShowLights, setShowLights: setQuickShowLights,
-        showParticles: quickShowParticles, setShowParticles: setQuickShowParticles,
-        showRibbons: quickShowRibbons, setShowRibbons: setQuickShowRibbons
+        showNodes: quickShowNodes,
+        setShowNodes: setQuickShowNodes,
+        nodeRenderMode,
+        setNodeRenderMode,
+        showSkeleton: quickShowSkeleton,
+        setShowSkeleton: setQuickShowSkeleton,
+        showGeosetVisibility: quickShowGeosetVisibility,
+        setShowGeosetVisibility: setQuickShowGeosetVisibility,
+        showCollisionShapes: quickShowCollisionShapes,
+        setShowCollisionShapes: setQuickShowCollisionShapes,
+        showLights: quickShowLights,
+        setShowLights: setQuickShowLights,
+        showParticles: quickShowParticles,
+        setShowParticles: setQuickShowParticles,
+        showRibbons: quickShowRibbons,
+        setShowRibbons: setQuickShowRibbons
     } = useRendererStore((state) => ({
         showGridXY: state.showGridXY,
         setShowGridXY: state.setShowGridXY,
@@ -203,7 +213,6 @@ const MenuBar: React.FC<MenuBarProps> = ({
         const handleClickOutside = (event: MouseEvent) => {
             if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
                 setActiveMenu(null)
-                setSettingsSubMenu(null)
             }
         }
 
@@ -215,7 +224,6 @@ const MenuBar: React.FC<MenuBarProps> = ({
 
     const toggleMenu = (menu: string) => {
         setActiveMenu(activeMenu === menu ? null : menu)
-        setSettingsSubMenu(null)
     }
 
     const closeMenu = () => setActiveMenu(null)
@@ -252,11 +260,11 @@ const MenuBar: React.FC<MenuBarProps> = ({
     }
 
     const hoverStyle = (e: React.MouseEvent) => {
-        (e.currentTarget as HTMLElement).style.backgroundColor = '#444'
+        ;(e.currentTarget as HTMLElement).style.backgroundColor = '#444'
     }
 
     const unhoverStyle = (e: React.MouseEvent) => {
-        (e.currentTarget as HTMLElement).style.backgroundColor = 'transparent'
+        ;(e.currentTarget as HTMLElement).style.backgroundColor = 'transparent'
     }
 
     const quickToggleItems: Array<{
@@ -269,25 +277,38 @@ const MenuBar: React.FC<MenuBarProps> = ({
         statusLabel?: string
         tone?: 'default' | 'warning'
     }> = [
-            { key: 'grid-xy', label: 'XY 网格', checked: quickShowGridXY, onToggle: () => setQuickShowGridXY(!quickShowGridXY), icon: <AppstoreOutlined />, badge: 'XY' },
-            { key: 'grid-xz', label: 'XZ 网格', checked: quickShowGridXZ, onToggle: () => setQuickShowGridXZ(!quickShowGridXZ), icon: <AppstoreOutlined />, badge: 'XZ' },
-            { key: 'grid-yz', label: 'YZ 网格', checked: quickShowGridYZ, onToggle: () => setQuickShowGridYZ(!quickShowGridYZ), icon: <AppstoreOutlined />, badge: 'YZ' },
-            { key: 'vertices', label: '顶点显示', checked: quickShowVertices, onToggle: () => toggleQuickVertices(!quickShowVertices), icon: <GatewayOutlined /> },
-            { key: 'nodes', label: '骨骼节点', checked: nodeRenderMode !== 'hidden', onToggle: () => setNodeRenderMode(nodeRenderMode === 'hidden' ? 'solid' : nodeRenderMode === 'solid' ? 'wireframe' : 'hidden'), icon: <AimOutlined />, statusLabel: nodeRenderMode === 'hidden' ? '已关闭' : nodeRenderMode === 'wireframe' ? '线框' : '实体', tone: nodeRenderMode === 'wireframe' ? 'warning' : 'default' },
-            { key: 'skeleton', label: '渲染骨架', checked: quickShowSkeleton, onToggle: () => setQuickShowSkeleton(!quickShowSkeleton), icon: <DeploymentUnitOutlined /> },
-            { key: 'geoset-tool', label: '多边形工具', checked: quickShowGeosetVisibility, onToggle: () => setQuickShowGeosetVisibility(!quickShowGeosetVisibility), icon: <ToolOutlined /> },
-            { key: 'collision', label: '碰撞节点', checked: quickShowCollisionShapes, onToggle: () => setQuickShowCollisionShapes(!quickShowCollisionShapes), icon: <BorderOutlined /> },
-            { key: 'lights', label: '灯光对象', checked: quickShowLights, onToggle: () => setQuickShowLights(!quickShowLights), icon: <BulbOutlined /> },
-            { key: 'particles', label: '粒子显示', checked: quickShowParticles, onToggle: () => setQuickShowParticles(!quickShowParticles), icon: <FireOutlined /> },
-            { key: 'ribbons', label: '丝带显示', checked: quickShowRibbons, onToggle: () => setQuickShowRibbons(!quickShowRibbons), icon: <LinkOutlined /> },
-            {
-                key: 'render-mode',
-                label: '线框模式',
-                checked: renderMode === 'wireframe',
-                onToggle: () => onChangeRenderMode(renderMode === 'wireframe' ? 'textured' : 'wireframe'),
-                icon: <BgColorsOutlined />
-            }
-        ]
+        { key: 'grid-xy', label: uiText.menu.quickToggle.xyGrid, checked: quickShowGridXY, onToggle: () => setQuickShowGridXY(!quickShowGridXY), icon: <AppstoreOutlined />, badge: 'XY' },
+        { key: 'grid-xz', label: uiText.menu.quickToggle.xzGrid, checked: quickShowGridXZ, onToggle: () => setQuickShowGridXZ(!quickShowGridXZ), icon: <AppstoreOutlined />, badge: 'XZ' },
+        { key: 'grid-yz', label: uiText.menu.quickToggle.yzGrid, checked: quickShowGridYZ, onToggle: () => setQuickShowGridYZ(!quickShowGridYZ), icon: <AppstoreOutlined />, badge: 'YZ' },
+        { key: 'vertices', label: uiText.menu.quickToggle.vertices, checked: quickShowVertices, onToggle: () => toggleQuickVertices(!quickShowVertices), icon: <GatewayOutlined /> },
+        {
+            key: 'nodes',
+            label: uiText.menu.quickToggle.nodes,
+            checked: nodeRenderMode !== 'hidden',
+            onToggle: () => setNodeRenderMode(nodeRenderMode === 'hidden' ? 'solid' : nodeRenderMode === 'solid' ? 'wireframe' : 'hidden'),
+            icon: <AimOutlined />,
+            statusLabel:
+                nodeRenderMode === 'hidden'
+                    ? uiText.menu.nodeRenderHidden
+                    : nodeRenderMode === 'wireframe'
+                        ? uiText.menu.nodeRenderWireframe
+                        : uiText.menu.nodeRenderSolid,
+            tone: nodeRenderMode === 'wireframe' ? 'warning' : 'default'
+        },
+        { key: 'skeleton', label: uiText.menu.quickToggle.skeleton, checked: quickShowSkeleton, onToggle: () => setQuickShowSkeleton(!quickShowSkeleton), icon: <DeploymentUnitOutlined /> },
+        { key: 'geoset-tool', label: uiText.menu.quickToggle.geosetTool, checked: quickShowGeosetVisibility, onToggle: () => setQuickShowGeosetVisibility(!quickShowGeosetVisibility), icon: <ToolOutlined /> },
+        { key: 'collision', label: uiText.menu.quickToggle.collision, checked: quickShowCollisionShapes, onToggle: () => setQuickShowCollisionShapes(!quickShowCollisionShapes), icon: <BorderOutlined /> },
+        { key: 'lights', label: uiText.menu.quickToggle.lights, checked: quickShowLights, onToggle: () => setQuickShowLights(!quickShowLights), icon: <BulbOutlined /> },
+        { key: 'particles', label: uiText.menu.quickToggle.particles, checked: quickShowParticles, onToggle: () => setQuickShowParticles(!quickShowParticles), icon: <FireOutlined /> },
+        { key: 'ribbons', label: uiText.menu.quickToggle.ribbons, checked: quickShowRibbons, onToggle: () => setQuickShowRibbons(!quickShowRibbons), icon: <LinkOutlined /> },
+        {
+            key: 'render-mode',
+            label: uiText.menu.quickToggle.wireframe,
+            checked: renderMode === 'wireframe',
+            onToggle: () => onChangeRenderMode(renderMode === 'wireframe' ? 'textured' : 'wireframe'),
+            icon: <BgColorsOutlined />
+        }
+    ]
 
     const quickBtnStyle = (checked: boolean, tone: 'default' | 'warning' = 'default'): React.CSSProperties => ({
         display: 'inline-flex',
@@ -307,55 +328,51 @@ const MenuBar: React.FC<MenuBarProps> = ({
     })
 
     return (
-        <div ref={menuRef} style={{
-            display: 'flex',
-            position: 'relative',
-            zIndex: 3100,
-            backgroundColor: '#2b2b2b',
-            borderBottom: '1px solid #444',
-            height: '30px',
-            alignItems: 'center',
-            fontSize: '13px'
-        }}>
-            {/* File Menu */}
+        <div
+            ref={menuRef}
+            style={{
+                display: 'flex',
+                position: 'relative',
+                zIndex: 3100,
+                backgroundColor: '#2b2b2b',
+                borderBottom: '1px solid #444',
+                height: '30px',
+                alignItems: 'center',
+                fontSize: '13px'
+            }}
+        >
             <div style={menuStyle} onClick={() => toggleMenu('file')}>
-                文件
+                {uiText.menu.file}
                 {activeMenu === 'file' && (
                     <div style={dropdownStyle}>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onOpen(); closeMenu() }}
-                        >
-                            <span>导入模型</span>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onOpen(); closeMenu() }}>
+                            <span>{uiText.menu.importModel}</span>
                             <span style={{ color: '#888', fontSize: '11px' }}>Ctrl+O</span>
                         </div>
-
-                        {/* Recent Files Submenu */}
                         <div
                             style={{ ...itemStyle, position: 'relative' }}
                             onMouseEnter={(e) => { hoverStyle(e); setShowRecentMenu(true) }}
                             onMouseLeave={(e) => { unhoverStyle(e); setShowRecentMenu(false) }}
                         >
-                            <span>最近文件</span>
+                            <span>{uiText.menu.recentFiles}</span>
                             <span style={{ color: '#888', fontSize: '11px' }}>▶</span>
-
                             {showRecentMenu && (
-                                <div style={{
-                                    position: 'absolute',
-                                    top: 0,
-                                    left: '100%',
-                                    backgroundColor: '#333',
-                                    boxShadow: '2px 2px 8px rgba(0,0,0,0.6)',
-                                    zIndex: 3300,
-                                    minWidth: '320px',
-                                    maxWidth: '480px',
-                                    padding: '5px 0',
-                                    border: '1px solid #444'
-                                }}>
+                                <div
+                                    style={{
+                                        position: 'absolute',
+                                        top: 0,
+                                        left: '100%',
+                                        backgroundColor: '#333',
+                                        boxShadow: '2px 2px 8px rgba(0,0,0,0.6)',
+                                        zIndex: 3300,
+                                        minWidth: '320px',
+                                        maxWidth: '480px',
+                                        padding: '5px 0',
+                                        border: '1px solid #444'
+                                    }}
+                                >
                                     {recentFiles.length === 0 ? (
-                                        <div style={{ padding: '8px 15px', color: '#666', fontSize: '12px' }}>暂无历史记录</div>
+                                        <div style={{ padding: '8px 15px', color: '#666', fontSize: '12px' }}>{uiText.menu.noRecentFiles}</div>
                                     ) : (
                                         recentFiles.map((f, i) => (
                                             <div
@@ -380,7 +397,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
                                                 <span style={{ color: '#666', minWidth: 16, textAlign: 'right', fontSize: 11 }}>{i + 1}.</span>
                                                 <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.name}</span>
                                                 <span style={{ color: '#555', fontSize: 10, flexShrink: 0 }}>
-                                                    {f.path.length > 50 ? '…' + f.path.slice(-48) : f.path}
+                                                    {f.path.length > 50 ? '...' + f.path.slice(-48) : f.path}
                                                 </span>
                                             </div>
                                         ))
@@ -394,391 +411,113 @@ const MenuBar: React.FC<MenuBarProps> = ({
                                                 onMouseLeave={unhoverStyle}
                                                 onClick={() => { onClearRecentFiles(); closeMenu() }}
                                             >
-                                                清空历史记录
+                                                {uiText.menu.clearRecentFiles}
                                             </div>
                                         </>
                                     )}
                                 </div>
                             )}
                         </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onSave(); closeMenu() }}
-                        >
-                            <span>保存模型</span>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onSave(); closeMenu() }}>
+                            <span>{uiText.menu.saveModel}</span>
                             <span style={{ color: '#888', fontSize: '11px' }}>Ctrl+S</span>
                         </div>
-
-
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onCopyModel(); closeMenu() }}
-                        >
-                            <span>{"\u590d\u5236\u6a21\u578b"}</span>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onCopyModel(); closeMenu() }}>
+                            <span>{uiText.menu.copyModel}</span>
                             <span style={{ color: '#888', fontSize: '11px' }}>Shift+C</span>
                         </div>
-
-                        <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onExportMDL(); closeMenu() }}
-                        >
-                            另存为 MDL
+                        <div style={{ borderTop: '1px solid #444', margin: '5px 0' }} />
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { void onSwapMdlMdx(); closeMenu() }}>
+                            {uiText.menu.swapMdlMdx}
                         </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onExportMDX(); closeMenu() }}
-                        >
-                            另存为 MDX
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onExportMDL(); closeMenu() }}>
+                            {uiText.menu.exportMdl}
+                        </div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onExportMDX(); closeMenu() }}>
+                            {uiText.menu.exportMdx}
                         </div>
                     </div>
                 )}
             </div>
 
-            {/* Edit Menu */}
             <div style={menuStyle} onClick={() => toggleMenu('edit')}>
-                编辑
+                {uiText.menu.edit}
                 {activeMenu === 'edit' && (
                     <div style={dropdownStyle}>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onToggleEditor('nodeManager'); closeMenu() }}
-                        >
-                            <span>节点管理器</span>
-                            <span style={{ color: '#888', fontSize: '11px' }}>N</span>
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onToggleEditor('camera'); closeMenu() }}
-                        >
-                            <span>镜头管理器</span>
-                            <span style={{ color: '#888', fontSize: '11px' }}>C</span>
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onToggleEditor('geoset'); closeMenu() }}
-                        >
-                            <span>多边形管理器</span>
-                            <span style={{ color: '#888', fontSize: '11px' }}>G</span>
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onToggleEditor('geosetAnim'); closeMenu() }}
-                        >
-                            <span>多边形动画管理器</span>
-                            <span style={{ color: '#888', fontSize: '11px' }}>E</span>
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onToggleEditor('texture'); closeMenu() }}
-                        >
-                            <span>贴图管理器</span>
-                            <span style={{ color: '#888', fontSize: '11px' }}>T</span>
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onToggleEditor('textureAnim'); closeMenu() }}
-                        >
-                            <span>贴图动画管理器</span>
-                            <span style={{ color: '#888', fontSize: '11px' }}>X</span>
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onToggleEditor('material'); closeMenu() }}
-                        >
-                            <span>材质管理器</span>
-                            <span style={{ color: '#888', fontSize: '11px' }}>M</span>
-                        </div>
-                        {/* Model Sequence Manager (Ignored / No Shortcut) */}
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onToggleEditor('sequence'); closeMenu() }}
-                        >
-                            <span>模型动作管理器</span>
-                            <span style={{ color: '#888', fontSize: '11px' }}>S</span>
-                            {/* User asked to ignore "Model Action Manager", but the image shows (S). 
-                                "Ignore" might mean "Don't change it" or "Don't implement it". 
-                                But later they said "Add shortcuts according to image". 
-                                I will add S shortcut for UI consistency but verify if logic exists. 
-                                Actually, user said "Directly ignore model action manager". 
-                                I will NOT trigger `toggleSequence` from MainLayout shortcut list, 
-                                but I will display it in the menu if it matches the image.
-                                Wait, the image shows "Model Action Manager (S)".
-                                If I ignore it, maybe I shouldn't show it?
-                                "And sort all managers... directly ignore that model action manager... then add shortcuts to THEM".
-                                "THEM" implies the ones I sorted.
-                                I'll keep it in the menu related to the image but maybe not enable the hotkey 
-                                if the user wants no changes to it. 
-                                But the image has (S), so I should probably render (S) for completeness. 
-                            */}
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onToggleEditor('globalSequence'); closeMenu() }}
-                        >
-                            <span>全局动作管理器</span>
-                            <span style={{ color: '#888', fontSize: '11px' }}>L</span>
-                        </div>
-                        <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onToggleEditor('modelInfo'); closeMenu() }}
-                        >
-                            模型信息
-                        </div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('nodeManager'); closeMenu() }}><span>{uiText.menu.nodeManager}</span><span style={{ color: '#888', fontSize: '11px' }}>N</span></div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('camera'); closeMenu() }}><span>{uiText.menu.cameraManager}</span><span style={{ color: '#888', fontSize: '11px' }}>C</span></div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('geoset'); closeMenu() }}><span>{uiText.menu.geosetManager}</span><span style={{ color: '#888', fontSize: '11px' }}>G</span></div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('geosetAnim'); closeMenu() }}><span>{uiText.menu.geosetAnimationManager}</span><span style={{ color: '#888', fontSize: '11px' }}>E</span></div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('texture'); closeMenu() }}><span>{uiText.menu.textureManager}</span><span style={{ color: '#888', fontSize: '11px' }}>T</span></div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('textureAnim'); closeMenu() }}><span>{uiText.menu.textureAnimationManager}</span><span style={{ color: '#888', fontSize: '11px' }}>X</span></div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('material'); closeMenu() }}><span>{uiText.menu.materialManager}</span><span style={{ color: '#888', fontSize: '11px' }}>M</span></div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('sequence'); closeMenu() }}><span>{uiText.menu.sequenceManager}</span><span style={{ color: '#888', fontSize: '11px' }}>S</span></div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('globalSequence'); closeMenu() }}><span>{uiText.menu.globalSequenceManager}</span><span style={{ color: '#888', fontSize: '11px' }}>L</span></div>
+                        <div style={{ borderTop: '1px solid #444', margin: '5px 0' }} />
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('modelInfo'); closeMenu() }}>{uiText.menu.modelInfo}</div>
                     </div>
                 )}
             </div>
 
-
-
-            {/* Mode Menu */}
             <div style={menuStyle} onClick={() => toggleMenu('mode')}>
-                模式
+                {uiText.menu.mode}
                 {activeMenu === 'mode' && (
                     <div style={dropdownStyle}>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onSetMainMode('view'); closeMenu() }}
-                        >
-                            <span>查看模式</span>
-                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                                <span style={{ color: '#888', fontSize: '11px' }}>1</span>
-                                <span style={{ width: '12px' }}>{mainMode === 'view' ? '✓' : ''}</span>
-                            </div>
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onSetMainMode('geometry'); closeMenu() }}
-                        >
-                            <span>顶点模式</span>
-                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                                <span style={{ color: '#888', fontSize: '11px' }}>2</span>
-                                <span style={{ width: '12px' }}>{mainMode === 'geometry' ? '✓' : ''}</span>
-                            </div>
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onSetMainMode('uv'); closeMenu() }}
-                        >
-                            <span>UV 模式</span>
-                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                                <span style={{ color: '#888', fontSize: '11px' }}>3</span>
-                                <span style={{ width: '12px' }}>{mainMode === 'uv' ? '✓' : ''}</span>
-                            </div>
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onSetMainMode('animation'); closeMenu() }}
-                        >
-                            <span>动画模式</span>
-                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                                <span style={{ color: '#888', fontSize: '11px' }}>4</span>
-                                <span style={{ width: '12px' }}>{mainMode === 'animation' ? '✓' : ''}</span>
-                            </div>
-                        </div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onSetMainMode('view'); closeMenu() }}><span>{uiText.menu.viewMode}</span><div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}><span style={{ color: '#888', fontSize: '11px' }}>1</span><span style={{ width: '12px' }}>{mainMode === 'view' ? '✓' : ''}</span></div></div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onSetMainMode('geometry'); closeMenu() }}><span>{uiText.menu.geometryMode}</span><div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}><span style={{ color: '#888', fontSize: '11px' }}>2</span><span style={{ width: '12px' }}>{mainMode === 'geometry' ? '✓' : ''}</span></div></div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onSetMainMode('uv'); closeMenu() }}><span>{uiText.menu.uvMode}</span><div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}><span style={{ color: '#888', fontSize: '11px' }}>3</span><span style={{ width: '12px' }}>{mainMode === 'uv' ? '✓' : ''}</span></div></div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onSetMainMode('animation'); closeMenu() }}><span>{uiText.menu.animationMode}</span><div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}><span style={{ color: '#888', fontSize: '11px' }}>4</span><span style={{ width: '12px' }}>{mainMode === 'animation' ? '✓' : ''}</span></div></div>
                     </div>
                 )}
             </div>
 
-            {/* Function Menu */}
             <div style={menuStyle} onClick={() => toggleMenu('function')}>
-                功能
+                {uiText.menu.tools}
                 {activeMenu === 'function' && (
                     <div style={dropdownStyle}>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onRecalculateNormals(); closeMenu() }}
-                        >
-                            重新计算法线
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onRecalculateExtents(); closeMenu() }}
-                        >
-                            重新计算模型顶点范围
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onTransformModel(); closeMenu() }}
-                        >
-                            修改模型位置/旋转/大小
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onToggleEditor('modelOptimize'); closeMenu() }}
-                        >
-                            模型优化
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onToggleEditor('modelMerge'); closeMenu() }}
-                        >
-                            模型合并
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onToggleEditor('geosetVisibilityTool'); closeMenu() }}
-                        >
-                            多边形动作显隐工具
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onAddDeathAnimation(); closeMenu() }}
-                        >
-                            添加死亡动画
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onRemoveLights(); closeMenu() }}
-                        >
-                            删除所有光照
-                        </div>
-
-                        <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onRepairModel(); closeMenu() }}
-                        >
-                            修复模型
-                        </div>
-                        <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onMergeSameMaterials(); closeMenu() }}
-                        >
-                            合并相同材质
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onCleanUnusedMaterials(); closeMenu() }}
-                        >
-                            清理未使用的材质
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onCleanUnusedTextures(); closeMenu() }}
-                        >
-                            清理未使用的贴图
-                        </div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onRecalculateNormals(); closeMenu() }}>{uiText.menu.recalculateNormals}</div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onRecalculateExtents(); closeMenu() }}>{uiText.menu.recalculateExtents}</div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onTransformModel(); closeMenu() }}>{uiText.menu.transformModel}</div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('modelOptimize'); closeMenu() }}>{uiText.menu.modelOptimize}</div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('modelMerge'); closeMenu() }}>{uiText.menu.modelMerge}</div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('geosetVisibilityTool'); closeMenu() }}>{uiText.menu.geosetVisibilityTool}</div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onAddDeathAnimation(); closeMenu() }}>{uiText.menu.addDeathAnimation}</div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onRemoveLights(); closeMenu() }}>{uiText.menu.removeLights}</div>
+                        <div style={{ borderTop: '1px solid #444', margin: '5px 0' }} />
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onRepairModel(); closeMenu() }}>{uiText.menu.repairModel}</div>
+                        <div style={{ borderTop: '1px solid #444', margin: '5px 0' }} />
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onMergeSameMaterials(); closeMenu() }}>{uiText.menu.mergeSameMaterials}</div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onCleanUnusedMaterials(); closeMenu() }}>{uiText.menu.cleanUnusedMaterials}</div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onCleanUnusedTextures(); closeMenu() }}>{uiText.menu.cleanUnusedTextures}</div>
                     </div>
                 )}
             </div>
 
-            {/* Help Menu */}
-            <div style={menuStyle} onClick={() => toggleMenu('help')}>
-                帮助
-                {activeMenu === 'help' && (
-                    <div style={dropdownStyle}>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onToggleDebugConsole(); }}
-                        >
-                            <span>显示调试控制台</span>
-                            <span>{showDebugConsole ? '✓' : ''}</span>
-                        </div>
-                        <div style={{ borderTop: '1px solid #444', margin: '5px 0' }}></div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onCheckUpdate(); closeMenu() }}
-                        >
-                            检查更新
-                        </div>
-                        <div
-                            style={itemStyle}
-                            onMouseEnter={hoverStyle}
-                            onMouseLeave={unhoverStyle}
-                            onClick={() => { onShowAbout(); closeMenu() }}
-                        >
-                            关于
-                        </div>
-                    </div>
-                )}
+            <div
+                style={menuStyle}
+                onClick={() => { onOpenMdlText(); closeMenu() }}
+                onMouseEnter={hoverStyle}
+                onMouseLeave={unhoverStyle}
+            >
+                {uiText.menu.modelText}
             </div>
 
-            {/* MPQ Browser Button - Direct Action */}
             <div
                 style={{ ...menuStyle, backgroundColor: showMpqBrowser ? '#444' : 'transparent' }}
                 onClick={toggleMpqBrowser}
                 onMouseEnter={hoverStyle}
                 onMouseLeave={!showMpqBrowser ? unhoverStyle : undefined}
             >
-                MPQ浏览
+                {uiText.menu.mpqBrowser}
             </div>
 
-
-            {/* Batch Button - Direct Action */}
             <div
                 style={{ ...menuStyle, backgroundColor: mainMode === 'batch' ? '#444' : 'transparent' }}
                 onClick={() => onSetMainMode('batch')}
                 onMouseEnter={hoverStyle}
                 onMouseLeave={mainMode !== 'batch' ? unhoverStyle : undefined}
             >
-                批量模式
+                {uiText.menu.batchMode}
             </div>
 
             <div
@@ -787,16 +526,14 @@ const MenuBar: React.FC<MenuBarProps> = ({
                 onMouseEnter={hoverStyle}
                 onMouseLeave={!showSettingsPanel ? unhoverStyle : undefined}
             >
-                设置
+                {uiText.menu.settings}
             </div>
-
-            <div style={{ width: 1, height: 18, backgroundColor: '#555', margin: '0 8px 0 6px' }} />
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingRight: 8, flexShrink: 0 }}>
                 {quickToggleItems.map((item) => (
                     <Tooltip
                         key={item.key}
-                        title={`${item.label}：${item.checked ? '已开启' : '已关闭'}`}
+                        title={`${item.label}：${item.statusLabel ?? (item.checked ? uiText.menu.statusOn : uiText.menu.statusOff)}`}
                         mouseEnterDelay={0.15}
                     >
                         <button
@@ -810,10 +547,25 @@ const MenuBar: React.FC<MenuBarProps> = ({
                     </Tooltip>
                 ))}
             </div>
-        </div >
+
+            <div style={{ flex: 1 }} />
+
+            <div style={menuStyle} onClick={() => toggleMenu('help')}>
+                {uiText.menu.help}
+                {activeMenu === 'help' && (
+                    <div style={{ ...dropdownStyle, left: 'auto', right: 0 }}>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleDebugConsole() }}>
+                            <span>{uiText.menu.debugConsole}</span>
+                            <span>{showDebugConsole ? '✓' : ''}</span>
+                        </div>
+                        <div style={{ borderTop: '1px solid #444', margin: '5px 0' }} />
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onCheckUpdate(); closeMenu() }}>{uiText.menu.checkUpdate}</div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onShowAbout(); closeMenu() }}>{uiText.menu.about}</div>
+                    </div>
+                )}
+            </div>
+        </div>
     )
 }
 
 export default MenuBar
-
-

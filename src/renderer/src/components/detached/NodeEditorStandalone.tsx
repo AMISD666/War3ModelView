@@ -41,6 +41,7 @@ const initialRpcState: NodeEditorRpcState = {
     modelPath: '',
     renameInitialName: '',
     allNodes: [],
+    pivotPoints: [],
 }
 
 /**
@@ -51,6 +52,7 @@ const NodeEditorStandalone: React.FC = () => {
     const { state, emitCommand } = useRpcClient<NodeEditorRpcState>('nodeEditor', initialRpcState)
     const sessionKeyRef = useRef('')
     const [frozenNode, setFrozenNode] = useState<any>(null)
+    const [editorSessionRev, setEditorSessionRev] = useState(0)
 
     useEffect(() => {
         const key = `${state.kind}:${state.objectId}`
@@ -73,6 +75,9 @@ const NodeEditorStandalone: React.FC = () => {
     }, [state.node, state.objectId, state.kind, frozenNode])
 
     const handleClose = async () => {
+        sessionKeyRef.current = ''
+        setFrozenNode(null)
+        setEditorSessionRev((v) => v + 1)
         try {
             await getCurrentWindow().hide()
         } catch (e) {
@@ -86,14 +91,24 @@ const NodeEditorStandalone: React.FC = () => {
             Materials: state.materials,
             GlobalSequences: state.globalSequences,
             Sequences: state.sequences,
+            PivotPoints: state.pivotPoints ?? [],
         }),
-        [state.snapshotVersion, state.textures, state.materials, state.globalSequences, state.sequences]
+        [
+            state.snapshotVersion,
+            state.textures,
+            state.materials,
+            state.globalSequences,
+            state.sequences,
+            state.pivotPoints,
+        ]
     )
 
     const frameTitle =
         state.kind && state.objectId >= 0
             ? getNodeEditorWindowLayout(state.kind as NodeEditorKind).title
             : '节点编辑器'
+
+    const editorKey = `${state.kind}:${state.objectId}:${editorSessionRev}`
 
     if (!state.kind || state.objectId < 0) {
         return (
@@ -130,6 +145,7 @@ const NodeEditorStandalone: React.FC = () => {
             >
                 {state.kind === 'particleEmitter' && (
                     <ParticleEmitterDialog
+                        key={editorKey}
                         visible={true}
                         nodeId={state.objectId}
                         onClose={handleClose}
@@ -141,6 +157,7 @@ const NodeEditorStandalone: React.FC = () => {
                 )}
                 {state.kind === 'particleEmitter2' && (
                     <ParticleEmitter2Dialog
+                        key={editorKey}
                         visible={true}
                         nodeId={state.objectId}
                         onClose={handleClose}
@@ -153,6 +170,7 @@ const NodeEditorStandalone: React.FC = () => {
                 )}
                 {state.kind === 'collisionShape' && (
                     <CollisionShapeDialog
+                        key={editorKey}
                         visible={true}
                         nodeId={state.objectId}
                         onClose={handleClose}
@@ -163,6 +181,7 @@ const NodeEditorStandalone: React.FC = () => {
                 )}
                 {state.kind === 'light' && (
                     <LightDialog
+                        key={editorKey}
                         visible={true}
                         nodeId={state.objectId}
                         onClose={handleClose}
@@ -174,6 +193,7 @@ const NodeEditorStandalone: React.FC = () => {
                 )}
                 {state.kind === 'eventObject' && (
                     <EventObjectDialog
+                        key={editorKey}
                         visible={true}
                         nodeId={state.objectId}
                         onClose={handleClose}
@@ -185,6 +205,7 @@ const NodeEditorStandalone: React.FC = () => {
                 )}
                 {state.kind === 'ribbonEmitter' && (
                     <RibbonEmitterDialog
+                        key={editorKey}
                         visible={true}
                         nodeId={state.objectId}
                         onClose={handleClose}
@@ -196,6 +217,7 @@ const NodeEditorStandalone: React.FC = () => {
                 )}
                 {state.kind === 'genericNode' && (
                     <NodeDialog
+                        key={editorKey}
                         visible={true}
                         nodeId={state.objectId}
                         onClose={handleClose}
@@ -208,6 +230,7 @@ const NodeEditorStandalone: React.FC = () => {
                 )}
                 {state.kind === 'rename' && (
                     <RenameNodeDialog
+                        key={editorKey}
                         visible={true}
                         nodeId={state.objectId}
                         currentName={state.renameInitialName}

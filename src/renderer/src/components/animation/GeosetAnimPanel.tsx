@@ -9,6 +9,7 @@ import { useHistoryStore } from '../../store/historyStore'
 import { listen } from '@tauri-apps/api/event'
 import { windowManager } from '../../utils/WindowManager'
 import RightFloatingPanelShell from './RightFloatingPanelShell'
+import { coercePivotFloat3 } from 'war3-model'
 
 const { Text } = Typography
 
@@ -269,7 +270,15 @@ const GeosetAnimPanel: React.FC = () => {
     const currentGeosetColor = useMemo<[number, number, number]>(() => {
         if (!activeGeosetAnim) return [1, 1, 1]
         if (isAnimTrack(activeGeosetAnim.Color)) return sampleColorTrack(activeGeosetAnim.Color, currentFrame, [1, 1, 1])
-        if (Array.isArray(activeGeosetAnim.Color)) return [Number(activeGeosetAnim.Color[0] ?? 1), Number(activeGeosetAnim.Color[1] ?? 1), Number(activeGeosetAnim.Color[2] ?? 1)]
+        const raw = activeGeosetAnim.Color
+        // MDX 解析常为 Float32Array(3)，非 Array.isArray，原先会误回退为白
+        if (raw instanceof Float32Array || ArrayBuffer.isView(raw)) {
+            const c = coercePivotFloat3(raw as Float32Array | Uint8Array | number[])
+            if (c) return [clamp01(c[0]), clamp01(c[1]), clamp01(c[2])]
+        }
+        if (Array.isArray(raw) && raw.length >= 3) {
+            return [Number(raw[0] ?? 1), Number(raw[1] ?? 1), Number(raw[2] ?? 1)]
+        }
         return [1, 1, 1]
     }, [activeGeosetAnim, currentFrame])
 

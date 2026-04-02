@@ -3,6 +3,7 @@ import {
     GeosetAnimInfo, GeosetAnim, Node, Bone, Helper, Attachment, EventObject, CollisionShape, CollisionShapeType,
     ParticleEmitter2, ParticleEmitter2FramesFlags, Camera, Light, TVertexAnim, RibbonEmitter, ParticleEmitter, FaceFX, BindPose, ParticleEmitterPopcorn
 } from '../model';
+import { applySequentialPivotPoints } from '../pivotUtils';
 import { LAYER_TEXTURE_ID_MAP } from '../renderer/util';
 
 const BIG_ENDIAN = true;
@@ -668,13 +669,17 @@ function parseAttachments(model: Model, state: State, size: number): void {
 
 function parsePivotPoints(model: Model, state: State, size: number): void {
     const pointsCount = size / (4 * 3);
+    const seq: Float32Array[] = [];
 
     for (let i = 0; i < pointsCount; ++i) {
-        model.PivotPoints[i] = new Float32Array(3);
-        model.PivotPoints[i][0] = state.float32();
-        model.PivotPoints[i][1] = state.float32();
-        model.PivotPoints[i][2] = state.float32();
+        const p = new Float32Array(3);
+        p[0] = state.float32();
+        p[1] = state.float32();
+        p[2] = state.float32();
+        seq.push(p);
     }
+
+    model.PivotPointsSequential = seq;
 }
 
 function parseEventObjects(model: Model, state: State, size: number): void {
@@ -1233,6 +1238,8 @@ export function parse(arrayBuffer: ArrayBuffer): Model {
             state.pos += size;
         }
     }
+
+    applySequentialPivotPoints(model);
 
     for (let i = 0; i < model.Nodes.length; ++i) {
         if (model.Nodes[i] && model.PivotPoints[i]) {

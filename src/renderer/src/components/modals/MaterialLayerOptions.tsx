@@ -1,6 +1,7 @@
 ﻿import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import React from 'react';
 import { Select, Checkbox, Typography } from 'antd';
+import { MATERIAL_FILTER_MODE_OPTIONS } from '../../constants/filterModes';
 
 const { Text } = Typography;
 
@@ -38,16 +39,6 @@ interface MaterialLayerOptionsProps {
     onChange: (config: LayerConfig) => void;
     textures: TextureInfo[];
 }
-
-const filterModeOptions = [
-    { value: 0, label: 'None' },
-    { value: 1, label: 'Transparent' },
-    { value: 2, label: 'Blend' },
-    { value: 3, label: 'Additive' },
-    { value: 4, label: 'Add Alpha' },
-    { value: 5, label: 'Modulate' },
-    { value: 6, label: 'Modulate 2X' },
-];
 
 export const MaterialLayerOptions: React.FC<MaterialLayerOptionsProps> = ({
     value,
@@ -100,7 +91,7 @@ export const MaterialLayerOptions: React.FC<MaterialLayerOptionsProps> = ({
                         style={{ width: '100%' }}
                         value={value.filterMode}
                         onChange={(v) => handleChange('filterMode', v)}
-                        options={filterModeOptions}
+                        options={MATERIAL_FILTER_MODE_OPTIONS as any}
                         popupClassName="dark-theme-select-dropdown"
                     />
                 </div>
@@ -158,4 +149,3 @@ export function layerConfigToMaterialLayer(config: LayerConfig): any {
 }
 
 export default MaterialLayerOptions;
-

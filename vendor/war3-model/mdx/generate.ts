@@ -3,6 +3,7 @@ import {
     Bone, Light, Attachment, ParticleEmitter2, ParticleEmitter2FramesFlags, RibbonEmitter, Camera, EventObject,
     CollisionShape, CollisionShapeType, ParticleEmitter, BindPose, ParticleEmitterPopcorn
 } from '../model';
+import { pivotPointsInObjectIdOrder } from '../pivotUtils';
 import { LAYER_TEXTURE_ID_MAP } from '../renderer/util';
 
 const BIG_ENDIAN = true;
@@ -1066,24 +1067,26 @@ function generateAttachments(model: Model, stream: Stream): void {
 
 
 function byteLengthPivotPoints(model: Model): number {
-    if (!model.PivotPoints.length) {
+    const ordered = pivotPointsInObjectIdOrder(model);
+    if (!ordered.length) {
         return 0;
     }
 
     return 4 /* keyword */ +
         4 /* size */ +
-        4 * 3 * model.PivotPoints.length;
+        4 * 3 * ordered.length;
 }
 
 function generatePivotPoints(model: Model, stream: Stream): void {
-    if (!model.PivotPoints.length) {
+    const ordered = pivotPointsInObjectIdOrder(model);
+    if (!ordered.length) {
         return;
     }
 
     stream.keyword('PIVT');
-    stream.int32(model.PivotPoints.length * 4 * 3);
+    stream.int32(ordered.length * 4 * 3);
 
-    for (const point of model.PivotPoints) {
+    for (const point of ordered) {
         stream.float32Array(point);
     }
 }
