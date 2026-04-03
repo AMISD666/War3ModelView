@@ -81,6 +81,7 @@ export const ViewSettingsWindow: React.FC = () => {
         showAttachments, setShowAttachments,
         showParticles, setShowParticles,
         showRibbons, setShowRibbons,
+        showHealthBar, setShowHealthBar,
         enableLighting, setEnableLighting,
         renderMode, setRenderMode,
         backgroundColor, setBackgroundColor,
@@ -518,6 +519,7 @@ export const ViewSettingsWindow: React.FC = () => {
                                         <ToggleButton checked={showAttachments} onChange={setShowAttachments} fullWidth>模型附件</ToggleButton>
                                         <ToggleButton checked={showParticles} onChange={setShowParticles} fullWidth>粒子显示</ToggleButton>
                                         <ToggleButton checked={showRibbons} onChange={setShowRibbons} fullWidth>丝带显示</ToggleButton>
+                                        <ToggleButton checked={showHealthBar} onChange={setShowHealthBar} fullWidth>模型血条</ToggleButton>
                                     </div>
                                 </div>
 

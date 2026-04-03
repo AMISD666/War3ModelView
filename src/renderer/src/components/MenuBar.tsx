@@ -10,6 +10,7 @@ import {
     DeploymentUnitOutlined,
     FireOutlined,
     LinkOutlined,
+    MinusOutlined,
     ToolOutlined
 } from '@ant-design/icons'
 import { useRendererStore } from '../store/rendererStore'
@@ -158,7 +159,9 @@ const MenuBar: React.FC<MenuBarProps> = ({
         showParticles: quickShowParticles,
         setShowParticles: setQuickShowParticles,
         showRibbons: quickShowRibbons,
-        setShowRibbons: setQuickShowRibbons
+        setShowRibbons: setQuickShowRibbons,
+        showHealthBar: quickShowHealthBar,
+        setShowHealthBar: setQuickShowHealthBar
     } = useRendererStore((state) => ({
         showGridXY: state.showGridXY,
         setShowGridXY: state.setShowGridXY,
@@ -186,7 +189,9 @@ const MenuBar: React.FC<MenuBarProps> = ({
         showParticles: state.showParticles,
         setShowParticles: state.setShowParticles,
         showRibbons: state.showRibbons,
-        setShowRibbons: state.setShowRibbons
+        setShowRibbons: state.setShowRibbons,
+        showHealthBar: state.showHealthBar,
+        setShowHealthBar: state.setShowHealthBar
     }))
 
     const { mainMode: currentMainMode, animationSubMode } = useSelectionStore((state) => ({
@@ -299,6 +304,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
         { key: 'lights', label: uiText.menu.quickToggle.lights, checked: quickShowLights, onToggle: () => setQuickShowLights(!quickShowLights), icon: <BulbOutlined /> },
         { key: 'particles', label: uiText.menu.quickToggle.particles, checked: quickShowParticles, onToggle: () => setQuickShowParticles(!quickShowParticles), icon: <FireOutlined /> },
         { key: 'ribbons', label: uiText.menu.quickToggle.ribbons, checked: quickShowRibbons, onToggle: () => setQuickShowRibbons(!quickShowRibbons), icon: <LinkOutlined /> },
+        { key: 'health-bar', label: uiText.menu.quickToggle.healthBar, checked: quickShowHealthBar, onToggle: () => setQuickShowHealthBar(!quickShowHealthBar), icon: <MinusOutlined /> },
         {
             key: 'render-mode',
             label: uiText.menu.quickToggle.wireframe,

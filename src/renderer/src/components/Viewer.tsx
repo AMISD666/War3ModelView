@@ -41,6 +41,7 @@ import { AutoSeparateLayersCommand } from '../commands/AutoSeparateLayersCommand
 import { WeldVerticesCommand } from '../commands/WeldVerticesCommand'
 import { DeleteVerticesCommand } from '../commands/DeleteVerticesCommand'
 import { PasteVerticesCommand } from '../commands/PasteVerticesCommand'
+import { UpdateSequenceExtentsCommand } from '../commands/UpdateSequenceExtentsCommand'
 import { isTextInputActive } from '../shortcuts/utils'
 
 const toTextureUpdateUint8Array = (payload: any): Uint8ClampedArray | null => {
@@ -226,6 +227,87 @@ const createViewerFramePerfAggregate = (): ViewerFramePerfAggregate => ({
 
 const roundPerfValue = (value: number): number => Number(value.toFixed(2))
 
+const HEALTH_BAR_MIN_WIDTH = 18
+const HEALTH_BAR_MAX_WIDTH = 84
+const HEALTH_BAR_MIN_THICKNESS = 4
+const HEALTH_BAR_MAX_THICKNESS = 10
+
+type HealthBarState = {
+  sequenceIndex: number
+  sequenceName: string
+  minimumExtent: [number, number, number]
+  maximumExtent: [number, number, number]
+  center: [number, number, number]
+  width: number
+  thickness: number
+}
+
+type HealthBarDragSnapshot = {
+  sequenceIndex: number
+  minimumExtent: [number, number, number]
+  maximumExtent: [number, number, number]
+}
+
+const toExtentTuple = (value: any): [number, number, number] => {
+  const source = Array.isArray(value) || ArrayBuffer.isView(value) ? Array.from(value as ArrayLike<number>) : []
+  return [
+    Number(source[0] ?? 0) || 0,
+    Number(source[1] ?? 0) || 0,
+    Number(source[2] ?? 0) || 0
+  ]
+}
+
+const resolveHealthBarState = (sequences: any[]): HealthBarState | null => {
+  if (!Array.isArray(sequences) || sequences.length === 0) return null
+
+  const standIndex = sequences.findIndex((seq) => /stand/i.test(String(seq?.Name ?? seq?.name ?? '')))
+  const sequenceIndex = standIndex >= 0 ? standIndex : 0
+  const sequence = sequences[sequenceIndex]
+  const minimumExtent = toExtentTuple(sequence?.MinimumExtent)
+  const maximumExtent = toExtentTuple(sequence?.MaximumExtent)
+  const spanX = Math.abs(maximumExtent[0] - minimumExtent[0])
+  const spanY = Math.abs(maximumExtent[1] - minimumExtent[1])
+  const widthBasis = Math.max(spanX, spanY)
+  const width = Math.max(HEALTH_BAR_MIN_WIDTH, Math.min(HEALTH_BAR_MAX_WIDTH, widthBasis * 0.58))
+  const thickness = Math.max(
+    HEALTH_BAR_MIN_THICKNESS,
+    Math.min(HEALTH_BAR_MAX_THICKNESS, width * 0.08)
+  )
+
+  return {
+    sequenceIndex,
+    sequenceName: String(sequence?.Name ?? sequence?.name ?? `Sequence ${sequenceIndex + 1}`),
+    minimumExtent,
+    maximumExtent,
+    center: [
+      0,
+      0,
+      maximumExtent[2]
+    ],
+    width,
+    thickness
+  }
+}
+
+const applyHealthBarOffset = (state: HealthBarState, offset: vec3): HealthBarState => ({
+  ...state,
+  minimumExtent: [
+    state.minimumExtent[0] + offset[0],
+    state.minimumExtent[1] + offset[1],
+    state.minimumExtent[2] + offset[2]
+  ],
+  maximumExtent: [
+    state.maximumExtent[0] + offset[0],
+    state.maximumExtent[1] + offset[1],
+    state.maximumExtent[2] + offset[2]
+  ],
+  center: [
+    state.center[0] + offset[0],
+    state.center[1] + offset[1],
+    state.center[2] + offset[2]
+  ]
+})
+
 const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   const {
   modelPath,
@@ -274,6 +356,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   const cachedRenderer = useModelStore((state) => state.cachedRenderer)
   const mpqLoaded = useRendererStore((state) => state.mpqLoaded)
   const nodeRenderMode = useRendererStore((state) => state.nodeRenderMode)
+  const showHealthBar = useRendererStore((state) => state.showHealthBar)
   const missingTextures = useRendererStore((state) => state.missingTextures)
   const glRef = useRef<WebGL2RenderingContext | WebGLRenderingContext | null>(null)
   const needsRendererUpdateRef = useRef(false)
@@ -486,6 +569,18 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     return []
   }
 
+  const setHealthBarSelection = useCallback((selected: boolean) => {
+    isHealthBarSelectedRef.current = selected
+    setIsHealthBarSelected(selected)
+  }, [])
+
+  const getHealthBarState = useCallback((): HealthBarState | null => {
+    if (!showHealthBarRef.current) return null
+    const state = resolveHealthBarState(useModelStore.getState().sequences)
+    if (!state) return null
+    return applyHealthBarOffset(state, healthBarPreviewOffsetRef.current)
+  }, [])
+
 
   const getConnectedGeometryGroup = (
     geosetIndex: number,
@@ -583,6 +678,61 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       faces: Array.from(visitedFaces).map((index) => ({ geosetIndex, index }))
     }
   }
+
+  const buildHealthBarBillboard = useCallback((healthBarState: HealthBarState) => {
+    const viewMatrix = mvMatrixRef.current
+    const invViewMatrix = mat4.create()
+    if (!mat4.invert(invViewMatrix, viewMatrix)) return null
+
+    const right = vec3.fromValues(invViewMatrix[0], invViewMatrix[1], invViewMatrix[2])
+    const up = vec3.fromValues(invViewMatrix[4], invViewMatrix[5], invViewMatrix[6])
+    if (vec3.length(right) < 1e-6 || vec3.length(up) < 1e-6) return null
+
+    vec3.normalize(right, right)
+    vec3.normalize(up, up)
+
+    return {
+      center: vec3.fromValues(...healthBarState.center),
+      right,
+      up,
+      halfWidth: healthBarState.width * 0.5,
+      halfThickness: healthBarState.thickness * 0.5
+    }
+  }, [])
+
+  const pickHealthBar = useCallback((cameraPos: vec3, rayDir: vec3) => {
+    const healthBarState = getHealthBarState()
+    if (!healthBarState) return false
+
+    const billboard = buildHealthBarBillboard(healthBarState)
+    if (!billboard) return false
+
+    const planeNormal = vec3.create()
+    vec3.cross(planeNormal, billboard.right, billboard.up)
+    if (vec3.length(planeNormal) < 1e-6) return false
+    vec3.normalize(planeNormal, planeNormal)
+
+    const denom = vec3.dot(rayDir, planeNormal)
+    if (Math.abs(denom) < 1e-6) return false
+
+    const toPlane = vec3.create()
+    vec3.sub(toPlane, billboard.center, cameraPos)
+    const t = vec3.dot(toPlane, planeNormal) / denom
+    if (!Number.isFinite(t) || t < 0) return false
+
+    const hitPoint = vec3.create()
+    vec3.scaleAndAdd(hitPoint, cameraPos, rayDir, t)
+
+    const local = vec3.create()
+    vec3.sub(local, hitPoint, billboard.center)
+    const localX = vec3.dot(local, billboard.right)
+    const localY = vec3.dot(local, billboard.up)
+    const paddingX = Math.max(8, billboard.halfWidth * 0.08)
+    const paddingY = Math.max(4, billboard.halfThickness * 0.5)
+
+    return Math.abs(localX) <= billboard.halfWidth + paddingX &&
+      Math.abs(localY) <= billboard.halfThickness + paddingY
+  }, [buildHealthBarBillboard, getHealthBarState])
 
   // Sync isLooping to renderer
   useEffect(() => {
@@ -687,10 +837,13 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   const showAttachmentsRef = useRef(showAttachments)
   const showParticlesRef = useRef(useRendererStore.getState().showParticles ?? true)
   const showRibbonsRef = useRef(useRendererStore.getState().showRibbons ?? true)
+  const showHealthBarRef = useRef(showHealthBar)
   const showWireframeRef = useRef(showWireframe)
   const isPlayingRef = useRef(isPlaying)
   const playbackSpeedRef = useRef(playbackSpeed)
   const backgroundColorRef = useRef(backgroundColor)
+  const [isHealthBarSelected, setIsHealthBarSelected] = useState(false)
+  const isHealthBarSelectedRef = useRef(false)
 
   // Store-derived refs
   const getShowVerticesForCurrentContext = () => {
@@ -710,6 +863,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
   // Cache for bound vertex highlighting (to avoid per-frame recalculation)
   const boundVerticesCache = useRef<{ boneId: number, vertices: number[] } | null>(null)
+  const healthBarDragInitialRef = useRef<HealthBarDragSnapshot | null>(null)
+  const healthBarPreviewOffsetRef = useRef(vec3.create())
 
   // Progress bar state
   const [progress, setProgress] = useState(0)
@@ -733,6 +888,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     showCamerasRef.current = showCameras
     showLightsRef.current = showLights
     showAttachmentsRef.current = !!showAttachments
+    showHealthBarRef.current = showHealthBar
     showWireframeRef.current = showWireframe
     isPlayingRef.current = isPlaying
     playbackSpeedRef.current = playbackSpeed
@@ -742,7 +898,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     const state = useRendererStore.getState()
     showVerticesRef.current = getShowVerticesForCurrentContext()
     vertexSettingsRef.current = state.vertexSettings
-  }, [showGrid, showNodes, nodeRenderMode, showSkeleton, showCollisionShapes, showCameras, showLights, showAttachments, showWireframe, isPlaying, playbackSpeed, backgroundColor,
+  }, [showGrid, showNodes, nodeRenderMode, showSkeleton, showCollisionShapes, showCameras, showLights, showAttachments, showHealthBar, showWireframe, isPlaying, playbackSpeed, backgroundColor,
     // Add implicit dependencies if they result in re-render, otherwise we rely on the loop checking refs.
     // Actually, we should subscribe or just use .getState() in the loop for low-frequency changes?
     // Refs are better for avoiding loop capturing stale closures.
@@ -769,6 +925,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       vertexSettingsRef.current = state.vertexSettings
       showParticlesRef.current = state.showParticles ?? true
       showRibbonsRef.current = state.showRibbons ?? true
+      showHealthBarRef.current = state.showHealthBar ?? false
     })
     return () => unsub()
   }, [])
@@ -777,6 +934,18 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     // Update when mode/sub-mode changes even if rendererStore doesn't change.
     showVerticesRef.current = getShowVerticesForCurrentContext()
   }, [appMainMode, animationSubMode])
+
+  useEffect(() => {
+    isHealthBarSelectedRef.current = isHealthBarSelected
+  }, [isHealthBarSelected])
+
+  useEffect(() => {
+    if (!showHealthBar || !resolveHealthBarState(useModelStore.getState().sequences)) {
+      setHealthBarSelection(false)
+    }
+    vec3.set(healthBarPreviewOffsetRef.current, 0, 0, 0)
+    healthBarDragInitialRef.current = null
+  }, [showHealthBar, modelData, setHealthBarSelection])
 
 
   useEffect(() => {
@@ -2315,10 +2484,17 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       // Block Gizmo in keyframe mode when autoKeyframe is disabled
       const { animationSubMode: subMode, isGlobalTransformMode } = useSelectionStore.getState()
       const { autoKeyframe } = useModelStore.getState()
+      const isHealthBarGizmo = isHealthBarSelectedRef.current && showHealthBarRef.current
 
       // If we are in Global Transform Mode, we always allow dragging (no selection dependencies)
       if (isGlobalTransformMode) {
         // Carry on to dragging logic
+      } else if (isHealthBarGizmo) {
+        if (useSelectionStore.getState().transformMode !== 'translate') {
+          gizmoState.current.activeAxis = null
+          if (cameraRef.current) cameraRef.current.enabled = false
+          return
+        }
       } else if (mainMode === 'animation' && subMode === 'keyframe' && !autoKeyframe) {
         console.log('[Viewer] Gizmo blocked: autoKeyframe is OFF in keyframe mode')
         // Clear activeAxis to prevent any visual feedback
@@ -2380,6 +2556,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
       // Capture initial positions for Undo (after potential paste)
       initialVertexPositions.current.clear()
+      healthBarDragInitialRef.current = null
+      vec3.set(healthBarPreviewOffsetRef.current, 0, 0, 0)
       // Re-fetch selection in case it was updated by paste
       const currentSelection = useSelectionStore.getState()
 
@@ -2536,6 +2714,16 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             }
           })
           console.log('[Viewer] Captured node positions:', initialNodePositions.current.size)
+        }
+      } else if (isHealthBarSelectedRef.current) {
+        const baseHealthBarState = resolveHealthBarState(useModelStore.getState().sequences)
+        if (baseHealthBarState) {
+          healthBarDragInitialRef.current = {
+            sequenceIndex: baseHealthBarState.sequenceIndex,
+            minimumExtent: [...baseHealthBarState.minimumExtent] as [number, number, number],
+            maximumExtent: [...baseHealthBarState.maximumExtent] as [number, number, number]
+          }
+          vec3.set(healthBarPreviewOffsetRef.current, 0, 0, 0)
         }
       } else if (geometrySubMode === 'vertex' || geometrySubMode === 'group') {
         console.log('[Viewer] Capturing vertices for vertex mode. Selected count:', currentSelection.selectedVertexIds.length)
@@ -2995,6 +3183,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       const result = pickClosestGeoset(cameraPos, rayDir, geosets, skinnedVerticesMap)
       if (result !== null) {
         console.log('[Viewer] Ctrl+Click picked geoset:', result.geosetIndex, 'at distance:', result.distance)
+        setHealthBarSelection(false)
         setPickedGeosetIndex(result.geosetIndex)
 
         // Visual feedback: temporarily highlight the picked geoset
@@ -3011,6 +3200,57 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       } else {
         // Clear picked geoset if clicked on empty space
         setPickedGeosetIndex(null)
+      }
+    }
+
+    if (showHealthBarRef.current) {
+      const rect = canvasRef.current.getBoundingClientRect()
+      const scaleX = canvasRef.current.width / rect.width
+      const scaleY = canvasRef.current.height / rect.height
+      const x = (clientX - rect.left) * scaleX
+      const y = (clientY - rect.top) * scaleY
+      const pMatrix = mat4.create()
+      const mvMatrix = mat4.create()
+      const cameraPos = vec3.create()
+
+      if (cameraRef.current) {
+        cameraRef.current.getMatrix(mvMatrix, pMatrix)
+        vec3.copy(cameraPos, cameraRef.current.position)
+      } else {
+        const { distance, theta, phi, target } = targetCamera.current
+        const cameraX = distance * Math.sin(phi) * Math.cos(theta)
+        const cameraY = distance * Math.sin(phi) * Math.sin(theta)
+        const cameraZ = distance * Math.cos(phi)
+        vec3.set(cameraPos, cameraX, cameraY, cameraZ)
+        vec3.add(cameraPos, cameraPos, target)
+
+        mat4.perspective(pMatrix, Math.PI / 4, canvasRef.current.width / canvasRef.current.height, 1, 100000)
+        const cameraUp = vec3.fromValues(0, 0, 1)
+        mat4.lookAt(mvMatrix, cameraPos, target, cameraUp)
+      }
+
+      const ndcX = (x / canvasRef.current.width) * 2 - 1
+      const ndcY = 1 - (y / canvasRef.current.height) * 2
+      const invProj = mat4.create()
+      const invView = mat4.create()
+      mat4.invert(invProj, pMatrix)
+      mat4.invert(invView, mvMatrix)
+
+      const rayClip = vec4.fromValues(ndcX, ndcY, -1.0, 1.0)
+      const rayEye = vec4.create()
+      vec4.transformMat4(rayEye, rayClip, invProj)
+      rayEye[2] = -1.0
+      rayEye[3] = 0.0
+
+      const rayWorld = vec4.create()
+      vec4.transformMat4(rayWorld, rayEye, invView)
+      const rayDir = vec3.fromValues(rayWorld[0], rayWorld[1], rayWorld[2])
+      vec3.normalize(rayDir, rayDir)
+
+      if (pickHealthBar(cameraPos, rayDir)) {
+        clearAllSelections()
+        setHealthBarSelection(true)
+        return
       }
     }
 
@@ -3105,10 +3345,12 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           return
         }
         markNodeManagerListScrollFromViewer()
+        setHealthBarSelection(false)
         selectNode(closestNodeId, isCtrl) // Support multi-select with Ctrl
         return // Stop here if we hit a node
       } else if (!isCtrl && animationSubMode !== 'binding') {
         // Only clear selection if NOT in binding mode (because in binding mode we might want to select a vertex next)
+        setHealthBarSelection(false)
         selectNode(-1)
       }
 
@@ -3118,7 +3360,12 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       }
     }
 
-    if (mainMode !== 'geometry' && !(mainMode === 'animation' && animationSubMode === 'binding')) return
+    if (mainMode !== 'geometry' && !(mainMode === 'animation' && animationSubMode === 'binding')) {
+      if (!isShift && !isCtrl) {
+        setHealthBarSelection(false)
+      }
+      return
+    }
 
     const rect = canvasRef.current.getBoundingClientRect()
     // Convert CSS coords to canvas pixel coords
@@ -3189,6 +3436,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     const result = rendererRef.current.raycast(cameraPos, rayDir, effectiveSubMode)
 
     if (result) {
+      setHealthBarSelection(false)
       if (geometrySubMode === 'group') {
         const sel = result as { geosetIndex: number, index: number }
         const groupSelection = getConnectedGeometryGroup(sel.geosetIndex, [sel.index], [])
@@ -3222,6 +3470,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         }
       }
     } else if (!isShift && !isCtrl) {
+      setHealthBarSelection(false)
       clearAllSelections()
     }
   }
@@ -4545,6 +4794,79 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             sceneMs = performance.now() - sceneStageStart
             overlayStageStart = performance.now()
 
+            if (gl && showHealthBarRef.current && debugRenderer.current) {
+              const healthBarState = getHealthBarState()
+              if (healthBarState) {
+                const billboard = buildHealthBarBillboard(healthBarState)
+                if (billboard) {
+                  const center = billboard.center
+                  const borderThickness = Math.max(0.5, getScreenStableWorldScale(3, center))
+                  const outerHalfWidth = billboard.halfWidth
+                  const outerHalfThickness = billboard.halfThickness
+                  const innerHalfWidth = Math.max(outerHalfWidth - borderThickness, outerHalfWidth * 0.7)
+                  const innerHalfThickness = Math.max(outerHalfThickness - borderThickness, outerHalfThickness * 0.45)
+                  const buildQuad = (halfWidth: number, halfThickness: number) => {
+                    const topLeft = vec3.create()
+                    const topRight = vec3.create()
+                    const bottomLeft = vec3.create()
+                    const bottomRight = vec3.create()
+
+                    vec3.scaleAndAdd(topLeft, center, billboard.right, -halfWidth)
+                    vec3.scaleAndAdd(topLeft, topLeft, billboard.up, halfThickness)
+                    vec3.scaleAndAdd(topRight, center, billboard.right, halfWidth)
+                    vec3.scaleAndAdd(topRight, topRight, billboard.up, halfThickness)
+                    vec3.scaleAndAdd(bottomLeft, center, billboard.right, -halfWidth)
+                    vec3.scaleAndAdd(bottomLeft, bottomLeft, billboard.up, -halfThickness)
+                    vec3.scaleAndAdd(bottomRight, center, billboard.right, halfWidth)
+                    vec3.scaleAndAdd(bottomRight, bottomRight, billboard.up, -halfThickness)
+
+                    return {
+                      triangles: [
+                        topLeft[0], topLeft[1], topLeft[2],
+                        bottomLeft[0], bottomLeft[1], bottomLeft[2],
+                        topRight[0], topRight[1], topRight[2],
+                        topRight[0], topRight[1], topRight[2],
+                        bottomLeft[0], bottomLeft[1], bottomLeft[2],
+                        bottomRight[0], bottomRight[1], bottomRight[2]
+                      ],
+                      outline: [
+                        topLeft[0], topLeft[1], topLeft[2], topRight[0], topRight[1], topRight[2],
+                        topRight[0], topRight[1], topRight[2], bottomRight[0], bottomRight[1], bottomRight[2],
+                        bottomRight[0], bottomRight[1], bottomRight[2], bottomLeft[0], bottomLeft[1], bottomLeft[2],
+                        bottomLeft[0], bottomLeft[1], bottomLeft[2], topLeft[0], topLeft[1], topLeft[2]
+                      ]
+                    }
+                  }
+
+                  const outerQuad = buildQuad(outerHalfWidth, outerHalfThickness)
+                  const innerQuad = buildQuad(innerHalfWidth, innerHalfThickness)
+                  const outlineColor = isHealthBarSelectedRef.current ? [1, 0.86, 0.25, 1] : [0, 0, 0, 1]
+
+                  debugRenderer.current.renderTriangles(
+                    gl as WebGLRenderingContext,
+                    mvMatrix,
+                    pMatrix,
+                    outerQuad.triangles,
+                    [0, 0, 0, 1]
+                  )
+                  debugRenderer.current.renderTriangles(
+                    gl as WebGLRenderingContext,
+                    mvMatrix,
+                    pMatrix,
+                    innerQuad.triangles,
+                    [0.12, 0.78, 0.18, 1]
+                  )
+                  debugRenderer.current.renderLines(
+                    gl as WebGLRenderingContext,
+                    mvMatrix,
+                    pMatrix,
+                    outerQuad.outline,
+                    outlineColor
+                  )
+                }
+              }
+            }
+
             // === Hover Highlight ===
             // If a geoset is hovered, render a highlight overlay using animated (skinned) vertex positions
             if (hoveredGeosetId !== null && mdlRenderer.model.Geosets && mdlRenderer.model.Geosets[hoveredGeosetId]) {
@@ -5338,6 +5660,15 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
               center[2] = globalPivot[2]
               count = 1
               showGizmo = true
+            } else if (isHealthBarSelectedRef.current && showHealthBarRef.current && transformMode === 'translate') {
+              const healthBarState = getHealthBarState()
+              if (healthBarState) {
+                center[0] = healthBarState.center[0]
+                center[1] = healthBarState.center[1]
+                center[2] = healthBarState.center[2]
+                count = 1
+                showGizmo = true
+              }
             }
 
             if (gl && showGizmo && count > 0) {
@@ -5735,6 +6066,15 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         center[2] += matrix[2] * pivot[0] + matrix[6] * pivot[1] + matrix[10] * pivot[2] + matrix[14]
         count++
       }
+    } else if (isHealthBarSelectedRef.current) {
+      const healthBarState = getHealthBarState()
+      if (healthBarState) {
+        center[0] = healthBarState.center[0]
+        center[1] = healthBarState.center[1]
+        center[2] = healthBarState.center[2]
+        count = 1
+        show = true
+      }
     } else if (isGlobalTransformMode) {
       const pivot = getModelCenter()
       center[0] = pivot[0]
@@ -5776,7 +6116,9 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       const axis = gizmoState.current.activeAxis
 
       // Allowed modes for Gizmo dragging
+      const isHealthBarDrag = isHealthBarSelectedRef.current && showHealthBarRef.current
       if (!isGlobalTransformMode &&
+        !isHealthBarDrag &&
         mainMode !== 'geometry' &&
         !(mainMode === 'animation' && (subMode === 'binding' || subMode === 'keyframe'))) {
         return
@@ -6070,6 +6412,19 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         hud.scale[1] *= scaleVec[1]
         hud.scale[2] *= scaleVec[2]
         updateHudPosition(e, 'scale')
+      }
+
+      if (isHealthBarDrag) {
+        if (transformMode !== 'translate') {
+          return
+        }
+
+        buildMoveVec(axis)
+        applyTranslateSnap(vecs.moveVec)
+        applyHudTranslate(vecs.moveVec)
+        vec3.add(healthBarPreviewOffsetRef.current, healthBarPreviewOffsetRef.current, vecs.moveVec)
+        needsRendererUpdateRef.current = true
+        return
       }
 
       if (isGlobalTransformMode) {
@@ -6776,7 +7131,11 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       // gizmoCenter and gizmoCount are used here from closure
       const center = gizmoCenter
       const count = gizmoCount
-      if (gizmoCount > 0 && transformMode) {
+      if (count > 0 && transformMode) {
+        if (isHealthBarSelectedRef.current && transformMode !== 'translate') {
+          gizmoState.current.activeAxis = null
+          return
+        }
         const gizmoScale = getGizmoScale(center)
 
         if (canvasRef.current) {
@@ -7009,7 +7368,47 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         snapDragRef.current.rotationDelta = [0, 0, 0]
         snapDragRef.current.rotationApplied = [0, 0, 0]
 
-        if (mainMode === 'geometry') {
+        if (isHealthBarSelectedRef.current && healthBarDragInitialRef.current) {
+          const start = healthBarDragInitialRef.current
+          const offset = healthBarPreviewOffsetRef.current
+          const hasMoved = Math.abs(offset[0]) > 1e-6 || Math.abs(offset[1]) > 1e-6 || Math.abs(offset[2]) > 1e-6
+
+          if (hasMoved) {
+            const newMinimumExtent: [number, number, number] = [
+              start.minimumExtent[0] + offset[0],
+              start.minimumExtent[1] + offset[1],
+              start.minimumExtent[2] + offset[2]
+            ]
+            const newMaximumExtent: [number, number, number] = [
+              start.maximumExtent[0] + offset[0],
+              start.maximumExtent[1] + offset[1],
+              start.maximumExtent[2] + offset[2]
+            ]
+
+            const cmd = new UpdateSequenceExtentsCommand(
+              [{
+                sequenceIndex: start.sequenceIndex,
+                oldMinimumExtent: start.minimumExtent,
+                oldMaximumExtent: start.maximumExtent,
+                newMinimumExtent,
+                newMaximumExtent
+              }],
+              (changes) => {
+                const { updateSequence } = useModelStore.getState()
+                changes.forEach((change) => {
+                  updateSequence(change.sequenceIndex, {
+                    MinimumExtent: change.newMinimumExtent,
+                    MaximumExtent: change.newMaximumExtent
+                  })
+                })
+              }
+            )
+            commandManager.execute(cmd)
+          }
+
+          vec3.set(healthBarPreviewOffsetRef.current, 0, 0, 0)
+          healthBarDragInitialRef.current = null
+        } else if (mainMode === 'geometry') {
           if (initialVertexPositions.current.size > 0) {
             const changes: VertexChange[] = []
 

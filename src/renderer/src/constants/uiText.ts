@@ -68,6 +68,7 @@
             lights: '灯光对象',
             particles: '粒子显示',
             ribbons: '丝带显示',
+            healthBar: '模型血条',
             wireframe: '线框模式',
         },
     },

@@ -42,6 +42,7 @@ export const NodeManagerWindow: React.FC = () => {
     const [searchText, setSearchText] = useState('');
     const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
     const [autoExpandParent, setAutoExpandParent] = useState(true);
+    const hasInitializedExpansionRef = useRef(false);
 
     // Track Ctrl key state for drag operations
     const ctrlKeyPressedRef = React.useRef(false);
@@ -107,6 +108,20 @@ export const NodeManagerWindow: React.FC = () => {
     const nodeManagerNodes = useMemo(() => nodes.filter(n => isNodeManagerType(n.type)), [nodes]);
     const treeData = useMemo(() => buildTreeData(nodeManagerNodes), [nodeManagerNodes]);
 
+    const collectTreeKeys = useCallback((data: any[]): string[] => {
+        const keys: string[] = [];
+        const walk = (items: any[]) => {
+            items.forEach((item) => {
+                keys.push(String(item.key));
+                if (item.children && item.children.length > 0) {
+                    walk(item.children);
+                }
+            });
+        };
+        walk(data);
+        return keys;
+    }, []);
+
     // 过滤树节点
     const filteredTreeData = useMemo(() => {
         if (!searchText) return treeData;
@@ -115,20 +130,28 @@ export const NodeManagerWindow: React.FC = () => {
 
     // Auto-expand all nodes when model is loaded
     useEffect(() => {
-        if (nodeManagerNodes.length > 0 && expandedKeys.length === 0) {
-            const allKeys: string[] = [];
-            const collectKeys = (data: any[]) => {
-                data.forEach(node => {
-                    allKeys.push(node.key);
-                    if (node.children && node.children.length > 0) {
-                        collectKeys(node.children);
-                    }
-                });
-            };
-            collectKeys(treeData);
-            setExpandedKeys(allKeys);
+        if (nodeManagerNodes.length === 0) {
+            hasInitializedExpansionRef.current = false;
+            if (expandedKeys.length > 0) {
+                setExpandedKeys([]);
+            }
+            return;
         }
-    }, [nodeManagerNodes.length, treeData]);
+
+        if (!hasInitializedExpansionRef.current && expandedKeys.length === 0) {
+            setExpandedKeys(collectTreeKeys(treeData));
+            hasInitializedExpansionRef.current = true;
+        }
+    }, [collectTreeKeys, expandedKeys.length, nodeManagerNodes.length, treeData]);
+
+    useEffect(() => {
+        if (treeData.length === 0) return;
+        const validKeys = new Set(collectTreeKeys(treeData));
+        setExpandedKeys((prev) => {
+            const next = prev.filter((key) => validKeys.has(String(key)));
+            return next.length === prev.length ? prev : next;
+        });
+    }, [collectTreeKeys, treeData]);
 
     // 搜索时自动展开
     useEffect(() => {
@@ -136,20 +159,8 @@ export const NodeManagerWindow: React.FC = () => {
             const keys = getExpandedKeys(treeData, searchText);
             setExpandedKeys(keys);
             setAutoExpandParent(true);
-        } else if (nodeManagerNodes.length > 0) {
-            const allKeys: string[] = [];
-            const collectKeys = (data: any[]) => {
-                data.forEach(node => {
-                    allKeys.push(node.key);
-                    if (node.children && node.children.length > 0) {
-                        collectKeys(node.children);
-                    }
-                });
-            };
-            collectKeys(treeData);
-            setExpandedKeys(allKeys);
         }
-    }, [searchText, treeData, nodeManagerNodes.length]);
+    }, [searchText, treeData]);
 
     /** 选中后让树区域获得焦点，便于 activeElement 落在管理器内、Delete 可被识别 */
     const focusTreeSurface = useCallback(() => {
@@ -1017,4 +1028,3 @@ export const NodeManagerWindow: React.FC = () => {
         </div >
     );
 };
-

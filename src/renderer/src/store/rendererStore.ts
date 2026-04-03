@@ -79,6 +79,8 @@ interface RendererStore {
     setShowParticles: (show: boolean) => void
     showRibbons: boolean
     setShowRibbons: (show: boolean) => void
+    showHealthBar: boolean
+    setShowHealthBar: (show: boolean) => void
     enableLighting: boolean
     setEnableLighting: (enable: boolean) => void
 
@@ -216,6 +218,8 @@ export const useRendererStore = create<RendererStore>()(
             setShowParticles: (show) => set({ showParticles: show }),
             showRibbons: true,
             setShowRibbons: (show) => set({ showRibbons: show }),
+            showHealthBar: false,
+            setShowHealthBar: (show) => set({ showHealthBar: show }),
             enableLighting: true,
             setEnableLighting: (enable) => set({ enableLighting: enable }),
 
@@ -318,6 +322,7 @@ export const useRendererStore = create<RendererStore>()(
                 showAttachments: state.showAttachments,
                 showParticles: state.showParticles,
                 showRibbons: state.showRibbons,
+                showHealthBar: state.showHealthBar,
                 enableLighting: state.enableLighting,
                 renderMode: state.renderMode,
                 teamColor: state.teamColor,
