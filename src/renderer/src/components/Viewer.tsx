@@ -4374,16 +4374,26 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             // === Geoset Visibility Control ===
             // Get visibility state from store
             const { hiddenGeosetIds, forceShowAllGeosets, hoveredGeosetId } = useModelStore.getState()
+            const shouldForceResetGeosetsVisible = isBindPoseMode
+            const effectiveForceShowAllGeosets = forceShowAllGeosets || shouldForceResetGeosetsVisible
 
             // Store original geoset alphas to restore later
             const originalGeosetAlphas: Map<number, number> = new Map()
+            const numGeosets = mdlRenderer.model.Geosets?.length || 0
+
+            if (mdlRenderer.rendererData.geosetAlpha) {
+              for (let i = 0; i < numGeosets; i++) {
+                originalGeosetAlphas.set(i, mdlRenderer.rendererData.geosetAlpha[i] ?? 1)
+                if (shouldForceResetGeosetsVisible) {
+                  mdlRenderer.rendererData.geosetAlpha[i] = 1
+                }
+              }
+            }
 
             // Apply visibility: hide geosets that are in hiddenGeosetIds (when forceShowAllGeosets is OFF)
             // When forceShowAllGeosets is ON, all geosets are visible regardless of hiddenGeosetIds
-            if (!forceShowAllGeosets && mdlRenderer.rendererData.geosetAlpha) {
-              const numGeosets = mdlRenderer.model.Geosets?.length || 0
+            if (!effectiveForceShowAllGeosets && mdlRenderer.rendererData.geosetAlpha) {
               for (let i = 0; i < numGeosets; i++) {
-                originalGeosetAlphas.set(i, mdlRenderer.rendererData.geosetAlpha[i] ?? 1)
                 // If geoset is in hiddenGeosetIds, it's unchecked = hidden
                 if (hiddenGeosetIds.includes(i)) {
                   mdlRenderer.rendererData.geosetAlpha[i] = 0
@@ -5437,7 +5447,32 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       if (hasSequences && animationIndex >= 0) {
         ; (renderer as any).setSequence(animationIndex)
       } else {
+        ; (renderer as any).rendererData.animation = -1
+        ; (renderer as any).rendererData.animationInfo = null
         renderer.rendererData.frame = 0
+
+        const globalSequenceFrames = (renderer.rendererData as any).globalSequencesFrames
+        if (globalSequenceFrames && typeof globalSequenceFrames.length === 'number') {
+          for (let i = 0; i < globalSequenceFrames.length; i++) {
+            globalSequenceFrames[i] = 0
+          }
+        }
+
+        const particlesController = (renderer as any)?.modelInstance?.particlesController as any
+        if (particlesController?.emitters && Array.isArray(particlesController.emitters)) {
+          particlesController.emitters.forEach((emitter: any) => {
+            emitter.emission = 0
+            emitter.squirtFrame = 0
+            emitter.particles = []
+          })
+        }
+
+        const ribbonsController = (renderer as any)?.modelInstance?.ribbonsController as any
+        if (ribbonsController && typeof ribbonsController.resetEmitters === 'function') {
+          ribbonsController.resetEmitters()
+        }
+
+        renderer.update(0)
       }
     }
   }, [renderer, animationIndex])
