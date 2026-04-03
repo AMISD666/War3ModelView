@@ -418,7 +418,10 @@ const GeosetAnimPanel: React.FC = () => {
         commitGeosetAnims(`Set Geoset Static Alpha`, (nextAnims) => {
             selectedGeosetIds.forEach((geosetId) => {
                 let index = nextAnims.findIndex((anim: any) => Number(anim?.GeosetId) === Number(geosetId))
-                if (index < 0) return
+                if (index < 0) {
+                    nextAnims.push({ GeosetId: geosetId, Alpha: 1, Color: [1, 1, 1], Flags: 0, UseColor: true, DropShadow: false })
+                    index = nextAnims.length - 1
+                }
                 const currentAnim = { ...nextAnims[index] }
                 if (isAnimTrack(currentAnim.Alpha)) return
                 currentAnim.Alpha = alpha
@@ -432,7 +435,10 @@ const GeosetAnimPanel: React.FC = () => {
         commitGeosetAnims(`Set Geoset Static Color`, (nextAnims) => {
             selectedGeosetIds.forEach((geosetId) => {
                 let index = nextAnims.findIndex((anim: any) => Number(anim?.GeosetId) === Number(geosetId))
-                if (index < 0) return
+                if (index < 0) {
+                    nextAnims.push({ GeosetId: geosetId, Alpha: 1, Color: [1, 1, 1], Flags: 0, UseColor: true, DropShadow: false })
+                    index = nextAnims.length - 1
+                }
                 const currentAnim = { ...nextAnims[index], UseColor: true }
                 if (isAnimTrack(currentAnim.Color)) return
                 currentAnim.Color = [color[0], color[1], color[2]]

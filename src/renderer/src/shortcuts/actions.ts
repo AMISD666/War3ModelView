@@ -419,6 +419,22 @@ export const shortcutActions: ShortcutAction[] = [
         defaultBindings: ['K'],
         preventDefault: true
     },
+    {
+        id: 'timeline.prevKeyframe',
+        label: '上一个关键帧',
+        category: '时间轴',
+        contexts: ['animation'],
+        defaultBindings: ['ArrowLeft'],
+        preventDefault: true
+    },
+    {
+        id: 'timeline.nextKeyframe',
+        label: '下一个关键帧',
+        category: '时间轴',
+        contexts: ['animation'],
+        defaultBindings: ['ArrowRight'],
+        preventDefault: true
+    },
 ]
 
 export const shortcutActionMap = new Map(shortcutActions.map((action) => [action.id, action]))

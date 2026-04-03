@@ -1,8 +1,9 @@
-import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
+import { SmartInputNumber as BaseInputNumber } from '@renderer/components/common/SmartInputNumber'
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Form, Checkbox, Select, Button, Input } from 'antd';
+import { Form, Checkbox, Select, Button, Input, Slider } from 'antd';
 import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker';
+import { UndoOutlined } from '@ant-design/icons';
 
 import { DraggableModal } from '../DraggableModal';
 import { NodeEditorStandaloneShell } from '../common/NodeEditorStandaloneShell';
@@ -19,6 +20,66 @@ import { showMessage } from '../../store/messageStore';
 import { uiText } from '../../constants/uiText';
 import { useNodeEditorPreview } from '../../hooks/useNodeEditorPreview';
 import { NODE_EDITOR_COMMANDS, type NodeEditorCommandSender } from '../../types/nodeEditorRpc';
+
+const DEFERRED_PREVIEW_FIELD_NAMES = new Set([
+    'Visibility',
+    'EmissionRate',
+    'Speed',
+    'Variation',
+    'Latitude',
+    'Width',
+    'Length',
+    'Gravity',
+    'Seg1Alpha',
+    'Seg1Scaling',
+    'Seg2Alpha',
+    'Seg2Scaling',
+    'Seg3Alpha',
+    'Seg3Scaling',
+    'HeadLifeSpanStart',
+    'HeadLifeSpanEnd',
+    'HeadLifeSpanRepeat',
+    'HeadDecayStart',
+    'HeadDecayEnd',
+    'HeadDecayRepeat',
+    'TailLifeSpanStart',
+    'TailLifeSpanEnd',
+    'TailLifeSpanRepeat',
+    'TailDecayStart',
+    'TailDecayEnd',
+    'TailDecayRepeat',
+    'Rows',
+    'LifeSpan',
+    'PriorityPlane',
+    'Time',
+    'Columns',
+    'TailLength',
+    'ReplaceableId',
+]);
+
+const DeferredCommitContext = React.createContext<(() => void) | null>(null);
+
+const InputNumber = React.forwardRef<any, React.ComponentProps<typeof BaseInputNumber>>((props, ref) => {
+    const commitDeferredChanges = React.useContext(DeferredCommitContext);
+    const { onBlur, onPressEnter, ...rest } = props as any;
+
+    return (
+        <BaseInputNumber
+            ref={ref}
+            {...rest}
+            onBlur={(event: any) => {
+                onBlur?.(event);
+                commitDeferredChanges?.();
+            }}
+            onPressEnter={(event: any) => {
+                onPressEnter?.(event);
+                commitDeferredChanges?.();
+            }}
+        />
+    );
+});
+
+InputNumber.displayName = 'ParticleEmitter2DeferredInputNumber';
 
 interface ParticleEmitter2DialogProps {
     visible: boolean;
@@ -69,6 +130,54 @@ const getStaticValue = (val: any, defaultVal: number = 0): number => {
     return Number.isFinite(n) ? n : defaultVal;
 };
 
+const getFiniteNumber = (value: unknown, fallback: number): number => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+};
+
+const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
+
+const normalizeHue = (value: number): number => {
+    const wrapped = value % 360;
+    return wrapped < 0 ? wrapped + 360 : wrapped;
+};
+
+const rgbToHsv = (r: number, g: number, b: number): [number, number, number] => {
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const delta = max - min;
+    let h = 0;
+
+    if (delta > 1e-8) {
+        if (max === r) h = ((g - b) / delta) % 6;
+        else if (max === g) h = (b - r) / delta + 2;
+        else h = (r - g) / delta + 4;
+        h *= 60;
+        if (h < 0) h += 360;
+    }
+
+    const s = max <= 1e-8 ? 0 : delta / max;
+    const v = max;
+    return [h, s, v];
+};
+
+const hsvToRgb = (h: number, s: number, v: number): [number, number, number] => {
+    const hh = normalizeHue(h);
+    const c = v * s;
+    const x = c * (1 - Math.abs(((hh / 60) % 2) - 1));
+    const m = v - c;
+    let r = 0, g = 0, b = 0;
+
+    if (hh < 60) [r, g, b] = [c, x, 0];
+    else if (hh < 120) [r, g, b] = [x, c, 0];
+    else if (hh < 180) [r, g, b] = [0, c, x];
+    else if (hh < 240) [r, g, b] = [0, x, c];
+    else if (hh < 300) [r, g, b] = [x, 0, c];
+    else [r, g, b] = [c, 0, x];
+
+    return [r + m, g + m, b + m];
+};
+
 const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
     visible,
     nodeId,
@@ -84,6 +193,12 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
     const modelData = isStandalone ? standaloneModelData : storeModelData;
     const modelPath = isStandalone ? (standaloneModelPath ?? '') : storeModelPath;
     const [isTextureDropActive, setIsTextureDropActive] = useState(false);
+    const [overallHueShift, setOverallHueShift] = useState(0);
+    const [overallAlphaScale, setOverallAlphaScale] = useState(1);
+    const [overallScaleScale, setOverallScaleScale] = useState(1);
+    const hueBaseColorsRef = useRef<[number, number, number][] | null>(null);
+    const alphaBaseValuesRef = useRef<number[] | null>(null);
+    const scalingBaseValuesRef = useRef<number[] | null>(null);
 
     const currentNode =
         nodeId !== null
@@ -121,6 +236,11 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
     const initialNodeRef = React.useRef<ParticleEmitter2Node | null>(null);
     const isCommittingRef = React.useRef(false);
     const didRealtimePreviewRef = React.useRef(false);
+    const suppressAutoPreviewRef = React.useRef(false);
+    const commitOnUnmountRef = React.useRef<(() => boolean) | null>(null);
+    const clearPreviewOnUnmountRef = React.useRef<(() => void) | null>(null);
+    const standaloneDraftCommitTimerRef = React.useRef<number | null>(null);
+    const deferredPreviewCommitTimerRef = React.useRef<number | null>(null);
     /** 仅在打开对话框或切换 nodeId 时灌入表单，避免 updateNode 导致 currentNode 引用变化而反复 setFieldsValue（失焦、数值被刷成 0） */
     const formHydratedForNodeIdRef = React.useRef<number | null>(null);
 
@@ -143,7 +263,9 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
     // Helper to convert Antd Color to array [r, g, b] (0-1)
     const fromAntdColor = (color: Color | string): [number, number, number] => {
         let r = 1, g = 1, b = 1;
-        if (typeof color === 'string') {            // Parse "rgb(255, 255, 255)"
+        if (typeof color === 'string') {
+            console.log('[ParticleDialog] Parsing color string:', color);
+            // Parse "rgb(255, 255, 255)"
             const match = color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
             if (match) {
                 r = parseInt(match[1]) / 255;
@@ -163,6 +285,33 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
         return [r, g, b];
     };
 
+    const getCurrentSegmentColors = useCallback((): [[number, number, number], [number, number, number], [number, number, number]] => {
+        const values = form.getFieldsValue(['Seg1Color', 'Seg2Color', 'Seg3Color']);
+        return [
+            fromAntdColor(values.Seg1Color ?? 'rgb(255, 255, 255)'),
+            fromAntdColor(values.Seg2Color ?? 'rgb(255, 255, 255)'),
+            fromAntdColor(values.Seg3Color ?? 'rgb(255, 255, 255)'),
+        ];
+    }, [form]);
+
+    const getCurrentSegmentAlpha = useCallback((): [number, number, number] => {
+        const values = form.getFieldsValue(['Seg1Alpha', 'Seg2Alpha', 'Seg3Alpha']);
+        return [
+            clamp(Number(values.Seg1Alpha ?? 255), 0, 255),
+            clamp(Number(values.Seg2Alpha ?? 255), 0, 255),
+            clamp(Number(values.Seg3Alpha ?? 255), 0, 255),
+        ];
+    }, [form]);
+
+    const getCurrentSegmentScaling = useCallback((): [number, number, number] => {
+        const values = form.getFieldsValue(['Seg1Scaling', 'Seg2Scaling', 'Seg3Scaling']);
+        return [
+            Math.max(0, Number(values.Seg1Scaling ?? 1)),
+            Math.max(0, Number(values.Seg2Scaling ?? 1)),
+            Math.max(0, Number(values.Seg3Scaling ?? 1)),
+        ];
+    }, [form]);
+
     useEffect(() => {
         animDataMapRef.current = animDataMap;
     }, [animDataMap]);
@@ -175,6 +324,12 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
             isCommittingRef.current = false;
             didRealtimePreviewRef.current = false;
             formHydratedForNodeIdRef.current = null;
+            hueBaseColorsRef.current = null;
+            alphaBaseValuesRef.current = null;
+            scalingBaseValuesRef.current = null;
+            setOverallHueShift(0);
+            setOverallAlphaScale(1);
+            setOverallScaleScale(1);
             clearPreviewNode();
             return;
         }
@@ -197,6 +352,12 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
         if (!initialNodeRef.current && currentNode) {
             initialNodeRef.current = JSON.parse(JSON.stringify(currentNode));
         }
+        hueBaseColorsRef.current = null;
+        alphaBaseValuesRef.current = null;
+        scalingBaseValuesRef.current = null;
+        setOverallHueShift(0);
+        setOverallAlphaScale(1);
+        setOverallScaleScale(1);
 
         const defaults = {
                 Visibility: 1,
@@ -335,49 +496,89 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
             ...sourceNode,
             TextureID: safeTextureId,
         };
+        form.setFieldValue('TextureID', safeTextureId);
+        if (isStandalone) {
+            applyCommittedNode(previewNode);
+            return;
+        }
         didRealtimePreviewRef.current = true;
         pushPreviewNode(previewNode);
-        form.setFieldValue('TextureID', safeTextureId);
     };
 
     const buildUpdatedNodeFromValues = useCallback((values: any): ParticleEmitter2Node | null => {
         if (!currentNode) return null;
 
         const animMap = animDataMapRef.current;
-
+        const currentSegmentColor = Array.isArray(currentNode.SegmentColor) && currentNode.SegmentColor.length >= 3
+            ? currentNode.SegmentColor
+            : [[1, 1, 1], [1, 1, 1], [1, 1, 1]];
+        const currentAlpha = Array.isArray(currentNode.Alpha) && currentNode.Alpha.length >= 3
+            ? currentNode.Alpha
+            : [255, 255, 255];
+        const currentScaling = Array.isArray(currentNode.ParticleScaling) && currentNode.ParticleScaling.length >= 3
+            ? currentNode.ParticleScaling
+            : [10, 10, 10];
         const updatedNode: ParticleEmitter2Node = {
             ...currentNode,
-            TextureID: Number(values.TextureID),
-            FilterMode: values.FilterMode,
-            Rows: Number(values.Rows),
-            Columns: Number(values.Columns),
-            PriorityPlane: Number(values.PriorityPlane),
-            ReplaceableId: Number(values.ReplaceableId),
+            TextureID: getFiniteNumber(values.TextureID, getFiniteNumber(currentNode.TextureID, -1)),
+            FilterMode: values.FilterMode ?? currentNode.FilterMode ?? 0,
+            Rows: Math.max(1, getFiniteNumber(values.Rows, getFiniteNumber(currentNode.Rows, 1))),
+            Columns: Math.max(1, getFiniteNumber(values.Columns, getFiniteNumber(currentNode.Columns, 1))),
+            PriorityPlane: getFiniteNumber(values.PriorityPlane, getFiniteNumber(currentNode.PriorityPlane, 0)),
+            ReplaceableId: getFiniteNumber(values.ReplaceableId, getFiniteNumber(currentNode.ReplaceableId, 0)),
             SegmentColor: [
-                fromAntdColor(values.Seg1Color),
-                fromAntdColor(values.Seg2Color),
-                fromAntdColor(values.Seg3Color),
+                values.Seg1Color ? fromAntdColor(values.Seg1Color) : currentSegmentColor[0],
+                values.Seg2Color ? fromAntdColor(values.Seg2Color) : currentSegmentColor[1],
+                values.Seg3Color ? fromAntdColor(values.Seg3Color) : currentSegmentColor[2],
             ],
-            Alpha: [Number(values.Seg1Alpha), Number(values.Seg2Alpha), Number(values.Seg3Alpha)],
-            ParticleScaling: [Number(values.Seg1Scaling), Number(values.Seg2Scaling), Number(values.Seg3Scaling)],
-            LifeSpanUVAnim: [Number(values.HeadLifeSpanStart) || 0, Number(values.HeadLifeSpanEnd) || 0, Number(values.HeadLifeSpanRepeat) || 1],
-            DecayUVAnim: [Number(values.HeadDecayStart) || 0, Number(values.HeadDecayEnd) || 0, Number(values.HeadDecayRepeat) || 1],
-            TailUVAnim: [Number(values.TailLifeSpanStart) || 0, Number(values.TailLifeSpanEnd) || 0, Number(values.TailLifeSpanRepeat) || 1],
-            TailDecayUVAnim: [Number(values.TailDecayStart) || 0, Number(values.TailDecayEnd) || 0, Number(values.TailDecayRepeat) || 1],
-            TailLength: Number(values.TailLength),
-            Time: Number(values.Time),
-            LifeSpan: Number(values.LifeSpan),
-            Unshaded: values.Unshaded,
-            Unfogged: values.Unfogged,
-            SortPrimsFarZ: values.SortPrimsFarZ,
-            LineEmitter: values.LineEmitter,
-            ModelSpace: values.ModelSpace,
-            XYQuad: values.XYQuad,
-            Squirt: values.Squirt,
-            Head: values.Head,
-            Tail: values.Tail,
-            Visibility: Number(values.Visibility),
+            Alpha: [
+                clamp(getFiniteNumber(values.Seg1Alpha, currentAlpha[0]), 0, 255),
+                clamp(getFiniteNumber(values.Seg2Alpha, currentAlpha[1]), 0, 255),
+                clamp(getFiniteNumber(values.Seg3Alpha, currentAlpha[2]), 0, 255),
+            ],
+            ParticleScaling: [
+                Math.max(0, getFiniteNumber(values.Seg1Scaling, currentScaling[0])),
+                Math.max(0, getFiniteNumber(values.Seg2Scaling, currentScaling[1])),
+                Math.max(0, getFiniteNumber(values.Seg3Scaling, currentScaling[2])),
+            ],
+            LifeSpanUVAnim: [
+                getFiniteNumber(values.HeadLifeSpanStart, currentNode.LifeSpanUVAnim?.[0] ?? 0),
+                getFiniteNumber(values.HeadLifeSpanEnd, currentNode.LifeSpanUVAnim?.[1] ?? 0),
+                Math.max(1, getFiniteNumber(values.HeadLifeSpanRepeat, currentNode.LifeSpanUVAnim?.[2] ?? 1))
+            ],
+            DecayUVAnim: [
+                getFiniteNumber(values.HeadDecayStart, currentNode.DecayUVAnim?.[0] ?? 0),
+                getFiniteNumber(values.HeadDecayEnd, currentNode.DecayUVAnim?.[1] ?? 0),
+                Math.max(1, getFiniteNumber(values.HeadDecayRepeat, currentNode.DecayUVAnim?.[2] ?? 1))
+            ],
+            TailUVAnim: [
+                getFiniteNumber(values.TailLifeSpanStart, currentNode.TailUVAnim?.[0] ?? 0),
+                getFiniteNumber(values.TailLifeSpanEnd, currentNode.TailUVAnim?.[1] ?? 0),
+                Math.max(1, getFiniteNumber(values.TailLifeSpanRepeat, currentNode.TailUVAnim?.[2] ?? 1))
+            ],
+            TailDecayUVAnim: [
+                getFiniteNumber(values.TailDecayStart, currentNode.TailDecayUVAnim?.[0] ?? 0),
+                getFiniteNumber(values.TailDecayEnd, currentNode.TailDecayUVAnim?.[1] ?? 0),
+                Math.max(1, getFiniteNumber(values.TailDecayRepeat, currentNode.TailDecayUVAnim?.[2] ?? 1))
+            ],
+            TailLength: getFiniteNumber(values.TailLength, getFiniteNumber(currentNode.TailLength, 0)),
+            Time: getFiniteNumber(values.Time, getFiniteNumber(currentNode.Time, 0.5)),
+            LifeSpan: Math.max(0.001, getFiniteNumber(values.LifeSpan, getFiniteNumber(currentNode.LifeSpan, 1))),
+            Unshaded: values.Unshaded ?? currentNode.Unshaded ?? true,
+            Unfogged: values.Unfogged ?? currentNode.Unfogged ?? false,
+            SortPrimsFarZ: values.SortPrimsFarZ ?? currentNode.SortPrimsFarZ ?? false,
+            LineEmitter: values.LineEmitter ?? currentNode.LineEmitter ?? false,
+            ModelSpace: values.ModelSpace ?? currentNode.ModelSpace ?? false,
+            XYQuad: values.XYQuad ?? currentNode.XYQuad ?? false,
+            Squirt: values.Squirt ?? currentNode.Squirt ?? false,
+            Head: values.Head ?? currentNode.Head ?? true,
+            Tail: values.Tail ?? currentNode.Tail ?? false,
+            Visibility: getFiniteNumber(values.Visibility, getStaticValue(currentNode.Visibility, 1)),
         };
+        const frameFlags =
+            (updatedNode.Head ? 1 : 0) |
+            (updatedNode.Tail ? 2 : 0);
+        (updatedNode as any).FrameFlags = frameFlags || 1;
 
         const dynamicProps: Array<{ prop: string }> = [
             { prop: 'EmissionRate' },
@@ -398,7 +599,10 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
                     (updatedNode as any)[animKey] = animMap[prop];
                 }
             } else {
-                (updatedNode as any)[prop] = Number(values[prop]);
+                (updatedNode as any)[prop] = getFiniteNumber(
+                    values[prop],
+                    getStaticValue((currentNode as any)[prop], 0)
+                );
                 if (animKey) {
                     delete (updatedNode as any)[animKey];
                 }
@@ -435,11 +639,103 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
         buildPreviewNode,
     });
 
-    const handleCancel = () => {
-        if (!isCommittingRef.current && didRealtimePreviewRef.current) {
-            clearPreviewNode();
+    const syncStandaloneDraft = useCallback((overrides?: Partial<ParticleEmitter2Node>) => {
+        if (!isStandalone || nodeId === null) return;
+        const values = form.getFieldsValue();
+        const updatedNode = buildUpdatedNodeFromValues(values);
+        if (!updatedNode) return;
+        const nextNode: ParticleEmitter2Node = overrides ? { ...updatedNode, ...overrides } : updatedNode;
+        applyCommittedNode(nextNode);
+    }, [applyCommittedNode, buildUpdatedNodeFromValues, form, isStandalone, nodeId]);
+
+    const flushPreviewNowWithOverrides = useCallback((overrides?: Partial<ParticleEmitter2Node>) => {
+        if (isStandalone) {
+            syncStandaloneDraft(overrides);
+            return;
         }
+        const values = form.getFieldsValue();
+        const updatedNode = buildUpdatedNodeFromValues(values);
+        if (!updatedNode) return;
+        const nextNode: ParticleEmitter2Node = overrides ? { ...updatedNode, ...overrides } : updatedNode;
+        didRealtimePreviewRef.current = true;
+        pushPreviewNode(nextNode);
+    }, [buildUpdatedNodeFromValues, form, isStandalone, pushPreviewNode, syncStandaloneDraft]);
+
+    const commitDeferredPreviewChanges = useCallback(() => {
+        if (suppressAutoPreviewRef.current) {
+            return;
+        }
+        if (deferredPreviewCommitTimerRef.current !== null) {
+            clearTimeout(deferredPreviewCommitTimerRef.current);
+        }
+        deferredPreviewCommitTimerRef.current = window.setTimeout(() => {
+            deferredPreviewCommitTimerRef.current = null;
+            if (isStandalone) {
+                if (standaloneDraftCommitTimerRef.current !== null) {
+                    clearTimeout(standaloneDraftCommitTimerRef.current);
+                    standaloneDraftCommitTimerRef.current = null;
+                }
+                syncStandaloneDraft();
+                return;
+            }
+            schedulePreview();
+        }, 0);
+    }, [isStandalone, schedulePreview, syncStandaloneDraft]);
+
+    const commitCurrentValues = useCallback(() => {
+        if (!currentNode || nodeId === null) return false;
+        const values = form.getFieldsValue();
+        const updatedNode = buildUpdatedNodeFromValues(values);
+        if (!updatedNode) return false;
+
+        const oldNode = initialNodeRef.current || currentNode;
+        isCommittingRef.current = true;
+        applyCommittedNode(updatedNode, {
+            name: `Edit Particle Emitter`,
+            undoNode: oldNode,
+            redoNode: updatedNode,
+        });
+        return true;
+    }, [applyCommittedNode, buildUpdatedNodeFromValues, currentNode, form, nodeId]);
+
+    useEffect(() => {
+        commitOnUnmountRef.current = commitCurrentValues;
+        clearPreviewOnUnmountRef.current = clearPreviewNode;
+    }, [clearPreviewNode, commitCurrentValues]);
+
+    useEffect(() => {
+        return () => {
+            if (deferredPreviewCommitTimerRef.current !== null) {
+                clearTimeout(deferredPreviewCommitTimerRef.current);
+                deferredPreviewCommitTimerRef.current = null;
+            }
+            if (standaloneDraftCommitTimerRef.current !== null) {
+                clearTimeout(standaloneDraftCommitTimerRef.current);
+                standaloneDraftCommitTimerRef.current = null;
+            }
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!isStandalone) return;
+
+        return () => {
+            try {
+                commitOnUnmountRef.current?.();
+            } catch (error) {
+                console.error('[ParticleEmitter2Dialog] failed to commit standalone changes on close:', error);
+            }
+            try {
+                clearPreviewOnUnmountRef.current?.();
+            } catch (error) {
+                console.error('[ParticleEmitter2Dialog] failed to clear standalone preview on close:', error);
+            }
+        };
+    }, [isStandalone]);
+
+    const handleCancel = () => {
         setPresetModalOpen(false);
+        commitCurrentValues();
         onClose();
     };
 
@@ -481,26 +777,6 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
         }
     };
 
-    const handleOk = async () => {
-        try {
-            const values = await form.validateFields();
-            if (!currentNode || nodeId === null) return;
-            const updatedNode = buildUpdatedNodeFromValues(values);
-            if (!updatedNode) return;
-
-            const oldNode = initialNodeRef.current || currentNode;
-            isCommittingRef.current = true;
-            applyCommittedNode(updatedNode, {
-                name: `Edit Particle Emitter`,
-                undoNode: oldNode,
-                redoNode: updatedNode,
-            });
-            onClose();
-        } catch (e) {
-            console.error("Validation failed", e);
-        }
-    };
-
     const [currentEditingTitle, setCurrentEditingTitle] = useState<string>('');
 
     useEffect(() => {
@@ -517,7 +793,11 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
                         return next;
                     });
                     setCurrentEditingProp(null);
-                    schedulePreview();
+                    if (isStandalone) {
+                        syncStandaloneDraft();
+                    } else {
+                        schedulePreview();
+                    }
                 }
             }
         });
@@ -525,7 +805,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
         return () => {
             unlisten.then(f => f());
         };
-    }, [currentEditingProp, schedulePreview]);
+    }, [currentEditingProp, isStandalone, schedulePreview, syncStandaloneDraft]);
 
     const handleOpenKeyframeEditor = (propName: string, title: string) => {
         setCurrentEditingProp(propName);
@@ -571,6 +851,131 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
         }
         schedulePreview();
     };
+
+    const captureOverallAdjustmentBases = useCallback(() => {
+        if (!hueBaseColorsRef.current) {
+            hueBaseColorsRef.current = getCurrentSegmentColors();
+        }
+        if (!alphaBaseValuesRef.current) {
+            alphaBaseValuesRef.current = getCurrentSegmentAlpha();
+        }
+        if (!scalingBaseValuesRef.current) {
+            scalingBaseValuesRef.current = getCurrentSegmentScaling();
+        }
+    }, [getCurrentSegmentAlpha, getCurrentSegmentColors, getCurrentSegmentScaling]);
+
+    const resetOverallHueShift = useCallback(() => {
+        const baseColors = hueBaseColorsRef.current;
+        if (baseColors) {
+            suppressAutoPreviewRef.current = true;
+            form.setFieldsValue({
+                Seg1Color: toAntdColor(baseColors[0]),
+                Seg2Color: toAntdColor(baseColors[1]),
+                Seg3Color: toAntdColor(baseColors[2]),
+            });
+            suppressAutoPreviewRef.current = false;
+            flushPreviewNowWithOverrides({
+                SegmentColor: [...baseColors],
+            });
+        }
+        hueBaseColorsRef.current = null;
+        setOverallHueShift(0);
+    }, [flushPreviewNowWithOverrides, form]);
+
+    const resetOverallAlphaScale = useCallback(() => {
+        const baseAlpha = alphaBaseValuesRef.current;
+        if (baseAlpha) {
+            suppressAutoPreviewRef.current = true;
+            form.setFieldsValue({
+                Seg1Alpha: baseAlpha[0],
+                Seg2Alpha: baseAlpha[1],
+                Seg3Alpha: baseAlpha[2],
+            });
+            suppressAutoPreviewRef.current = false;
+            flushPreviewNowWithOverrides({
+                Alpha: [baseAlpha[0], baseAlpha[1], baseAlpha[2]],
+            });
+        }
+        alphaBaseValuesRef.current = null;
+        setOverallAlphaScale(1);
+    }, [flushPreviewNowWithOverrides, form]);
+
+    const resetOverallScaleScale = useCallback(() => {
+        const baseScaling = scalingBaseValuesRef.current;
+        if (baseScaling) {
+            suppressAutoPreviewRef.current = true;
+            form.setFieldsValue({
+                Seg1Scaling: baseScaling[0],
+                Seg2Scaling: baseScaling[1],
+                Seg3Scaling: baseScaling[2],
+            });
+            suppressAutoPreviewRef.current = false;
+            flushPreviewNowWithOverrides({
+                ParticleScaling: [baseScaling[0], baseScaling[1], baseScaling[2]],
+            });
+        }
+        scalingBaseValuesRef.current = null;
+        setOverallScaleScale(1);
+    }, [flushPreviewNowWithOverrides, form]);
+
+    const applyOverallHueShift = useCallback((nextShift: number, flushNow: boolean) => {
+        captureOverallAdjustmentBases();
+        const baseColors = hueBaseColorsRef.current;
+        if (!baseColors) return;
+
+        const shiftedColors = baseColors.map((rgb) => {
+            const [h, s, v] = rgbToHsv(rgb[0], rgb[1], rgb[2]);
+            return hsvToRgb(h + nextShift, s, v);
+        }) as [[number, number, number], [number, number, number], [number, number, number]];
+
+        suppressAutoPreviewRef.current = !flushNow;
+        form.setFieldsValue({
+            Seg1Color: toAntdColor(shiftedColors[0]),
+            Seg2Color: toAntdColor(shiftedColors[1]),
+            Seg3Color: toAntdColor(shiftedColors[2]),
+        });
+        suppressAutoPreviewRef.current = false;
+        setOverallHueShift(nextShift);
+        if (flushNow) {
+            flushPreviewNowWithOverrides({ SegmentColor: shiftedColors });
+        }
+    }, [captureOverallAdjustmentBases, flushPreviewNowWithOverrides, form]);
+
+    const applyOverallAlphaScale = useCallback((nextScale: number, flushNow: boolean) => {
+        captureOverallAdjustmentBases();
+        const baseAlpha = alphaBaseValuesRef.current;
+        if (!baseAlpha) return;
+        const scaledAlpha = baseAlpha.map((value) => clamp(Math.round(value * nextScale), 0, 255)) as [number, number, number];
+        suppressAutoPreviewRef.current = !flushNow;
+        form.setFieldsValue({
+            Seg1Alpha: scaledAlpha[0],
+            Seg2Alpha: scaledAlpha[1],
+            Seg3Alpha: scaledAlpha[2],
+        });
+        suppressAutoPreviewRef.current = false;
+        setOverallAlphaScale(nextScale);
+        if (flushNow) {
+            flushPreviewNowWithOverrides({ Alpha: scaledAlpha });
+        }
+    }, [captureOverallAdjustmentBases, flushPreviewNowWithOverrides, form]);
+
+    const applyOverallScaleScale = useCallback((nextScale: number, flushNow: boolean) => {
+        captureOverallAdjustmentBases();
+        const baseScaling = scalingBaseValuesRef.current;
+        if (!baseScaling) return;
+        const scaledValues = baseScaling.map((value) => Math.max(0, Number((value * nextScale).toFixed(3)))) as [number, number, number];
+        suppressAutoPreviewRef.current = !flushNow;
+        form.setFieldsValue({
+            Seg1Scaling: scaledValues[0],
+            Seg2Scaling: scaledValues[1],
+            Seg3Scaling: scaledValues[2],
+        });
+        suppressAutoPreviewRef.current = false;
+        setOverallScaleScale(nextScale);
+        if (flushNow) {
+            flushPreviewNowWithOverrides({ ParticleScaling: scaledValues });
+        }
+    }, [captureOverallAdjustmentBases, flushPreviewNowWithOverrides, form]);
 
     // --- New Components ---
 
@@ -726,38 +1131,80 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
         </div>
     );
 
+    const ColorFieldControl = ({ name, committedValue }: { name: string; committedValue: string }) => {
+        const [draftValue, setDraftValue] = useState(committedValue)
+        const [pickerOpen, setPickerOpen] = useState(false)
+
+        useEffect(() => {
+            if (!pickerOpen) {
+                setDraftValue(committedValue)
+            }
+        }, [committedValue, pickerOpen])
+
+        const commitColorValue = useCallback((rawValue: string) => {
+            const nextValue = rawValue.trim() || 'rgb(255, 255, 255)'
+            if (nextValue !== committedValue) {
+                form.setFieldValue(name, nextValue)
+            }
+            setDraftValue(nextValue)
+        }, [committedValue, form, name])
+
+        const commitDraftValue = useCallback(() => {
+            commitColorValue(draftValue)
+        }, [commitColorValue, draftValue])
+
+        return (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
+                <ColorPicker
+                    size="small"
+                    showText={false}
+                    format="rgb"
+                    value={draftValue}
+                    open={pickerOpen}
+                    onOpenChange={(nextOpen) => {
+                        setPickerOpen(nextOpen)
+                        if (nextOpen) {
+                            setDraftValue(committedValue)
+                        }
+                    }}
+                    onChange={(color) => {
+                        setDraftValue(
+                            color && typeof color.toRgbString === 'function'
+                                ? color.toRgbString()
+                                : committedValue
+                        )
+                    }}
+                    onChangeComplete={(color) => {
+                        const nextValue =
+                            color && typeof color.toRgbString === 'function'
+                                ? color.toRgbString()
+                                : committedValue
+                        commitColorValue(nextValue)
+                    }}
+                />
+                <Input
+                    size="small"
+                    value={draftValue}
+                    onChange={(e) => setDraftValue(e.target.value)}
+                    onBlur={commitDraftValue}
+                    onPressEnter={commitDraftValue}
+                    placeholder="rgb(255, 255, 255)"
+                    style={{ flex: 1, minWidth: 0 }}
+                />
+            </div>
+        )
+    }
+
     const ColorField = ({ name }: { name: string }) => (
-        <Form.Item shouldUpdate noStyle>
+        <Form.Item shouldUpdate={(prevValues, nextValues) => prevValues?.[name] !== nextValues?.[name]} noStyle>
             {() => {
                 const rawValue = form.getFieldValue(name)
-                const value = typeof rawValue === 'string'
+                const committedValue = typeof rawValue === 'string'
                     ? rawValue
                     : rawValue && typeof rawValue.toRgbString === 'function'
                         ? rawValue.toRgbString()
                         : 'rgb(255, 255, 255)'
-                return (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
-                        <Form.Item
-                            name={name}
-                            noStyle
-                            trigger="onChange"
-                            getValueFromEvent={(color: any) =>
-                                color && typeof color.toRgbString === 'function'
-                                    ? color.toRgbString()
-                                    : value
-                            }
-                        >
-                            <ColorPicker size="small" showText={false} format="rgb" />
-                        </Form.Item>
-                        <Input
-                            size="small"
-                            value={value}
-                            onChange={(e) => form.setFieldValue(name, e.target.value)}
-                            placeholder="rgb(255, 255, 255)"
-                            style={{ flex: 1, minWidth: 0 }}
-                        />
-                    </div>
-                )
+                return <ColorFieldControl name={name} committedValue={committedValue} />
             }}
         </Form.Item>
     )
@@ -793,10 +1240,40 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
     textureOptions.unshift({ label: '(None)', value: -1 });
 
     const pe2FormEl = (
+        <DeferredCommitContext.Provider value={commitDeferredPreviewChanges}>
             <Form
                 form={form}
                 layout="vertical"
-                onValuesChange={() => {
+                onValuesChange={(changedValues) => {
+                    if ('Seg1Color' in changedValues || 'Seg2Color' in changedValues || 'Seg3Color' in changedValues) {
+                        hueBaseColorsRef.current = null;
+                        setOverallHueShift(0);
+                    }
+                    if ('Seg1Alpha' in changedValues || 'Seg2Alpha' in changedValues || 'Seg3Alpha' in changedValues) {
+                        alphaBaseValuesRef.current = null;
+                        setOverallAlphaScale(1);
+                    }
+                    if ('Seg1Scaling' in changedValues || 'Seg2Scaling' in changedValues || 'Seg3Scaling' in changedValues) {
+                        scalingBaseValuesRef.current = null;
+                        setOverallScaleScale(1);
+                    }
+                    if (suppressAutoPreviewRef.current) {
+                        return;
+                    }
+                    const changedKeys = Object.keys(changedValues);
+                    if (changedKeys.some((key) => DEFERRED_PREVIEW_FIELD_NAMES.has(key))) {
+                        return;
+                    }
+                    if (isStandalone) {
+                        if (standaloneDraftCommitTimerRef.current !== null) {
+                            clearTimeout(standaloneDraftCommitTimerRef.current);
+                        }
+                        standaloneDraftCommitTimerRef.current = window.setTimeout(() => {
+                            standaloneDraftCommitTimerRef.current = null;
+                            syncStandaloneDraft();
+                        }, 60);
+                        return;
+                    }
                     schedulePreview();
                 }}
             >
@@ -828,6 +1305,62 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
                     {/* LEFT COLUMN: Segments, Lifecycle, Others */}
                     <div style={{ flex: 1 }}>
                         {/* Segments */}
+                        <div style={{ border: '1px solid #484848', padding: '10px 8px', marginTop: 8, backgroundColor: '#2b2b2b' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                                    <span style={{ color: '#ccc', fontSize: 12, whiteSpace: 'nowrap' }}>整体色相</span>
+                                    <Slider
+                                        min={-180}
+                                        max={180}
+                                        step={1}
+                                        value={overallHueShift}
+                                        onChange={(value) => applyOverallHueShift(value, false)}
+                                        onChangeComplete={(value) => applyOverallHueShift(value, true)}
+                                        tooltip={{ formatter: (value) => `${value ?? 0}°` }}
+                                        style={{ width: 150, margin: 0 }}
+                                        styles={{
+                                            rail: { background: 'linear-gradient(90deg, #ff4d4f, #faad14, #95de64, #5cdbd3, #597ef7, #b37feb, #ff4d4f)' },
+                                            track: { background: 'transparent' },
+                                        }}
+                                    />
+                                    <Button size="small" icon={<UndoOutlined />} onClick={resetOverallHueShift} title="重置整体色相" aria-label="重置整体色相" />
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                                    <span style={{ color: '#ccc', fontSize: 12, whiteSpace: 'nowrap' }}>整体透明</span>
+                                    <Slider
+                                        min={0}
+                                        max={2}
+                                        step={0.01}
+                                        value={overallAlphaScale}
+                                        onChange={(value) => applyOverallAlphaScale(value, false)}
+                                        onChangeComplete={(value) => applyOverallAlphaScale(value, true)}
+                                        tooltip={{ formatter: (value) => `${Math.round((value ?? 1) * 100)}%` }}
+                                        style={{ width: 140, margin: 0 }}
+                                        styles={{
+                                            rail: { background: 'linear-gradient(90deg, #4b4b4b, #e8e8e8)' },
+                                        }}
+                                    />
+                                    <Button size="small" icon={<UndoOutlined />} onClick={resetOverallAlphaScale} title="重置整体透明" aria-label="重置整体透明" />
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                                    <span style={{ color: '#ccc', fontSize: 12, whiteSpace: 'nowrap' }}>整体缩放</span>
+                                    <Slider
+                                        min={0}
+                                        max={10}
+                                        step={0.01}
+                                        value={overallScaleScale}
+                                        onChange={(value) => applyOverallScaleScale(value, false)}
+                                        onChangeComplete={(value) => applyOverallScaleScale(value, true)}
+                                        tooltip={{ formatter: (value) => `${(value ?? 1).toFixed(2)}x` }}
+                                        style={{ width: 140, margin: 0 }}
+                                        styles={{
+                                            rail: { background: 'linear-gradient(90deg, #5b8c00, #d3f261)' },
+                                        }}
+                                    />
+                                    <Button size="small" icon={<UndoOutlined />} onClick={resetOverallScaleScale} title="重置整体缩放" aria-label="重置整体缩放" />
+                                </div>
+                            </div>
+                        </div>
                         <div style={{ display: 'flex', gap: 8 }}>
                             <div style={{ flex: 1 }}><SegmentBox title={uiText.particleEmitter2Dialog.segment1} prefix="Seg1" /></div>
                             <div style={{ flex: 1 }}><SegmentBox title={uiText.particleEmitter2Dialog.segment2} prefix="Seg2" /></div>
@@ -961,14 +1494,13 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
 
                             {/* Buttons inside Flags Box (Bottom) */}
                             <div style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                <Button onClick={handleOk} type="primary" size="small" block>{uiText.particleEmitter2Dialog.confirm}</Button>
-                                <Button onClick={handleCancel} size="small" block>{uiText.particleEmitter2Dialog.cancel}</Button>
                                 <Button onClick={handleOpenPresetModal} size="small" block>{uiText.particleEmitter2Dialog.savePreset}</Button>
                             </div>
                         </div>
                     </div>
                 </div>
             </Form>
+        </DeferredCommitContext.Provider>
     );
 
     const pe2PresetPortal = presetModalOpen && typeof document !== 'undefined' ? createPortal(
@@ -1022,7 +1554,6 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
         <DraggableModal
             title={uiText.particleEmitter2Dialog.title}
             open={visible}
-            onOk={handleOk}
             onCancel={handleCancel}
             footer={null} // Hide default footer
             width={850}

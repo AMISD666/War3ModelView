@@ -14,7 +14,7 @@ type WarmWindowSpec = {
 const WARMUP_WINDOWS: WarmWindowSpec[] = [
     { id: 'materialManager', title: '材质管理器', w: 740, h: 450 },
     { id: 'textureManager', title: '贴图管理器', w: 920, h: 480 },
-    { id: 'geosetEditor', title: '多边形管理器', w: 660, h: 520 },
+    { id: 'geosetEditor', title: '多边形管理器', w: 420, h: 520 },
     { id: 'sequenceManager', title: '动画管理器', w: 600, h: 500 },
     { id: 'cameraManager', title: '相机管理器', w: 700, h: 520 },
     { id: 'textureAnimManager', title: '贴图动画管理器', w: 800, h: 480 },

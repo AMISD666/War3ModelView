@@ -32,6 +32,7 @@ const RightFloatingPanelShell: React.FC<RightFloatingPanelShellProps> = ({
                 color: '#ddd',
                 display: 'flex',
                 flexDirection: 'column',
+                flexShrink: 0,
                 boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
                 pointerEvents: 'auto',
                 overflow: 'hidden',

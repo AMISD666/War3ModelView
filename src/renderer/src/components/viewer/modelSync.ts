@@ -81,14 +81,15 @@ export function syncParticleEmitters2InPlace(currentEmitters: any[], nextEmitter
         const oid = em?.ObjectId
         const next = typeof oid === 'number' ? nextById.get(oid) : undefined
         if (!next) continue
-        Object.assign(em, next)
-        const anim = em.VisibilityAnim
+        const merged = { ...em, ...next }
+        const anim = merged.VisibilityAnim
         if (anim != null && typeof anim === 'object' && anim.Keys != null) {
-            const v = em.Visibility
+            const v = merged.Visibility
             if (v == null || typeof v === 'number') {
-                em.Visibility = anim
+                merged.Visibility = anim
             }
         }
+        currentEmitters[i] = merged
     }
 }
 

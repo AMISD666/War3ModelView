@@ -1,4 +1,4 @@
-import {
+﻿import {
     ParticleEmitter2, ParticleEmitter2FilterMode, ParticleEmitter2Flags,
     ParticleEmitter2FramesFlags
 } from '../model';
@@ -69,7 +69,7 @@ function getEmitterMatrix(rendererData: RendererData, objectId: number): mat4 {
 
 const ZERO_PIVOT: [number, number, number] = [0, 0, 0];
 
-/** 解析发射器局部轴心：节点包装器 → 发射器 props → 全局 PIVT 表（避免热同步后 node 与 PE2 对象引用分裂导致误用 [0,0,0]） */
+/** 瑙ｆ瀽鍙戝皠鍣ㄥ眬閮ㄨ酱蹇冿細鑺傜偣鍖呰鍣?鈫?鍙戝皠鍣?props 鈫?鍏ㄥ眬 PIVT 琛紙閬垮厤鐑悓姝ュ悗 node 涓?PE2 瀵硅薄寮曠敤鍒嗚瀵艰嚧璇敤 [0,0,0]锛?*/
 function resolveEmitterPivot(rendererData: RendererData, emitterProps: ParticleEmitter2): [number, number, number] {
     const oid = emitterProps.ObjectId;
     if (typeof oid !== 'number' || oid < 0) {
@@ -440,8 +440,8 @@ export class ParticlesController {
             return;
         }
 
-        // 仅按长度与槽位 ObjectId 判断结构变化。勿用 emitter.type !== FrameFlags：
-        // 轻量同步用 Object.assign 原地改 props 时，wrapper.type 可能未与 props.FrameFlags 同步，会误判为结构变化并整表销毁 → 粒子消失。
+        // Only treat length/ObjectId changes as structural changes.
+        // FrameFlags changes are handled per-emitter below so Head/Tail toggles rebuild safely.
         const structuralMismatch =
             this.emitters.length !== particleEmitters.length ||
             this.emitters.some((emitter, index) => {
@@ -459,12 +459,21 @@ export class ParticlesController {
 
         for (let i = 0; i < this.emitters.length; ++i) {
             const newProps = particleEmitters[i];
-            const oldProps = this.emitters[i].props;
+            const emitter = this.emitters[i];
+            const oldProps = emitter.props;
+            const previousType = emitter.type || 1;
+            const nextType = newProps.FrameFlags || 1;
 
-            this.emitters[i].index = i;
-            this.emitters[i].props = newProps;
+            if (previousType !== nextType) {
+                this.destroyEmitterWrapper(emitter);
+                this.emitters[i] = this.createEmitterWrapper(newProps, i);
+                continue;
+            }
 
-            const needsInitialSync = this.emitters[i]._needsInitialSync === true;
+            emitter.index = i;
+            emitter.props = newProps;
+
+            const needsInitialSync = emitter._needsInitialSync === true;
             const propsChanged = needsInitialSync ||
                 oldProps !== newProps ||
                 oldProps.LifeSpan !== newProps.LifeSpan ||
@@ -481,23 +490,22 @@ export class ParticlesController {
                 oldProps.XYQuad !== newProps.XYQuad;
 
             if (propsChanged) {
-                for (const particle of this.emitters[i].particles) {
+                for (const particle of emitter.particles) {
                     this.particleStorage.push(particle);
                 }
-                this.emitters[i].particles = [];
-                this.emitters[i]._xyQuadLogged = false;
-                this.emitters[i]._velocityLogged = false;
-                this.emitters[i]._needsInitialSync = false;
+                emitter.particles = [];
+                emitter._xyQuadLogged = false;
+                emitter._velocityLogged = false;
+                emitter._needsInitialSync = false;
             }
 
-            // Object.assign 原地更新时 EmissionRate 引用可能不变 → propsChanged 为 false，但 Keys 已修复，须每帧重算容量
             const emissionRate = newProps.EmissionRate;
             const lifeSpan = newProps.LifeSpan || 1;
-            this.emitters[i].baseCapacity = Math.ceil(
+            emitter.baseCapacity = Math.ceil(
                 ModelInterp.maxAnimVectorVal(emissionRate) * lifeSpan
             );
-            // 每帧与 props 对齐 Head/Tail 位，避免 type 漂移导致渲染路径与数据不一致
-            this.emitters[i].type = newProps.FrameFlags || 1;
+            // Keep wrapper type aligned with props for steady-state updates.
+            emitter.type = nextType;
         }
     }
 
@@ -757,7 +765,14 @@ export class ParticlesController {
 
 
     private resizeEmitterBuffers(emitter: ParticleEmitterWrapper, size: number): void {
-        if (size <= emitter.capacity) {
+        const needsHeadBuffers =
+            (emitter.type & ParticleEmitter2FramesFlags.Head) &&
+            (!emitter.headVertices || !emitter.headTexCoords);
+        const needsTailBuffers =
+            (emitter.type & ParticleEmitter2FramesFlags.Tail) &&
+            (!emitter.tailVertices || !emitter.tailTexCoords);
+
+        if (size <= emitter.capacity && !needsHeadBuffers && !needsTailBuffers) {
             return;
         }
 
@@ -898,10 +913,10 @@ export class ParticlesController {
             this.setLayerProps(emitter);
             this.setGeneralBuffers(emitter);
 
-            if (emitter.type & ParticleEmitter2FramesFlags.Tail) {
+            if ((emitter.type & ParticleEmitter2FramesFlags.Tail) && emitter.tailVertices && emitter.tailTexCoords) {
                 this.renderEmitterType(emitter, ParticleEmitter2FramesFlags.Tail);
             }
-            if (emitter.type & ParticleEmitter2FramesFlags.Head) {
+            if ((emitter.type & ParticleEmitter2FramesFlags.Head) && emitter.headVertices && emitter.headTexCoords) {
                 this.renderEmitterType(emitter, ParticleEmitter2FramesFlags.Head);
             }
         }
@@ -1010,10 +1025,22 @@ export class ParticlesController {
             pass.setVertexBuffer(2, emitter.colorGPUBuffer);
             pass.setIndexBuffer(emitter.indexGPUBuffer, 'uint16');
 
-            if (emitter.type & ParticleEmitter2FramesFlags.Tail) {
+            if (
+                (emitter.type & ParticleEmitter2FramesFlags.Tail) &&
+                emitter.tailVertices &&
+                emitter.tailTexCoords &&
+                emitter.tailVertexGPUBuffer &&
+                emitter.tailTexCoordGPUBuffer
+            ) {
                 this.renderGPUEmitterType(pass, emitter, ParticleEmitter2FramesFlags.Tail);
             }
-            if (emitter.type & ParticleEmitter2FramesFlags.Head) {
+            if (
+                (emitter.type & ParticleEmitter2FramesFlags.Head) &&
+                emitter.headVertices &&
+                emitter.headTexCoords &&
+                emitter.headVertexGPUBuffer &&
+                emitter.headTexCoordGPUBuffer
+            ) {
                 this.renderGPUEmitterType(pass, emitter, ParticleEmitter2FramesFlags.Head);
             }
         }
@@ -1226,10 +1253,10 @@ export class ParticlesController {
             vec3.copy(particleWorldSpeed, particle.speed);
         }
 
-        if (emitter.type & ParticleEmitter2FramesFlags.Head) {
-            const isXYQuad = hasParticleFlag(emitter.props, ParticleEmitter2Flags.XYQuad);
-            const cosA = Math.cos(particle.angle);
-            const sinA = Math.sin(particle.angle);
+            if ((emitter.type & ParticleEmitter2FramesFlags.Head) && emitter.headVertices && emitter.headTexCoords) {
+                const isXYQuad = hasParticleFlag(emitter.props, ParticleEmitter2Flags.XYQuad);
+                const cosA = Math.cos(particle.angle);
+                const sinA = Math.sin(particle.angle);
 
             for (let i = 0; i < 4; ++i) {
                 const baseX = this.particleBaseVectors[i][0] * scale;
@@ -1262,7 +1289,7 @@ export class ParticlesController {
             }
         }
 
-        if (emitter.type & ParticleEmitter2FramesFlags.Tail) {
+        if ((emitter.type & ParticleEmitter2FramesFlags.Tail) && emitter.tailVertices) {
             tailPos[0] = -particleWorldSpeed[0] * emitter.props.TailLength;
             tailPos[1] = -particleWorldSpeed[1] * emitter.props.TailLength;
             tailPos[2] = -particleWorldSpeed[2] * emitter.props.TailLength;
@@ -1310,10 +1337,10 @@ export class ParticlesController {
         }
     }
     private updateParticleTexCoords(index: number, emitter: ParticleEmitterWrapper, firstHalf: boolean, t: number) {
-        if (emitter.type & ParticleEmitter2FramesFlags.Head) {
+        if ((emitter.type & ParticleEmitter2FramesFlags.Head) && emitter.headTexCoords) {
             this.updateParticleTexCoordsByType(index, emitter, firstHalf, t, ParticleEmitter2FramesFlags.Head);
         }
-        if (emitter.type & ParticleEmitter2FramesFlags.Tail) {
+        if ((emitter.type & ParticleEmitter2FramesFlags.Tail) && emitter.tailTexCoords) {
             this.updateParticleTexCoordsByType(index, emitter, firstHalf, t, ParticleEmitter2FramesFlags.Tail);
         }
     }
@@ -1419,8 +1446,7 @@ export class ParticlesController {
         const defaultColor = [1, 1, 1];
         const defaultAlpha = 255;
 
-        // SegmentColor：MDX 解析后为 RGB 顺序，与着色器顶点色一致，不做 R/B 交换（此前交换会导致红蓝对调）
-
+        // SegmentColor锛歁DX 瑙ｆ瀽鍚庝负 RGB 椤哄簭锛屼笌鐫€鑹插櫒椤剁偣鑹蹭竴鑷达紝涓嶅仛 R/B 浜ゆ崲锛堟鍓嶄氦鎹細瀵艰嚧绾㈣摑瀵硅皟锛?
         // Get safe color values
         const getColor = (idx: number): number[] => {
             if (segColor && Array.isArray(segColor) && segColor[idx]) {
@@ -1560,8 +1586,6 @@ export class ParticlesController {
         this.gl.drawElements(this.gl.TRIANGLES, emitter.particles.length * 6, this.gl.UNSIGNED_SHORT, 0);
     }
 }
-
-
 
 
 

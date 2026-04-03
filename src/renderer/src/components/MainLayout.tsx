@@ -1799,6 +1799,23 @@ const MainLayout: React.FC = () => {
             // Exclude huge arrays: Vertices, Faces, Normals, TVertices, Tangents
         }));
     };
+    const toRpcSafeNodeSnapshot = (value: any): any => {
+        if (value == null) return value
+        if (ArrayBuffer.isView(value)) {
+            return Array.from(value as ArrayLike<number>)
+        }
+        if (Array.isArray(value)) {
+            return value.map((entry) => toRpcSafeNodeSnapshot(entry))
+        }
+        if (typeof value === 'object') {
+            const result: Record<string, any> = {}
+            Object.entries(value).forEach(([key, entry]) => {
+                result[key] = toRpcSafeNodeSnapshot(entry)
+            })
+            return result
+        }
+        return value
+    }
 
     const [showGeosetModal, setShowGeosetModal] = useState<boolean>(false)
     const [showModelOptimizeModal, setShowModelOptimizeModal] = useState<boolean>(false)
@@ -1903,9 +1920,9 @@ const MainLayout: React.FC = () => {
         let cloned: any = null
         if (node) {
             try {
-                cloned = structuredClone(node)
+                cloned = toRpcSafeNodeSnapshot(structuredClone(node))
             } catch {
-                cloned = JSON.parse(JSON.stringify(node))
+                cloned = toRpcSafeNodeSnapshot(node)
             }
         }
         return {
@@ -5043,4 +5060,3 @@ const MainLayout: React.FC = () => {
 }
 
 export default MainLayout
-

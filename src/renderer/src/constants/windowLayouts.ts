@@ -20,7 +20,7 @@ export type WindowSize = {
 
 export const TOOL_WINDOW_SIZES: Record<ToolWindowId, WindowSize> = {
     cameraManager: { width: 680, height: 520 },
-    geosetEditor: { width: 850, height: 480 },
+    geosetEditor: { width: 660, height: 480 },
     geosetVisibilityTool: { width: 980, height: 560 },
     textureManager: { width: 920, height: 480 },
     textureAnimManager: { width: 800, height: 480 },

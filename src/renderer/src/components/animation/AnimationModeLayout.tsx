@@ -266,20 +266,33 @@ const AnimationModeLayout: React.FC<AnimationModeLayoutProps> = ({
                         borderLeft: '1px solid #444',
                         display: 'flex',
                         flexDirection: 'column',
-                        padding: '8px 6px',
-                        gap: 8,
-                        overflowY: 'auto',
-                        overflowX: 'hidden',
+                        height: '100%',
+                        minHeight: 0,
+                        overflow: 'hidden',
                         zIndex: 10,
                         alignItems: 'stretch'
                     }}
                 >
-                    <>
+                    <div
+                        style={{
+                            flex: 1,
+                            height: '100%',
+                            minHeight: 0,
+                            padding: '8px 6px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 8,
+                            overflowY: 'scroll',
+                            overflowX: 'hidden',
+                            scrollbarGutter: 'stable',
+                            overscrollBehavior: 'contain'
+                        }}
+                    >
                         <TextureAnimGizmoPanel />
                         <ParticleAnimKeyframePanel />
                         <GeosetAnimPanel />
                         <MaterialAnimPanel />
-                    </>
+                    </div>
                 </div>
             )}
         </div>

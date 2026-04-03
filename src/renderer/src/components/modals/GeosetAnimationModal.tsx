@@ -26,8 +26,7 @@ interface GeosetAnimationModalProps {
 
 const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, onClose, isStandalone }) => {
     const { modelData, updateGeosetAnim, setGeosetAnims } = useModelStore()
-    const rpcClient = useRpcClient<any>('geosetAnimManager', { geosets: [], geosetAnims: [], globalSequences: [], pickedGeosetIndex: null })
-    const rpcState = rpcClient.state
+    const { state: rpcState, emitCommand } = useRpcClient<any>('geosetAnimManager', { geosets: [], geosetAnims: [], globalSequences: [], pickedGeosetIndex: null })
 
     const [localAnims, setLocalAnims] = useState<any[]>([])
     const [selectedIndex, setSelectedIndex] = useState<number>(-1)
@@ -168,7 +167,7 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
 
     const saveToBackend = (anims: any[]) => {
         if (isStandalone) {
-            rpcClient.sendCommand('EXECUTE_ANIM_ACTION', { action: 'UPDATE_GEOSET_ANIMS', payload: anims });
+            emitCommand('EXECUTE_ANIM_ACTION', { action: 'UPDATE_GEOSET_ANIMS', payload: anims });
         } else if (setGeosetAnims) {
             setGeosetAnims(anims)
         } else {
@@ -621,5 +620,4 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
 }
 
 export default GeosetAnimationModal
-
 

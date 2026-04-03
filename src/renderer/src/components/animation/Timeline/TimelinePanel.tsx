@@ -2349,40 +2349,6 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         return () => window.cancelAnimationFrame(rafId)
     }, [contextMenu.visible, contextMenu.x, contextMenu.y])
 
-    useEffect(() => {
-        if (!isActive) return
-
-        const unsubscribeHandlers = [
-            registerShortcutHandler('timeline.deleteKeyframes', () => {
-                if (selectedKeyframeUids.size === 0) return false
-                deleteSelectedKeyframes()
-                return true
-            }),
-            registerShortcutHandler('timeline.copyKeyframes', () => {
-                if (selectedKeyframeUids.size === 0) return false
-                copyKeyframes(false)
-                return true
-            }),
-            registerShortcutHandler('timeline.cutKeyframes', () => {
-                if (selectedKeyframeUids.size === 0) return false
-                copyKeyframes(true)
-                return true
-            }),
-            registerShortcutHandler('timeline.pasteKeyframes', () => {
-                if (!effectiveClipboard) return false
-                pasteKeyframes()
-                return true
-            }),
-            registerShortcutHandler('timeline.quickKeyframe', () => {
-                return insertKeyframesForSelectedNodes()
-            })
-        ]
-
-        return () => {
-            unsubscribeHandlers.forEach((unsubscribe) => unsubscribe())
-        }
-    }, [isActive, selectedKeyframeUids, effectiveClipboard, deleteSelectedKeyframes, copyKeyframes, pasteKeyframes, insertKeyframesForSelectedNodes])
-
     // --- Global Window Handlers for Robust Dragging ---
 
     const handleGlobalMouseMove = useCallback((e: MouseEvent) => {
@@ -3112,6 +3078,30 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     const handlePrevFrame = () => { setFrame(Math.max(seqStart, Math.round(frameRef.current) - 33)) }
     const handleNextFrame = () => { setFrame(Math.min(seqEnd, Math.round(frameRef.current) + 33)) }
     const handleGoToEnd = () => { setFrame(seqEnd); setDisplayFrame(seqEnd) }
+    const jumpToAdjacentKeyframe = useCallback((direction: -1 | 1) => {
+        const frames = Array.from(new Set(
+            activeKeyframesRef.current
+                .filter((kf) => {
+                    if (!isKeyframeTypeVisible(kf.type, keyframeDisplayModeRef.current)) return false
+                    return kf.frame >= seqStartRef.current && kf.frame <= seqEndRef.current
+                })
+                .map((kf) => Math.round(kf.frame))
+        )).sort((a, b) => a - b)
+
+        if (frames.length === 0) return false
+
+        const currentFrame = Math.round(frameRef.current)
+        const targetFrame = direction < 0
+            ? [...frames].reverse().find((frame) => frame < currentFrame)
+            : frames.find((frame) => frame > currentFrame)
+
+        if (typeof targetFrame !== 'number') return false
+
+        updateFrame(targetFrame)
+        setDisplayFrame(targetFrame)
+        confirmScrub()
+        return true
+    }, [confirmScrub])
 
     // Toolbar Handlers
     const handleFrameInputChange = (e: any) => {
@@ -3121,6 +3111,46 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             setDisplayFrame(val)
         }
     }
+
+    useEffect(() => {
+        if (!isActive) return
+
+        const unsubscribeHandlers = [
+            registerShortcutHandler('timeline.deleteKeyframes', () => {
+                if (selectedKeyframeUids.size === 0) return false
+                deleteSelectedKeyframes()
+                return true
+            }),
+            registerShortcutHandler('timeline.copyKeyframes', () => {
+                if (selectedKeyframeUids.size === 0) return false
+                copyKeyframes(false)
+                return true
+            }),
+            registerShortcutHandler('timeline.cutKeyframes', () => {
+                if (selectedKeyframeUids.size === 0) return false
+                copyKeyframes(true)
+                return true
+            }),
+            registerShortcutHandler('timeline.pasteKeyframes', () => {
+                if (!effectiveClipboard) return false
+                pasteKeyframes()
+                return true
+            }),
+            registerShortcutHandler('timeline.quickKeyframe', () => {
+                return insertKeyframesForSelectedNodes()
+            }),
+            registerShortcutHandler('timeline.prevKeyframe', () => {
+                return jumpToAdjacentKeyframe(-1)
+            }),
+            registerShortcutHandler('timeline.nextKeyframe', () => {
+                return jumpToAdjacentKeyframe(1)
+            })
+        ]
+
+        return () => {
+            unsubscribeHandlers.forEach((unsubscribe) => unsubscribe())
+        }
+    }, [isActive, selectedKeyframeUids, effectiveClipboard, deleteSelectedKeyframes, copyKeyframes, pasteKeyframes, insertKeyframesForSelectedNodes, jumpToAdjacentKeyframe])
 
     const handleSeqStartChange = (val: number | null) => {
         if (val !== null && currentSequence >= 0 && sequences) {
