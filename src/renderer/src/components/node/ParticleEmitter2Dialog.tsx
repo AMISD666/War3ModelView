@@ -81,6 +81,92 @@ const InputNumber = React.forwardRef<any, React.ComponentProps<typeof BaseInputN
 
 InputNumber.displayName = 'ParticleEmitter2DeferredInputNumber';
 
+type SegmentColorTuple = [[number, number, number], [number, number, number], [number, number, number]];
+
+interface ParticleEmitter2ColorFieldControlProps {
+    name: string;
+    committedValue: string;
+    form: any;
+    getCurrentSegmentColors: () => SegmentColorTuple;
+    flushPreviewNowWithOverrides: (overrides?: Partial<ParticleEmitter2Node>) => void;
+    resetOverallHueState: () => void;
+    fromAntdColor: (color: Color | string) => [number, number, number];
+}
+
+const ParticleEmitter2ColorFieldControl: React.FC<ParticleEmitter2ColorFieldControlProps> = ({
+    name,
+    committedValue,
+    form,
+    getCurrentSegmentColors,
+    flushPreviewNowWithOverrides,
+    resetOverallHueState,
+    fromAntdColor,
+}) => {
+    const [draftValue, setDraftValue] = useState(committedValue);
+    const [pickerOpen, setPickerOpen] = useState(false);
+
+    useEffect(() => {
+        if (!pickerOpen) {
+            setDraftValue(committedValue);
+        }
+    }, [committedValue, pickerOpen]);
+
+    const commitColorValue = useCallback((rawValue: string) => {
+        const nextValue = rawValue.trim() || 'rgb(255, 255, 255)';
+        resetOverallHueState();
+        if (nextValue !== committedValue) {
+            const nextSegmentColors = getCurrentSegmentColors();
+            const nextRgb = fromAntdColor(nextValue);
+            if (name === 'Seg1Color') nextSegmentColors[0] = nextRgb;
+            if (name === 'Seg2Color') nextSegmentColors[1] = nextRgb;
+            if (name === 'Seg3Color') nextSegmentColors[2] = nextRgb;
+            form.setFieldsValue({ [name]: nextValue });
+            flushPreviewNowWithOverrides({ SegmentColor: nextSegmentColors });
+        }
+        setDraftValue(nextValue);
+    }, [committedValue, flushPreviewNowWithOverrides, form, fromAntdColor, getCurrentSegmentColors, name, resetOverallHueState]);
+
+    const commitDraftValue = useCallback(() => {
+        commitColorValue(draftValue);
+    }, [commitColorValue, draftValue]);
+
+    return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
+            <ColorPicker
+                size="small"
+                showText={false}
+                format="rgb"
+                value={draftValue}
+                open={pickerOpen}
+                onOpenChange={setPickerOpen}
+                onChange={(color) => {
+                    setDraftValue(
+                        color && typeof color.toRgbString === 'function'
+                            ? color.toRgbString()
+                            : committedValue
+                    );
+                }}
+                onChangeComplete={(color) => {
+                    const nextValue =
+                        color && typeof color.toRgbString === 'function'
+                            ? color.toRgbString()
+                            : committedValue;
+                    commitColorValue(nextValue);
+                }}
+            />
+            <Input
+                size="small"
+                value={draftValue}
+                onChange={(e) => setDraftValue(e.target.value)}
+                onBlur={commitDraftValue}
+                onPressEnter={commitDraftValue}
+                placeholder="rgb(255, 255, 255)"
+                style={{ flex: 1, minWidth: 0 }}
+            />
+        </div>
+    );
+};
+
 interface ParticleEmitter2DialogProps {
     visible: boolean;
     nodeId: number | null;
@@ -1131,71 +1217,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
         </div>
     );
 
-    const ColorFieldControl = ({ name, committedValue }: { name: string; committedValue: string }) => {
-        const [draftValue, setDraftValue] = useState(committedValue)
-        const [pickerOpen, setPickerOpen] = useState(false)
-
-        useEffect(() => {
-            if (!pickerOpen) {
-                setDraftValue(committedValue)
-            }
-        }, [committedValue, pickerOpen])
-
-        const commitColorValue = useCallback((rawValue: string) => {
-            const nextValue = rawValue.trim() || 'rgb(255, 255, 255)'
-            if (nextValue !== committedValue) {
-                form.setFieldValue(name, nextValue)
-            }
-            setDraftValue(nextValue)
-        }, [committedValue, form, name])
-
-        const commitDraftValue = useCallback(() => {
-            commitColorValue(draftValue)
-        }, [commitColorValue, draftValue])
-
-        return (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
-                <ColorPicker
-                    size="small"
-                    showText={false}
-                    format="rgb"
-                    value={draftValue}
-                    open={pickerOpen}
-                    onOpenChange={(nextOpen) => {
-                        setPickerOpen(nextOpen)
-                        if (nextOpen) {
-                            setDraftValue(committedValue)
-                        }
-                    }}
-                    onChange={(color) => {
-                        setDraftValue(
-                            color && typeof color.toRgbString === 'function'
-                                ? color.toRgbString()
-                                : committedValue
-                        )
-                    }}
-                    onChangeComplete={(color) => {
-                        const nextValue =
-                            color && typeof color.toRgbString === 'function'
-                                ? color.toRgbString()
-                                : committedValue
-                        commitColorValue(nextValue)
-                    }}
-                />
-                <Input
-                    size="small"
-                    value={draftValue}
-                    onChange={(e) => setDraftValue(e.target.value)}
-                    onBlur={commitDraftValue}
-                    onPressEnter={commitDraftValue}
-                    placeholder="rgb(255, 255, 255)"
-                    style={{ flex: 1, minWidth: 0 }}
-                />
-            </div>
-        )
-    }
-
-    const ColorField = ({ name }: { name: string }) => (
+    const renderColorField = (name: string) => (
         <Form.Item shouldUpdate={(prevValues, nextValues) => prevValues?.[name] !== nextValues?.[name]} noStyle>
             {() => {
                 const rawValue = form.getFieldValue(name)
@@ -1204,18 +1226,31 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
                     : rawValue && typeof rawValue.toRgbString === 'function'
                         ? rawValue.toRgbString()
                         : 'rgb(255, 255, 255)'
-                return <ColorFieldControl name={name} committedValue={committedValue} />
+                return (
+                    <ParticleEmitter2ColorFieldControl
+                        name={name}
+                        committedValue={committedValue}
+                        form={form}
+                        getCurrentSegmentColors={getCurrentSegmentColors}
+                        flushPreviewNowWithOverrides={flushPreviewNowWithOverrides}
+                        resetOverallHueState={() => {
+                            hueBaseColorsRef.current = null;
+                            setOverallHueShift(0);
+                        }}
+                        fromAntdColor={fromAntdColor}
+                    />
+                )
             }}
         </Form.Item>
     )
 
     // Segment Box
-    const SegmentBox = ({ title, prefix }: { title: string, prefix: string }) => (
+    const renderSegmentBox = (title: string, prefix: string) => (
         <fieldset style={{ border: '1px solid #484848', padding: '10px 8px 6px', margin: 0, marginTop: 8, backgroundColor: '#2b2b2b' }}>
             <legend style={{ fontSize: 12, color: '#ccc', marginLeft: 8, padding: '0 4px', width: 'auto' }}>{title}</legend>
             <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
                 <span style={{ width: 40, color: '#ccc', fontSize: 12 }}>{uiText.particleEmitter2Dialog.color}:</span>
-                <ColorField name={`${prefix}Color`} />
+                {renderColorField(`${prefix}Color`)}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
                 <span style={{ width: 40, color: '#ccc', fontSize: 12 }}>{uiText.particleEmitter2Dialog.alpha}:</span>
@@ -1362,9 +1397,9 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
                             </div>
                         </div>
                         <div style={{ display: 'flex', gap: 8 }}>
-                            <div style={{ flex: 1 }}><SegmentBox title={uiText.particleEmitter2Dialog.segment1} prefix="Seg1" /></div>
-                            <div style={{ flex: 1 }}><SegmentBox title={uiText.particleEmitter2Dialog.segment2} prefix="Seg2" /></div>
-                            <div style={{ flex: 1 }}><SegmentBox title={uiText.particleEmitter2Dialog.segment3} prefix="Seg3" /></div>
+                            <div style={{ flex: 1 }}>{renderSegmentBox(uiText.particleEmitter2Dialog.segment1, 'Seg1')}</div>
+                            <div style={{ flex: 1 }}>{renderSegmentBox(uiText.particleEmitter2Dialog.segment2, 'Seg2')}</div>
+                            <div style={{ flex: 1 }}>{renderSegmentBox(uiText.particleEmitter2Dialog.segment3, 'Seg3')}</div>
                         </div>
 
                         {/* Lifecycle - MDX uses HeadLifeSpan/HeadDecay/TailLifeSpan/TailDecay as interval arrays */}
