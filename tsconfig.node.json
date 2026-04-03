@@ -8,6 +8,7 @@
         "src/assets.d.ts"
     ],
     "compilerOptions": {
-        "composite": true
+        "composite": true,
+        "ignoreDeprecations": "6.0"
     }
 }

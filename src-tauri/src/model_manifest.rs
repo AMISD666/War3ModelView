@@ -1,38 +1,4 @@
-use serde::Serialize;
-use std::path::{Path, PathBuf};
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ModelManifestRow {
-    pub full_path: String,
-    pub file_name: String,
-    pub animations: Vec<String>,
-    pub texture_paths: Vec<String>,
-    pub byte_len: usize,
-    pub modified_unix_ms: u128,
-}
-
-pub fn build_manifest_row(full_path: &Path, data: &[u8]) -> ModelManifestRow {
-    let file_name = full_path
-        .file_name()
-        .and_then(|v| v.to_str())
-        .unwrap_or_default()
-        .to_string();
-    let metadata = std::fs::metadata(full_path).ok();
-    let modified_unix_ms = metadata
-        .and_then(|m| m.modified().ok())
-        .and_then(|ts| ts.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-
-    ModelManifestRow {
-        full_path: full_path.to_string_lossy().to_string(),
-        file_name,
-        animations: extract_animation_names(data, full_path),
-        texture_paths: extract_texture_paths(data, full_path),
-        byte_len: data.len(),
-        modified_unix_ms,
-    }
-}
+use std::path::Path;
 
 pub fn extract_texture_paths(data: &[u8], model_path: &Path) -> Vec<String> {
     let mut paths = Vec::new();
@@ -95,84 +61,6 @@ pub fn extract_texture_paths(data: &[u8], model_path: &Path) -> Vec<String> {
     }
 
     dedupe_preserve_order(paths)
-}
-
-pub fn extract_animation_names(data: &[u8], model_path: &Path) -> Vec<String> {
-    let ext = model_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-
-    let names = if ext == "mdx" {
-        extract_mdx_animation_names(data)
-    } else if ext == "mdl" {
-        extract_mdl_animation_names(data)
-    } else {
-        Vec::new()
-    };
-
-    dedupe_preserve_order(names)
-}
-
-fn extract_mdx_animation_names(data: &[u8]) -> Vec<String> {
-    let mut names = Vec::new();
-    let Some(seqs_pos) = find_chunk(data, b"SEQS") else {
-        return names;
-    };
-    let chunk_size = u32::from_le_bytes([
-        data[seqs_pos + 4],
-        data[seqs_pos + 5],
-        data[seqs_pos + 6],
-        data[seqs_pos + 7],
-    ]) as usize;
-    let chunk_end = seqs_pos + 8 + chunk_size;
-    if chunk_end > data.len() {
-        return names;
-    }
-    let chunk_data = &data[seqs_pos + 8..chunk_end];
-    let entry_size = 132;
-
-    for i in (0..chunk_data.len()).step_by(entry_size) {
-        if i + entry_size > chunk_data.len() {
-            break;
-        }
-        let name_bytes = &chunk_data[i..i + 80];
-        let end = name_bytes.iter().position(|&b| b == 0).unwrap_or(name_bytes.len());
-        if let Ok(name) = std::str::from_utf8(&name_bytes[..end]) {
-            let trimmed = name.trim();
-            if !trimmed.is_empty() {
-                names.push(trimmed.to_string());
-            }
-        }
-    }
-
-    names
-}
-
-fn extract_mdl_animation_names(data: &[u8]) -> Vec<String> {
-    let mut names = Vec::new();
-    let Ok(text) = std::str::from_utf8(data) else {
-        return names;
-    };
-
-    for line in text.lines() {
-        let line = line.trim();
-        if !line.starts_with("Anim ") {
-            continue;
-        }
-        if let Some(start) = line.find('"') {
-            if let Some(end_rel) = line[start + 1..].find('"') {
-                let name = &line[start + 1..start + 1 + end_rel];
-                let trimmed = name.trim();
-                if !trimmed.is_empty() {
-                    names.push(trimmed.to_string());
-                }
-            }
-        }
-    }
-
-    names
 }
 
 fn dedupe_preserve_order(values: Vec<String>) -> Vec<String> {
@@ -278,13 +166,4 @@ fn extract_mdl_texture_paths(text: &str) -> Vec<String> {
     }
 
     paths
-}
-
-pub fn normalize_manifest_paths(paths: &[String], model_path: &Path) -> Vec<PathBuf> {
-    let model_dir = match model_path.parent() {
-        Some(dir) => dir,
-        None => return Vec::new(),
-    };
-
-    paths.iter().map(|p| model_dir.join(p)).collect()
 }

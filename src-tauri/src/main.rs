@@ -11,13 +11,11 @@ mod texture_decode;
 mod texture_encode;
 
 use base64::Engine;
-use model_manifest::{build_manifest_row, ModelManifestRow};
 use mpq_manager::MpqManager;
 use rayon::prelude::*;
 use serde::Serialize;
 use serde_json::json;
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{ipc::Response, Emitter, LogicalSize, Manager, State, WebviewWindow};
@@ -348,16 +346,6 @@ fn read_local_files_batch(paths: Vec<String>) -> Vec<Option<String>> {
         .collect()
 }
 
-#[derive(Serialize)]
-struct LocalFileReadDetailed {
-    path: String,
-    found: bool,
-    byte_len: usize,
-    read_ms: f64,
-    data_b64: Option<String>,
-}
-
-
 #[tauri::command]
 fn read_local_files_batch_bin(paths: Vec<String>) -> Result<Response, String> {
     let results: Vec<(bool, f64, Vec<u8>)> = paths
@@ -384,13 +372,6 @@ fn read_local_files_batch_bin(paths: Vec<String>) -> Result<Response, String> {
     }
 
     Ok(Response::new(payload))
-}
-
-
-fn is_replaceable_team_texture_path(texture_path: &str) -> bool {
-    let normalized = normalize_path(texture_path).to_lowercase();
-    normalized.starts_with("replaceabletextures\\teamcolor\\")
-        || normalized.starts_with("replaceabletextures\\teamglow\\")
 }
 
 fn load_texture_bytes_with_source_key(
