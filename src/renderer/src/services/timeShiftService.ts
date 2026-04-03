@@ -163,14 +163,5 @@ export const shiftModelKeyframes = (modelData: any, targetSequenceIndex: number,
         newData.Cameras.forEach((cam: any) => {
             shiftAllTracksInObject(cam);
         });
-    }
-
-    console.log(`[TimeShiftService] Scaling Summary:
-    - Delta: ${deltaMs}ms
-    - Scale: ${scale.toFixed(4)}
-    - Mode: ${deltaMs > 0 ? 'Extend' : 'Shrink'}
-    - Tracks Found/Scaled: ${scaledCount}
-    - Tracks Shifted: ${shiftedCount}`);
-
-    return newData;
+    }    return newData;
 };

@@ -1,7 +1,7 @@
-﻿import React, { useState } from 'react'
-import { Button, Input, Form, Checkbox, message, Modal } from 'antd'
-import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
+import React, { useEffect, useState } from 'react'
+import { Button, Checkbox, Form, Input, Modal, message } from 'antd'
 import { PlusOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons'
+import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { DraggableModal } from '../DraggableModal'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useModelStore } from '../../store/modelStore'
@@ -14,22 +14,41 @@ const SequenceManager: React.FC = () => {
     const setSequences = useModelStore((state) => state.setSequences)
     const setPlaying = useModelStore((state) => state.setPlaying)
     const removeSequence = useModelStore((state) => state.removeSequence)
-
-    const { animationSubMode } = useSelectionStore()
+    const {
+        animationSubMode,
+        timelineGlobalSequenceFilter,
+        setTimelineGlobalSequenceFilter
+    } = useSelectionStore()
 
     const [isModalVisible, setIsModalVisible] = useState(false)
     const [editingIndex, setEditingIndex] = useState<number | null>(null)
-    const [form] = Form.useForm()
     const [pruneKeyframes, setPruneKeyframes] = useState(true)
-
+    const [form] = Form.useForm()
     const { push } = useHistoryStore()
 
-    const handleSelect = (index: number) => {
-        setSequence(index)
+    useEffect(() => {
+        if (timelineGlobalSequenceFilter === null) {
+            setTimelineGlobalSequenceFilter(-1)
+        }
+    }, [timelineGlobalSequenceFilter, setTimelineGlobalSequenceFilter])
 
+    const fitTimeline = () => {
+        window.dispatchEvent(new Event('timeline-fit-current-sequence'))
+    }
+
+    const handleSelect = (index: number) => {
+        setTimelineGlobalSequenceFilter(-1)
+        setSequence(index)
         const isEditingMode = animationSubMode === 'keyframe' || animationSubMode === 'binding'
         setPlaying(!isEditingMode)
-        window.dispatchEvent(new Event('timeline-fit-current-sequence'))
+        fitTimeline()
+    }
+
+    const handleSelectAll = () => {
+        setTimelineGlobalSequenceFilter(-1)
+        setSequence(-1)
+        setPlaying(false)
+        fitTimeline()
     }
 
     const getNextInterval = () => {
@@ -44,11 +63,11 @@ const SequenceManager: React.FC = () => {
     const handleAdd = () => {
         setEditingIndex(null)
         form.resetFields()
-        const [newStart, newEnd] = getNextInterval()
+        const [start, end] = getNextInterval()
         form.setFieldsValue({
             Name: 'Stand',
-            Start: newStart,
-            End: newEnd,
+            Start: start,
+            End: end,
             Rarity: 0,
             MoveSpeed: 0,
             NonLooping: false
@@ -73,7 +92,6 @@ const SequenceManager: React.FC = () => {
 
     const handleDelete = (index: number, e: React.MouseEvent) => {
         e.stopPropagation()
-
         Modal.confirm({
             title: '删除确认',
             content: `确定要删除序列 "${sequences[index].Name}" 吗？${pruneKeyframes ? '（将同时删除该范围内的关键帧）' : ''}`,
@@ -83,13 +101,11 @@ const SequenceManager: React.FC = () => {
             onOk() {
                 const seq = sequences[index]
                 const oldSequences = [...sequences]
-
                 push({
                     name: `Delete Sequence "${seq.Name}"`,
                     undo: () => setSequences(oldSequences),
                     redo: () => removeSequence(index, pruneKeyframes)
                 })
-
                 removeSequence(index, pruneKeyframes)
                 message.success(pruneKeyframes ? '序列及相关关键帧已删除' : '序列已删除')
             }
@@ -98,12 +114,9 @@ const SequenceManager: React.FC = () => {
 
     const handleModalOk = () => {
         form.validateFields().then((values) => {
-            const startValue = typeof values.Start === 'number' ? values.Start : 0
-            const endValue = typeof values.End === 'number' ? values.End : 0
-
-            const newSeq = {
+            const nextSequence = {
                 Name: values.Name,
-                Interval: [startValue, endValue],
+                Interval: [typeof values.Start === 'number' ? values.Start : 0, typeof values.End === 'number' ? values.End : 0],
                 Rarity: values.Rarity || 0,
                 MoveSpeed: values.MoveSpeed || 0,
                 NonLooping: values.NonLooping ? 1 : 0,
@@ -114,32 +127,29 @@ const SequenceManager: React.FC = () => {
             const newSequences = [...(sequences || [])]
 
             if (editingIndex !== null) {
-                newSequences[editingIndex] = { ...newSequences[editingIndex], ...newSeq }
-
+                newSequences[editingIndex] = { ...newSequences[editingIndex], ...nextSequence }
                 push({
-                    name: `Edit Sequence "${newSeq.Name}"`,
+                    name: `Edit Sequence "${nextSequence.Name}"`,
                     undo: () => setSequences(oldSequences),
                     redo: () => setSequences(newSequences)
                 })
-
                 message.success('序列已更新')
             } else {
-                newSequences.push(newSeq)
-
+                newSequences.push(nextSequence)
                 push({
-                    name: `Add Sequence "${newSeq.Name}"`,
+                    name: `Add Sequence "${nextSequence.Name}"`,
                     undo: () => setSequences(oldSequences),
                     redo: () => setSequences(newSequences)
                 })
-
                 message.success('序列已添加')
             }
+
             setSequences(newSequences)
             setIsModalVisible(false)
         })
     }
 
-    const sequenceButtonBaseStyle: React.CSSProperties = {
+    const buttonBaseStyle: React.CSSProperties = {
         minHeight: 28,
         padding: '3px 6px',
         cursor: 'pointer',
@@ -151,32 +161,14 @@ const SequenceManager: React.FC = () => {
         gap: 4
     }
 
+    const isGlobalView = typeof timelineGlobalSequenceFilter === 'number' && timelineGlobalSequenceFilter >= 0
+
     return (
-        <div
-            style={{
-                height: '100%',
-                display: 'flex',
-                flexDirection: 'column',
-                backgroundColor: '#2b2b2b',
-                color: '#eee'
-            }}
-        >
-            <div
-                style={{
-                    padding: '6px 8px',
-                    borderBottom: '1px solid #444',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center'
-                }}
-            >
+        <div style={{ height: '100%', display: 'flex', flexDirection: 'column', backgroundColor: '#2b2b2b', color: '#eee' }}>
+            <div style={{ padding: '6px 8px', borderBottom: '1px solid #444', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ fontWeight: 'bold', fontSize: '12px' }}>序列管理</span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <Checkbox
-                        checked={pruneKeyframes}
-                        onChange={(e) => setPruneKeyframes(e.target.checked)}
-                        style={{ color: '#aaa', fontSize: '10px' }}
-                    >
+                    <Checkbox checked={pruneKeyframes} onChange={(e) => setPruneKeyframes(e.target.checked)} style={{ color: '#aaa', fontSize: '10px' }}>
                         动画关键帧
                     </Checkbox>
                     <Button type="primary" size="small" icon={<PlusOutlined />} onClick={handleAdd}>
@@ -188,14 +180,11 @@ const SequenceManager: React.FC = () => {
             <div style={{ flex: 1, overflowY: 'auto', padding: '6px' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 4 }}>
                     <div
-                        onClick={() => {
-                            setSequence(-1)
-                            setPlaying(false)
-                        }}
+                        onClick={handleSelectAll}
                         style={{
-                            ...sequenceButtonBaseStyle,
-                            backgroundColor: currentSequence === -1 ? '#4a90e2' : '#303030',
-                            color: currentSequence === -1 ? '#fff' : '#ddd',
+                            ...buttonBaseStyle,
+                            backgroundColor: !isGlobalView && currentSequence === -1 ? '#4a90e2' : '#303030',
+                            color: !isGlobalView && currentSequence === -1 ? '#fff' : '#ddd',
                             justifyContent: 'center',
                             fontWeight: 600,
                             fontSize: '12px'
@@ -214,22 +203,12 @@ const SequenceManager: React.FC = () => {
                                 key={index}
                                 onClick={() => handleSelect(index)}
                                 style={{
-                                    ...sequenceButtonBaseStyle,
-                                    backgroundColor: currentSequence === index ? '#4a90e2' : '#303030',
-                                    color: currentSequence === index ? '#fff' : '#ddd'
+                                    ...buttonBaseStyle,
+                                    backgroundColor: !isGlobalView && currentSequence === index ? '#4a90e2' : '#303030',
+                                    color: !isGlobalView && currentSequence === index ? '#fff' : '#ddd'
                                 }}
                             >
-                                <span
-                                    style={{
-                                        fontSize: '12px',
-                                        lineHeight: 1.2,
-                                        overflow: 'hidden',
-                                        textOverflow: 'ellipsis',
-                                        whiteSpace: 'nowrap',
-                                        flex: 1
-                                    }}
-                                    title={seq.Name}
-                                >
+                                <span style={{ fontSize: '12px', lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }} title={seq.Name}>
                                     {seq.Name}
                                 </span>
                                 <div style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
@@ -238,13 +217,7 @@ const SequenceManager: React.FC = () => {
                                         size="small"
                                         icon={<EditOutlined />}
                                         onClick={(e) => handleEdit(index, e)}
-                                        style={{
-                                            color: currentSequence === index ? '#fff' : '#aaa',
-                                            width: 18,
-                                            minWidth: 18,
-                                            height: 18,
-                                            padding: 0
-                                        }}
+                                        style={{ color: !isGlobalView && currentSequence === index ? '#fff' : '#aaa', width: 18, minWidth: 18, height: 18, padding: 0 }}
                                     />
                                     <Button
                                         type="text"
@@ -300,4 +273,3 @@ const SequenceManager: React.FC = () => {
 }
 
 export default SequenceManager
-

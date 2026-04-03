@@ -240,30 +240,19 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
     };
 
     // Handle merge confirmation
-    const handleMergeConfirm = (materialIndex: number, newLayerConfig?: LayerConfig) => {
-        console.log('[Merge] Starting merge with selectedIndices:', selectedIndices);
-        console.log('[Merge] Total geosets count:', geosets.length);
-
-        if (selectedIndices.length < 2) {
+    const handleMergeConfirm = (materialIndex: number, newLayerConfig?: LayerConfig) => {       if (selectedIndices.length < 2) {
             message.error('请选择至少2个多边形');
             return;
         }
 
         // Sort indices - smallest first (will be target)
         const sortedIndices = [...selectedIndices].sort((a, b) => a - b);
-        const targetIndex = sortedIndices[0];
-
-        console.log('[Merge] Sorted indices:', sortedIndices);
-        console.log('[Merge] Target index:', targetIndex);
-
-        // Deep copy the target geoset
+        const targetIndex = sortedIndices[0];       // Deep copy the target geoset
         const targetGeoset: any = { ...geosets[targetIndex] };
 
         // Merge all other geosets into target
         for (let i = 1; i < sortedIndices.length; i++) {
-            const srcIndex = sortedIndices[i];
-            console.log('[Merge] Merging source geoset at index:', srcIndex);
-            const srcGeoset: any = geosets[srcIndex];
+            const srcIndex = sortedIndices[i];            const srcGeoset: any = geosets[srcIndex];
 
             // Calculate offset for face indices (number of vertices, not floats)
             const targetVertexCount = (targetGeoset.Vertices?.length || 0) / 3;
@@ -316,17 +305,12 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                 // Copy target UVs or pad with zeros
                 if (targetCh0) {
                     newUVs.set(new Float32Array(targetCh0), 0);
-                } else {
-                    // No UVs on target, but likely need zeros for the target part
-                    console.log('[Merge] Warning: Target geoset missing UVs (ch0), padding with zeros');
-                }
+                } else {                }
 
                 // Copy source UVs or pad with zeros at correct offset
                 if (srcCh0) {
                     newUVs.set(new Float32Array(srcCh0), srcOffset);
-                } else {
-                    console.log('[Merge] Warning: Source geoset missing UVs (ch0), padding with zeros');
-                }
+                } else {                }
 
                 // Important: Wrap in array as TVertices expects array of channels
                 targetGeoset.TVertices = [newUVs];
@@ -368,11 +352,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
             if (srcGeoset.Groups && srcGeoset.Groups.length > 0) {
                 targetGeoset.Groups = [...(targetGeoset.Groups || []), ...srcGeoset.Groups];
             }
-        }
-
-        // Set material
-        console.log('[Merge] Setting material. Selected Index:', materialIndex);
-        if (materialIndex === -1 && newLayerConfig) {
+        }        if (materialIndex === -1 && newLayerConfig) {
             // Create new material with user-specified layer config
             const materials: any[] = [...(modelData?.Materials || [])];
 
@@ -417,9 +397,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
             targetGeoset.MaterialID = newMaterialIndex;
             useModelStore.getState().setTextures(textures);
             setMaterials(materials);
-        } else {
-            console.log('[Merge] Assigning existing material ID:', materialIndex);
-            targetGeoset.MaterialID = materialIndex;
+        } else {            targetGeoset.MaterialID = materialIndex;
         }
 
         // Build new geosets array:
@@ -437,13 +415,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
             } else {
                 newGeosets.push(geosets[i]);
             }
-        }
-
-        console.log('[Merge] Indices to remove (except target):', Array.from(indicesToRemove));
-        console.log('[Merge] Old geosets count:', geosets.length);
-        console.log('[Merge] New geosets count:', newGeosets.length);
-
-        // Update state and modelStore (lightweight update)
+        }      // Update state and modelStore (lightweight update)
         setGeosets(newGeosets);
         useModelStore.getState().setGeosets(newGeosets);
         applySelection([]);
@@ -716,11 +688,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                                                 const nativeEvent = e.nativeEvent as MouseEvent;
                                                 const isAlt = nativeEvent.altKey;
 
-                                                if (isAlt) {
-                                                    // Exclusive Visibility Mode
-                                                    console.log('[GeosetVisibilityPanel] Exclusive Visibility for Geoset', index);
-
-                                                    // Hide ALL except current index
+                                                if (isAlt) {                                                    // Hide ALL except current index
                                                     const allOtherIndices = geosets.map((_, i) => i).filter(i => i !== index);
                                                     // Pass 'false' for forceShowAllGeosets (disable "Show All")
                                                     commandManager.execute(new SetGeosetVisibilityCommand(allOtherIndices, false));

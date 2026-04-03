@@ -45,10 +45,7 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
             undoStack: newStack,
             redoStack: [], // Clear redo on new action
             isDirty: true
-        });
-
-        console.log(`[History] Pushed: ${cmd.name}`);
-    },
+        });    },
 
     undo: () => {
         const { undoStack, redoStack } = get();
@@ -56,10 +53,7 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
 
         const cmd = undoStack[undoStack.length - 1];
         const newUndoStack = undoStack.slice(0, -1);
-        const newRedoStack = [cmd, ...redoStack];
-
-        console.log(`[History] Undoing: ${cmd.name}`);
-        cmd.undo();
+        const newRedoStack = [cmd, ...redoStack];        cmd.undo();
 
         set({
             undoStack: newUndoStack,
@@ -73,10 +67,7 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
 
         const cmd = redoStack[0];
         const newRedoStack = redoStack.slice(1);
-        const newUndoStack = [...undoStack, cmd];
-
-        console.log(`[History] Redoing: ${cmd.name}`);
-        cmd.redo();
+        const newUndoStack = [...undoStack, cmd];        cmd.redo();
 
         set({
             undoStack: newUndoStack,

@@ -281,9 +281,7 @@ export function useSelection({
             const geosets = rendererRef.current.model.Geosets || []
             const result = pickClosestGeoset(cameraPos, rayDir, geosets)
 
-            if (result !== null) {
-                console.log('[useSelection] Ctrl+Click picked geoset:', result.geosetIndex)
-                setPickedGeosetIndex(result.geosetIndex)
+            if (result !== null) {                setPickedGeosetIndex(result.geosetIndex)
 
                 const { setHoveredGeosetId, setSelectedGeosetIndex } = useModelStore.getState()
                 setHoveredGeosetId(result.geosetIndex)

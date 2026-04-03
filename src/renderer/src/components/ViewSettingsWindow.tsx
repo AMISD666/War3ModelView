@@ -423,10 +423,7 @@ export const ViewSettingsWindow: React.FC = () => {
                 archive_paths: string[];
                 found: boolean;
                 size: number | null;
-            }>('debug_mpq_probe', { path: target });
-
-            console.log('[MPQ Debug] Probe result:', result);
-            showMessage(
+            }>('debug_mpq_probe', { path: target });            showMessage(
                 result.found ? 'success' : 'warning',
                 'MPQ 调试',
                 result.found

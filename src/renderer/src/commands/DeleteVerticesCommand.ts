@@ -57,15 +57,8 @@ export class DeleteVerticesCommand implements Command {
         this.deleteResult = deleteVertices(geoset, vertexIndices)
 
         // Update geoset
-        Object.assign(geoset, this.deleteResult.updatedGeoset)
-
-        console.log('[DeleteVerticesCommand] Deleted', this.deleteResult.verticesRemoved, 'vertices and', this.deleteResult.facesRemoved, 'faces')
-
-        // Rebuild GPU Buffers
-        ModelResourceManager.getInstance().addGeosetBuffers(this.renderer.model, this.geosetIndex)
-        console.log('[DeleteVerticesCommand] Rebuilt GPU buffers for geoset', this.geosetIndex)
-
-        // Clear selection
+        Object.assign(geoset, this.deleteResult.updatedGeoset)        // Rebuild GPU Buffers
+        ModelResourceManager.getInstance().addGeosetBuffers(this.renderer.model, this.geosetIndex)        // Clear selection
         useSelectionStore.getState().selectVertices([])
 
         // Sync to store
@@ -81,10 +74,7 @@ export class DeleteVerticesCommand implements Command {
         }
 
         // Rebuild GPU Buffers
-        ModelResourceManager.getInstance().addGeosetBuffers(this.renderer.model, this.geosetIndex)
-        console.log('[DeleteVerticesCommand] Undo: Restored geoset and rebuilt buffers')
-
-        // Sync to store
+        ModelResourceManager.getInstance().addGeosetBuffers(this.renderer.model, this.geosetIndex)        // Sync to store
         this.syncToStore()
     }
 

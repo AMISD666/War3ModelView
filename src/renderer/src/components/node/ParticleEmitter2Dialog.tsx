@@ -143,9 +143,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
     // Helper to convert Antd Color to array [r, g, b] (0-1)
     const fromAntdColor = (color: Color | string): [number, number, number] => {
         let r = 1, g = 1, b = 1;
-        if (typeof color === 'string') {
-            console.log('[ParticleDialog] Parsing color string:', color);
-            // Parse "rgb(255, 255, 255)"
+        if (typeof color === 'string') {            // Parse "rgb(255, 255, 255)"
             const match = color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
             if (match) {
                 r = parseInt(match[1]) / 255;

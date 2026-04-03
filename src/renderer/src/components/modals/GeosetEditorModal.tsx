@@ -95,9 +95,7 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
         const initialPickedIndex = useSelectionStore.getState().pickedGeosetIndex
         if (initialPickedIndex !== null && initialPickedIndex >= 0 && initialPickedIndex < localGeosets.length) {
             setSelectedIndex(initialPickedIndex)
-            scrollToItem(initialPickedIndex)
-            console.log('[GeosetEditor] Initial auto-selected geoset', initialPickedIndex)
-        }
+            scrollToItem(initialPickedIndex)        }
 
         let lastPickedIndex: number | null = initialPickedIndex
         const unsubscribe = useSelectionStore.subscribe((state) => {
@@ -106,9 +104,7 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
                 lastPickedIndex = pickedGeosetIndex
                 if (pickedGeosetIndex !== null && pickedGeosetIndex >= 0 && pickedGeosetIndex < localGeosets.length) {
                     setSelectedIndex(pickedGeosetIndex)
-                    scrollToItem(pickedGeosetIndex)
-                    console.log('[GeosetEditor] Auto-selected geoset', pickedGeosetIndex)
-                }
+                    scrollToItem(pickedGeosetIndex)                }
             }
         })
         return unsubscribe

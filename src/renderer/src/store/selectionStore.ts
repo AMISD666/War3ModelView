@@ -13,7 +13,7 @@ export type AppMode = 'view' | 'geometry' | 'uv' | 'animation';
 export type GeometrySubMode = 'vertex' | 'face' | 'group';
 export type TransformMode = 'translate' | 'rotate' | 'scale' | null;
 export type KeyframeDisplayMode = 'node' | 'geosetAnim' | 'particle' | 'textureAnim' | 'material';
-export type TimelineGlobalSequenceFilter = number | null;
+export type TimelineGlobalSequenceFilter = number | null | -1;
 
 export type SelectionMode = 'object' | 'vertex' | 'face' | 'group'; // Deprecated in favor of AppMode + SubMode, keeping for compatibility for now
 export type GizmoMode = 'translate' | 'rotate' | 'scale'; // Deprecated in favor of TransformMode
@@ -173,6 +173,9 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
 
     // 节点选择实现
     selectNode: (id, multi = false) => {
+        if (typeof id !== 'number' || id < 0) {
+            return;
+        }
         set((state) => {
             if (multi) {
                 // 多选模式：切换选择状态
@@ -190,7 +193,7 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
     },
 
     selectNodes: (ids) => {
-        set({ selectedNodeIds: ids });
+        set({ selectedNodeIds: ids.filter((id) => typeof id === 'number' && id >= 0) });
     },
 
     clearNodeSelection: () => {

@@ -770,16 +770,13 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
   // Mount/Unmount tracking
   useEffect(() => {
-    // // // console.log('[Viewer] Component mounted');
-    return () => console.log('[Viewer] Component unmounted');
+    return () => {};
   }, []);
 
   // Hot-swap cached renderer when it changes (tab switch)
   useEffect(() => {
     if (cachedRenderer && cachedRenderer.model) {
-      const modelPathStr = (cachedRenderer as any).__modelPath || cachedRenderer.model.path || 'unknown';
-      console.log('[Viewer] Hot-swapping to cached renderer:', modelPathStr)
-      // Update local state
+      const modelPathStr = (cachedRenderer as any).__modelPath || cachedRenderer.model.path || 'unknown';      // Update local state
       setRenderer(cachedRenderer)
       rendererRef.current = cachedRenderer
 
@@ -805,10 +802,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       // Ensure viewport and renderer size are correct
       if (canvasRef.current) {
         const width = canvasRef.current.width;
-        const height = canvasRef.current.height;
-        console.log('[Viewer] Syncing viewport and renderer resize:', width, height);
-
-        if (glRef.current) {
+        const height = canvasRef.current.height;        if (glRef.current) {
           glRef.current.viewport(0, 0, width, height);
         }
 
@@ -818,10 +812,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       }
 
       // Force-trigger a re-render in the loop to show the model immediately
-      needsRendererUpdateRef.current = true
-      console.log('[Viewer] Hot-swap complete, re-render triggered');
-
-      // Reset time tracking to prevent delta spike
+      needsRendererUpdateRef.current = true      // Reset time tracking to prevent delta spike
       lastFrameTime.current = performance.now()
     }
   }, [cachedRenderer])
@@ -1977,9 +1968,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
     const run = async () => {
       const resolveStart = performance.now()
-      try {
-        console.log(`[Viewer] Resolving ${unresolved.length} missing textures after MPQ ready`)
-        const textureResults = await loadAllTextures(
+      try {        const textureResults = await loadAllTextures(
           sourceModel,
           renderer,
           activePath,
@@ -2001,11 +1990,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           const nextMissing = currentMissing.filter((path) => !resolved.has(path))
           useRendererStore.getState().setMissingTextures(nextMissing)
           await loadTeamColorTextures(renderer, teamColor)
-        }
-        console.log(
-          `[Viewer] Missing texture resolve finished in ${(performance.now() - resolveStart).toFixed(1)}ms, resolved=${resolved.size}/${unresolved.length}`
-        )
-      } catch (e) {
+        }      } catch (e) {
         console.warn('[Viewer] Resolve missing textures after MPQ load failed:', e)
       } finally {
         backgroundTextureResolveRunningRef.current = false
@@ -2214,7 +2199,6 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     const presetKey = `${viewPreset.type}:${viewPreset.time}:${viewPreset.reset ? 1 : 0}`
     if (lastAppliedViewPresetRef.current === presetKey) return
     lastAppliedViewPresetRef.current = presetKey
-    console.log('[Viewer] View preset changed:', viewPreset.type)
     if (viewPreset.type === 'perspective' && viewPreset.reset) {
       vec3.set(targetCamera.current.target, 0, 0, 0)
       targetCamera.current.distance = 500
@@ -2352,10 +2336,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   // Handle Structural Changes (Add/Delete/Reorder Node)
   const structureUpdateTrigger = useModelStore(state => state.rendererReloadTrigger)
   useEffect(() => {
-    if (rendererRef.current && (rendererRef.current as any).modelInstance && structureUpdateTrigger > 0) {
-      console.log('[Viewer] Structural change detected (Trigger: ' + structureUpdateTrigger + '), rebuilding node hierarchy...')
-
-      // Update the model's master node list
+    if (rendererRef.current && (rendererRef.current as any).modelInstance && structureUpdateTrigger > 0) {      // Update the model's master node list
       rendererRef.current.model.Nodes = useModelStore.getState().nodes
 
       // Call syncNodes to rebuild rendererData.nodes and rootNode children
@@ -2399,18 +2380,14 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       if (modelPath.startsWith('dropped:')) {
         // Load from in-memory data stored in the model store
         const storeModelData = useModelStore.getState().modelData
-        if (storeModelData) {
-          console.log('[Viewer] Loading from in-memory data for dropped file:', modelPath)
-          loadModel(modelPath, storeModelData)
+        if (storeModelData) {          loadModel(modelPath, storeModelData)
         }
       } else if (didModelPathChange) {
         // Switching tabs: only reload if no cached renderer is available
         // The hot-swap effect will handle restoring the cached renderer.
         if (!cachedRenderer) {
           loadModel(modelPath)
-        } else {
-          console.log('[Viewer] Switching tab with cached renderer, skipping full disk reload.')
-        }
+        } else {        }
       } else {
         // Normal file open - only reload if no cached renderer
         if (!cachedRenderer) {
@@ -2419,9 +2396,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       }
     } else {
       // If modelPath is null, it means no models are loaded
-      if (lastLoadedModelPath.current !== null) {
-        console.log('[Viewer] No model path, clearing renderer');
-        lastLoadedModelPath.current = null;
+      if (lastLoadedModelPath.current !== null) {        lastLoadedModelPath.current = null;
         if (rendererRef.current) {
           try { rendererRef.current.destroy(); } catch (e) { }
           setRenderer(null);
@@ -2495,9 +2470,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           if (cameraRef.current) cameraRef.current.enabled = false
           return
         }
-      } else if (mainMode === 'animation' && subMode === 'keyframe' && !autoKeyframe) {
-        console.log('[Viewer] Gizmo blocked: autoKeyframe is OFF in keyframe mode')
-        // Clear activeAxis to prevent any visual feedback
+      } else if (mainMode === 'animation' && subMode === 'keyframe' && !autoKeyframe) {        // Clear activeAxis to prevent any visual feedback
         gizmoState.current.activeAxis = null
         // CRITICAL: Disable camera to prevent it from handling mouse events
         if (cameraRef.current) cameraRef.current.enabled = false
@@ -2578,10 +2551,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       if ((mainMode === 'animation' && subMode2 === 'binding') || (mainMode === 'animation' && subMode2 === 'keyframe')) {
         // AUTO-PAUSE: Pause animation when starting Gizmo drag in keyframe mode
         if (subMode2 === 'keyframe') {
-          useModelStore.getState().setPlaying(false)
-          console.log('[Viewer] Auto-paused animation for keyframe drag')
-
-          // Initialize keyframeDragData for stable Initial + Delta updates
+          useModelStore.getState().setPlaying(false)          // Initialize keyframeDragData for stable Initial + Delta updates
           // This fixes "double transform" and "jump on release" issues
           const { nodes, currentFrame } = useModelStore.getState()
           keyframeDragData.current = {
@@ -2686,16 +2656,9 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 }
 
                 keyframeDragData.current!.initialValues.set(nodeId, initialVals as any)
-
-                // DEBUG: Log initial state
-                console.log('[DEBUG MouseDown] NodeId:', nodeId)
                 const pivot = getOrCreateNodePivot(nodeWrapper)
-                console.log('[DEBUG MouseDown] PivotPoint:', pivot ? [...pivot] : 'N/A')
-                console.log('[DEBUG MouseDown] Matrix (translation part):',
-                  nodeWrapper.matrix ? [nodeWrapper.matrix[12], nodeWrapper.matrix[13], nodeWrapper.matrix[14]] : 'N/A')
-                console.log('[DEBUG MouseDown] InitialVals.translation:', initialVals.translation || '[0,0,0]')
-                console.log('[DEBUG MouseDown] CurrentFrame:', currentFrame)
-              }
+                void pivot
+            }
             }
           })
         }
@@ -2704,7 +2667,6 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         initialNodePositions.current.clear()
 
         const { selectedNodeIds } = useSelectionStore.getState()
-        console.log('[Viewer] Capturing node positions. Mode:', mainMode, subMode2, 'Selected:', selectedNodeIds.length)
         if (renderer && renderer.rendererData && renderer.rendererData.nodes) {
           selectedNodeIds.forEach(nodeId => {
             const nodeWrapper = renderer.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
@@ -2712,9 +2674,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             if (nodeWrapper && pivot) {
               initialNodePositions.current.set(nodeId, [pivot[0], pivot[1], pivot[2]])
             }
-          })
-          console.log('[Viewer] Captured node positions:', initialNodePositions.current.size)
-        }
+          })        }
       } else if (isHealthBarSelectedRef.current) {
         const baseHealthBarState = resolveHealthBarState(useModelStore.getState().sequences)
         if (baseHealthBarState) {
@@ -2725,11 +2685,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           }
           vec3.set(healthBarPreviewOffsetRef.current, 0, 0, 0)
         }
-      } else if (geometrySubMode === 'vertex' || geometrySubMode === 'group') {
-        console.log('[Viewer] Capturing vertices for vertex mode. Selected count:', currentSelection.selectedVertexIds.length)
-        currentSelection.selectedVertexIds.forEach(sel => captureVertex(sel.geosetIndex, sel.index))
-        console.log('[Viewer] Captured vertices:', initialVertexPositions.current.size)
-      } else if (geometrySubMode === 'face') {
+      } else if (geometrySubMode === 'vertex' || geometrySubMode === 'group') {        currentSelection.selectedVertexIds.forEach(sel => captureVertex(sel.geosetIndex, sel.index))      } else if (geometrySubMode === 'face') {
         const faceVertexKeysByGeoset = new Map<number, Set<string>>()
         currentSelection.selectedFaceIds.forEach(sel => {
           if (!renderer) return
@@ -2813,8 +2769,6 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     if (!rendererRef.current || !canvasRef.current) return
 
     const { mainMode, animationSubMode, geometrySubMode, addVertexSelection, addFaceSelection, removeVertexSelection, removeFaceSelection, selectVertices, selectFaces, selectNodes } = useSelectionStore.getState()
-    console.log('[Viewer] handleBoxSelection', { mainMode, animationSubMode, geometrySubMode, box: { startX, startY, endX, endY } })
-
     if (mainMode !== 'geometry' && mainMode !== 'animation') return
 
     // Normalize box coordinates relative to canvas
@@ -2883,19 +2837,9 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
     // PRIORITY: Check animation keyframe mode FIRST (bone selection)
     // Note: geometrySubMode remains 'vertex' even in animation mode, so we must check mainMode first
-    if (mainMode === 'animation' && animationSubMode !== 'binding') {
-      // Box Select Nodes (bones)
-      console.log('[Viewer] Box Select Nodes - entering animation keyframe mode branch')
-      const newSelection: number[] = []
-      if (!rendererRef.current || !rendererRef.current.rendererData || !rendererRef.current.rendererData.nodes) {
-        console.log('[Viewer] Box Select Nodes - no renderer data')
-        return
-      }
-
-      console.log('[Viewer] Box Select Nodes - checking', rendererRef.current.rendererData.nodes.length, 'nodes')
-      console.log('[Viewer] Box bounds:', { boxLeft, boxRight, boxTop, boxBottom })
-
-      rendererRef.current.rendererData.nodes.forEach((nodeWrapper: any) => {
+    if (mainMode === 'animation' && animationSubMode !== 'binding') {      const newSelection: number[] = []
+      if (!rendererRef.current || !rendererRef.current.rendererData || !rendererRef.current.rendererData.nodes) {        return
+      }     rendererRef.current.rendererData.nodes.forEach((nodeWrapper: any) => {
         const pivot = getOrCreateNodePivot(nodeWrapper)
         if (!pivot) return
         const worldPos = vec3.create()
@@ -2904,23 +2848,16 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         const screenPos = project(worldPos)
         if (screenPos) {
           if (screenPos[0] >= boxLeft && screenPos[0] <= boxRight &&
-            screenPos[1] >= boxTop && screenPos[1] <= boxBottom) {
-            console.log('[Viewer] Node in box:', nodeWrapper.node.ObjectId, nodeWrapper.node.Name || 'unnamed', 'screen:', screenPos)
-            newSelection.push(nodeWrapper.node.ObjectId)
+            screenPos[1] >= boxTop && screenPos[1] <= boxBottom) {            newSelection.push(nodeWrapper.node.ObjectId)
           }
         }
       })
-
-      console.log('[Viewer] Box Select Nodes - found', newSelection.length, 'nodes:', newSelection)
-
       if (isCtrl) {
         const current = useSelectionStore.getState().selectedNodeIds
         const combined = Array.from(new Set([...current, ...newSelection]))
-        console.log('[Viewer] Ctrl+Box select - combining with existing:', current, '=> combined:', combined)
         markNodeManagerListScrollFromViewer()
         selectNodes(combined)
       } else {
-        console.log('[Viewer] Box select - setting new selection:', newSelection)
         markNodeManagerListScrollFromViewer()
         selectNodes(newSelection)
       }
@@ -3067,7 +3004,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   const handleSelectionClick = (clientX: number, clientY: number, isShift: boolean, isCtrl: boolean, isAlt: boolean = false) => {
     if (!rendererRef.current || !canvasRef.current) return
 
-    const { mainMode, animationSubMode, geometrySubMode, selectVertex, selectVertices, selectFace, selectFaces, addVertexSelection, addFaceSelection, removeVertexSelection, removeFaceSelection, clearAllSelections, selectNode, setPickedGeosetIndex } = useSelectionStore.getState()
+    const { mainMode, animationSubMode, geometrySubMode, selectVertex, selectVertices, selectFace, selectFaces, addVertexSelection, addFaceSelection, removeVertexSelection, removeFaceSelection, clearAllSelections, selectNode, clearNodeSelection, setPickedGeosetIndex } = useSelectionStore.getState()
 
     // === Ctrl+Click Geoset Picking (works in any mode) ===
     if (isCtrl) {
@@ -3181,9 +3118,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       }
 
       const result = pickClosestGeoset(cameraPos, rayDir, geosets, skinnedVerticesMap)
-      if (result !== null) {
-        console.log('[Viewer] Ctrl+Click picked geoset:', result.geosetIndex, 'at distance:', result.distance)
-        setHealthBarSelection(false)
+      if (result !== null) {        setHealthBarSelection(false)
         setPickedGeosetIndex(result.geosetIndex)
 
         // Visual feedback: temporarily highlight the picked geoset
@@ -3351,7 +3286,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       } else if (!isCtrl && animationSubMode !== 'binding') {
         // Only clear selection if NOT in binding mode (because in binding mode we might want to select a vertex next)
         setHealthBarSelection(false)
-        selectNode(-1)
+        clearNodeSelection()
       }
 
       // If we are in Binding Mode and didn't hit a node, continue to vertex selection
@@ -3553,9 +3488,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     lastFrameTime.current = performance.now()
 
     // IMMEDIATE CLEAR: Remove old renderer reference
-    if (renderer) {
-      console.log('[Viewer] Detaching old renderer (lifecycle managed by store)')
-      setRenderer(null)
+    if (renderer) {      setRenderer(null)
     }
 
     setLoading(true)
@@ -3631,9 +3564,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
       console.time('[Viewer] MDX Parse')
       const parseStart = performance.now()
-      if (inMemoryData) {
-        console.log('[Viewer] Loading model from in-memory data')
-        model = inMemoryData
+      if (inMemoryData) {        model = inMemoryData
       } else {
         setLoadingStatus('正在解析模型...')
         const buffer = await readPathBytes(path)
@@ -3666,18 +3597,13 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         const cacheKey = createModelParseCacheKey(path, buffer)
         const cachedModel = getCachedParsedModel(cacheKey)
         if (cachedModel) {
-          model = cachedModel
-          console.log('[Viewer] Loaded parsed model from cache')
-        } else {
+          model = cachedModel        } else {
           const parseResult = await parseWithWorker(buffer)
           model = parseResult.model
           setCachedParsedModel(cacheKey, model)
         }
       }
-      console.timeEnd('[Viewer] MDX Parse')
-      console.log(`[Viewer] Model Parsing took ${(performance.now() - parseStart).toFixed(1)}ms`)
-
-      // Log to production CMD window
+      console.timeEnd('[Viewer] MDX Parse')      // Log to production CMD window
       logModelInfo(path, model, performance.now() - parseStart)
       // console.log('[Viewer] Parsed model:', {
       //   Sequences: model.Sequences?.length || 0,
@@ -3719,14 +3645,11 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       const { model: rendererModelWithSequences, usedFallback } = ensureRendererSequences(blendCompatibleModel)
       const { model: rendererModel, defaultNodeId } = ensureRenderNodes(rendererModelWithSequences)
       ensureGeosetGroups(rendererModel, defaultNodeId)
-      console.log('[Viewer] Initializing Renderer Backend (WebGL)...')
       const newRenderer = new ModelRenderer(rendererModel)
       initializeRendererBackend(canvas, newRenderer)
       // NOTE: setRenderer(newRenderer) is called AFTER texture loading to avoid race condition
       newRenderer.update(0)
       resetCamera()
-      console.log(`[Viewer] Renderer Init took ${(performance.now() - rendererStart).toFixed(1)}ms`)
-
       setLoadingStatus('加载贴图资源...')
       // 模型贴图与队伍色替换贴图互不依赖，并行缩短首帧前等待时间
       const [textureResults] = await Promise.all([
@@ -3765,18 +3688,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   }
 
   const reloadRendererWithData = async (model: any, modelPath: string) => {
-    console.log('[Viewer] ========== FULL RELOAD START ==========')
     const safeModelPath = typeof modelPath === 'string' ? modelPath : ''
     const previousRendererGeosets = Array.isArray(renderer?.model?.Geosets) ? renderer.model.Geosets : null
-    console.log('[Viewer] reloadRendererWithData called with path:', safeModelPath)
-    console.log('[Viewer] Model data summary:', {
-      Geosets: model.Geosets?.length || 0,
-      Textures: model.Textures?.length || 0,
-      Materials: model.Materials?.length || 0,
-      ParticleEmitters2: model.ParticleEmitters2?.length || 0,
-      Nodes: model.Nodes?.length || 0,
-      Sequences: model.Sequences?.length || 0
-    })
     const reloadTimerLabel = `[Viewer] ReloadModel:${Date.now().toString(36)}:${Math.floor(Math.random() * 1e6).toString(36)}`
     let reloadTimerStarted = false
     console.time(reloadTimerLabel)
@@ -3820,10 +3733,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       const blendCompatibleModel = createRendererBlendCompatibleModel(sanitizedModel)
       const { model: rendererModelWithNodes, defaultNodeId } = ensureRenderNodes(blendCompatibleModel)
       ensureGeosetGroups(rendererModelWithNodes, defaultNodeId)
-      console.log('[Viewer] Step 1: Validating particles...')
       validateAllParticleEmitters(sanitizedModel)
-      console.log('[Viewer] Step 1: Particle validation complete')
-
       // 与 loadModel 一致：提前发起 Rust 批量读贴图，与后续 WebGL 初始化重叠
       const textureLoadContextReload = prepareModelForTextureLoad(sanitizedModel, {})
       const batchPayloadPromiseReload =
@@ -3833,28 +3743,12 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
               texturePaths: textureLoadContextReload.effectiveTexturePaths
             })
           : undefined
-
-      console.log('[Viewer] Step 2: Creating ModelRenderer...')
       const rendererStart = performance.now()
       const { model: rendererModelWithSequences, usedFallback } = ensureRendererSequences(rendererModelWithNodes)
       const newRenderer = new ModelRenderer(rendererModelWithSequences)
-      console.log('[Viewer] Step 2: ModelRenderer created')
-
-      console.log('[Viewer] Step 3: Initializing Renderer Backend (WebGL)...')
       initializeRendererBackend(canvas, newRenderer)
-      console.log('[Viewer] Step 3: WebGL initialized')
-
-      // NOTE: setRenderer(newRenderer) is called AFTER texture loading to avoid race condition
-      console.log('[Viewer] Step 4: First update(0)...')
       newRenderer.update(0)
-      console.log('[Viewer] Step 4: First update complete')
-
-      console.log('[Viewer] Step 5: Resetting camera...')
       resetCamera()
-      console.log(`[Viewer] reloadRendererWithData: Renderer Init took ${(performance.now() - rendererStart).toFixed(1)}ms`)
-
-      // Load textures using concurrent loader with mipmap optimization
-      console.log('[Viewer] Step 6: Loading textures...')
       const [textureResults] = await Promise.all([
         loadAllTextures(sanitizedModel, newRenderer, safeModelPath, textureWorkers, 512, {
           yieldUploads: false,
@@ -3862,10 +3756,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           batchPayloadPromise: batchPayloadPromiseReload
         }),
         loadTeamColorTextures(newRenderer, teamColor)
-      ])
-      console.log('[Viewer] Step 6: Textures + team colors loaded')
-
-      // Keep missing texture warning in sync after a full reload
+      ])      // Keep missing texture warning in sync after a full reload
       const missingPaths = textureResults
         .filter(r => {
           if (!r.loaded) return true
@@ -3873,17 +3764,10 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           return ext !== 'blp' && ext !== 'tga'
         })
         .map(r => r.path)
-      useRendererStore.getState().setMissingTextures(missingPaths)
-
-      // Set renderer AFTER textures are loaded to avoid race condition where
-      // render loop starts before textures are available in GPU
-      console.log('[Viewer] Step 8: Setting renderer state...')
-
-      // CRITICAL: Force set the correct animation sequence on the NEW renderer
+      useRendererStore.getState().setMissingTextures(missingPaths)      // CRITICAL: Force set the correct animation sequence on the NEW renderer
       // before setting it as state. This ensures animation is restored correctly
       // after a full reload (e.g. after creating a particle).
       const currentAnimIndex = useModelStore.getState().currentSequence
-      console.log('[Viewer] Step 8a: Setting animation sequence on new renderer to:', currentAnimIndex)
       if (typeof (newRenderer as any).setSequence === 'function' && currentAnimIndex >= 0) {
         (newRenderer as any).setSequence(currentAnimIndex)
       }
@@ -3893,7 +3777,6 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
       (newRenderer as any).__modelPath = safeModelPath
       setRenderer(newRenderer)
-      console.log('[Viewer] ========== FULL RELOAD COMPLETE ==========')
       console.timeEnd(reloadTimerLabel)
       reloadTimerStarted = false
       setLoading(false)
@@ -3918,9 +3801,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     const hasChanged = rendererReloadTrigger !== lastReloadTrigger.current
 
     if (!isInitialMount && hasChanged) {
-      if (import.meta.env.DEV) {
-        console.log('[Viewer] Model data sync triggered, trigger:', rendererReloadTrigger)
-      }
+      if (import.meta.env.DEV) {      }
 
       // Sync model data to renderer without recreating the entire renderer
       // This is the LIGHTWEIGHT SYNC approach - only updates internal data arrays
@@ -3930,16 +3811,13 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         // Check for structural changes that require full reload
         if ((modelData as any).__forceFullReload) {
           delete (modelData as any).__forceFullReload
-          console.log('[Viewer] Forced full reload due to geometry transform')
           reloadRendererWithData(modelData, modelPath || '')
           lastReloadTrigger.current = rendererReloadTrigger
           return
         }
         const { needsReload, reason } = checkForStructuralChanges(modelData, renderer.model)
 
-        if (needsReload) {
-          console.log('[Viewer] Structural change detected:', reason, '. Triggering full reload.')
-          reloadRendererWithData(modelData, modelPath || '')
+        if (needsReload) {          reloadRendererWithData(modelData, modelPath || '')
           lastReloadTrigger.current = rendererReloadTrigger
           return
         }
@@ -3987,22 +3865,10 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         } else {
           renderer.model.ParticleEmitters2 = nextEmitters
         }
-        if (import.meta.env.DEV) {
-          console.log('[Viewer] Synced ParticleEmitters2:', renderer.model.ParticleEmitters2.length, 'emitters')
-        }
+        if (import.meta.env.DEV) {        }
         if (pe2PreviewDebugEnabled()) {
           const pe2List = renderer.model.ParticleEmitters2 || []
-          pe2List.forEach((em: any, i: number) => {
-            console.log(`[PE2预览] Viewer 轻量同步后 PE2[${i}]`, {
-              Name: em?.Name,
-              ObjectId: em?.ObjectId,
-              Visibility: describePe2AnimOrScalar(em?.Visibility),
-              VisibilityAnim: describePe2AnimOrScalar(em?.VisibilityAnim),
-              EmissionRate: describePe2AnimOrScalar(em?.EmissionRate),
-              LifeSpan: em?.LifeSpan,
-              TextureID: em?.TextureID,
-            })
-          })
+          pe2List.forEach((em: any, i: number) => {          })
         }
 
         // === RIBBON EMITTERS ===
@@ -4067,9 +3933,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           }
 
           // Load any new textures asynchronously
-          if (newTextures.length > 0) {
-            console.log('[Viewer] Lightweight sync: Loading', newTextures.length, 'new textures')
-            const textureModelPath = (renderer as any).__modelPath || modelPath || (modelData as any)?.__modelPath || (modelData as any)?.path || ''
+          if (newTextures.length > 0) {            const textureModelPath = (renderer as any).__modelPath || modelPath || (modelData as any)?.__modelPath || (modelData as any)?.path || ''
             void loadAllTextures(
               renderer.model,
               renderer,
@@ -4091,21 +3955,15 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
               }
               // After all textures loaded, rebuild material layer cache
               if ((renderer as any).modelInstance?.syncMaterials) {
-                (renderer as any).modelInstance.syncMaterials()
-                console.log('[Viewer] Rebuilt material cache after texture load')
-              }
+                (renderer as any).modelInstance.syncMaterials()              }
             }).catch((e) => {
               console.error('[Viewer] Error loading new textures via lightweight sync:', e)
             })
           }
         } else if (Array.isArray(modelData.Textures) && modelData.Textures.length === 0) {
-          if (import.meta.env.DEV) {
-            console.debug('[Viewer] Skip applying empty Textures patch (keep renderer textures)')
-          }
+          if (import.meta.env.DEV) {          }
         }
-        if (Array.isArray(modelData.Materials) && modelData.Materials.length > 0) {
-          console.log('[Viewer] Syncing materials. Count:', modelData.Materials.length)
-          const sanitizedMaterials = sanitizeMaterialsForRenderer(modelData.Materials, renderer.model.Textures?.length || 0)
+        if (Array.isArray(modelData.Materials) && modelData.Materials.length > 0) {          const sanitizedMaterials = sanitizeMaterialsForRenderer(modelData.Materials, renderer.model.Textures?.length || 0)
           renderer.model.Materials = cloneMaterialsWithReferenceBlendCompat(sanitizedMaterials)
           // Lightweight sync: rebuild materialLayerTextureID cache
           if ((renderer as any).modelInstance && typeof (renderer as any).modelInstance.syncMaterials === 'function') {
@@ -4116,18 +3974,12 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           }
         } else if (Array.isArray(modelData.Materials) && modelData.Materials.length === 0) {
           // 无材质数组的模型或仅节点补丁时属正常，勿用 warn 误导为异常
-          if (import.meta.env.DEV) {
-            console.debug('[Viewer] Skip applying empty Materials patch (keep renderer materials)')
-          }
+          if (import.meta.env.DEV) {          }
         }
         if (modelData.TextureAnims && Array.isArray(modelData.TextureAnims)) {
-          renderer.model.TextureAnims = modelData.TextureAnims
-          console.log('[Viewer] Synced TextureAnims:', modelData.TextureAnims.length, 'anims')
-          // Debug: log GlobalSeqId for each anim's Translation
+          renderer.model.TextureAnims = modelData.TextureAnims          // Debug: log GlobalSeqId for each anim's Translation
           modelData.TextureAnims.forEach((anim: any, i: number) => {
-            if (anim.Translation) {
-              console.log(`[Viewer] TextureAnim[${i}].Translation GlobalSeqId:`, anim.Translation.GlobalSeqId, 'Keys:', anim.Translation.Keys?.length)
-            }
+            if (anim.Translation) {            }
           })
         }
 
@@ -4137,10 +3989,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         // and create GPU buffers. Overwriting here would break buffer references.
         // However, we DO need to sync MaterialID and other property changes.
         let geosetMaterialChanged = false
-        console.log('[Viewer] Geoset sync check - modelData.Geosets:', modelData.Geosets?.length, 'renderer.model.Geosets:', renderer.model.Geosets?.length)
         if (modelData.Geosets && renderer.model.Geosets) {
           const minLen = Math.min(modelData.Geosets.length, renderer.model.Geosets.length)
-          console.log('[Viewer] Syncing', minLen, 'geosets')
           for (let i = 0; i < minLen; i++) {
             const geoset = modelData.Geosets[i]
             const rendererGeoset = renderer.model.Geosets[i]
@@ -4152,9 +4002,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
               const safeMatId = Number.isFinite(rawMatId)
                 ? Math.min(Math.max(0, Math.floor(rawMatId)), materialCount > 0 ? materialCount - 1 : 0)
                 : 0
-              if (rendererGeoset.MaterialID !== safeMatId) {
-                console.log(`[Viewer] Syncing Geoset[${i}] MaterialID: ${rendererGeoset.MaterialID} -> ${safeMatId}`)
-                rendererGeoset.MaterialID = safeMatId
+              if (rendererGeoset.MaterialID !== safeMatId) {                rendererGeoset.MaterialID = safeMatId
                 geosetMaterialChanged = true
               }
             }
@@ -4187,13 +4035,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         }
 
         // If any geoset MaterialID changed, rebuild material layer texture ID cache
-        if (geosetMaterialChanged) {
-          console.log('[Viewer] Geoset MaterialID changed, checking syncMaterials availability')
-          if ((renderer as any).modelInstance && typeof (renderer as any).modelInstance.syncMaterials === 'function') {
-            console.log('[Viewer] Calling syncMaterials to rebuild texture ID cache')
-              ; (renderer as any).modelInstance.syncMaterials()
-            console.log('[Viewer] syncMaterials completed')
-          } else {
+        if (geosetMaterialChanged) {          if ((renderer as any).modelInstance && typeof (renderer as any).modelInstance.syncMaterials === 'function') { (renderer as any).modelInstance.syncMaterials()          } else {
             console.warn('[Viewer] syncMaterials not available!')
           }
         }
@@ -4220,9 +4062,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           renderer.model.GlobalSequences = modelData.GlobalSequences
           // Sync the globalSequencesFrames array for new entries
           if ((renderer as any).modelInstance?.syncGlobalSequences) {
-            (renderer as any).modelInstance.syncGlobalSequences()
-            console.log('[Viewer] Called syncGlobalSequences() for', modelData.GlobalSequences.length, 'GlobalSequences')
-          }
+            (renderer as any).modelInstance.syncGlobalSequences()          }
         }
 
         // === PIVOT POINTS ===
@@ -4230,9 +4070,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           renderer.model.PivotPoints = modelData.PivotPoints
         }
 
-        if (import.meta.env.DEV) {
-          console.log('[Viewer] Lightweight sync complete')
-        }
+        if (import.meta.env.DEV) {        }
       }
     }
     lastReloadTrigger.current = rendererReloadTrigger
@@ -4553,9 +4391,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             const selectedIdx = selector ? parseInt(selector.value) : -1;
 
             // Debug log every 300 frames
-            if (frameCount.current % 300 === 0) {
-              console.log('[Camera Render] showCameras:', showCamerasRef.current, 'cameraNodes:', cameraNodes.length, 'selectedIdx:', selectedIdx);
-            }
+            if (frameCount.current % 300 === 0) {            }
 
             if (cameraNodes.length > 0 && selectedIdx >= 0 && selectedIdx < cameraNodes.length) {
               // Only render the selected camera's frustum
@@ -5752,11 +5588,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       renderRef.current = render
       animationFrameId.current = requestAnimationFrame(render)
 
-      return () => {
-        // CRITICAL: Set THIS closure's flag to false
-        // Only affects this specific render function, not new ones
-        console.log('[Viewer] Cleanup: stopping RAF loop for mode:', appMainMode)
-        flushFramePerfSummary('cleanup', true)
+      return () => {        flushFramePerfSummary('cleanup', true)
         runState.shouldRun = false
         if (animationFrameId.current) {
           cancelAnimationFrame(animationFrameId.current)
@@ -6700,9 +6532,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                     }
 
                     // Debug log (first call only per drag)
-                    if (!((window as any)._baseTransLogOnce)) {
-                      console.log('[DEBUG Preview] NodeId:', nodeId, 'Frame:', frame, 'BaseSource:', baseSource, 'BaseTranslation:', baseTranslation)
-                        ; (window as any)._baseTransLogOnce = true
+                    if (!((window as any)._baseTransLogOnce)) { (window as any)._baseTransLogOnce = true
                     }
 
                     const previewTranslation = [
@@ -7203,9 +7033,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     }
   }
 
-  const handleRecalculateNormals = () => {
-    console.log('[Viewer] Recalculating normals (Smooth)...')
-    useModelStore.getState().recalculateNormals()
+  const handleRecalculateNormals = () => {    useModelStore.getState().recalculateNormals()
   }
 
   // Split vertices handler - now opens dialog for material selection
@@ -7213,10 +7041,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     if (!rendererRef.current) return
     const { geometrySubMode, mainMode } = useSelectionStore.getState()
     const splitSelection = getSplitVertexSelection()
-    if (mainMode !== 'geometry' || !['vertex', 'face', 'group'].includes(geometrySubMode) || splitSelection.length < 1) return
-
-    console.log('[Viewer] Opening separate dialog for', splitSelection.length, 'vertices')
-    // Get source geoset from first selected vertex
+    if (mainMode !== 'geometry' || !['vertex', 'face', 'group'].includes(geometrySubMode) || splitSelection.length < 1) return    // Get source geoset from first selected vertex
     const geosetIdx = splitSelection[0].geosetIndex
     setSeparateSourceGeosetIndex(geosetIdx)
     setSeparateDialogVisible(true)
@@ -7286,10 +7111,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     } else {
       // Fallback
       targetMaterialId = rendererRef.current.model.Geosets[separateSourceGeosetIndex]?.MaterialID ?? 0
-    }
-
-    console.log('[Viewer] Splitting', splitSelection.length, 'vertices with materialId:', targetMaterialId)
-    const cmd = new SplitVerticesCommand(rendererRef.current, splitSelection, targetMaterialId)
+    }    const cmd = new SplitVerticesCommand(rendererRef.current, splitSelection, targetMaterialId)
     commandManager.execute(cmd)
 
     setSeparateDialogVisible(false)
@@ -7307,10 +7129,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     if (!allSameGeoset) {
       console.warn('[Viewer] Cannot weld vertices from different geosets')
       return
-    }
-
-    console.log('[Viewer] Welding', selectedVertexIds.length, 'vertices')
-    const cmd = new WeldVerticesCommand(rendererRef.current, selectedVertexIds)
+    }    const cmd = new WeldVerticesCommand(rendererRef.current, selectedVertexIds)
     commandManager.execute(cmd)
   }
 
@@ -7352,9 +7171,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           if (hasTransform) {
             const pivot = getModelCenter()
             const cmd = new GlobalTransformCommand(commitTransform, rendererRef.current, pivot)
-            commandManager.execute(cmd)
-            console.log('[Viewer] Global transform applied via command')
-          }
+            commandManager.execute(cmd)          }
 
           // Reset local preview transform reference
           previewTransformRef.current = {
@@ -7411,8 +7228,6 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         } else if (mainMode === 'geometry') {
           if (initialVertexPositions.current.size > 0) {
             const changes: VertexChange[] = []
-
-            console.log('[Viewer] Checking vertex changes. Initial positions:', initialVertexPositions.current.size)
             initialVertexPositions.current.forEach((oldPos, key) => {
               const [geosetIndexStr, vertexIndexStr] = key.split('-')
               const geosetIndex = parseInt(geosetIndexStr)
@@ -7433,9 +7248,6 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 }
               }
             })
-
-            console.log('[Viewer] Detected vertex changes:', changes.length)
-
             if (changes.length > 0) {
               const cmd = new MoveVerticesCommand(
                 rendererRef.current,
@@ -7450,14 +7262,10 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                   })
                 }
               )
-              commandManager.execute(cmd)
-              console.log('[Viewer] Vertex Move Command executed', changes.length)
-            }
+              commandManager.execute(cmd)            }
             initialVertexPositions.current.clear()
           }
-        } else if (mainMode === 'animation' && animationSubMode === 'binding') {
-          console.log('[Viewer] handleMouseUp - Animation binding mode, checking node changes. initialNodePositions size:', initialNodePositions.current.size)
-          if (initialNodePositions.current.size > 0) {
+        } else if (mainMode === 'animation' && animationSubMode === 'binding') {          if (initialNodePositions.current.size > 0) {
             const changes: NodeChange[] = []
 
             initialNodePositions.current.forEach((oldPos, nodeId) => {
@@ -7489,9 +7297,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                   useModelStore.getState().updateNodes(updates)
                 }
               )
-              commandManager.execute(cmd)
-              console.log('[Viewer] Node Move Command executed', changes.length)
-            }
+              commandManager.execute(cmd)            }
             initialNodePositions.current.clear()
           }
         } else if (mainMode === 'animation' && animationSubMode === 'keyframe') {
@@ -7574,14 +7380,6 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                       baseTranslation[1] + delta[1],
                       baseTranslation[2] + delta[2]
                     ]
-
-                    // DEBUG: Log commit data
-                    console.log('[DEBUG MouseUp] NodeId:', nodeId)
-                    console.log('[DEBUG MouseUp] Delta:', [...delta])
-                    console.log('[DEBUG MouseUp] BaseTranslation:', [...baseTranslation], existingKey ? '(from keyframe)' : '(interpolated)')
-                    console.log('[DEBUG MouseUp] NewTranslation:', [...newTranslation])
-                    console.log('[DEBUG MouseUp] Frame:', frame)
-
                     translationChanges.push({
                       nodeId,
                       propertyName: 'Translation',
@@ -7595,9 +7393,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
               if (translationChanges.length > 0) {
                 const cmd = new UpdateKeyframeCommand(rendererRef.current, translationChanges)
-                commandManager.execute(cmd)
-                console.log('[Viewer] Committed Translation Keyframe changes via command', translationChanges.length)
-              }
+                commandManager.execute(cmd)              }
             }
             // Clear global delta
             ; (window as any)._keyframeDragDelta = null
@@ -7699,9 +7495,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
               if (changes.length > 0) {
                 const cmd = new UpdateKeyframeCommand(rendererRef.current, changes)
-                commandManager.execute(cmd)
-                console.log('[Viewer] Committed Rotation/Scaling Keyframe changes via command', changes.length)
-              }
+                commandManager.execute(cmd)              }
             }
           }
 
@@ -7734,43 +7528,31 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     if (!rendererRef.current) return
     const { selectedVertexIds, geometrySubMode, mainMode } = useSelectionStore.getState()
     if (mainMode !== 'geometry' || geometrySubMode !== 'vertex' || selectedVertexIds.length < 1) return
-
-    console.log('[Viewer] Deleting', selectedVertexIds.length, 'vertices')
     const cmd = new DeleteVerticesCommand(rendererRef.current, selectedVertexIds)
     commandManager.execute(cmd)
   }
 
   // Handle vertex copy
   const handleCopyVertices = () => {
-    console.log('[Viewer] handleCopyVertices called')
     if (!rendererRef.current) {
-      console.log('[Viewer] handleCopyVertices: No renderer')
       return
     }
     const { selectedVertexIds, geometrySubMode, mainMode } = useSelectionStore.getState()
-    console.log('[Viewer] handleCopyVertices state:', { mainMode, geometrySubMode, selectedCount: selectedVertexIds.length })
     if (mainMode !== 'geometry' || geometrySubMode !== 'vertex' || selectedVertexIds.length < 1) {
-      console.log('[Viewer] handleCopyVertices: Guard failed - mainMode:', mainMode, 'geometrySubMode:', geometrySubMode, 'selectedCount:', selectedVertexIds.length)
       return
     }
 
     const geosetIndex = selectedVertexIds[0].geosetIndex
     const geoset = rendererRef.current.model.Geosets[geosetIndex]
-    if (!geoset) {
-      console.log('[Viewer] handleCopyVertices: Geoset not found at index', geosetIndex)
-      return
+    if (!geoset) {      return
     }
 
     const vertexIndices = selectedVertexIds.map(s => s.index)
-    vertexCopyBuffer.current = copyVertices(geoset, vertexIndices, geosetIndex)
-    console.log('[Viewer] Copied', vertexCopyBuffer.current.vertices.length / 3, 'vertices and', vertexCopyBuffer.current.faces.length / 3, 'faces')
-  }
+    vertexCopyBuffer.current = copyVertices(geoset, vertexIndices, geosetIndex)  }
 
   // Handle vertex paste - always creates new geoset
   const handlePasteVertices = () => {
-    if (!rendererRef.current || !vertexCopyBuffer.current) {
-      console.log('[Viewer] No vertices in copy buffer')
-      return
+    if (!rendererRef.current || !vertexCopyBuffer.current) {      return
     }
 
     const { geometrySubMode, mainMode } = useSelectionStore.getState()

@@ -880,9 +880,7 @@ export const NodeManagerWindow: React.FC = () => {
                                             const deltaY = Math.abs(moveEvent.clientY - startY);
 
                                             // Start dragging after threshold
-                                            if (!dragStarted && (deltaX > 5 || deltaY > 5)) {
-                                                console.log('[MouseDrag] Start:', nodeId);
-                                                dragStarted = true;
+                                            if (!dragStarted && (deltaX > 5 || deltaY > 5)) {                                                dragStarted = true;
                                                 draggedNodeIdRef.current = nodeId;
                                                 isDraggingRef.current = true;
                                                 setDraggedNodeId(nodeId);
@@ -917,10 +915,7 @@ export const NodeManagerWindow: React.FC = () => {
                                             document.removeEventListener('mouseup', handleMouseUp);
 
                                             if (dragStarted) {
-                                                const targetId = dropTargetNodeIdRef.current;
-                                                console.log('[MouseDrag] Drop:', nodeId, '->', targetId);
-
-                                                // Allow dropping to -1 (root) or any valid node
+                                                const targetId = dropTargetNodeIdRef.current;                                                // Allow dropping to -1 (root) or any valid node
                                                 if (targetId !== null && targetId !== nodeId) {
                                                     // Perform reparent
                                                     const { selectedNodeIds } = useSelectionStore.getState();

@@ -1236,9 +1236,7 @@ function prepareModelDataForSave(modelData: any): any {
             const totalCount = geoset.Groups.reduce((sum: number, group: any) => {
                 return sum + (Array.isArray(group) ? group.length : 0);
             }, 0);
-            if (geoset.TotalGroupsCount !== totalCount) {
-                console.log(`[MainLayout] Geoset ${index}: Updating TotalGroupsCount from ${geoset.TotalGroupsCount} to ${totalCount}`);
-                geoset.TotalGroupsCount = totalCount;
+            if (geoset.TotalGroupsCount !== totalCount) {                geoset.TotalGroupsCount = totalCount;
             }
 
             const maxGroupIndex = Math.max(0, geoset.Groups.length - 1);
@@ -2193,9 +2191,7 @@ const MainLayout: React.FC = () => {
                                     try {
                                         const srcPath = dir2.endsWith('\\') || dir2.endsWith('/') ? `${dir2}${tex.Image}` : `${dir2}\\${tex.Image}`;
                                         const destPath = dir1.endsWith('\\') || dir1.endsWith('/') ? `${dir1}${tex.Image}` : `${dir1}\\${tex.Image}`;
-                                        await copyFile(srcPath, destPath);
-                                        console.log(`[ModelMerge] Copied texture: ${tex.Image}`);
-                                    } catch(e) {
+                                        await copyFile(srcPath, destPath);                                    } catch(e) {
                                         // Ignore, might be an MPQ texture or already exists
                                     }
                                 }
@@ -2311,9 +2307,7 @@ const MainLayout: React.FC = () => {
     const handleSaveRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false))
     const handleSaveAsRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false))
     const handleCopyModelRef = useRef<() => void>(() => { })
-    const openModelAsTab = useCallback((filePath: string) => {
-        console.log('[MainLayout] Opening model as tab:', filePath)
-        setIsLoading(true)
+    const openModelAsTab = useCallback((filePath: string) => {        setIsLoading(true)
         setZustandLoading(true)
         const added = addTab(filePath)
         if (!added) {
@@ -2368,10 +2362,7 @@ const MainLayout: React.FC = () => {
             useUIStore.getState().reset();
             useRendererStore.getState().reset();
             useHistoryStore.getState().clear();
-            useMessageStore.getState().clearAll();
-
-            console.log('[MainLayout] Stores reset successfully');
-        };
+            useMessageStore.getState().clearAll();        };
 
         doReset();
 
@@ -2433,14 +2424,9 @@ const MainLayout: React.FC = () => {
                 // Combine and unique
                 const allPaths = Array.from(new Set([...cliPaths, ...pendingPaths]));
 
-                if (allPaths.length > 0) {
-                    console.log('[MainLayout] Files opened from CLI/Pending:', allPaths);
-
-                    // ... (MPQ loading logic) ...
+                if (allPaths.length > 0) {                    // ... (MPQ loading logic) ...
                     const savedPaths = localStorage.getItem('mpq_paths');
-                    if (savedPaths && !mpqLoaded) {
-                        console.log('[MainLayout] Loading MPQs before model...');
-                        try {
+                    if (savedPaths && !mpqLoaded) {                        try {
                             const paths = JSON.parse(savedPaths);
                             try {
                                 await invoke('set_mpq_paths', { paths });
@@ -2452,9 +2438,7 @@ const MainLayout: React.FC = () => {
                             );
                             const successCount = results.filter(r => r.status === 'fulfilled').length;
                             if (successCount > 0) {
-                                setMpqLoaded(true);
-                                console.log(`[MainLayout] Loaded ${successCount} MPQs before opening model`);
-                            }
+                                setMpqLoaded(true);                            }
                         } catch (e) {
                             console.error('[MainLayout] MPQ pre-load failed:', e);
                         }
@@ -2462,9 +2446,7 @@ const MainLayout: React.FC = () => {
 
                     // Now load all models via tab system sequentially
                     for (const cliPath of allPaths) {
-                        if (processedHotOpenPaths.current.has(cliPath)) {
-                            console.log('[MainLayout] CLI path already processed, skipping:', cliPath);
-                            continue;
+                        if (processedHotOpenPaths.current.has(cliPath)) {                            continue;
                         }
                         processedHotOpenPaths.current.add(cliPath);
                         openModelAsTab(cliPath);
@@ -2483,17 +2465,11 @@ const MainLayout: React.FC = () => {
     useEffect(() => {
         // Check if running in Electron and api is available
         const api = (window as any).api;
-        if (api && api.onOpenFile) {
-            console.log('[MainLayout] Registering Electron file open listener');
-            api.onOpenFile((filePath: string) => {
-                console.log('[MainLayout] File opened from context menu:', filePath);
-                if (!filePath || !(filePath.endsWith('.mdx') || filePath.endsWith('.mdl'))) {
+        if (api && api.onOpenFile) {            api.onOpenFile((filePath: string) => {                if (!filePath || !(filePath.endsWith('.mdx') || filePath.endsWith('.mdl'))) {
                     return;
                 }
 
-                if (processedHotOpenPaths.current.has(filePath)) {
-                    console.log('[MainLayout] Skipping duplicate hot-open path:', filePath);
-                    return;
+                if (processedHotOpenPaths.current.has(filePath)) {                    return;
                 }
 
                 processedHotOpenPaths.current.add(filePath);
@@ -2550,10 +2526,7 @@ const MainLayout: React.FC = () => {
     }
 
     const handleViewCamera = (cameraNode: any) => {
-        if (viewerRef.current && cameraNode) {
-            console.log('handleViewCamera', cameraNode)
-
-            const isArrayLike = (v: any) => Array.isArray(v) || v instanceof Float32Array || ArrayBuffer.isView(v);
+        if (viewerRef.current && cameraNode) {            const isArrayLike = (v: any) => Array.isArray(v) || v instanceof Float32Array || ArrayBuffer.isView(v);
             const toArray = (v: any) => v instanceof Float32Array ? Array.from(v) : v;
 
             const getPos = (prop: any, directProp?: any) => {
@@ -2568,9 +2541,6 @@ const MainLayout: React.FC = () => {
 
             const pos = getPos(cameraNode.Translation, cameraNode.Position)
             const target = getPos(cameraNode.TargetTranslation, cameraNode.TargetPosition)
-
-            console.log('Camera Pos:', pos, 'Target:', target)
-
             const dx = pos[0] - target[0]
             const dy = pos[1] - target[1]
             const dz = pos[2] - target[2]
@@ -2583,11 +2553,7 @@ const MainLayout: React.FC = () => {
             phi = Math.max(0.01, Math.min(Math.PI - 0.01, phi))
 
             let theta = Math.atan2(dy, dx)
-            if (isNaN(theta)) theta = 0;
-
-            console.log(' Calculated:', { distance, theta, phi })
-
-            viewerRef.current.setCamera({
+            if (isNaN(theta)) theta = 0;            viewerRef.current.setCamera({
                 distance,
                 theta,
                 phi,
@@ -2742,9 +2708,7 @@ const MainLayout: React.FC = () => {
         return ensureTextureManagerSnapshotState()
     }, [ensureTextureManagerSnapshotState]);
     const handleTextureCommand = useCallback((command: string, payload: any) => {
-        if (command === 'SAVE_TEXTURES' && payload.textures) {
-            console.log('[RPC COMMAND: SAVE_TEXTURES]', payload.textures);
-            useModelStore.getState().updateModelDataSilent({ Textures: payload.textures });
+        if (command === 'SAVE_TEXTURES' && payload.textures) {            useModelStore.getState().updateModelDataSilent({ Textures: payload.textures });
             showMessage('success', '纹理已更新', '贴图修改已同步到模型');
         } else if (command === 'EXECUTE_TEXTURE_ACTION') {
             const { action, payload: actionPayload } = payload;
@@ -3237,9 +3201,7 @@ const MainLayout: React.FC = () => {
                 prevNodes = state.nodes;
                 prevModelData = state.modelData;
 
-                if (isInitialLoad) {
-                    console.log('[MainLayout] Initial model load detected, deferring IPC broadcast for smoothness');
-                    setTimeout(() => { void performBroadcast(useModelStore.getState()); }, 100);
+                if (isInitialLoad) {                    setTimeout(() => { void performBroadcast(useModelStore.getState()); }, 100);
                 } else {
                     void performBroadcast(state);
                 }
@@ -3379,12 +3341,8 @@ const MainLayout: React.FC = () => {
                 }
             } else {
                 // Try auto-detection from Registry
-                try {
-                    console.log('[MainLayout] Attempting to auto-detect Warcraft III path...')
-                    const installPath = await invoke<string>('detect_warcraft_path')
-                    if (installPath) {
-                        console.log('[MainLayout] Detected Warcraft III path:', installPath)
-                        const mpqs = ['war3.mpq', 'War3Patch.mpq', 'War3x.mpq', 'War3xLocal.mpq']
+                try {                    const installPath = await invoke<string>('detect_warcraft_path')
+                    if (installPath) {                        const mpqs = ['war3.mpq', 'War3Patch.mpq', 'War3x.mpq', 'War3xLocal.mpq']
                         const basePath = installPath.endsWith('') ? installPath : `${installPath}`
                         const pathsToLoad = mpqs.map(mpq => `${basePath}${mpq}`)
 
@@ -3396,9 +3354,7 @@ const MainLayout: React.FC = () => {
                         const validPaths = pathsToLoad.filter((_, i) => results[i].status === 'fulfilled')
                         const successCount = validPaths.length
 
-                        if (successCount > 0) {
-                            console.log(`[MainLayout] Loaded ${successCount} MPQ files in parallel`)
-                            localStorage.setItem('mpq_paths', JSON.stringify(validPaths))
+                        if (successCount > 0) {                            localStorage.setItem('mpq_paths', JSON.stringify(validPaths))
                             try {
                                 await invoke('set_mpq_paths', { paths: validPaths })
                             } catch (e) {
@@ -3407,9 +3363,7 @@ const MainLayout: React.FC = () => {
                             setMpqLoaded(true)
                         }
                     }
-                } catch (e) {
-                    console.log('[MainLayout] Auto-detection failed (registry key not found or error):', e)
-                    setMpqLoaded(false)
+                } catch (e) {                    setMpqLoaded(false)
                 }
             }
         }
@@ -3460,9 +3414,7 @@ const MainLayout: React.FC = () => {
     }, [openModelAsTab])
     handleImportRef.current = handleImport;
 
-    const handleModelLoaded = useCallback((data: any) => {
-        console.log('Model loaded:', data)
-        // setModelData(data) // No longer needed as we use store
+    const handleModelLoaded = useCallback((data: any) => {        // setModelData(data) // No longer needed as we use store
         setZustandModelData(data, data.path || modelPath, {
             skipAutoRecalculate: true,
             skipModelRebuild: true
@@ -3488,11 +3440,9 @@ const MainLayout: React.FC = () => {
                 if (!isSameModel || useModelStore.getState().currentSequence === -1) {
                     const preferredSequence = useModelStore.getState().currentSequence
                     const nextSequence = preferredSequence >= 0 ? preferredSequence : 0
-                    console.log('[MainLayout] Auto-playing preferred animation:', nextSequence)
                     useModelStore.getState().setSequence(nextSequence)
                     useModelStore.getState().setPlaying(true)
                 } else {
-                    console.log('[MainLayout] Preserving existing animation sequence:', useModelStore.getState().currentSequence)
                 }
             }, 300)
         } else {
@@ -3554,10 +3504,7 @@ const MainLayout: React.FC = () => {
                             }
                         }))
                         return
-                    }
-
-                    console.log('[MainLayout] File dropped (Tauri):', filePath)
-                    openModelAsTab(filePath)
+                    }                    openModelAsTab(filePath)
                     setRecentFiles(addRecentFile(filePath))
                 })
 
@@ -4425,24 +4372,16 @@ const MainLayout: React.FC = () => {
         preparedData.Geosets.forEach((geoset: any, index: number) => {
             // Anims is required by generate.ts:575
             if (!geoset.Anims) {
-                geoset.Anims = []
-                console.log(`[MainLayout] Fixed Geoset ${index}: Added missing Anims array`)
-            }
+                geoset.Anims = []            }
             // VertexGroup is required
             if (!geoset.VertexGroup) {
-                geoset.VertexGroup = new Uint8Array(geoset.Vertices.length / 3)
-                console.log(`[MainLayout] Fixed Geoset ${index}: Added missing VertexGroup`)
-            }
+                geoset.VertexGroup = new Uint8Array(geoset.Vertices.length / 3)            }
             // Groups is required
             if (!geoset.Groups) {
-                geoset.Groups = [[0]]
-                console.log(`[MainLayout] Fixed Geoset ${index}: Added missing Groups`)
-            }
+                geoset.Groups = [[0]]            }
         })
 
-        if (preparedData.Geosets.length !== originalCount) {
-            console.log(`[MainLayout] Cleaned up ${originalCount - preparedData.Geosets.length} invalid geosets.`)
-        }
+        if (preparedData.Geosets.length !== originalCount) {        }
     }
 
     const toggleEditor = (editor: string) => {
@@ -4676,9 +4615,7 @@ const MainLayout: React.FC = () => {
                     const newVal = !showAttachments
                     setShowAttachments(newVal)
                 }}
-                onToggleEditor={(editor) => {
-                    console.log('[MainLayout] onToggleEditor called with:', editor)
-                    if (editor === 'nodeManager') {
+                onToggleEditor={(editor) => {                    if (editor === 'nodeManager') {
                         toggleNodeManager()
                     } else if (editor === 'modelInfo') {
                         toggleModelInfo()
@@ -4711,9 +4648,7 @@ const MainLayout: React.FC = () => {
                         windowManager.openToolWindow('modelMerge', '模型合并', 560, 500);
                     } else if (editor === 'geosetVisibility') {
                         setShowGeosetVisibility(!showGeosetVisibility)
-                    } else {
-                        console.log('[MainLayout] Toggling editor:', editor)
-                        toggleEditor(editor)
+                    } else {                        toggleEditor(editor)
                     }
                 }}
                 mainMode={mainMode}
@@ -5108,5 +5043,4 @@ const MainLayout: React.FC = () => {
 }
 
 export default MainLayout
-
 

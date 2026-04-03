@@ -356,13 +356,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
             if (storeData && storeData.Sequences) {
                 targetSequences = storeData.Sequences;
             }
-        }
-
-        console.log('[KeyframeEditor] Batch Generate clicked')
-        console.log('Target Sequences:', targetSequences)
-        console.log('VectorSize:', vectorSize)
-
-        if (!targetSequences || targetSequences.length === 0) {
+        }      if (!targetSequences || targetSequences.length === 0) {
             console.warn('[KeyframeEditor] No sequences found')
             return
         }
@@ -398,11 +392,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
                     count++
                 }
             })
-        })
-
-        console.log(`[KeyframeEditor] Generated / Updated ${count} keys`)
-
-        // Reconstruct sorted list
+        })        // Reconstruct sorted list
         const newKeys = Array.from(keyMap.values()).sort((a, b) => a.Frame - b.Frame)
         const newText = generateText(newKeys, lineType, vectorSize)
         setText(newText)
@@ -520,9 +510,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
     }
 
     useEffect(() => {
-        if (!isStandalone && visible) {
-            console.log('[KeyframeEditor] Opening with initialData:', initialData, 'fieldName:', fieldName)
-            if (initialData && initialData.Keys && initialData.Keys.length > 0) {
+        if (!isStandalone && visible) {            if (initialData && initialData.Keys && initialData.Keys.length > 0) {
                 const normalizedKeys = normalizeKeys(initialData.Keys, vectorSize)
                 setLineType(initialData.LineType ?? 0)
                 setGlobalSeqId(initialData.GlobalSeqId ?? null)
@@ -545,20 +533,14 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
     useEffect(() => {
         if (!isStandalone) return;
 
-        const currentWindowLabel = getCurrentWindow().label;
-        console.log(`[KeyframeEditor] Standalone mode initializing IPC listener on ${currentWindowLabel}`);
-
-        const unlisten = listen('IPC_KEYFRAME_INIT', (event) => {
+        const currentWindowLabel = getCurrentWindow().label;        const unlisten = listen('IPC_KEYFRAME_INIT', (event) => {
             const payload = event.payload as any;
             if (!payload) return;
 
             const tid = payload.targetWindowId as string | undefined;
             if (tid && currentWindowLabel && tid.toLowerCase() !== String(currentWindowLabel).toLowerCase()) {
                 return;
-            }
-
-            console.log(`[KeyframeEditor] ${currentWindowLabel} accepted IPC_KEYFRAME_INIT`);
-            // 优先用 initialDataJson：主进程已用 JSON 字符串传递，避免嵌套对象跨 WebView 时 float 被错成 128 等整数
+            }            // 优先用 initialDataJson：主进程已用 JSON 字符串传递，避免嵌套对象跨 WebView 时 float 被错成 128 等整数
             const vSize = payload.vectorSize || 1
             const fName = payload.fieldName || ''
             const intOpts = { isInt: isKeyframeAnimVectorIntTrack(fName) }
@@ -644,9 +626,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
 
         onOk && onOk(result)
 
-        if (isStandalone) {
-            console.log('[KeyframeEditor] Emitting IPC_KEYFRAME_SAVE to caller:', standaloneData.callerId);
-            emit('IPC_KEYFRAME_SAVE', {
+        if (isStandalone) {            emit('IPC_KEYFRAME_SAVE', {
                 callerId: standaloneData.callerId,
                 data: result
             });

@@ -282,16 +282,12 @@ class WindowManager {
     async preloadToolWindow(windowId: string, title: string, width: number, height: number): Promise<void> {
         this.ensureHydrationListener(windowId);
 
-        if (this.activeWindows.has(windowId)) {
-            console.log(`[WindowManager] Window "${windowId}" already in memory.`);
-            return;
+        if (this.activeWindows.has(windowId)) {            return;
         }
 
         try {
             const existingWin = await WebviewWindow.getByLabel(windowId);
-            if (existingWin) {
-                console.log(`[WindowManager] Recovered existing native window: ${windowId}`);
-                markStandalonePerf('window_recovered', { windowId, title });
+            if (existingWin) {                markStandalonePerf('window_recovered', { windowId, title });
                 this.activeWindows.set(windowId, existingWin);
                 await this.applyWindowBounds(existingWin, width, height);
                 this.visibilityCache.set(windowId, await existingWin.isVisible().catch(() => false));
@@ -306,10 +302,7 @@ class WindowManager {
             }
         } catch (e) {
             console.warn(`[WindowManager] Error checking for existing window ${windowId}:`, e);
-        }
-
-        console.log(`[WindowManager] Creating new window: ${windowId} (${title})`);
-        try {
+        }        try {
             const win = new WebviewWindow(windowId, {
                 // 使用独立 HTML 入口，避免加载主应用 main.tsx / App 依赖链
                 url: `${window.location.origin}/standalone.html?window=${encodeURIComponent(windowId)}`,
@@ -377,7 +370,6 @@ class WindowManager {
         const resolvedSize = this.resolveConfiguredToolWindowSize(windowId, width, height)
         width = resolvedSize.width
         height = resolvedSize.height
-        console.log(`[WindowManager] Request to open: ${windowId}`);
         markStandalonePerf('open_requested', { windowId, title, width, height });
 
         let win = this.activeWindows.get(windowId);
@@ -385,7 +377,6 @@ class WindowManager {
         const resolvedOptions = this.getOpenOptions(windowId, options);
 
         if (!win) {
-            console.log(`[WindowManager] Window ${windowId} not preloaded, preloading now...`);
             await this.preloadToolWindow(windowId, title, width, height);
             win = this.activeWindows.get(windowId);
         }
@@ -393,10 +384,7 @@ class WindowManager {
         if (win) {
             try {
                 await this.applyWindowBounds(win, width, height);
-                await this.prepareWindowForShow(windowId, hadExistingWindow, resolvedOptions);
-
-                console.log(`[WindowManager] Showing window: ${windowId}`);
-                await win.show();
+                await this.prepareWindowForShow(windowId, hadExistingWindow, resolvedOptions);                await win.show();
                 markStandalonePerf('window_shown', { windowId, title });
                 this.visibilityCache.set(windowId, true);
                 await win.setFocus();
@@ -565,9 +553,7 @@ class WindowManager {
         const windowId = `keyframeEditor_${this.nextPoolIndex}`;
         this.keyframeMap.set(key, windowId);
 
-        this.nextPoolIndex = (this.nextPoolIndex + 1) % this.POOL_SIZE;
-        console.log(`[WindowManager] Mapped field "${safeFieldName}" to pooled window "${windowId}"`);
-        return windowId;
+        this.nextPoolIndex = (this.nextPoolIndex + 1) % this.POOL_SIZE;        return windowId;
     }
 }
 

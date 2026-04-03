@@ -106,10 +106,7 @@ export function validateParticleEmitter2(emitter: any, idx: number, textureCount
         if (Array.isArray(val)) {
             emitter[prop] = new Uint32Array(val)
         }
-    })
-
-    console.log(`[particleValidator] Particle ${idx} validated: Flags=${emitter.Flags}, FrameFlags=${emitter.FrameFlags}, TextureID=${emitter.TextureID}`)
-}
+    })}
 
 /**
  * Validate all ParticleEmitter2 in a model
@@ -118,8 +115,6 @@ export function validateAllParticleEmitters(model: any): void {
     if (!model.ParticleEmitters2 || model.ParticleEmitters2.length === 0) return
 
     const textureCount = model.Textures?.length || 0
-    console.log(`[particleValidator] Validating ${model.ParticleEmitters2.length} ParticleEmitters2, textureCount: ${textureCount}`)
-
     model.ParticleEmitters2.forEach((emitter: any, idx: number) => {
         validateParticleEmitter2(emitter, idx, textureCount)
     })

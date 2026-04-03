@@ -127,10 +127,7 @@ export class EnvironmentManager {
         this.updateColors();
 
         this.currentPreset = presetKey;
-        this.enabled = true;
-
-        console.log(`[EnvironmentManager] Loaded: ${preset.name}`);
-        return true;
+        this.enabled = true;        return true;
     }
 
     /**
@@ -145,9 +142,7 @@ export class EnvironmentManager {
             lightColor: [...this._lightColorRGB],
             ambientColor: [...this._ambientColorRGB]
         };
-        this.saveCustomPresets();
-        console.log(`[EnvironmentManager] Saved preset: ${name}`);
-        return key;
+        this.saveCustomPresets();        return key;
     }
 
     /**

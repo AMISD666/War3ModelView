@@ -61,11 +61,7 @@ export class WeldVerticesCommand implements Command {
         // Apply to geoset (only updates Vertices)
         if (this.weldResult.updatedGeoset.Vertices) {
             geoset.Vertices = this.weldResult.updatedGeoset.Vertices
-        }
-
-        console.log('[WeldVerticesCommand] Welded', this.selections.length, 'vertices to center:', this.weldResult.centerPosition)
-
-        // Update GPU buffer
+        }        // Update GPU buffer
         if (this.renderer.updateGeosetVertices) {
             this.renderer.updateGeosetVertices(this.geosetIndex, geoset.Vertices)
         }

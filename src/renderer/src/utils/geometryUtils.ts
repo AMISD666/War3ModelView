@@ -158,9 +158,7 @@ export function recalculateGeosetNormals(
     // Update GPU buffer if the method exists
     if (typeof renderer.updateGeosetNormals === 'function') {
         renderer.updateGeosetNormals(geosetIndex, newNormals)
-    } else {
-        console.log('[geometryUtils] updateGeosetNormals not available, GPU buffer not updated')
-    }
+    } else {    }
 }
 
 /**
@@ -181,10 +179,7 @@ export function recalculateAllNormals(
     const geosets = renderer.model.Geosets
     for (let i = 0; i < geosets.length; i++) {
         recalculateGeosetNormals(renderer, i, smooth)
-    }
-
-    console.log('[geometryUtils] Recalculated normals for', geosets.length, 'geosets')
-}
+    }}
 
 /**
  * Calculate the bounding box and radius for a geoset.

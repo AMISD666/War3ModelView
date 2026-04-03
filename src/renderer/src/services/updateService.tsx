@@ -82,12 +82,7 @@ function isNewerVersion(current: string, remote: string): boolean {
 }
 
 async function downloadAndInstall(assets: GiteeRelease['assets'], version: string) {
-    const loadingId = showMessage('loading', '正在更新', '正在下载安装包，请稍候...', 0);
-
-    // Debug: Log all assets
-    console.log('[Update] Available assets:', assets);
-
-    const exeAsset = assets.find(a => a.name.endsWith('.exe'));
+    const loadingId = showMessage('loading', '正在更新', '正在下载安装包，请稍候...', 0);    const exeAsset = assets.find(a => a.name.endsWith('.exe'));
     if (!exeAsset) {
         console.error('[Update] No .exe asset found in release. Assets:', assets.map(a => a.name));
         useMessageStore.getState().removeMessage(loadingId);
@@ -99,25 +94,9 @@ async function downloadAndInstall(assets: GiteeRelease['assets'], version: strin
         const downloadUrl = exeAsset.browser_download_url;
         const fileName = exeAsset.name;
         const tempDirPath = await tempDir();
-        const absolutePath = `${tempDirPath}${fileName}`;
-
-        console.log('[Update] Download URL:', downloadUrl);
-        console.log('[Update] Target path:', absolutePath);
-
-        // Use Rust backend command to download - bypasses all JS HTTP/shell issues
-        const { invoke } = await import('@tauri-apps/api/core');
-
-        console.log('[Update] Invoking Rust download_file command...');
-
-        await invoke('download_file', { url: downloadUrl, targetPath: absolutePath });
-
-        console.log('[Update] Download completed successfully');
-
-        useMessageStore.getState().removeMessage(loadingId);
-        showMessage('success', '下载完成', '即将启动安装程序...', 2000);
-
-        console.log(`[Update] executing installer at: ${absolutePath}`);
-        await invoke('launch_installer', { path: absolutePath });
+        const absolutePath = `${tempDirPath}${fileName}`;       // Use Rust backend command to download - bypasses all JS HTTP/shell issues
+        const { invoke } = await import('@tauri-apps/api/core');        await invoke('download_file', { url: downloadUrl, targetPath: absolutePath });        useMessageStore.getState().removeMessage(loadingId);
+        showMessage('success', '下载完成', '即将启动安装程序...', 2000);        await invoke('launch_installer', { path: absolutePath });
 
         setTimeout(async () => {
             await exit(0);

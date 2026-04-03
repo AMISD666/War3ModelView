@@ -18,6 +18,7 @@ import { windowManager } from '../../utils/WindowManager'
 import { GlobalSequenceSelect } from '../common/GlobalSequenceSelect'
 import RightFloatingPanelShell from './RightFloatingPanelShell'
 import { invokeReadMpqFile } from '../../utils/mpqPerf'
+import { decodeTextureData, getTextureCandidatePaths, normalizePath } from '../viewer/textureLoader'
 
 const { Text } = Typography
 

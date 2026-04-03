@@ -83,22 +83,11 @@ export class SplitVerticesCommand implements Command {
         if (!this.splitResult.extractedFaceIndices.length) {
             console.warn('[SplitVerticesCommand] No faces to extract')
             return
-        }
-
-        // Debug: log what splitResult contains
-        console.log('[SplitVerticesCommand] splitResult.newGeoset:', {
-            hasVertices: !!this.splitResult.newGeoset.Vertices,
-            vertexCount: this.splitResult.newGeoset.Vertices?.length / 3,
-            faceCount: this.splitResult.newGeoset.Faces?.length / 3,
-        })
-
-        // Update original geoset with remaining geometry (faces removed)
+        }        // Update original geoset with remaining geometry (faces removed)
         if (Object.keys(this.splitResult.updatedOriginalGeoset).length > 0) {
             Object.assign(geoset, this.splitResult.updatedOriginalGeoset)
             // Rebuild GPU buffers for modified original geoset
-            ModelResourceManager.getInstance().addGeosetBuffers(this.renderer.model, this.geosetIndex)
-            console.log('[SplitVerticesCommand] Updated original geoset, rebuilt GPU buffers')
-        }
+            ModelResourceManager.getInstance().addGeosetBuffers(this.renderer.model, this.geosetIndex)        }
 
         // Add new geoset to model
         // Use targetMaterialId if provided, otherwise inherit from source
@@ -113,20 +102,8 @@ export class SplitVerticesCommand implements Command {
             MaximumExtent: geoset.MaximumExtent || [0, 0, 0],
             BoundsRadius: geoset.BoundsRadius || 0
         }
-
-        // Debug: log the new geoset that will be added
-        console.log('[SplitVerticesCommand] Adding newGeoset to renderer:', {
-            vertexCount: (newGeoset as any).Vertices?.length / 3,
-            faceCount: (newGeoset as any).Faces?.length / 3,
-            MaterialID: newGeoset.MaterialID,
-        })
-
         this.renderer.model.Geosets.push(newGeoset)
         this.newGeosetIndex = this.renderer.model.Geosets.length - 1
-
-        console.log('[SplitVerticesCommand] Created new geoset at index', this.newGeosetIndex,
-            'Total geosets now:', this.renderer.model.Geosets.length)
-
         // Create GPU buffers for the new geoset
         ModelResourceManager.getInstance().addGeosetBuffers(this.renderer.model, this.newGeosetIndex)
 
@@ -150,10 +127,7 @@ export class SplitVerticesCommand implements Command {
         this.renderer.model.Geosets.splice(this.newGeosetIndex, 1)
 
         // Rebuild GPU buffers for the restored original geoset
-        ModelResourceManager.getInstance().addGeosetBuffers(this.renderer.model, this.geosetIndex)
-        console.log('[SplitVerticesCommand] Undo: Restored old geoset and rebuilt buffers')
-
-        // Sync to store and trigger reload
+        ModelResourceManager.getInstance().addGeosetBuffers(this.renderer.model, this.geosetIndex)        // Sync to store and trigger reload
         this.syncToStore()
     }
 
@@ -225,8 +199,6 @@ export class SplitVerticesCommand implements Command {
 
         // Force renderer reload to rebuild GPU buffers
         if (this.renderer.reload) {
-            this.renderer.reload()
-            console.log('[SplitVerticesCommand] Called renderer.reload() to rebuild GPU buffers')
-        }
+            this.renderer.reload()        }
     }
 }

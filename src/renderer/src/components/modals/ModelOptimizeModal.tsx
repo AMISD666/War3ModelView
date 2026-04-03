@@ -85,9 +85,7 @@ const ModelOptimizeModal: React.FC<ModelOptimizeModalProps> = ({ visible, onClos
         const payload = { removeRedundantVertices, decimateModel, decimateRatio };
         if (isStandalone) {
             emitCommand('EXECUTE_POLYGON_OPT', payload);
-        } else {
-            console.log('Embedded execution:', payload);
-        }
+        } else {        }
     };
 
     const handleExecuteKeyframeOpt = () => {
@@ -95,9 +93,7 @@ const ModelOptimizeModal: React.FC<ModelOptimizeModalProps> = ({ visible, onClos
         const payload = { removeRedundantFrames, optimizeKeyframes };
         if (isStandalone) {
             emitCommand('EXECUTE_KEYFRAME_OPT', payload);
-        } else {
-            console.log('Embedded execution:', payload);
-        }
+        } else {        }
     };
 
     const innerContent = (

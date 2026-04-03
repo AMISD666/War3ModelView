@@ -15,26 +15,7 @@ import {
 export function checkForStructuralChanges(
     modelData: any,
     rendererModel: any
-): { needsReload: boolean; reason?: string } {
-    console.log('[modelSync] checkForStructuralChanges called')
-    console.log('[modelSync] modelData counts:', {
-        Geosets: modelData.Geosets?.length || 0,
-        Textures: modelData.Textures?.length || 0,
-        Materials: modelData.Materials?.length || 0,
-        ParticleEmitters2: modelData.ParticleEmitters2?.length || 0,
-        Lights: modelData.Lights?.length || 0,
-        Nodes: modelData.Nodes?.length || 0
-    })
-    console.log('[modelSync] rendererModel counts:', {
-        Geosets: rendererModel.Geosets?.length || 0,
-        Textures: rendererModel.Textures?.length || 0,
-        Materials: rendererModel.Materials?.length || 0,
-        ParticleEmitters2: rendererModel.ParticleEmitters2?.length || 0,
-        Lights: rendererModel.Lights?.length || 0,
-        Nodes: rendererModel.Nodes?.length || 0
-    })
-
-    const geoChanged = (modelData.Geosets?.length || 0) !== (rendererModel.Geosets?.length || 0)
+): { needsReload: boolean; reason?: string } {  const geoChanged = (modelData.Geosets?.length || 0) !== (rendererModel.Geosets?.length || 0)
     const textureChanged = buildTextureDefinitionSignature(modelData.Textures) !== buildTextureDefinitionSignature(rendererModel.Textures)
     const materialChanged = (modelData.Materials?.length || 0) !== (rendererModel.Materials?.length || 0)
     const materialTopologyChanged = buildMaterialLayerTopologySignature(modelData.Materials) !== buildMaterialLayerTopologySignature(rendererModel.Materials)
@@ -53,24 +34,14 @@ export function checkForStructuralChanges(
             const modelVertexCount = modelData.Geosets[i]?.Vertices?.length || 0
             const rendererVertexCount = rendererModel.Geosets[i]?.Vertices?.length || 0
             if (modelVertexCount !== rendererVertexCount) {
-                geosetVertexCountChanged = true
-                console.log(`[modelSync] Geoset ${i} vertex count changed: ${rendererVertexCount} -> ${modelVertexCount}`)
-            }
+                geosetVertexCountChanged = true            }
         }
-    }
-
-    console.log('[modelSync] Change flags:', { geoChanged, textureChanged, materialChanged, materialTopologyChanged, particleChanged, geosetMaterialChanged, geosetVertexCountChanged, lightCountChanged })
-
-    // OPTIMIZATION: Geoset structure changes (Split/Weld/Delete) are now handled 
+    }    // OPTIMIZATION: Geoset structure changes (Split/Weld/Delete) are now handled 
     // by the commands themselves (rebuilding buffers). We can trust the live renderer.
-    if (geoChanged) {
-        console.log('[modelSync] Geoset count changed, but skipping reload (Trusting Command)')
-        // return { needsReload: true, reason: 'Geoset count changed' }
+    if (geoChanged) {        // return { needsReload: true, reason: 'Geoset count changed' }
     }
 
-    if (textureChanged) {
-        console.log('[modelSync] Texture definition changed, but using lightweight sync')
-    }
+    if (textureChanged) {    }
     if (materialChanged) {
         return { needsReload: true, reason: 'Material count changed' }
     }
@@ -83,17 +54,13 @@ export function checkForStructuralChanges(
     // OPTIMIZATION: Geoset MaterialID changes are now handled via lightweight sync
     // syncMaterials() rebuilds the materialLayerTextureID cache after MaterialID changes
     if (geosetMaterialChanged) {
-        console.log('[modelSync] Geoset MaterialID changed, but using lightweight sync')
         // return { needsReload: true, reason: 'Geoset MaterialID changed' }
     }
 
     if (geosetVertexCountChanged) {
-        console.log('[modelSync] Geoset vertex count changed, but skipping reload (Trusting Command)')
         // return { needsReload: true, reason: 'Geoset vertex count changed (Split/Weld)' }
     }
     if (lightCountChanged) return { needsReload: true, reason: 'Light count changed' }
-
-    console.log('[modelSync] No structural changes, using lightweight sync')
     return { needsReload: false }
 }
 
@@ -143,9 +110,7 @@ export function lightweightSync(renderer: any, modelData: any): void {
             renderer.model.ParticleEmitters2 = currentEmitters
         } else {
             renderer.model.ParticleEmitters2 = nextEmitters
-        }
-        console.log('[modelSync] Synced ParticleEmitters2:', renderer.model.ParticleEmitters2.length, 'emitters')
-        // ParticlesController.syncEmitters() is called automatically in update()
+        }        // ParticlesController.syncEmitters() is called automatically in update()
     }
 
     // === RIBBON EMITTERS ===
@@ -167,9 +132,7 @@ export function lightweightSync(renderer: any, modelData: any): void {
         renderer.model.Nodes = modelData.Nodes
         // Also update rendererData.nodes for particles to find their node transforms
         if (renderer.modelInstance?.syncNodes) {
-            renderer.modelInstance.syncNodes()
-            console.log('[modelSync] Called modelInstance.syncNodes() for node updates')
-        }
+            renderer.modelInstance.syncNodes()        }
     }
 
     // === BONES ===
@@ -198,11 +161,7 @@ export function lightweightSync(renderer: any, modelData: any): void {
     }
 
     // === MATERIALS ===
-    if (modelData.Materials) {
-        console.log('[modelSync] Syncing materials. Count:', modelData.Materials.length)
-        if (modelData.Materials.length > 0) {
-            console.log('[modelSync] First material Layers:', modelData.Materials[0]?.Layers?.length || 0)
-        }
+    if (modelData.Materials) {        if (modelData.Materials.length > 0) {        }
         renderer.model.Materials = modelData.Materials
         if (renderer.modelInstance?.syncMaterials) {
             renderer.modelInstance.syncMaterials()
@@ -231,9 +190,7 @@ export function lightweightSync(renderer: any, modelData: any): void {
         renderer.model.GlobalSequences = modelData.GlobalSequences
         // Sync the globalSequencesFrames array for new entries
         if (renderer.modelInstance?.syncGlobalSequences) {
-            renderer.modelInstance.syncGlobalSequences()
-            console.log('[modelSync] Called modelInstance.syncGlobalSequences() for GlobalSequences update')
-        }
+            renderer.modelInstance.syncGlobalSequences()        }
     }
 
     // === PIVOT POINTS ===
@@ -244,25 +201,16 @@ export function lightweightSync(renderer: any, modelData: any): void {
     // === TEXTURE ANIMS ===
     if (modelData.TextureAnims) {
         renderer.model.TextureAnims = modelData.TextureAnims
-        // Debug: Log TextureAnims data to help trace sync issues
-        console.log('[modelSync] Synced TextureAnims:', modelData.TextureAnims.length, 'anims')
         modelData.TextureAnims.forEach((anim: any, index: number) => {
             const trans = anim.Translation
             const rot = anim.Rotation
             const scale = anim.Scaling
-            console.log(`[modelSync] TextureAnim[${index}]:`, {
-                hasTranslation: !!trans,
-                transGlobalSeqId: trans?.GlobalSeqId,
-                transKeysCount: trans?.Keys?.length,
-                hasRotation: !!rot,
-                rotGlobalSeqId: rot?.GlobalSeqId,
-                hasScaling: !!scale,
-                scaleGlobalSeqId: scale?.GlobalSeqId
-            })
+            void trans
+            void rot
+            void scale
+            void index
         })
     }
-
-    console.log('[modelSync] Lightweight sync complete')
 }
 
 /**
@@ -283,4 +231,3 @@ export function syncNodeData(renderer: any, storeNodes: any[]): void {
         }
     })
 }
-

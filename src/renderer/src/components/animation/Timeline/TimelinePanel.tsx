@@ -13,10 +13,11 @@ import {
     ZoomOutOutlined,
     EyeOutlined,
     EyeInvisibleOutlined,
-    DownOutlined
+    DownOutlined,
+    NodeIndexOutlined
 } from '@ant-design/icons'
 import { useHistoryStore } from '../../../store/historyStore'
-import { Button, Slider, Input, Radio, Tooltip, Menu, Modal, Dropdown, Select } from 'antd'
+import { Button, Slider, Input, Radio, Tooltip, Modal, Dropdown } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { registerShortcutHandler } from '../../../shortcuts/manager'
 import { UpdateKeyframeCommand, KeyframeChange } from '../../../commands/UpdateKeyframeCommand'
@@ -29,7 +30,7 @@ interface TimelinePanelProps {
 // Constants
 const RULER_HEIGHT = 28
 // Track visual settings
-const KEYFRAME_SIZE = 8
+const KEYFRAME_SIZE = 10
 const SNAP_THRESHOLD_X = 90 // px, fallback snap threshold in X
 const MIN_SNAP_THRESHOLD_X = 10 // px, lower bound for dynamic threshold
 const MAX_SNAP_THRESHOLD_X = 160 // px, upper bound for dynamic threshold
@@ -43,6 +44,22 @@ const OFFSET_ROTATION = 26
 const OFFSET_SCALING = 40
 const CONTEXT_MENU_WIDTH = 170
 const CONTEXT_MENU_HEIGHT = 160
+const MIN_ZOOM_RANGE_PADDING_RATIO = 0.1
+
+const dimHexColor = (hex: string, factor = 0.22) => {
+    const normalized = hex.startsWith('#') ? hex.slice(1) : hex
+    const expanded = normalized.length === 3
+        ? normalized.split('').map((ch) => ch + ch).join('')
+        : normalized
+    if (expanded.length !== 6) return hex
+    const r = parseInt(expanded.slice(0, 2), 16)
+    const g = parseInt(expanded.slice(2, 4), 16)
+    const b = parseInt(expanded.slice(4, 6), 16)
+    if ([r, g, b].some((v) => Number.isNaN(v))) return hex
+    const gray = 24
+    const mix = (value: number) => Math.max(0, Math.min(255, Math.round(value * factor + gray * (1 - factor))))
+    return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`
+}
 
 const makeKeyframeUid = (ownerType: 'node' | 'geoset' | 'textureAnim' | 'materialLayer', ownerId: number, type: string, frame: number) =>
     `${ownerType}-${ownerId}-${type}-${frame}`
@@ -481,8 +498,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         setSelectedMaterialLayerIndex,
         timelineKeyframeDisplayMode,
         setTimelineKeyframeDisplayMode,
-        timelineGlobalSequenceFilter,
-        setTimelineGlobalSequenceFilter
+        timelineGlobalSequenceFilter
     } = useSelectionStore()
 
     const effectiveModelData = useMemo(
@@ -500,6 +516,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     const activeGlobalSequenceDuration = typeof timelineGlobalSequenceFilter === 'number' && timelineGlobalSequenceFilter >= 0
         ? Number(globalSequences[timelineGlobalSequenceFilter] ?? 0)
         : null
+    const isSequenceOnlyView = timelineGlobalSequenceFilter === -1
     const isSpecificGlobalSequenceView = activeGlobalSequenceDuration !== null
         && Number.isFinite(activeGlobalSequenceDuration)
         && activeGlobalSequenceDuration >= 0
@@ -522,6 +539,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     const [isEditingFrame, setIsEditingFrame] = useState(false)
     const [inputFrameValue, setInputFrameValue] = useState('')
     const [showAllKeyframes, setShowAllKeyframes] = useState(true)
+    const [showAllOwnerKeyframes, setShowAllOwnerKeyframes] = useState(true)
     const keyframeDisplayMode = timelineKeyframeDisplayMode
     const currentKeyframeModeConfig = KEYFRAME_DISPLAY_MODE_CONFIG[keyframeDisplayMode]
     const keyframeModeMenuItems = useMemo(() => (
@@ -557,18 +575,6 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     // Drag Keyframe Preview State
     const [dragKeyframeOffset, setDragKeyframeOffset] = useState<number>(0)
     const [dragKeyframeScale, setDragKeyframeScale] = useState<number | null>(null)
-    const globalSequenceFilterOptions = useMemo(() => ([
-        { label: '全部轨道', value: '__all__' },
-        { label: '普通动作', value: '__sequence__' },
-        ...globalSequences.map((duration, index) => ({
-            label: ` ${index} (${duration}ms)`,
-            value: String(index)
-        }))
-    ]), [globalSequences])
-    const globalSequenceFilterValue = timelineGlobalSequenceFilter === null
-        ? '__all__'
-        : (timelineGlobalSequenceFilter === -1 ? '__sequence__' : String(timelineGlobalSequenceFilter))
-
     // Refs for RAF
     const frameRef = useRef(0)
     const pixelsPerMsRef = useRef(pixelsPerMs)
@@ -583,6 +589,10 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     const keyframeDisplayModeRef = useRef<KeyframeDisplayMode>(keyframeDisplayMode)
     const dragKeyframeOffsetRef = useRef(0)
     const dragKeyframeScaleRef = useRef<number | null>(null)
+    const isSequenceOnlyViewRef = useRef(isSequenceOnlyView)
+    const isSpecificGlobalSequenceViewRef = useRef(isSpecificGlobalSequenceView)
+    const showAllOwnerKeyframesRef = useRef(showAllOwnerKeyframes)
+    const selectedNodeIdsRef = useRef<number[]>(selectedNodeIds)
 
     // Interaction Refs
     const interactionRef = useRef({
@@ -624,6 +634,10 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     useEffect(() => { isDraggingRef.current = isDragging }, [isDragging])
     useEffect(() => { dragKeyframeOffsetRef.current = dragKeyframeOffset }, [dragKeyframeOffset])
     useEffect(() => { dragKeyframeScaleRef.current = dragKeyframeScale }, [dragKeyframeScale])
+    useEffect(() => { isSequenceOnlyViewRef.current = isSequenceOnlyView }, [isSequenceOnlyView])
+    useEffect(() => { isSpecificGlobalSequenceViewRef.current = isSpecificGlobalSequenceView }, [isSpecificGlobalSequenceView])
+    useEffect(() => { showAllOwnerKeyframesRef.current = showAllOwnerKeyframes }, [showAllOwnerKeyframes])
+    useEffect(() => { selectedNodeIdsRef.current = selectedNodeIds }, [selectedNodeIds])
     useEffect(() => {
         setSelectedKeyframeUids(new Set())
         setSelectionRect(null)
@@ -702,6 +716,26 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         return trackGlobalSeqId === timelineGlobalSequenceFilter
     }, [timelineGlobalSequenceFilter])
 
+    const getSelectionSetForKeyframe = useCallback((keyframe: any) => {
+        if (!keyframe) return new Set<string>()
+        if (!showAllOwnerKeyframes) {
+            return new Set([keyframe.uid])
+        }
+        const grouped = activeKeyframesRef.current.filter((candidate) => {
+            if (candidate.frame !== keyframe.frame) return false
+            if (candidate.type !== keyframe.type) return false
+            if (
+                keyframe.ownerType === 'node' &&
+                selectedNodeIds.length > 0 &&
+                candidate.ownerType === 'node'
+            ) {
+                return selectedNodeIds.includes(Number(candidate.ownerId))
+            }
+            return true
+        })
+        return new Set(grouped.map((candidate) => candidate.uid))
+    }, [showAllOwnerKeyframes, selectedNodeIds])
+
 
 
     // Cache active keyframes
@@ -717,9 +751,25 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             : (selectedGeosetIndex !== null
                 ? [selectedGeosetIndex]
                 : (pickedGeosetIndex !== null ? [pickedGeosetIndex] : []))
+        const geosetIdsForTimeline = showAllOwnerKeyframes
+            ? Array.from(new Set(
+                (Array.isArray((modelData as any).GeosetAnims) ? (modelData as any).GeosetAnims : [])
+                    .map((anim: any) => Number(anim?.GeosetId))
+                    .filter((id: number) => Number.isFinite(id) && id >= 0)
+            ))
+            : geosetSelection
+        const nodeIdsForTimeline = showAllOwnerKeyframes
+            ? modelNodes.map((node: any) => Number(node?.ObjectId)).filter((id: number) => Number.isFinite(id))
+            : selectedNodeIds
+        const particleNodeIdsForTimeline = showAllOwnerKeyframes
+            ? modelNodes.filter((node: any) => isParticleEmitter2Node(node)).map((node: any) => Number(node?.ObjectId)).filter((id: number) => Number.isFinite(id))
+            : selectedNodeIds.map((id) => Number(id)).filter((id) => Number.isFinite(id))
+        const textureAnimIdsForTimeline = showAllOwnerKeyframes
+            ? Array.from({ length: Array.isArray((modelData as any)?.TextureAnims) ? (modelData as any).TextureAnims.length : 0 }, (_, index) => index)
+            : ((typeof selectedTextureAnimIndex === 'number' && selectedTextureAnimIndex >= 0) ? [selectedTextureAnimIndex] : [])
 
         if (keyframeDisplayMode === 'node') {
-            selectedNodeIds.forEach(nodeId => {
+            nodeIdsForTimeline.forEach(nodeId => {
                 const node = modelNodes.find((n: any) => n.ObjectId === nodeId)
                 if (!node) return
 
@@ -739,12 +789,12 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 }
 
                 addKeys(node.Translation, 'Translation', '#ff4d4f')
-                addKeys(node.Rotation, 'Rotation', '#52c41a')
+                addKeys(node.Rotation, 'Rotation', '#d3f261')
                 addKeys(node.Scaling, 'Scaling', '#1890ff')
             })
         }
 
-        if (keyframeDisplayMode === 'geosetAnim' && geosetSelection.length > 0 && Array.isArray((modelData as any).GeosetAnims)) {
+        if (keyframeDisplayMode === 'geosetAnim' && geosetIdsForTimeline.length > 0 && Array.isArray((modelData as any).GeosetAnims)) {
             const addGeosetKeys = (geosetId: number, propData: any, type: 'GeosetAlpha' | 'GeosetColor', color: string) => {
                 if (!isAnimTrack(propData) || !matchesTimelineGlobalSequenceFilter(propData)) return
                 propData.Keys.forEach((k: any) => {
@@ -759,7 +809,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 })
             }
 
-            geosetSelection.forEach((geosetId) => {
+            geosetIdsForTimeline.forEach((geosetId) => {
                 const geosetAnim = (modelData as any).GeosetAnims.find((anim: any) => Number(anim?.GeosetId) === Number(geosetId))
                 addGeosetKeys(geosetId, geosetAnim?.Alpha, 'GeosetAlpha', '#fadb14')
                 addGeosetKeys(geosetId, geosetAnim?.Color, 'GeosetColor', '#ff85c0')
@@ -767,11 +817,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         }
 
         if (keyframeDisplayMode === 'particle') {
-            const selectedParticleIds = selectedNodeIds
-                .map((id) => Number(id))
-                .filter((id) => Number.isFinite(id))
-
-            selectedParticleIds.forEach((nodeId) => {
+            particleNodeIdsForTimeline.forEach((nodeId) => {
                 const node = modelNodes.find((n: any) => Number(n?.ObjectId) === nodeId)
                 if (!node || !isParticleEmitter2Node(node)) return
 
@@ -796,12 +842,8 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             const textureAnims = Array.isArray((modelData as any)?.TextureAnims)
                 ? ((modelData as any).TextureAnims as any[])
                 : []
-            const textureAnimId = selectedTextureAnimIndex
-            if (
-                typeof textureAnimId === 'number' &&
-                textureAnimId >= 0 &&
-                textureAnimId < textureAnims.length
-            ) {
+            textureAnimIdsForTimeline.forEach((textureAnimId) => {
+                if (textureAnimId < 0 || textureAnimId >= textureAnims.length) return
                 const anim = textureAnims[textureAnimId]
                 TEXTURE_ANIM_TRACK_INFOS.forEach(({ type, propName, color }) => {
                     const track = anim?.[propName]
@@ -817,35 +859,41 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                         })
                     })
                 })
-            }
+            })
         }
 
         if (keyframeDisplayMode === 'material') {
             const materials = Array.isArray((effectiveModelData as any)?.Materials)
                 ? ((effectiveModelData as any).Materials as any[])
                 : []
-            const materialIds = selectedMaterialIndices.length > 0
+            const materialIds = showAllOwnerKeyframes
+                ? Array.from({ length: materials.length }, (_, index) => index)
+                : (selectedMaterialIndices.length > 0
                 ? selectedMaterialIndices
-                : (typeof selectedMaterialIndex === 'number' ? [selectedMaterialIndex] : [])
+                : (typeof selectedMaterialIndex === 'number' ? [selectedMaterialIndex] : []))
             materialIds.forEach((materialIndex) => {
                 if (materialIndex < 0 || materialIndex >= materials.length) return
-                const layerIndex = (
-                    typeof selectedMaterialLayerIndex === 'number' &&
-                    selectedMaterialLayerIndex >= 0
-                ) ? selectedMaterialLayerIndex : 0
-                const layer = materials[materialIndex]?.Layers?.[layerIndex]
-                const ownerId = encodeMaterialLayerOwnerId(materialIndex, layerIndex)
-                MATERIAL_TRACK_INFOS.forEach(({ type, propName, color }) => {
-                    const track = layer?.[propName]
-                    if (!isAnimTrack(track) || !matchesTimelineGlobalSequenceFilter(track)) return
-                    track.Keys.forEach((k: any) => {
-                        keyframes.push({
-                            frame: Number(k.Frame),
-                            ownerType: 'materialLayer',
-                            ownerId,
-                            type,
-                            uid: makeKeyframeUid('materialLayer', ownerId, type, Number(k.Frame)),
-                            color
+                const layerIndices = showAllOwnerKeyframes
+                    ? Array.from({ length: Array.isArray(materials[materialIndex]?.Layers) ? materials[materialIndex].Layers.length : 0 }, (_, index) => index)
+                    : [(
+                        typeof selectedMaterialLayerIndex === 'number' &&
+                        selectedMaterialLayerIndex >= 0
+                    ) ? selectedMaterialLayerIndex : 0]
+                layerIndices.forEach((layerIndex) => {
+                    const layer = materials[materialIndex]?.Layers?.[layerIndex]
+                    const ownerId = encodeMaterialLayerOwnerId(materialIndex, layerIndex)
+                    MATERIAL_TRACK_INFOS.forEach(({ type, propName, color }) => {
+                        const track = layer?.[propName]
+                        if (!isAnimTrack(track) || !matchesTimelineGlobalSequenceFilter(track)) return
+                        track.Keys.forEach((k: any) => {
+                            keyframes.push({
+                                frame: Number(k.Frame),
+                                ownerType: 'materialLayer',
+                                ownerId,
+                                type,
+                                uid: makeKeyframeUid('materialLayer', ownerId, type, Number(k.Frame)),
+                                color
+                            })
                         })
                     })
                 })
@@ -865,7 +913,8 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         selectedMaterialIndices,
         selectedMaterialLayerIndex,
         keyframeDisplayMode,
-        matchesTimelineGlobalSequenceFilter
+        matchesTimelineGlobalSequenceFilter,
+        showAllOwnerKeyframes
     ])
 
     const didInitialAutoFitRef = useRef(false)
@@ -883,14 +932,25 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const end = isSpecificGlobalSequenceView
             ? seqEnd
             : (useFullRange ? allSequencesMax : (sequence?.Interval?.[1] ?? 1000))
-        const duration = end - start
-        const paddedDuration = Math.max(100, duration * 1.2)
+        const duration = Math.max(1, end - start)
+        const paddedDuration = isSpecificGlobalSequenceView ? duration : Math.max(100, duration * (1 + MIN_ZOOM_RANGE_PADDING_RATIO))
         const newPixelsPerMs = containerWidth / paddedDuration
 
         setPixelsPerMs(Math.max(0.01, Math.min(2, newPixelsPerMs)))
-        setScrollX(Math.max(0, start - duration * 0.1))
+        setScrollX(isSpecificGlobalSequenceView ? start : Math.max(0, start - duration * (MIN_ZOOM_RANGE_PADDING_RATIO * 0.5)))
         return true
     }, [sequence, isAllSequences, isSpecificGlobalSequenceView, allSequencesMax, seqEnd])
+
+    const zoomDuration = Math.max(1, seqEnd - seqStart)
+    const minPixelsPerMs = useMemo(() => {
+        const width = containerSizeRef.current.width
+        if (!Number.isFinite(width) || width <= 0) return 0.01
+        const paddedZoomDuration = isSpecificGlobalSequenceView
+            ? zoomDuration
+            : zoomDuration * (1 + MIN_ZOOM_RANGE_PADDING_RATIO)
+        return Math.max(0.0005, width / paddedZoomDuration)
+    }, [zoomDuration, containerMeasureTick, isSpecificGlobalSequenceView])
+    const maxPixelsPerMs = 12
 
     // Reset the one-time auto-fit when leaving keyframe mode, so re-entering matches the selected sequence.
     useEffect(() => {
@@ -898,6 +958,10 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             didInitialAutoFitRef.current = false
         }
     }, [isActive])
+
+    useEffect(() => {
+        setPixelsPerMs((current) => Math.max(minPixelsPerMs, Math.min(maxPixelsPerMs, current)))
+    }, [minPixelsPerMs])
 
     // Initial entry into keyframe timeline: fit once to the selected sequence interval (e.g. "Stand").
     useLayoutEffect(() => {
@@ -909,18 +973,27 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         }
     }, [isActive, currentSequence, fitToCurrentSequenceInterval, containerMeasureTick])
 
-    // Auto-fit when the SEQUENCE INDEX changes (but not while dragging).
-    const lastSequenceIndexRef = useRef(currentSequence)
+    // Auto-fit when the timeline source changes (sequence switch or global-sequence filter switch).
+    const currentTimelineViewKey = isSpecificGlobalSequenceView
+        ? `global:${timelineGlobalSequenceFilter}:${seqEnd}`
+        : (isSequenceOnlyView
+            ? `sequence:${currentSequence}:${seqStart}:${seqEnd}`
+            : `all:${currentSequence}:${allSequencesMax}`)
+    const lastTimelineViewKeyRef = useRef(currentTimelineViewKey)
     useEffect(() => {
-        const indexChanged = lastSequenceIndexRef.current !== currentSequence
-        lastSequenceIndexRef.current = currentSequence
+        const viewChanged = lastTimelineViewKeyRef.current !== currentTimelineViewKey
+        lastTimelineViewKeyRef.current = currentTimelineViewKey
 
         if (!isActive) return
-        if (!indexChanged) return
+        if (!viewChanged) return
         if (isDraggingRef.current) return
 
         fitToCurrentSequenceInterval()
-    }, [currentSequence, isActive, fitToCurrentSequenceInterval])
+        const clampedFrame = Math.max(seqStart, Math.min(seqEnd, Math.round(frameRef.current)))
+        frameRef.current = clampedFrame
+        setDisplayFrame(clampedFrame)
+        setFrame(clampedFrame)
+    }, [currentTimelineViewKey, isActive, fitToCurrentSequenceInterval, seqStart, seqEnd, setFrame])
 
     // Allow external sequence list clicks (including re-click on the same sequence)
     // to force a timeline fit to the current sequence interval.
@@ -1042,6 +1115,10 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const selRect = selectionRectRef.current
         const showAll = showAllKeyframesRef.current
         const displayMode = keyframeDisplayModeRef.current
+        const sequenceOnlyView = isSequenceOnlyViewRef.current
+        const specificGlobalSequenceView = isSpecificGlobalSequenceViewRef.current
+        const currentlySelectedNodeIds = selectedNodeIdsRef.current
+        const showAllOwners = showAllOwnerKeyframesRef.current
 
         // Bg
         ctx.fillStyle = '#1e1e1e'
@@ -1080,7 +1157,14 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         if (idealMsPerTick > 5000) tickInterval = 5000
         else if (idealMsPerTick > 1000) tickInterval = 1000
         else if (idealMsPerTick > 500) tickInterval = 500
+        else if (idealMsPerTick > 200) tickInterval = 200
         else if (idealMsPerTick > 100) tickInterval = 100
+        else if (idealMsPerTick > 50) tickInterval = 50
+        else if (idealMsPerTick > 20) tickInterval = 20
+        else if (idealMsPerTick > 10) tickInterval = 10
+        else if (idealMsPerTick > 5) tickInterval = 5
+        else if (idealMsPerTick > 2) tickInterval = 2
+        else tickInterval = 1
 
         const firstTick = Math.floor(startTime / tickInterval) * tickInterval
         ctx.font = '10px Microsoft YaHei'
@@ -1108,15 +1192,14 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         // Sequence Bounds Highlight (Ruler + Track)
         const startX = (start - scroll) * pxPerMs
         const endX = (end - scroll) * pxPerMs
-        ctx.fillStyle = 'rgba(70, 144, 226, 0.15)' // Increased opacity from 0.05 to 0.15
-        ctx.fillRect(startX, RULER_HEIGHT, Math.max(0, endX - startX), seqTrackY - RULER_HEIGHT)
-
-        ctx.strokeStyle = 'rgba(70, 144, 226, 0.3)'
-        ctx.lineWidth = 1
-        ctx.beginPath()
-        ctx.moveTo(startX, 0); ctx.lineTo(startX, seqTrackY)
-        ctx.moveTo(endX, 0); ctx.lineTo(endX, seqTrackY)
-        ctx.stroke()
+        if (sequenceOnlyView) {
+            ctx.strokeStyle = 'rgba(70, 144, 226, 0.3)'
+            ctx.lineWidth = 1
+            ctx.beginPath()
+            ctx.moveTo(startX, 0); ctx.lineTo(startX, seqTrackY)
+            ctx.moveTo(endX, 0); ctx.lineTo(endX, seqTrackY)
+            ctx.stroke()
+        }
 
         // Draw Sequence Markers (Bottom Track)
         const storeSequences = useModelStore.getState().sequences
@@ -1124,7 +1207,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
            Draw Markers: Start Triangle, End Triangle.
            Name: Below the markers.
         */
-        if (storeSequences) {
+        if (storeSequences && sequenceOnlyView && !specificGlobalSequenceView) {
             ctx.font = '10px Microsoft YaHei' // Smaller font for name
             storeSequences.forEach((seq, idx) => {
                 const isCurrent = idx === useModelStore.getState().currentSequence
@@ -1185,17 +1268,23 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const dragScale = dragKeyframeScaleRef.current
         const dragAnchor = interactionRef.current.dragKeyframeScaleAnchorFrame
 
+        const drawGroups = new Map<string, {
+            drawX: number
+            lineTop: number
+            lineBottom: number
+            hasSelected: boolean
+            hasNormal: boolean
+            hasDimmed: boolean
+            baseColor: string
+        }>()
+
         activeKeyframes.forEach(kf => {
             let drawFrame = kf.frame
-
-            // Filter logic
             if (!isKeyframeTypeVisible(kf.type, displayMode)) return
 
             const laneY = laneYMap[kf.type] ?? (RULER_HEIGHT + OFFSET_TRANSLATION)
-
             const isSelected = selectedUids.has(kf.uid)
 
-            // Apply drag offset or scale to selected keyframes for real-time preview
             if (isSelected && dragScale !== null) {
                 drawFrame = Math.round(dragAnchor + (kf.frame - dragAnchor) * dragScale)
             } else if (isSelected && dragOffset !== 0) {
@@ -1211,22 +1300,53 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             const lineBottom = displayMode === 'particle'
                 ? trackBottom
                 : laneY + effectiveKeyframeSize
-            const lineColor = isSelected ? '#ffcc00' : kf.color
+            const shouldDimForNodeSelection = (
+                showAllOwners &&
+                displayMode === 'node' &&
+                currentlySelectedNodeIds.length > 0 &&
+                kf.ownerType === 'node' &&
+                !currentlySelectedNodeIds.includes(Number(kf.ownerId))
+            )
 
-            if (isSelected) {
-                ctx.strokeStyle = '#fff'
-                ctx.lineWidth = 3
+            const groupKey = `${kf.type}:${drawFrame}`
+            const existing = drawGroups.get(groupKey)
+            if (existing) {
+                existing.hasSelected = existing.hasSelected || isSelected
+                existing.hasNormal = existing.hasNormal || (!isSelected && !shouldDimForNodeSelection)
+                existing.hasDimmed = existing.hasDimmed || shouldDimForNodeSelection
+                return
+            }
+
+            drawGroups.set(groupKey, {
+                drawX,
+                lineTop,
+                lineBottom,
+                hasSelected: isSelected,
+                hasNormal: !isSelected && !shouldDimForNodeSelection,
+                hasDimmed: shouldDimForNodeSelection,
+                baseColor: kf.color
+            })
+        })
+
+        drawGroups.forEach((group) => {
+            const lineColor = group.hasSelected
+                ? '#ffd666'
+                : (group.hasNormal ? group.baseColor : dimHexColor(group.baseColor, 0.16))
+
+            if (group.hasSelected) {
+                ctx.strokeStyle = '#ffffff'
+                ctx.lineWidth = 4
                 ctx.beginPath()
-                ctx.moveTo(drawX, lineTop)
-                ctx.lineTo(drawX, lineBottom)
+                ctx.moveTo(group.drawX, group.lineTop)
+                ctx.lineTo(group.drawX, group.lineBottom)
                 ctx.stroke()
             }
 
             ctx.strokeStyle = lineColor
-            ctx.lineWidth = 1
+            ctx.lineWidth = group.hasSelected ? 2 : 1.25
             ctx.beginPath()
-            ctx.moveTo(drawX, lineTop)
-            ctx.lineTo(drawX, lineBottom)
+            ctx.moveTo(group.drawX, group.lineTop)
+            ctx.lineTo(group.drawX, group.lineBottom)
             ctx.stroke()
         })
 
@@ -2209,20 +2329,24 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
     useLayoutEffect(() => {
         if (!contextMenu.visible) return
-        const container = containerRef.current
-        const menu = contextMenuRef.current
-        if (!container || !menu) return
-        const containerRect = container.getBoundingClientRect()
-        const menuRect = menu.getBoundingClientRect()
-        let x = contextMenu.x
-        let y = contextMenu.y
-        const maxX = Math.max(0, containerRect.width - menuRect.width)
-        const maxY = Math.max(0, containerRect.height - menuRect.height)
-        if (x > maxX) x = maxX
-        if (y > maxY) y = maxY
-        if (x !== contextMenu.x || y !== contextMenu.y) {
-            setContextMenu(prev => ({ ...prev, x, y }))
+        const adjustPosition = () => {
+            const menu = contextMenuRef.current
+            if (!menu) return
+            const menuRect = menu.getBoundingClientRect()
+            let x = contextMenu.x
+            let y = contextMenu.y
+            const maxX = Math.max(0, window.innerWidth - menuRect.width - 2)
+            const maxY = Math.max(0, window.innerHeight - menuRect.height - 2)
+            if (x > maxX) x = maxX
+            if (y > maxY) y = maxY
+            if (x < 0) x = 0
+            if (y < 0) y = 0
+            if (x !== contextMenu.x || y !== contextMenu.y) {
+                setContextMenu(prev => ({ ...prev, x, y }))
+            }
         }
+        const rafId = window.requestAnimationFrame(adjustPosition)
+        return () => window.cancelAnimationFrame(rafId)
     }, [contextMenu.visible, contextMenu.x, contextMenu.y])
 
     useEffect(() => {
@@ -2453,7 +2577,9 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             if (clickedKf) {
                 updateFrame(clickedKf.frame)
                 confirmScrub()
-                setSelectedKeyframeUids(new Set([clickedKf.uid]))
+                const nextSelection = getSelectionSetForKeyframe(clickedKf)
+                selectedKeyframeUidsRef.current = nextSelection
+                setSelectedKeyframeUids(nextSelection)
             }
         } else if (mode === 'dragKeyframes') {
             setIsDragging(false)
@@ -2775,7 +2901,9 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 if (kf) {
                     updateFrame(kf.frame)
                     confirmScrub()
-                    setSelectedKeyframeUids(new Set([kf.uid]))
+                    const nextSelection = getSelectionSetForKeyframe(kf)
+                    selectedKeyframeUidsRef.current = nextSelection
+                    setSelectedKeyframeUids(nextSelection)
                 } else {
                     setSelectedKeyframeUids(new Set())
                 }
@@ -2975,7 +3103,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const mouseX = e.clientX - rect.left
         const mouseFrame = scrollXRef.current + mouseX / pixelsPerMsRef.current
 
-        const newPixelsPerMs = Math.max(0.01, Math.min(5, pixelsPerMs * factor))
+        const newPixelsPerMs = Math.max(minPixelsPerMs, Math.min(maxPixelsPerMs, pixelsPerMs * factor))
         setPixelsPerMs(newPixelsPerMs)
         setScrollX(Math.max(0, mouseFrame - mouseX / newPixelsPerMs))
     }
@@ -3063,12 +3191,9 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         if (blockContextMenuRef.current) {
             return
         }
-        const container = containerRef.current
-        if (!container) return
-
         const clickedKf = getKeyframeAtPos(e.clientX, e.clientY)
         if (clickedKf && !selectedKeyframeUidsRef.current.has(clickedKf.uid)) {
-            const next = new Set([clickedKf.uid])
+            const next = getSelectionSetForKeyframe(clickedKf)
             selectedKeyframeUidsRef.current = next
             setSelectedKeyframeUids(next)
         }
@@ -3077,15 +3202,9 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             return
         }
 
-        const rect = container.getBoundingClientRect()
-        let x = e.clientX - rect.left
-        let y = e.clientY - rect.top
-        x = Math.max(0, Math.min(x, rect.width - CONTEXT_MENU_WIDTH))
-        y = Math.max(0, Math.min(y, rect.height - CONTEXT_MENU_HEIGHT))
-
         const selectionCount = selectedKeyframeUidsRef.current.size
-        setContextMenu({ visible: true, x, y, selectionCount })
-    }, [getKeyframeAtPos])
+        setContextMenu({ visible: true, x: e.clientX, y: e.clientY, selectionCount })
+    }, [getKeyframeAtPos, getSelectionSetForKeyframe])
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: '#1e1e1e', userSelect: 'none' }} onContextMenu={(e) => e.preventDefault()}>
@@ -3095,25 +3214,33 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                     background: #2a2a2a;
                     border: none;
                 }
-                .timeline-context-menu .ant-menu-item {
+                .timeline-context-menu-item {
                     height: 28px;
                     line-height: 28px;
                     padding: 0 12px;
                     margin: 0;
                     color: #fff;
                     font-size: 12px;
+                    transition: background-color 0.12s ease, color 0.12s ease;
+                    cursor: pointer;
+                    white-space: nowrap;
                 }
-                .timeline-context-menu .ant-menu-item:hover,
-                .timeline-context-menu .ant-menu-item-active {
+                .timeline-context-menu-item:hover {
                     background: #1f4f8f;
                     color: #fff;
                 }
-                .timeline-context-menu .ant-menu-item-disabled {
+                .timeline-context-menu-item-disabled {
+                    color: #666;
+                    cursor: not-allowed;
+                }
+                .timeline-context-menu-item-disabled:hover {
+                    background: transparent;
                     color: #666;
                 }
-                .timeline-context-menu .ant-menu-item-divider {
+                .timeline-context-menu-divider {
+                    height: 1px;
                     margin: 4px 0;
-                    border-color: #333;
+                    background: #333;
                 }
             `}} />
             <Modal
@@ -3260,21 +3387,6 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
                 {/* Playback Controls */}
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'nowrap', whiteSpace: 'nowrap', minWidth: 'max-content', justifySelf: 'center' }}>
-                    <Select
-                        size="small"
-                        style={{ width: 140 }}
-                        value={globalSequenceFilterValue}
-                        options={globalSequenceFilterOptions}
-                        onChange={(value) => {
-                            if (value === '__all__') {
-                                setTimelineGlobalSequenceFilter(null)
-                            } else if (value === '__sequence__') {
-                                setTimelineGlobalSequenceFilter(-1)
-                            } else {
-                                setTimelineGlobalSequenceFilter(Number(value))
-                            }
-                        }}
-                    />
                     <div style={{ marginTop: 2 }}>
                         <Tooltip title={currentKeyframeModeConfig.tooltip}>
                             <Dropdown
@@ -3325,6 +3437,13 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                         onClick={() => setShowAllKeyframes(!showAllKeyframes)}
                         style={{ color: showAllKeyframes ? '#1890ff' : '#eee' }}
                     />
+                    <Button
+                        type="text"
+                        icon={<NodeIndexOutlined style={{ color: showAllOwnerKeyframes ? '#1890ff' : undefined }} />}
+                        title={showAllOwnerKeyframes ? '显示所有对象的关键帧' : '只显示选中对象的关键帧'}
+                        onClick={() => setShowAllOwnerKeyframes(!showAllOwnerKeyframes)}
+                        style={{ color: showAllOwnerKeyframes ? '#1890ff' : '#eee' }}
+                    />
                 </div>
 
                 {/* Zoom & Sequence Range (Right Aligned) */}
@@ -3365,8 +3484,8 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                     <span style={{ color: '#444', fontSize: '12px' }}>|</span>
                     <ZoomOutOutlined style={{ color: '#888' }} />
                     <Slider
-                        min={0.01}
-                        max={2}
+                        min={minPixelsPerMs}
+                        max={maxPixelsPerMs}
                         step={0.01}
                         value={pixelsPerMs}
                         onChange={(v) => {
@@ -3389,65 +3508,56 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                     style={{ width: '100%', height: '100%', display: 'block', cursor: isDragging ? 'grabbing' : 'default' }}
                     onMouseDown={handleMouseDown}
                 />
-                {contextMenu.visible && (
-                    <div
-                        ref={contextMenuRef}
-                        style={{
-                            position: 'absolute',
-                            left: contextMenu.x,
-                            top: contextMenu.y,
-                            zIndex: 1000,
-                            backgroundColor: '#2a2a2a',
-                            border: '1px solid #3a3a3a',
-                            borderRadius: 4,
-                            boxShadow: '0 6px 16px rgba(0,0,0,0.45)'
-                        }}
-                    >
-                        <Menu
-                            selectable={false}
-                            className="timeline-context-menu"
-                            style={{ backgroundColor: 'transparent', border: 'none' }}
-                        >
-                            <Menu.Item
-                                key="copy"
-                                disabled={contextMenu.selectionCount === 0}
-                                onClick={() => { copyKeyframes(false); closeContextMenu() }}
-                            >
-                                复制
-                            </Menu.Item>
-                            <Menu.Item
-                                key="cut"
-                                disabled={contextMenu.selectionCount === 0}
-                                onClick={() => { copyKeyframes(true); closeContextMenu() }}
-                            >
-                                剪切
-                            </Menu.Item>
-                            <Menu.Item
-                                key="paste"
-                                disabled={!effectiveClipboard || effectiveClipboard.data.keyframes.length === 0}
-                                onClick={() => { pasteKeyframes(); closeContextMenu() }}
-                            >
-                                粘贴
-                            </Menu.Item>
-                            <Menu.Item
-                                key="scalePaste"
-                                disabled={!effectiveClipboard || effectiveClipboard.data.keyframes.length <= 2}
-                                onClick={() => { openScalePasteDialog(); closeContextMenu() }}
-                            >
-                                缩放粘贴
-                            </Menu.Item>
-                            <Menu.Divider style={{ borderColor: '#333' }} />
-                            <Menu.Item
-                                key="delete"
-                                disabled={contextMenu.selectionCount === 0}
-                                onClick={() => { deleteSelectedKeyframes(); closeContextMenu() }}
-                            >
-                                删除
-                            </Menu.Item>
-                        </Menu>
-                    </div>
-                )}
             </div>
+            {contextMenu.visible && (
+                <div
+                    ref={contextMenuRef}
+                    style={{
+                        position: 'fixed',
+                        left: contextMenu.x,
+                        top: contextMenu.y,
+                        zIndex: 4000,
+                        backgroundColor: '#2a2a2a',
+                        border: '1px solid #3a3a3a',
+                        borderRadius: 4,
+                        boxShadow: '0 6px 16px rgba(0,0,0,0.45)',
+                        padding: '4px 0',
+                        minWidth: 110
+                    }}
+                >
+                    <div
+                        className={`timeline-context-menu-item${contextMenu.selectionCount === 0 ? ' timeline-context-menu-item-disabled' : ''}`}
+                        onClick={contextMenu.selectionCount === 0 ? undefined : () => { copyKeyframes(false); closeContextMenu() }}
+                    >
+                        复制
+                    </div>
+                    <div
+                        className={`timeline-context-menu-item${contextMenu.selectionCount === 0 ? ' timeline-context-menu-item-disabled' : ''}`}
+                        onClick={contextMenu.selectionCount === 0 ? undefined : () => { copyKeyframes(true); closeContextMenu() }}
+                    >
+                        剪切
+                    </div>
+                    <div
+                        className={`timeline-context-menu-item${!effectiveClipboard || effectiveClipboard.data.keyframes.length === 0 ? ' timeline-context-menu-item-disabled' : ''}`}
+                        onClick={!effectiveClipboard || effectiveClipboard.data.keyframes.length === 0 ? undefined : () => { pasteKeyframes(); closeContextMenu() }}
+                    >
+                        粘贴
+                    </div>
+                    <div
+                        className={`timeline-context-menu-item${!effectiveClipboard || effectiveClipboard.data.keyframes.length <= 2 ? ' timeline-context-menu-item-disabled' : ''}`}
+                        onClick={!effectiveClipboard || effectiveClipboard.data.keyframes.length <= 2 ? undefined : () => { openScalePasteDialog(); closeContextMenu() }}
+                    >
+                        缩放粘贴
+                    </div>
+                    <div className="timeline-context-menu-divider" />
+                    <div
+                        className={`timeline-context-menu-item${contextMenu.selectionCount === 0 ? ' timeline-context-menu-item-disabled' : ''}`}
+                        onClick={contextMenu.selectionCount === 0 ? undefined : () => { deleteSelectedKeyframes(); closeContextMenu() }}
+                    >
+                        删除
+                    </div>
+                </div>
+            )}
         </div>
     )
 }

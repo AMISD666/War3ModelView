@@ -218,12 +218,7 @@ export function splitVertices(geoset: GeosetData, vertexIndices: number[], mater
             oldToRemainingIndex.get(geoset.Faces[faceStart + 1])!,
             oldToRemainingIndex.get(geoset.Faces[faceStart + 2])!
         )
-    }
-
-    console.log('[splitVertices] Extracted', sortedVerticesToExtract.length, 'vertices and', newFaces.length / 3, 'faces to new geoset')
-    console.log('[splitVertices] Original geoset now has', sortedRemainingVertices.length, 'vertices and', updatedFaces.length / 3, 'faces')
-
-    return {
+    }   return {
         updatedOriginalGeoset: {
             Vertices: new Float32Array(updatedVertices),
             Normals: new Float32Array(updatedNormals),

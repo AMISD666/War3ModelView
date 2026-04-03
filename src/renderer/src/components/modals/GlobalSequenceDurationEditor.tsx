@@ -15,7 +15,6 @@ const GlobalSequenceDurationEditor: React.FC = () => {
     useEffect(() => {
         const unlisten = listen('IPC_GLOBAL_SEQ_DURATION_INIT', (event) => {
             const payload = event.payload as any
-            console.log('[GlobalSequenceDurationEditor] Received init payload:', payload);
             if (payload) {
                 setIndex(payload.index ?? 0)
                 setDuration(payload.duration ?? 1000)
@@ -30,9 +29,7 @@ const GlobalSequenceDurationEditor: React.FC = () => {
         }
     }, [])
 
-    const handleConfirm = () => {
-        console.log('[GlobalSequenceDurationEditor] Emitting update:', { index, duration, callerId, sourceTabId, sourceModelPath });
-        emit('IPC_GLOBAL_SEQUENCE_UPDATE', {
+    const handleConfirm = () => {        emit('IPC_GLOBAL_SEQUENCE_UPDATE', {
             index,
             duration,
             callerId,

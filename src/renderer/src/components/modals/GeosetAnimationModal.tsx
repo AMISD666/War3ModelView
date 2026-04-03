@@ -144,9 +144,7 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
             const matchingIndex = localAnims.findIndex((anim: any) => anim.GeosetId === pickedGeosetIndex)
             if (matchingIndex !== -1) {
                 setSelectedIndex(matchingIndex)
-                setTimeout(() => scrollToItem(matchingIndex), 0)
-                console.log('[GeosetAnimationEditor] Auto-selected animation', matchingIndex, 'for geoset', pickedGeosetIndex)
-            }
+                setTimeout(() => scrollToItem(matchingIndex), 0)            }
         }
 
         if (isStandalone) {
@@ -333,9 +331,7 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
 
         const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
             const payload = event.payload as any;
-            if (payload && payload.callerId === 'GeosetAnimationModal') {
-                console.log('[GeosetAnimationModal] Received IPC_KEYFRAME_SAVE:', payload.data);
-                if (editingField && selectedIndex >= 0) {
+            if (payload && payload.callerId === 'GeosetAnimationModal') {                if (editingField && selectedIndex >= 0) {
                     updateLocalAnim(selectedIndex, { [editingField]: payload.data });
                 }
             }

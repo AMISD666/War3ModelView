@@ -82,31 +82,21 @@ export class BindVerticesCommand implements Command {
         private operation: 'bind' | 'unbind'
     ) { }
 
-    execute() {
-        console.log('[BindVerticesCommand] Execute called')
-        if (!this.changes) {
+    execute() {        if (!this.changes) {
             this.calculateChanges()
-        }
-        console.log('[BindVerticesCommand] Changes count:', this.changes?.length ?? 0)
-        this.apply(true)
+        }        this.apply(true)
     }
 
     undo() {
-        console.log('[BindVerticesCommand] Undo called')
         this.apply(false)
     }
 
     private calculateChanges() {
         this.changes = []
         const model = this.renderer.model
-        console.log('[BindVerticesCommand] Calculating changes. Targets:', this.targets.length, 'BoneId:', this.boneId, 'Op:', this.operation)
-
         this.targets.forEach(target => {
             const geoset = model.Geosets[target.geosetIndex]
             if (!geoset || !geoset.VertexGroup || !geoset.Groups) return
-
-            console.log(`[BindVerticesCommand] Processing geoset ${target.geosetIndex}. Vertices: ${target.vertexIndices.length}`)
-
             target.vertexIndices.forEach(vIdx => {
                 const oldGroupIndex = geoset.VertexGroup[vIdx]
                 const oldGroup = geoset.Groups[oldGroupIndex] || [] // Should be array of bone ids
@@ -149,9 +139,7 @@ export class BindVerticesCommand implements Command {
                 if (existingGroupIndex === -1) {
                     // Create new group
                     geoset.Groups.push(newGroup)
-                    existingGroupIndex = geoset.Groups.length - 1
-                    console.log(`[BindVerticesCommand] Created new group ${existingGroupIndex} for configuration:`, newGroup)
-                }
+                    existingGroupIndex = geoset.Groups.length - 1                }
                 // else {
                 //      console.log(`[Debug] Found existing group ${existingGroupIndex} for configuration:`, newGroup)
                 // }
@@ -216,9 +204,7 @@ export class BindVerticesCommand implements Command {
 
         // Update GPU buffers using ModelResourceManager singleton
         const resourceManager = ModelResourceManager.getInstance()
-        affectedGeosets.forEach(geosetIndex => {
-            console.log(`[BindVerticesCommand] Updating GPU buffers for geoset ${geosetIndex}`)
-            if (resourceManager && typeof resourceManager.updateGeosetGroups === 'function') {
+        affectedGeosets.forEach(geosetIndex => {            if (resourceManager && typeof resourceManager.updateGeosetGroups === 'function') {
                 resourceManager.updateGeosetGroups(this.renderer.model, geosetIndex)
             } else {
                 console.warn('[BindVerticesCommand] ModelResourceManager.updateGeosetGroups not available')

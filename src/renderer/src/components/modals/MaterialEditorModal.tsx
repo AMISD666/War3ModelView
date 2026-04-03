@@ -479,9 +479,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                     if (texturesChanged) {
                         setLocalTextures(JSON.parse(JSON.stringify(currentTextures)))
                     }
-                } else {
-                console.log('[MaterialEditorModal] Initializing local materials from store. Count:', modelData.Materials.length)
-                lastMaterialsSignatureRef.current = materialsSignature
+                } else {                lastMaterialsSignatureRef.current = materialsSignature
                 lastStandaloneModelPathRef.current = pathStr
                 lastRpcMaterialsRef.current = isStandalone ? rpcState.snapshotVersion : modelData.Materials
                 originalMaterialsRef.current = JSON.parse(JSON.stringify(modelData.Materials))

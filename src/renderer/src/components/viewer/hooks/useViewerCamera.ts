@@ -93,9 +93,7 @@ export function useViewerCamera(canvasRef: React.RefObject<HTMLCanvasElement>): 
         }
     }, [])
 
-    const setCamera = useCallback((params: { distance: number; theta: number; phi: number; target: [number, number, number] }) => {
-        console.log('[useViewerCamera] Setting camera:', params)
-        const clampedPhi = Math.max(0.01, Math.min(Math.PI - 0.01, params.phi))
+    const setCamera = useCallback((params: { distance: number; theta: number; phi: number; target: [number, number, number] }) => {        const clampedPhi = Math.max(0.01, Math.min(Math.PI - 0.01, params.phi))
 
         // Update targetCamera (backup/fallback)
         targetCamera.current.distance = params.distance

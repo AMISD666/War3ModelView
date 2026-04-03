@@ -476,9 +476,7 @@ export function extractNodesFromModel(data: ModelData | null): ModelNode[] {
             if (!nodes.find(n => n.ObjectId === node.ObjectId)) {
                 // Try to infer type or default to Helper
                 const type = node.type || NodeType.HELPER;
-                nodes.push({ ...node, type } as ModelNode);
-                console.log(`[ModelStore] Recovered node ID=${node.ObjectId} from Nodes array (Type=${type})`);
-            }
+                nodes.push({ ...node, type } as ModelNode);            }
         });
     }
 
@@ -494,10 +492,7 @@ export function extractNodesFromModel(data: ModelData | null): ModelNode[] {
             const triplet = pivotVec3ToTuple(p)
             if (triplet) any.PivotPoint = triplet
         }
-    }
-
-    console.log('[ModelStore] Extracted nodes:', nodes.length, 'from keys:', Object.keys(data));
-    return nodes;
+    }    return nodes;
 }
 
 /**
@@ -694,9 +689,7 @@ function updateModelDataWithNodes(
                     node.Parent = newParentId;
                 }
             }
-        });
-        console.log('[ModelStore] Reassigned ObjectIds for', oldToNewId.size, 'nodes to match WC3 type order');
-    }
+        });    }
 
     // Update type-specific arrays with reassigned/ordered nodes
     updated.Bones = orderedNodes.filter(n => n.type === NodeType.BONE);
@@ -779,9 +772,7 @@ function updateModelDataWithNodes(
                 }
             }
         });
-        if (updatedGroupsCount > 0) {
-            console.log('[ModelStore] Updated', updatedGroupsCount, 'bone references in Geoset Groups');
-        }
+        if (updatedGroupsCount > 0) {        }
     }
 
     return updated;
@@ -1121,10 +1112,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
         const skipAutoRecalculate = !!options.skipAutoRecalculate;
         const skipModelRebuild = !!options.skipModelRebuild;
 
-        let nodes = extractNodesFromModel(data);
-        console.log('[ModelStore] Loaded model with', nodes.length, 'nodes');
-
-        // FORCE NO REORDERING ON LOAD to prevent invalidating saved bone references
+        let nodes = extractNodesFromModel(data);        // FORCE NO REORDERING ON LOAD to prevent invalidating saved bone references
         const correctedData = skipModelRebuild ? data : updateModelDataWithNodes(data, nodes, false);
 
         // Auto recalculate extent and normals using optimized unified utilities
@@ -1262,9 +1250,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
             // 2. Prune keyframes if requested
             if (pruneKeyframes) {
-                pruneModelKeyframes(modelData, start, end);
-                console.log(`[ModelStore] Pruned keyframes in range ${start}-${end}`);
-            }
+                pruneModelKeyframes(modelData, start, end);            }
 
             // Sync other state
             let nextSequence = state.currentSequence;
@@ -1362,10 +1348,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[], false);
 
             // CRITICAL: Extract corrected nodes from modelData to sync ObjectIds
-            const correctedNodes = extractNodesFromModel(updatedModelData);
-
-            console.log('[ModelStore] Updated node, triggering lightweight sync');
-            return {
+            const correctedNodes = extractNodesFromModel(updatedModelData);            return {
                 nodes: correctedNodes,
                 modelData: updatedModelData,
                 rendererReloadTrigger: state.rendererReloadTrigger + 1,
@@ -1427,9 +1410,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                     }
                     return max;
                 }, -1);
-                attachmentId = maxAttachmentId + 1;
-                console.log('[ModelStore] Calculated unique AttachmentID:', attachmentId);
-            }
+                attachmentId = maxAttachmentId + 1;            }
 
             const newNode: ModelNode = {
                 ...defaults,
@@ -1449,11 +1430,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[], true);
 
             // CRITICAL: Extract corrected nodes with reassigned ObjectIds
-            const correctedNodes = extractNodesFromModel(updatedModelData);
-
-            console.log('[ModelStore] Added node', newNode.Name, '(ObjectId will be corrected by type order)');
-
-            return {
+            const correctedNodes = extractNodesFromModel(updatedModelData);            return {
                 nodes: correctedNodes,
                 modelData: updatedModelData,
                 rendererReloadTrigger: state.rendererReloadTrigger + 1
@@ -1481,10 +1458,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             // CRITICAL: Extract corrected nodes with reassigned ObjectIds
             const correctedNodes = extractNodesFromModel(updatedModelData);
 
-            const orphanedCount = state.nodes.filter(n => n.Parent === objectId).length;
-            console.log('[ModelStore] Deleted node', objectId, '- re-parented', orphanedCount, 'children');
-
-            return {
+            const orphanedCount = state.nodes.filter(n => n.Parent === objectId).length;            return {
                 nodes: correctedNodes,
                 modelData: updatedModelData,
                 rendererReloadTrigger: state.rendererReloadTrigger + 1
@@ -1700,10 +1674,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             const updatedModelData = updateModelDataWithNodes(modelDataForPaste, updatedNodes as any[], true);
 
             // CRITICAL: Extract corrected nodes with reassigned ObjectIds
-            const correctedNodes = extractNodesFromModel(updatedModelData);
-
-            console.log('[ModelStore] Pasted node', newNode.Name, 'to parent', parentId);
-            return { nodes: correctedNodes, modelData: updatedModelData };
+            const correctedNodes = extractNodesFromModel(updatedModelData);            return { nodes: correctedNodes, modelData: updatedModelData };
         });
     },
 
@@ -1766,10 +1737,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             // Reparenting shouldn't change IDs ideally.
             // Let's set reorder=false for stability.
             const updatedModelData = updateModelDataWithNodes(state.modelData, newNodes as any[], false);
-            const correctedNodes = extractNodesFromModel(updatedModelData);
-
-            console.log(`[ModelStore] Moved node ${nodeId} ${position} ${targetId}`);
-            return { nodes: correctedNodes, modelData: updatedModelData };
+            const correctedNodes = extractNodesFromModel(updatedModelData);            return { nodes: correctedNodes, modelData: updatedModelData };
         });
     },
 
@@ -1833,10 +1801,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
             // 5. Update Model Data and extract corrected nodes
             const updatedModelData = updateModelDataWithNodes(state.modelData, newNodes as any[]);
-            const correctedNodes = extractNodesFromModel(updatedModelData);
-
-            console.log(`[ModelStore] Moved node ${nodeId} with ${descendantIds.length} children ${position} ${targetId}`);
-            return { nodes: correctedNodes, modelData: updatedModelData };
+            const correctedNodes = extractNodesFromModel(updatedModelData);            return { nodes: correctedNodes, modelData: updatedModelData };
         });
     },
 
@@ -1845,10 +1810,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             const updatedNodes = state.nodes.map(node =>
                 node.ObjectId === nodeId ? { ...node, Name: newName } : node
             );
-            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[]);
-
-            console.log('[ModelStore] Renamed node', nodeId, 'to', newName);
-            return { nodes: updatedNodes, modelData: updatedModelData };
+            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[]);            return { nodes: updatedNodes, modelData: updatedModelData };
         });
     },
 
@@ -1901,20 +1863,14 @@ export const useModelStore = create<ModelState>((set, get) => ({
                     worldPos[0] - parentWorldPos[0],
                     worldPos[1] - parentWorldPos[1],
                     worldPos[2] - parentWorldPos[2]
-                ];
-
-                console.log(`[ModelStore] Reparenting node ${node.ObjectId} "${node.Name}": world=[${worldPos}], newLocal=[${newPivotPoint[0].toFixed(2)}, ${newPivotPoint[1].toFixed(2)}, ${newPivotPoint[2].toFixed(2)}]`);
-
-                return {
+                ];                return {
                     ...node,
                     Parent: newParentId,
                     PivotPoint: newPivotPoint
                 };
             });
 
-            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[]);
-            console.log(`[ModelStore] Reparented ${nodeIds.length} nodes to parent ${newParentId}`);
-            return { nodes: updatedNodes, modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
+            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[]);            return { nodes: updatedNodes, modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
         });
     },
 
@@ -2055,9 +2011,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             : state.tabs;
         return { modelData: updatedModelData, tabs: updatedTabs, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
     }),
-    setMaterials: (materials) => set((state) => {
-        console.log('[ModelStore] setMaterials called. Count:', materials ? materials.length : 0);
-        const updatedModelData = state.modelData ? { ...state.modelData, Materials: materials } : state.modelData;
+    setMaterials: (materials) => set((state) => {        const updatedModelData = state.modelData ? { ...state.modelData, Materials: materials } : state.modelData;
         const updatedMaterialManagerPreview = state.materialManagerPreview
             ? {
                 ...state.materialManagerPreview,
@@ -2222,9 +2176,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 Scaling: { InterpolationType: 0, GlobalSeqId: null, Keys: [] }
             };
             const updatedAnims = [...currentAnims, newAnim];
-            const updatedModelData = { ...state.modelData, TextureAnims: updatedAnims };
-            console.log('[ModelStore] Added TextureAnim, new count:', updatedAnims.length);
-            return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
+            const updatedModelData = { ...state.modelData, TextureAnims: updatedAnims };            return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
         });
     },
 
@@ -2236,9 +2188,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             const updatedAnims = [...state.modelData.TextureAnims];
             if (index >= 0 && index < updatedAnims.length) {
                 updatedAnims.splice(index, 1);
-                const updatedModelData = { ...state.modelData, TextureAnims: updatedAnims };
-                console.log('[ModelStore] Removed TextureAnim at index', index);
-                return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
+                const updatedModelData = { ...state.modelData, TextureAnims: updatedAnims };                return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
             }
             return {};
         });
@@ -2325,9 +2275,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             if (!hasChanges) return {};
 
             const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[], false);
-            const correctedNodes = extractNodesFromModel(updatedModelData);
-            console.log('[ModelStore] Batch updated', updates.length, 'nodes');
-            return { nodes: correctedNodes as ModelNode[], modelData: updatedModelData, ...markActiveTabDirtyState(state) };
+            const correctedNodes = extractNodesFromModel(updatedModelData);            return { nodes: correctedNodes as ModelNode[], modelData: updatedModelData, ...markActiveTabDirtyState(state) };
         });
     },
 
@@ -2348,9 +2296,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
     },
 
     transformModel: (ops) => {
-        const { translation, rotation, scale, skipAnimationTracks, suppressReload } = ops;
-        console.log('[ModelStore] transformModel starting with ops:', { translation, rotation, scale, skipAnimationTracks, suppressReload });
-        set((state) => {
+        const { translation, rotation, scale, skipAnimationTracks, suppressReload } = ops;        set((state) => {
             if (!state.modelData) {
                 console.warn('[ModelStore] transformModel: No modelData loaded.');
                 return {};
@@ -2554,15 +2500,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
             // 8. Re-sync nodes state and recalculate derived data
             const updatedNodes = extractNodesFromModel(modelData);
-            calculateModelExtent(modelData);
-
-            console.log(`[ModelStore] Applied global transformation:
-                Geosets: ${modelData.Geosets?.length || 0}
-                Nodes processed in hierarchy: ${allNodeGroups.reduce((acc, group) => acc + ((modelData as any)[group]?.length || 0), 0)}
-                CollisionShapes: ${modelData.CollisionShapes?.length || 0}
-                Unique arrays transformed: ${transformedArrays.size}`);
-
-            return {
+            calculateModelExtent(modelData);            return {
                 modelData: { ...modelData },
                 nodes: updatedNodes,
                 rendererReloadTrigger: state.rendererReloadTrigger + (suppressReload ? 0 : 1)
@@ -2591,10 +2529,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
     addDeathAnimation: () => {
         set((state) => {
             if (!state.modelData) return {};
-            const { status } = processDeathAnimation(state.modelData);
-            console.log(`[ModelStore] Death animation ${status}`);
-
-            // Extract nodes again as they might have been added (GeosetAnims)
+            const { status } = processDeathAnimation(state.modelData);            // Extract nodes again as they might have been added (GeosetAnims)
             const updatedNodes = extractNodesFromModel(state.modelData);
 
             return {
@@ -2609,10 +2544,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
     removeLights: () => {
         set((state) => {
             if (!state.modelData) return {};
-            const { count } = processRemoveLights(state.modelData);
-            console.log(`[ModelStore] Removed ${count} lights`);
-
-            const updatedNodes = extractNodesFromModel(state.modelData);
+            const { count } = processRemoveLights(state.modelData);            const updatedNodes = extractNodesFromModel(state.modelData);
 
             // Rebuild model data to ensure internal arrays (Nodes, PivotPoints) are in sync
             // and ObjectIds are reassigned if needed
@@ -2628,10 +2560,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
     repairModel: () => {
         set((state) => {
-            if (!state.nodes || state.nodes.length === 0) return {};
-
-            console.log('[ModelStore] Starting model repair...');
-            let repairCount = 0;
+            if (!state.nodes || state.nodes.length === 0) return {};            let repairCount = 0;
 
             // 1. Repair AttachmentIDs (Sequential starting from 0)
             let nextAttachmentId = 0;
@@ -2650,27 +2579,19 @@ export const useModelStore = create<ModelState>((set, get) => ({
             if (repairCount > 0) {
                 // Update modelData without reordering ObjectIds (just updating properties)
                 const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[], false);
-                const correctedNodes = extractNodesFromModel(updatedModelData);
-
-                console.log(`[ModelStore] Repair complete. Fixed ${repairCount} AttachmentIDs.`);
-                return {
+                const correctedNodes = extractNodesFromModel(updatedModelData);                return {
                     nodes: correctedNodes,
                     modelData: updatedModelData,
                     rendererReloadTrigger: state.rendererReloadTrigger + 1
                 };
-            }
-
-            console.log('[ModelStore] No repairs needed.');
-            return {};
+            }            return {};
         });
     },
 
     triggerRendererReload: () => {
         set((state) => ({
             rendererReloadTrigger: state.rendererReloadTrigger + 1
-        }));
-        console.log('[ModelStore] Triggered renderer reload');
-    },
+        }));    },
 
     // Geoset Visibility Actions
     toggleGeosetVisibility: (geosetId: number) => {
@@ -2784,9 +2705,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
         // Check if tab with this path already exists - if so, switch to it instead
         const existingTab = state.tabs.find(t => t.path === path);
-        if (existingTab) {
-            console.log('[ModelStore] Tab already exists for:', path, '- switching to it');
-            get().setActiveTab(existingTab.id);
+        if (existingTab) {            get().setActiveTab(existingTab.id);
             return false;
         }
 
@@ -2857,10 +2776,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             forceShowAllGeosets: true,
             cachedRenderer: null, // Reset cached renderer when adding new tab
             dirtyTabs: { ...state.dirtyTabs }
-        });
-
-        console.log('[ModelStore] Added new tab:', name, 'id:', id);
-        return true;
+        });        return true;
     },
 
     closeTab: (tabId) => {
@@ -2876,9 +2792,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
         // CLEANUP: Destroy renderer resources if cached
         // Safety: Only destroy if it's not the currently active renderer in the store
         const currentActiveRenderer = state.cachedRenderer;
-        if (tab.snapshot.renderer && tab.snapshot.renderer !== currentActiveRenderer) {
-            console.log(`[ModelStore] Destroying renderer for closed tab: ${tab.name}`);
-            try { (tab.snapshot.renderer as any).destroy(); } catch (e) { }
+        if (tab.snapshot.renderer && tab.snapshot.renderer !== currentActiveRenderer) {            try { (tab.snapshot.renderer as any).destroy(); } catch (e) { }
         }
 
         if (state.activeTabId === tabId) {
@@ -2903,11 +2817,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 // Switch to adjacent tab
                 const newActiveIndex = Math.min(tabIndex, newTabs.length - 1);
                 const newActiveTab = newTabs[newActiveIndex];
-                const snapshot = newActiveTab.snapshot;
-
-                console.log(`[ModelStore] Closing active tab, switching to: ${newActiveTab.name}`);
-
-                set({
+                const snapshot = newActiveTab.snapshot;                set({
                     tabs: newTabs,
                     activeTabId: newActiveTab.id,
                     modelData: snapshot.modelData,
@@ -2939,10 +2849,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
         else {
             // Just remove the tab, no state switch needed
             set({ tabs: newTabs, dirtyTabs: nextDirtyTabs });
-        }
-
-        console.log('[ModelStore] Closed tab:', tabId);
-    },
+        }    },
 
     setActiveTab: (tabId) => {
         const state = get();
@@ -2992,9 +2899,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
         if (tabsWithRenderer.length > MAX_CACHED_RENDERERS) {
             const tabToEvict = tabsWithRenderer[0];
             updatedTabs = updatedTabs.map(t => {
-                if (t.id === tabToEvict.id) {
-                    console.log(`[ModelStore] LRU Evicting and DESTROYING renderer for tab: ${t.name}`);
-                    // CLEANUP: Actually destroy evicted renderer
+                if (t.id === tabToEvict.id) {                    // CLEANUP: Actually destroy evicted renderer
                     if (t.snapshot.renderer) {
                         try { (t.snapshot.renderer as any).destroy(); } catch (e) { }
                     }
@@ -3033,10 +2938,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             currentCam.theta = snap.theta;
             currentCam.phi = snap.phi;
             vec3.copy(currentCam.target, snap.target as vec3);
-        }
-
-        console.log('[ModelStore] Switched to tab:', newActiveTab.name, hasCachedRenderer ? '(Cached)' : '(Reload)');
-    },
+        }    },
 
     reset: () => {
         const state = get();

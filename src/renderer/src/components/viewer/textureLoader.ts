@@ -447,7 +447,6 @@ export async function loadTextureForRenderer(
             const imageData = await loadTextureFromFile(candidate)
             if (imageData && renderer.setTextureImageData) {
                 renderer.setTextureImageData(texturePath, [imageData])
-                console.debug(`${logPrefix} Loaded from FS (${candidate}) in ${(performance.now() - startTime).toFixed(1)}ms`)
                 return true
             }
         }
@@ -460,7 +459,6 @@ export async function loadTextureForRenderer(
             const imageData = decodeTextureData(mpqData.buffer as ArrayBuffer, texturePath);
             if (imageData && renderer.setTextureImageData) {
                 renderer.setTextureImageData(texturePath, [imageData])
-                console.debug(`${logPrefix} Loaded from MPQ in ${(performance.now() - startTime).toFixed(1)}ms`)
                 return true
             }
         }
@@ -659,7 +657,6 @@ export async function decodeTexture(
                 try {
                     const imageData = await decodeBuffer(texBuffer.buffer)
                     if (!imageData) continue
-                    console.debug(`[Texture] ${texturePath}: Decoded from FS in ${(performance.now() - startTime).toFixed(1)}ms`)
                     return { path: texturePath, imageData }
                 } catch (e) {
                     console.warn(`[Texture] Failed to decode found file ${candidate}:`, e)
@@ -675,9 +672,7 @@ export async function decodeTexture(
             const imageData = await decodeBuffer(mpqData.buffer as ArrayBuffer)
             if (!imageData) {
                 return { path: texturePath, imageData: null, error: 'Decode failed' }
-            }
-            console.debug(`[Texture] ${texturePath}: Decoded from MPQ in ${(performance.now() - startTime).toFixed(1)}ms`)
-            return { path: texturePath, imageData }
+            }            return { path: texturePath, imageData }
         }
     } catch (e) {
         // MPQ failed
@@ -690,9 +685,7 @@ export async function decodeTexture(
             const imageData = await decodeBuffer(mpqData.buffer as ArrayBuffer)
             if (!imageData) {
                 return { path: texturePath, imageData: null, error: 'Decode failed' }
-            }
-            console.debug(`[Texture] ${texturePath}: Decoded from MPQ (fallback search) in ${(performance.now() - startTime).toFixed(1)}ms`)
-            return { path: texturePath, imageData }
+            }            return { path: texturePath, imageData }
         }
     } catch (e) {
         // Final fail
