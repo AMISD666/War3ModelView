@@ -1,4 +1,4 @@
-export type ShortcutContext = 'global' | 'view' | 'geometry' | 'uv' | 'animation' | 'batch' | 'viewer'
+export type ShortcutContext = 'global' | 'view' | 'geometry' | 'uv' | 'animation' | 'viewer'
 
 export interface ShortcutAction {
     id: string
@@ -130,7 +130,7 @@ export const shortcutActions: ShortcutAction[] = [
     },
     {
         id: 'editor.geosetManager',
-        label: '多边形管理器',
+        label: '多边形组管理器',
         category: '编辑器',
         contexts: ['global'],
         defaultBindings: ['G']
@@ -280,7 +280,7 @@ export const shortcutActions: ShortcutAction[] = [
     },
     {
         id: 'animation.prevSequence',
-        label: '\u4e0a\u4e00\u4e2a\u64ad\u653e\u52a8\u4f5c',
+        label: '上一个播放动作',
         category: '动画',
         contexts: ['view', 'geometry', 'uv', 'animation'],
         defaultBindings: ['ArrowUp'],
@@ -288,7 +288,7 @@ export const shortcutActions: ShortcutAction[] = [
     },
     {
         id: 'animation.nextSequence',
-        label: '\u4e0b\u4e00\u4e2a\u64ad\u653e\u52a8\u4f5c',
+        label: '下一个播放动作',
         category: '动画',
         contexts: ['view', 'geometry', 'uv', 'animation'],
         defaultBindings: ['ArrowDown'],
@@ -356,7 +356,7 @@ export const shortcutActions: ShortcutAction[] = [
     {
         id: 'geometry.copyVertices',
         label: '复制顶点',
-        category: '几何',
+        category: '多边形组',
         contexts: ['geometry'],
         defaultBindings: ['Ctrl+C'],
         preventDefault: true
@@ -364,7 +364,7 @@ export const shortcutActions: ShortcutAction[] = [
     {
         id: 'geometry.pasteVertices',
         label: '粘贴顶点',
-        category: '几何',
+        category: '多边形组',
         contexts: ['geometry'],
         defaultBindings: ['Ctrl+V'],
         preventDefault: true
@@ -372,7 +372,7 @@ export const shortcutActions: ShortcutAction[] = [
     {
         id: 'geometry.deleteVertices',
         label: '删除顶点',
-        category: '几何',
+        category: '多边形组',
         contexts: ['geometry'],
         defaultBindings: ['Delete'],
         preventDefault: true
@@ -413,22 +413,12 @@ export const shortcutActions: ShortcutAction[] = [
     },
     {
         id: 'timeline.quickKeyframe',
-        label: '\u5feb\u901fK\u5e27\uff08\u4f4d\u79fb/\u65cb\u8f6c/\u7f29\u653e\uff09',
-        category: '\u65f6\u95f4\u8f74',
+        label: '快速K帧（位移/旋转/缩放）',
+        category: '时间轴',
         contexts: ['animation'],
         defaultBindings: ['K'],
         preventDefault: true
     },
-
-    // Batch
-    {
-        id: 'batch.copyModel',
-        label: '复制批处理模型',
-        category: '批量',
-        contexts: ['batch'],
-        defaultBindings: ['Ctrl+C'],
-        preventDefault: true
-    }
 ]
 
 export const shortcutActionMap = new Map(shortcutActions.map((action) => [action.id, action]))

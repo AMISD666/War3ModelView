@@ -19,7 +19,6 @@ import { uiText } from '../constants/uiText'
 
 interface MenuBarProps {
     onOpen: () => void
-    onOpenMdlText: () => void
     onSave: () => void | Promise<boolean>
     onSaveAs: () => void | Promise<boolean>
     onSwapMdlMdx: () => void | Promise<boolean>
@@ -53,8 +52,8 @@ interface MenuBarProps {
     showAttachments: boolean
     onToggleAttachments: () => void
     onToggleEditor: (editor: string) => void
-    mainMode: 'view' | 'geometry' | 'uv' | 'animation' | 'batch'
-    onSetMainMode: (mode: 'view' | 'geometry' | 'uv' | 'animation' | 'batch') => void
+    mainMode: 'view' | 'geometry' | 'uv' | 'animation'
+    onSetMainMode: (mode: 'view' | 'geometry' | 'uv' | 'animation') => void
     showDebugConsole: boolean
     onToggleDebugConsole: () => void
     onShowAbout: () => void
@@ -74,7 +73,6 @@ interface MenuBarProps {
 
 const MenuBar: React.FC<MenuBarProps> = ({
     onOpen,
-    onOpenMdlText,
     onSave,
     onSaveAs,
     onSwapMdlMdx,
@@ -494,30 +492,12 @@ const MenuBar: React.FC<MenuBarProps> = ({
             </div>
 
             <div
-                style={menuStyle}
-                onClick={() => { onOpenMdlText(); closeMenu() }}
-                onMouseEnter={hoverStyle}
-                onMouseLeave={unhoverStyle}
-            >
-                {uiText.menu.modelText}
-            </div>
-
-            <div
                 style={{ ...menuStyle, backgroundColor: showMpqBrowser ? '#444' : 'transparent' }}
                 onClick={toggleMpqBrowser}
                 onMouseEnter={hoverStyle}
                 onMouseLeave={!showMpqBrowser ? unhoverStyle : undefined}
             >
                 {uiText.menu.mpqBrowser}
-            </div>
-
-            <div
-                style={{ ...menuStyle, backgroundColor: mainMode === 'batch' ? '#444' : 'transparent' }}
-                onClick={() => onSetMainMode('batch')}
-                onMouseEnter={hoverStyle}
-                onMouseLeave={mainMode !== 'batch' ? unhoverStyle : undefined}
-            >
-                {uiText.menu.batchMode}
             </div>
 
             <div

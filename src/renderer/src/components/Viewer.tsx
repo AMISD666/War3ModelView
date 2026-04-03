@@ -1708,6 +1708,10 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       const nextLayers = material.Layers.map((layer: any) => {
         if (!layer || typeof layer !== 'object') return layer
 
+        if (layer.TextureID && typeof layer.TextureID === 'object' && Array.isArray(layer.TextureID.Keys)) {
+          return layer
+        }
+
         const rawTextureId = typeof layer.TextureID === 'number' ? layer.TextureID : Number(layer.TextureID)
         const safeTextureId = Number.isFinite(rawTextureId)
           ? Math.min(Math.max(0, Math.floor(rawTextureId)), maxTextureId)
@@ -2587,10 +2591,10 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     // const isCtrl = e.ctrlKey || e.metaKey
 
     // Box Selection behavior:
-    // - View mode: 左键直接旋转摄像机，不进行框选
-    // - Batch mode: 同 View mode，左键旋转摄像机
-    // - Other modes: 左键框选，Alt+左键旋转摄像机
-    const shouldStartBoxSelection = e.button === 0 && !e.altKey && mainMode !== 'view' && mainMode !== 'batch'
+    // - View mode: 左键直接旋转镜头，不进行框选
+    // - Batch mode: 同 View mode，左键旋转镜头
+    // - Other modes: 左键框选，Alt+左键旋转镜头
+    const shouldStartBoxSelection = e.button === 0 && !e.altKey && mainMode !== 'view'
 
     if (shouldStartBoxSelection) {
       if (cameraRef.current) cameraRef.current.enabled = false

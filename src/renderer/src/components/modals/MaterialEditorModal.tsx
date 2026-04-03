@@ -14,6 +14,7 @@ import { useRpcClient } from '../../hooks/useRpc'
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
 import { markStandalonePerf, markStandalonePerfOnce } from '../../utils/standalonePerf'
 import { MATERIAL_FILTER_MODE_OPTIONS } from '../../constants/filterModes'
+import { getMaterialTrackEditorTitle, getMaterialTrackFieldName } from '../../utils/materialAnimShared'
 
 const { Text } = Typography
 
@@ -30,6 +31,10 @@ function cloneDeep<T>(value: T): T {
     } catch {
         return JSON.parse(JSON.stringify(value))
     }
+}
+
+function isAnimTrack(value: any): value is { Keys: any[]; LineType?: number; GlobalSeqId?: number | null; InterpolationType?: number } {
+    return !!value && typeof value === 'object' && Array.isArray(value.Keys)
 }
 
 /**
@@ -134,11 +139,13 @@ interface MaterialManagerRpcState {
     snapshot: MaterialManagerSnapshot
     pickedGeosetIndex: number | null
     selectedMaterialIndex: number | null
+    selectedMaterialLayerIndex: number | null
 }
 
 interface MaterialManagerPatch {
     pickedGeosetIndex?: number | null
     selectedMaterialIndex?: number | null
+    selectedMaterialLayerIndex?: number | null
 }
 
 const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onClose, isStandalone }) => {
@@ -155,6 +162,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         },
         pickedGeosetIndex: null,
         selectedMaterialIndex: null,
+        selectedMaterialLayerIndex: null,
     }
 
     const { state: rpcState, emitCommand } = useRpcClient<MaterialManagerRpcState, MaterialManagerPatch>(
@@ -174,6 +182,10 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                     nextState.selectedMaterialIndex = patch.selectedMaterialIndex
                     changed = true
                 }
+                if (patch?.selectedMaterialLayerIndex !== undefined && previousState.selectedMaterialLayerIndex !== patch.selectedMaterialLayerIndex) {
+                    nextState.selectedMaterialLayerIndex = patch.selectedMaterialLayerIndex
+                    changed = true
+                }
 
                 return changed ? nextState : previousState
             }
@@ -189,6 +201,8 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const directSetMaterials = useModelStore((state) => state.setMaterials)
     const directSetTextures = useModelStore((state) => state.setTextures)
     const directSetVisualDataPatch = useModelStore((state) => state.setVisualDataPatch)
+    const directSetSelectedMaterialIndex = useSelectionStore((state) => state.setSelectedMaterialIndex)
+    const directSetSelectedMaterialLayerIndex = useSelectionStore((state) => state.setSelectedMaterialLayerIndex)
 
     // 独立窗：RPC 快照对象需稳定引用；勿把 directModelData 放进依赖，否则主窗口任意更新都会重建并触发死循环
     const standaloneModelData = useMemo(
@@ -267,6 +281,21 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const [editingField, setEditingField] = useState<string | null>(null)
     const [editingVectorSize, setEditingVectorSize] = useState(1)
 
+    const syncMaterialSelection = useCallback((materialIndex: number | null, layerIndex: number | null) => {
+        if (isStandalone) {
+            emitCommand('EXECUTE_MATERIAL_ACTION', {
+                action: 'SET_SELECTION',
+                payload: {
+                    selectedMaterialIndex: materialIndex,
+                    selectedMaterialLayerIndex: layerIndex
+                }
+            })
+            return
+        }
+        directSetSelectedMaterialIndex(materialIndex)
+        directSetSelectedMaterialLayerIndex(layerIndex)
+    }, [directSetSelectedMaterialIndex, directSetSelectedMaterialLayerIndex, emitCommand, isStandalone])
+
     const focusMaterialForGeoset = useCallback((geosetIndex: number | null | undefined) => {
         if (!Number.isInteger(geosetIndex) || geosetIndex === null || geosetIndex === undefined) {
             return
@@ -278,6 +307,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         }
         setSelectedMaterialIndex(materialId)
         setSelectedLayerIndex(0)
+        syncMaterialSelection(materialId, 0)
         setTimeout(() => {
             if (materialListRef.current) {
                 materialListRef.current.scrollTo({ top: materialId * 50, behavior: 'smooth' })
@@ -286,7 +316,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                 layerListRef.current.scrollTo({ top: 0, behavior: 'smooth' })
             }
         }, 0)
-    }, [])
+    }, [syncMaterialSelection])
 
     const materialListRef = React.useRef<HTMLDivElement>(null)
     const layerListRef = React.useRef<HTMLDivElement>(null)
@@ -297,10 +327,10 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             if (Number.isInteger(rpcState.selectedMaterialIndex) && rpcState.selectedMaterialIndex !== null) {
                 // Ignore picking if the user explicitly picked a material
                 setSelectedMaterialIndex(rpcState.selectedMaterialIndex)
-                setSelectedLayerIndex(0)
+                setSelectedLayerIndex(typeof rpcState.selectedMaterialLayerIndex === 'number' ? rpcState.selectedMaterialLayerIndex : 0)
                 setTimeout(() => {
                     scrollMaterialToItem(rpcState.selectedMaterialIndex!)
-                    scrollLayerToItem(0)
+                    scrollLayerToItem(typeof rpcState.selectedMaterialLayerIndex === 'number' ? rpcState.selectedMaterialLayerIndex : 0)
                 }, 0)
             } else {
                 focusMaterialForGeoset(rpcState.pickedGeosetIndex)
@@ -309,16 +339,16 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             const standaloneState = useSelectionStore.getState()
             if (Number.isInteger(standaloneState.selectedMaterialIndex) && standaloneState.selectedMaterialIndex !== null) {
                 setSelectedMaterialIndex(standaloneState.selectedMaterialIndex)
-                setSelectedLayerIndex(0)
+                setSelectedLayerIndex(typeof standaloneState.selectedMaterialLayerIndex === 'number' ? standaloneState.selectedMaterialLayerIndex : 0)
                 setTimeout(() => {
                     scrollMaterialToItem(standaloneState.selectedMaterialIndex!)
-                    scrollLayerToItem(0)
+                    scrollLayerToItem(typeof standaloneState.selectedMaterialLayerIndex === 'number' ? standaloneState.selectedMaterialLayerIndex : 0)
                 }, 0)
             } else {
                 focusMaterialForGeoset(standaloneState.pickedGeosetIndex)
             }
         }
-    }, [visible, isStandalone, rpcState.pickedGeosetIndex, rpcState.selectedMaterialIndex, focusMaterialForGeoset])
+    }, [visible, isStandalone, rpcState.pickedGeosetIndex, rpcState.selectedMaterialIndex, rpcState.selectedMaterialLayerIndex, focusMaterialForGeoset])
     const textureDropZoneRef = React.useRef<HTMLDivElement>(null)
     const layerTextureDropSurfaceRef = React.useRef<HTMLDivElement>(null)
     const detailsDropSurfaceRef = React.useRef<HTMLDivElement>(null)
@@ -429,12 +459,17 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             const materialsDataChanged = lastMaterialsSignatureRef.current !== materialsSignature
 
             const pathStr = String(modelPath || '')
+            const localMaterialsSignature = JSON.stringify({
+                m: denormalizeMaterialsForSave(localMaterialsRef.current || []),
+                t: localTexturesRef.current || []
+            })
             // 独立窗口：编辑图层 Alpha 等会 emit 保存，RPC 回传后 signature 必变；若再 normalize+setLocalMaterials 会重挂载列表/输入框导致失焦且数值被冲成 0
             const skipStandaloneFullReload =
                 isStandalone &&
                 isInitialized.current &&
                 lastStandaloneModelPathRef.current !== '' &&
-                lastStandaloneModelPathRef.current === pathStr
+                lastStandaloneModelPathRef.current === pathStr &&
+                materialsSignature === localMaterialsSignature
 
             if (hasMaterials && (!isInitialized.current || materialsDataChanged)) {
                 if (skipStandaloneFullReload) {
@@ -972,12 +1007,19 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         setEditingField(field)
         setEditingVectorSize(vectorSize)
 
+        const activeMaterialIndex = selectedMaterialIndexRef.current
+        const activeLayerIndex = selectedLayerIndexRef.current
+        if (activeMaterialIndex < 0 || activeLayerIndex < 0) return
+
+        const title = getMaterialTrackEditorTitle(field as 'TextureID' | 'Alpha')
+        const fieldName = getMaterialTrackFieldName(field as 'TextureID' | 'Alpha', activeMaterialIndex, activeLayerIndex)
+
         const payload = {
             callerId: 'MaterialEditorModal',
             initialData: selectedLayer ? selectedLayer[field] : null,
-            title: `编辑 ${field}`,
+            title,
             vectorSize,
-            fieldName: field,
+            fieldName,
             globalSequences: (modelData?.GlobalSequences || [])
                 .map((g: any) => (typeof g === 'number' ? g : g?.Duration))
                 .filter((v: any) => typeof v === 'number'),
@@ -1432,8 +1474,10 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                                         const mats = localMaterials[index]
                                         if (mats && mats.Layers && mats.Layers.length > 0) {
                                             setSelectedLayerIndex(0) // Auto select first layer
+                                            syncMaterialSelection(index, 0)
                                         } else {
                                             setSelectedLayerIndex(-1)
+                                            syncMaterialSelection(index, null)
                                         }
                                     }}
                                     style={{
@@ -1478,7 +1522,10 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                                 rowKey={(item: any, index?: number) => item?.__editorLayerId || `layer-${index ?? 0}`}
                                 renderItem={(_item: any, index: number) => (
                                     <List.Item
-                                        onClick={() => setSelectedLayerIndex(index)}
+                                        onClick={() => {
+                                            setSelectedLayerIndex(index)
+                                            syncMaterialSelection(selectedMaterialIndex, index)
+                                        }}
                                         data-layer-index={index}
                                         onMouseDown={(e) => handleLayerMouseDown(e, index)}
                                         style={{
@@ -1599,13 +1646,13 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                                                 <Text style={{ display: 'block', marginBottom: '2px', color: '#b0b0b0', fontSize: '12px', whiteSpace: 'nowrap' }}>透明度 (Alpha):</Text>
                                                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                                                     <Checkbox
-                                                        checked={selectedLayer.Alpha && typeof selectedLayer.Alpha !== 'number'}
+                                                        checked={isAnimTrack(selectedLayer.Alpha)}
                                                         onChange={(e) => handleAnimToggle('Alpha', e.target.checked)}
                                                         style={{ color: '#e8e8e8', fontSize: '12px', whiteSpace: 'nowrap' }}
                                                     >
                                                         动态
                                                     </Checkbox>
-                                                    {selectedLayer.Alpha && typeof selectedLayer.Alpha !== 'number' ? (
+                                                    {isAnimTrack(selectedLayer.Alpha) ? (
                                                         <Button size="small" onClick={() => openKeyframeEditor('Alpha', 1)}>编辑动画</Button>
                                                     ) : (
                                                         <InputNumber

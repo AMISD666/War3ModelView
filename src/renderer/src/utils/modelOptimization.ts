@@ -2205,7 +2205,7 @@ export async function optimizeModelPolygons(
             changed = true;
         }
 
-        onProgress?.((i + 1) / geosets.length, `优化几何 ${i + 1}/${geosets.length}`);
+        onProgress?.((i + 1) / geosets.length, `优化多边形 ${i + 1}/${geosets.length}`);
         await nextTick();
     }
 

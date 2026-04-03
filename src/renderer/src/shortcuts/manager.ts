@@ -19,7 +19,6 @@ const contextPriority: ShortcutContext[] = [
     'geometry',
     'uv',
     'view',
-    'batch',
     'viewer',
     'global'
 ]
@@ -31,9 +30,7 @@ const getActiveContexts = (): Set<ShortcutContext> => {
     const { mainMode } = useSelectionStore.getState()
     contexts.add(mainMode)
 
-    if (mainMode !== 'batch') {
-        contexts.add('viewer')
-    }
+    contexts.add('viewer')
 
     return contexts
 }

@@ -148,7 +148,7 @@ const getGroupTitleMap = (category: string): string => {
         case '视图':
             return '查看状态'
         case '变换':
-        case '几何':
+        case '多边形组':
             return '顶点编辑'
         case 'UV':
             return 'UV 编辑'

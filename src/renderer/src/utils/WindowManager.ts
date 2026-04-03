@@ -6,6 +6,7 @@ import { markStandalonePerf } from './standalonePerf';
 import { chooseRpcEmitEncoding } from './rpcSerialization';
 import { isKeyframeAnimVectorIntTrack, serializeAnimVectorForKeyframeIpc } from './animVectorIpc';
 import type { NodeEditorKind } from '../types/nodeEditorRpc';
+import { getToolWindowSize, TOOL_WINDOW_SIZES, type ToolWindowId } from '../constants/windowLayouts';
 
 /** 超过此 JSON 字符长度则走 Rust invoke 投递，避免超大对象在 JS emit 路径反复序列化 */
 const RPC_INVOKE_EMIT_THRESHOLD_CHARS = 48 * 1024
@@ -31,6 +32,14 @@ class WindowManager {
     private hydrationState: Map<string, boolean> = new Map();
     private hydrationWaiters: Map<string, Array<(hydrated: boolean) => void>> = new Map();
     private hydrationListeners: Map<string, () => void> = new Map();
+
+    private resolveConfiguredToolWindowSize(windowId: string, width: number, height: number): { width: number; height: number } {
+        if (windowId in TOOL_WINDOW_SIZES) {
+            return getToolWindowSize(windowId as ToolWindowId)
+        }
+
+        return { width, height }
+    }
 
     private async applyWindowBounds(win: WebviewWindow, width: number, height: number): Promise<void> {
         const size = new LogicalSize(width, height);
@@ -365,6 +374,9 @@ class WindowManager {
         height: number,
         options?: OpenToolWindowOptions
     ): Promise<void> {
+        const resolvedSize = this.resolveConfiguredToolWindowSize(windowId, width, height)
+        width = resolvedSize.width
+        height = resolvedSize.height
         console.log(`[WindowManager] Request to open: ${windowId}`);
         markStandalonePerf('open_requested', { windowId, title, width, height });
 
@@ -531,6 +543,16 @@ class WindowManager {
     private keyframeMap: Map<string, string> = new Map();
     private nextPoolIndex = 0;
     private readonly POOL_SIZE = 8;
+
+    async openConfiguredToolWindow(windowId: import('../constants/windowLayouts').ToolWindowId, title: string): Promise<void> {
+        const { width, height } = getToolWindowSize(windowId)
+        await this.openToolWindow(windowId, title, width, height)
+    }
+
+    async openConfiguredMaterialManager(): Promise<void> {
+        const { width, height } = getToolWindowSize('materialManager')
+        await this.openToolWindow('materialManager', '鏉愯川绠＄悊鍣?', width, height)
+    }
 
     getKeyframeWindowId(fieldName: string): string {
         const safeFieldName = fieldName || 'default';

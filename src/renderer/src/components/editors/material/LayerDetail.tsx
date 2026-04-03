@@ -14,6 +14,10 @@ interface LayerDetailProps {
     _onBack: () => void
 }
 
+const isAnimTrack = (value: any): value is { Keys: any[]; LineType?: number; GlobalSeqId?: number | null; InterpolationType?: number } => (
+    !!value && typeof value === 'object' && Array.isArray(value.Keys)
+)
+
 const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
     const modelData = useModelStore(state => state.modelData)
     const [isAnimManagerOpen, setIsAnimManagerOpen] = useState(false)
@@ -100,8 +104,8 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
         label: `TextureAnim ${i}`
     })) || []
 
-    const isAlphaAnimated = layer.Alpha && typeof layer.Alpha !== 'number'
-    const isTextureIDAnimated = layer.TextureID && typeof layer.TextureID !== 'number'
+    const isAlphaAnimated = isAnimTrack(layer.Alpha)
+    const isTextureIDAnimated = isAnimTrack(layer.TextureID)
 
     return (
         <div style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: '10px' }}>

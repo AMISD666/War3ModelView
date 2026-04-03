@@ -2058,6 +2058,12 @@ export const useModelStore = create<ModelState>((set, get) => ({
     setMaterials: (materials) => set((state) => {
         console.log('[ModelStore] setMaterials called. Count:', materials ? materials.length : 0);
         const updatedModelData = state.modelData ? { ...state.modelData, Materials: materials } : state.modelData;
+        const updatedMaterialManagerPreview = state.materialManagerPreview
+            ? {
+                ...state.materialManagerPreview,
+                materials,
+            }
+            : state.materialManagerPreview;
         const updatedTabs = state.activeTabId
             ? state.tabs.map((tab) => {
                 if (tab.id !== state.activeTabId) {
@@ -2079,13 +2085,27 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 };
             })
             : state.tabs;
-        return { modelData: updatedModelData, tabs: updatedTabs, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
+        return {
+            modelData: updatedModelData,
+            materialManagerPreview: updatedMaterialManagerPreview,
+            tabs: updatedTabs,
+            rendererReloadTrigger: state.rendererReloadTrigger + 1,
+            ...markActiveTabDirtyState(state)
+        };
     }),
     setVisualDataPatch: (patch) => set((state) => {
         const sanitizedPatch = Object.fromEntries(
             Object.entries(patch || {}).filter(([, value]) => value !== undefined)
         ) as typeof patch;
         const updatedModelData = state.modelData ? { ...state.modelData, ...sanitizedPatch } : state.modelData;
+        const updatedMaterialManagerPreview = state.materialManagerPreview
+            ? {
+                ...state.materialManagerPreview,
+                ...(Object.prototype.hasOwnProperty.call(sanitizedPatch, 'Materials') ? { materials: sanitizedPatch.Materials as any[] } : {}),
+                ...(Object.prototype.hasOwnProperty.call(sanitizedPatch, 'Textures') ? { textures: sanitizedPatch.Textures as any[] } : {}),
+                ...(Object.prototype.hasOwnProperty.call(sanitizedPatch, 'Geosets') ? { geosets: sanitizedPatch.Geosets as any[] } : {}),
+            }
+            : state.materialManagerPreview;
         const updatedTabs = state.activeTabId
             ? state.tabs.map((tab) => {
                 if (tab.id !== state.activeTabId) {
@@ -2107,7 +2127,13 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 };
             })
             : state.tabs;
-        return { modelData: updatedModelData, tabs: updatedTabs, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
+        return {
+            modelData: updatedModelData,
+            materialManagerPreview: updatedMaterialManagerPreview,
+            tabs: updatedTabs,
+            rendererReloadTrigger: state.rendererReloadTrigger + 1,
+            ...markActiveTabDirtyState(state)
+        };
     }),
 
     setMaterialManagerPreview: (payload) => set((state) => ({

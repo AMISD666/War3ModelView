@@ -1,5 +1,5 @@
 ﻿import React, { useRef, useEffect, useState, useCallback, useMemo, useLayoutEffect } from 'react'
-import { useModelStore } from '../../../store/modelStore'
+import { mergeMaterialManagerPreview, useModelStore } from '../../../store/modelStore'
 import { useSelectionStore, type KeyframeDisplayMode } from '../../../store/selectionStore'
 import { useRendererStore } from '../../../store/rendererStore'
 import {
@@ -447,6 +447,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     const contextMenuRef = useRef<HTMLDivElement>(null)
     const rafRef = useRef<number | null>(null)
     const containerSizeRef = useRef<{ width: number; height: number }>({ width: 400, height: 180 })
+    const [containerMeasureTick, setContainerMeasureTick] = useState(0)
 
     // Stores
     const {
@@ -455,6 +456,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         isPlaying,
         playbackSpeed,
         modelData,
+        materialManagerPreview,
         nodes: modelNodes,
         selectedGeosetIndex,
         selectedGeosetIndices,
@@ -483,13 +485,18 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         setTimelineGlobalSequenceFilter
     } = useSelectionStore()
 
+    const effectiveModelData = useMemo(
+        () => mergeMaterialManagerPreview(modelData, materialManagerPreview),
+        [modelData, materialManagerPreview]
+    )
+
     // Derived Global Info
     const globalSequences = useMemo<number[]>(() => {
-        const raw = (modelData as any)?.GlobalSequences
+        const raw = (effectiveModelData as any)?.GlobalSequences
         return Array.isArray(raw)
             ? raw.map((entry: any) => typeof entry === 'number' ? entry : Number(entry?.Duration ?? 0))
             : []
-    }, [modelData])
+    }, [effectiveModelData])
     const activeGlobalSequenceDuration = typeof timelineGlobalSequenceFilter === 'number' && timelineGlobalSequenceFilter >= 0
         ? Number(globalSequences[timelineGlobalSequenceFilter] ?? 0)
         : null
@@ -642,8 +649,8 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
     useEffect(() => {
         if (keyframeDisplayMode !== 'material') return
-        const materials = Array.isArray((modelData as any)?.Materials)
-            ? ((modelData as any).Materials as any[])
+        const materials = Array.isArray((effectiveModelData as any)?.Materials)
+            ? ((effectiveModelData as any).Materials as any[])
             : []
         if (materials.length === 0) {
             if (selectedMaterialIndex !== null) setSelectedMaterialIndex(null)
@@ -653,7 +660,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         }
 
         const pickedMaterialIndex = (() => {
-            const geosets = Array.isArray((modelData as any)?.Geosets) ? ((modelData as any).Geosets as any[]) : []
+            const geosets = Array.isArray((effectiveModelData as any)?.Geosets) ? ((effectiveModelData as any).Geosets as any[]) : []
             if (pickedGeosetIndex === null || pickedGeosetIndex < 0 || pickedGeosetIndex >= geosets.length) return null
             const materialId = Number(geosets[pickedGeosetIndex]?.MaterialID)
             return Number.isFinite(materialId) && materialId >= 0 && materialId < materials.length ? materialId : null
@@ -674,10 +681,9 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             setSelectedMaterialIndex(nextMaterialIds[0])
         }
 
-        if (selectedMaterialLayerIndex !== 0) setSelectedMaterialLayerIndex(0)
     }, [
         keyframeDisplayMode,
-        modelData,
+        effectiveModelData,
         pickedGeosetIndex,
         selectedMaterialIndex,
         selectedMaterialIndices,
@@ -700,7 +706,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
     // Cache active keyframes
     useEffect(() => {
-        if (!modelData) {
+        if (!effectiveModelData) {
             activeKeyframesRef.current = []
             return
         }
@@ -815,15 +821,18 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         }
 
         if (keyframeDisplayMode === 'material') {
-            const materials = Array.isArray((modelData as any)?.Materials)
-                ? ((modelData as any).Materials as any[])
+            const materials = Array.isArray((effectiveModelData as any)?.Materials)
+                ? ((effectiveModelData as any).Materials as any[])
                 : []
             const materialIds = selectedMaterialIndices.length > 0
                 ? selectedMaterialIndices
                 : (typeof selectedMaterialIndex === 'number' ? [selectedMaterialIndex] : [])
             materialIds.forEach((materialIndex) => {
                 if (materialIndex < 0 || materialIndex >= materials.length) return
-                const layerIndex = 0
+                const layerIndex = (
+                    typeof selectedMaterialLayerIndex === 'number' &&
+                    selectedMaterialLayerIndex >= 0
+                ) ? selectedMaterialLayerIndex : 0
                 const layer = materials[materialIndex]?.Layers?.[layerIndex]
                 const ownerId = encodeMaterialLayerOwnerId(materialIndex, layerIndex)
                 MATERIAL_TRACK_INFOS.forEach(({ type, propName, color }) => {
@@ -845,7 +854,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
         activeKeyframesRef.current = keyframes
     }, [
-        modelData,
+        effectiveModelData,
         selectedNodeIds,
         modelNodes,
         selectedGeosetIndex,
@@ -898,7 +907,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         if (fitToCurrentSequenceInterval()) {
             didInitialAutoFitRef.current = true
         }
-    }, [isActive, currentSequence, fitToCurrentSequenceInterval])
+    }, [isActive, currentSequence, fitToCurrentSequenceInterval, containerMeasureTick])
 
     // Auto-fit when the SEQUENCE INDEX changes (but not while dragging).
     const lastSequenceIndexRef = useRef(currentSequence)
@@ -937,10 +946,12 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                     width: entry.contentRect.width,
                     height: entry.contentRect.height
                 }
+                setContainerMeasureTick((tick) => tick + 1)
             }
         })
         resizeObserver.observe(container)
         containerSizeRef.current = { width: container.clientWidth, height: container.clientHeight }
+        setContainerMeasureTick((tick) => tick + 1)
         return () => resizeObserver.disconnect()
     }, [])
 
@@ -1546,15 +1557,16 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
     const getSelectedKeyframeData = useCallback(() => {
         const result: TimelineKeyframeData[] = []
         const state = useModelStore.getState()
+        const mergedModelData = mergeMaterialManagerPreview(state.modelData as any, state.materialManagerPreview as any)
         const nodes = state.nodes as any[]
-        const geosetAnims = Array.isArray((state.modelData as any)?.GeosetAnims)
-            ? ((state.modelData as any).GeosetAnims as any[])
+        const geosetAnims = Array.isArray((mergedModelData as any)?.GeosetAnims)
+            ? ((mergedModelData as any).GeosetAnims as any[])
             : []
-        const textureAnims = Array.isArray((state.modelData as any)?.TextureAnims)
-            ? ((state.modelData as any).TextureAnims as any[])
+        const textureAnims = Array.isArray((mergedModelData as any)?.TextureAnims)
+            ? ((mergedModelData as any).TextureAnims as any[])
             : []
-        const materials = Array.isArray((state.modelData as any)?.Materials)
-            ? ((state.modelData as any).Materials as any[])
+        const materials = Array.isArray((mergedModelData as any)?.Materials)
+            ? ((mergedModelData as any).Materials as any[])
             : []
 
         activeKeyframesRef.current.forEach((kf) => {
@@ -1658,6 +1670,23 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         return result
     }, [selectedKeyframeUids])
 
+    const getEditableTimelineSnapshots = useCallback(() => {
+        const state = useModelStore.getState()
+        const mergedModelData = mergeMaterialManagerPreview(state.modelData as any, state.materialManagerPreview as any)
+        return {
+            nodes: state.nodes as any[],
+            geosetAnims: Array.isArray((mergedModelData as any)?.GeosetAnims)
+                ? ((mergedModelData as any).GeosetAnims as any[])
+                : [],
+            textureAnims: Array.isArray((mergedModelData as any)?.TextureAnims)
+                ? ((mergedModelData as any).TextureAnims as any[])
+                : [],
+            materials: Array.isArray((mergedModelData as any)?.Materials)
+                ? ((mergedModelData as any).Materials as any[])
+                : []
+        }
+    }, [])
+
     const effectiveClipboard = useMemo(() => {
         if (clipboardKeyframes && clipboardKeyframes.keyframes.length > 0) {
             return { source: 'clipboard' as const, data: clipboardKeyframes }
@@ -1703,17 +1732,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const keyframeData = getSelectedKeyframeData()
         if (keyframeData.length === 0) return
 
-        const state = useModelStore.getState()
-        const nodes = state.nodes
-        const geosetAnims = Array.isArray((state.modelData as any)?.GeosetAnims)
-            ? ((state.modelData as any).GeosetAnims as any[])
-            : []
-        const textureAnims = Array.isArray((state.modelData as any)?.TextureAnims)
-            ? ((state.modelData as any).TextureAnims as any[])
-            : []
-        const materials = Array.isArray((state.modelData as any)?.Materials)
-            ? ((state.modelData as any).Materials as any[])
-            : []
+        const { nodes, geosetAnims, textureAnims, materials } = getEditableTimelineSnapshots()
         const oldNodes = cloneNodesForKeyframes(nodes)
         const nodesCopy = cloneNodesForKeyframes(nodes)
         const oldGeosetAnims = cloneGeosetAnimsForKeyframes(geosetAnims)
@@ -1802,7 +1821,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
         applyKeyframeSnapshots(nodesCopy, geosetAnimsCopy, textureAnimsCopy, materialsCopy, { nodeChanged, geosetChanged, textureChanged, materialChanged })
         setSelectedKeyframeUids(new Set())
-    }, [selectedKeyframeUids, getSelectedKeyframeData, applyKeyframeSnapshots])
+    }, [selectedKeyframeUids, getSelectedKeyframeData, applyKeyframeSnapshots, getEditableTimelineSnapshots])
 
     // Copy keyframes to clipboard (isCut = true for cut operation)
     const copyKeyframes = useCallback((isCut: boolean) => {
@@ -1840,17 +1859,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const currentFrame = frameRef.current
         const offset = currentFrame - source.baseFrame
 
-        const state = useModelStore.getState()
-        const nodes = state.nodes
-        const geosetAnims = Array.isArray((state.modelData as any)?.GeosetAnims)
-            ? ((state.modelData as any).GeosetAnims as any[])
-            : []
-        const textureAnims = Array.isArray((state.modelData as any)?.TextureAnims)
-            ? ((state.modelData as any).TextureAnims as any[])
-            : []
-        const materials = Array.isArray((state.modelData as any)?.Materials)
-            ? ((state.modelData as any).Materials as any[])
-            : []
+        const { nodes, geosetAnims, textureAnims, materials } = getEditableTimelineSnapshots()
         const oldNodes = cloneNodesForKeyframes(nodes)
         const nodesCopy = cloneNodesForKeyframes(nodes)
         const oldGeosetAnims = cloneGeosetAnimsForKeyframes(geosetAnims)
@@ -1998,7 +2007,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         if (effectiveClipboard.source === 'clipboard' && source.isCut) {
             setClipboardKeyframes(null)
         }
-    }, [effectiveClipboard, applyKeyframeSnapshots])
+    }, [effectiveClipboard, applyKeyframeSnapshots, getEditableTimelineSnapshots])
 
     const pasteKeyframesScaled = useCallback((mode: 'ratio' | 'range') => {
         if (!effectiveClipboard) return
@@ -2023,17 +2032,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             scale = (scalePasteEnd - scalePasteStart) / sourceSpan
         }
 
-        const state = useModelStore.getState()
-        const nodes = state.nodes
-        const geosetAnims = Array.isArray((state.modelData as any)?.GeosetAnims)
-            ? ((state.modelData as any).GeosetAnims as any[])
-            : []
-        const textureAnims = Array.isArray((state.modelData as any)?.TextureAnims)
-            ? ((state.modelData as any).TextureAnims as any[])
-            : []
-        const materials = Array.isArray((state.modelData as any)?.Materials)
-            ? ((state.modelData as any).Materials as any[])
-            : []
+        const { nodes, geosetAnims, textureAnims, materials } = getEditableTimelineSnapshots()
         const oldNodes = cloneNodesForKeyframes(nodes)
         const nodesCopy = cloneNodesForKeyframes(nodes)
         const oldGeosetAnims = cloneGeosetAnimsForKeyframes(geosetAnims)
@@ -2181,7 +2180,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         if (effectiveClipboard.source === 'clipboard' && source.isCut) {
             setClipboardKeyframes(null)
         }
-    }, [effectiveClipboard, clipboardInfo, scalePastePercent, scalePasteStart, scalePasteEnd, applyKeyframeSnapshots])
+    }, [effectiveClipboard, clipboardInfo, scalePastePercent, scalePasteStart, scalePasteEnd, applyKeyframeSnapshots, getEditableTimelineSnapshots])
     const openScalePasteDialog = useCallback(() => {
         if (!clipboardInfo) return
         const currentFrame = Math.round(frameRef.current)
@@ -2468,17 +2467,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
             // Only process if there was actual movement
             if (dragScale !== null && interactionRef.current.dragKeyframeData.length > 0 && Math.abs(dragScale - 1) > 1e-4) {
-                const state = useModelStore.getState()
-                const nodes = state.nodes
-                const geosetAnims = Array.isArray((state.modelData as any)?.GeosetAnims)
-                    ? ((state.modelData as any).GeosetAnims as any[])
-                    : []
-                const textureAnims = Array.isArray((state.modelData as any)?.TextureAnims)
-                    ? ((state.modelData as any).TextureAnims as any[])
-                    : []
-                const materials = Array.isArray((state.modelData as any)?.Materials)
-                    ? ((state.modelData as any).Materials as any[])
-                    : []
+                const { nodes, geosetAnims, textureAnims, materials } = getEditableTimelineSnapshots()
                 const oldNodes = cloneNodesForKeyframes(nodes)
                 const nodesCopy = cloneNodesForKeyframes(nodes)
                 const oldGeosetAnims = cloneGeosetAnimsForKeyframes(geosetAnims)
@@ -2623,17 +2612,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 })
                 setSelectedKeyframeUids(next)
             } else if (dragScale === null && frameOffset !== 0 && interactionRef.current.dragKeyframeData.length > 0) {
-                const state = useModelStore.getState()
-                const nodes = state.nodes
-                const geosetAnims = Array.isArray((state.modelData as any)?.GeosetAnims)
-                    ? ((state.modelData as any).GeosetAnims as any[])
-                    : []
-                const textureAnims = Array.isArray((state.modelData as any)?.TextureAnims)
-                    ? ((state.modelData as any).TextureAnims as any[])
-                    : []
-                const materials = Array.isArray((state.modelData as any)?.Materials)
-                    ? ((state.modelData as any).Materials as any[])
-                    : []
+                const { nodes, geosetAnims, textureAnims, materials } = getEditableTimelineSnapshots()
                 const oldNodes = cloneNodesForKeyframes(nodes)
                 const nodesCopy = cloneNodesForKeyframes(nodes)
                 const oldGeosetAnims = cloneGeosetAnimsForKeyframes(geosetAnims)
@@ -2972,7 +2951,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 setSelectionRect({ startX: mouseX, startY: mouseY, endX: mouseX, endY: mouseY })
             }
         }
-    }, [handleGlobalMouseMove, handleGlobalMouseUp, setPlaying, selectedKeyframeUids, getSelectedKeyframeData, contextMenu.visible, closeContextMenu])
+    }, [handleGlobalMouseMove, handleGlobalMouseUp, setPlaying, selectedKeyframeUids, getSelectedKeyframeData, contextMenu.visible, closeContextMenu, getEditableTimelineSnapshots])
 
     useEffect(() => {
         return () => {

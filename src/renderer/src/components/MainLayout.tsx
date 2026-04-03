@@ -100,11 +100,13 @@ type MaterialManagerRpcState = {
     snapshot: MaterialManagerSnapshot
     pickedGeosetIndex: number | null
     selectedMaterialIndex: number | null
+    selectedMaterialLayerIndex: number | null
 }
 
 type MaterialManagerPatch = {
     pickedGeosetIndex?: number | null
     selectedMaterialIndex?: number | null
+    selectedMaterialLayerIndex?: number | null
 }
 
 function prepareModelDataForSave(modelData: any): any {
@@ -1786,7 +1788,6 @@ const MainLayout: React.FC = () => {
     const [showTextureModal, setShowTextureModal] = useState<boolean>(false)
     const [showTextureAnimModal, setShowTextureAnimModal] = useState<boolean>(false)
     const [showSequenceModal, setShowSequenceModal] = useState<boolean>(false)
-
     const [showGlobalSeqModal, setShowGlobalSeqModal] = useState<boolean>(false)
     // Utility to strip heavy typed arrays from geosets before RPC broadcast
     const stripGeosetData = (geosets: any[] | undefined) => {
@@ -1967,6 +1968,7 @@ const MainLayout: React.FC = () => {
             snapshot: cache.snapshot,
             pickedGeosetIndex: useSelectionStore.getState().pickedGeosetIndex ?? null,
             selectedMaterialIndex: useSelectionStore.getState().selectedMaterialIndex ?? null,
+            selectedMaterialLayerIndex: useSelectionStore.getState().selectedMaterialLayerIndex ?? null,
         }
     }, [])
 
@@ -2355,7 +2357,6 @@ const MainLayout: React.FC = () => {
         // We do this BEFORE potentially loading CLI files
         const doReset = async () => {
             const { useModelStore } = await import('../store/modelStore');
-            const { useBatchStore } = await import('../store/batchStore');
             const { useSelectionStore } = await import('../store/selectionStore');
             const { useUIStore } = await import('../store/uiStore');
             const { useRendererStore } = await import('../store/rendererStore');
@@ -2363,7 +2364,6 @@ const MainLayout: React.FC = () => {
             const { useMessageStore } = await import('../store/messageStore');
 
             useModelStore.getState().reset();
-            useBatchStore.getState().reset();
             useSelectionStore.getState().reset();
             useUIStore.getState().reset();
             useRendererStore.getState().reset();
@@ -2904,6 +2904,13 @@ const MainLayout: React.FC = () => {
                 });
             } else if (action === 'RELOAD_RENDERER') {
                 useModelStore.getState().triggerRendererReload();
+            } else if (action === 'SET_SELECTION') {
+                if (actionPayload && Object.prototype.hasOwnProperty.call(actionPayload, 'selectedMaterialIndex')) {
+                    useSelectionStore.getState().setSelectedMaterialIndex(actionPayload.selectedMaterialIndex ?? null)
+                }
+                if (actionPayload && Object.prototype.hasOwnProperty.call(actionPayload, 'selectedMaterialLayerIndex')) {
+                    useSelectionStore.getState().setSelectedMaterialLayerIndex(actionPayload.selectedMaterialLayerIndex ?? null)
+                }
             }
         }
     }, []);
@@ -3241,18 +3248,22 @@ const MainLayout: React.FC = () => {
 
         let prevPickedGeosetIndex = useSelectionStore.getState().pickedGeosetIndex;
         let prevSelectedMaterialIndex = useSelectionStore.getState().selectedMaterialIndex;
+        let prevSelectedMaterialLayerIndex = useSelectionStore.getState().selectedMaterialLayerIndex;
         const unsubscribeSelection = useSelectionStore.subscribe((selectionState) => {
             const geosetChanged = selectionState.pickedGeosetIndex !== prevPickedGeosetIndex;
             const materialChanged = selectionState.selectedMaterialIndex !== prevSelectedMaterialIndex;
+            const materialLayerChanged = selectionState.selectedMaterialLayerIndex !== prevSelectedMaterialLayerIndex;
 
-            if (geosetChanged || materialChanged) {
+            if (geosetChanged || materialChanged || materialLayerChanged) {
                 prevPickedGeosetIndex = selectionState.pickedGeosetIndex;
                 prevSelectedMaterialIndex = selectionState.selectedMaterialIndex;
+                prevSelectedMaterialLayerIndex = selectionState.selectedMaterialLayerIndex;
 
                 const liveModelState = useModelStore.getState();
                 const modelData = liveModelState.modelData;
                 const pickedGeosetIndex = selectionState.pickedGeosetIndex;
                 const selectedMaterialIndex = selectionState.selectedMaterialIndex;
+                const selectedMaterialLayerIndex = selectionState.selectedMaterialLayerIndex;
                 const strippedGeosets = stripGeosetData(modelData?.Geosets);
 
                 if (geosetChanged) {
@@ -3278,6 +3289,7 @@ const MainLayout: React.FC = () => {
                 rpcRefs.current.broadcastMaterialManagerPatch({
                     ...(geosetChanged && { pickedGeosetIndex }),
                     ...(materialChanged && { selectedMaterialIndex }),
+                    ...(materialLayerChanged && { selectedMaterialLayerIndex }),
                 });
             }
         });
@@ -3463,11 +3475,7 @@ const MainLayout: React.FC = () => {
         // Guard: If model path is same, don't reset state (it's a reload/update)
         const isSameModel = data.path === modelPath
         if (!isSameModel) {
-            // CRITICAL: Do not switch away from batch mode when loading a model
-            const currentMode = useSelectionStore.getState().mainMode;
-            if (currentMode !== 'batch') {
-                setMainMode('view')
-            }
+            setMainMode('view')
             useSelectionStore.getState().clearAllSelections()
         }
 
@@ -3501,7 +3509,6 @@ const MainLayout: React.FC = () => {
 
 
     const handleOpen = handleImport // Alias for MenuBar
-
     const handleOpenRecent = useCallback((path: string) => {
         openModelAsTab(path)
         setRecentFiles(addRecentFile(path))
@@ -4180,7 +4187,7 @@ const MainLayout: React.FC = () => {
             }),
             registerShortcutHandler('editor.sequenceManager', () => {
                 // setShowSequenceModal(prev => !prev);
-                windowManager.openToolWindow('sequenceManager', '动画管理器', 600, 450);
+                windowManager.openToolWindow('sequenceManager', '动画管理器', 660, 550);
                 return true;
             }),
             registerShortcutHandler('editor.globalSequenceManager', () => {
@@ -4962,7 +4969,6 @@ const MainLayout: React.FC = () => {
                     </AppErrorBoundary>
                 </Suspense>
             )}
-
             {showTransformModelDialog && (
                 <Suspense fallback={null}>
                     <AppErrorBoundary scope="Transform Model" compact>
@@ -5102,17 +5108,5 @@ const MainLayout: React.FC = () => {
 }
 
 export default MainLayout
-
-
-
-
-
-
-
-
-
-
-
-
 
 

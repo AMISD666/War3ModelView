@@ -1,4 +1,4 @@
-#![windows_subsystem = "windows"]
+﻿#![windows_subsystem = "windows"]
 
 mod activation;
 mod app_paths;
@@ -236,7 +236,8 @@ fn debug_log(message: String) {
     println!("{}", message);
 }
 
-/// 独立窗口 RPC：主窗口已通过 MessagePack 编码为 base64，Rust 仅包装为 JSON 对象后 emit（子窗口再解码）。
+/// Detached window RPC: the main window sends a MessagePack payload encoded as base64.
+/// Rust wraps it as JSON and emits it to the target webview.
 #[tauri::command]
 fn emit_to_webview_msgpack_b64(
     app: tauri::AppHandle,
@@ -250,13 +251,13 @@ fn emit_to_webview_msgpack_b64(
     });
     let win = app
         .get_webview_window(&label)
-        .ok_or_else(|| format!("未找到窗口: {}", label))?;
+        .ok_or_else(|| format!("鏈壘鍒扮獥鍙? {}", label))?;
     win.emit(&event, v).map_err(|e| e.to_string())?;
     Ok(())
 }
 
-/// 独立窗口 RPC：主窗口通过 invoke 传入 UTF-8 JSON 字符串，Rust 解析一次后以 Value 投递目标 Webview，
-/// 减轻超大对象在 JS `emit` 路径下被多次序列化/拷贝的开销。
+/// Detached window RPC: the main window sends a UTF-8 JSON string through invoke.
+/// Rust parses it once and emits the resulting JSON value to the target webview.
 #[tauri::command]
 fn emit_to_webview_json_payload(
     app: tauri::AppHandle,
@@ -265,10 +266,10 @@ fn emit_to_webview_json_payload(
     payload_json: String,
 ) -> Result<(), String> {
     let v: serde_json::Value = serde_json::from_str(&payload_json)
-        .map_err(|e| format!("JSON 解析失败: {}", e))?;
+        .map_err(|e| format!("JSON 瑙ｆ瀽澶辫触: {}", e))?;
     let win = app
         .get_webview_window(&label)
-        .ok_or_else(|| format!("未找到窗口: {}", label))?;
+        .ok_or_else(|| format!("鏈壘鍒扮獥鍙? {}", label))?;
     win.emit(&event, v).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -356,31 +357,6 @@ struct LocalFileReadDetailed {
     data_b64: Option<String>,
 }
 
-#[tauri::command]
-fn read_local_files_batch_detailed(paths: Vec<String>) -> Vec<LocalFileReadDetailed> {
-    paths
-        .into_par_iter()
-        .map(|path| {
-            let start = std::time::Instant::now();
-            match std::fs::read(&path) {
-                Ok(data) => LocalFileReadDetailed {
-                    path,
-                    found: true,
-                    byte_len: data.len(),
-                    read_ms: start.elapsed().as_secs_f64() * 1000.0,
-                    data_b64: Some(base64::engine::general_purpose::STANDARD.encode(data)),
-                },
-                Err(_) => LocalFileReadDetailed {
-                    path,
-                    found: false,
-                    byte_len: 0,
-                    read_ms: start.elapsed().as_secs_f64() * 1000.0,
-                    data_b64: None,
-                },
-            }
-        })
-        .collect()
-}
 
 #[tauri::command]
 fn read_local_files_batch_bin(paths: Vec<String>) -> Result<Response, String> {
@@ -410,268 +386,11 @@ fn read_local_files_batch_bin(paths: Vec<String>) -> Result<Response, String> {
     Ok(Response::new(payload))
 }
 
-#[tauri::command]
-fn scan_model_files_first_page_bin(root: String, page_size: usize) -> Result<Response, String> {
-    if root.trim().is_empty() {
-        return Err("root is empty".to_string());
-    }
-
-    let mut dirs: VecDeque<PathBuf> = VecDeque::from([PathBuf::from(root)]);
-    let mut discovered: Vec<String> = Vec::new();
-    let target = page_size.max(1);
-
-    while let Some(dir) = dirs.pop_front() {
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(_) => continue,
-        };
-
-        let mut child_dirs: Vec<PathBuf> = Vec::new();
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                child_dirs.push(path);
-                continue;
-            }
-
-            let ext = path
-                .extension()
-                .and_then(|v| v.to_str())
-                .map(|v| v.to_ascii_lowercase())
-                .unwrap_or_default();
-            if ext == "mdx" || ext == "mdl" {
-                discovered.push(path.to_string_lossy().to_string());
-            }
-        }
-
-        for child in child_dirs {
-            dirs.push_back(child);
-        }
-
-        if discovered.len() >= target {
-            break;
-        }
-    }
-
-    let results: Vec<(String, f64, Vec<u8>)> = discovered
-        .into_par_iter()
-        .map(|path| {
-            let start = std::time::Instant::now();
-            let data = std::fs::read(&path).unwrap_or_default();
-            (path, start.elapsed().as_secs_f64() * 1000.0, data)
-        })
-        .collect();
-
-    let mut payload: Vec<u8> = Vec::new();
-    payload.extend_from_slice(&(results.len() as u32).to_le_bytes());
-
-    for (path, read_ms, data) in results {
-        let path_bytes = path.as_bytes();
-        payload.extend_from_slice(&(path_bytes.len() as u32).to_le_bytes());
-        payload.extend_from_slice(path_bytes);
-        payload.extend_from_slice(&read_ms.to_le_bytes());
-        payload.extend_from_slice(&(data.len() as u32).to_le_bytes());
-        if !data.is_empty() {
-            payload.extend_from_slice(&data);
-        }
-    }
-
-    Ok(Response::new(payload))
-}
-
-#[derive(Serialize, Clone)]
-struct BatchScanPayload {
-    scan_id: String,
-    files: Vec<String>,
-    manifests: Vec<ModelManifestRow>,
-}
 
 fn is_replaceable_team_texture_path(texture_path: &str) -> bool {
     let normalized = normalize_path(texture_path).to_lowercase();
     normalized.starts_with("replaceabletextures\\teamcolor\\")
         || normalized.starts_with("replaceabletextures\\teamglow\\")
-}
-
-fn collect_model_files_streaming(root: String, page_size: usize, on_first_page: impl Fn(Vec<String>) + Send + 'static, on_complete: impl Fn(Vec<String>) + Send + 'static) {
-    std::thread::spawn(move || {
-        let mut discovered: Vec<String> = Vec::new();
-        let mut dirs: VecDeque<PathBuf> = VecDeque::from([PathBuf::from(&root)]);
-        let mut first_page_sent = false;
-
-        while let Some(dir) = dirs.pop_front() {
-            let entries = match std::fs::read_dir(&dir) {
-                Ok(entries) => entries,
-                Err(_) => continue,
-            };
-
-            let mut child_dirs: Vec<PathBuf> = Vec::new();
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    child_dirs.push(path);
-                    continue;
-                }
-
-                let ext = path
-                    .extension()
-                    .and_then(|v| v.to_str())
-                    .map(|v| v.to_ascii_lowercase())
-                    .unwrap_or_default();
-                if ext == "mdx" || ext == "mdl" {
-                    discovered.push(path.to_string_lossy().to_string());
-                    if !first_page_sent && discovered.len() >= page_size {
-                        first_page_sent = true;
-                        on_first_page(discovered[..page_size].to_vec());
-                    }
-                }
-            }
-
-            for child in child_dirs {
-                dirs.push_back(child);
-            }
-        }
-
-        if !first_page_sent && !discovered.is_empty() {
-            on_first_page(discovered.clone());
-        }
-        on_complete(discovered);
-    });
-}
-
-#[tauri::command]
-fn scan_model_files_streamed(
-    app: tauri::AppHandle,
-    root: String,
-    page_size: usize,
-    scan_id: String,
-) -> Result<Response, String> {
-    if root.trim().is_empty() {
-        return Err("root is empty".to_string());
-    }
-
-    let mut dirs: VecDeque<PathBuf> = VecDeque::from([PathBuf::from(&root)]);
-    let mut discovered: Vec<String> = Vec::new();
-    let target = page_size.max(1);
-
-    while let Some(dir) = dirs.pop_front() {
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(_) => continue,
-        };
-
-        let mut child_dirs: Vec<PathBuf> = Vec::new();
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                child_dirs.push(path);
-                continue;
-            }
-
-            let ext = path
-                .extension()
-                .and_then(|v| v.to_str())
-                .map(|v| v.to_ascii_lowercase())
-                .unwrap_or_default();
-            if ext == "mdx" || ext == "mdl" {
-                discovered.push(path.to_string_lossy().to_string());
-            }
-        }
-
-        for child in child_dirs {
-            dirs.push_back(child);
-        }
-
-        if discovered.len() >= target {
-            break;
-        }
-    }
-
-    let first_page = discovered.clone();
-    let first_page_results: Vec<(String, f64, Vec<u8>, ModelManifestRow)> = first_page
-        .into_par_iter()
-        .map(|path| {
-            let start = std::time::Instant::now();
-            let data = std::fs::read(&path).unwrap_or_default();
-            let manifest = build_manifest_row(PathBuf::from(&path).as_path(), &data);
-            (path, start.elapsed().as_secs_f64() * 1000.0, data, manifest)
-        })
-        .collect();
-
-    let mut payload: Vec<u8> = Vec::new();
-    payload.extend_from_slice(&(first_page_results.len() as u32).to_le_bytes());
-    for (path, read_ms, data, manifest) in first_page_results {
-        let path_bytes = path.as_bytes();
-        payload.extend_from_slice(&(path_bytes.len() as u32).to_le_bytes());
-        payload.extend_from_slice(path_bytes);
-        payload.extend_from_slice(&read_ms.to_le_bytes());
-        payload.extend_from_slice(&(data.len() as u32).to_le_bytes());
-        if !data.is_empty() {
-            payload.extend_from_slice(&data);
-        }
-        payload.extend_from_slice(&(manifest.animations.len() as u32).to_le_bytes());
-        for animation in manifest.animations {
-            let animation_bytes = animation.as_bytes();
-            payload.extend_from_slice(&(animation_bytes.len() as u32).to_le_bytes());
-            payload.extend_from_slice(animation_bytes);
-        }
-        payload.extend_from_slice(&(manifest.texture_paths.len() as u32).to_le_bytes());
-        for texture_path in manifest.texture_paths {
-            let texture_path_bytes = texture_path.as_bytes();
-            payload.extend_from_slice(&(texture_path_bytes.len() as u32).to_le_bytes());
-            payload.extend_from_slice(texture_path_bytes);
-        }
-    }
-
-    std::thread::spawn(move || {
-        while let Some(dir) = dirs.pop_front() {
-            let entries = match std::fs::read_dir(&dir) {
-                Ok(entries) => entries,
-                Err(_) => continue,
-            };
-
-            let mut child_dirs: Vec<PathBuf> = Vec::new();
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    child_dirs.push(path);
-                    continue;
-                }
-
-                let ext = path
-                    .extension()
-                    .and_then(|v| v.to_str())
-                    .map(|v| v.to_ascii_lowercase())
-                    .unwrap_or_default();
-                if ext == "mdx" || ext == "mdl" {
-                    discovered.push(path.to_string_lossy().to_string());
-                }
-            }
-
-            for child in child_dirs {
-                dirs.push_back(child);
-            }
-        }
-
-        let manifests: Vec<ModelManifestRow> = discovered
-            .par_iter()
-            .map(|path| {
-                let path_buf = PathBuf::from(path);
-                let data = std::fs::read(&path_buf).unwrap_or_default();
-                build_manifest_row(path_buf.as_path(), &data)
-            })
-            .collect();
-
-        let _ = app.emit(
-            "batch-scan-complete",
-            BatchScanPayload {
-                scan_id,
-                files: discovered,
-                manifests,
-            },
-        );
-    });
-
-    Ok(Response::new(payload))
 }
 
 fn load_texture_bytes_with_source_key(
@@ -912,141 +631,6 @@ fn load_textures_batch_thumb_rgba(
     Ok(Response::new(payload))
 }
 
-#[tauri::command]
-fn load_batch_page_bundle(
-    model_paths: Vec<String>,
-    state: State<'_, MpqManager>,
-    cache: State<'_, TextureBatchCache>,
-) -> Result<Response, String> {
-    let unique_model_paths: Vec<String> = model_paths
-        .into_iter()
-        .filter(|path| !path.trim().is_empty())
-        .collect();
-
-    let model_results: Vec<(String, bool, f64, Vec<u8>, ModelManifestRow)> = unique_model_paths
-        .par_iter()
-        .map(|path| {
-            let start = std::time::Instant::now();
-            match std::fs::read(path) {
-                Ok(data) => {
-                    let manifest = build_manifest_row(PathBuf::from(path).as_path(), &data);
-                    (
-                        path.clone(),
-                        true,
-                        start.elapsed().as_secs_f64() * 1000.0,
-                        data,
-                        manifest,
-                    )
-                }
-                Err(_) => (
-                    path.clone(),
-                    false,
-                    start.elapsed().as_secs_f64() * 1000.0,
-                    Vec::new(),
-                    ModelManifestRow {
-                        full_path: path.clone(),
-                        file_name: PathBuf::from(path)
-                            .file_name()
-                            .and_then(|v| v.to_str())
-                            .unwrap_or_default()
-                            .to_string(),
-                        animations: Vec::new(),
-                        texture_paths: Vec::new(),
-                        byte_len: 0,
-                        modified_unix_ms: 0,
-                    },
-                ),
-            }
-        })
-        .collect();
-
-    let texture_requests: Vec<(String, String)> = model_results
-        .iter()
-        .flat_map(|(model_path, found, _read_ms, _data, manifest)| {
-            if !found {
-                return Vec::new();
-            }
-            manifest
-                .texture_paths
-                .iter()
-                .filter(|texture_path| !is_replaceable_team_texture_path(texture_path))
-                .cloned()
-                .map(|texture_path| (model_path.clone(), texture_path))
-                .collect::<Vec<_>>()
-        })
-        .collect();
-
-    let texture_results: Vec<(String, String, Option<Arc<Vec<u8>>>)> = texture_requests
-        .into_par_iter()
-        .map(|(model_path, texture_path)| {
-            let normalized_model_path = normalize_path(&model_path);
-            let normalized_model_path_lc = normalized_model_path.to_lowercase();
-            let normalized_texture_path = normalize_path(&texture_path);
-            let normalized_texture_path_lc = normalized_texture_path.to_lowercase();
-            let skip_fs = normalized_model_path.starts_with("dropped:") || normalized_model_path.is_empty();
-            let bytes = load_texture_bytes_with_source_key(
-                &normalized_model_path,
-                &normalized_model_path_lc,
-                &normalized_texture_path,
-                &normalized_texture_path_lc,
-                skip_fs,
-                &state,
-                &cache,
-            )
-            .map(|(bytes, _source_key)| bytes);
-            (model_path, normalized_texture_path, bytes)
-        })
-        .collect();
-
-    let mut payload: Vec<u8> = Vec::new();
-    payload.extend_from_slice(&(model_results.len() as u32).to_le_bytes());
-
-    for (path, found, read_ms, data, manifest) in model_results {
-        let path_bytes = path.as_bytes();
-        payload.extend_from_slice(&(path_bytes.len() as u32).to_le_bytes());
-        payload.extend_from_slice(path_bytes);
-        payload.push(if found { 1u8 } else { 0u8 });
-        payload.extend_from_slice(&read_ms.to_le_bytes());
-        payload.extend_from_slice(&(data.len() as u32).to_le_bytes());
-        if !data.is_empty() {
-            payload.extend_from_slice(&data);
-        }
-        payload.extend_from_slice(&(manifest.animations.len() as u32).to_le_bytes());
-        for animation in manifest.animations {
-            let animation_bytes = animation.as_bytes();
-            payload.extend_from_slice(&(animation_bytes.len() as u32).to_le_bytes());
-            payload.extend_from_slice(animation_bytes);
-        }
-        payload.extend_from_slice(&(manifest.texture_paths.len() as u32).to_le_bytes());
-        for texture_path in manifest.texture_paths {
-            let texture_bytes = texture_path.as_bytes();
-            payload.extend_from_slice(&(texture_bytes.len() as u32).to_le_bytes());
-            payload.extend_from_slice(texture_bytes);
-        }
-    }
-
-    payload.extend_from_slice(&(texture_results.len() as u32).to_le_bytes());
-    for (model_path, texture_path, bytes) in texture_results {
-        let model_path_bytes = model_path.as_bytes();
-        payload.extend_from_slice(&(model_path_bytes.len() as u32).to_le_bytes());
-        payload.extend_from_slice(model_path_bytes);
-
-        let texture_path_bytes = texture_path.as_bytes();
-        payload.extend_from_slice(&(texture_path_bytes.len() as u32).to_le_bytes());
-        payload.extend_from_slice(texture_path_bytes);
-
-        if let Some(bytes) = bytes {
-            payload.push(1u8);
-            payload.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
-            payload.extend_from_slice(bytes.as_slice());
-        } else {
-            payload.push(0u8);
-            payload.extend_from_slice(&0u32.to_le_bytes());
-        }
-    }
-
-    Ok(Response::new(payload))
-}
 
 // ==================
 // Activation Commands
@@ -1070,7 +654,7 @@ fn activate_software(license_code: String) -> Result<activation::ActivationStatu
 async fn open_qq_verification_window(app: tauri::AppHandle) -> Result<(), String> {
     let label = "qq_verification";
 
-    // If an old window exists, destroy it (not close — destroy is synchronous and
+    // If an old window exists, destroy it (not close 鈥?destroy is synchronous and
     // immediately frees the label so we can re-create without a race condition).
     if let Some(window) = app.get_webview_window(label) {
         let _ = window.destroy();
@@ -1104,13 +688,13 @@ async fn open_qq_verification_window(app: tauri::AppHandle) -> Result<(), String
     let external_url =
         tauri::WebviewUrl::External(tauri::Url::parse(url).map_err(|e| e.to_string())?);
     tauri::WebviewWindowBuilder::new(&app, label, external_url)
-        .title("QQ群成员验证")
+        .title("QQ 群成员验证")
         .inner_size(1024.0, 768.0)
         .resizable(true)
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
         .initialization_script(&script)
         .build()
-        .map_err(|e| format!("打开QQ群验证窗口失败: {}", e))?;
+        .map_err(|e| format!("鎵撳紑QQ缇ら獙璇佺獥鍙ｅけ璐? {}", e))?;
 
     Ok(())
 }
@@ -1140,16 +724,10 @@ fn close_qq_verification_window(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn get_cli_copy_path() -> Option<String> {
     let args: Vec<String> = std::env::args().collect();
-    let mut has_copy_flag = false;
-    for arg in &args {
-        if arg == "--copy-model" {
-            has_copy_flag = true;
-            break;
-        }
-    }
-    if !has_copy_flag {
+    if !args.iter().any(|arg| arg == "--copy-model") {
         return None;
     }
+
     for arg in args.iter().skip(1) {
         let lower = arg.to_lowercase();
         if lower.ends_with(".mdx") || lower.ends_with(".mdl") {
@@ -1162,16 +740,10 @@ fn get_cli_copy_path() -> Option<String> {
 #[tauri::command]
 fn get_cli_delete_path() -> Option<String> {
     let args: Vec<String> = std::env::args().collect();
-    let mut has_delete_flag = false;
-    for arg in &args {
-        if arg == "--delete-model" {
-            has_delete_flag = true;
-            break;
-        }
-    }
-    if !has_delete_flag {
+    if !args.iter().any(|arg| arg == "--delete-model") {
         return None;
     }
+
     for arg in args.iter().skip(1) {
         let lower = arg.to_lowercase();
         if lower.ends_with(".mdx") || lower.ends_with(".mdl") {
@@ -1186,6 +758,7 @@ fn get_cli_delete_paths() -> Option<Vec<String>> {
     if !args.iter().any(|a| a == "--delete-model") {
         return None;
     }
+
     let mut paths: Vec<String> = args
         .iter()
         .skip(1)
@@ -1200,6 +773,7 @@ fn get_cli_delete_paths() -> Option<Vec<String>> {
         let raw = args.iter().skip(1).cloned().collect::<Vec<_>>().join(" ");
         let mut in_quotes = false;
         let mut current = String::new();
+
         let push_if_model = |s: &str, out: &mut Vec<String>| {
             let trimmed = s.trim().trim_matches('"');
             let lower = trimmed.to_lowercase();
@@ -1325,7 +899,7 @@ fn register_context_menu() -> Result<bool, String> {
 
         // 2. Set display name
         shell_key
-            .set_value("", &"使用 GGwar3Edit 打开")
+            .set_value("", &"浣跨敤 GGwar3Edit 鎵撳紑")
             .map_err(|e| format!("Failed to set display name: {}", e))?;
 
         // 3. Set icon
@@ -1637,7 +1211,7 @@ try {{
     Start-Process -FilePath '{current_exe}'
 }} catch {{
     Add-Type -AssemblyName System.Windows.Forms
-    [System.Windows.Forms.MessageBox]::Show("更新失败: $($_.Exception.Message)", "更新错误", 0, 16)
+    [System.Windows.Forms.MessageBox]::Show("鏇存柊澶辫触: $($_.Exception.Message)", "鏇存柊閿欒", 0, 16)
 }}
 
 # Clean up - remove the downloaded new EXE
@@ -1983,13 +1557,9 @@ fn main() {
             set_mpq_priority,
             debug_mpq_probe,
             read_local_files_batch,
-            read_local_files_batch_detailed,
             read_local_files_batch_bin,
-            scan_model_files_first_page_bin,
-            scan_model_files_streamed,
             load_textures_batch_bin,
             load_textures_batch_thumb_rgba,
-            load_batch_page_bundle,
             clear_texture_batch_cache,
             encode_texture_image,
             detect_warcraft_path,
@@ -2083,3 +1653,4 @@ fn apply_main_window_layout(window: &WebviewWindow) -> tauri::Result<()> {
 
     Ok(())
 }
+

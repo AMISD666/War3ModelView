@@ -181,8 +181,7 @@ export const useRendererStore = create<RendererStore>()(
                 view: false,
                 geometry: true,
                 uv: true,
-                animation: true,
-                batch: true
+                animation: true
             },
             setShowVerticesForMode: (mode, show) => set((state) => ({
                 showVerticesByMode: { ...state.showVerticesByMode, [mode]: show }

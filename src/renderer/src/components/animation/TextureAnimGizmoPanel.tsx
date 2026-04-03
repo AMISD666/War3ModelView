@@ -428,14 +428,15 @@ const TextureAnimGizmoPanel: React.FC = () => {
             return null
         }
 
-        // Triangle hit-test for xy handle
-        const triSize = GIZMO_XY_BOX_OFFSET + 4
-        const lx = x - pivot.x
-        const ly = pivot.y - y
-        if (lx >= 0 && ly >= 0 && lx + ly <= triSize && lx + ly > 0) return 'xy'
-
         if (y >= pivot.y - 8 && y <= pivot.y + 8 && x >= pivot.x && x <= pivot.x + GIZMO_AXIS_LENGTH) return 'x'
         if (x >= pivot.x - 8 && x <= pivot.x + 8 && y >= pivot.y - GIZMO_AXIS_LENGTH && y <= pivot.y) return 'y'
+
+        const boxLeft = pivot.x + GIZMO_XY_BOX_OFFSET
+        const boxRight = boxLeft + GIZMO_XY_BOX_SIZE
+        const boxTop = pivot.y - GIZMO_XY_BOX_OFFSET - GIZMO_XY_BOX_SIZE
+        const boxBottom = boxTop + GIZMO_XY_BOX_SIZE
+        if (x >= boxLeft && x <= boxRight && y >= boxTop && y <= boxBottom) return 'xy'
+
         return null
     }, [worldToCanvas, textureCenterWorld.x, textureCenterWorld.y, gizmoMode])
 
@@ -579,18 +580,14 @@ const TextureAnimGizmoPanel: React.FC = () => {
             ctx.lineTo(pivot.x + 3, pivot.y - GIZMO_AXIS_LENGTH + 6)
             ctx.fill()
 
-            // XY 联动手柄：三角形
-            const triSize = GIZMO_XY_BOX_OFFSET + 4
+            // XY 联动手柄：偏移小方块，避免吞掉单轴命中
+            const boxX = pivot.x + GIZMO_XY_BOX_OFFSET
+            const boxY = pivot.y - GIZMO_XY_BOX_OFFSET - GIZMO_XY_BOX_SIZE
             ctx.fillStyle = xyActive ? 'rgba(255, 214, 102, 0.45)' : 'rgba(250, 173, 20, 0.25)'
             ctx.strokeStyle = xyActive ? '#ffd666' : '#faad14'
             ctx.lineWidth = 1.5
-            ctx.beginPath()
-            ctx.moveTo(pivot.x, pivot.y)
-            ctx.lineTo(pivot.x + triSize, pivot.y)
-            ctx.lineTo(pivot.x, pivot.y - triSize)
-            ctx.closePath()
-            ctx.fill()
-            ctx.stroke()
+            ctx.fillRect(boxX, boxY, GIZMO_XY_BOX_SIZE, GIZMO_XY_BOX_SIZE)
+            ctx.strokeRect(boxX, boxY, GIZMO_XY_BOX_SIZE, GIZMO_XY_BOX_SIZE)
         }
     }, [form, transformedQuad, worldToCanvas, previewImage, getOrigin, unitScale, activeAxis, hoverAxis, textureCenterWorld.x, textureCenterWorld.y, gizmoMode])
 
@@ -1085,4 +1082,3 @@ const TextureAnimGizmoPanel: React.FC = () => {
 }
 
 export default React.memo(TextureAnimGizmoPanel)
-

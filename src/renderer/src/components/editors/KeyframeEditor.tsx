@@ -42,13 +42,14 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
 
     const [standaloneData, setStandaloneData] = useState<any>({
         initialData: props.initialData,
-        title: props.title ?? 'Keyframe Editor',
+        title: props.title ?? '',
         vectorSize: props.vectorSize ?? 1,
         globalSequences: props.globalSequences ?? [],
         sequences: props.sequences ?? [],
         fieldName: props.fieldName ?? '',
         callerId: ''
     })
+    const [standaloneReady, setStandaloneReady] = useState(!isStandalone)
 
     const title = isStandalone ? standaloneData.title : (props.title ?? 'Keyframe Editor')
     const vectorSize = isStandalone ? standaloneData.vectorSize : (props.vectorSize ?? 1)
@@ -581,6 +582,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
                 ? { ...initData, Keys: normalizeKeys(initData.Keys, vSize, fName) }
                 : initData;
 
+            void getCurrentWindow().setTitle(titleStr).catch(() => {})
             setStandaloneData({
                 initialData: normalizedInitData,
                 title: titleStr,
@@ -590,6 +592,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
                 fieldName: fName,
                 callerId: payload.callerId || ''
             });
+            setStandaloneReady(true)
 
             setLineType(initData?.LineType ?? 0);
             setGlobalSeqId(initData?.GlobalSeqId ?? null);
@@ -867,7 +870,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
             <div style={{ width: '100vw', height: '100vh', backgroundColor: '#1e1e1e', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                 <div style={{ height: '32px', minHeight: '32px', backgroundColor: '#222', display: 'flex', alignItems: 'center', padding: '0 16px', borderBottom: '1px solid #333' }}>
                     <div data-tauri-drag-region style={{ flex: 1, height: '100%', display: 'flex', alignItems: 'center', cursor: 'default' }}>
-                        <span data-tauri-drag-region style={{ color: '#e0e0e0', fontWeight: 600, fontSize: 13 }}>{title}</span>
+                        <span data-tauri-drag-region style={{ color: '#e0e0e0', fontWeight: 600, fontSize: 13 }}>{standaloneReady ? title : ''}</span>
                     </div>
                     <Button
                         type="text"
@@ -878,10 +881,10 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
                     />
                 </div>
                 <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
-                    <div style={{ flex: 1 }}>{innerContent}</div>
+                    <div style={{ flex: 1 }}>{standaloneReady ? innerContent : null}</div>
                     <div style={{ padding: '12px 16px', borderTop: '1px solid #333', display: 'flex', justifyContent: 'flex-end', gap: 8, backgroundColor: '#222' }}>
                         <Button onClick={handleCancel} style={{ background: 'transparent', borderColor: '#4a4a4a', color: '#e8e8e8' }}>取消</Button>
-                        <Button type="primary" onClick={handleOk}>确定</Button>
+                        <Button type="primary" onClick={handleOk} disabled={!standaloneReady}>确定</Button>
                     </div>
                 </div>
             </div>
@@ -913,7 +916,6 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
 }
 
 export default KeyframeEditor
-
 
 
 

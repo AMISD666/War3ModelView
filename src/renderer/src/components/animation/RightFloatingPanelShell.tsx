@@ -40,6 +40,7 @@ const RightFloatingPanelShell: React.FC<RightFloatingPanelShellProps> = ({
         >
             {/* 标题栏 */}
             <div
+                onClick={onToggleCollapse}
                 style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -48,7 +49,8 @@ const RightFloatingPanelShell: React.FC<RightFloatingPanelShellProps> = ({
                     padding: '0 10px',
                     background: 'linear-gradient(90deg, #3a3a3a 0%, #242424 100%)',
                     borderBottom: collapsed ? 'none' : '1px solid #1f1f1f',
-                    userSelect: 'none'
+                    userSelect: 'none',
+                    cursor: 'pointer'
                 }}
             >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

@@ -1,7 +1,7 @@
 /**
  * Main layout wrapper that keeps a single MainLayout instance mounted.
  * This avoids war3-model shared state corruption while still supporting
- * batch mode, detached panels, and resizable side panes.
+ * detached panels and resizable side panes.
  */
 
 import React, { Suspense, lazy, useState, useCallback, useRef, useEffect } from 'react'
@@ -21,7 +21,6 @@ const MainLayoutOld = lazy(() => import('./MainLayout'))
 const NodeManagerWindow = lazy(() => import('./node/NodeManagerWindow').then((m) => ({ default: m.NodeManagerWindow })))
 const CreateNodeDialog = lazy(() => import('./node/CreateNodeDialog').then((m) => ({ default: m.CreateNodeDialog })))
 const ViewSettingsWindow = lazy(() => import('./ViewSettingsWindow').then((m) => ({ default: m.ViewSettingsWindow })))
-const BatchManager = lazy(() => import('./batch/BatchManager').then((m) => ({ default: m.BatchManager })))
 const MpqBrowserPanel = lazy(() => import('./mpq/MpqBrowserPanel').then((m) => ({ default: m.MpqBrowserPanel })))
 
 const { Content } = Layout
@@ -35,37 +34,17 @@ export const MainLayoutNew: React.FC = () => {
 
     const [nodeManagerWidth, setNodeManagerWidth] = useState(300)
     const [isResizingNodeMgr, setIsResizingNodeMgr] = useState(false)
-    const [batchPanelWidth, setBatchPanelWidth] = useState(54)
-    const [isResizingBatch, setIsResizingBatch] = useState(false)
     const [mpqPanelWidth, setMpqPanelWidth] = useState(360)
     const [isResizingMpqPanel, setIsResizingMpqPanel] = useState(false)
-    const [isBatchFullView, setIsBatchFullView] = useState<boolean>(() => {
-        if (typeof window === 'undefined') return false
-        return window.localStorage.getItem('batch.fullView') === '1'
-    })
-    const [batchSelectedAnimation, setBatchSelectedAnimation] = useState<number>(0)
 
     const containerRef = useRef<HTMLDivElement>(null)
-
     const addTab = useModelStore((state) => state.addTab)
-    const tabs = useModelStore((state) => state.tabs)
-    const activeTabId = useModelStore((state) => state.activeTabId)
-    const activeBatchTab = tabs.find((tab) => tab.id === activeTabId) || null
-    const batchSelectedPath = activeBatchTab?.path || null
 
     const getNodeManagerBounds = useCallback(() => {
         const containerWidth = containerRef.current?.clientWidth ?? window.innerWidth
         const minWidth = 180
         const maxWidth = Math.max(minWidth, Math.min(560, containerWidth - 520))
         return { minWidth, maxWidth }
-    }, [])
-
-    const getBatchPanelBounds = useCallback(() => {
-        const containerWidth = Math.max(1, containerRef.current?.clientWidth ?? window.innerWidth)
-        const minPercentByPx = (260 / containerWidth) * 100
-        const minPercent = Math.min(48, Math.max(20, minPercentByPx))
-        const maxPercent = Math.max(52, Math.min(80, 100 - minPercent))
-        return { minPercent, maxPercent }
     }, [])
 
     const getMpqPanelBounds = useCallback(() => {
@@ -75,26 +54,8 @@ export const MainLayoutNew: React.FC = () => {
         return { minWidth, maxWidth }
     }, [])
 
-    const handleBatchSelectModel = useCallback(
-        (path: string, animationIndex: number) => {
-            console.log('[MainLayoutNew] Batch model selected:', path, 'animation:', animationIndex)
-            setBatchSelectedAnimation(animationIndex)
-            addTab(path)
-        },
-        [addTab]
-    )
-
-    const handleBatchAnimationChange = useCallback((animationIndex: number) => {
-        setBatchSelectedAnimation(animationIndex)
-    }, [])
-
     const handleNodeMgrMouseDown = (e: React.MouseEvent) => {
         setIsResizingNodeMgr(true)
-        e.preventDefault()
-    }
-
-    const handleBatchDividerMouseDown = (e: React.MouseEvent) => {
-        setIsResizingBatch(true)
         e.preventDefault()
     }
 
@@ -112,14 +73,6 @@ export const MainLayoutNew: React.FC = () => {
                 setNodeManagerWidth(clamp(newWidth, minWidth, maxWidth))
             }
 
-            if (isResizingBatch && containerRef.current) {
-                const containerRect = containerRef.current.getBoundingClientRect()
-                const newWidthPx = e.clientX - containerRect.left
-                const newWidthPercent = (newWidthPx / containerRect.width) * 100
-                const { minPercent, maxPercent } = getBatchPanelBounds()
-                setBatchPanelWidth(clamp(newWidthPercent, minPercent, maxPercent))
-            }
-
             if (isResizingMpqPanel && containerRef.current) {
                 const containerRect = containerRef.current.getBoundingClientRect()
                 const newWidth = containerRect.right - e.clientX
@@ -130,11 +83,10 @@ export const MainLayoutNew: React.FC = () => {
 
         const handleMouseUp = () => {
             setIsResizingNodeMgr(false)
-            setIsResizingBatch(false)
             setIsResizingMpqPanel(false)
         }
 
-        if (isResizingNodeMgr || isResizingBatch || isResizingMpqPanel) {
+        if (isResizingNodeMgr || isResizingMpqPanel) {
             document.addEventListener('mousemove', handleMouseMove)
             document.addEventListener('mouseup', handleMouseUp)
         }
@@ -143,31 +95,23 @@ export const MainLayoutNew: React.FC = () => {
             document.removeEventListener('mousemove', handleMouseMove)
             document.removeEventListener('mouseup', handleMouseUp)
         }
-    }, [isResizingNodeMgr, isResizingBatch, isResizingMpqPanel, getNodeManagerBounds, getBatchPanelBounds, getMpqPanelBounds])
+    }, [isResizingNodeMgr, isResizingMpqPanel, getNodeManagerBounds, getMpqPanelBounds])
 
     useEffect(() => {
         const clampPanelSizes = () => {
             const { minWidth, maxWidth } = getNodeManagerBounds()
-            const { minPercent, maxPercent } = getBatchPanelBounds()
             const mpqBounds = getMpqPanelBounds()
             setNodeManagerWidth((prev) => clamp(prev, minWidth, maxWidth))
-            setBatchPanelWidth((prev) => clamp(prev, minPercent, maxPercent))
             setMpqPanelWidth((prev) => clamp(prev, mpqBounds.minWidth, mpqBounds.maxWidth))
         }
 
         clampPanelSizes()
         window.addEventListener('resize', clampPanelSizes)
         return () => window.removeEventListener('resize', clampPanelSizes)
-    }, [getNodeManagerBounds, getBatchPanelBounds, getMpqPanelBounds])
-
-    useEffect(() => {
-        if (typeof window === 'undefined') return
-        window.localStorage.setItem('batch.fullView', isBatchFullView ? '1' : '0')
-    }, [isBatchFullView])
+    }, [getNodeManagerBounds, getMpqPanelBounds])
 
     useEffect(() => {
         const unlisten = listen<string[]>('open-files', async (event) => {
-            console.log('[MainLayoutNew] Received open-files event:', event.payload)
             const paths = event.payload
             if (!paths || paths.length === 0) return
 
@@ -190,88 +134,22 @@ export const MainLayoutNew: React.FC = () => {
         return () => window.removeEventListener('keydown', onKeyDown, true)
     }, [])
 
-    const isBatchMode = mainMode === 'batch'
-
     return (
         <>
             <div
                 ref={containerRef}
                 style={{ height: '100dvh', display: 'flex', overflow: 'hidden', position: 'relative', minWidth: 0 }}
             >
-                {isBatchMode && (
-                    <>
-                        <div
-                            style={{
-                                width: isBatchFullView ? '100%' : `${batchPanelWidth}%`,
-                                height: '100%',
-                                overflow: 'hidden',
-                                flexShrink: 0,
-                                minWidth: 0,
-                            }}
-                        >
-                            <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
-                                <AppErrorBoundary scope="Batch Panel" compact>
-                                    <Suspense fallback={null}>
-                                        <BatchManager
-                                            onSelectModel={handleBatchSelectModel}
-                                            onAnimationChange={handleBatchAnimationChange}
-                                            selectedPath={batchSelectedPath}
-                                            isFullBatchView={isBatchFullView}
-                                            onToggleFullBatchView={() => setIsBatchFullView((prev) => !prev)}
-                                        />
-                                    </Suspense>
-                                </AppErrorBoundary>
-                            </ConfigProvider>
-                        </div>
-
-                        {!isBatchFullView && (
-                            <div
-                                onMouseDown={handleBatchDividerMouseDown}
-                                style={{
-                                    width: '6px',
-                                    height: '100%',
-                                    cursor: 'ew-resize',
-                                    backgroundColor: isResizingBatch ? '#007acc' : '#333',
-                                    transition: isResizingBatch ? 'none' : 'background-color 0.2s',
-                                    flexShrink: 0,
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                }}
-                                onMouseEnter={(e) => {
-                                    if (!isResizingBatch) {
-                                        e.currentTarget.style.backgroundColor = '#007acc80'
-                                    }
-                                }}
-                                onMouseLeave={(e) => {
-                                    if (!isResizingBatch) {
-                                        e.currentTarget.style.backgroundColor = '#333'
-                                    }
-                                }}
-                            >
-                                <div
-                                    style={{
-                                        width: '2px',
-                                        height: '40px',
-                                        backgroundColor: '#666',
-                                        borderRadius: '1px',
-                                    }}
-                                />
-                            </div>
-                        )}
-                    </>
-                )}
-
                 <div
                     style={{
                         flex: 1,
-                        display: isBatchMode && isBatchFullView ? 'none' : 'flex',
+                        display: 'flex',
                         height: '100%',
                         overflow: 'hidden',
                         minWidth: 0,
                     }}
                 >
-                    {showNodeManager && !isBatchMode && mainMode !== 'uv' && (
+                    {showNodeManager && mainMode !== 'uv' && (
                         <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
                             <div
                                 style={{
@@ -349,12 +227,10 @@ export const MainLayoutNew: React.FC = () => {
                             display: 'flex',
                             flexDirection: 'column',
                             overflow: 'hidden',
-                            backgroundColor: isBatchMode ? '#1a1a1a' : 'transparent',
                             minWidth: 0,
                         }}
                     >
-                        {!isBatchMode && <TabBar />}
-                        {isBatchMode && <TabBar emptyText={uiText.layout.batchPreviewEmpty} />}
+                        <TabBar />
 
                         <Content style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
                             <AppErrorBoundary scope="Main Editor">

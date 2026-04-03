@@ -356,7 +356,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         message.success(`已解绑 ${selectedVertexIds.length} 个顶点从骨骼 ${boneId}`)
     }
 
-    if (mainMode === 'uv' || mainMode === 'batch') return null;
+    if (mainMode === 'uv') return null;
 
     // Check if selected vertices are all from the same geoset (required for weld)
     const canSplit = (
@@ -595,7 +595,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                                 onClick={() => setGizmoOrientation('world')}
                             />
                         </Tooltip>
-                        <Tooltip title={'摄像机朝向'}>
+                        <Tooltip title={'镜头朝向'}>
                             <Button
                                 type={gizmoOrientation === 'camera' ? 'primary' : 'default'}
                                 icon={<CameraOutlined />}
@@ -684,7 +684,6 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         </div>
     );
 };
-
 
 
 

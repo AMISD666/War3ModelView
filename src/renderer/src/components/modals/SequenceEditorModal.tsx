@@ -9,6 +9,7 @@ import { useRpcClient } from '../../hooks/useRpc'
 
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame';
 const { Text } = Typography
+const createDefaultExtent = (): [number, number, number] => [0, 0, 0]
 
 interface SequenceEditorModalProps {
     visible: boolean
@@ -163,6 +164,38 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
         setLocalSequences(newSequences)
     }
 
+    const ensureExtent = (extent: any): [number, number, number] => {
+        if (Array.isArray(extent)) {
+            return [
+                Number(extent[0]) || 0,
+                Number(extent[1]) || 0,
+                Number(extent[2]) || 0
+            ]
+        }
+
+        if (extent && typeof extent === 'object') {
+            return [
+                Number(extent[0]) || 0,
+                Number(extent[1]) || 0,
+                Number(extent[2]) || 0
+            ]
+        }
+
+        return createDefaultExtent()
+    }
+
+    const updateExtentValue = (
+        index: number,
+        key: 'MinimumExtent' | 'MaximumExtent',
+        axisIndex: 0 | 1 | 2,
+        value: number | null
+    ) => {
+        const current = ensureExtent(localSequences[index]?.[key])
+        const next = [...current] as [number, number, number]
+        next[axisIndex] = value ?? 0
+        updateLocalSequence(index, { [key]: next })
+    }
+
     const handleIntervalChange = (index: number, subIndex: number, value: number | null) => {
         const newSequences = [...localSequences]
         const newInterval = [...newSequences[index].Interval]
@@ -172,6 +205,8 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
     }
 
     const selectedSequence = selectedIndex >= 0 ? localSequences[selectedIndex] : null
+    const minimumExtent = ensureExtent(selectedSequence?.MinimumExtent)
+    const maximumExtent = ensureExtent(selectedSequence?.MaximumExtent)
 
     const innerContent = (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: '#252525' }}>
@@ -191,6 +226,8 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
                                     NonLooping: 0,
                                     Rarity: 0,
                                     MoveSpeed: 0,
+                                    MinimumExtent: createDefaultExtent(),
+                                    MaximumExtent: createDefaultExtent(),
                                     BoundsRadius: 0
                                 }
                                 const newSequences = [...localSequences, newSequence]
@@ -303,6 +340,49 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
                             </Card>
 
                             <Card
+                                size="small"
+                                bordered={false}
+                                style={{ background: '#333333', border: '1px solid #4a4a4a' }}
+                                bodyStyle={{ padding: '8px' }}
+                            >
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                    {[
+                                        { title: '最小范围', key: 'MinimumExtent' as const, values: minimumExtent },
+                                        { title: '最大范围', key: 'MaximumExtent' as const, values: maximumExtent }
+                                    ].map((group) => (
+                                        <div
+                                            key={group.key}
+                                            style={{
+                                                flex: 1,
+                                                border: '1px solid #5a5a5a',
+                                                padding: '6px 8px 8px',
+                                                backgroundColor: '#2d2d2d'
+                                            }}
+                                        >
+                                            <Text style={{ display: 'block', marginBottom: '6px', color: '#d8d8d8', fontSize: '12px' }}>
+                                                {group.title}
+                                            </Text>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                                {(['X', 'Y', 'Z'] as const).map((axis, axisIndex) => (
+                                                    <div key={axis} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                        <Text style={{ width: '14px', color: '#b0b0b0', fontSize: '11px', flex: '0 0 14px' }}>
+                                                            {axis}:
+                                                        </Text>
+                                                        <InputNumber
+                                                            size="small"
+                                                            value={group.values[axisIndex]}
+                                                            onChange={(v) => updateExtentValue(selectedIndex, group.key, axisIndex as 0 | 1 | 2, v)}
+                                                            style={{ width: '100%', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8', fontSize: '12px' }}
+                                                        />
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </Card>
+
+                            <Card
                                 title={<span style={{ color: '#b0b0b0', fontSize: '12px' }}>高级属性</span>}
                                 size="small"
                                 bordered={false}
@@ -310,28 +390,26 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
                                 headStyle={{ borderBottom: '1px solid #4a4a4a', padding: '0 8px', minHeight: '28px' }}
                                 bodyStyle={{ padding: '8px' }}
                             >
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                    <div style={{ display: 'flex', gap: '8px' }}>
-                                        <div style={{ flex: 1 }}>
-                                            <Text style={{ display: 'block', marginBottom: '2px', color: '#b0b0b0', fontSize: '11px' }}>稀有度 (Rarity):</Text>
-                                            <InputNumber
-                                                size="small"
-                                                value={selectedSequence.Rarity}
-                                                onChange={(v) => updateLocalSequence(selectedIndex, { Rarity: v })}
-                                                style={{ width: '100%', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8', fontSize: '12px' }}
-                                            />
-                                        </div>
-                                        <div style={{ flex: 1 }}>
-                                            <Text style={{ display: 'block', marginBottom: '2px', color: '#b0b0b0', fontSize: '11px' }}>移动速度 (MoveSpeed):</Text>
-                                            <InputNumber
-                                                size="small"
-                                                value={selectedSequence.MoveSpeed}
-                                                onChange={(v) => updateLocalSequence(selectedIndex, { MoveSpeed: v })}
-                                                style={{ width: '100%', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8', fontSize: '12px' }}
-                                            />
-                                        </div>
+                                <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                        <Text style={{ display: 'block', marginBottom: '2px', color: '#b0b0b0', fontSize: '11px' }}>稀有度 (Rarity):</Text>
+                                        <InputNumber
+                                            size="small"
+                                            value={selectedSequence.Rarity}
+                                            onChange={(v) => updateLocalSequence(selectedIndex, { Rarity: v })}
+                                            style={{ width: '100%', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8', fontSize: '12px' }}
+                                        />
                                     </div>
-                                    <div>
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                        <Text style={{ display: 'block', marginBottom: '2px', color: '#b0b0b0', fontSize: '11px' }}>移动速度 (MoveSpeed):</Text>
+                                        <InputNumber
+                                            size="small"
+                                            value={selectedSequence.MoveSpeed}
+                                            onChange={(v) => updateLocalSequence(selectedIndex, { MoveSpeed: v })}
+                                            style={{ width: '100%', backgroundColor: '#252525', borderColor: '#4a4a4a', color: '#e8e8e8', fontSize: '12px' }}
+                                        />
+                                    </div>
+                                    <div style={{ flex: 1, minWidth: 0 }}>
                                         <Text style={{ display: 'block', marginBottom: '2px', color: '#b0b0b0', fontSize: '11px' }}>边界半径 (BoundsRadius):</Text>
                                         <InputNumber
                                             size="small"

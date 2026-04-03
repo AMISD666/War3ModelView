@@ -1,6 +1,6 @@
 /**
  * 在全局快捷键分发之前优先处理「节点管理器 + Delete」，
- * 避免时间轴/几何等 Delete 绑定先执行，以及 blur 抢焦点导致 contains 失败。
+ * 避免时间轴/多边形组等 Delete 绑定先执行，以及 blur 抢焦点导致 contains 失败。
  */
 
 type NodeManagerDeleteListener = (event: KeyboardEvent) => boolean

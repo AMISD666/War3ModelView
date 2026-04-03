@@ -5,8 +5,9 @@ import { EditOutlined } from '@ant-design/icons'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 
 import { useHistoryStore } from '../../store/historyStore'
-import { useModelStore } from '../../store/modelStore'
+import { mergeMaterialManagerPreview, useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
+import { getMaterialTrackEditorTitle, getMaterialTrackFieldName } from '../../utils/materialAnimShared'
 import { windowManager } from '../../utils/WindowManager'
 import { GlobalSequenceSelect } from '../common/GlobalSequenceSelect'
 import RightFloatingPanelShell from './RightFloatingPanelShell'
@@ -14,10 +15,10 @@ import RightFloatingPanelShell from './RightFloatingPanelShell'
 const { Text } = Typography
 
 const INTERPOLATION_OPTIONS = [
-    { label: '无插值', value: 0 },
-    { label: '线性', value: 1 },
-    { label: '埃尔米特', value: 2 },
-    { label: '贝塞尔', value: 3 }
+    { label: 'None', value: 0 },
+    { label: 'linear', value: 1 },
+    { label: 'Hermite', value: 2 },
+    { label: 'Bezier', value: 3 }
 ]
 
 const deepClone = <T,>(value: T): T => {
@@ -96,11 +97,12 @@ const getTextureName = (image: any) => {
 }
 
 const MaterialAnimPanel: React.FC = () => {
-    const { modelData, currentFrame, setMaterials } = useModelStore()
+    const { modelData, materialManagerPreview, currentFrame, setMaterials } = useModelStore()
     const {
         pickedGeosetIndex,
         selectedMaterialIndex,
         selectedMaterialIndices,
+        selectedMaterialLayerIndex,
         setSelectedMaterialIndex,
         setSelectedMaterialIndices,
         timelineKeyframeDisplayMode
@@ -108,13 +110,19 @@ const MaterialAnimPanel: React.FC = () => {
 
     const [collapsed, setCollapsed] = useState(true)
     const [editingField, setEditingField] = useState<'TextureID' | 'Alpha' | null>(null)
+    const [alphaInputValue, setAlphaInputValue] = useState<string | number>('1')
+    const [isAlphaInputFocused, setIsAlphaInputFocused] = useState(false)
 
     useEffect(() => {
         setCollapsed(timelineKeyframeDisplayMode !== 'material')
     }, [timelineKeyframeDisplayMode])
 
-    const materials = useMemo(() => Array.isArray((modelData as any)?.Materials) ? ((modelData as any).Materials as any[]) : [], [modelData])
-    const textures = useMemo(() => Array.isArray((modelData as any)?.Textures) ? ((modelData as any).Textures as any[]) : [], [modelData])
+    const effectiveModelData = useMemo(
+        () => mergeMaterialManagerPreview(modelData, materialManagerPreview),
+        [modelData, materialManagerPreview]
+    )
+    const materials = useMemo(() => Array.isArray((effectiveModelData as any)?.Materials) ? ((effectiveModelData as any).Materials as any[]) : [], [effectiveModelData])
+    const textures = useMemo(() => Array.isArray((effectiveModelData as any)?.Textures) ? ((effectiveModelData as any).Textures as any[]) : [], [effectiveModelData])
     const roundedFrame = Math.round(currentFrame)
 
     const selectedIds = useMemo(() => {
@@ -126,7 +134,11 @@ const MaterialAnimPanel: React.FC = () => {
 
     const primaryMaterialIndex = selectedIds[0] ?? null
     const primaryMaterial = primaryMaterialIndex !== null ? materials[primaryMaterialIndex] : null
-    const primaryLayer = primaryMaterial?.Layers?.[0] ?? null
+    const primaryLayerIndex = (
+        typeof selectedMaterialLayerIndex === 'number' &&
+        selectedMaterialLayerIndex >= 0
+    ) ? selectedMaterialLayerIndex : 0
+    const primaryLayer = primaryMaterial?.Layers?.[primaryLayerIndex] ?? null
 
     useEffect(() => {
         if (materials.length === 0) {
@@ -135,7 +147,7 @@ const MaterialAnimPanel: React.FC = () => {
             return
         }
 
-        const geosets = Array.isArray((modelData as any)?.Geosets) ? ((modelData as any).Geosets as any[]) : []
+        const geosets = Array.isArray((effectiveModelData as any)?.Geosets) ? ((effectiveModelData as any).Geosets as any[]) : []
         const pickedMaterialId = (
             pickedGeosetIndex !== null &&
             pickedGeosetIndex >= 0 &&
@@ -160,7 +172,7 @@ const MaterialAnimPanel: React.FC = () => {
         } else if (selectedMaterialIndex !== nextIds[0]) {
             setSelectedMaterialIndex(nextIds[0] ?? null)
         }
-    }, [materials.length, modelData, pickedGeosetIndex, selectedIds, selectedMaterialIndex, selectedMaterialIndices.length, setSelectedMaterialIndex, setSelectedMaterialIndices])
+    }, [materials.length, effectiveModelData, pickedGeosetIndex, selectedIds, selectedMaterialIndex, selectedMaterialIndices.length, setSelectedMaterialIndex, setSelectedMaterialIndices])
 
     const currentTextureId = useMemo(() => {
         if (!primaryLayer) return 0
@@ -175,6 +187,12 @@ const MaterialAnimPanel: React.FC = () => {
             ? Number(primaryLayer.Alpha)
             : sampleScalarTrack(primaryLayer.Alpha, roundedFrame, 1)
     }, [primaryLayer, roundedFrame])
+
+    useEffect(() => {
+        if (!isAlphaInputFocused) {
+            setAlphaInputValue(String(currentAlpha))
+        }
+    }, [currentAlpha, isAlphaInputFocused])
 
     const textureOptions = useMemo(() => (
         textures.map((texture, index) => ({
@@ -208,13 +226,14 @@ const MaterialAnimPanel: React.FC = () => {
                 if (materialIndex < 0 || materialIndex >= nextMaterials.length) return
                 const material = nextMaterials[materialIndex]
                 const layers = ensureTrackLayer(material)
-                layers[0] = updater({ ...layers[0] })
+                while (layers.length <= primaryLayerIndex) layers.push(createDefaultLayer())
+                layers[primaryLayerIndex] = updater({ ...layers[primaryLayerIndex] })
                 nextMaterials[materialIndex] = { ...material, Layers: layers }
             })
         })
-    }, [commitMaterials, ensureTrackLayer, selectedIds])
+    }, [commitMaterials, ensureTrackLayer, primaryLayerIndex, selectedIds])
 
-    const updateStaticField = useCallback((field: 'TextureID' | 'Alpha', value: number | null) => {
+    const updateFieldValue = useCallback((field: 'TextureID' | 'Alpha', value: number | null) => {
         const safeValue = field === 'TextureID'
             ? Math.max(0, Math.round(Number(value ?? 0)))
             : Math.max(0, Math.min(1, Number(value ?? 1)))
@@ -223,6 +242,43 @@ const MaterialAnimPanel: React.FC = () => {
             [field]: safeValue
         }))
     }, [applyToSelectedMaterials])
+
+    const commitFieldValue = useCallback((field: 'TextureID' | 'Alpha', value: number | null) => {
+        const safeValue = field === 'TextureID'
+            ? Math.max(0, Math.round(Number(value ?? 0)))
+            : Math.max(0, Math.min(1, Number(value ?? 1)))
+        applyToSelectedMaterials(field === 'TextureID' ? '修改材质TextureID' : '修改材质Alpha', (layer) => {
+            const previousTrack = layer[field]
+            if (isAnimTrack(previousTrack)) {
+                const previousInterpolation = typeof (previousTrack?.InterpolationType ?? previousTrack?.LineType) === 'number'
+                    ? Number(previousTrack?.InterpolationType ?? previousTrack?.LineType)
+                    : 1
+                const previousGlobalSeqId = typeof previousTrack?.GlobalSeqId === 'number' ? previousTrack.GlobalSeqId : -1
+                return {
+                    ...layer,
+                    [field]: {
+                        ...previousTrack,
+                        Keys: upsertScalarTrackKey(previousTrack.Keys, roundedFrame, safeValue),
+                        LineType: previousInterpolation,
+                        InterpolationType: previousInterpolation,
+                        GlobalSeqId: previousGlobalSeqId
+                    }
+                }
+            }
+            return {
+                ...layer,
+                [field]: safeValue
+            }
+        })
+    }, [applyToSelectedMaterials, roundedFrame])
+
+    const commitAlphaInput = useCallback(() => {
+        const parsed = Number(alphaInputValue)
+        const safeValue = Number.isFinite(parsed) ? parsed : currentAlpha
+        const clampedValue = Math.max(0, Math.min(1, safeValue))
+        setAlphaInputValue(String(clampedValue))
+        commitFieldValue('Alpha', clampedValue)
+    }, [alphaInputValue, commitFieldValue, currentAlpha])
 
     const insertTrackKey = useCallback((field: 'TextureID' | 'Alpha') => {
         const fallback = field === 'TextureID' ? 0 : 1
@@ -273,18 +329,18 @@ const MaterialAnimPanel: React.FC = () => {
             initialData: isAnimTrack(primaryLayer[field])
                 ? primaryLayer[field]
                 : { LineType: 1, InterpolationType: 1, GlobalSeqId: null, Keys: [{ Frame: 0, Vector: [fallback] }] },
-            title: field === 'TextureID' ? '编辑材质贴图 ID 关键帧' : '编辑材质透明度关键帧',
+            title: getMaterialTrackEditorTitle(field),
             vectorSize: 1,
-            fieldName: `${field}_${primaryMaterialIndex}_0`,
-            globalSequences: Array.isArray((modelData as any)?.GlobalSequences)
-                ? (modelData as any).GlobalSequences.map((g: any) => typeof g === 'number' ? g : g?.Duration).filter((v: any) => typeof v === 'number')
+            fieldName: getMaterialTrackFieldName(field, primaryMaterialIndex, primaryLayerIndex),
+            globalSequences: Array.isArray((effectiveModelData as any)?.GlobalSequences)
+                ? (effectiveModelData as any).GlobalSequences.map((g: any) => typeof g === 'number' ? g : g?.Duration).filter((v: any) => typeof v === 'number')
                 : [],
-            sequences: (modelData as any)?.Sequences || []
+            sequences: (effectiveModelData as any)?.Sequences || []
         }
         const windowId = windowManager.getKeyframeWindowId(payload.fieldName)
         payload.targetWindowId = windowId
         void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload)
-    }, [currentAlpha, currentTextureId, modelData, primaryLayer, primaryMaterialIndex])
+    }, [currentAlpha, currentTextureId, effectiveModelData, primaryLayer, primaryLayerIndex, primaryMaterialIndex])
 
     const handleSaveEditor = useCallback((animVector: any) => {
         if (!editingField) return
@@ -336,9 +392,16 @@ const MaterialAnimPanel: React.FC = () => {
     }, [primaryMaterialIndex, setSelectedMaterialIndex, setSelectedMaterialIndices])
 
     const fieldLabelStyle: React.CSSProperties = { width: 52, flexShrink: 0, color: '#b0b0b0', fontSize: 12 }
-    const metaLabelStyle: React.CSSProperties = { color: '#888', fontSize: 11, flexShrink: 0 }
+    const metaLabelStyle: React.CSSProperties = { color: '#666', fontSize: 11, flexShrink: 0 }
     const rowStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8 }
-    const nestedRowStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 60 }
+    const nestedRowStyle: React.CSSProperties = {
+        display: 'grid',
+        gridTemplateColumns: '52px minmax(0, 1fr) 52px minmax(84px, 96px)',
+        gap: 6,
+        alignItems: 'center',
+        marginTop: 6,
+        width: '100%'
+    }
 
     return (
         <RightFloatingPanelShell
@@ -410,7 +473,7 @@ const MaterialAnimPanel: React.FC = () => {
                         <Select
                             size="small"
                             value={currentTextureId}
-                            onChange={(value) => updateStaticField('TextureID', value)}
+                            onChange={(value) => commitFieldValue('TextureID', value)}
                             options={textureOptions}
                             style={{ width: 120 }}
                         />
@@ -418,26 +481,26 @@ const MaterialAnimPanel: React.FC = () => {
                         <Button size="small" onClick={() => insertTrackKey('TextureID')} disabled={selectedIds.length === 0} style={{ background: '#333', borderColor: '#444', color: '#ddd' }}>
                             K帧
                         </Button>
-                        <Button size="small" onClick={() => openEditor('TextureID')} disabled={selectedIds.length !== 1} style={{ fontSize: 11, color: '#1890ff', borderColor: '#1890ff', background: 'transparent' }}>
+                        <Button size="small" onClick={() => openEditor('TextureID')} disabled={primaryMaterialIndex === null || !primaryLayer} style={{ fontSize: 11, color: '#1890ff', borderColor: '#1890ff', background: 'transparent' }}>
                             动画编辑
                         </Button>
                     </div>
 
                     <div style={nestedRowStyle}>
-                        <Text style={{ ...metaLabelStyle, width: 52 }}>全局序列</Text>
+                        <Text style={metaLabelStyle}>全局序列</Text>
                         <GlobalSequenceSelect
                             size="small"
                             value={hasTextureTrack ? textureTrackMeta.globalSeqId : null}
                             onChange={(value) => updateTrackMeta('TextureID', { GlobalSeqId: value })}
-                            style={{ flex: 1, minWidth: 0 }}
+                            style={{ minWidth: 0 }}
                         />
-                        <Text style={metaLabelStyle}>插值</Text>
+                        <Text style={metaLabelStyle}>插值类型</Text>
                         <Select
                             size="small"
                             value={textureTrackMeta.interpolationType}
                             options={INTERPOLATION_OPTIONS}
                             onChange={(value) => updateTrackMeta('TextureID', { InterpolationType: Number(value) })}
-                            style={{ width: 80 }}
+                            style={{ width: '100%' }}
                         />
                     </div>
 
@@ -445,8 +508,13 @@ const MaterialAnimPanel: React.FC = () => {
                         <Text style={fieldLabelStyle}>透明度</Text>
                         <InputNumber
                             size="small"
-                            value={currentAlpha}
-                            onChange={(value) => updateStaticField('Alpha', value)}
+                            value={alphaInputValue as any}
+                            onChange={(value) => setAlphaInputValue(value ?? '')}
+                            onFocus={() => setIsAlphaInputFocused(true)}
+                            onBlur={() => {
+                                setIsAlphaInputFocused(false)
+                                commitAlphaInput()
+                            }}
                             min={0}
                             max={1}
                             step={0.01}
@@ -457,26 +525,26 @@ const MaterialAnimPanel: React.FC = () => {
                         <Button size="small" onClick={() => insertTrackKey('Alpha')} disabled={selectedIds.length === 0} style={{ background: '#333', borderColor: '#444', color: '#ddd' }}>
                             K帧
                         </Button>
-                        <Button size="small" onClick={() => openEditor('Alpha')} disabled={selectedIds.length !== 1} style={{ fontSize: 11, color: '#1890ff', borderColor: '#1890ff', background: 'transparent' }}>
+                        <Button size="small" onClick={() => openEditor('Alpha')} disabled={primaryMaterialIndex === null || !primaryLayer} style={{ fontSize: 11, color: '#1890ff', borderColor: '#1890ff', background: 'transparent' }}>
                             动画编辑
                         </Button>
                     </div>
 
                     <div style={nestedRowStyle}>
-                        <Text style={{ ...metaLabelStyle, width: 52 }}>全局序列</Text>
+                        <Text style={metaLabelStyle}>全局序列</Text>
                         <GlobalSequenceSelect
                             size="small"
                             value={hasAlphaTrack ? alphaTrackMeta.globalSeqId : null}
                             onChange={(value) => updateTrackMeta('Alpha', { GlobalSeqId: value })}
-                            style={{ flex: 1, minWidth: 0 }}
+                            style={{ minWidth: 0 }}
                         />
-                        <Text style={metaLabelStyle}>插值</Text>
+                        <Text style={metaLabelStyle}>插值类型</Text>
                         <Select
                             size="small"
                             value={alphaTrackMeta.interpolationType}
                             options={INTERPOLATION_OPTIONS}
                             onChange={(value) => updateTrackMeta('Alpha', { InterpolationType: Number(value) })}
-                            style={{ width: 80 }}
+                            style={{ width: '100%' }}
                         />
                     </div>
                 </div>
