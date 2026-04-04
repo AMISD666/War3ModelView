@@ -947,7 +947,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         }
     }
 
-    const handleAdjustmentSliderChange = (field: keyof TextureAdjustments, value: number) => {
+    const handleAdjustmentSliderChange = (field: keyof TextureAdjustments, value: number | boolean) => {
         updateSelectedAdjustment({ [field]: value }, 'debounced')
     }
 
@@ -1778,7 +1778,20 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
 
                                         {/* Bottom Section: Adjustments (Moved to left column) */}
                                         <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px', flexShrink: 0 }}>
-                                            <Typography.Text style={{ color: '#b0b0b0', fontSize: 12, display: 'block', marginBottom: 4 }}>贴图调整（保存后生效）</Typography.Text>
+                                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                                                <Typography.Text style={{ color: '#b0b0b0', fontSize: 12, display: 'block' }}>贴图调整（保存后生效）</Typography.Text>
+                                                <Checkbox 
+                                                    checked={selectedAdjustments.colorize} 
+                                                    onChange={(e) => {
+                                                        handleAdjustmentSliderChange('colorize', e.target.checked);
+                                                        handleAdjustmentSliderComplete();
+                                                    }}
+                                                    disabled={!canAdjustSelectedTexture}
+                                                    style={{ fontSize: 12, color: '#b0b0b0' }}
+                                                >
+                                                    着色
+                                                </Checkbox>
+                                            </div>
 
                                             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                                 <Typography.Text style={{ color: '#999', fontSize: 12, width: 44, flexShrink: 0 }}>色相</Typography.Text>

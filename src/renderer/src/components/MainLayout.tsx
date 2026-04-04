@@ -4674,14 +4674,17 @@ const MainLayout: React.FC = () => {
                 onToggleDebugConsole={() => setShowDebugConsole(!showDebugConsole)}
                 onShowAbout={() => setShowAbout(true)}
                 onRecalculateNormals={() => {
+                    if (!useModelStore.getState().modelData) return showMessage('warning', '提示', '没有打开任何模型，请先打开一个模型。');
                     useModelStore.getState().recalculateNormals();
                     showMessage('success', '成功', '已重新计算法线');
                 }}
                 onRecalculateExtents={() => {
+                    if (!useModelStore.getState().modelData) return showMessage('warning', '提示', '没有打开任何模型，请先打开一个模型。');
                     useModelStore.getState().recalculateExtents();
                     showMessage('success', '成功', '已重新计算模型顶点范围');
                 }}
                 onRepairModel={() => {
+                    if (!useModelStore.getState().modelData) return showMessage('warning', '提示', '没有打开任何模型，请先打开一个模型。');
                     useModelStore.getState().repairModel();
                     showMessage('success', '成功', '模型修复完成');
                 }}
@@ -4738,10 +4741,18 @@ const MainLayout: React.FC = () => {
                 }}
                 onTransformModel={() => setTransformModelDialogVisible(true)}
                 onAddDeathAnimation={() => {
+                    if (!useModelStore.getState().modelData) {
+                        showMessage('warning', '提示', '没有打开任何模型，请先打开一个模型。');
+                        return;
+                    }
                     useModelStore.getState().addDeathAnimation();
                     showMessage('success', '成功', '已添加/更新死亡动画');
                 }}
                 onRemoveLights={() => {
+                    if (!useModelStore.getState().modelData) {
+                        showMessage('warning', '提示', '没有打开任何模型，请先打开一个模型。');
+                        return;
+                    }
                     useModelStore.getState().removeLights();
                     showMessage('success', '成功', '已删除所有光照节点');
                 }}
