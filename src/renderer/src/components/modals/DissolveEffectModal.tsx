@@ -66,7 +66,7 @@ const DissolveTimelineSlider: React.FC<DissolveTimelineSliderProps> = ({ min, ma
     const handleTrackClick = (e: React.MouseEvent) => {
         // Prevent click if we dragged or clicked a thumb
         if (draggingId || (e.target as HTMLElement).dataset.thumb) return;
-        
+
         if (!trackRef.current) return;
         const rect = trackRef.current.getBoundingClientRect();
         let ratio = (e.clientX - rect.left) / rect.width;
@@ -83,18 +83,19 @@ const DissolveTimelineSlider: React.FC<DissolveTimelineSliderProps> = ({ min, ma
     };
 
     return (
-        <div 
+        <div
             ref={trackRef}
             onClick={handleTrackClick}
-            style={{ 
-                height: 24, 
-                backgroundColor: '#252525', 
-                border: '1px solid #444', 
-                position: 'relative', 
-                borderRadius: 4, 
+            style={{
+                height: 24,
+                backgroundColor: '#1a1a1a',
+                border: '1px solid #3e3e3e',
+                position: 'relative',
+                borderRadius: 4,
                 cursor: 'pointer',
-                marginTop: 24,
-                marginBottom: 24
+                marginTop: 16,
+                marginBottom: 16,
+                boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.5)'
             }}
         >
             {points.map(p => {
@@ -122,23 +123,51 @@ const DissolveTimelineSlider: React.FC<DissolveTimelineSliderProps> = ({ min, ma
                             bottom: 0,
                             width: 14,
                             marginLeft: -7,
-                            backgroundColor: color,
-                            border: `2px solid ${isSelected ? '#fff' : '#222'}`,
-                            borderRadius: '4px',
                             cursor: 'ew-resize',
                             display: 'flex',
                             justifyContent: 'center',
                             alignItems: 'center',
-                            boxShadow: isSelected ? '0 0 0 2px rgba(24, 144, 255, 0.5)' : 'none',
                             zIndex: isSelected ? 10 : 1
                         }}
                         title={`帧: ${p.frame} (${p.type === 'start' ? '开始' : '结束'})`}
-                    />
+                    >
+                        <div style={{
+                            width: 4,
+                            height: '100%',
+                            backgroundColor: color,
+                            borderRadius: '2px',
+                            border: isSelected ? '1px solid #fff' : 'none',
+                            boxShadow: isSelected ? '0 0 0 2px rgba(24, 144, 255, 0.5)' : '1px 1px 2px rgba(0,0,0,0.5)',
+                            pointerEvents: 'none'
+                        }} />
+
+                        {draggingId === p.id && (
+                            <div style={{
+                                position: 'absolute',
+                                bottom: '100%',
+                                left: '50%',
+                                transform: 'translateX(-50%)',
+                                marginBottom: '4px',
+                                backgroundColor: '#1890ff',
+                                color: '#fff',
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                                fontSize: '11px',
+                                fontWeight: 'bold',
+                                whiteSpace: 'nowrap',
+                                pointerEvents: 'none',
+                                zIndex: 20,
+                                boxShadow: '0 2px 8px rgba(0,0,0,0.5)'
+                            }}>
+                                {p.frame} 帧
+                            </div>
+                        )}
+                    </div>
                 );
             })}
-            <div style={{ position: 'absolute', bottom: -20, left: 0, color: '#888', fontSize: 11 }}>{min}</div>
-            <div style={{ position: 'absolute', bottom: -20, right: 0, color: '#888', fontSize: 11 }}>{max}</div>
-            <div style={{ position: 'absolute', top: -20, left: 0, width: '100%', textAlign: 'center', color: '#888', fontSize: 11, pointerEvents: 'none' }}>
+            <div style={{ position: 'absolute', bottom: -20, left: 0, color: '#aaa', fontSize: 11, fontWeight: 500 }}>{min}</div>
+            <div style={{ position: 'absolute', bottom: -20, right: 0, color: '#aaa', fontSize: 11, fontWeight: 500 }}>{max}</div>
+            <div style={{ position: 'absolute', top: -20, left: 0, width: '100%', textAlign: 'center', color: '#999', fontSize: 11, pointerEvents: 'none', letterSpacing: '0.02em' }}>
                 空白处点击新建点 | 选中点按Del删除 | 右键切换类型
             </div>
         </div>
@@ -152,10 +181,16 @@ interface DissolveEffectModalProps {
 }
 
 const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onClose, isStandalone = false }) => {
-    // Model store data
-    const nodes = useModelStore(state => state.nodes);
-    const sequences = useModelStore(state => state.sequences);
-    
+    const storeNodes = useModelStore(state => state.nodes);
+    const storeSequences = useModelStore(state => state.sequences);
+    const storeGeosetCount = useModelStore(state => state.modelData?.Geosets?.length || 0);
+
+    const { state: rpcState } = useRpcClient<any>('dissolveEffect', { geosets: [], sequences: [], geosetCount: 0 });
+
+    const nodes = isStandalone ? [] : storeNodes; // Placeholder if nodes are needed later over RPC
+    const sequences = isStandalone ? (rpcState.sequences || []) : (storeSequences || []);
+    const geosetCount = isStandalone ? (rpcState.geosetCount || 0) : storeGeosetCount;
+
     // UI State
     const [selectedGeosets, setSelectedGeosets] = useState<number[]>([]);
     const [texturePath, setTexturePath] = useState<string>('');
@@ -170,10 +205,42 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
     const currentMin = timeMode === 'sequence' ? (sequences[selectedSequenceIndex]?.Interval[0] || 0) : manualStart;
     const currentMax = timeMode === 'sequence' ? (sequences[selectedSequenceIndex]?.Interval[1] || 1000) : manualEnd;
 
+    const hasInitializedPoints = useRef(false);
+    const lastRangeRef = useRef({ min: currentMin, max: currentMax });
+
+    useEffect(() => {
+        // Wait until sequences are available so it initializes on real interval
+        if (!hasInitializedPoints.current && currentMax > currentMin && sequences.length > 0) {
+            const range = currentMax - currentMin;
+            setPoints([
+                { id: Math.random().toString(36).substring(2, 9), frame: Math.round(currentMin + range * 0.3), type: 'start' },
+                { id: Math.random().toString(36).substring(2, 9), frame: Math.round(currentMin + range * 0.8), type: 'end' }
+            ]);
+            hasInitializedPoints.current = true;
+            lastRangeRef.current = { min: currentMin, max: currentMax };
+        }
+    }, [currentMin, currentMax, sequences]);
+
+    useEffect(() => {
+        // Proportionally rescale slider points when the timeline range changes (e.g. switching sequences)
+        if (hasInitializedPoints.current && currentMax > currentMin) {
+            const oldMin = lastRangeRef.current.min;
+            const oldMax = lastRangeRef.current.max;
+            const oldRange = oldMax - oldMin;
+            const newRange = currentMax - currentMin;
+            if (oldRange > 0 && (oldMin !== currentMin || oldMax !== currentMax)) {
+                setPoints(prev => prev.map(p => {
+                    const ratio = Math.max(0, Math.min(1, (p.frame - oldMin) / oldRange));
+                    return { ...p, frame: Math.round(currentMin + ratio * newRange) };
+                }));
+            }
+        }
+        lastRangeRef.current = { min: currentMin, max: currentMax };
+    }, [currentMin, currentMax]);
+
     // Extract all geosets logically
     // Since war3 models' geosets are not guaranteed to have IDs as nodes, we typically rely on index or Geoset selection
-    const geosetCount = useModelStore.getState().modelData?.Geosets?.length || 0;
-    const geosetOptions = Array.from({ length: geosetCount }, (_, i) => ({ label: `多边形组 ${i}`, value: i }));
+    const geosetOptions = Array.from({ length: geosetCount }, (_, i) => ({ label: `${i}`, value: i }));
 
     const handleSelectTexture = async () => {
         try {
@@ -196,79 +263,116 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
     };
 
     const innerContent = (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', height: '100%' }}>
-            
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <Text style={{ color: '#aaa', fontSize: 13, fontWeight: 500 }}>选择多边形组:</Text>
-                <Select
-                    mode="multiple"
-                    allowClear
-                    style={{ width: '100%' }}
-                    placeholder="请选择要应用消散效果的多边形组"
-                    value={selectedGeosets}
-                    onChange={setSelectedGeosets}
-                    options={geosetOptions}
-                    maxTagCount="responsive"
-                />
-            </div>
-
-            <Divider style={{ margin: '4px 0', borderColor: '#333' }} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', height: '100%' }}>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <Text style={{ color: '#aaa', fontSize: 13, fontWeight: 500 }}>消散掩码贴图:</Text>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                    <Input 
-                        value={texturePath} 
-                        readOnly 
-                        placeholder="暂未选择消散贴图..."
-                        style={{ flex: 1, backgroundColor: '#1e1e1e', borderColor: '#444', color: '#eee' }} 
-                    />
-                    <Button type="default" onClick={handleSelectTexture}>浏览...</Button>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Text style={{ color: '#eee', fontSize: 13, fontWeight: 600 }}>多边形组 (Geosets)</Text>
+                    <div style={{ display: 'flex', gap: '12px' }}>
+                        <Button size="small" type="link" style={{ padding: 0, fontSize: 12, color: '#1890ff', fontWeight: 500 }} onClick={() => setSelectedGeosets(geosetOptions.map(o => o.value))}>全选</Button>
+                        <Button size="small" type="link" style={{ padding: 0, fontSize: 12, color: '#ff7875', fontWeight: 500 }} onClick={() => setSelectedGeosets([])}>清空</Button>
+                    </div>
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', maxHeight: '120px', overflowY: 'auto', padding: '10px', backgroundColor: '#252526', border: '1px solid #3e3e3e', borderRadius: '4px' }}>
+                    {geosetOptions.map(option => {
+                        const isSelected = selectedGeosets.includes(option.value);
+                        return (
+                            <Button
+                                key={option.value}
+                                size="small"
+                                type={isSelected ? "primary" : "default"}
+                                style={{
+                                    backgroundColor: isSelected ? '#1890ff' : '#333',
+                                    borderColor: isSelected ? '#1890ff' : '#444',
+                                    color: isSelected ? '#fff' : '#ccc',
+                                    transition: 'all 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
+                                    boxShadow: 'none',
+                                    minWidth: '32px',
+                                    fontWeight: isSelected ? 600 : 400
+                                }}
+                                onClick={() => {
+                                    if (isSelected) {
+                                        setSelectedGeosets(prev => prev.filter(v => v !== option.value));
+                                    } else {
+                                        setSelectedGeosets(prev => [...prev, option.value]);
+                                    }
+                                }}
+                            >
+                                {option.label}
+                            </Button>
+                        );
+                    })}
+                    {geosetOptions.length === 0 && (
+                        <Text style={{ color: '#666', fontSize: 12 }}>无可用多边形组</Text>
+                    )}
                 </div>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: 12 }}>
-                <Text style={{ color: '#aaa', fontSize: 13, fontWeight: 500 }}>消散滑块控制 (范围: {currentMin} - {currentMax}):</Text>
-                <DissolveTimelineSlider
-                    min={currentMin}
-                    max={currentMax}
-                    points={points}
-                    onPointsChange={setPoints}
-                    selectedPointId={selectedPointId}
-                    onSelectPoint={setSelectedPointId}
-                />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <Text style={{ color: '#eee', fontSize: 13, fontWeight: 600 }}>消散贴图</Text>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                    <Input
+                        value={texturePath}
+                        readOnly
+                        placeholder="选择贴图"
+                        style={{ flex: 1, backgroundColor: '#1e1e1e', borderColor: '#3e3e3e', color: '#fff' }}
+                    />
+                    <Button type="primary" onClick={handleSelectTexture} style={{ borderRadius: '4px' }}>浏览...</Button>
+                </div>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', backgroundColor: '#2a2a2a', padding: 12, borderRadius: 6, border: '1px solid #333' }}>
-                <Radio.Group onChange={e => setTimeMode(e.target.value)} value={timeMode}>
-                    <Radio value="sequence" style={{ color: '#ccc' }}>绑定到动作序列</Radio>
-                    <Radio value="manual" style={{ color: '#ccc' }}>手动输入关键帧范围</Radio>
-                </Radio.Group>
+            <div style={{ display: 'flex', flexDirection: 'column', backgroundColor: '#252526', padding: '14px', borderRadius: '6px', border: '1px solid #3e3e3e', gap: '14px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Text style={{ color: '#eee', fontSize: 13, fontWeight: 600 }}>时间轴控制</Text>
+                    <Radio.Group size="small" onChange={e => setTimeMode(e.target.value)} value={timeMode} style={{ display: 'flex' }}>
+                        <Radio.Button value="sequence" style={{ flex: 1, textAlign: 'center', backgroundColor: timeMode === 'sequence' ? '#1890ff' : '#1e1e1f', borderColor: '#3e3e3e', color: timeMode === 'sequence' ? '#fff' : '#999' }}>动作序列</Radio.Button>
+                        <Radio.Button value="manual" style={{ flex: 1, textAlign: 'center', backgroundColor: timeMode === 'manual' ? '#1890ff' : '#1e1e1f', borderColor: '#3e3e3e', color: timeMode === 'manual' ? '#fff' : '#999' }}>手动范围</Radio.Button>
+                    </Radio.Group>
+                </div>
 
-                {timeMode === 'sequence' && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', paddingLeft: 24 }}>
-                        <Text style={{ color: '#888' }}>动作:</Text>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    {timeMode === 'sequence' ? (
                         <Select
                             style={{ flex: 1 }}
                             value={selectedSequenceIndex}
                             onChange={setSelectedSequenceIndex}
                             options={sequences.map((s, i) => ({ label: `${s.Name} [${s.Interval[0]}-${s.Interval[1]}]`, value: i }))}
+                            dropdownStyle={{ backgroundColor: '#2a2a2a', color: '#eee' }}
                         />
-                    </div>
-                )}
+                    ) : (
+                        <>
+                            <Input
+                                addonBefore="开始帧"
+                                defaultValue={manualStart}
+                                key={`start-${manualStart}`}
+                                className="dark-input-number"
+                                style={{ flex: 1 }}
+                                onBlur={e => { const v = parseInt(e.target.value); if (!isNaN(v)) setManualStart(v); }}
+                                onPressEnter={e => { const v = parseInt((e.target as HTMLInputElement).value); if (!isNaN(v)) setManualStart(v); (e.target as HTMLInputElement).blur(); }}
+                            />
+                            <Input
+                                addonBefore="结束帧"
+                                defaultValue={manualEnd}
+                                key={`end-${manualEnd}`}
+                                className="dark-input-number"
+                                style={{ flex: 1 }}
+                                onBlur={e => { const v = parseInt(e.target.value); if (!isNaN(v)) setManualEnd(v); }}
+                                onPressEnter={e => { const v = parseInt((e.target as HTMLInputElement).value); if (!isNaN(v)) setManualEnd(v); (e.target as HTMLInputElement).blur(); }}
+                            />
+                        </>
+                    )}
+                </div>
 
-                {timeMode === 'manual' && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px', paddingLeft: 24 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <Text style={{ color: '#888' }}>开始:</Text>
-                            <InputNumber value={manualStart} onChange={val => setManualStart(val || 0)} className="dark-input-number" />
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <Text style={{ color: '#888' }}>结束:</Text>
-                            <InputNumber value={manualEnd} onChange={val => setManualEnd(val || 0)} className="dark-input-number" />
-                        </div>
-                    </div>
-                )}
+                <div style={{ padding: '0 8px' }}>
+                    <DissolveTimelineSlider
+                        min={currentMin}
+                        max={currentMax}
+                        points={points}
+                        onPointsChange={setPoints}
+                        selectedPointId={selectedPointId}
+                        onSelectPoint={setSelectedPointId}
+                    />
+                </div>
             </div>
 
             <div style={{ flex: 1 }} />
@@ -279,21 +383,36 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
 
             <style dangerouslySetInnerHTML={{
                 __html: `
-                .dark-input-number .ant-input-number-input {
+                .dark-input-number .ant-input {
                     background-color: #1e1e1e !important;
-                    color: #ccc !important;
+                    color: #fff !important;
+                    border: 1px solid #3e3e3e !important;
+                    border-left: none !important;
                 }
-                .dark-input-number .ant-input-number-group-addon {
-                    background-color: #2a2a2a !important;
-                    border-color: #444 !important;
-                    color: #888 !important;
+                .dark-input-number .ant-input-group-addon {
+                    background-color: #333 !important;
+                    border-color: #3e3e3e !important;
+                    color: #bbb !important;
+                    font-size: 11px !important;
+                    padding: 0 10px !important;
                 }
-                .dark-input-number {
-                    background-color: #1e1e1e !important;
-                    border-color: #444 !important;
+                .dark-input-number:hover .ant-input, 
+                .dark-input-number:hover .ant-input-group-addon {
+                    border-color: #666 !important;
                 }
-                .dark-input-number:hover {
+                .dark-input-number .ant-input:focus {
                     border-color: #1890ff !important;
+                    box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.2) !important;
+                }
+                .ant-select-selector {
+                    background-color: #1e1e1e !important;
+                    border-color: #3e3e3e !important;
+                }
+                .ant-select-selection-item {
+                    color: #eee !important;
+                }
+                .ant-select-arrow {
+                    color: #888 !important;
                 }
             `}} />
         </div>
@@ -302,7 +421,7 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
     if (isStandalone) {
         return (
             <StandaloneWindowFrame title="消散动画工具" onClose={onClose}>
-                <div style={{ padding: '16px', flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+                <div style={{ padding: '16px', flex: 1, overflowY: 'auto', overflowX: 'hidden', display: 'flex', flexDirection: 'column' }}>
                     {innerContent}
                 </div>
             </StandaloneWindowFrame>

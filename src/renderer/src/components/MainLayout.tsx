@@ -2243,6 +2243,44 @@ const MainLayout: React.FC = () => {
 
     useRpcServer('modelMerge', getModelMergeState, handleModelMergeCommand);
 
+    // ---- Dissolve Effect RPC Server ----
+    const getDissolveEffectState = useCallback(() => {
+        const store = useModelStore.getState();
+        // Return stripped geosets to reduce payload size, similar to textureManager
+        const stripGeosets = (geosets: any[]) => {
+            if (!geosets) return [];
+            return geosets.map((g: any) => ({
+                MaterialID: g.MaterialID,
+                SelectionGroup: g.SelectionGroup,
+                vertexCount: g.Vertices ? Math.floor(g.Vertices.length / 3) : 0
+            }));
+        };
+        const stripSequences = (seqs: any[]) => {
+            if (!seqs) return [];
+            return seqs.map((s: any) => ({
+                Name: s.Name,
+                Interval: s.Interval ? Array.from(s.Interval) : [0, 0]
+            }));
+        };
+        return {
+            geosets: stripGeosets(store.modelData?.Geosets),
+            sequences: stripSequences(store.modelData?.Sequences),
+            geosetCount: store.modelData?.Geosets?.length || 0,
+        };
+    }, []);
+
+    const { broadcastSync: broadcastDissolveEffect } = useRpcServer('dissolveEffect', getDissolveEffectState);
+
+    useEffect(() => {
+        const unsubscribe = useModelStore.subscribe((state, prevState) => {
+            if (state.modelData?.Geosets !== prevState.modelData?.Geosets || state.sequences !== prevState.sequences) {
+                broadcastDissolveEffect(getDissolveEffectState());
+            }
+        });
+        return () => unsubscribe();
+    }, [broadcastDissolveEffect, getDissolveEffectState]);
+
+
     useEffect(() => {
         if (!modelData || standaloneWarmupStartedRef.current) return
 
