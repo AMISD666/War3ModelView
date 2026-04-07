@@ -23,9 +23,9 @@ const WARMUP_WINDOWS: WarmWindowSpec[] = [
     { id: 'globalSequenceManager', title: '全局动作管理器', w: 300, h: 360 },
     { id: 'keyframeEditor_0', title: '关键帧编辑器', w: 600, h: 480 },
     { id: 'keyframeEditor_1', title: '关键帧编辑器', w: 600, h: 480 },
-    { id: 'modelOptimize', title: '模型优化', w: 320, h: 520 },
     { id: 'modelMerge', title: '模型合并', w: 560, h: 500 },
     { id: 'nodeEditor', title: '节点编辑器', w: 640, h: 520 },
+    { id: 'dissolveEffect', title: '消散动画工具', w: 600, h: 580 },
 ]
 
 /** 首批预热前等待：给主界面与首屏渲染留时间，避免与模型加载抢线程 */
@@ -52,10 +52,10 @@ export const prefetchStandaloneLazyChunks = (): void => {
         import('../components/modals/TextureEditorModal'),
         import('../components/modals/TextureAnimationManagerModal'),
         import('../components/modals/MaterialEditorModal'),
-        import('../components/modals/SequenceEditorModal'),
         import('../components/modals/GlobalSequenceModal'),
         import('../components/editors/KeyframeEditor'),
         import('../components/detached/NodeEditorStandalone'),
+        import('../components/modals/DissolveEffectModal'),
     ])
 }
 

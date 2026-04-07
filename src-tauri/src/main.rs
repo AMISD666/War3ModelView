@@ -878,9 +878,12 @@ fn register_context_menu() -> Result<bool, String> {
             .create_subkey(&shell_path)
             .map_err(|e| format!("Failed to create shell key for .{}: {}", ext, e))?;
 
-        // 2. Set display name
+        // 2. 设置右键菜单显示名（使用 \\u 转义，避免源码编码导致注册表乱码）
         shell_key
-            .set_value("", &"浣跨敤 GGwar3Edit 鎵撳紑")
+            .set_value(
+                "",
+                &"\u{4f7f}\u{7528} GGwar3Edit \u{6253}\u{5f00}",
+            )
             .map_err(|e| format!("Failed to set display name: {}", e))?;
 
         // 3. Set icon

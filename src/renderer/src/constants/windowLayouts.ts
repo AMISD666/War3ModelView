@@ -12,6 +12,7 @@ export type ToolWindowId =
     | 'geosetAnimManager'
     | 'modelOptimize'
     | 'modelMerge'
+    | 'dissolveEffect'
 
 export type WindowSize = {
     width: number
@@ -29,7 +30,8 @@ export const TOOL_WINDOW_SIZES: Record<ToolWindowId, WindowSize> = {
     globalSequenceManager: { width: 300, height: 360 },
     geosetAnimManager: { width: 800, height: 560 },
     modelOptimize: { width: 320, height: 520 },
-    modelMerge: { width: 560, height: 500 }
+    modelMerge: { width: 560, height: 500 },
+    dissolveEffect: { width: 600, height: 580 }
 }
 
 export const NODE_EDITOR_WINDOW_SIZES: Record<NodeEditorKind, WindowSize> = {

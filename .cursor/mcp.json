@@ -1,13 +1,3 @@
 {
-  "mcpServers": {
-    "cursor辅助对话工具": {
-      "command": "node",
-      "args": [
-        "c:\\Users\\Administrator\\.cursor\\extensions\\local.cursor-assist-dialog-2.0.7\\dist\\mcp-server.mjs"
-      ],
-      "env": {
-        "MESSENGER_DATA_DIR": "C:\\Users\\Administrator\\.moyu-message\\e76fcf2d7abe"
-      }
-    }
-  }
+  "mcpServers": {}
 }

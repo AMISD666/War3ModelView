@@ -1,4 +1,4 @@
-﻿import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import { Tooltip } from 'antd'
 import {
     AimOutlined,
@@ -485,6 +485,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
                         <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('modelOptimize'); closeMenu() }}>{uiText.menu.modelOptimize}</div>
                         <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('modelMerge'); closeMenu() }}>{uiText.menu.modelMerge}</div>
                         <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('geosetVisibilityTool'); closeMenu() }}>{uiText.menu.geosetVisibilityTool}</div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('dissolveEffect'); closeMenu() }}>{uiText.menu.dissolveEffect}</div>
                         <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onAddDeathAnimation(); closeMenu() }}>{uiText.menu.addDeathAnimation}</div>
                         <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onRemoveLights(); closeMenu() }}>{uiText.menu.removeLights}</div>
                         <div style={{ borderTop: '1px solid #444', margin: '5px 0' }} />

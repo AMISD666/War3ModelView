@@ -23,6 +23,7 @@ const SequenceEditorModal = React.lazy(() => import('./components/modals/Sequenc
 const GlobalSequenceModal = React.lazy(() => import('./components/modals/GlobalSequenceModal'))
 const KeyframeEditor = React.lazy(() => import('./components/editors/KeyframeEditor'))
 const NodeEditorStandalone = React.lazy(() => import('./components/detached/NodeEditorStandalone'))
+const DissolveEffectModal = React.lazy(() => import('./components/modals/DissolveEffectModal'))
 
 const installBrowserGuards = () => {
     window.addEventListener(
@@ -128,6 +129,10 @@ if (targetWindow === 'modelOptimize') {
 } else if (targetWindow === 'nodeEditor') {
     RootComponent = renderWithinSuspense(
         <NodeEditorStandalone />
+    )
+} else if (targetWindow === 'dissolveEffect') {
+    RootComponent = renderWithinSuspense(
+        <DissolveEffectModal visible={true} onClose={() => getCurrentWindow().hide()} isStandalone={true} />
     )
 } else if (targetWindow?.startsWith('keyframeEditor')) {
     RootComponent = renderWithinSuspense(

@@ -9,9 +9,9 @@ import MaterialEditorModal from '../modals/MaterialEditorModal'
 import SequenceEditorModal from '../modals/SequenceEditorModal'
 import GlobalSequenceModal from '../modals/GlobalSequenceModal'
 import GeosetVisibilityToolModal from '../modals/GeosetVisibilityToolModal'
-import TextureEditorModal from '../modals/TextureEditorModal'
 import ModelOptimizeModal from '../modals/ModelOptimizeModal'
 import ModelMergeModal from '../modals/ModelMergeModal'
+import DissolveEffectModal from '../modals/DissolveEffectModal'
 import KeyframeEditor from '../editors/KeyframeEditor'
 import NodeEditorStandalone from './NodeEditorStandalone'
 
@@ -28,6 +28,7 @@ export const isStandaloneToolWindowLabel = (windowLabel: string | null | undefin
         || windowLabel === 'geosetVisibilityTool'
         || windowLabel === 'modelOptimize'
         || windowLabel === 'modelMerge'
+        || windowLabel === 'dissolveEffect'
         || windowLabel === 'nodeEditor'
         || windowLabel.startsWith('keyframeEditor_')
 }
@@ -87,6 +88,10 @@ const StandaloneToolWindowRouter: React.FC<StandaloneToolWindowRouterProps> = ({
 
     if (windowLabel === 'modelMerge') {
         return <ModelMergeModal visible={true} onClose={handleHide} isStandalone={true} />
+    }
+
+    if (windowLabel === 'dissolveEffect') {
+        return <DissolveEffectModal visible={true} onClose={handleHide} isStandalone={true} />
     }
 
     if (windowLabel === 'nodeEditor') {

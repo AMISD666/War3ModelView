@@ -4663,6 +4663,8 @@ const MainLayout: React.FC = () => {
                         windowManager.openToolWindow('modelOptimize', '模型优化', 320, 520);
                     } else if (editor === 'modelMerge') {
                         windowManager.openToolWindow('modelMerge', '模型合并', 560, 500);
+                    } else if (editor === 'dissolveEffect') {
+                        windowManager.openToolWindow('dissolveEffect', '消散动画工具', 600, 580);
                     } else if (editor === 'geosetVisibility') {
                         setShowGeosetVisibility(!showGeosetVisibility)
                     } else {                        toggleEditor(editor)

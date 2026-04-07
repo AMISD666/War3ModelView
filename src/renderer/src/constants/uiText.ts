@@ -1,4 +1,4 @@
-﻿export const uiText = {
+export const uiText = {
     app: {
         name: '咕咕 War3 模型编辑器',
         version: 'v1.0.0',
@@ -38,6 +38,7 @@
         transformModel: '修改模型位置/旋转/缩放',
         modelOptimize: '模型优化',
         modelMerge: '模型合并',
+        dissolveEffect: '消散动画工具',
         geosetVisibilityTool: '多边形显隐工具',
         addDeathAnimation: '添加死亡动画',
         removeLights: '删除所有灯光',
