@@ -18,6 +18,7 @@ import { getDraggedTextureIndex } from '../../utils/textureDragDrop';
 import { saveParticleEmitter2Preset } from '../../services/particleEmitter2PresetService';
 import { showMessage } from '../../store/messageStore';
 import { uiText } from '../../constants/uiText';
+import { MATERIAL_FILTER_MODE_OPTIONS } from '../../constants/filterModes';
 import { useNodeEditorPreview } from '../../hooks/useNodeEditorPreview';
 import { NODE_EDITOR_COMMANDS, type NodeEditorCommandSender } from '../../types/nodeEditorRpc';
 
@@ -259,7 +260,7 @@ const hsvToRgb = (h: number, s: number, v: number): [number, number, number] => 
     else if (hh < 180) [r, g, b] = [0, c, x];
     else if (hh < 240) [r, g, b] = [0, x, c];
     else if (hh < 300) [r, g, b] = [x, 0, c];
-    else [r, g, b] = [c, 0, x];
+    else[r, g, b] = [c, 0, x];
 
     return [r + m, g + m, b + m];
 };
@@ -446,46 +447,46 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
         setOverallScaleScale(1);
 
         const defaults = {
-                Visibility: 1,
-                EmissionRate: 0,
-                Speed: 0,
-                Variation: 0,
-                Latitude: 0,
-                Width: 0,
-                Length: 0,
-                Gravity: 0,
+            Visibility: 1,
+            EmissionRate: 0,
+            Speed: 0,
+            Variation: 0,
+            Latitude: 0,
+            Width: 0,
+            Length: 0,
+            Gravity: 0,
 
-                TextureID: -1,
-                FilterMode: 0, // 0=None, 1=Transparent, 2=Blend, 3=Additive, 4=AddAlpha, 5=Modulate, 6=Modulate2x
-                Rows: 1,
-                Columns: 1,
-                PriorityPlane: 0,
-                ReplaceableId: 0,
+            TextureID: -1,
+            FilterMode: 0, // 0=None, 1=Transparent, 2=Blend, 3=Additive, 4=AddAlpha, 5=Modulate, 6=Modulate2x
+            Rows: 1,
+            Columns: 1,
+            PriorityPlane: 0,
+            ReplaceableId: 0,
 
-                // Segments (White, Alpha 255, Scale 1)
-                Seg1Color: 'rgb(255, 255, 255)', Seg1Alpha: 255, Seg1Scaling: 1,
-                Seg2Color: 'rgb(255, 255, 255)', Seg2Alpha: 255, Seg2Scaling: 1,
-                Seg3Color: 'rgb(255, 255, 255)', Seg3Alpha: 255, Seg3Scaling: 1,
+            // Segments (White, Alpha 255, Scale 1)
+            Seg1Color: 'rgb(255, 255, 255)', Seg1Alpha: 255, Seg1Scaling: 1,
+            Seg2Color: 'rgb(255, 255, 255)', Seg2Alpha: 255, Seg2Scaling: 1,
+            Seg3Color: 'rgb(255, 255, 255)', Seg3Alpha: 255, Seg3Scaling: 1,
 
-                // Lifecycle - using Start/End/Repeat format
-                HeadLifeSpanStart: 0, HeadLifeSpanEnd: 0, HeadLifeSpanRepeat: 1,
-                HeadDecayStart: 0, HeadDecayEnd: 0, HeadDecayRepeat: 1,
-                TailLifeSpanStart: 0, TailLifeSpanEnd: 0, TailLifeSpanRepeat: 1,
-                TailDecayStart: 0, TailDecayEnd: 0, TailDecayRepeat: 1,
-                TailLength: 0,
-                Time: 0.5,
-                LifeSpan: 1,
+            // Lifecycle - using Start/End/Repeat format
+            HeadLifeSpanStart: 0, HeadLifeSpanEnd: 0, HeadLifeSpanRepeat: 1,
+            HeadDecayStart: 0, HeadDecayEnd: 0, HeadDecayRepeat: 1,
+            TailLifeSpanStart: 0, TailLifeSpanEnd: 0, TailLifeSpanRepeat: 1,
+            TailDecayStart: 0, TailDecayEnd: 0, TailDecayRepeat: 1,
+            TailLength: 0,
+            Time: 0.5,
+            LifeSpan: 1,
 
-                // Flags
-                Unshaded: true,
-                Unfogged: false,
-                SortPrimsFarZ: false,
-                LineEmitter: false,
-                ModelSpace: false,
-                XYQuad: false,
-                Squirt: false,
-                Head: true,
-                Tail: false,
+            // Flags
+            Unshaded: true,
+            Unfogged: false,
+            SortPrimsFarZ: false,
+            LineEmitter: false,
+            ModelSpace: false,
+            XYQuad: false,
+            Squirt: false,
+            Head: true,
+            Tail: false,
         };
 
         const newAnimDataMap: Record<string, any> = {};
@@ -1203,15 +1204,13 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
             </div>
 
             <div>
-                <div style={{ marginBottom: 4, color: '#ccc' }}>Filter Mode:</div>
+                <div style={{ marginBottom: 4, color: '#ccc' }}>过滤模式</div>
                 <Form.Item name="FilterMode" noStyle>
-                    <Select options={[
-                        { label: 'Blend', value: 0 },
-                        { label: 'Additive', value: 1 },
-                        { label: 'Modulate', value: 2 },
-                        { label: 'Modulate2x', value: 3 },
-                        { label: 'AlphaKey', value: 4 },
-                    ]} style={{ width: '100%' }} size="small" />
+                    <Select
+                        options={MATERIAL_FILTER_MODE_OPTIONS as any}
+                        style={{ width: '100%' }}
+                        size="small"
+                    />
                 </Form.Item>
             </div>
         </div>
@@ -1539,38 +1538,38 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
     );
 
     const pe2PresetPortal = presetModalOpen && typeof document !== 'undefined' ? createPortal(
-                <div
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onClick={(e) => e.stopPropagation()}
-                >
-                    <DraggableModal
-                        title={uiText.particleEmitter2Dialog.savePreset}
-                        open={presetModalOpen}
-                        onCancel={() => setPresetModalOpen(false)}
-                        width={360}
-                        minWidth={360}
-                        minHeight={150}
-                        resizable={false}
-                        destroyOnClose
-                        styles={{ body: { padding: 16 } }}
-                        footer={(
-                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-                                <Button size="small" onClick={() => setPresetModalOpen(false)}>{uiText.particleEmitter2Dialog.cancel}</Button>
-                                <Button size="small" type="primary" loading={isSavingPreset} onClick={() => { void handleSavePreset() }}>{uiText.particleEmitter2Dialog.save}</Button>
-                            </div>
-                        )}
-                    >
-                        <Input
-                            placeholder={uiText.particleEmitter2Dialog.presetNamePlaceholder}
-                            value={presetName}
-                            onChange={(e) => setPresetName(e.target.value)}
-                            onPressEnter={() => { void handleSavePreset() }}
-                            autoFocus
-                        />
-                    </DraggableModal>
-                </div>,
-                document.body
-            ) : null;
+        <div
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+        >
+            <DraggableModal
+                title={uiText.particleEmitter2Dialog.savePreset}
+                open={presetModalOpen}
+                onCancel={() => setPresetModalOpen(false)}
+                width={360}
+                minWidth={360}
+                minHeight={150}
+                resizable={false}
+                destroyOnClose
+                styles={{ body: { padding: 16 } }}
+                footer={(
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                        <Button size="small" onClick={() => setPresetModalOpen(false)}>{uiText.particleEmitter2Dialog.cancel}</Button>
+                        <Button size="small" type="primary" loading={isSavingPreset} onClick={() => { void handleSavePreset() }}>{uiText.particleEmitter2Dialog.save}</Button>
+                    </div>
+                )}
+            >
+                <Input
+                    placeholder={uiText.particleEmitter2Dialog.presetNamePlaceholder}
+                    value={presetName}
+                    onChange={(e) => setPresetName(e.target.value)}
+                    onPressEnter={() => { void handleSavePreset() }}
+                    autoFocus
+                />
+            </DraggableModal>
+        </div>,
+        document.body
+    ) : null;
 
     if (isStandalone) {
         return (

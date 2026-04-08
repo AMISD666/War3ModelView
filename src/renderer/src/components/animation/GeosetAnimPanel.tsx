@@ -609,14 +609,14 @@ const GeosetAnimPanel: React.FC = () => {
                         <Button size="small" onClick={handleInsertGeosetAlphaKey} disabled={selectedGeosetIds.length === 0} style={{ background: '#333', borderColor: '#444', color: '#ddd' }}>K帧</Button>
                         <Button size="small" onClick={() => openEditor('Alpha')} disabled={selectedGeosetIds.length !== 1} style={{ fontSize: 11, color: '#1890ff', borderColor: '#1890ff', background: 'transparent' }}>轨道编辑</Button>
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '50px 1fr 50px 120px', gap: 6, alignItems: 'center', marginTop: 6 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '58px minmax(0, 1fr) 42px 88px', gap: 6, alignItems: 'center', marginTop: 6 }}>
                         <Text style={{ color: '#666', fontSize: 11 }}>全局序列</Text>
                         <GlobalSequenceSelect
                             size="small"
                             value={alphaGlobalSeqId}
                             onChange={(value) => updateTrackMeta('Alpha', { GlobalSeqId: value })}
                         />
-                        <Text style={{ color: '#666', fontSize: 11 }}>插值类型</Text>
+                        <Text style={{ color: '#666', fontSize: 11 }}>插值</Text>
                         <Select
                             size="small"
                             value={alphaInterpolationType}
@@ -638,14 +638,14 @@ const GeosetAnimPanel: React.FC = () => {
                         <Button size="small" onClick={handleInsertGeosetColorKey} disabled={selectedGeosetIds.length === 0} style={{ background: '#333', borderColor: '#444', color: '#ddd' }}>K帧</Button>
                         <Button size="small" onClick={() => openEditor('Color')} disabled={selectedGeosetIds.length !== 1} style={{ fontSize: 11, color: '#1890ff', borderColor: '#1890ff', background: 'transparent' }}>轨道编辑</Button>
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '50px 1fr 50px 120px', gap: 6, alignItems: 'center', marginTop: 6 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '58px minmax(0, 1fr) 42px 88px', gap: 6, alignItems: 'center', marginTop: 6 }}>
                         <Text style={{ color: '#666', fontSize: 11 }}>全局序列</Text>
                         <GlobalSequenceSelect
                             size="small"
                             value={colorGlobalSeqId}
                             onChange={(value) => updateTrackMeta('Color', { GlobalSeqId: value })}
                         />
-                        <Text style={{ color: '#666', fontSize: 11 }}>插值类型</Text>
+                        <Text style={{ color: '#666', fontSize: 11 }}>插值</Text>
                         <Select
                             size="small"
                             value={colorInterpolationType}

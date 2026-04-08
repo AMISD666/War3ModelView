@@ -3,6 +3,7 @@ import { Button, Select, Tooltip, Typography } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import {
     CheckOutlined,
+    DeleteOutlined,
     DragOutlined,
     ExpandOutlined,
     PlusOutlined,
@@ -783,6 +784,28 @@ const TextureAnimGizmoPanel: React.FC = () => {
         setSelectedTextureAnimIndex(newAnims.length - 1)
     }, [textureAnims, setTextureAnims, setSelectedTextureAnimIndex])
 
+    const deleteTextureAnim = useCallback(() => {
+        if (selectedTextureAnimIndex === null || selectedTextureAnimIndex < 0 || selectedTextureAnimIndex >= textureAnims.length) return
+        const deleteIndex = selectedTextureAnimIndex
+        const oldAnims = deepClone(textureAnims)
+        const newAnims = deepClone(textureAnims)
+        newAnims.splice(deleteIndex, 1)
+        const nextSelection = newAnims.length === 0 ? null : Math.min(deleteIndex, newAnims.length - 1)
+        useHistoryStore.getState().push({
+            name: '删除贴图动画',
+            undo: () => {
+                setTextureAnims(deepClone(oldAnims))
+                setSelectedTextureAnimIndex(deleteIndex)
+            },
+            redo: () => {
+                setTextureAnims(deepClone(newAnims))
+                setSelectedTextureAnimIndex(nextSelection)
+            }
+        })
+        setTextureAnims(newAnims)
+        setSelectedTextureAnimIndex(nextSelection)
+    }, [selectedTextureAnimIndex, textureAnims, setTextureAnims, setSelectedTextureAnimIndex])
+
     const activeTrackMeta = useMemo(() => {
         const modeLabel = gizmoMode === 'translate'
             ? '位移'
@@ -959,25 +982,36 @@ const TextureAnimGizmoPanel: React.FC = () => {
     return (
         <RightFloatingPanelShell
             title="贴图动画"
-            status={
-                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            status={selectedTextureAnimIndex !== null ? `已选 ${selectedTextureAnimIndex}` : '未选择'}
+            collapsed={panelCollapsed}
+            onToggleCollapse={() => setPanelCollapsed(!panelCollapsed)}
+        >
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Text style={{ color: '#888', fontSize: 11, flexShrink: 0 }}>贴图动画</Text>
                     <Select
                         size="small"
-                        style={{ width: 100 }}
+                        style={{ flex: '0 1 112px', minWidth: 0 }}
                         value={selectedTextureAnimIndex ?? undefined}
                         onChange={(v) => setSelectedTextureAnimIndex(v)}
                         placeholder="选择..."
                         options={textureAnims.map((_, i) => ({ label: `动画 ${i}`, value: i }))}
                     />
                     <Tooltip title="新建贴图动画">
-                        <Button size="small" type="text" icon={<PlusOutlined />} onClick={addTextureAnim} style={{ padding: 0, width: 20, height: 20, color: '#ccc' }} />
+                        <Button size="small" type="text" icon={<PlusOutlined />} onClick={addTextureAnim} style={{ padding: 0, width: 20, height: 20, color: '#ccc', flexShrink: 0 }} />
+                    </Tooltip>
+                    <Tooltip title="删除贴图动画">
+                        <Button
+                            size="small"
+                            type="text"
+                            icon={<DeleteOutlined />}
+                            onClick={deleteTextureAnim}
+                            disabled={selectedTextureAnimIndex === null || selectedTextureAnimIndex < 0 || selectedTextureAnimIndex >= textureAnims.length}
+                            style={{ padding: 0, width: 20, height: 20, color: '#ccc', flexShrink: 0 }}
+                        />
                     </Tooltip>
                 </div>
-            }
-            collapsed={panelCollapsed}
-            onToggleCollapse={() => setPanelCollapsed(!panelCollapsed)}
-        >
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+
                 {/* Mode Select & Action */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div style={{ display: 'flex', gap: 4 }}>
@@ -1061,7 +1095,7 @@ const TextureAnimGizmoPanel: React.FC = () => {
                     <InputNumber size="small" value={inputY} onChange={onChangeInputY} disabled={gizmoMode === 'rotate'} style={{ width: '100%' }} />
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '50px 1fr 50px 120px', gap: 8, alignItems: 'center' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '58px minmax(0, 1fr) 42px 88px', gap: 8, alignItems: 'center' }}>
                     <Text style={{ color: '#888', fontSize: 11 }}>全局序列</Text>
                     <GlobalSequenceSelect
                         size="small"
@@ -1069,7 +1103,7 @@ const TextureAnimGizmoPanel: React.FC = () => {
                         value={activeTrackMeta.globalSeqId === -1 ? null : activeTrackMeta.globalSeqId}
                         onChange={(value) => updateTrackMeta({ GlobalSeqId: value ?? -1 })}
                     />
-                    <Text style={{ color: '#888', fontSize: 11 }}>插值类型</Text>
+                    <Text style={{ color: '#888', fontSize: 11 }}>插值</Text>
                     <Select
                         size="small"
                         value={activeTrackMeta.interpolationType}

@@ -45,6 +45,7 @@ const OFFSET_SCALING = 40
 const CONTEXT_MENU_WIDTH = 170
 const CONTEXT_MENU_HEIGHT = 160
 const MIN_ZOOM_RANGE_PADDING_RATIO = 0.1
+const MAX_PIXELS_PER_MS = 12
 
 const dimHexColor = (hex: string, factor = 0.22) => {
     const normalized = hex.startsWith('#') ? hex.slice(1) : hex
@@ -936,7 +937,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const paddedDuration = isSpecificGlobalSequenceView ? duration : Math.max(100, duration * (1 + MIN_ZOOM_RANGE_PADDING_RATIO))
         const newPixelsPerMs = containerWidth / paddedDuration
 
-        setPixelsPerMs(Math.max(0.01, Math.min(2, newPixelsPerMs)))
+        setPixelsPerMs(Math.max(0.01, Math.min(MAX_PIXELS_PER_MS, newPixelsPerMs)))
         setScrollX(isSpecificGlobalSequenceView ? start : Math.max(0, start - duration * (MIN_ZOOM_RANGE_PADDING_RATIO * 0.5)))
         return true
     }, [sequence, isAllSequences, isSpecificGlobalSequenceView, allSequencesMax, seqEnd])
@@ -950,7 +951,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             : zoomDuration * (1 + MIN_ZOOM_RANGE_PADDING_RATIO)
         return Math.max(0.0005, width / paddedZoomDuration)
     }, [zoomDuration, containerMeasureTick, isSpecificGlobalSequenceView])
-    const maxPixelsPerMs = 12
+    const maxPixelsPerMs = MAX_PIXELS_PER_MS
 
     // Reset the one-time auto-fit when leaving keyframe mode, so re-entering matches the selected sequence.
     useEffect(() => {
@@ -1061,7 +1062,17 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 if (!isDraggingRef.current && interactionRef.current.mode !== 'scrub' && interactionRef.current.mode !== 'dragSequence' && interactionRef.current.mode !== 'dragSequenceStart' && interactionRef.current.mode !== 'dragSequenceEnd') {
                     const renderer = useRendererStore.getState().renderer
                     if (renderer && renderer.rendererData && typeof renderer.rendererData.frame === 'number') {
-                        frameRef.current = renderer.rendererData.frame
+                        const activeGlobalFilter = useSelectionStore.getState().timelineGlobalSequenceFilter
+                        if (
+                            typeof activeGlobalFilter === 'number' &&
+                            activeGlobalFilter >= 0 &&
+                            Array.isArray(renderer.rendererData.globalSequencesFrames) &&
+                            typeof renderer.rendererData.globalSequencesFrames[activeGlobalFilter] === 'number'
+                        ) {
+                            frameRef.current = renderer.rendererData.globalSequencesFrames[activeGlobalFilter]
+                        } else {
+                            frameRef.current = renderer.rendererData.frame
+                        }
                     } else {
                         frameRef.current = useModelStore.getState().currentFrame
                     }

@@ -2353,6 +2353,29 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     }
   }, [structureUpdateTrigger, renderer])
 
+  // Handle Material/Texture/Visual Patch Changes (Fast Reload)
+  const materialUpdateTrigger = useModelStore(state => state.materialReloadTrigger)
+  useEffect(() => {
+    if (rendererRef.current && (rendererRef.current as any).modelInstance && materialUpdateTrigger > 0) {
+      const storeData = useModelStore.getState().modelData;
+      if (storeData) {
+        if (storeData.Materials) rendererRef.current.model.Materials = storeData.Materials;
+        if (storeData.Textures) rendererRef.current.model.Textures = storeData.Textures;
+        if (storeData.Geosets) rendererRef.current.model.Geosets = storeData.Geosets;
+        if (storeData.TextureAnims) rendererRef.current.model.TextureAnims = storeData.TextureAnims;
+      }
+
+      const instance = (rendererRef.current as any).modelInstance;
+      
+      // Specifically sync materials and textures without destroying node wrappers
+      if (typeof instance.syncMaterials === 'function') {
+        instance.syncMaterials();
+      }
+
+      needsRendererUpdateRef.current = true;
+    }
+  }, [materialUpdateTrigger, renderer])
+
   useEffect(() => {
     return () => {
       if (animationFrameId.current !== null) {
@@ -4251,10 +4274,26 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             mdlRenderer.update(delta * playbackSpeedRef.current)
             needsRendererUpdateRef.current = false
 
+            const activeGlobalSequenceFilter = useSelectionStore.getState().timelineGlobalSequenceFilter
+            const globalSequenceDurations = mdlRenderer.model?.GlobalSequences
+            const isSpecificGlobalSequenceView =
+              typeof activeGlobalSequenceFilter === 'number' &&
+              activeGlobalSequenceFilter >= 0 &&
+              typeof globalSequenceDurations?.[activeGlobalSequenceFilter] === 'number'
+            const activeGlobalSequenceDuration = isSpecificGlobalSequenceView
+              ? Number(globalSequenceDurations?.[activeGlobalSequenceFilter] ?? 0)
+              : null
+
             // Auto-pause if not looping and reached end
-            if (!isLooping && mdlRenderer.rendererData &&
-              mdlRenderer.rendererData.animationInfo &&
-              mdlRenderer.rendererData.frame >= mdlRenderer.rendererData.animationInfo.Interval[1] - 0.1) {
+            if (!isLooping && mdlRenderer.rendererData && (
+              (isSpecificGlobalSequenceView &&
+                activeGlobalSequenceDuration !== null &&
+                Array.isArray(mdlRenderer.rendererData.globalSequencesFrames) &&
+                mdlRenderer.rendererData.globalSequencesFrames[activeGlobalSequenceFilter] >= activeGlobalSequenceDuration - 0.1) ||
+              (!isSpecificGlobalSequenceView &&
+                mdlRenderer.rendererData.animationInfo &&
+                mdlRenderer.rendererData.frame >= mdlRenderer.rendererData.animationInfo.Interval[1] - 0.1)
+            )) {
               onTogglePlay()
             }
 
@@ -4263,7 +4302,12 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             if (currentMainMode === 'animation' && mdlRenderer.rendererData) {
               const FRAME_SYNC_INTERVAL = 200 // ms
               if (time - lastFrameSyncTime.current >= FRAME_SYNC_INTERVAL) {
-                useModelStore.getState().setFrame(mdlRenderer.rendererData.frame)
+                const timelineFrame = isSpecificGlobalSequenceView &&
+                  activeGlobalSequenceDuration !== null &&
+                  Array.isArray(mdlRenderer.rendererData.globalSequencesFrames)
+                  ? Number(mdlRenderer.rendererData.globalSequencesFrames[activeGlobalSequenceFilter] ?? 0)
+                  : mdlRenderer.rendererData.frame
+                useModelStore.getState().setFrame(timelineFrame)
                 lastFrameSyncTime.current = time
               }
             }
@@ -4283,16 +4327,26 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             if (mdlRenderer.rendererData) {
               if (currentMainMode === 'animation') {
                 if (Math.abs(storeFrame - currentFrame) > 0.0001) {
+                  const activeGlobalSequenceFilter = useSelectionStore.getState().timelineGlobalSequenceFilter
+                  const globalSequenceDurations = mdlRenderer.model?.GlobalSequences
+                  const activeGlobalSequenceDuration =
+                    typeof activeGlobalSequenceFilter === 'number' && activeGlobalSequenceFilter >= 0
+                      ? Number(globalSequenceDurations?.[activeGlobalSequenceFilter] ?? NaN)
+                      : NaN
+                  const hasSpecificGlobalSequence =
+                    Number.isFinite(activeGlobalSequenceDuration) &&
+                    activeGlobalSequenceDuration >= 0
+
                   const interval = mdlRenderer.rendererData.animationInfo?.Interval
                   const hasInterval =
                     !!interval &&
                     typeof (interval as any).length === 'number' &&
                     (interval as any).length >= 2
 
-                  if (hasInterval && Number.isFinite(storeFrame)) {
-                    const sequenceStart = Number(interval[0])
-                    const sequenceEnd = Number(interval[1])
-                    const targetFrame = Math.min(Math.max(storeFrame, sequenceStart), sequenceEnd)
+                  if ((hasSpecificGlobalSequence || hasInterval) && Number.isFinite(storeFrame)) {
+                    const targetFrame = hasSpecificGlobalSequence
+                      ? Math.min(Math.max(storeFrame, 0), activeGlobalSequenceDuration)
+                      : Math.min(Math.max(storeFrame, Number(interval[0])), Number(interval[1]))
 
                     // Deterministic paused preview:
                     // Keep a single authoritative frame for ribbons and other anim channels.
@@ -4340,6 +4394,9 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                     }
 
                     currentFrame = Number(mdlRenderer.rendererData.frame ?? targetFrame)
+                    if (hasSpecificGlobalSequence) {
+                      currentFrame = targetFrame
+                    }
                     simulatedTimelineStep = true
                     frameCacheRef.current = currentFrame
                     needsRendererUpdateRef.current = false

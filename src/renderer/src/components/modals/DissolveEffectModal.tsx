@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Modal, Radio, InputNumber, Button, Select, Divider, Typography, Input } from 'antd';
+import React, { useState, useEffect, useRef } from 'react';
+import { Modal, Radio, InputNumber, Button, Select, Divider, Typography, Input, message } from 'antd';
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame';
 import { useModelStore } from '../../store/modelStore';
 import { useRpcClient } from '../../hooks/useRpc';
@@ -183,13 +183,13 @@ interface DissolveEffectModalProps {
 const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onClose, isStandalone = false }) => {
     const storeNodes = useModelStore(state => state.nodes);
     const storeSequences = useModelStore(state => state.sequences);
-    const storeGeosetCount = useModelStore(state => state.modelData?.Geosets?.length || 0);
+    const storeGeosets = useModelStore(state => state.modelData?.Geosets || []);
 
-    const { state: rpcState } = useRpcClient<any>('dissolveEffect', { geosets: [], sequences: [], geosetCount: 0 });
+    const { state: rpcState, emitCommand } = useRpcClient<any>('dissolveEffect', { geosets: [], sequences: [], geosetCount: 0 });
 
     const nodes = isStandalone ? [] : storeNodes; // Placeholder if nodes are needed later over RPC
     const sequences = isStandalone ? (rpcState.sequences || []) : (storeSequences || []);
-    const geosetCount = isStandalone ? (rpcState.geosetCount || 0) : storeGeosetCount;
+    const geosets = isStandalone ? (rpcState.geosets || []) : storeGeosets;
 
     // UI State
     const [selectedGeosets, setSelectedGeosets] = useState<number[]>([]);
@@ -200,6 +200,7 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
     const [selectedSequenceIndex, setSelectedSequenceIndex] = useState<number>(0);
     const [manualStart, setManualStart] = useState<number>(0);
     const [manualEnd, setManualEnd] = useState<number>(1000);
+    const [saveMode, setSaveMode] = useState<'overwrite' | 'saveAs'>('saveAs');
 
     // Derived min/max
     const currentMin = timeMode === 'sequence' ? (sequences[selectedSequenceIndex]?.Interval[0] || 0) : manualStart;
@@ -238,9 +239,12 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
         lastRangeRef.current = { min: currentMin, max: currentMax };
     }, [currentMin, currentMax]);
 
-    // Extract all geosets logically
-    // Since war3 models' geosets are not guaranteed to have IDs as nodes, we typically rely on index or Geoset selection
-    const geosetOptions = Array.from({ length: geosetCount }, (_, i) => ({ label: `${i}`, value: i }));
+    // 多边形组与材质 ID（点击时按同材质批量选中）
+    const geosetOptions = geosets.map((g: any, i: number) => ({
+        label: `${i}`,
+        value: i,
+        materialId: g.MaterialID !== undefined ? g.MaterialID : 0
+    }));
 
     const handleSelectTexture = async () => {
         try {
@@ -257,9 +261,48 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
         }
     };
 
-    const handleExecute = () => {
-        console.log('Execute Dissolve:', { selectedGeosets, texturePath, points, timeMode, currentMin, currentMax });
-        // The implementation logic will be filled here later
+    const handleExecute = async () => {
+        if (selectedGeosets.length === 0) { message.warning('请至少选择一个多边形组'); return; }
+        if (!texturePath) { message.warning('请选择消散贴图'); return; }
+        if (points.length === 0) { message.warning('请在时间轴上设置至少一个关键帧点'); return; }
+
+        const sortedPoints = [...points].sort((a, b) => a.frame - b.frame);
+        const startPoints = sortedPoints.filter(p => p.type === 'start');
+        const endPoints = sortedPoints.filter(p => p.type === 'end');
+        if (startPoints.length === 0 || endPoints.length === 0) {
+            message.warning('请确保时间轴上同时存在开始和结束关键帧'); return;
+        }
+
+        const dissolveParams = {
+            selectedGeosets,
+            dissolveTexturePath: texturePath,
+            dissolveStartFrame: startPoints[0].frame,
+            dissolveEndFrame: endPoints[endPoints.length - 1].frame,
+            seqStart: currentMin,
+            seqEnd: currentMax,
+            saveMode,
+        };
+
+        if (isStandalone) {
+            emitCommand('EXECUTE_DISSOLVE', dissolveParams);
+            message.info('正在执行消散效果...');
+            return;
+        }
+
+        const store = useModelStore.getState();
+        if (!store.modelData || !store.modelPath) { message.error('没有加载模型数据'); return; }
+
+        try {
+            const { executeDissolveEffect } = await import('../../utils/dissolveEffect');
+            const result = await executeDissolveEffect(store.modelData, store.modelPath, dissolveParams);
+            store.setVisualDataPatch({ Materials: result.materials, Textures: result.textures });
+            Modal.success({
+                title: '消散动画制作完成',
+                content: `已修改 ${result.textureModifiedCount} 个贴图，更新 ${result.materialModifiedCount} 个材质的透明度关键帧`,
+            });
+        } catch (err: any) {
+            message.error(err?.message || '执行消散效果失败');
+        }
     };
 
     const innerContent = (
@@ -267,38 +310,55 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Text style={{ color: '#eee', fontSize: 13, fontWeight: 600 }}>多边形组 (Geosets)</Text>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Text style={{ color: '#eee', fontSize: 13, fontWeight: 600 }}>多边形组 (Geosets)</Text>
+                        <Text style={{ color: '#888', fontSize: 11 }}>点击将同步选中同材质组</Text>
+                    </div>
                     <div style={{ display: 'flex', gap: '12px' }}>
                         <Button size="small" type="link" style={{ padding: 0, fontSize: 12, color: '#1890ff', fontWeight: 500 }} onClick={() => setSelectedGeosets(geosetOptions.map(o => o.value))}>全选</Button>
                         <Button size="small" type="link" style={{ padding: 0, fontSize: 12, color: '#ff7875', fontWeight: 500 }} onClick={() => setSelectedGeosets([])}>清空</Button>
                     </div>
                 </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', maxHeight: '120px', overflowY: 'auto', padding: '10px', backgroundColor: '#252526', border: '1px solid #3e3e3e', borderRadius: '4px' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', maxHeight: '160px', overflowY: 'auto', padding: '10px', backgroundColor: '#252526', border: '1px solid #3e3e3e', borderRadius: '4px' }}>
                     {geosetOptions.map(option => {
                         const isSelected = selectedGeosets.includes(option.value);
+
                         return (
                             <Button
                                 key={option.value}
-                                size="small"
                                 type={isSelected ? "primary" : "default"}
                                 style={{
-                                    backgroundColor: isSelected ? '#1890ff' : '#333',
-                                    borderColor: isSelected ? '#1890ff' : '#444',
+                                    backgroundColor: isSelected ? '#1890ff' : '#2b2b2b',
+                                    borderColor: '#3e3e3e',
+                                    borderWidth: '2px',
                                     color: isSelected ? '#fff' : '#ccc',
-                                    transition: 'all 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
-                                    boxShadow: 'none',
-                                    minWidth: '32px',
-                                    fontWeight: isSelected ? 600 : 400
+                                    transition: 'all 0.15s',
+                                    boxShadow: isSelected ? '0 0 8px rgba(24, 144, 255, 0.45)' : 'none',
+                                    minWidth: '55px',
+                                    height: 'auto',
+                                    padding: '4px 6px',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    lineHeight: 1.2,
+                                    opacity: isSelected ? 1 : 0.95
                                 }}
                                 onClick={() => {
+                                    const relatedGeosetIndices = geosetOptions
+                                        .filter(o => o.materialId === option.materialId)
+                                        .map(o => o.value);
+                                    
                                     if (isSelected) {
-                                        setSelectedGeosets(prev => prev.filter(v => v !== option.value));
+                                        setSelectedGeosets(prev => prev.filter(v => !relatedGeosetIndices.includes(v)));
                                     } else {
-                                        setSelectedGeosets(prev => [...prev, option.value]);
+                                        setSelectedGeosets(prev => Array.from(new Set([...prev, ...relatedGeosetIndices])));
                                     }
                                 }}
+                                title={`点击可选中/取消所有 Material ID 为 ${option.materialId} 的组`}
                             >
-                                {option.label}
+                                <div style={{ fontSize: '10px', opacity: isSelected ? 0.9 : 0.6, marginBottom: '2px' }}>材质 {option.materialId}</div>
+                                <div style={{ fontSize: '14px', fontWeight: 'bold' }}>组 {option.label}</div>
                             </Button>
                         );
                     })}
@@ -308,16 +368,26 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
                 </div>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <Text style={{ color: '#eee', fontSize: 13, fontWeight: 600 }}>消散贴图</Text>
-                <div style={{ display: 'flex', gap: '8px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <Text style={{ color: '#eee', fontSize: 13, fontWeight: 600 }}>消散贴图与模式</Text>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                     <Input
                         value={texturePath}
                         readOnly
-                        placeholder="选择贴图"
+                        placeholder="选择消散贴图"
                         style={{ flex: 1, backgroundColor: '#1e1e1e', borderColor: '#3e3e3e', color: '#fff' }}
+                        onClick={handleSelectTexture}
                     />
                     <Button type="primary" onClick={handleSelectTexture} style={{ borderRadius: '4px' }}>浏览...</Button>
+                    <Radio.Group 
+                        size="small" 
+                        onChange={e => setSaveMode(e.target.value)} 
+                        value={saveMode} 
+                        style={{ display: 'flex', backgroundColor: '#1e1e1e', padding: '3px 8px', borderRadius: '4px', border: '1px solid #3e3e3e', height: '32px', alignItems: 'center' }}
+                    >
+                        <Radio value="saveAs" style={{ color: '#ccc', fontSize: 12, marginRight: 8 }}>另存新贴图</Radio>
+                        <Radio value="overwrite" style={{ color: '#ccc', fontSize: 12, marginRight: 0 }}>破坏性覆盖</Radio>
+                    </Radio.Group>
                 </div>
             </div>
 

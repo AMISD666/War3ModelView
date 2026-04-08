@@ -2269,7 +2269,23 @@ const MainLayout: React.FC = () => {
         };
     }, []);
 
-    const { broadcastSync: broadcastDissolveEffect } = useRpcServer('dissolveEffect', getDissolveEffectState);
+    const handleDissolveCommand = useCallback((command: string, payload: any) => {
+        if (command === 'EXECUTE_DISSOLVE') {
+            (async () => {
+                const store = useModelStore.getState();
+                if (!store.modelData || !store.modelPath) return;
+                try {
+                    const { executeDissolveEffect } = await import('../utils/dissolveEffect');
+                    const result = await executeDissolveEffect(store.modelData, store.modelPath, payload);
+                    store.setVisualDataPatch({ Materials: result.materials, Textures: result.textures });
+                } catch (e: any) {
+                    console.error('[Dissolve] Failed:', e);
+                }
+            })();
+        }
+    }, []);
+
+    const { broadcastSync: broadcastDissolveEffect } = useRpcServer('dissolveEffect', getDissolveEffectState, handleDissolveCommand);
 
     useEffect(() => {
         const unsubscribe = useModelStore.subscribe((state, prevState) => {

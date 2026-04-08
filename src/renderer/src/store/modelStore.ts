@@ -186,6 +186,7 @@ interface ModelState {
 
     // Renderer reload trigger - increment to force Viewer to reload
     rendererReloadTrigger: number;
+    materialReloadTrigger: number;
 
     // Geoset Visibility State
     hiddenGeosetIds: number[];
@@ -1963,6 +1964,12 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
     setTextures: (textures) => set((state) => {
         const updatedModelData = state.modelData ? { ...state.modelData, Textures: textures } : state.modelData;
+        const updatedMaterialManagerPreview = state.materialManagerPreview
+            ? {
+                ...state.materialManagerPreview,
+                textures,
+            }
+            : state.materialManagerPreview;
         const updatedTabs = state.activeTabId
             ? state.tabs.map((tab) => {
                 if (tab.id !== state.activeTabId) {
@@ -1984,10 +1991,22 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 };
             })
             : state.tabs;
-        return { modelData: updatedModelData, tabs: updatedTabs, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
+        return {
+            modelData: updatedModelData,
+            materialManagerPreview: updatedMaterialManagerPreview,
+            tabs: updatedTabs,
+            rendererReloadTrigger: state.rendererReloadTrigger + 1,
+            ...markActiveTabDirtyState(state)
+        };
     }),
     setGeosets: (geosets) => set((state) => {
         const updatedModelData = state.modelData ? { ...state.modelData, Geosets: geosets } : state.modelData;
+        const updatedMaterialManagerPreview = state.materialManagerPreview
+            ? {
+                ...state.materialManagerPreview,
+                geosets,
+            }
+            : state.materialManagerPreview;
         const updatedTabs = state.activeTabId
             ? state.tabs.map((tab) => {
                 if (tab.id !== state.activeTabId) {
@@ -2009,7 +2028,13 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 };
             })
             : state.tabs;
-        return { modelData: updatedModelData, tabs: updatedTabs, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
+        return {
+            modelData: updatedModelData,
+            materialManagerPreview: updatedMaterialManagerPreview,
+            tabs: updatedTabs,
+            rendererReloadTrigger: state.rendererReloadTrigger + 1,
+            ...markActiveTabDirtyState(state)
+        };
     }),
     setMaterials: (materials) => set((state) => {        const updatedModelData = state.modelData ? { ...state.modelData, Materials: materials } : state.modelData;
         const updatedMaterialManagerPreview = state.materialManagerPreview
@@ -2085,7 +2110,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             modelData: updatedModelData,
             materialManagerPreview: updatedMaterialManagerPreview,
             tabs: updatedTabs,
-            rendererReloadTrigger: state.rendererReloadTrigger + 1,
+            materialReloadTrigger: state.materialReloadTrigger + 1,
             ...markActiveTabDirtyState(state)
         };
     }),
@@ -2096,7 +2121,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             textures: payload.textures,
             geosets: payload.geosets,
         },
-        rendererReloadTrigger: state.rendererReloadTrigger + 1,
+        materialReloadTrigger: state.materialReloadTrigger + 1,
         ...markActiveTabDirtyState(state),
     })),
 
@@ -2104,7 +2129,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
         if (!state.materialManagerPreview) return {};
         return {
             materialManagerPreview: null,
-            rendererReloadTrigger: state.rendererReloadTrigger + 1,
+            materialReloadTrigger: state.materialReloadTrigger + 1,
         };
     }),
 
@@ -2927,7 +2952,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
             hiddenGeosetIds: [...snapshot.hiddenGeosetIds],
             forceShowAllGeosets: false, // Respect hiddenGeosetIds during restoration
             cachedRenderer: snapshot.renderer || null,
-            rendererReloadTrigger: hasCachedRenderer ? state.rendererReloadTrigger : state.rendererReloadTrigger + 1
+            rendererReloadTrigger: hasCachedRenderer ? state.rendererReloadTrigger : state.rendererReloadTrigger + 1,
+            materialReloadTrigger: hasCachedRenderer ? state.materialReloadTrigger : state.materialReloadTrigger + 1
         });
 
         // Restore camera
@@ -2965,6 +2991,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             selectedGeosetIndices: [],
             cachedRenderer: null,
             rendererReloadTrigger: 0,
+            materialReloadTrigger: 0,
             dirtyTabs: {},
             previewTransform: {
                 translation: [0, 0, 0],

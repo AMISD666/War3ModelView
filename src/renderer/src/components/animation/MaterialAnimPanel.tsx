@@ -396,7 +396,7 @@ const MaterialAnimPanel: React.FC = () => {
     const rowStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8 }
     const nestedRowStyle: React.CSSProperties = {
         display: 'grid',
-        gridTemplateColumns: '52px minmax(0, 1fr) 52px minmax(84px, 96px)',
+        gridTemplateColumns: '58px minmax(0, 1fr) 42px 88px',
         gap: 6,
         alignItems: 'center',
         marginTop: 6,
@@ -494,7 +494,7 @@ const MaterialAnimPanel: React.FC = () => {
                             onChange={(value) => updateTrackMeta('TextureID', { GlobalSeqId: value })}
                             style={{ minWidth: 0 }}
                         />
-                        <Text style={metaLabelStyle}>插值类型</Text>
+                        <Text style={metaLabelStyle}>插值</Text>
                         <Select
                             size="small"
                             value={textureTrackMeta.interpolationType}
@@ -538,7 +538,7 @@ const MaterialAnimPanel: React.FC = () => {
                             onChange={(value) => updateTrackMeta('Alpha', { GlobalSeqId: value })}
                             style={{ minWidth: 0 }}
                         />
-                        <Text style={metaLabelStyle}>插值类型</Text>
+                        <Text style={metaLabelStyle}>插值</Text>
                         <Select
                             size="small"
                             value={alphaTrackMeta.interpolationType}
