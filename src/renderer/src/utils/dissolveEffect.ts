@@ -9,6 +9,11 @@ export interface DissolveEffectParams {
     dissolveTexturePath: string;
     dissolveStartFrame: number;
     dissolveEndFrame: number;
+    dissolvePoints?: Array<{
+        frame: number;
+        value: number;
+        type?: 'visible' | 'start' | 'end';
+    }>;
     seqStart: number;
     seqEnd: number;
     saveMode: 'overwrite' | 'saveAs';
@@ -179,13 +184,25 @@ export async function executeDissolveEffect(
                 return val;
             };
 
-            // Build sequence-specific keys adapted to this layer's base Alpha
+            // Build sequence-specific keys from explicit dissolve timeline points.
             const layerStartVal = sampleAlpha(params.seqStart);
+            const explicitPoints = (params.dissolvePoints || [])
+                .filter(point => Number.isFinite(point.frame) && Number.isFinite(point.value))
+                .sort((a, b) => a.frame - b.frame);
+            const pointAtOrBeforeSeqEnd = [...explicitPoints].reverse().find(point => point.frame <= params.seqEnd);
             const frameSet = new Map<number, number>();
-            frameSet.set(params.seqStart, layerStartVal);
-            frameSet.set(params.dissolveStartFrame, layerStartVal * 0.75);
-            frameSet.set(params.dissolveEndFrame, 0);
-            if (params.seqEnd > params.dissolveEndFrame) frameSet.set(params.seqEnd, 0);
+            frameSet.set(params.seqStart, explicitPoints.find(point => point.frame === params.seqStart)?.value ?? layerStartVal);
+            explicitPoints.forEach(point => {
+                if (point.frame >= params.seqStart && point.frame <= params.seqEnd) {
+                    frameSet.set(point.frame, point.value);
+                }
+            });
+            frameSet.set(
+                params.seqEnd,
+                explicitPoints.find(point => point.frame === params.seqEnd)?.value ??
+                pointAtOrBeforeSeqEnd?.value ??
+                layerStartVal
+            );
 
             // Left and Right Boundary isolation to prevent bleeding into other sequences
             const leftBoundary = Math.max(0, params.seqStart - 1);

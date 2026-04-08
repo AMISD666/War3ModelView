@@ -56,6 +56,7 @@ import { markStandalonePerf } from '../utils/standalonePerf'
 import { parseModelBuffer, mergeGeosets, mergeAnimations } from '../utils/modelMerge'
 import { readFile, copyFile } from '@tauri-apps/plugin-fs'
 import { uiText } from '../constants/uiText'
+import { getToolWindowSize } from '../constants/windowLayouts'
 
 /**
  * Normalize model data before saving to ensure typed arrays are correct.
@@ -1772,9 +1773,15 @@ const MainLayout: React.FC = () => {
     const showTransformModelDialog = useUIStore(state => state.showTransformModelDialog);
     const setTransformModelDialogVisible = useUIStore(state => state.setTransformModelDialogVisible);
     const currentSequence = useModelStore(state => state.currentSequence)
+    const sequences = useModelStore(state => state.sequences)
+    const currentFrame = useModelStore(state => state.currentFrame)
     const isPlaying = useModelStore(state => state.isPlaying)
     const playbackSpeed = useModelStore(state => state.playbackSpeed)
+    const isLooping = useModelStore(state => state.isLooping)
     const setPlaying = useModelStore(state => state.setPlaying)
+    const setFrame = useModelStore(state => state.setFrame)
+    const setLooping = useModelStore(state => state.setLooping)
+    const renderer = useRendererStore(state => state.renderer)
     const { toggleNodeManager, toggleModelInfo } = useUIStore()
     const { mainMode, setMainMode } = useSelectionStore()
 
@@ -1787,6 +1794,66 @@ const MainLayout: React.FC = () => {
     const [showTextureAnimModal, setShowTextureAnimModal] = useState<boolean>(false)
     const [showSequenceModal, setShowSequenceModal] = useState<boolean>(false)
     const [showGlobalSeqModal, setShowGlobalSeqModal] = useState<boolean>(false)
+
+    const getPlaybackInterval = useCallback((): [number, number] => {
+        const rawInterval = renderer?.rendererData?.animationInfo?.Interval
+        if (rawInterval && typeof (rawInterval as any).length === 'number' && (rawInterval as any).length >= 2) {
+            const start = Number((rawInterval as any)[0] ?? 0)
+            const end = Number((rawInterval as any)[1] ?? start)
+            return [Number.isFinite(start) ? start : 0, Number.isFinite(end) ? end : 0]
+        }
+
+        const seq = currentSequence >= 0 ? sequences?.[currentSequence] as any : null
+        const seqInterval = seq?.Interval
+        if (seqInterval && typeof seqInterval.length === 'number' && seqInterval.length >= 2) {
+            const start = Number(seqInterval[0] ?? 0)
+            const end = Number(seqInterval[1] ?? start)
+            return [Number.isFinite(start) ? start : 0, Number.isFinite(end) ? end : 0]
+        }
+
+        return [0, 0]
+    }, [renderer, currentSequence, sequences])
+
+    const handleTogglePlay = useCallback(() => {
+        if (isPlaying) {
+            setPlaying(false)
+            return
+        }
+
+        const [start, end] = getPlaybackInterval()
+        const ended = Number.isFinite(currentFrame) && currentFrame >= end - 0.1
+        const nextFrame = ended ? start : Math.max(start, Math.min(currentFrame, end))
+
+        if (ended) {
+            setFrame(nextFrame)
+            if (renderer?.rendererData) {
+                renderer.rendererData.frame = nextFrame
+            }
+        }
+
+        setPlaying(true)
+    }, [isPlaying, getPlaybackInterval, currentFrame, setFrame, renderer, setPlaying])
+
+    const handleToggleLooping = useCallback(() => {
+        const nextLooping = !isLooping
+        setLooping(nextLooping)
+
+        if (!nextLooping || isPlaying) {
+            return
+        }
+
+        const [start, end] = getPlaybackInterval()
+        const ended = Number.isFinite(currentFrame) && currentFrame >= end - 0.1
+        if (!ended) {
+            return
+        }
+
+        setFrame(start)
+        if (renderer?.rendererData) {
+            renderer.rendererData.frame = start
+        }
+        setPlaying(true)
+    }, [isLooping, setLooping, isPlaying, getPlaybackInterval, currentFrame, setFrame, renderer, setPlaying])
     // Utility to strip heavy typed arrays from geosets before RPC broadcast
     const stripGeosetData = (geosets: any[] | undefined) => {
         if (!geosets || !Array.isArray(geosets)) return [];
@@ -4718,7 +4785,8 @@ const MainLayout: React.FC = () => {
                     } else if (editor === 'modelMerge') {
                         windowManager.openToolWindow('modelMerge', '模型合并', 560, 500);
                     } else if (editor === 'dissolveEffect') {
-                        windowManager.openToolWindow('dissolveEffect', '消散动画工具', 600, 580);
+                        const { width, height } = getToolWindowSize('dissolveEffect')
+                        windowManager.openToolWindow('dissolveEffect', '消散动画工具', width, height);
                     } else if (editor === 'geosetVisibility') {
                         setShowGeosetVisibility(!showGeosetVisibility)
                     } else {                        toggleEditor(editor)
@@ -5050,7 +5118,8 @@ const MainLayout: React.FC = () => {
                                         backgroundColor={backgroundColor}
                                         animationIndex={currentSequence}
                                         isPlaying={mainMode !== 'uv' && isPlaying}
-                                        onTogglePlay={() => setPlaying(!isPlaying)}
+                                        onTogglePlay={handleTogglePlay}
+                                        onToggleLooping={handleToggleLooping}
                                         onModelLoaded={handleModelLoaded}
                                         showFPS={mainMode !== 'uv' && showFPS}
                                         playbackSpeed={playbackSpeed}

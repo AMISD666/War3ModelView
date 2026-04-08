@@ -1,46 +1,45 @@
 import { windowManager } from './WindowManager'
+import { getToolWindowSize, type ToolWindowId } from '../constants/windowLayouts'
 
 type WarmWindowSpec = {
-    id: string
+    id: ToolWindowId | 'keyframeEditor_0' | 'keyframeEditor_1' | 'nodeEditor'
     title: string
-    w: number
-    h: number
 }
 
-/**
- * 预热顺序：常用编辑窗靠前，便于在「只跑完前几批」时也已覆盖高频场景。
- * 独立窗体使用 standalone.html + standalone-main.tsx（与主入口分离，见 vite build.rollupOptions.input）。
- */
+// Preload common detached windows in batches after the main model is ready.
 const WARMUP_WINDOWS: WarmWindowSpec[] = [
-    { id: 'materialManager', title: '材质管理器', w: 740, h: 450 },
-    { id: 'textureManager', title: '贴图管理器', w: 920, h: 480 },
-    { id: 'geosetEditor', title: '多边形管理器', w: 420, h: 520 },
-    { id: 'sequenceManager', title: '动画管理器', w: 600, h: 500 },
-    { id: 'cameraManager', title: '相机管理器', w: 700, h: 520 },
-    { id: 'textureAnimManager', title: '贴图动画管理器', w: 800, h: 480 },
-    { id: 'geosetAnimManager', title: '多边形动画管理器', w: 800, h: 600 },
-    { id: 'geosetVisibilityTool', title: '多边形动作显隐工具', w: 980, h: 560 },
-    { id: 'globalSequenceManager', title: '全局动作管理器', w: 300, h: 360 },
-    { id: 'keyframeEditor_0', title: '关键帧编辑器', w: 600, h: 480 },
-    { id: 'keyframeEditor_1', title: '关键帧编辑器', w: 600, h: 480 },
-    { id: 'modelMerge', title: '模型合并', w: 560, h: 500 },
-    { id: 'nodeEditor', title: '节点编辑器', w: 640, h: 520 },
-    { id: 'dissolveEffect', title: '消散动画工具', w: 600, h: 580 },
+    { id: 'materialManager', title: '材质管理器' },
+    { id: 'textureManager', title: '贴图管理器' },
+    { id: 'geosetEditor', title: '多边形管理器' },
+    { id: 'sequenceManager', title: '动画管理器' },
+    { id: 'cameraManager', title: '相机管理器' },
+    { id: 'textureAnimManager', title: '贴图动画管理器' },
+    { id: 'geosetAnimManager', title: '多边形动画管理器' },
+    { id: 'geosetVisibilityTool', title: '多边形动作显隐工具' },
+    { id: 'globalSequenceManager', title: '全局动作管理器' },
+    { id: 'keyframeEditor_0', title: '关键帧编辑器' },
+    { id: 'keyframeEditor_1', title: '关键帧编辑器' },
+    { id: 'modelMerge', title: '模型合并' },
+    { id: 'nodeEditor', title: '节点编辑器' },
+    { id: 'dissolveEffect', title: '消散动画工具' },
 ]
 
-/** 首批预热前等待：给主界面与首屏渲染留时间，避免与模型加载抢线程 */
+const getWarmWindowSize = (id: WarmWindowSpec['id']) => {
+    if (id === 'keyframeEditor_0' || id === 'keyframeEditor_1') {
+        return { width: 600, height: 480 }
+    }
+
+    if (id === 'nodeEditor') {
+        return { width: 640, height: 520 }
+    }
+
+    return getToolWindowSize(id)
+}
+
 const INITIAL_DELAY_MS = 900
-
-/** 每批并行创建的独立窗口数量（过大可能瞬时占用内存/进程，可按机器调整） */
 const BATCH_SIZE = 3
-
-/** 批次之间的间隔，给事件循环与 WebView 初始化喘息时间 */
 const BETWEEN_BATCHES_MS = 450
 
-/**
- * 与 standalone-main.tsx 中 lazy 模块一致，在主窗口先 dynamic import 一遍。
- * 子 WebView 加载同源 URL 时，更易命中 HTTP/磁盘缓存，缩短首包等待（每个 WebView 仍要独立解析 JS）。
- */
 export const prefetchStandaloneLazyChunks = (): void => {
     void Promise.allSettled([
         import('../components/modals/ModelOptimizeModal'),
@@ -59,9 +58,6 @@ export const prefetchStandaloneLazyChunks = (): void => {
     ])
 }
 
-/**
- * 在模型已加载后调度后台预热：分批并行创建隐藏 WebView + 预先拉取 lazy chunk。
- */
 export const scheduleStandaloneWarmup = (): (() => void) => {
     prefetchStandaloneLazyChunks()
 
@@ -82,7 +78,10 @@ export const scheduleStandaloneWarmup = (): (() => void) => {
         const batch = WARMUP_WINDOWS.slice(startIndex, end)
 
         await Promise.allSettled(
-            batch.map((spec) => windowManager.preloadToolWindow(spec.id, spec.title, spec.w, spec.h))
+            batch.map((spec) => {
+                const size = getWarmWindowSize(spec.id)
+                return windowManager.preloadToolWindow(spec.id, spec.title, size.width, size.height)
+            })
         )
 
         if (cancelled || end >= WARMUP_WINDOWS.length) return

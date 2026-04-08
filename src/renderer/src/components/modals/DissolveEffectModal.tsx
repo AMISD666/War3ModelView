@@ -9,8 +9,13 @@ const { Text, Title } = Typography;
 export interface DissolvePoint {
     id: string;
     frame: number;
-    type: 'start' | 'end';
+    type: 'visible' | 'start' | 'end';
 }
+const DISSOLVE_POINT_META: Record<DissolvePoint['type'], { color: string; label: string; value: number }> = {
+    visible: { color: '#40a9ff', label: '\u4e0d\u6d88\u6563', value: 1 },
+    start: { color: '#52c41a', label: '\u6d88\u6563\u5f00\u59cb', value: 0.75 },
+    end: { color: '#ff4d4f', label: '\u6d88\u6563\u7ed3\u675f', value: 0 },
+};
 
 interface DissolveTimelineSliderProps {
     min: number;
@@ -76,7 +81,7 @@ const DissolveTimelineSlider: React.FC<DissolveTimelineSliderProps> = ({ min, ma
         const newPoint: DissolvePoint = {
             id: Math.random().toString(36).substring(2, 9),
             frame: newFrame,
-            type: 'start'
+            type: 'visible'
         };
         onPointsChange([...points, newPoint]);
         onSelectPoint(newPoint.id);
@@ -101,7 +106,7 @@ const DissolveTimelineSlider: React.FC<DissolveTimelineSliderProps> = ({ min, ma
             {points.map(p => {
                 const ratio = (p.frame - min) / safeRange;
                 const isSelected = p.id === selectedPointId;
-                const color = p.type === 'start' ? '#52c41a' : '#ff4d4f';
+                const meta = DISSOLVE_POINT_META[p.type];
                 return (
                     <div
                         key={p.id}
@@ -113,7 +118,14 @@ const DissolveTimelineSlider: React.FC<DissolveTimelineSliderProps> = ({ min, ma
                         }}
                         onContextMenu={(e) => {
                             e.preventDefault();
-                            onPointsChange(points.map(pt => pt.id === p.id ? { ...pt, type: pt.type === 'start' ? 'end' : 'start' } : pt));
+                            onPointsChange(points.map(pt => {
+                                if (pt.id !== p.id) return pt;
+                                const nextType: DissolvePoint['type'] =
+                                    pt.type === 'visible' ? 'start' :
+                                    pt.type === 'start' ? 'end' :
+                                    'visible';
+                                return { ...pt, type: nextType };
+                            }));
                             onSelectPoint(p.id);
                         }}
                         style={{
@@ -129,15 +141,15 @@ const DissolveTimelineSlider: React.FC<DissolveTimelineSliderProps> = ({ min, ma
                             alignItems: 'center',
                             zIndex: isSelected ? 10 : 1
                         }}
-                        title={`帧: ${p.frame} (${p.type === 'start' ? '开始' : '结束'})`}
+                        title={`帧 ${p.frame} (${meta.label}, 关键帧值 ${meta.value})`}
                     >
                         <div style={{
                             width: 4,
                             height: '100%',
-                            backgroundColor: color,
+                            backgroundColor: meta.color,
                             borderRadius: '2px',
                             border: isSelected ? '1px solid #fff' : 'none',
-                            boxShadow: isSelected ? '0 0 0 2px rgba(24, 144, 255, 0.5)' : '1px 1px 2px rgba(0,0,0,0.5)',
+                            boxShadow: isSelected ? '0 0 0 1px #fff' : '1px 1px 2px rgba(0,0,0,0.5)',
                             pointerEvents: 'none'
                         }} />
 
@@ -168,7 +180,7 @@ const DissolveTimelineSlider: React.FC<DissolveTimelineSliderProps> = ({ min, ma
             <div style={{ position: 'absolute', bottom: -20, left: 0, color: '#aaa', fontSize: 11, fontWeight: 500 }}>{min}</div>
             <div style={{ position: 'absolute', bottom: -20, right: 0, color: '#aaa', fontSize: 11, fontWeight: 500 }}>{max}</div>
             <div style={{ position: 'absolute', top: -20, left: 0, width: '100%', textAlign: 'center', color: '#999', fontSize: 11, pointerEvents: 'none', letterSpacing: '0.02em' }}>
-                空白处点击新建点 | 选中点按Del删除 | 右键切换类型
+                点击空白处新建点 | 选中点按 Del 删除 | 右键循环切换状态
             </div>
         </div>
     );
@@ -214,6 +226,7 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
         if (!hasInitializedPoints.current && currentMax > currentMin && sequences.length > 0) {
             const range = currentMax - currentMin;
             setPoints([
+                { id: Math.random().toString(36).substring(2, 9), frame: currentMin, type: 'visible' },
                 { id: Math.random().toString(36).substring(2, 9), frame: Math.round(currentMin + range * 0.3), type: 'start' },
                 { id: Math.random().toString(36).substring(2, 9), frame: Math.round(currentMin + range * 0.8), type: 'end' }
             ]);
@@ -278,6 +291,11 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
             dissolveTexturePath: texturePath,
             dissolveStartFrame: startPoints[0].frame,
             dissolveEndFrame: endPoints[endPoints.length - 1].frame,
+            dissolvePoints: sortedPoints.map(point => ({
+                frame: point.frame,
+                value: DISSOLVE_POINT_META[point.type].value,
+                type: point.type,
+            })),
             seqStart: currentMin,
             seqEnd: currentMax,
             saveMode,
@@ -442,6 +460,18 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
                         selectedPointId={selectedPointId}
                         onSelectPoint={setSelectedPointId}
                     />
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px 18px', alignItems: 'center', padding: '0 8px' }}>
+                    {(Object.entries(DISSOLVE_POINT_META) as Array<[DissolvePoint['type'], typeof DISSOLVE_POINT_META[DissolvePoint['type']]]>).map(([type, meta]) => (
+                        <div
+                            key={type}
+                            title={meta.label}
+                            style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#cfcfcf', fontSize: 12 }}
+                        >
+                            <span style={{ width: 10, height: 10, borderRadius: 999, backgroundColor: meta.color, boxShadow: `0 0 0 1px ${meta.color}55` }} />
+                            <span>{meta.label}</span>
+                        </div>
+                    ))}
                 </div>
             </div>
 

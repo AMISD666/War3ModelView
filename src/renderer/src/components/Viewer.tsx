@@ -104,6 +104,7 @@ interface ViewerProps {
   showWireframe: boolean
   isPlaying: boolean
   onTogglePlay: () => void
+  onToggleLooping?: () => void
   onToggleWireframe: () => void
   onModelLoaded: (model: any) => void
   backgroundColor: string
@@ -323,6 +324,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   showWireframe,
   isPlaying,
   onTogglePlay,
+  onToggleLooping,
   onToggleWireframe,
   onModelLoaded,
   backgroundColor,
@@ -831,6 +833,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   const showHealthBarRef = useRef(showHealthBar)
   const showWireframeRef = useRef(showWireframe)
   const isPlayingRef = useRef(isPlaying)
+  const isLoopingRef = useRef(isLooping)
   const playbackSpeedRef = useRef(playbackSpeed)
   const backgroundColorRef = useRef(backgroundColor)
   const [isHealthBarSelected, setIsHealthBarSelected] = useState(false)
@@ -882,6 +885,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     showHealthBarRef.current = showHealthBar
     showWireframeRef.current = showWireframe
     isPlayingRef.current = isPlaying
+    isLoopingRef.current = isLooping
     playbackSpeedRef.current = playbackSpeed
     backgroundColorRef.current = backgroundColor
 
@@ -889,7 +893,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     const state = useRendererStore.getState()
     showVerticesRef.current = getShowVerticesForCurrentContext()
     vertexSettingsRef.current = state.vertexSettings
-  }, [showGrid, showNodes, nodeRenderMode, showSkeleton, showCollisionShapes, showCameras, showLights, showAttachments, showHealthBar, showWireframe, isPlaying, playbackSpeed, backgroundColor,
+  }, [showGrid, showNodes, nodeRenderMode, showSkeleton, showCollisionShapes, showCameras, showLights, showAttachments, showHealthBar, showWireframe, isPlaying, isLooping, playbackSpeed, backgroundColor,
     // Add implicit dependencies if they result in re-render, otherwise we rely on the loop checking refs.
     // Actually, we should subscribe or just use .getState() in the loop for low-frequency changes?
     // Refs are better for avoiding loop capturing stale closures.
@@ -4271,9 +4275,6 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           }
 
           if (isPlayingRef.current && !isBindPoseMode) {
-            mdlRenderer.update(delta * playbackSpeedRef.current)
-            needsRendererUpdateRef.current = false
-
             const activeGlobalSequenceFilter = useSelectionStore.getState().timelineGlobalSequenceFilter
             const globalSequenceDurations = mdlRenderer.model?.GlobalSequences
             const isSpecificGlobalSequenceView =
@@ -4283,9 +4284,56 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             const activeGlobalSequenceDuration = isSpecificGlobalSequenceView
               ? Number(globalSequenceDurations?.[activeGlobalSequenceFilter] ?? 0)
               : null
+            const advanceDelta = delta * playbackSpeedRef.current
+
+            if (!isLoopingRef.current && mdlRenderer.rendererData) {
+              if (
+                isSpecificGlobalSequenceView &&
+                activeGlobalSequenceDuration !== null &&
+                Array.isArray(mdlRenderer.rendererData.globalSequencesFrames)
+              ) {
+                const currentGlobalFrame = Number(mdlRenderer.rendererData.globalSequencesFrames[activeGlobalSequenceFilter] ?? 0)
+                if (currentGlobalFrame + advanceDelta >= activeGlobalSequenceDuration) {
+                  mdlRenderer.rendererData.globalSequencesFrames[activeGlobalSequenceFilter] = activeGlobalSequenceDuration
+                  mdlRenderer.update(0)
+                  needsRendererUpdateRef.current = false
+                  useModelStore.getState().setFrame(activeGlobalSequenceDuration)
+                  useModelStore.getState().setPlaying(false)
+                  lastFrameSyncTime.current = time
+                  renderRef.current = render
+                  if (scheduleNext) {
+                    animationFrameId.current = requestAnimationFrame((t) => {
+                      renderRef.current?.(t, true)
+                    })
+                  }
+                  return
+                }
+              } else if (mdlRenderer.rendererData.animationInfo) {
+                const intervalEnd = Number(mdlRenderer.rendererData.animationInfo.Interval?.[1] ?? 0)
+                const currentAnimFrame = Number(mdlRenderer.rendererData.frame ?? 0)
+                if (currentAnimFrame + advanceDelta >= intervalEnd) {
+                  mdlRenderer.rendererData.frame = intervalEnd
+                  mdlRenderer.update(0)
+                  needsRendererUpdateRef.current = false
+                  useModelStore.getState().setFrame(intervalEnd)
+                  useModelStore.getState().setPlaying(false)
+                  lastFrameSyncTime.current = time
+                  renderRef.current = render
+                  if (scheduleNext) {
+                    animationFrameId.current = requestAnimationFrame((t) => {
+                      renderRef.current?.(t, true)
+                    })
+                  }
+                  return
+                }
+              }
+            }
+
+            mdlRenderer.update(advanceDelta)
+            needsRendererUpdateRef.current = false
 
             // Auto-pause if not looping and reached end
-            if (!isLooping && mdlRenderer.rendererData && (
+            if (!isLoopingRef.current && mdlRenderer.rendererData && (
               (isSpecificGlobalSequenceView &&
                 activeGlobalSequenceDuration !== null &&
                 Array.isArray(mdlRenderer.rendererData.globalSequencesFrames) &&
@@ -8027,7 +8075,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
               {Math.round(progress)} / {Math.round(duration)}
             </span>
             <button
-              onClick={() => setLooping(!isLooping)}
+              onClick={onToggleLooping ?? (() => setLooping(!isLooping))}
               title={isLooping ? '循环开启' : '循环关闭'}
               style={{
                 background: 'none',
