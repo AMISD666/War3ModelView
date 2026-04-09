@@ -434,8 +434,24 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
     if (isStandalone) {
         return (
             <StandaloneWindowFrame title="模型动作管理器" onClose={onClose}>
-                <div style={{ height: '100%', width: '100%', backgroundColor: '#252525' }}>
-                    {innerContent}
+                <div style={{ height: '100%', width: '100%', backgroundColor: '#252525', display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ flex: 1, minHeight: 0 }}>
+                        {innerContent}
+                    </div>
+                    <div
+                        style={{
+                            display: 'flex',
+                            justifyContent: 'flex-end',
+                            alignItems: 'center',
+                            gap: '8px',
+                            padding: '8px 12px',
+                            borderTop: '1px solid #4a4a4a',
+                            backgroundColor: '#2d2d2d'
+                        }}
+                    >
+                        <Button onClick={onClose} size="small">关闭</Button>
+                        <Button type="primary" size="small" onClick={handleOk}>保存</Button>
+                    </div>
                 </div>
             </StandaloneWindowFrame>
         )

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Typography, Select, Button, Input, Tooltip } from 'antd'
+import type { Color } from 'antd/es/color-picker'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker'
 import { GlobalSequenceSelect } from '../common/GlobalSequenceSelect'
@@ -148,7 +149,7 @@ const clamp01 = (value: number, fallback = 1) => {
 }
 
 const parseColorToNormalized = (
-    color: any,
+    color: Color | string | [number, number, number],
     fallback: [number, number, number]
 ): [number, number, number] => {
     if (color?.toRgb && typeof color.toRgb === 'function') {
@@ -181,7 +182,7 @@ const parseColorToNormalized = (
             }
         }
     }
-    return [...fallback]
+    return [fallback[0], fallback[1], fallback[2]]
 }
 
 const normalizedColorToRgbText = (color: [number, number, number]) => {
@@ -503,7 +504,7 @@ const GeosetAnimPanel: React.FC = () => {
             else data = { LineType: 1, GlobalSeqId: null, Keys: [{ Frame: 0, Vector: [...currentGeosetColor] }] };
         }
 
-        const payload = {
+        const payload: any = {
             callerId: 'GeosetAnimPanel',
             initialData: data,
             title: field === 'Color' ? '编辑颜色关键帧' : '编辑透明度关键帧',
@@ -632,7 +633,7 @@ const GeosetAnimPanel: React.FC = () => {
                         <Text style={{ color: '#888', fontSize: 11 }}>颜色 {hasExactGeosetColorKey && <span style={{ color: '#52c41a' }}>●</span>}</Text>
                     </div>
                     <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-                        <ColorPicker size="small" format="rgb" value={geosetColorText} onChange={(c) => setGeosetColorInput(parseColorToNormalized(c, [1, 1, 1]))} onChangeComplete={(c) => applyStaticColor(parseColorToNormalized(c, [1, 1, 1]))} />
+                        <ColorPicker size="small" format="rgb" value={geosetColorText} onChange={(c: Color) => setGeosetColorInput(parseColorToNormalized(c, [1, 1, 1]))} onChangeComplete={(c: Color) => applyStaticColor(parseColorToNormalized(c, [1, 1, 1]))} />
                         <Input size="small" value={geosetColorText} onChange={(e) => setGeosetColorText(e.target.value)} onBlur={() => applyStaticColor(parseColorToNormalized(geosetColorText, [1, 1, 1]))} style={{ width: 140, fontSize: 11 }} />
                         <div style={{ flex: 1 }} />
                         <Button size="small" onClick={handleInsertGeosetColorKey} disabled={selectedGeosetIds.length === 0} style={{ background: '#333', borderColor: '#444', color: '#ddd' }}>K帧</Button>

@@ -4022,6 +4022,16 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             const geoset = modelData.Geosets[i]
             const rendererGeoset = renderer.model.Geosets[i]
 
+            if (geoset?.Vertices) {
+              const vertexData = geoset.Vertices instanceof Float32Array
+                ? geoset.Vertices
+                : new Float32Array(geoset.Vertices)
+              if (rendererGeoset.Vertices !== vertexData) {
+                rendererGeoset.Vertices = vertexData
+                ; (renderer as any).updateGeosetVertices?.(i, vertexData)
+              }
+            }
+
             // Sync MaterialID changes
             if (geoset?.MaterialID !== undefined) {
               const materialCount = modelData.Materials?.length || 0
@@ -4037,6 +4047,13 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             // Sync SelectionGroup changes
             if (geoset?.SelectionGroup !== undefined && rendererGeoset.SelectionGroup !== geoset.SelectionGroup) {
               rendererGeoset.SelectionGroup = geoset.SelectionGroup
+            }
+
+            if (geoset?.MinimumExtent) {
+              rendererGeoset.MinimumExtent = geoset.MinimumExtent
+            }
+            if (geoset?.MaximumExtent) {
+              rendererGeoset.MaximumExtent = geoset.MaximumExtent
             }
 
             // Sync normal buffers so menu-driven recalculate normals updates immediately
@@ -4095,6 +4112,15 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         // === PIVOT POINTS ===
         if (modelData.PivotPoints) {
           renderer.model.PivotPoints = modelData.PivotPoints
+        }
+        if (modelData.MinimumExtent) {
+          renderer.model.MinimumExtent = modelData.MinimumExtent
+        }
+        if (modelData.MaximumExtent) {
+          renderer.model.MaximumExtent = modelData.MaximumExtent
+        }
+        if ((modelData as any).Extents) {
+          ; (renderer.model as any).Extents = (modelData as any).Extents
         }
 
         if (import.meta.env.DEV) {        }

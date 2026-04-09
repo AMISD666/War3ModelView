@@ -27,6 +27,7 @@ import {
     CompressOutlined
 } from '@ant-design/icons'
 import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker'
+import type { Color } from 'antd/es/color-picker'
 import { invokeReadMpqFile } from '../../utils/mpqPerf'
 
 interface UVEditorProps {
@@ -1440,7 +1441,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
                     <div>
                         <ColorPicker
                             value={canvasBackgroundColor}
-                            onChange={(color) => setCanvasBackgroundColor(color.toHexString())}
+                            onChange={(color: Color) => setCanvasBackgroundColor(color.toHexString())}
                             size="small"
                             showText={false}
                         />
@@ -1481,7 +1482,6 @@ const UVEditor: React.FC<UVEditorProps> = ({
 }
 
 export default UVEditor
-
 
 
 

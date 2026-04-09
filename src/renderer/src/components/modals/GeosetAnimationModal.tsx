@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { List, Checkbox, Button, Select, Card, Typography, message } from 'antd'
+import type { Color } from 'antd/es/color-picker'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker'
 import { DraggableModal } from '../DraggableModal';
@@ -196,10 +197,10 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
 
     const selectedAnim = selectedIndex >= 0 ? localAnims[selectedIndex] : null
 
-    const handleColorChange = (color: any, persist: boolean = true) => {
+    const handleColorChange = (color: Color, persist: boolean = true) => {
         if (selectedIndex < 0) return
         const rgb = color.toRgb()
-        const newColor = [rgb.r / 255, rgb.g / 255, rgb.b / 255]
+        const newColor: [number, number, number] = [rgb.r / 255, rgb.g / 255, rgb.b / 255]
         updateLocalAnim(selectedIndex, { Color: newColor }, persist)
     }
 
@@ -399,8 +400,10 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
                             block
                             onClick={() => {
                                 const newAnim = { GeosetId: 0, Alpha: 1, Color: [1, 1, 1], Flags: 0 }
-                                setLocalAnims([...localAnims, newAnim])
-                                setSelectedIndex(localAnims.length)
+                                const newAnims = [...localAnims, newAnim]
+                                setLocalAnims(newAnims)
+                                saveToBackend(newAnims)
+                                setSelectedIndex(newAnims.length - 1)
                             }}
                             style={{ backgroundColor: '#5a9cff', borderColor: '#5a9cff' }}
                         >
@@ -620,4 +623,3 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
 }
 
 export default GeosetAnimationModal
-

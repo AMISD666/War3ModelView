@@ -140,14 +140,14 @@ const ParticleEmitter2ColorFieldControl: React.FC<ParticleEmitter2ColorFieldCont
                 value={draftValue}
                 open={pickerOpen}
                 onOpenChange={setPickerOpen}
-                onChange={(color) => {
+                onChange={(color: Color) => {
                     setDraftValue(
                         color && typeof color.toRgbString === 'function'
                             ? color.toRgbString()
                             : committedValue
                     );
                 }}
-                onChangeComplete={(color) => {
+                onChangeComplete={(color: Color) => {
                     const nextValue =
                         color && typeof color.toRgbString === 'function'
                             ? color.toRgbString()

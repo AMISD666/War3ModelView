@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { useModelStore } from '../../store/modelStore'
 import { Card, List, Checkbox, Button, Select, Typography } from 'antd'
+import type { Color } from 'antd/es/color-picker'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker'
 import { PlusOutlined } from '@ant-design/icons'
@@ -18,11 +19,11 @@ const GeosetAnimationEditor: React.FC = () => {
 
     const selectedAnim = selectedIndex >= 0 ? geosetAnims[selectedIndex] : null
 
-    const handleColorChange = (color: any) => {
+    const handleColorChange = (color: Color) => {
         if (selectedIndex < 0) return
         const rgb = color.toRgb()
         // War3 uses 0-1 float for color
-        const newColor = [rgb.r / 255, rgb.g / 255, rgb.b / 255]
+        const newColor: [number, number, number] = [rgb.r / 255, rgb.g / 255, rgb.b / 255]
         updateGeosetAnim(selectedIndex, { Color: newColor })
     }
 

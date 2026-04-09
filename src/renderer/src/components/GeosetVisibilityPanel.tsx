@@ -59,7 +59,6 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
         hiddenGeosetIds,
         forceShowAllGeosets,
         hoveredGeosetId,
-        setForceShowAllGeosets,
         setHoveredGeosetId,
         setGeosets,
         setMaterials,
@@ -102,6 +101,17 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
             setSelectedIndices(globalSelection);
         }
     }, [pickedGeosetIndex, selectedGeosetIndices, selectedGeosetIndex]);
+
+    useEffect(() => {
+        const validSelectedIndices = selectedIndices.filter((index) => index >= 0 && index < geosets.length);
+        if (!areSameIndices(selectedIndices, validSelectedIndices)) {
+            applySelection(validSelectedIndices);
+        }
+
+        if (hoveredGeosetId !== null && (hoveredGeosetId < 0 || hoveredGeosetId >= geosets.length)) {
+            setHoveredGeosetId(null);
+        }
+    }, [geosets.length, hoveredGeosetId, selectedIndices]);
 
     const applySelection = (indices: number[]) => {
         const cleaned = Array.from(new Set(indices.filter(i => Number.isInteger(i) && i >= 0)));
@@ -497,7 +507,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
 
     if (!visible) return null;
 
-    const isGeosetVisible = (id: number) => !hiddenGeosetIds.includes(id);
+    const isGeosetVisible = (id: number) => forceShowAllGeosets || !hiddenGeosetIds.includes(id);
 
     return (
         <>
@@ -552,7 +562,20 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                             <>
                                 <Checkbox
                                     checked={forceShowAllGeosets}
-                                    onChange={(e) => setForceShowAllGeosets(e.target.checked)}
+                                    onChange={(e) => {
+                                        const checked = e.target.checked;
+                                        if (checked) {
+                                            commandManager.execute(new SetGeosetVisibilityCommand([], true));
+                                            return;
+                                        }
+
+                                        const normalizedHiddenIds = hiddenGeosetIds
+                                            .filter((id) => id >= 0 && id < geosets.length);
+                                        const nextHiddenIds = normalizedHiddenIds.length > 0
+                                            ? normalizedHiddenIds
+                                            : geosets.map((_, i) => i);
+                                        commandManager.execute(new SetGeosetVisibilityCommand(nextHiddenIds, false));
+                                    }}
                                 />
                                 <span style={{ color: '#ddd', fontSize: 11, fontWeight: 500 }}>
                                     {forceShowAllGeosets ? <EyeOutlined /> : <EyeInvisibleOutlined />} 全部
@@ -698,7 +721,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                                                     const newHiddenIds = hiddenGeosetIds.includes(index)
                                                         ? hiddenGeosetIds.filter(id => id !== index)
                                                         : [...hiddenGeosetIds, index];
-                                                    commandManager.execute(new SetGeosetVisibilityCommand(newHiddenIds));
+                                                    commandManager.execute(new SetGeosetVisibilityCommand(newHiddenIds, false));
                                                 }
                                             }}
                                             onClick={(e) => e.stopPropagation()}
@@ -874,5 +897,3 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
 };
 
 export default GeosetVisibilityPanel;
-
-

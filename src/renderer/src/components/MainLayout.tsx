@@ -21,7 +21,7 @@ const EditorPanel = React.lazy(() => import('./EditorPanel'))
 import { GeosetVisibilityPanel } from './GeosetVisibilityPanel'
 import { open } from '@tauri-apps/plugin-dialog'
 import { generateMDL, generateMDX } from 'war3-model'
-import { getRecentFiles, addRecentFile, clearRecentFiles, RecentFile } from '../services/historyService'
+import { getRecentFiles, addRecentFile, clearRecentFiles, replaceRecentModelPath, RecentFile } from '../services/historyService'
 import { useModelStore, mergeMaterialManagerPreview, mergeNodeEditorPreview } from '../store/modelStore'
 import { NodeType } from '../types/node'
 import { useUIStore } from '../store/uiStore'
@@ -42,6 +42,7 @@ import {
     TEXTURE_ADJUSTMENTS_KEY
 } from '../utils/textureAdjustments'
 import { windowManager } from '../utils/WindowManager'
+import { repairClassicModelData } from '../utils/modelUtils'
 import {
     NODE_EDITOR_COMMANDS,
     type ApplyNodeUpdatePayload,
@@ -374,6 +375,12 @@ function prepareModelDataForSave(modelData: any): any {
                     }
                 }
             });
+            animVec.Keys = animVec.Keys
+                .filter((key: any) => ArrayBuffer.isView(key?.Vector) && key.Vector.length === vectorSize)
+                .sort((a: any, b: any) => a.Frame - b.Frame)
+                .filter((key: any, index: number, keys: any[]) =>
+                    index === keys.length - 1 || key.Frame !== keys[index + 1].Frame
+                );
         } else {
             // No Keys, this AnimVector is invalid - make it empty
             animVec.Keys = [];
@@ -1463,6 +1470,8 @@ function prepareModelDataForSave(modelData: any): any {
         });
     }
 
+    repairClassicModelData(data);
+
     return data;
 }
 
@@ -1476,6 +1485,10 @@ function validateModelData(data: any): string[] {
     if (!data) {
         errors.push('Model data is null or undefined');
         return errors;
+    }
+
+    if (typeof data.Version !== 'number' || data.Version < 800) {
+        errors.push(`Invalid model Version=${data.Version}; classic export requires version 800 or higher`);
     }
 
     // 1. Check ObjectId uniqueness
@@ -1579,6 +1592,9 @@ function validateModelData(data: any): string[] {
             if (geoset.VertexGroup && geoset.VertexGroup.length !== vertexCount) {
                 errors.push(`Geoset ${i} VertexGroup length mismatch (expected ${vertexCount}, found ${geoset.VertexGroup.length})`);
             }
+            if (geoset.Groups && geoset.Groups.length > 256) {
+                errors.push(`Geoset ${i} has ${geoset.Groups.length} matrix groups; MDX800 supports at most 256`);
+            }
             if (geoset.Groups && geoset.VertexGroup) {
                 const maxGroupIndex = geoset.Groups.length - 1;
                 if (maxGroupIndex >= 0) {
@@ -1617,7 +1633,8 @@ function validateModelData(data: any): string[] {
         for (let i = 0; i < data.Textures.length; i++) {
             const tex = data.Textures[i];
             const image = typeof tex?.Image === 'string' ? tex.Image : '';
-            if (!image || image.trim() === '') {
+            const replaceableId = Number(tex?.ReplaceableId ?? 0);
+            if ((!image || image.trim() === '') && replaceableId === 0) {
                 errors.push(`Texture ${i} has empty Image path (Image="${tex?.Image ?? ''}", Path="${tex?.Path ?? ''}")`);
             }
         }
@@ -2011,11 +2028,12 @@ const MainLayout: React.FC = () => {
     const ensureTextureManagerSnapshotState = useCallback((): TextureManagerRpcState => {
         const liveModelState = useModelStore.getState()
         const liveModelData = liveModelState.modelData
+        const preview = liveModelState.materialManagerPreview
         const cache = textureManagerSnapshotCacheRef.current
         const nextSourceRefs = {
-            textures: liveModelData?.Textures || null,
-            materials: liveModelData?.Materials || null,
-            geosets: liveModelData?.Geosets || null,
+            textures: preview?.textures ?? liveModelData?.Textures ?? null,
+            materials: preview?.materials ?? liveModelData?.Materials ?? null,
+            geosets: preview?.geosets ?? liveModelData?.Geosets ?? null,
             globalSequences: liveModelData?.GlobalSequences || null,
             modelPath: liveModelState.modelPath,
         }
@@ -2031,9 +2049,9 @@ const MainLayout: React.FC = () => {
             cache.snapshotVersion += 1
             cache.sourceRefs = nextSourceRefs
             cache.snapshot = {
-                textures: liveModelData?.Textures || [],
-                materials: liveModelData?.Materials || [],
-                geosets: stripGeosetData(liveModelData?.Geosets),
+                textures: preview?.textures ?? liveModelData?.Textures ?? [],
+                materials: preview?.materials ?? liveModelData?.Materials ?? [],
+                geosets: stripGeosetData(preview?.geosets ?? liveModelData?.Geosets),
                 globalSequences: liveModelData?.GlobalSequences || [],
                 modelPath: liveModelState.modelPath,
             }
@@ -2357,7 +2375,10 @@ const MainLayout: React.FC = () => {
     useEffect(() => {
         const unsubscribe = useModelStore.subscribe((state, prevState) => {
             if (state.modelData?.Geosets !== prevState.modelData?.Geosets || state.sequences !== prevState.sequences) {
-                broadcastDissolveEffect(getDissolveEffectState());
+                void windowManager.isToolWindowVisible('dissolveEffect').then((visible) => {
+                    if (!visible) return
+                    broadcastDissolveEffect(getDissolveEffectState());
+                }).catch(() => { })
             }
         });
         return () => unsubscribe();
@@ -4475,6 +4496,83 @@ const MainLayout: React.FC = () => {
         }
     }
 
+    const handleSwapMdlMdx = async (): Promise<boolean> => {
+        if (!modelData || !modelPath) {
+            showMessage('warning', '提示', '请先打开一个 MDL 或 MDX 模型')
+            return false
+        }
+
+        const sourcePath = normalizeWindowsPath(modelPath)
+        const lowerPath = sourcePath.toLowerCase()
+        const targetExt = lowerPath.endsWith('.mdl') ? '.mdx' : lowerPath.endsWith('.mdx') ? '.mdl' : ''
+        if (!targetExt) {
+            showMessage('warning', '提示', '当前文件不是 MDL 或 MDX，无法互转')
+            return false
+        }
+
+        const sourceDir = getDirname(sourcePath)
+        const sourceName = getBasename(sourcePath)
+        const baseName = sourceName.replace(/\.(mdl|mdx)$/i, '')
+        const targetPath = joinPath(sourceDir, `${baseName}${targetExt}`)
+
+        try {
+            const { writeFile, exists } = await import('@tauri-apps/plugin-fs')
+
+            if (normalizeWindowsPath(targetPath).toLowerCase() !== lowerPath && await exists(targetPath)) {
+                const proceed = await showConfirm(
+                    '目标文件已存在',
+                    <div>检测到目标文件已存在，是否覆盖？<div style={{ marginTop: 8, color: '#999' }}>{targetPath}</div></div>
+                )
+                if (!proceed) {
+                    return false
+                }
+            }
+
+            const normalizedData = useModelStore.getState().getModelDataForSave?.() ?? modelData
+            const preparedData = prepareModelDataForSave(normalizedData)
+
+            cleanupInvalidGeosets(preparedData)
+            await copyReferencedTexturesToTarget(preparedData, modelPath, targetPath)
+
+            const validationErrors = validateModelData(preparedData)
+            if (validationErrors.length > 0) {
+                const proceed = await showConfirm(
+                    '模型验证警告',
+                    <div>
+                        <div>发现以下问题：</div>
+                        <div style={{ color: '#ff4d4f', margin: '10px 0' }}>
+                            {validationErrors.slice(0, 3).map((error) => <div key={error}>{error}</div>)}
+                            {validationErrors.length > 3 && <div>...还有 {validationErrors.length - 3} 个问题</div>}
+                        </div>
+                        <div>是否仍然继续互转？</div>
+                    </div>
+                )
+                if (!proceed) {
+                    return false
+                }
+            }
+
+            cleanupInvalidGeosets(preparedData)
+
+            if (targetExt === '.mdl') {
+                const content = generateMDL(preparedData)
+                await writeFile(targetPath, new TextEncoder().encode(content))
+            } else {
+                const buffer = generateMDX(preparedData)
+                await writeFile(targetPath, new Uint8Array(buffer))
+            }
+
+            openModelAsTab(targetPath)
+            setRecentFiles(replaceRecentModelPath(sourcePath, targetPath))
+            showMessage('success', '互转成功', `已生成并打开: ${targetPath}`)
+            return true
+        } catch (err) {
+            console.error('Failed to swap MDL/MDX:', err)
+            showMessage('error', 'MDL/MDX 互转失败', '详细信息: ' + err)
+            return false
+        }
+    }
+
 
     // Helper to remove empty/invalid geosets before export
     const cleanupInvalidGeosets = (preparedData: any) => {
@@ -4705,6 +4803,7 @@ const MainLayout: React.FC = () => {
                 onOpen={handleOpen}
                 onSave={handleSave}
                 onSaveAs={handleSaveAs}
+                onSwapMdlMdx={handleSwapMdlMdx}
                 onExportMDL={handleExportMDL}
                 onExportMDX={handleExportMDX}
                 onOpenRecent={handleOpenRecent}

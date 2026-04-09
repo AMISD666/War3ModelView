@@ -1276,6 +1276,25 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
         const newTextures = [...localTextures]
         newTextures[index] = { ...newTextures[index], ...updates }
         setLocalTextures(newTextures)
+
+        const shouldInvalidatePreview =
+            index === selectedIndex &&
+            (Object.prototype.hasOwnProperty.call(updates, 'Image') ||
+                Object.prototype.hasOwnProperty.call(updates, 'ReplaceableId'))
+
+        if (shouldInvalidatePreview) {
+            previewCacheRef.current.clear()
+            selectedPreviewCacheKeyRef.current = null
+            previewAdjustSourceKeyRef.current = null
+            latestAdjustedPreviewImageDataRef.current = null
+            latestAdjustedPreviewKeyRef.current = null
+            pendingRendererSyncRef.current = null
+            setBasePreviewImageData(null)
+            setPreviewUrl(null)
+            setPreviewError(null)
+            setPreviewSource(null)
+        }
+
         syncStandaloneTextures(newTextures)
     }
 
@@ -1976,7 +1995,6 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({ visible, onClos
 }
 
 export default TextureEditorModal
-
 
 
 

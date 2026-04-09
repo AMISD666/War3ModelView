@@ -81,6 +81,7 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
     const [rotationAnim, setRotationAnim] = useState<any>(null)
     const [scalingAnim, setScalingAnim] = useState<any>(null)
     const [currentEditingProp, setCurrentEditingProp] = useState<string>('')
+    const currentEditingPropRef = React.useRef<string>('')
 
     const formHydratedForNodeIdRef = React.useRef<number | null>(null)
     useEffect(() => {
@@ -119,7 +120,11 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
         setScalingAnim(node.Scaling || null)
     }, [clearPreviewNode, visible, nodeId, isStandalone, standaloneNode, form])
 
-    const buildUpdatedNodeFromValues = useCallback((values: any): ModelNode | null => {
+    const buildUpdatedNodeFromValues = useCallback((values: any, overrides?: {
+        translationAnim?: any
+        rotationAnim?: any
+        scalingAnim?: any
+    }): ModelNode | null => {
         if (!currentNode) return null
 
         return {
@@ -137,9 +142,9 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
             BillboardedLockY: values.billboardedLockY,
             BillboardedLockZ: values.billboardedLockZ,
             CameraAnchored: values.cameraAnchored,
-            Translation: translationAnim || undefined,
-            Rotation: rotationAnim || undefined,
-            Scaling: scalingAnim || undefined,
+            Translation: overrides?.translationAnim !== undefined ? (overrides.translationAnim || undefined) : (translationAnim || undefined),
+            Rotation: overrides?.rotationAnim !== undefined ? (overrides.rotationAnim || undefined) : (rotationAnim || undefined),
+            Scaling: overrides?.scalingAnim !== undefined ? (overrides.scalingAnim || undefined) : (scalingAnim || undefined),
         }
     }, [currentNode, rotationAnim, scalingAnim, translationAnim])
 
@@ -188,9 +193,25 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
         const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
             const payload = event.payload as any
             if (payload && payload.callerId === 'NodeDialog') {
-                if (currentEditingProp === 'Translation') setTranslationAnim(payload.data)
-                else if (currentEditingProp === 'Rotation') setRotationAnim(payload.data)
-                else if (currentEditingProp === 'Scaling') setScalingAnim(payload.data)
+                const targetProp = payload.fieldName || currentEditingPropRef.current
+                if (targetProp === 'Translation') setTranslationAnim(payload.data)
+                else if (targetProp === 'Rotation') setRotationAnim(payload.data)
+                else if (targetProp === 'Scaling') setScalingAnim(payload.data)
+
+                if (isStandalone && nodeId !== null) {
+                    const values = form.getFieldsValue()
+                    const nextNode = buildUpdatedNodeFromValues(values, {
+                        translationAnim: targetProp === 'Translation' ? payload.data : undefined,
+                        rotationAnim: targetProp === 'Rotation' ? payload.data : undefined,
+                        scalingAnim: targetProp === 'Scaling' ? payload.data : undefined,
+                    })
+                    if (nextNode && standaloneEmit) {
+                        standaloneEmit(NODE_EDITOR_COMMANDS.applyNodeUpdate, { objectId: nodeId, node: nextNode })
+                    }
+                }
+
+                currentEditingPropRef.current = ''
+                setCurrentEditingProp('')
                 schedulePreview()
             }
         })
@@ -198,9 +219,10 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
         return () => {
             unlisten.then((f) => f())
         }
-    }, [currentEditingProp, schedulePreview])
+    }, [buildUpdatedNodeFromValues, form, isStandalone, nodeId, schedulePreview, standaloneEmit])
 
     const handleOpenKeyframeEditor = (propName: string, title: string, vectorSize: number) => {
+        currentEditingPropRef.current = propName
         setCurrentEditingProp(propName)
 
         let data = null

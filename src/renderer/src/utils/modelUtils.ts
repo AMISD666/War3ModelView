@@ -237,6 +237,153 @@ export const getModelTexturePaths = (modelPath: string, model: any): string[] =>
     return textures;
 };
 
+type ClassicModelRepairSummary = {
+    attachmentIdsFixed: number;
+    geosetsNormalized: number;
+    geosetGroupsClamped: number;
+    versionFixed: boolean;
+};
+
+function normalizeGroupIndices(group: any): number[] {
+    const source = Array.isArray(group)
+        ? group
+        : Array.isArray(group?.matrices)
+            ? group.matrices
+            : [];
+
+    const seen = new Set<number>();
+    const normalized: number[] = [];
+
+    for (const value of source) {
+        const num = Number(value);
+        if (!Number.isFinite(num) || num < 0) continue;
+        const index = Math.floor(num);
+        if (seen.has(index)) continue;
+        seen.add(index);
+        normalized.push(index);
+    }
+
+    return normalized.length > 0 ? normalized : [0];
+}
+
+/**
+ * Repairs classic MDX/MDL compatibility constraints that the renderer is lenient about
+ * but Warcraft III is not.
+ */
+export function repairClassicModelData(model: any): ClassicModelRepairSummary {
+    const summary: ClassicModelRepairSummary = {
+        attachmentIdsFixed: 0,
+        geosetsNormalized: 0,
+        geosetGroupsClamped: 0,
+        versionFixed: false
+    };
+
+    if (!model || typeof model !== 'object') {
+        return summary;
+    }
+
+    if (!Number.isFinite(Number(model.Version)) || Number(model.Version) < 800) {
+        model.Version = 800;
+        summary.versionFixed = true;
+    }
+
+    if (Array.isArray(model.Attachments)) {
+        let nextAttachmentId = 0;
+        model.Attachments.forEach((attachment: any) => {
+            if (!attachment || typeof attachment !== 'object') return;
+            if (attachment.AttachmentID !== nextAttachmentId) {
+                attachment.AttachmentID = nextAttachmentId;
+                summary.attachmentIdsFixed++;
+            }
+            nextAttachmentId++;
+        });
+    }
+
+    if (!Array.isArray(model.Geosets)) {
+        return summary;
+    }
+
+    model.Geosets.forEach((geoset: any) => {
+        if (!geoset || typeof geoset !== 'object') return;
+
+        const vertexCount = geoset.Vertices?.length
+            ? Math.max(0, Math.floor(Number(geoset.Vertices.length) / 3))
+            : ArrayBuffer.isView(geoset.VertexGroup)
+                ? Number(geoset.VertexGroup.length) || 0
+                : 0;
+
+        let groups = Array.isArray(geoset.Groups)
+            ? geoset.Groups.map((group: any) => normalizeGroupIndices(group))
+            : [];
+
+        if (groups.length === 0 && vertexCount > 0) {
+            groups = [[0]];
+        }
+
+        const remap = new Map<number, number>();
+        const compacted: number[][] = [];
+        groups.forEach((group: number[], index: number) => {
+            const key = group.join(',');
+            const existing = compacted.findIndex((candidate) => candidate.join(',') === key);
+            if (existing >= 0) {
+                remap.set(index, existing);
+                return;
+            }
+            const nextIndex = compacted.length;
+            remap.set(index, nextIndex);
+            compacted.push(group);
+        });
+
+        const maxClassicGroups = 256;
+        if (compacted.length > maxClassicGroups) {
+            summary.geosetGroupsClamped += compacted.length - maxClassicGroups;
+            compacted.length = maxClassicGroups;
+        }
+
+        const rawVertexGroups = Array.from(
+            geoset.VertexGroup as ArrayLike<number> | undefined ?? { length: 0 },
+            (value: any) => {
+                const num = Number(value);
+                return Number.isFinite(num) && num >= 0 ? Math.floor(num) : 0;
+            }
+        );
+        const normalizedVertexGroups = new Uint8Array(vertexCount);
+
+        for (let i = 0; i < vertexCount; i++) {
+            const sourceGroup = rawVertexGroups[i] ?? 0;
+            let nextGroup = remap.get(sourceGroup);
+            if (nextGroup === undefined) {
+                nextGroup = sourceGroup < compacted.length ? sourceGroup : 0;
+            }
+            if (nextGroup >= maxClassicGroups) {
+                nextGroup = 0;
+                summary.geosetGroupsClamped++;
+            }
+            normalizedVertexGroups[i] = nextGroup;
+        }
+
+        const totalGroupsCount = compacted.reduce((sum, group) => sum + group.length, 0);
+        const groupsChanged =
+            !Array.isArray(geoset.Groups) ||
+            compacted.length !== geoset.Groups.length ||
+            totalGroupsCount !== geoset.TotalGroupsCount;
+        const vertexGroupChanged =
+            !(geoset.VertexGroup instanceof Uint8Array) ||
+            geoset.VertexGroup.length !== normalizedVertexGroups.length ||
+            rawVertexGroups.some((value, index) => normalizedVertexGroups[index] !== value);
+
+        geoset.Groups = compacted;
+        geoset.TotalGroupsCount = totalGroupsCount;
+        geoset.VertexGroup = normalizedVertexGroups;
+
+        if (groupsChanged || vertexGroupChanged) {
+            summary.geosetsNormalized++;
+        }
+    });
+
+    return summary;
+}
+
 export const processDeathAnimation = (model: any) => {
     const sequences = model.Sequences || [];
     const deathIndex = sequences.findIndex((seq: any) => String(seq.Name || '').toLowerCase() === 'death');

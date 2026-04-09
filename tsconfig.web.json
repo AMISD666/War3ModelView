@@ -8,8 +8,9 @@
     ],
     "compilerOptions": {
         "composite": true,
-        "ignoreDeprecations": "5.0",
+        "ignoreDeprecations": "6.0",
         "jsx": "react-jsx",
+        "moduleResolution": "bundler",
         "baseUrl": ".",
         "noUnusedLocals": false,
         "noUnusedParameters": false,

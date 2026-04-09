@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { Input, Select, Row, Col, Button } from 'antd'
+import type { Color } from 'antd/es/color-picker'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker'
 import { DraggableModal } from '../DraggableModal'
@@ -628,6 +629,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
 
         if (isStandalone) {            emit('IPC_KEYFRAME_SAVE', {
                 callerId: standaloneData.callerId,
+                fieldName: standaloneData.fieldName,
                 data: result
             });
             getCurrentWindow().hide();
@@ -691,7 +693,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
                                     size="small"
                                     showText={false}
                                     style={{ transform: 'scale(0.6)', transformOrigin: 'left center' }}
-                                    onChange={(color) => updateColorForFrame(marker.frame, marker.lineIndex, color.toRgb())}
+                                    onChange={(color: Color) => updateColorForFrame(marker.frame, marker.lineIndex, color.toRgb())}
                                 />
                             </div>
                         ))}
@@ -896,7 +898,5 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
 }
 
 export default KeyframeEditor
-
-
 
 

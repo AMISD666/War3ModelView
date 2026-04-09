@@ -13,6 +13,7 @@ import {
     processRemoveLights,
     pruneModelKeyframes,
     pivotVec3ToTuple,
+    repairClassicModelData,
     resolvePivotForPersist,
 } from '../utils/modelUtils';
 import { calculateModelExtent, calculateModelNormals } from '../utils/geometryUtils';
@@ -123,6 +124,33 @@ const removeDirtyTabState = (state: { dirtyTabs: Record<string, boolean> }, tabI
     const next = { ...state.dirtyTabs };
     delete next[tabId];
     return { dirtyTabs: next };
+};
+
+const sanitizeGeosetUiState = (
+    state: {
+        hiddenGeosetIds: number[];
+        hoveredGeosetId: number | null;
+        selectedGeosetIndex: number | null;
+        selectedGeosetIndices: number[];
+    },
+    geosetCount: number
+) => {
+    const isValidIndex = (value: number | null | undefined): value is number =>
+        Number.isInteger(value) && value >= 0 && value < geosetCount;
+
+    const hiddenGeosetIds = Array.from(new Set(state.hiddenGeosetIds.filter((value) => isValidIndex(value))));
+    const selectedGeosetIndices = Array.from(new Set(state.selectedGeosetIndices.filter((value) => isValidIndex(value))));
+    const selectedGeosetIndex = isValidIndex(state.selectedGeosetIndex)
+        ? state.selectedGeosetIndex
+        : (selectedGeosetIndices[0] ?? null);
+    const hoveredGeosetId = isValidIndex(state.hoveredGeosetId) ? state.hoveredGeosetId : null;
+
+    return {
+        hiddenGeosetIds,
+        selectedGeosetIndices,
+        selectedGeosetIndex,
+        hoveredGeosetId
+    };
 };
 
 function collectTextureIdsFromAnimVector(value: any, ids: Set<number>): void {
@@ -2000,6 +2028,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
         };
     }),
     setGeosets: (geosets) => set((state) => {
+        const sanitizedGeosetUiState = sanitizeGeosetUiState(state, geosets.length);
         const updatedModelData = state.modelData ? { ...state.modelData, Geosets: geosets } : state.modelData;
         const updatedMaterialManagerPreview = state.materialManagerPreview
             ? {
@@ -2022,7 +2051,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                         sequences: [...state.sequences],
                         currentSequence: state.currentSequence,
                         currentFrame: state.currentFrame,
-                        hiddenGeosetIds: [...state.hiddenGeosetIds],
+                        hiddenGeosetIds: [...sanitizedGeosetUiState.hiddenGeosetIds],
                         lastActive: Date.now()
                     }
                 };
@@ -2032,6 +2061,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             modelData: updatedModelData,
             materialManagerPreview: updatedMaterialManagerPreview,
             tabs: updatedTabs,
+            ...sanitizedGeosetUiState,
             rendererReloadTrigger: state.rendererReloadTrigger + 1,
             ...markActiveTabDirtyState(state)
         };
@@ -2328,9 +2358,6 @@ export const useModelStore = create<ModelState>((set, get) => ({
             }
 
             const modelData = state.modelData;
-            // Force full renderer rebuild because geoset vertices are mutated in-place.
-            // Lightweight sync does not update vertex buffers.
-            (modelData as any).__forceFullReload = true;
 
             // 1. Construct Transformation Matrices
             // matrix: Full transformation (TRS) for absolute positions
@@ -2528,7 +2555,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
             calculateModelExtent(modelData);            return {
                 modelData: { ...modelData },
                 nodes: updatedNodes,
-                rendererReloadTrigger: state.rendererReloadTrigger + (suppressReload ? 0 : 1)
+                rendererReloadTrigger: state.rendererReloadTrigger + (suppressReload ? 0 : 1),
+                ...markActiveTabDirtyState(state)
             };
         });
     },
@@ -2585,31 +2613,26 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
     repairModel: () => {
         set((state) => {
-            if (!state.nodes || state.nodes.length === 0) return {};            let repairCount = 0;
+            if (!state.modelData) return {};
 
-            // 1. Repair AttachmentIDs (Sequential starting from 0)
-            let nextAttachmentId = 0;
-            const updatedNodes = state.nodes.map(node => {
-                if (node.type === NodeType.ATTACHMENT) {
-                    const currentId = (node as any).AttachmentID;
-                    if (currentId !== nextAttachmentId) {
-                        repairCount++;
-                        return { ...node, AttachmentID: nextAttachmentId++ };
-                    }
-                    nextAttachmentId++;
-                }
-                return node;
-            });
+            const baseNodes = state.nodes && state.nodes.length > 0
+                ? sanitizeNodesArray(state.nodes)
+                : extractNodesFromModel(state.modelData);
+            if (baseNodes.length === 0) return {};
 
-            if (repairCount > 0) {
-                // Update modelData without reordering ObjectIds (just updating properties)
-                const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[], false);
-                const correctedNodes = extractNodesFromModel(updatedModelData);                return {
-                    nodes: correctedNodes,
-                    modelData: updatedModelData,
-                    rendererReloadTrigger: state.rendererReloadTrigger + 1
-                };
-            }            return {};
+            let updatedModelData = updateModelDataWithNodes(state.modelData, baseNodes as any[], true);
+            if (!updatedModelData) return {};
+
+            repairClassicModelData(updatedModelData);
+            calculateModelExtent(updatedModelData);
+
+            const correctedNodes = extractNodesFromModel(updatedModelData);
+            return {
+                nodes: correctedNodes,
+                modelData: updatedModelData,
+                rendererReloadTrigger: state.rendererReloadTrigger + 1,
+                ...markActiveTabDirtyState(state)
+            };
         });
     },
 
