@@ -2360,9 +2360,10 @@ const MainLayout: React.FC = () => {
                 const store = useModelStore.getState();
                 if (!store.modelData || !store.modelPath) return;
                 try {
-                    const { executeDissolveEffect } = await import('../utils/dissolveEffect');
+                    const { executeDissolveEffect, refreshDissolveTexturesInRenderer } = await import('../utils/dissolveEffect');
                     const result = await executeDissolveEffect(store.modelData, store.modelPath, payload);
                     store.setVisualDataPatch({ Materials: result.materials, Textures: result.textures });
+                    await refreshDissolveTexturesInRenderer(useRendererStore.getState().renderer, store.modelPath, result);
                 } catch (e: any) {
                     console.error('[Dissolve] Failed:', e);
                 }

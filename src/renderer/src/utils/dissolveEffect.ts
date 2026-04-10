@@ -24,6 +24,7 @@ export interface DissolveEffectResult {
     textures: any[];
     textureModifiedCount: number;
     materialModifiedCount: number;
+    modifiedTexturePaths: string[];
 }
 
 function resizeImageData(source: ImageData, tw: number, th: number): ImageData {
@@ -102,6 +103,7 @@ export async function executeDissolveEffect(
 
     // 4. Process each affected texture: composite dissolve luminance → alpha channel
     let textureModifiedCount = 0;
+    const modifiedTexturePaths = new Set<string>();
     const modelDir = modelPath.substring(0, Math.max(modelPath.lastIndexOf('\\'), modelPath.lastIndexOf('/')));
 
     for (const texId of affectedTexIds) {
@@ -148,6 +150,7 @@ export async function executeDissolveEffect(
             tex.Image = newImagePath;
             if (tex.Path !== undefined) tex.Path = newImagePath;
             textureModifiedCount++;
+            modifiedTexturePaths.add(newImagePath);
         } catch (e: any) {
             console.warn(`[Dissolve] Failed to process texture ${imagePath}:`, e);
         }
@@ -236,5 +239,36 @@ export async function executeDissolveEffect(
         materialModifiedCount++;
     });
 
-    return { materials, textures, textureModifiedCount, materialModifiedCount };
+    return {
+        materials,
+        textures,
+        textureModifiedCount,
+        materialModifiedCount,
+        modifiedTexturePaths: Array.from(modifiedTexturePaths),
+    };
+}
+
+export async function refreshDissolveTexturesInRenderer(
+    renderer: any,
+    modelPath: string,
+    result: DissolveEffectResult
+): Promise<void> {
+    if (!renderer || !modelPath || result.modifiedTexturePaths.length === 0) return;
+
+    const { loadTextureForRenderer } = await import('../components/viewer/textureLoader');
+
+    if (result.textures) {
+        renderer.model.Textures = result.textures;
+    }
+    if (result.materials) {
+        renderer.model.Materials = result.materials;
+    }
+
+    await Promise.all(
+        result.modifiedTexturePaths.map((texturePath) => loadTextureForRenderer(renderer, texturePath, modelPath))
+    );
+
+    if (renderer.modelInstance?.syncMaterials) {
+        renderer.modelInstance.syncMaterials();
+    }
 }

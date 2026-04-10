@@ -22,6 +22,18 @@ import { getPivotChainSum } from '../utils/nodeUtils';
 
 const MAX_CACHED_RENDERERS = 5;
 
+const hasGeometryBufferUpdate = (updates: any): boolean => {
+    if (!updates || typeof updates !== 'object') return false;
+    return (
+        'Vertices' in updates ||
+        'Faces' in updates ||
+        'Normals' in updates ||
+        'TVertices' in updates ||
+        'VertexGroup' in updates ||
+        'Groups' in updates
+    );
+};
+
 type ClipboardPayload = {
     node: ModelNode;
     sourceModelPath: string | null;
@@ -1138,6 +1150,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
         if (data && path) {
             (data as any).__modelPath = path;
         }
+        useRendererStore.getState().bumpVertexRenderRevision();
         const skipAutoRecalculate = !!options.skipAutoRecalculate;
         const skipModelRebuild = !!options.skipModelRebuild;
 
@@ -2272,6 +2285,9 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
                 // Update modelData
                 const updatedModelData = { ...state.modelData, Geosets: newGeosets };
+                if (hasGeometryBufferUpdate(updates)) {
+                    useRendererStore.getState().bumpVertexRenderRevision();
+                }
                 return { modelData: updatedModelData, ...markActiveTabDirtyState(state) };
             }
             return {};
@@ -2351,7 +2367,9 @@ export const useModelStore = create<ModelState>((set, get) => ({
     },
 
     transformModel: (ops) => {
-        const { translation, rotation, scale, skipAnimationTracks, suppressReload } = ops;        set((state) => {
+        const { translation, rotation, scale, skipAnimationTracks, suppressReload } = ops;        
+        useRendererStore.getState().bumpVertexRenderRevision();
+        set((state) => {
             if (!state.modelData) {
                 console.warn('[ModelStore] transformModel: No modelData loaded.');
                 return {};

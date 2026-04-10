@@ -13,6 +13,8 @@ import {
     ThunderboltOutlined, // Recalculate Normals
     SplitCellsOutlined, // Split
     MergeCellsOutlined, // Weld
+    CopyOutlined, // Copy mode toggle
+    ImportOutlined, // Merge-into-existing mode toggle
     LinkOutlined, // Bind
     DisconnectOutlined, // Unbind
     ApartmentOutlined, // Parent
@@ -78,7 +80,9 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         snapRotateStep,
         setSnapRotateStep,
         gizmoOrientation,
-        setGizmoOrientation
+        setGizmoOrientation,
+        pasteCreatesNewGeoset,
+        setPasteCreatesNewGeoset
     } = useRendererStore(state => state);
     const { executeCommand } = useCommandManager();
     const snapButtonSize = 28
@@ -423,7 +427,14 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                     <div style={dividerStyle} />
                     <Space>
                         {/* Vertex Operations - always visible in geometry mode */}
-                        <Tooltip title="分离 - 将选中顶点及其面分离为新多边形">
+                        <Tooltip title={pasteCreatesNewGeoset ? '复制后新建多边形组' : '复制后合并到原多边形组'}>
+                            <Button
+                                type={pasteCreatesNewGeoset ? 'primary' : 'default'}
+                                icon={pasteCreatesNewGeoset ? <CopyOutlined /> : <ImportOutlined />}
+                                onClick={() => setPasteCreatesNewGeoset(!pasteCreatesNewGeoset)}
+                            />
+                        </Tooltip>
+                        <Tooltip title="分离 - 将选中顶点及其面分离为新多边形组">
                             <Button
                                 icon={<SplitCellsOutlined />}
                                 onClick={onSplitVertices}
@@ -684,15 +695,6 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         </div>
     );
 };
-
-
-
-
-
-
-
-
-
 
 
 

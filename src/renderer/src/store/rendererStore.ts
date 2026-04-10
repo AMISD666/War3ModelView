@@ -139,6 +139,10 @@ interface RendererStore {
     setAutoRecalculateNormals: (enabled: boolean) => void
     keepCameraOnLoad: boolean
     setKeepCameraOnLoad: (enabled: boolean) => void
+    pasteCreatesNewGeoset: boolean
+    setPasteCreatesNewGeoset: (enabled: boolean) => void
+    vertexRenderRevision: number
+    bumpVertexRenderRevision: () => void
     reset: () => void
 }
 
@@ -290,11 +294,16 @@ export const useRendererStore = create<RendererStore>()(
             setAutoRecalculateNormals: (enabled) => set({ autoRecalculateNormals: enabled }),
             keepCameraOnLoad: false,
             setKeepCameraOnLoad: (enabled) => set({ keepCameraOnLoad: enabled }),
+            pasteCreatesNewGeoset: true,
+            setPasteCreatesNewGeoset: (enabled) => set({ pasteCreatesNewGeoset: enabled }),
+            vertexRenderRevision: 0,
+            bumpVertexRenderRevision: () => set((state) => ({ vertexRenderRevision: state.vertexRenderRevision + 1 })),
 
             reset: () => {
                 set({
                     renderer: null,
-                    missingTextures: []
+                    missingTextures: [],
+                    vertexRenderRevision: 0
                 });
             }
         }),
@@ -343,7 +352,8 @@ export const useRendererStore = create<RendererStore>()(
                 textureSaveSuffix: state.textureSaveSuffix,
                 autoRecalculateExtent: state.autoRecalculateExtent,
                 autoRecalculateNormals: state.autoRecalculateNormals,
-                keepCameraOnLoad: state.keepCameraOnLoad
+                keepCameraOnLoad: state.keepCameraOnLoad,
+                pasteCreatesNewGeoset: state.pasteCreatesNewGeoset
             }),
         }
     )

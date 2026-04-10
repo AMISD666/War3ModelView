@@ -72,6 +72,12 @@ interface NodeWrapper {
     matrix?: Float32Array
 }
 
+type CachedPointBuffer = {
+    buffer: WebGLBuffer
+    uploadedRevision: number
+    vertexCount: number
+}
+
 export class DebugRenderer {
     private program: WebGLProgram | null = null
     private aPosition: number = -1
@@ -81,6 +87,8 @@ export class DebugRenderer {
     private uPointSize: WebGLUniformLocation | null = null
     private uDepthBias: WebGLUniformLocation | null = null // New uniform
     private buffer: WebGLBuffer | null = null
+    private cachedPointBuffers = new WeakMap<Float32Array, CachedPointBuffer>()
+    private cachedPointContext: WebGLRenderingContext | WebGL2RenderingContext | null = null
 
     // Cube program
     private cubeProgram: WebGLProgram | null = null
@@ -106,6 +114,11 @@ export class DebugRenderer {
     private tetrahedronNormalBuffer: WebGLBuffer | null = null
 
     init(gl: WebGLRenderingContext | WebGL2RenderingContext) {
+        if (this.cachedPointContext !== gl) {
+            this.cachedPointContext = gl
+            this.cachedPointBuffers = new WeakMap()
+        }
+
         // Simple program
         const vs = this.compileShader(gl, gl.VERTEX_SHADER, vsSource)
         const fs = this.compileShader(gl, gl.FRAGMENT_SHADER, fsSource)
@@ -506,6 +519,22 @@ export class DebugRenderer {
         this.draw(gl, mvMatrix, pMatrix, positions, color, gl.POINTS, size, enableDepth, enableBlend)
     }
 
+    renderCachedPoints(
+        gl: WebGLRenderingContext | WebGL2RenderingContext,
+        mvMatrix: mat4,
+        pMatrix: mat4,
+        positions: Float32Array,
+        color: number[],
+        size: number = 5.0,
+        enableDepth: boolean = false,
+        enableBlend: boolean = true,
+        revision: number = 0
+    ) {
+        const cached = this.getOrCreatePointBuffer(gl, positions, revision)
+        if (!cached) return
+        this.drawUploadedBuffer(gl, mvMatrix, pMatrix, cached.buffer, cached.vertexCount, color, gl.POINTS, size, enableDepth, enableBlend)
+    }
+
     renderTriangles(
         gl: WebGLRenderingContext | WebGL2RenderingContext,
         mvMatrix: mat4,
@@ -536,6 +565,111 @@ export class DebugRenderer {
         enableBlend: boolean = true
     ) {
         this.draw(gl, mvMatrix, pMatrix, positions, color, gl.LINES, 1.0, false, enableBlend)
+    }
+
+    private getOrCreatePointBuffer(
+        gl: WebGLRenderingContext | WebGL2RenderingContext,
+        positions: Float32Array,
+        revision: number
+    ): CachedPointBuffer | null {
+        if (this.cachedPointContext !== gl) {
+            this.cachedPointContext = gl
+            this.cachedPointBuffers = new WeakMap()
+        }
+
+        let cached = this.cachedPointBuffers.get(positions)
+        if (!cached) {
+            const buffer = gl.createBuffer()
+            if (!buffer) return null
+
+            cached = {
+                buffer,
+                uploadedRevision: Number.NaN,
+                vertexCount: positions.length / 3
+            }
+            this.cachedPointBuffers.set(positions, cached)
+        }
+
+        if (cached.uploadedRevision !== revision) {
+            gl.bindBuffer(gl.ARRAY_BUFFER, cached.buffer)
+            gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW)
+            cached.uploadedRevision = revision
+            cached.vertexCount = positions.length / 3
+        }
+
+        return cached
+    }
+
+    private drawUploadedBuffer(
+        gl: WebGLRenderingContext | WebGL2RenderingContext,
+        mvMatrix: mat4,
+        pMatrix: mat4,
+        buffer: WebGLBuffer,
+        vertexCount: number,
+        color: number[],
+        mode: number,
+        pointSize: number,
+        enableDepth: boolean = false,
+        enableBlend: boolean = true
+    ) {
+        if (!this.program || vertexCount === 0) return
+
+        gl.useProgram(this.program)
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffer)
+        gl.enableVertexAttribArray(this.aPosition)
+        gl.vertexAttribPointer(this.aPosition, 3, gl.FLOAT, false, 0, 0)
+
+        gl.uniformMatrix4fv(this.uMVMatrix, false, mvMatrix)
+        gl.uniformMatrix4fv(this.uPMatrix, false, pMatrix)
+        gl.uniform4fv(this.uColor, color)
+        gl.uniform1f(this.uPointSize, pointSize)
+        gl.uniform1f(this.uDepthBias, 0.0)
+
+        const prevBlend = gl.isEnabled(gl.BLEND)
+        const prevBlendSrcRGB = gl.getParameter(gl.BLEND_SRC_RGB)
+        const prevBlendDstRGB = gl.getParameter(gl.BLEND_DST_RGB)
+        const prevBlendSrcAlpha = gl.getParameter(gl.BLEND_SRC_ALPHA)
+        const prevBlendDstAlpha = gl.getParameter(gl.BLEND_DST_ALPHA)
+        const prevBlendEqRGB = gl.getParameter(gl.BLEND_EQUATION_RGB)
+        const prevBlendEqAlpha = gl.getParameter(gl.BLEND_EQUATION_ALPHA)
+        const prevDepthTest = gl.isEnabled(gl.DEPTH_TEST)
+        const prevCullFace = gl.isEnabled(gl.CULL_FACE)
+
+        if (enableDepth) {
+            gl.enable(gl.DEPTH_TEST)
+        } else {
+            gl.disable(gl.DEPTH_TEST)
+        }
+
+        gl.disable(gl.CULL_FACE)
+
+        if (enableBlend) {
+            gl.enable(gl.BLEND)
+            gl.blendEquationSeparate(gl.FUNC_ADD, gl.FUNC_ADD)
+            gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
+        } else {
+            gl.disable(gl.BLEND)
+        }
+
+        gl.drawArrays(mode, 0, vertexCount)
+
+        gl.blendEquationSeparate(prevBlendEqRGB, prevBlendEqAlpha)
+        gl.blendFuncSeparate(prevBlendSrcRGB, prevBlendDstRGB, prevBlendSrcAlpha, prevBlendDstAlpha)
+        if (prevBlend) {
+            gl.enable(gl.BLEND)
+        } else {
+            gl.disable(gl.BLEND)
+        }
+        if (prevCullFace) {
+            gl.enable(gl.CULL_FACE)
+        } else {
+            gl.disable(gl.CULL_FACE)
+        }
+        if (prevDepthTest) {
+            gl.enable(gl.DEPTH_TEST)
+        } else {
+            gl.disable(gl.DEPTH_TEST)
+        }
     }
 
     renderWireframeBox(
@@ -701,71 +835,10 @@ export class DebugRenderer {
     ) {
         if (!this.program || !this.buffer || positions.length === 0) return
 
-        gl.useProgram(this.program)
-
         gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer)
         const data = positions instanceof Float32Array ? positions : new Float32Array(positions)
         gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW)
-
-        gl.enableVertexAttribArray(this.aPosition)
-        gl.vertexAttribPointer(this.aPosition, 3, gl.FLOAT, false, 0, 0)
-
-        gl.uniformMatrix4fv(this.uMVMatrix, false, mvMatrix)
-        gl.uniformMatrix4fv(this.uPMatrix, false, pMatrix)
-        gl.uniform4fv(this.uColor, color)
-        gl.uniform1f(this.uPointSize, pointSize)
-        gl.uniform1f(this.uDepthBias, 0.0) // Set default bias to 0 to avoid garbage values
-
-        // Save GL state to avoid inheriting material blend modes
-        const prevBlend = gl.isEnabled(gl.BLEND)
-        const prevBlendSrcRGB = gl.getParameter(gl.BLEND_SRC_RGB)
-        const prevBlendDstRGB = gl.getParameter(gl.BLEND_DST_RGB)
-        const prevBlendSrcAlpha = gl.getParameter(gl.BLEND_SRC_ALPHA)
-        const prevBlendDstAlpha = gl.getParameter(gl.BLEND_DST_ALPHA)
-        const prevBlendEqRGB = gl.getParameter(gl.BLEND_EQUATION_RGB)
-        const prevBlendEqAlpha = gl.getParameter(gl.BLEND_EQUATION_ALPHA)
-        const prevDepthTest = gl.isEnabled(gl.DEPTH_TEST)
-        const prevCullFace = gl.isEnabled(gl.CULL_FACE)
-
-        // Configure depth test based on parameter
-        if (enableDepth) {
-            gl.enable(gl.DEPTH_TEST)
-        } else {
-            gl.disable(gl.DEPTH_TEST)
-        }
-
-        // Force double-sided overlay for selection/highlight
-        gl.disable(gl.CULL_FACE)
-
-        if (enableBlend) {
-            // Force a stable blend mode for selection/debug overlays
-            gl.enable(gl.BLEND)
-            gl.blendEquationSeparate(gl.FUNC_ADD, gl.FUNC_ADD)
-            gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
-        } else {
-            gl.disable(gl.BLEND)
-        }
-
-        gl.drawArrays(mode, 0, positions.length / 3)
-
-        // Restore state
-        gl.blendEquationSeparate(prevBlendEqRGB, prevBlendEqAlpha)
-        gl.blendFuncSeparate(prevBlendSrcRGB, prevBlendDstRGB, prevBlendSrcAlpha, prevBlendDstAlpha)
-        if (prevBlend) {
-            gl.enable(gl.BLEND)
-        } else {
-            gl.disable(gl.BLEND)
-        }
-        if (prevCullFace) {
-            gl.enable(gl.CULL_FACE)
-        } else {
-            gl.disable(gl.CULL_FACE)
-        }
-        if (prevDepthTest) {
-            gl.enable(gl.DEPTH_TEST)
-        } else {
-            gl.disable(gl.DEPTH_TEST)
-        }
+        this.drawUploadedBuffer(gl, mvMatrix, pMatrix, this.buffer, data.length / 3, color, mode, pointSize, enableDepth, enableBlend)
     }
     /**
      * Render a visual representation of a light

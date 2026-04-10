@@ -66,6 +66,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
         selectedGeosetIndices,
         setSelectedGeosetIndices
     } = useModelStore();
+    const geosets = modelData?.Geosets || [];
 
     const [position, setPosition] = useState(() => getDefaultPanelPosition(DEFAULT_PANEL_SIZE.width, DEFAULT_PANEL_SIZE.height));
     const [size, setSize] = useState(DEFAULT_PANEL_SIZE);
@@ -128,8 +129,6 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
 
     // Merge dialog state
     const [mergeDialogVisible, setMergeDialogVisible] = useState(false);
-
-    const geosets = modelData?.Geosets || [];
 
     // Handle item click for selection
     const handleItemClick = (index: number, e: React.MouseEvent) => {

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Modal, Radio, InputNumber, Button, Select, Divider, Typography, Input, message } from 'antd';
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame';
 import { useModelStore } from '../../store/modelStore';
+import { useRendererStore } from '../../store/rendererStore';
 import { useRpcClient } from '../../hooks/useRpc';
 
 const { Text, Title } = Typography;
@@ -311,9 +312,10 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
         if (!store.modelData || !store.modelPath) { message.error('没有加载模型数据'); return; }
 
         try {
-            const { executeDissolveEffect } = await import('../../utils/dissolveEffect');
+            const { executeDissolveEffect, refreshDissolveTexturesInRenderer } = await import('../../utils/dissolveEffect');
             const result = await executeDissolveEffect(store.modelData, store.modelPath, dissolveParams);
             store.setVisualDataPatch({ Materials: result.materials, Textures: result.textures });
+            await refreshDissolveTexturesInRenderer(useRendererStore.getState().renderer, store.modelPath, result);
             Modal.success({
                 title: '消散动画制作完成',
                 content: `已修改 ${result.textureModifiedCount} 个贴图，更新 ${result.materialModifiedCount} 个材质的透明度关键帧`,

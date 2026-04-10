@@ -42,7 +42,7 @@ import { WeldVerticesCommand } from '../commands/WeldVerticesCommand'
 import { DeleteVerticesCommand } from '../commands/DeleteVerticesCommand'
 import { PasteVerticesCommand } from '../commands/PasteVerticesCommand'
 import { UpdateSequenceExtentsCommand } from '../commands/UpdateSequenceExtentsCommand'
-import { isTextInputActive } from '../shortcuts/utils'
+import { isTextInputActive, normalizeKeyCombo, normalizeKeyComboFromEvent } from '../shortcuts/utils'
 
 const toTextureUpdateUint8Array = (payload: any): Uint8ClampedArray | null => {
   if (!payload) return null
@@ -72,7 +72,7 @@ import { LayerConfig, layerConfigToMaterialLayer } from './modals/MaterialLayerO
 import { NodeType } from '../types/node'
 import { openNodeEditor } from '../utils/nodeEditorOpen'
 import { nodeTypeToEditorKind } from '../types/nodeEditorRpc'
-import { registerShortcutHandler } from '../shortcuts/manager'
+import { getEffectiveBindings, registerShortcutHandler } from '../shortcuts/manager'
 import { markStandalonePerf } from '../utils/standalonePerf'
 import { invokeReadMpqFile } from '../utils/mpqPerf'
 import {
@@ -1578,6 +1578,16 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       // Only suppress viewer-local shortcuts when a real text input is focused.
       if (isTextInputActive()) return
 
+      // Fallback for render-mode toggle when the global shortcut layer misses.
+      const combo = normalizeKeyComboFromEvent(ev)
+      const wireframeBindings = getEffectiveBindings('view.toggleWireframe').map(normalizeKeyCombo)
+      if (combo && wireframeBindings.includes(normalizeKeyCombo(combo))) {
+        onToggleWireframe()
+        ev.preventDefault()
+        ev.stopPropagation()
+        return
+      }
+
       if (ev.key === 'ArrowUp' || ev.key === 'ArrowDown') {
         const direction = ev.key === 'ArrowUp' ? -1 : 1
         const { sequences, currentSequence, setSequence } = useModelStore.getState()
@@ -2524,6 +2534,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
       // Shift+Drag = Duplicate then move
       if (e.shiftKey && (geometrySubMode === 'vertex' || geometrySubMode === 'face' || geometrySubMode === 'group') && rendererRef.current) {
+        const { pasteCreatesNewGeoset } = useRendererStore.getState()
 
         let buffer: VertexCopyBuffer | null = null
         let mode: 'vertex' | 'face' = 'vertex'
@@ -2547,7 +2558,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         }
 
         if (buffer) {
-          const cmd = new PasteVerticesCommand(rendererRef.current, buffer, true, [0, 0, 0], mode)
+          const cmd = new PasteVerticesCommand(rendererRef.current, buffer, pasteCreatesNewGeoset, [0, 0, 0], mode)
           commandManager.execute(cmd)
 
           // Note: PasteVerticesCommand automatically selects the new elements
@@ -4026,10 +4037,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
               const vertexData = geoset.Vertices instanceof Float32Array
                 ? geoset.Vertices
                 : new Float32Array(geoset.Vertices)
-              if (rendererGeoset.Vertices !== vertexData) {
-                rendererGeoset.Vertices = vertexData
-                ; (renderer as any).updateGeosetVertices?.(i, vertexData)
-              }
+              rendererGeoset.Vertices = vertexData
+              ; (renderer as any).updateGeosetVertices?.(i, vertexData)
             }
 
             // Sync MaterialID changes
@@ -4061,10 +4070,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
               const normalData = geoset.Normals instanceof Float32Array
                 ? geoset.Normals
                 : new Float32Array(geoset.Normals)
-              if (rendererGeoset.Normals !== normalData) {
-                rendererGeoset.Normals = normalData
-                ; (renderer as any).updateGeosetNormals?.(i, normalData)
-              }
+              rendererGeoset.Normals = normalData
+              ; (renderer as any).updateGeosetNormals?.(i, normalData)
             }
 
             // Sync UV texture coordinate buffers
@@ -5425,10 +5432,11 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             // Get geoset visibility state from modelStore
             const { hiddenGeosetIds, forceShowAllGeosets, hoveredGeosetId } = useModelStore.getState()
             // Get color settings from rendererStore
-            const { vertexColor, selectionColor, hoverColor } = useRendererStore.getState()
+            const { vertexColor, selectionColor, hoverColor, vertexRenderRevision } = useRendererStore.getState()
             const vertexColorRgb = hexToRgb(vertexColor)
             const selectionColorRgb = hexToRgb(selectionColor)
             const hoverColorRgb = hexToRgb(hoverColor)
+            const hiddenGeosetIdSet = forceShowAllGeosets ? null : new Set(hiddenGeosetIds)
 
             // gl_PointSize 是屏幕像素。这里保持顶点在大模型/远距离下仍然可见，
             // 只做轻微缩放，避免旧逻辑把点压到接近 1px。
@@ -5453,15 +5461,45 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                 if (!geoset.Vertices) continue
 
                 // Skip hidden geosets (based on hiddenGeosetIds from modelStore)
-                if (hiddenGeosetIds.includes(geosetIndex) && !forceShowAllGeosets) continue
+                if (hiddenGeosetIdSet?.has(geosetIndex)) continue
+
+                const canUseCachedVertexBuffer = geoset.Vertices instanceof Float32Array
 
                 // Use different color for hovered geoset vertices
                 if (hoveredGeosetId === geosetIndex) {
                   // Hovered geoset: use hover color from settings
-                  debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, geoset.Vertices, [...hoverColorRgb, 1], hoverPointSize, vertexSettingsRef.current.enableDepth)
+                  if (canUseCachedVertexBuffer) {
+                    debugRenderer.current.renderCachedPoints(
+                      gl as WebGLRenderingContext,
+                      mvMatrix,
+                      pMatrix,
+                      geoset.Vertices,
+                      [...hoverColorRgb, 1],
+                      hoverPointSize,
+                      vertexSettingsRef.current.enableDepth,
+                      true,
+                      vertexRenderRevision
+                    )
+                  } else {
+                    debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, geoset.Vertices, [...hoverColorRgb, 1], hoverPointSize, vertexSettingsRef.current.enableDepth)
+                  }
                 } else {
                   // Normal geoset: use vertex color from settings
-                  debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, geoset.Vertices, [...vertexColorRgb, 0.8], basePointSize, vertexSettingsRef.current.enableDepth)
+                  if (canUseCachedVertexBuffer) {
+                    debugRenderer.current.renderCachedPoints(
+                      gl as WebGLRenderingContext,
+                      mvMatrix,
+                      pMatrix,
+                      geoset.Vertices,
+                      [...vertexColorRgb, 0.8],
+                      basePointSize,
+                      vertexSettingsRef.current.enableDepth,
+                      true,
+                      vertexRenderRevision
+                    )
+                  } else {
+                    debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, geoset.Vertices, [...vertexColorRgb, 0.8], basePointSize, vertexSettingsRef.current.enableDepth)
+                  }
                 }
               }
             }
@@ -7653,6 +7691,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
 
   // Global copy buffer for vertex operations
   const vertexCopyBuffer = useRef<VertexCopyBuffer | null>(null)
+  const vertexCopySelectionModeRef = useRef<'vertex' | 'face'>('vertex')
 
   // Handle vertex delete
   const handleDeleteVertices = () => {
@@ -7668,29 +7707,62 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     if (!rendererRef.current) {
       return
     }
-    const { selectedVertexIds, geometrySubMode, mainMode } = useSelectionStore.getState()
-    if (mainMode !== 'geometry' || geometrySubMode !== 'vertex' || selectedVertexIds.length < 1) {
+    const { selectedVertexIds, selectedFaceIds, geometrySubMode, mainMode } = useSelectionStore.getState()
+    if (mainMode !== 'geometry') {
       return
     }
 
-    const geosetIndex = selectedVertexIds[0].geosetIndex
-    const geoset = rendererRef.current.model.Geosets[geosetIndex]
-    if (!geoset) {      return
+    if (geometrySubMode === 'vertex') {
+      if (selectedVertexIds.length < 1) {
+        return
+      }
+
+      const geosetIndex = selectedVertexIds[0].geosetIndex
+      const geoset = rendererRef.current.model.Geosets[geosetIndex]
+      if (!geoset) {
+        return
+      }
+
+      const vertexIndices = selectedVertexIds.map(s => s.index)
+      vertexCopyBuffer.current = copyVertices(geoset, vertexIndices, geosetIndex)
+      vertexCopySelectionModeRef.current = 'vertex'
+      return
     }
 
-    const vertexIndices = selectedVertexIds.map(s => s.index)
-    vertexCopyBuffer.current = copyVertices(geoset, vertexIndices, geosetIndex)  }
+    if ((geometrySubMode === 'face' || geometrySubMode === 'group') && selectedFaceIds.length > 0) {
+      const geosetIndex = selectedFaceIds[0].geosetIndex
+      const geoset = rendererRef.current.model.Geosets[geosetIndex]
+      if (!geoset) {
+        return
+      }
+
+      const faceIndices = selectedFaceIds.map(s => s.index)
+      vertexCopyBuffer.current = copyFaces(geoset, faceIndices, geosetIndex)
+      vertexCopySelectionModeRef.current = 'face'
+    }
+  }
 
   // Handle vertex paste - always creates new geoset
   const handlePasteVertices = () => {
-    if (!rendererRef.current || !vertexCopyBuffer.current) {      return
+    if (!rendererRef.current || !vertexCopyBuffer.current) {
+      return
     }
 
     const { geometrySubMode, mainMode } = useSelectionStore.getState()
-    if (mainMode !== 'geometry' || geometrySubMode !== 'vertex') return
+    const { pasteCreatesNewGeoset } = useRendererStore.getState()
+    if (mainMode !== 'geometry' || (geometrySubMode !== 'vertex' && geometrySubMode !== 'face' && geometrySubMode !== 'group')) {
+      return
+    }
 
     // Execute paste command directly (creates new geoset)
-    const cmd = new PasteVerticesCommand(rendererRef.current, vertexCopyBuffer.current, true)
+    const selectionMode = geometrySubMode === 'vertex' ? 'vertex' : 'face'
+    const cmd = new PasteVerticesCommand(
+      rendererRef.current,
+      vertexCopyBuffer.current,
+      pasteCreatesNewGeoset,
+      [10, 0, 0],
+      vertexCopySelectionModeRef.current ?? selectionMode
+    )
     commandManager.execute(cmd)
   }
 
@@ -7836,6 +7908,11 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       return mainMode === 'geometry' && geometrySubMode === 'vertex'
     }
 
+    const isGeometryCopyPasteMode = () => {
+      const { mainMode, geometrySubMode } = useSelectionStore.getState()
+      return mainMode === 'geometry' && (geometrySubMode === 'vertex' || geometrySubMode === 'face' || geometrySubMode === 'group')
+    }
+
     const isNotUvMode = () => useSelectionStore.getState().mainMode !== 'uv'
     const switchSequence = (direction: -1 | 1) => {
       const { sequences, currentSequence, setSequence } = useModelStore.getState()
@@ -7929,12 +8006,12 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         { isActive: isNotUvMode }
       ),
       registerShortcutHandler('geometry.copyVertices', () => {
-        if (!isGeometryVertexMode()) return false
+        if (!isGeometryCopyPasteMode()) return false
         handleCopyVertices()
         return true
       }),
       registerShortcutHandler('geometry.pasteVertices', () => {
-        if (!isGeometryVertexMode()) return false
+        if (!isGeometryCopyPasteMode()) return false
         handlePasteVertices()
         return true
       }),

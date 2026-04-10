@@ -274,7 +274,7 @@ export function useGizmoTransform({
         const applyToSelection = (updateFn: (v: Float32Array, idx: number) => void) => {
             if (geometrySubMode === 'vertex') {
                 selectedVertexIds.forEach(sel => updateVertex(sel.geosetIndex, sel.index, updateFn))
-            } else if (geometrySubMode === 'face') {
+            } else if (geometrySubMode === 'face' || geometrySubMode === 'group') {
                 getExpandedFaceSelection(selectedFaceIds).forEach(sel => updateVertex(sel.geosetIndex, sel.index, updateFn))
             }
         }
@@ -417,7 +417,7 @@ export function useGizmoTransform({
 
         if (geometrySubMode === 'vertex') {
             selectedVertexIds.forEach(sel => accumulateCenter(sel.geosetIndex, sel.index))
-        } else if (geometrySubMode === 'face') {
+        } else if (geometrySubMode === 'face' || geometrySubMode === 'group') {
             getExpandedFaceSelection(selectedFaceIds).forEach(sel => accumulateCenter(sel.geosetIndex, sel.index))
         }
 
@@ -440,7 +440,7 @@ export function useGizmoTransform({
         const applyToSelection = (updateFn: (v: Float32Array, idx: number) => void) => {
             if (geometrySubMode === 'vertex') {
                 selectedVertexIds.forEach(sel => updateVertex(sel.geosetIndex, sel.index, updateFn))
-            } else if (geometrySubMode === 'face') {
+            } else if (geometrySubMode === 'face' || geometrySubMode === 'group') {
                 getExpandedFaceSelection(selectedFaceIds).forEach(sel => updateVertex(sel.geosetIndex, sel.index, updateFn))
             }
         }

@@ -1,9 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Divider } from 'antd'
 import { MoveVerticesCommand, VertexChange } from '../commands/MoveVerticesCommand'
 import { commandManager } from '../utils/CommandManager'
 import { useModelStore } from '../store/modelStore'
-import { useSelectionStore } from '../store/selectionStore'
+import { type SelectionId, useSelectionStore } from '../store/selectionStore'
+import { ConfigProvider, theme, Typography, Space, Row, Col, Tag, Divider } from 'antd'
+import { SmartInputNumber } from './common/SmartInputNumber'
+import { GatewayOutlined, AimOutlined, ExpandOutlined, SyncOutlined } from '@ant-design/icons'
+
+const { Text, Title } = Typography
 
 interface VertexEditorProps {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -13,88 +17,285 @@ interface VertexEditorProps {
 
 type Vec3 = [number, number, number]
 
-const ZERO_VECTOR: Vec3 = [0, 0, 0]
+type SelectionStats = {
+    count: number
+    center: Vec3
+}
 
-const inputStyle: React.CSSProperties = {
-    width: '96px',
-    backgroundColor: '#1f1f1f',
-    color: '#fff',
-    border: '1px solid #434343',
-    borderRadius: '6px',
-    padding: '2px 8px',
-    outline: 'none',
-    appearance: 'textfield',
-    MozAppearance: 'textfield' as any
+const ZERO_VECTOR: Vec3 = [0, 0, 0]
+const DISPLAY_DECIMALS = 5
+
+const panelStyle: React.CSSProperties = {
+    position: 'absolute',
+    top: '64px',
+    right: '24px',
+    width: '280px',
+    padding: '0',
+    borderRadius: '12px',
+    overflow: 'hidden',
+    zIndex: 1000,
+    background: '#1f1f1f',
+    border: '1px solid #303030',
+    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.5)',
+    pointerEvents: 'auto'
+}
+
+const headerStyle: React.CSSProperties = {
+    padding: '12px 16px',
+    background: '#262626',
+    borderBottom: '1px solid #303030',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between'
+}
+
+const contentStyle: React.CSSProperties = {
+    padding: '16px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '16px'
+}
+
+const footerStyle: React.CSSProperties = {
+    padding: '8px 16px',
+    background: '#262626',
+    borderTop: '1px solid #303030',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center'
+}
+
+const sectionTitleStyle: React.CSSProperties = {
+    fontSize: '12px',
+    fontWeight: 600,
+    color: 'rgba(255, 255, 255, 0.45)',
+    marginBottom: '8px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px'
+}
+
+function getGeometryModeLabel(mode: 'vertex' | 'face' | 'group'): string {
+    if (mode === 'face') return '面'
+    if (mode === 'group') return '组'
+    return '点'
+}
+
+function getAxisColor(axis: 'x' | 'y' | 'z'): string {
+    if (axis === 'x') return '#ff5d5f'
+    if (axis === 'y') return '#52c41a'
+    return '#3b82f6'
+}
+
+function vectorsEqual(a: Vec3 | null, b: Vec3 | null, epsilon = 0.000001): boolean {
+    if (a === b) return true
+    if (!a || !b) return false
+    return Math.abs(a[0] - b[0]) < epsilon
+        && Math.abs(a[1] - b[1]) < epsilon
+        && Math.abs(a[2] - b[2]) < epsilon
+}
+
+function selectionStatsEqual(a: SelectionStats | null, b: SelectionStats | null): boolean {
+    if (a === b) return true
+    if (!a || !b) return false
+    return a.count === b.count && vectorsEqual(a.center, b.center)
+}
+
+function formatDisplayValue(value: number): string {
+    if (!Number.isFinite(value)) return '0'
+    return Number(value.toFixed(DISPLAY_DECIMALS)).toString()
+}
+
+function getCoincidentVertexKey(vertices: Float32Array | number[], vertexIndex: number): string {
+    const offset = vertexIndex * 3
+    const round = (value: number) => Math.round(Number(value) * 10000) / 10000
+    return `${round(vertices[offset])}|${round(vertices[offset + 1])}|${round(vertices[offset + 2])}`
+}
+
+function collectExpandedFaceVertices(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    renderer: any,
+    selectedFaceIds: SelectionId[]
+): SelectionId[] {
+    const result: SelectionId[] = []
+    const uniqueVertexKeys = new Set<string>()
+    const positionKeysByGeoset = new Map<number, Set<string>>()
+
+    for (const sel of selectedFaceIds) {
+        const geoset = renderer?.model?.Geosets?.[sel.geosetIndex]
+        if (!geoset?.Faces || !geoset?.Vertices) continue
+
+        const faceOffset = sel.index * 3
+        const faceVertexIndices = [
+            geoset.Faces[faceOffset],
+            geoset.Faces[faceOffset + 1],
+            geoset.Faces[faceOffset + 2]
+        ]
+
+        for (const vertexIndex of faceVertexIndices) {
+            if (!Number.isFinite(vertexIndex)) continue
+
+            const uniqueKey = `${sel.geosetIndex}-${vertexIndex}`
+            if (!uniqueVertexKeys.has(uniqueKey)) {
+                uniqueVertexKeys.add(uniqueKey)
+                result.push({ geosetIndex: sel.geosetIndex, index: vertexIndex })
+            }
+
+            let geosetPositionKeys = positionKeysByGeoset.get(sel.geosetIndex)
+            if (!geosetPositionKeys) {
+                geosetPositionKeys = new Set<string>()
+                positionKeysByGeoset.set(sel.geosetIndex, geosetPositionKeys)
+            }
+            geosetPositionKeys.add(getCoincidentVertexKey(geoset.Vertices, vertexIndex))
+        }
+    }
+
+    for (const [geosetIndex, positionKeys] of positionKeysByGeoset.entries()) {
+        const geoset = renderer?.model?.Geosets?.[geosetIndex]
+        if (!geoset?.Vertices) continue
+
+        const vertexCount = Math.floor(geoset.Vertices.length / 3)
+        for (let vertexIndex = 0; vertexIndex < vertexCount; vertexIndex += 1) {
+            const positionKey = getCoincidentVertexKey(geoset.Vertices, vertexIndex)
+            if (!positionKeys.has(positionKey)) continue
+
+            const uniqueKey = `${geosetIndex}-${vertexIndex}`
+            if (uniqueVertexKeys.has(uniqueKey)) continue
+
+            uniqueVertexKeys.add(uniqueKey)
+            result.push({ geosetIndex, index: vertexIndex })
+        }
+    }
+
+    return result
+}
+
+function computeSelectionStats(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    renderer: any,
+    selections: SelectionId[]
+): SelectionStats | null {
+    if (!renderer || selections.length === 0) {
+        return null
+    }
+
+    let sumX = 0
+    let sumY = 0
+    let sumZ = 0
+    let validCount = 0
+
+    for (const sel of selections) {
+        const geoset = renderer.model?.Geosets?.[sel.geosetIndex]
+        if (!geoset?.Vertices) continue
+
+        const vertexOffset = sel.index * 3
+        const x = geoset.Vertices[vertexOffset]
+        const y = geoset.Vertices[vertexOffset + 1]
+        const z = geoset.Vertices[vertexOffset + 2]
+        if (![x, y, z].every(Number.isFinite)) continue
+
+        sumX += x
+        sumY += y
+        sumZ += z
+        validCount += 1
+    }
+
+    if (validCount === 0) {
+        return null
+    }
+
+    return {
+        count: validCount,
+        center: [sumX / validCount, sumY / validCount, sumZ / validCount]
+    }
 }
 
 export const VertexEditor: React.FC<VertexEditorProps> = ({ renderer, onBeginUpdate }) => {
+    const cachedRenderer = useModelStore((state) => state.cachedRenderer)
     const selectedVertexIds = useSelectionStore((state) => state.selectedVertexIds)
+    const selectedFaceIds = useSelectionStore((state) => state.selectedFaceIds)
     const geometrySubMode = useSelectionStore((state) => state.geometrySubMode)
     const mainMode = useSelectionStore((state) => state.mainMode)
+    const [selectionStats, setSelectionStats] = useState<SelectionStats | null>(null)
     const [centerPosition, setCenterPosition] = useState<Vec3 | null>(null)
     const [multiOffset, setMultiOffset] = useState<Vec3>(ZERO_VECTOR)
     const startCenterPosition = useRef<Vec3 | null>(null)
+    const isEditingCenterInput = useRef(false)
 
-    const activeRenderer = renderer ?? useModelStore.getState().cachedRenderer
+    const activeRenderer = renderer ?? cachedRenderer
+    const isGeometrySelectionMode = geometrySubMode === 'vertex' || geometrySubMode === 'face' || geometrySubMode === 'group'
 
-    const selectionStats = useMemo(() => {
-        if (!activeRenderer || !Array.isArray(selectedVertexIds) || selectedVertexIds.length === 0) {
-            return null
+    const effectiveSelections = useMemo<SelectionId[]>(() => {
+        if (!activeRenderer || !isGeometrySelectionMode) {
+            return []
         }
 
-        let sumX = 0
-        let sumY = 0
-        let sumZ = 0
-        let validCount = 0
-
-        for (const sel of selectedVertexIds) {
-            const geoset = activeRenderer.model?.Geosets?.[sel.geosetIndex]
-            if (!geoset?.Vertices) continue
-            const vertexOffset = sel.index * 3
-            const x = geoset.Vertices[vertexOffset]
-            const y = geoset.Vertices[vertexOffset + 1]
-            const z = geoset.Vertices[vertexOffset + 2]
-            if (![x, y, z].every(Number.isFinite)) continue
-            sumX += x
-            sumY += y
-            sumZ += z
-            validCount += 1
+        if (geometrySubMode === 'vertex') {
+            return selectedVertexIds
         }
 
-        if (validCount === 0) return null
-
-        return {
-            count: validCount,
-            center: [sumX / validCount, sumY / validCount, sumZ / validCount] as Vec3
-        }
-    }, [activeRenderer, selectedVertexIds])
+        return collectExpandedFaceVertices(activeRenderer, selectedFaceIds)
+    }, [activeRenderer, geometrySubMode, isGeometrySelectionMode, selectedFaceIds, selectedVertexIds])
 
     useEffect(() => {
-        if (!activeRenderer || geometrySubMode !== 'vertex' || mainMode !== 'geometry' || selectedVertexIds.length === 0) {
+        const hasSelection = mainMode === 'geometry' && isGeometrySelectionMode && effectiveSelections.length > 0
+        if (!activeRenderer || !hasSelection) {
+            setSelectionStats(null)
             setCenterPosition(null)
             setMultiOffset(ZERO_VECTOR)
             startCenterPosition.current = null
             return
         }
 
-        if (selectionStats) {
-            const nextCenter: Vec3 = [...selectionStats.center]
-            setCenterPosition(nextCenter)
-            startCenterPosition.current = [...nextCenter]
-        } else {
-            setCenterPosition(null)
-            startCenterPosition.current = null
+        let isCancelled = false
+        let frameId = 0
+
+        const syncSelectionStats = () => {
+            if (isCancelled) return
+
+            const nextStats = computeSelectionStats(activeRenderer, effectiveSelections)
+            setSelectionStats((previousStats) => selectionStatsEqual(previousStats, nextStats) ? previousStats : nextStats)
+
+            if (!isEditingCenterInput.current) {
+                if (nextStats) {
+                    const nextCenter: Vec3 = [...nextStats.center]
+                    setCenterPosition((previousCenter) => vectorsEqual(previousCenter, nextCenter) ? previousCenter : nextCenter)
+                    startCenterPosition.current = [...nextCenter]
+                } else {
+                    setCenterPosition(null)
+                    startCenterPosition.current = null
+                }
+            }
+
+            frameId = window.requestAnimationFrame(syncSelectionStats)
         }
-        setMultiOffset(ZERO_VECTOR)
-    }, [activeRenderer, selectedVertexIds, geometrySubMode, mainMode, selectionStats])
+
+        syncSelectionStats()
+
+        return () => {
+            isCancelled = true
+            window.cancelAnimationFrame(frameId)
+        }
+    }, [activeRenderer, effectiveSelections, isGeometrySelectionMode, mainMode])
+
+    const syncAffectedGeosetsToStore = (changes: VertexChange[]) => {
+        const affectedGeosets = new Set(changes.map((change) => change.geosetIndex))
+        affectedGeosets.forEach((index) => {
+            const vertices = activeRenderer?.model?.Geosets?.[index]?.Vertices
+            if (vertices) {
+                useModelStore.getState().updateGeoset(index, { Vertices: Array.from(vertices) })
+            }
+        })
+    }
 
     const buildSelectionChanges = (delta: Vec3): VertexChange[] => {
         if (!activeRenderer) return []
 
         const changes: VertexChange[] = []
-        selectedVertexIds.forEach((sel) => {
+        effectiveSelections.forEach((sel) => {
             const geoset = activeRenderer.model?.Geosets?.[sel.geosetIndex]
             if (!geoset?.Vertices) return
+
             const vertexOffset = sel.index * 3
             const oldPos: Vec3 = [
                 geoset.Vertices[vertexOffset] ?? 0,
@@ -106,6 +307,7 @@ export const VertexEditor: React.FC<VertexEditorProps> = ({ renderer, onBeginUpd
                 oldPos[1] + delta[1],
                 oldPos[2] + delta[2]
             ]
+
             changes.push({
                 geosetIndex: sel.geosetIndex,
                 vertexIndex: sel.index,
@@ -161,119 +363,145 @@ export const VertexEditor: React.FC<VertexEditorProps> = ({ renderer, onBeginUpd
     const handleMultiCommit = () => {
         executeSelectionMove(multiOffset, () => {
             setMultiOffset(ZERO_VECTOR)
-            if (selectionStats) {
-                const nextCenter: Vec3 = [
-                    selectionStats.center[0] + multiOffset[0],
-                    selectionStats.center[1] + multiOffset[1],
-                    selectionStats.center[2] + multiOffset[2]
-                ]
-                setCenterPosition(nextCenter)
-                startCenterPosition.current = [...nextCenter]
-            }
         })
     }
 
-    const syncAffectedGeosetsToStore = (changes: VertexChange[]) => {
-        const affectedGeosets = new Set(changes.map((change) => change.geosetIndex))
-        affectedGeosets.forEach((index) => {
-            const vertices = activeRenderer?.model?.Geosets?.[index]?.Vertices
-            if (vertices) {
-                useModelStore.getState().updateGeoset(index, { Vertices: Array.from(vertices) })
-            }
-        })
-    }
+    if (mainMode !== 'geometry' || !isGeometrySelectionMode || effectiveSelections.length === 0) return null
 
-    if (mainMode !== 'geometry' || geometrySubMode !== 'vertex' || selectedVertexIds.length === 0) return null
+    const modeLabel = getGeometryModeLabel(geometrySubMode)
+
+    const renderAxisLabel = (axis: 'x' | 'y' | 'z') => (
+        <Space size={8} style={{ width: '40px' }}>
+            <span style={{
+                width: '10px',
+                height: '10px',
+                borderRadius: '2px',
+                backgroundColor: getAxisColor(axis),
+                display: 'inline-block'
+            }} />
+            <Text strong style={{ fontSize: '12px', color: 'rgba(255, 255, 255, 0.85)' }}>
+                {axis.toUpperCase()}
+            </Text>
+        </Space>
+    )
 
     const renderNumberInput = (
         value: number,
         onChange: (value: number | null) => void,
-        onCommit: () => void
+        onCommit: () => void,
+        onFocus?: () => void,
+        onBlur?: () => void
     ) => (
-        <input
-            type="number"
-            step="0.0001"
-            value={Number.isFinite(value) ? value : 0}
-            onChange={(event) => {
-                const nextValue = event.target.value
-                onChange(nextValue === '' ? null : Number(nextValue))
+        <SmartInputNumber
+            style={{ width: '100%' }}
+            size="small"
+            step="0.00001"
+            precision={5}
+            value={value}
+            onChange={(val) => {
+                onChange(val === null || val === undefined ? null : Number(val))
             }}
-            onBlur={onCommit}
-            onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                    onCommit()
-                }
+            onFocus={onFocus}
+            onBlur={() => {
+                onCommit()
+                onBlur?.()
             }}
-            style={inputStyle}
-            className="vertex-editor-number-input"
+            onPressEnter={(e) => {
+                ;(e.target as HTMLInputElement).blur()
+            }}
         />
     )
 
     return (
-        <div style={{
-            position: 'absolute',
-            top: '60px',
-            right: '20px',
-            backgroundColor: 'rgba(0, 0, 0, 0.85)',
-            padding: '12px',
-            borderRadius: '8px',
-            color: 'white',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '8px',
-            zIndex: 100,
-            minWidth: '180px',
-            border: '1px solid #434343'
-        }}>
-            <style>{`
-                .vertex-editor-number-input::-webkit-outer-spin-button,
-                .vertex-editor-number-input::-webkit-inner-spin-button {
-                    -webkit-appearance: none;
-                    margin: 0;
-                }
-            `}</style>
-            {centerPosition && (
-                <>
-                    <div style={{ fontSize: '12px', marginBottom: '2px', color: '#aaa' }}>中心点坐标</div>
-                    <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
-                        <span style={{ color: '#ff4d4f', width: '15px' }}>X:</span>
-                        {renderNumberInput(centerPosition[0], (value) => handleCenterChange(0, value), handleCenterCommit)}
-                    </div>
-                    <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
-                        <span style={{ color: '#52c41a', width: '15px' }}>Y:</span>
-                        {renderNumberInput(centerPosition[1], (value) => handleCenterChange(1, value), handleCenterCommit)}
-                    </div>
-                    <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
-                        <span style={{ color: '#1890ff', width: '15px' }}>Z:</span>
-                        {renderNumberInput(centerPosition[2], (value) => handleCenterChange(2, value), handleCenterCommit)}
-                    </div>
-                    <Divider style={{ margin: '8px 0', borderColor: '#434343' }} />
-                </>
-            )}
-
-            <div style={{ fontSize: '12px', marginBottom: '2px', color: '#aaa' }}>叠加位移</div>
-            {selectionStats && (
-                <div style={{ fontSize: '11px', color: '#777', marginBottom: '4px' }}>
-                    当前中心点 {`${selectionStats.center[0].toFixed(3)}, ${selectionStats.center[1].toFixed(3)}, ${selectionStats.center[2].toFixed(3)}`}
+        <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
+            <div style={panelStyle} onMouseDown={(e) => e.stopPropagation()}>
+                <div style={headerStyle}>
+                    <Space direction="vertical" size={0}>
+                        <Title level={5} style={{ margin: 0, fontSize: '14px' }}>
+                            变换中心
+                        </Title>
+                        <Text type="secondary" style={{ fontSize: '11px' }}>
+                            精确编辑选区坐标
+                        </Text>
+                    </Space>
+                    <Tag bordered={false} color="blue" style={{ margin: 0, opacity: 0.8 }}>
+                        <GatewayOutlined /> {modeLabel}模式
+                    </Tag>
                 </div>
-            )}
-            <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
-                <span style={{ color: '#ff4d4f', width: '15px' }}>X:</span>
-                {renderNumberInput(multiOffset[0], (value) => handleMultiOffsetChange(0, value), handleMultiCommit)}
-            </div>
-            <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
-                <span style={{ color: '#52c41a', width: '15px' }}>Y:</span>
-                {renderNumberInput(multiOffset[1], (value) => handleMultiOffsetChange(1, value), handleMultiCommit)}
-            </div>
-            <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
-                <span style={{ color: '#1890ff', width: '15px' }}>Z:</span>
-                {renderNumberInput(multiOffset[2], (value) => handleMultiOffsetChange(2, value), handleMultiCommit)}
-            </div>
-            <Divider style={{ margin: '8px 0', borderColor: '#434343' }} />
 
-            <div style={{ fontSize: '11px', color: '#888' }}>
-                已选择 {selectedVertexIds.length} 个顶点
+                <div style={contentStyle}>
+                    {centerPosition && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                            <div style={sectionTitleStyle}>
+                                <AimOutlined /> 中心点坐标
+                            </div>
+                            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    {renderAxisLabel('x')}
+                                    {renderNumberInput(
+                                        centerPosition[0],
+                                        (value) => handleCenterChange(0, value),
+                                        handleCenterCommit,
+                                        () => { isEditingCenterInput.current = true },
+                                        () => { isEditingCenterInput.current = false }
+                                    )}
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    {renderAxisLabel('y')}
+                                    {renderNumberInput(
+                                        centerPosition[1],
+                                        (value) => handleCenterChange(1, value),
+                                        handleCenterCommit,
+                                        () => { isEditingCenterInput.current = true },
+                                        () => { isEditingCenterInput.current = false }
+                                    )}
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    {renderAxisLabel('z')}
+                                    {renderNumberInput(
+                                        centerPosition[2],
+                                        (value) => handleCenterChange(2, value),
+                                        handleCenterCommit,
+                                        () => { isEditingCenterInput.current = true },
+                                        () => { isEditingCenterInput.current = false }
+                                    )}
+                                </div>
+                            </Space>
+                        </div>
+                    )}
+
+                    <Divider style={{ margin: '4px 0', borderColor: 'rgba(255, 255, 255, 0.06)' }} />
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        <div style={sectionTitleStyle}>
+                            <ExpandOutlined /> 叠加位移
+                        </div>
+                        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                {renderAxisLabel('x')}
+                                {renderNumberInput(multiOffset[0], (value) => handleMultiOffsetChange(0, value), handleMultiCommit)}
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                {renderAxisLabel('y')}
+                                {renderNumberInput(multiOffset[1], (value) => handleMultiOffsetChange(1, value), handleMultiCommit)}
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                {renderAxisLabel('z')}
+                                {renderNumberInput(multiOffset[2], (value) => handleMultiOffsetChange(2, value), handleMultiCommit)}
+                            </div>
+                        </Space>
+                    </div>
+                </div>
+
+                <div style={footerStyle}>
+                    <Text type="secondary" style={{ fontSize: '11px' }}>
+                        选中 <Text strong style={{ color: '#fff' }}>{selectionStats?.count ?? effectiveSelections.length}</Text> 个顶点
+                    </Text>
+                    <Tag icon={<SyncOutlined spin={false} />} color="success" bordered={false} style={{ margin: 0, fontSize: '10px' }}>
+                        实时同步
+                    </Tag>
+                </div>
             </div>
-        </div>
+        </ConfigProvider>
     )
 }
