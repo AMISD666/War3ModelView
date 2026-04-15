@@ -1,7 +1,6 @@
 ﻿import React, { useState, useEffect, useRef } from 'react';
 import { Modal, Checkbox, Slider, InputNumber, Button, Row, Col, Typography, Divider } from 'antd';
 import Draggable, { DraggableData, DraggableEvent } from 'react-draggable';
-import { clearAndFixModel, IClearConfig } from '../../utils/modelUtils';
 import { useRpcClient } from '../../hooks/useRpc';
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame';
 
@@ -331,4 +330,3 @@ const ModelOptimizeModal: React.FC<ModelOptimizeModalProps> = ({ visible, onClos
 };
 
 export default ModelOptimizeModal;
-

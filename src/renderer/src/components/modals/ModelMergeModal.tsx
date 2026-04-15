@@ -22,8 +22,12 @@ import {
     BoneMatchResult,
     parseModelBuffer,
     computeBoneMatch,
-    collectBoneNames
+    collectBoneNames,
+    mergeAnimations,
+    mergeGeosets
 } from '../../utils/modelMerge';
+
+type MergeMode = 'geosets' | 'animations'
 
 interface ModelMergeModalProps {
     visible: boolean;
@@ -67,7 +71,11 @@ const ModelMergeModal: React.FC<ModelMergeModalProps> = ({ visible, onClose, isS
             try {
                 await ensureTauri();
                 const buffer = await tauriFs.readFile(rpcState.modelPath);
-                const arrayBuffer = buffer instanceof ArrayBuffer ? buffer : (buffer as Uint8Array).buffer;
+                const arrayBuffer = buffer instanceof ArrayBuffer
+                    ? buffer
+                    : buffer.buffer instanceof ArrayBuffer
+                        ? buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
+                        : buffer.slice().buffer;
                 const parsed = parseModelBuffer(arrayBuffer, rpcState.modelPath);
                 setModel1Data(parsed);
             } catch (err) {
@@ -113,7 +121,11 @@ const ModelMergeModal: React.FC<ModelMergeModalProps> = ({ visible, onClose, isS
             setStatusMsg(`正在加载 ${filePath.split('\\').pop() || filePath.split('/').pop()}...`);
 
             const buffer = await tauriFs.readFile(filePath);
-            const arrayBuffer = buffer instanceof ArrayBuffer ? buffer : (buffer as Uint8Array).buffer;
+            const arrayBuffer = buffer instanceof ArrayBuffer
+                ? buffer
+                : buffer.buffer instanceof ArrayBuffer
+                    ? buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
+                    : buffer.slice().buffer;
             const parsed = parseModelBuffer(arrayBuffer, filePath);
 
             if (target === 'model1') {
@@ -145,8 +157,8 @@ const ModelMergeModal: React.FC<ModelMergeModalProps> = ({ visible, onClose, isS
             } else {
                 // Non-standalone: merge locally
                 const updatedModel = mergeMode === 'geosets'
-                    ? window.War3ModelToolMerge?.mergeGeosets(model1Data, model2Data) || model1Data
-                    : window.War3ModelToolMerge?.mergeAnimations(model1Data, model2Data) || model1Data;
+                    ? mergeGeosets(model1Data, model2Data) || model1Data
+                    : mergeAnimations(model1Data, model2Data) || model1Data;
                 
                 const store = useModelStore.getState();
                 store.setModelData(updatedModel, model1Path);

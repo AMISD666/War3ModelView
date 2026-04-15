@@ -338,7 +338,6 @@ const MaterialAnimPanel: React.FC = () => {
             sequences: (effectiveModelData as any)?.Sequences || []
         }
         const windowId = windowManager.getKeyframeWindowId(payload.fieldName)
-        payload.targetWindowId = windowId
         void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload)
     }, [currentAlpha, currentTextureId, effectiveModelData, primaryLayer, primaryLayerIndex, primaryMaterialIndex])
 

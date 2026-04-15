@@ -10,11 +10,22 @@ import { getNodeIcon, getVirtualRootIcon } from './nodeUtils';
  * 添加一个虚拟根节点（ObjectId = -1）作为所有顶级节点的父节点
  */
 export function buildTreeData(nodes: ModelNode[]): TreeNode[] {
+    const uniqueNodes = Array.from(
+        nodes.reduce((map, node) => {
+            if (typeof node?.ObjectId !== 'number' || Number.isNaN(node.ObjectId)) {
+                return map;
+            }
+            if (!map.has(node.ObjectId)) {
+                map.set(node.ObjectId, node);
+            }
+            return map;
+        }, new Map<number, ModelNode>()).values()
+    );
     const nodeMap = new Map<number, TreeNode>();
     const rootNodes: TreeNode[] = [];
 
     // 第一遍：创建所有树节点
-    nodes.forEach(node => {
+    uniqueNodes.forEach(node => {
         const objectId = node.ObjectId ?? 0;  // 确保 ObjectId 有值
         const treeNode: TreeNode = {
             key: String(objectId),
@@ -29,7 +40,7 @@ export function buildTreeData(nodes: ModelNode[]): TreeNode[] {
     });
 
     // 第二遍：建立父子关系
-    nodes.forEach(node => {
+    uniqueNodes.forEach(node => {
         const treeNode = nodeMap.get(node.ObjectId);
         if (!treeNode) return;
 
@@ -48,7 +59,7 @@ export function buildTreeData(nodes: ModelNode[]): TreeNode[] {
     });
 
     // 如果没有节点，直接返回空数组
-    if (nodes.length === 0) {
+    if (uniqueNodes.length === 0) {
         return [];
     }
 

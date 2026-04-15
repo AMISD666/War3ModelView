@@ -5,6 +5,7 @@ import ModelWorker from '../workers/model-worker.worker?worker'
 import TextureAdjustWorker from '../workers/texture-adjust.worker?worker'
 import { SimpleOrbitCamera } from '../utils/SimpleOrbitCamera'
 import { decodeTextureData, getTextureCandidatePaths, loadAllTextures, normalizePath, prepareModelForTextureLoad } from './viewer/textureLoader'
+import type { WorkerLike } from './viewer/textureLoader'
 import { createModelParseCacheKey, getCachedParsedModel, setCachedParsedModel } from './viewer/modelParseCache'
 import { validateAllParticleEmitters } from './viewer/particleValidator'
 import { describePe2AnimOrScalar, pe2PreviewDebugEnabled } from '../utils/pe2PreviewDebug'
@@ -158,10 +159,13 @@ const toUint8Array = (payload: any): Uint8Array | null => {
 }
 
 const toTightArrayBuffer = (bytes: Uint8Array): ArrayBuffer => {
-  if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
+  if (bytes.buffer instanceof ArrayBuffer && bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
     return bytes.buffer
   }
-  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+  if (bytes.buffer instanceof ArrayBuffer) {
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+  }
+  return bytes.slice().buffer
 }
 
 const TEXTURE_PREVIEW_EXTENSIONS = new Set(['blp', 'tga'])
@@ -336,9 +340,9 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   onAddCameraFromView
   } = props
   const [parseWorker] = useState(() => new ModelWorker())
-  const [textureWorkers] = useState(() => {
+  const [textureWorkers] = useState<WorkerLike[]>(() => {
     const count = getTextureDecodeWorkerCount()
-    return Array.from({ length: count }, () => new ModelWorker())
+    return Array.from({ length: count }, () => new ModelWorker() as unknown as WorkerLike)
   })
   const [loading, setLoading] = useState(false)
   const [loadingStatus, setLoadingStatus] = useState('')
@@ -448,7 +452,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   useEffect(() => {
     return () => {
       parseWorker.terminate()
-      textureWorkers.forEach((worker) => worker.terminate())
+      textureWorkers.forEach((worker) => worker.terminate?.())
     }
   }, [parseWorker, textureWorkers])
 
@@ -739,7 +743,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   // Sync isLooping to renderer
   useEffect(() => {
     if (renderer && renderer.rendererData) {
-      renderer.rendererData.loop = isLooping
+      ;(renderer.rendererData as any).loop = isLooping
     }
   }, [renderer, isLooping])
 
@@ -1091,7 +1095,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           adjusted = applyTextureAdjustments(sourceImageData, normalizedAdjustments)
         }
 
-        if (queuedAdjust && areAdjustmentsEqual(normalizedAdjustments, normalizeTextureAdjustments(queuedAdjust.adjustments))) {
+        const pendingAdjustments = (queuedAdjust as LiveTextureAdjustPayload | null)?.adjustments
+        if (pendingAdjustments && areAdjustmentsEqual(normalizedAdjustments, normalizeTextureAdjustments(pendingAdjustments))) {
           continue
         }
 
@@ -1606,7 +1611,15 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         return
       }
 
-      if (ev.code === 'Backquote') {
+      const perspectiveBindings = getEffectiveBindings('view.perspective').map(normalizeKeyCombo)
+      const orthographicBindings = getEffectiveBindings('view.orthographic').map(normalizeKeyCombo)
+      if (
+        combo &&
+        (
+          perspectiveBindings.includes(normalizeKeyCombo(combo)) ||
+          orthographicBindings.includes(normalizeKeyCombo(combo))
+        )
+      ) {
         const nextPreset = cameraRef.current?.projectionMode === 'orthographic'
           ? 'perspective'
           : 'orthographic'
@@ -2293,11 +2306,11 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       const storeNodeMap = new Map<number, any>(safeStoreNodes.map((n: any) => [n.ObjectId, n]));
 
       // 1. Update full Nodes list (contains structure and hierarchy info)
-      rendererRef.current.model.Nodes = safeStoreNodes;
+      ;(rendererRef.current.model as any).Nodes = safeStoreNodes;
 
       // 2. Update specific lists used by renderer (Lights, etc.)
       // Note: war3-model might cache these, so we update them explicitly.
-      rendererRef.current.model.Lights = safeStoreNodes.filter((n: any) => n && n.type === 'Light');
+      ;(rendererRef.current.model as any).Lights = safeStoreNodes.filter((n: any) => n && n.type === 'Light');
       // Update other types if necessary (cameras, emitters, etc.)
 
       // 3. Force caching/update if possible. 
@@ -2351,7 +2364,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   const structureUpdateTrigger = useModelStore(state => state.rendererReloadTrigger)
   useEffect(() => {
     if (rendererRef.current && (rendererRef.current as any).modelInstance && structureUpdateTrigger > 0) {      // Update the model's master node list
-      rendererRef.current.model.Nodes = useModelStore.getState().nodes
+      ;(rendererRef.current.model as any).Nodes = useModelStore.getState().nodes
 
       // Call syncNodes to rebuild rendererData.nodes and rootNode children
       // This ensures all wrappers match the new ObjectIds
@@ -2373,10 +2386,10 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     if (rendererRef.current && (rendererRef.current as any).modelInstance && materialUpdateTrigger > 0) {
       const storeData = useModelStore.getState().modelData;
       if (storeData) {
-        if (storeData.Materials) rendererRef.current.model.Materials = storeData.Materials;
-        if (storeData.Textures) rendererRef.current.model.Textures = storeData.Textures;
-        if (storeData.Geosets) rendererRef.current.model.Geosets = storeData.Geosets;
-        if (storeData.TextureAnims) rendererRef.current.model.TextureAnims = storeData.TextureAnims;
+        if (storeData.Materials) (rendererRef.current.model as any).Materials = storeData.Materials;
+        if (storeData.Textures) (rendererRef.current.model as any).Textures = storeData.Textures;
+        if (storeData.Geosets) (rendererRef.current.model as any).Geosets = storeData.Geosets;
+        if (storeData.TextureAnims) (rendererRef.current.model as any).TextureAnims = storeData.TextureAnims;
       }
 
       const instance = (rendererRef.current as any).modelInstance;
@@ -3566,7 +3579,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       // Texture preview mode (.blp/.tga)
       if (isTexturePreviewPath(path)) {
         const bytes = await readPathBytes(path)
-        const imageData = decodeTextureData(toTightArrayBuffer(bytes), path, { preferredBLPMip: 0 })
+        const imageData = decodeTextureData(toTightArrayBuffer(bytes), path, { preferBlpBaseMip: true })
         if (!imageData) {
           throw new Error(`无法解码贴图文件: ${path}`)
         }
@@ -4002,7 +4015,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           if (import.meta.env.DEV) {          }
         }
         if (Array.isArray(modelData.Materials) && modelData.Materials.length > 0) {          const sanitizedMaterials = sanitizeMaterialsForRenderer(modelData.Materials, renderer.model.Textures?.length || 0)
-          renderer.model.Materials = cloneMaterialsWithReferenceBlendCompat(sanitizedMaterials)
+          ;(renderer.model as any).Materials = cloneMaterialsWithReferenceBlendCompat(sanitizedMaterials)
           // Lightweight sync: rebuild materialLayerTextureID cache
           if ((renderer as any).modelInstance && typeof (renderer as any).modelInstance.syncMaterials === 'function') {
             (renderer as any).modelInstance.syncMaterials()
@@ -4121,10 +4134,10 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           renderer.model.PivotPoints = modelData.PivotPoints
         }
         if (modelData.MinimumExtent) {
-          renderer.model.MinimumExtent = modelData.MinimumExtent
+          ;(renderer.model as any).MinimumExtent = modelData.MinimumExtent
         }
         if (modelData.MaximumExtent) {
-          renderer.model.MaximumExtent = modelData.MaximumExtent
+          ;(renderer.model as any).MaximumExtent = modelData.MaximumExtent
         }
         if ((modelData as any).Extents) {
           ; (renderer.model as any).Extents = (modelData as any).Extents
@@ -4425,9 +4438,10 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                     (interval as any).length >= 2
 
                   if ((hasSpecificGlobalSequence || hasInterval) && Number.isFinite(storeFrame)) {
+                    const safeInterval = interval ?? [0, 0]
                     const targetFrame = hasSpecificGlobalSequence
                       ? Math.min(Math.max(storeFrame, 0), activeGlobalSequenceDuration)
-                      : Math.min(Math.max(storeFrame, Number(interval[0])), Number(interval[1]))
+                      : Math.min(Math.max(storeFrame, Number(safeInterval[0])), Number(safeInterval[1]))
 
                     // Deterministic paused preview:
                     // Keep a single authoritative frame for ribbons and other anim channels.
@@ -5292,7 +5306,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                   const nodeWrapper = mdlRenderer.rendererData.nodes.find((n: any) => n.node.ObjectId === light.ObjectId)
                   if (!nodeWrapper) return
 
-                  let worldMatrix = nodeWrapper.worldMatrix || nodeWrapper.matrix
+                  let worldMatrix = (nodeWrapper as any).worldMatrix || (nodeWrapper as any).matrix
                   if (!worldMatrix) worldMatrix = mat4.create()
 
                   mat4.multiply(nodeMVMatrix, viewMatrix, worldMatrix)
@@ -5638,7 +5652,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                   if (nodeWrapper && nodeWrapper.matrix) {
                     // 使用矩阵变换 PivotPoint 获取正确的世界坐标
                     const matrix = nodeWrapper.matrix
-                    let pivot = [0, 0, 0]
+                    let pivot: ArrayLike<number> = [0, 0, 0]
                     if (nodeWrapper.node && nodeWrapper.node.PivotPoint) {
                       pivot = nodeWrapper.node.PivotPoint
                     } else if (mdlRenderer.model.PivotPoints && mdlRenderer.model.PivotPoints[nodeId]) {
@@ -5854,10 +5868,11 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       let count = 0
 
       for (const nodeWrapper of rendererNodes) {
-        const matrix = nodeWrapper?.matrix
-        if (!matrix) continue
+        const matrixValue = nodeWrapper?.matrix
+        if (!matrixValue) continue
+        const matrix = matrixValue as mat4
 
-        let pivot = nodeWrapper?.node?.PivotPoint
+        let pivot: ArrayLike<number> | undefined = nodeWrapper?.node?.PivotPoint
         const objectId = Number(nodeWrapper?.node?.ObjectId)
         if ((!pivot || pivot.length < 3) && Number.isInteger(objectId)) {
           pivot = renderer?.model?.PivotPoints?.[objectId]
@@ -6055,7 +6070,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
       for (const nodeId of selectedNodeIds) {
         const nodeWrapper = rendererRef.current.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
         if (!nodeWrapper?.matrix) continue
-        let pivot = [0, 0, 0]
+        let pivot: ArrayLike<number> = [0, 0, 0]
         if (nodeWrapper.node && nodeWrapper.node.PivotPoint) {
           pivot = nodeWrapper.node.PivotPoint
         } else if (rendererRef.current.model.PivotPoints && rendererRef.current.model.PivotPoints[nodeId]) {
@@ -6645,7 +6660,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                           InTan: k.InTan ? (Array.isArray(k.InTan) ? [...k.InTan] : Array.from(k.InTan)) : undefined,
                           OutTan: k.OutTan ? (Array.isArray(k.OutTan) ? [...k.OutTan] : Array.from(k.OutTan)) : undefined
                         }))
-                      rendererNode.Translation = {
+                      ;(rendererNode as any).Translation = {
                         Keys: copiedKeys,
                         InterpolationType: storeNode?.Translation?.InterpolationType || 1
                       }
@@ -6654,7 +6669,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                     // 获取基础值：优先使用现有关键帧，否则实时从 store 插值
                     let baseTranslation = [0, 0, 0]
                     let baseSource = 'default'
-                    const existingKey = rendererNode.Translation.Keys.find(
+                    const translationKeys = (((rendererNode as any).Translation?.Keys) || []) as any[]
+                    const existingKey = translationKeys.find(
                       (k: any) => !k._isPreviewKey && Math.abs(k.Frame - frame) < 0.1
                     )
 
@@ -6711,17 +6727,17 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                     ]
 
                     // 在当前帧注入临时关键帧用于预览
-                    const tempKeyIndex = rendererNode.Translation.Keys.findIndex((k: any) => k._isPreviewKey)
+                    const tempKeyIndex = translationKeys.findIndex((k: any) => k._isPreviewKey)
                     if (tempKeyIndex >= 0) {
-                      rendererNode.Translation.Keys[tempKeyIndex].Vector = previewTranslation
-                      rendererNode.Translation.Keys[tempKeyIndex].Frame = frame
+                      translationKeys[tempKeyIndex].Vector = previewTranslation
+                      translationKeys[tempKeyIndex].Frame = frame
                     } else {
-                      rendererNode.Translation.Keys.push({
+                      translationKeys.push({
                         Frame: frame,
                         Vector: previewTranslation,
                         _isPreviewKey: true
                       })
-                      rendererNode.Translation.Keys.sort((a: any, b: any) => a.Frame - b.Frame)
+                      translationKeys.sort((a: any, b: any) => a.Frame - b.Frame)
                     }
                   }
                 }
@@ -6872,8 +6888,8 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             const nodeWrapper = rendererRef.current!.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
             if (nodeWrapper) {
               // Get current interpolated value
-              const currentRot = nodeWrapper.localRotation ? quat.clone(nodeWrapper.localRotation) : quat.create()
-              const currentScale = nodeWrapper.localScale ? vec3.clone(nodeWrapper.localScale) : vec3.fromValues(1, 1, 1)
+              const currentRot = (nodeWrapper as any).localRotation ? quat.clone((nodeWrapper as any).localRotation) : quat.create()
+              const currentScale = (nodeWrapper as any).localScale ? vec3.clone((nodeWrapper as any).localScale) : vec3.fromValues(1, 1, 1)
 
               keyframeDragData.current!.initialValues.set(nodeId, {
                 rotation: currentRot as Float32Array,
@@ -6889,7 +6905,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           const nodeWrapper = rendererRef.current!.rendererData.nodes.find((n: any) => n.node.ObjectId === nodeId)
           if (nodeWrapper) {
             const matrix = nodeWrapper.matrix
-            let pivot = [0, 0, 0]
+            let pivot: ArrayLike<number> = [0, 0, 0]
             const resolvedPivot = getOrCreateNodePivot(nodeWrapper)
             if (resolvedPivot) pivot = resolvedPivot
             const x = matrix[0] * pivot[0] + matrix[4] * pivot[1] + matrix[8] * pivot[2] + matrix[12]
@@ -6914,7 +6930,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           }
 
           if (axis === 'x' || axis === 'y' || axis === 'z') {
-            applyHudRotate(axis, angle * 180 / Math.PI)
+            applyHudRotate(axis as 'x' | 'y' | 'z', angle * 180 / Math.PI)
           }
           if (angle !== 0) {
             keyframeTransformDirty.current = true
@@ -6965,13 +6981,13 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                         InTan: k.InTan ? (Array.isArray(k.InTan) ? [...k.InTan] : Array.from(k.InTan)) : undefined,
                         OutTan: k.OutTan ? (Array.isArray(k.OutTan) ? [...k.OutTan] : Array.from(k.OutTan)) : undefined
                       }))
-                    rendererNode.Rotation = {
+                    ;(rendererNode as any).Rotation = {
                       Keys: copiedKeys,
                       InterpolationType: storeNode?.Rotation?.InterpolationType || 1
                     }
                   }
 
-                  const keys = rendererNode.Rotation.Keys || []
+                  const keys = ((((rendererNode as any).Rotation)?.Keys) || []) as any[]
                   const previewIndex = keys.findIndex((k: any) => k._isPreviewKey)
                   if (previewIndex >= 0) {
                     keys[previewIndex].Vector = [newRot[0], newRot[1], newRot[2], newRot[3]]
@@ -7030,13 +7046,13 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                       InTan: k.InTan ? (Array.isArray(k.InTan) ? [...k.InTan] : Array.from(k.InTan)) : undefined,
                       OutTan: k.OutTan ? (Array.isArray(k.OutTan) ? [...k.OutTan] : Array.from(k.OutTan)) : undefined
                     }))
-                  rendererNode.Scaling = {
+                  ;(rendererNode as any).Scaling = {
                     Keys: copiedKeys,
                     InterpolationType: storeNode?.Scaling?.InterpolationType || 1
                   }
                 }
 
-                const keys = rendererNode.Scaling.Keys || []
+                const keys = ((((rendererNode as any).Scaling)?.Keys) || []) as any[]
                 const previewIndex = keys.findIndex((k: any) => k._isPreviewKey)
                 if (previewIndex >= 0) {
                   keys[previewIndex].Vector = [newScale[0], newScale[1], newScale[2]]

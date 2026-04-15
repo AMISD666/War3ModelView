@@ -9,6 +9,8 @@ import { windowManager } from '../../utils/WindowManager'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useRpcClient } from '../../hooks/useRpc'
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
+import { vectorToPlainArray } from '../../utils/animVectorIpc'
+import { coercePivotFloat3 } from '../../utils/pivotUtils'
 
 const { Text } = Typography
 
@@ -39,9 +41,9 @@ const cloneAnimVector = (animVector: any, size: number) => {
     if (!animVector || typeof animVector !== 'object') return animVector
 
     const toArray = (val: any): number[] => {
-        if (ArrayBuffer.isView(val)) return Array.from(val as ArrayLike<number>).slice(0, size)
-        if (Array.isArray(val)) return val.slice(0, size)
-        if (typeof val === 'number') return [val]
+        const values = vectorToPlainArray(val).slice(0, size)
+        if (values.length >= size) return values
+        if (values.length > 0) return [...values, ...new Array(size - values.length).fill(0)]
         return new Array(size).fill(0)
     }
 
@@ -61,7 +63,7 @@ const normalizeAlphaKeys = (keys: any[]): any[] => {
     if (!Array.isArray(keys)) return []
     const normalized = keys.map((key) => {
         const frame = typeof key?.Frame === 'number' ? key.Frame : Number(key?.Time ?? 0)
-        const vectorRaw = ArrayBuffer.isView(key?.Vector) ? Array.from(key.Vector as ArrayLike<number>) : key?.Vector
+        const vectorRaw = vectorToPlainArray(key?.Vector)
         const value = Array.isArray(vectorRaw) ? Number(vectorRaw[0] ?? 0) : Number(vectorRaw ?? 0)
         return {
             Frame: Number.isFinite(frame) ? Math.round(frame) : 0,
@@ -119,7 +121,7 @@ const parseSequenceInterval = (interval: any): [number, number] => {
         start = Number(interval[0] ?? 0)
         end = Number(interval[1] ?? start)
     } else if (ArrayBuffer.isView(interval)) {
-        const values = Array.from(interval as ArrayLike<number>)
+        const values = Array.from(interval as unknown as ArrayLike<number>)
         start = Number(values[0] ?? 0)
         end = Number(values[1] ?? start)
     } else if (interval && typeof interval === 'object') {
@@ -174,7 +176,7 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
         if (isStandalone) {
             emitCommand('EXECUTE_VISIBILITY_ACTION', { action: 'SET_SEQUENCE', payload: seqId })
         } else {
-            directSetSequence(seqId)
+            directSetSequence(seqId ?? -1)
         }
     }
 
@@ -294,7 +296,10 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
             const cloned = { ...anim }
             if (isAnimVector(anim?.Alpha)) cloned.Alpha = cloneAnimVector(anim.Alpha, 1)
             if (isAnimVector(anim?.Color)) cloned.Color = cloneAnimVector(anim.Color, 3)
-            if (ArrayBuffer.isView(anim?.Color)) cloned.Color = Array.from(anim.Color as ArrayLike<number>)
+            if (ArrayBuffer.isView(anim?.Color)) {
+                const color = coercePivotFloat3(anim.Color as Float32Array | Uint8Array | number[])
+                cloned.Color = color ? [color[0], color[1], color[2]] : vectorToPlainArray(anim.Color).slice(0, 3)
+            }
             return cloned
         })
         setLocalAnims(clonedAnims)
@@ -475,7 +480,7 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
         // Actually, since we're generating the default track right now, let's just generate the payload directly:
         let animIndex = getAnimIndexByGeosetId(nextAnims, targetGeosetId)
 
-        let initialData = null
+        let initialData: any = null
         if (animIndex >= 0 && isAnimVector(nextAnims[animIndex].Alpha)) {
             initialData = nextAnims[animIndex].Alpha
         } else {
@@ -500,7 +505,6 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
         };
 
         const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
-        payload.targetWindowId = windowId;
 
         void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload);
     }
@@ -689,4 +693,3 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
 }
 
 export default GeosetVisibilityToolModal
-

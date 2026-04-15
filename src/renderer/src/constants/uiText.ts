@@ -258,9 +258,16 @@ export const uiText = {
     transformModelDialog: {
         title: '修改模型位置/旋转/缩放',
         translation: '平移 (Translation)',
+        translationWorld: '模型世界坐标 (包围盒中心)',
         rotation: '旋转 (Rotation)',
+        rotationWorld: '世界角度 (绕模型中心)',
         scale: '缩放 (Scale)',
+        scaleWorld: '世界尺寸 (绕模型中心)',
         syncScale: '同步缩放比例',
+        mode: '坐标模式',
+        relativeMode: '相对',
+        worldMode: '世界',
+        worldModeHint: '世界模式下：位移显示模型包围盒中心，旋转显示全局角度，缩放显示当前包围盒尺寸。',
     },
     renameNodeDialog: {
         title: '重命名节点',

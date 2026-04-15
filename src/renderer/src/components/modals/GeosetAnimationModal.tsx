@@ -13,7 +13,8 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useRpcClient } from '../../hooks/useRpc'
 import { listen } from '@tauri-apps/api/event'
 import { windowManager } from '../../utils/WindowManager'
-import { coercePivotFloat3 } from 'war3-model'
+import { coercePivotFloat3 } from '../../utils/pivotUtils'
+import { vectorToPlainArray } from '../../utils/animVectorIpc'
 import { toFloat32Array } from '../../utils/modelUtils'
 
 const { Text } = Typography
@@ -45,18 +46,12 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
 
         if (!animVector || typeof animVector !== 'object') return animVector
         const toArray = (val: any): number[] => {
-            if (ArrayBuffer.isView(val)) return Array.from(val as ArrayLike<number>).slice(0, size)
-            if (Array.isArray(val)) return val.slice(0, size)
-            if (typeof val === 'number') return [val]
-            if (val && typeof val === 'object') {
-                const arr = new Array(size).fill(0)
-                const keys = Object.keys(val).map(k => Number(k)).filter(k => !isNaN(k))
-                if (keys.length > 0) {
-                    for (const k of keys) {
-                        if (k >= 0 && k < size) arr[k] = Number(val[k]) || 0
-                    }
-                    return arr
-                }
+            const values = vectorToPlainArray(val).slice(0, size)
+            if (values.length >= size) {
+                return values
+            }
+            if (values.length > 0) {
+                return [...values, ...new Array(size - values.length).fill(0)]
             }
             return new Array(size).fill(0)
         }
@@ -361,8 +356,6 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
             };
 
             const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
-            payload.targetWindowId = windowId;
-
             // Emit instantly to update react state before visual native window paint
             void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload);
             // Legacy inline route, which we obsolete now but just in case

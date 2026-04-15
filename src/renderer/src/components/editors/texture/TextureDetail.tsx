@@ -55,7 +55,10 @@ const TextureDetail: React.FC<TextureDetailProps> = ({ texture, modelPath, onUpd
     const toArrayBuffer = (payload: any): ArrayBuffer | null => {
         const bytes = toUint8Array(payload)
         if (!bytes) return null
-        return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+        if (bytes.buffer instanceof ArrayBuffer) {
+            return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+        }
+        return bytes.slice().buffer
     }
 
     useEffect(() => {

@@ -148,6 +148,7 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
             })
             return unsubscribe
         }
+        return undefined
     }, [visible, currentGeosets, currentMaterials, rpcState.pickedGeosetIndex, localAnims.length, isStandalone])
 
     const handleAdd = () => {
@@ -234,7 +235,6 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
         };
 
         const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
-        payload.targetWindowId = windowId;
 
         void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload);
     };

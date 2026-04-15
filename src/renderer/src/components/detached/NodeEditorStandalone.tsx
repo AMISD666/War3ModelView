@@ -56,31 +56,40 @@ const NodeEditorStandalone: React.FC = () => {
     const { state, emitCommand } = useRpcClient<NodeEditorRpcState>('nodeEditor', initialRpcState)
     const sessionKeyRef = useRef('')
     const [frozenNode, setFrozenNode] = useState<any>(null)
+    const [frozenSessionKey, setFrozenSessionKey] = useState('')
     const [editorSessionRev, setEditorSessionRev] = useState(0)
+    const activeSessionKey =
+        state.kind && state.objectId >= 0
+            ? `${state.kind}:${state.objectId}`
+            : ''
 
     useEffect(() => {
-        const key = `${state.kind}:${state.objectId}`
+        const key = activeSessionKey
         if (sessionKeyRef.current !== key) {
             sessionKeyRef.current = key
             setFrozenNode(null)
+            setFrozenSessionKey('')
         }
-    }, [state.kind, state.objectId])
+    }, [activeSessionKey])
 
     useEffect(() => {
         if (state.kind === 'rename') return
-        if (frozenNode !== null) return
+        if (!activeSessionKey) return
+        if (frozenNode !== null && frozenSessionKey === activeSessionKey) return
         if (state.node && state.objectId >= 0 && state.kind) {
             try {
                 setFrozenNode(structuredClone(state.node))
             } catch {
                 setFrozenNode(JSON.parse(JSON.stringify(state.node)))
             }
+            setFrozenSessionKey(activeSessionKey)
         }
-    }, [state.node, state.objectId, state.kind, frozenNode])
+    }, [activeSessionKey, state.node, state.objectId, state.kind, frozenNode, frozenSessionKey])
 
     const handleClose = async () => {
         sessionKeyRef.current = ''
         setFrozenNode(null)
+        setFrozenSessionKey('')
         setEditorSessionRev((v) => v + 1)
         try {
             await getCurrentWindow().hide()
@@ -113,6 +122,8 @@ const NodeEditorStandalone: React.FC = () => {
             : '节点编辑器'
 
     const editorKey = `${state.kind}:${state.objectId}:${editorSessionRev}`
+    const isFrozenNodeReady =
+        state.kind === 'rename' || (frozenNode !== null && frozenSessionKey === activeSessionKey)
 
     if (!state.kind || state.objectId < 0) {
         return (
@@ -124,7 +135,7 @@ const NodeEditorStandalone: React.FC = () => {
         )
     }
 
-    if (state.kind !== 'rename' && frozenNode === null) {
+    if (!isFrozenNodeReady) {
         return (
             <ConfigProvider theme={nodeEditorStandaloneTheme}>
                 <StandaloneWindowFrame title={frameTitle} onClose={handleClose}>

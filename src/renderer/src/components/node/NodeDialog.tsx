@@ -42,6 +42,14 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
     const currentNode = nodeId !== null ? (isStandalone ? standaloneNode ?? null : getNodeById(nodeId)) : null
     const allNodes = isStandalone ? standaloneAllNodes ?? [] : getAllNodes()
 
+    const getCurrentSourceNode = React.useCallback((): ModelNode | null => {
+        if (nodeId === null) return null
+        if (isStandalone) {
+            return standaloneNode ?? null
+        }
+        return useModelStore.getState().getNodeById(nodeId) ?? null
+    }, [isStandalone, nodeId, standaloneNode])
+
     const applyCommittedNode = React.useCallback(
         (next: ModelNode, history?: { name: string; undoNode: any; redoNode: any }) => {
             if (nodeId === null) return
@@ -125,10 +133,11 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
         rotationAnim?: any
         scalingAnim?: any
     }): ModelNode | null => {
-        if (!currentNode) return null
+        const sourceNode = getCurrentSourceNode()
+        if (!sourceNode) return null
 
         return {
-            ...currentNode,
+            ...sourceNode,
             Name: values.name,
             Parent: values.parent,
             PivotPoint: [Number(values.pivotX), Number(values.pivotY), Number(values.pivotZ)],
@@ -146,7 +155,7 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
             Rotation: overrides?.rotationAnim !== undefined ? (overrides.rotationAnim || undefined) : (rotationAnim || undefined),
             Scaling: overrides?.scalingAnim !== undefined ? (overrides.scalingAnim || undefined) : (scalingAnim || undefined),
         }
-    }, [currentNode, rotationAnim, scalingAnim, translationAnim])
+    }, [getCurrentSourceNode, rotationAnim, scalingAnim, translationAnim])
 
     const { schedulePreview } = useNodeEditorPreview<ModelNode>({
         visible,
@@ -167,7 +176,8 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
     const handleSave = async () => {
         try {
             const values = await form.validateFields()
-            if (nodeId === null || !currentNode) return
+            const sourceNode = getCurrentSourceNode()
+            if (nodeId === null || !sourceNode) return
 
             const nameValidation = validateNodeName(values.name)
             if (!nameValidation.valid) {
@@ -180,7 +190,7 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
 
             applyCommittedNode(updatedNode, {
                 name: `Edit Node "${values.name}"`,
-                undoNode: currentNode,
+                undoNode: sourceNode,
                 redoNode: updatedNode,
             })
             onClose()
@@ -241,7 +251,6 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
         }
 
         const windowId = windowManager.getKeyframeWindowId(payload.fieldName)
-        payload.targetWindowId = windowId
 
         void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload)
     }

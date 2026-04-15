@@ -150,7 +150,6 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({
                                     borderColor: '#333',
                                     color: TEXT,
                                 }}
-                                styles={{ input: { color: TEXT, textAlign: 'right' } }}
                             />
 
                             <span style={{ fontSize: '11px', color: MUTED, width: '22px' }}>ms</span>

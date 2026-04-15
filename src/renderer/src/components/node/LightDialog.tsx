@@ -65,6 +65,14 @@ const LightDialog: React.FC<LightDialogProps> = ({
     const currentNode =
         nodeId !== null ? (isStandalone ? (standaloneNode as LightNode | null) : (getNodeById(nodeId) as LightNode)) : null
 
+    const getCurrentSourceNode = React.useCallback((): LightNode | null => {
+        if (nodeId === null) return null
+        if (isStandalone) {
+            return (standaloneNode as LightNode | null) ?? null
+        }
+        return (useModelStore.getState().getNodeById(nodeId) as LightNode | undefined) ?? null
+    }, [isStandalone, nodeId, standaloneNode])
+
     const applyNodeToStore = React.useCallback(
         (next: any, history?: { name: string; undoNode: any; redoNode: any }) => {
             if (nodeId === null) return
@@ -188,7 +196,6 @@ const LightDialog: React.FC<LightDialogProps> = ({
             sequences: modelData?.Sequences || [],
         }
         const windowId = windowManager.getKeyframeWindowId(payload.fieldName)
-        ;(payload as any).targetWindowId = windowId
         void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload)
     }
 
@@ -239,11 +246,12 @@ const LightDialog: React.FC<LightDialogProps> = ({
     const handleOk = async () => {
         try {
             const values = await form.validateFields()
-            if (!currentNode || nodeId === null) return
+            const sourceNode = getCurrentSourceNode()
+            if (!sourceNode || nodeId === null) return
             let lightTypeVal = 0
             if (values.LightType === 'Directional') lightTypeVal = 1
             else if (values.LightType === 'Ambient') lightTypeVal = 2
-            const updatedNode: any = { ...currentNode, LightType: lightTypeVal }
+            const updatedNode: any = { ...sourceNode, LightType: lightTypeVal }
             const propConfigs: Array<{ prop: string; isColor: boolean; formField: string }> = [
                 { prop: 'AttenuationStart', isColor: false, formField: 'AttenuationStart' },
                 { prop: 'AttenuationEnd', isColor: false, formField: 'AttenuationEnd' },
@@ -263,7 +271,7 @@ const LightDialog: React.FC<LightDialogProps> = ({
                     if (animKey) delete updatedNode[animKey]
                 }
             })
-            applyNodeToStore(updatedNode, { name: uiText.lightDialog.editHistory, undoNode: currentNode, redoNode: updatedNode })
+            applyNodeToStore(updatedNode, { name: uiText.lightDialog.editHistory, undoNode: sourceNode, redoNode: updatedNode })
             onClose()
         } catch (e) {
             console.error('Validation failed', e)

@@ -86,6 +86,14 @@ const ParticleEmitterDialog: React.FC<ParticleEmitterDialogProps> = ({
                 : (getNodeById(nodeId) as ParticleEmitterNode)
             : null
 
+    const getCurrentSourceNode = React.useCallback((): ParticleEmitterNode | null => {
+        if (nodeId === null) return null
+        if (isStandalone) {
+            return (standaloneNode as ParticleEmitterNode | null) ?? null
+        }
+        return (useModelStore.getState().getNodeById(nodeId) as ParticleEmitterNode | undefined) ?? null
+    }, [isStandalone, nodeId, standaloneNode])
+
     const applyNodeToStore = React.useCallback(
         (next: ParticleEmitterNode, history?: { name: string; undoNode: any; redoNode: any }) => {
             if (nodeId === null) return
@@ -141,7 +149,6 @@ const ParticleEmitterDialog: React.FC<ParticleEmitterDialogProps> = ({
             globalSequences: globalSequences as any,
         }
         const windowId = windowManager.getKeyframeWindowId(payload.fieldName)
-        ;(payload as any).targetWindowId = windowId
         void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload)
     }
 
@@ -210,15 +217,16 @@ const ParticleEmitterDialog: React.FC<ParticleEmitterDialogProps> = ({
     const handleOk = async () => {
         try {
             const values = await form.validateFields()
-            if (!currentNode || nodeId === null) return
-            let flags = Number((currentNode as any).Flags ?? 0)
+            const sourceNode = getCurrentSourceNode()
+            if (!sourceNode || nodeId === null) return
+            let flags = Number((sourceNode as any).Flags ?? 0)
             if (values.UsesMdl) flags |= EMITTER_USES_MDL
             else flags &= ~EMITTER_USES_MDL
             if (values.UsesTga) flags |= EMITTER_USES_TGA
             else flags &= ~EMITTER_USES_TGA
             const updatedNode: ParticleEmitterNode = {
-                ...currentNode,
-                ...(currentNode as any),
+                ...sourceNode,
+                ...(sourceNode as any),
                 Flags: flags as any,
                 Path: String(values.Path ?? ''),
                 FileName: String(values.Path ?? ''),
@@ -228,7 +236,7 @@ const ParticleEmitterDialog: React.FC<ParticleEmitterDialogProps> = ({
             }
             applyNodeToStore(updatedNode, {
                 name: uiText.particleEmitterDialog.editHistory,
-                undoNode: currentNode,
+                undoNode: sourceNode,
                 redoNode: updatedNode,
             })
             onClose()

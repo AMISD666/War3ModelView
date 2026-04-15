@@ -42,7 +42,7 @@ import {
     TEXTURE_ADJUSTMENTS_KEY
 } from '../utils/textureAdjustments'
 import { windowManager } from '../utils/WindowManager'
-import { repairClassicModelData } from '../utils/modelUtils'
+import { pruneModelKeyframes, repairClassicModelData } from '../utils/modelUtils'
 import {
     NODE_EDITOR_COMMANDS,
     type ApplyNodeUpdatePayload,
@@ -69,18 +69,36 @@ import { getToolWindowSize } from '../constants/windowLayouts'
  */
 const AUTO_UPDATE_CHECK_DATE_KEY = 'lastAutoUpdateCheck'
 
+const toGlobalSequenceDurations = (values: any[] | undefined | null): number[] => {
+    if (!Array.isArray(values)) return []
+    return values
+        .map((value) => (typeof value === 'number' ? value : value?.Duration))
+        .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+}
+
+const toArrayBuffer = (value: ArrayBuffer | Uint8Array): ArrayBuffer => {
+    if (value instanceof ArrayBuffer) return value
+    const { buffer, byteOffset, byteLength } = value
+    if (buffer instanceof ArrayBuffer && byteOffset === 0 && byteLength === buffer.byteLength) {
+        return buffer
+    }
+    return value.slice().buffer
+}
+
 type TextureManagerSnapshot = {
     textures: any[]
     materials: any[]
     geosets: any[]
-    globalSequences: number[]
-    modelPath: string | undefined
+    globalSequences: any[]
+    modelPath: string | null | undefined
 }
 
 type TextureManagerRpcState = {
     snapshotVersion: number
     snapshot: TextureManagerSnapshot
     pickedGeosetIndex: number | null
+    selectedMaterialIndex: number | null
+    selectedMaterialLayerIndex: number | null
 }
 
 type TextureManagerPatch = {
@@ -91,10 +109,10 @@ type MaterialManagerSnapshot = {
     materials: any[]
     textures: any[]
     geosets: any[]
-    globalSequences: number[]
+    globalSequences: any[]
     sequences: any[]
     textureAnims: any[]
-    modelPath: string | undefined
+    modelPath: string | null | undefined
 }
 
 type MaterialManagerRpcState = {
@@ -157,8 +175,8 @@ function prepareModelDataForSave(modelData: any): any {
         let start = 0;
         let end = 0;
         if (interval instanceof Uint32Array || ArrayBuffer.isView(interval)) {
-            start = Number((interval as ArrayLike<number>)[0]);
-            end = Number((interval as ArrayLike<number>)[1]);
+            start = Number((interval as unknown as ArrayLike<number>)[0]);
+            end = Number((interval as unknown as ArrayLike<number>)[1]);
         } else if (Array.isArray(interval)) {
             start = Number(interval[0]);
             end = Number(interval[1]);
@@ -239,7 +257,7 @@ function prepareModelDataForSave(modelData: any): any {
         if (arr instanceof Uint8Array) return arr;
         let values: number[] = [];
         if (ArrayBuffer.isView(arr)) {
-            values = Array.from(arr as ArrayLike<number>);
+            values = Array.from(arr as unknown as ArrayLike<number>);
         } else if (Array.isArray(arr)) {
             values = arr;
         } else if (arr && typeof arr === 'object') {
@@ -268,7 +286,7 @@ function prepareModelDataForSave(modelData: any): any {
         const Type = isInt ? Int32Array : Float32Array;
         const result = new Type(vectorSize);
         if (defaultVec) {
-            const defArr = ArrayBuffer.isView(defaultVec) ? Array.from(defaultVec as ArrayLike<number>) : Array.from(defaultVec as number[]);
+            const defArr = ArrayBuffer.isView(defaultVec) ? Array.from(defaultVec as unknown as ArrayLike<number>) : Array.from(defaultVec as number[]);
             for (let i = 0; i < vectorSize; i++) {
                 const num = Number(defArr[i]);
                 if (Number.isFinite(num)) {
@@ -294,7 +312,7 @@ function prepareModelDataForSave(modelData: any): any {
         }
 
         if (value instanceof Type || ArrayBuffer.isView(value)) {
-            const arr = Array.from(value as ArrayLike<number>);
+            const arr = Array.from(value as unknown as ArrayLike<number>);
             for (let i = 0; i < Math.min(vectorSize, arr.length); i++) {
                 assignValue(i, arr[i]);
             }
@@ -574,7 +592,7 @@ function prepareModelDataForSave(modelData: any): any {
                 geoset.Faces = toUint16Array(geoset.Faces);
             }
             if (geoset.VertexGroup) {
-                const vertexGroupValues = Array.from(geoset.VertexGroup as ArrayLike<number>, (value) => Number(value) || 0);
+                const vertexGroupValues = Array.from(geoset.VertexGroup as unknown as ArrayLike<number>, (value) => Number(value) || 0);
                 const maxGroupIndex = vertexGroupValues.reduce((max, value) => Math.max(max, Math.floor(value)), 0);
                 const TypedArrayCtor = maxGroupIndex > 255 ? Uint16Array : Uint8Array;
                 if (!(geoset.VertexGroup instanceof TypedArrayCtor)) {
@@ -1254,7 +1272,7 @@ function prepareModelDataForSave(modelData: any): any {
             if (!geoset.VertexGroup) {
                 geoset.VertexGroup = new VertexGroupCtor(vertexCount);
             } else if (!(geoset.VertexGroup instanceof VertexGroupCtor)) {
-                geoset.VertexGroup = new VertexGroupCtor(Array.from(geoset.VertexGroup as ArrayLike<number>, (value) => Number(value) || 0));
+                geoset.VertexGroup = new VertexGroupCtor(Array.from(geoset.VertexGroup as unknown as ArrayLike<number>, (value) => Number(value) || 0));
             }
             if (geoset.VertexGroup.length !== vertexCount) {
                 const fixed = new VertexGroupCtor(vertexCount);
@@ -1886,7 +1904,7 @@ const MainLayout: React.FC = () => {
     const toRpcSafeNodeSnapshot = (value: any): any => {
         if (value == null) return value
         if (ArrayBuffer.isView(value)) {
-            return Array.from(value as ArrayLike<number>)
+            return Array.from(value as unknown as ArrayLike<number>)
         }
         if (Array.isArray(value)) {
             return value.map((entry) => toRpcSafeNodeSnapshot(entry))
@@ -1931,8 +1949,8 @@ const MainLayout: React.FC = () => {
             textures: null as any[] | null,
             materials: null as any[] | null,
             geosets: null as any[] | null,
-            globalSequences: null as number[] | null,
-            modelPath: undefined as string | undefined,
+            globalSequences: null as any[] | null,
+            modelPath: undefined as string | null | undefined,
         },
     })
     const materialManagerSnapshotCacheRef = useRef({
@@ -1950,10 +1968,10 @@ const MainLayout: React.FC = () => {
             materials: null as any[] | null,
             textures: null as any[] | null,
             geosets: null as any[] | null,
-            globalSequences: null as number[] | null,
+            globalSequences: null as any[] | null,
             sequences: null as any[] | null,
             textureAnims: null as any[] | null,
-            modelPath: undefined as string | undefined,
+            modelPath: undefined as string | null | undefined,
         },
     })
     const standaloneSnapshotDispatchRef = useRef({
@@ -1984,6 +2002,7 @@ const MainLayout: React.FC = () => {
                 modelPath: '',
                 renameInitialName: '',
                 allNodes: [],
+                pivotPoints: [],
             }
         }
         const live = useModelStore.getState()
@@ -2021,6 +2040,7 @@ const MainLayout: React.FC = () => {
             modelPath: live.modelPath ?? '',
             renameInitialName: node?.Name ?? '',
             allNodes: live.nodes ?? [],
+            pivotPoints: md?.PivotPoints ?? [],
         }
     }, [])
 
@@ -2034,7 +2054,7 @@ const MainLayout: React.FC = () => {
             textures: preview?.textures ?? liveModelData?.Textures ?? null,
             materials: preview?.materials ?? liveModelData?.Materials ?? null,
             geosets: preview?.geosets ?? liveModelData?.Geosets ?? null,
-            globalSequences: liveModelData?.GlobalSequences || null,
+            globalSequences: toGlobalSequenceDurations(liveModelData?.GlobalSequences),
             modelPath: liveModelState.modelPath,
         }
 
@@ -2052,7 +2072,7 @@ const MainLayout: React.FC = () => {
                 textures: preview?.textures ?? liveModelData?.Textures ?? [],
                 materials: preview?.materials ?? liveModelData?.Materials ?? [],
                 geosets: stripGeosetData(preview?.geosets ?? liveModelData?.Geosets),
-                globalSequences: liveModelData?.GlobalSequences || [],
+                globalSequences: toGlobalSequenceDurations(liveModelData?.GlobalSequences),
                 modelPath: liveModelState.modelPath,
             }
             markStandalonePerf('texture_snapshot_cached', {
@@ -2081,7 +2101,7 @@ const MainLayout: React.FC = () => {
             materials: preview?.materials ?? liveModelData?.Materials ?? null,
             textures: preview?.textures ?? liveModelData?.Textures ?? null,
             geosets: preview?.geosets ?? liveModelData?.Geosets ?? null,
-            globalSequences: liveModelData?.GlobalSequences || null,
+            globalSequences: toGlobalSequenceDurations(liveModelData?.GlobalSequences),
             sequences: liveModelData?.Sequences || null,
             textureAnims: liveModelData?.TextureAnims || null,
             modelPath: liveModelState.modelPath,
@@ -2103,7 +2123,7 @@ const MainLayout: React.FC = () => {
                 materials: preview?.materials ?? liveModelData?.Materials ?? [],
                 textures: preview?.textures ?? liveModelData?.Textures ?? [],
                 geosets: stripGeosetData(preview?.geosets ?? liveModelData?.Geosets),
-                globalSequences: liveModelData?.GlobalSequences || [],
+                globalSequences: toGlobalSequenceDurations(liveModelData?.GlobalSequences),
                 sequences: liveModelData?.Sequences || [],
                 textureAnims: liveModelData?.TextureAnims || [],
                 modelPath: liveModelState.modelPath,
@@ -2121,6 +2141,7 @@ const MainLayout: React.FC = () => {
             snapshot: cache.snapshot,
             pickedGeosetIndex: useSelectionStore.getState().pickedGeosetIndex ?? null,
             selectedMaterialIndex: useSelectionStore.getState().selectedMaterialIndex ?? null,
+            selectedMaterialLayerIndex: useSelectionStore.getState().selectedMaterialLayerIndex ?? null,
         }
     }, [])
     // RPC Server for modelOptimize standalone window
@@ -2275,7 +2296,7 @@ const MainLayout: React.FC = () => {
             try {
                 // Read model2 directly from disk in MainLayout to prevent RPC serialization from destroying TypedArrays
                 const buffer = await readFile(payload.model2Path);
-                const arrayBuffer = buffer instanceof ArrayBuffer ? buffer : (buffer as Uint8Array).buffer;
+                const arrayBuffer = toArrayBuffer(buffer as ArrayBuffer | Uint8Array);
                 const model2Data = parseModelBuffer(arrayBuffer, payload.model2Path);
 
                 let mergedModel: any = null;
@@ -2332,7 +2353,7 @@ const MainLayout: React.FC = () => {
     const getDissolveEffectState = useCallback(() => {
         const store = useModelStore.getState();
         // Return stripped geosets to reduce payload size, similar to textureManager
-        const stripGeosets = (geosets: any[]) => {
+        const stripGeosets = (geosets?: any[]) => {
             if (!geosets) return [];
             return geosets.map((g: any) => ({
                 MaterialID: g.MaterialID,
@@ -2340,7 +2361,7 @@ const MainLayout: React.FC = () => {
                 vertexCount: g.Vertices ? Math.floor(g.Vertices.length / 3) : 0
             }));
         };
-        const stripSequences = (seqs: any[]) => {
+        const stripSequences = (seqs?: any[]) => {
             if (!seqs) return [];
             return seqs.map((s: any) => ({
                 Name: s.Name,
@@ -2486,6 +2507,7 @@ const MainLayout: React.FC = () => {
             showTextureModal,
             showTextureAnimModal,
             showSequenceModal,
+            showCameraModal: false,
             showMaterialModal: false, // Material manager is now a tool window
             showGeosetModal,
             showGlobalSeqModal,
@@ -2728,7 +2750,7 @@ const MainLayout: React.FC = () => {
         const rawCameras = Array.isArray((modelData as any)?.Cameras) ? (modelData as any).Cameras : [];
         return {
             cameras: rawCameras.length > 0 ? rawCameras : nodes.filter(n => n.type === NodeType.CAMERA),
-            globalSequences: (modelData?.GlobalSequences || []) as number[]
+            globalSequences: toGlobalSequenceDurations(modelData?.GlobalSequences)
         };
     }, [nodes, modelData]);
 
@@ -2753,7 +2775,7 @@ const MainLayout: React.FC = () => {
                     : latestStore.nodes.filter((node) => node.type === NodeType.CAMERA);
                 rpcRefs.current.broadcastCameraManager({
                     cameras: latestCameras,
-                    globalSequences: (latestModelData?.GlobalSequences || []) as number[]
+                    globalSequences: toGlobalSequenceDurations(latestModelData?.GlobalSequences)
                 });
             };
 
@@ -2868,7 +2890,7 @@ const MainLayout: React.FC = () => {
         return ensureTextureManagerSnapshotState()
     }, [ensureTextureManagerSnapshotState]);
     const handleTextureCommand = useCallback((command: string, payload: any) => {
-        if (command === 'SAVE_TEXTURES' && payload.textures) {            useModelStore.getState().updateModelDataSilent({ Textures: payload.textures });
+        if (command === 'SAVE_TEXTURES' && payload.textures) {            useModelStore.getState().setTextures(payload.textures);
             showMessage('success', '纹理已更新', '贴图修改已同步到模型');
         } else if (command === 'EXECUTE_TEXTURE_ACTION') {
             const { action, payload: actionPayload } = payload;
@@ -3090,7 +3112,7 @@ const MainLayout: React.FC = () => {
                 useModelStore.getState().renameNode(objectId, name)
             }
         }
-    }, []) as (command: NodeEditorCommand, payload: unknown) => void
+    }, [])
 
     const getNodeEditorState = useCallback(() => {
         return ensureNodeEditorSnapshotState()
@@ -3144,7 +3166,7 @@ const MainLayout: React.FC = () => {
     const getGlobalSeqManagerState = useCallback(() => {
         const state = useModelStore.getState();
         return {
-            globalSequences: (state.modelData?.GlobalSequences || []) as number[]
+            globalSequences: toGlobalSequenceDurations(state.modelData?.GlobalSequences)
         };
     }, []);
 
@@ -3259,7 +3281,7 @@ const MainLayout: React.FC = () => {
                 const rawCameras = Array.isArray((modelData as any)?.Cameras) ? (modelData as any).Cameras : [];
                 broadcastCameraManager({
                     cameras: rawCameras.length > 0 ? rawCameras : state.nodes.filter(n => n.type === NodeType.CAMERA),
-                    globalSequences: (modelData?.GlobalSequences || []) as number[]
+                    globalSequences: toGlobalSequenceDurations(modelData?.GlobalSequences)
                 });
             }
 
@@ -3284,9 +3306,10 @@ const MainLayout: React.FC = () => {
 
             if (geosetAnimVisible) {
                 broadcastGeosetAnimManager({
-                    geosets: strippedGeosets.map(g => ({ index: (g as any).index })),
+                    geosets: strippedGeosets.map(g => ({ index: (g as any).index })) as any,
                     geosetAnims: modelData?.GeosetAnims || [],
                     globalSequences: modelData?.GlobalSequences || [],
+                    pickedGeosetIndex,
                 });
             }
 
@@ -3309,7 +3332,7 @@ const MainLayout: React.FC = () => {
                     globalSequences: modelData?.GlobalSequences || [],
                     sequences: modelData?.Sequences || [],
                     materials: modelData?.Materials || [],
-                    geosets: strippedGeosets,
+                    geosets: strippedGeosets as any,
                     pickedGeosetIndex
                 });
             }
@@ -3335,7 +3358,7 @@ const MainLayout: React.FC = () => {
 
             if (globalSeqVisible) {
                 broadcastGlobalSeqManager({
-                    globalSequences: (modelData?.GlobalSequences || []) as number[]
+                    globalSequences: toGlobalSequenceDurations(modelData?.GlobalSequences)
                 });
             }
 
@@ -4624,19 +4647,19 @@ const MainLayout: React.FC = () => {
     const toggleEditor = (editor: string) => {
         if (editor === 'camera') {
             windowManager.openToolWindow('cameraManager', '相机管理器', 680, 520).catch(e => {
-                showMessage(`无法打开相机管理器: ${e.message || e}`, 'error');
+                showMessage('error', '相机管理器', `无法打开: ${e instanceof Error ? e.message : String(e)}`);
             });
             return;
         }
         if (editor === 'geoset') {
             windowManager.openToolWindow('geosetEditor', '多边形管理器', 850, 480).catch(e => {
-                showMessage(`无法打开多边形管理器: ${e.message || e}`, 'error');
+                showMessage('error', '多边形管理器', `无法打开: ${e instanceof Error ? e.message : String(e)}`);
             });
             return;
         }
         if (editor === 'geosetVisibilityTool') {
             windowManager.openToolWindow('geosetVisibilityTool', '多边形动作显隐工具', 980, 560).catch(e => {
-                showMessage(`无法打开多边形显隐工具: ${e.message || e}`, 'error');
+                showMessage('error', '多边形显隐工具', `无法打开: ${e instanceof Error ? e.message : String(e)}`);
             });
             return;
         }
@@ -4898,17 +4921,26 @@ const MainLayout: React.FC = () => {
                 onToggleDebugConsole={() => setShowDebugConsole(!showDebugConsole)}
                 onShowAbout={() => setShowAbout(true)}
                 onRecalculateNormals={() => {
-                    if (!useModelStore.getState().modelData) return showMessage('warning', '提示', '没有打开任何模型，请先打开一个模型。');
+                    if (!useModelStore.getState().modelData) {
+                        showMessage('warning', '提示', '没有打开任何模型，请先打开一个模型。');
+                        return;
+                    }
                     useModelStore.getState().recalculateNormals();
                     showMessage('success', '成功', '已重新计算法线');
                 }}
                 onRecalculateExtents={() => {
-                    if (!useModelStore.getState().modelData) return showMessage('warning', '提示', '没有打开任何模型，请先打开一个模型。');
+                    if (!useModelStore.getState().modelData) {
+                        showMessage('warning', '提示', '没有打开任何模型，请先打开一个模型。');
+                        return;
+                    }
                     useModelStore.getState().recalculateExtents();
                     showMessage('success', '成功', '已重新计算模型顶点范围');
                 }}
                 onRepairModel={() => {
-                    if (!useModelStore.getState().modelData) return showMessage('warning', '提示', '没有打开任何模型，请先打开一个模型。');
+                    if (!useModelStore.getState().modelData) {
+                        showMessage('warning', '提示', '没有打开任何模型，请先打开一个模型。');
+                        return;
+                    }
                     useModelStore.getState().repairModel();
                     showMessage('success', '成功', '模型修复完成');
                 }}

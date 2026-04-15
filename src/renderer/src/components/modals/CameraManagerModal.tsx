@@ -203,8 +203,6 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
         };
 
         const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
-        payload.targetWindowId = windowId;
-
         void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload);
     };
 
@@ -443,4 +441,3 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
 };
 
 export default CameraManagerModal;
-

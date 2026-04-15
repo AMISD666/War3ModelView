@@ -10,7 +10,7 @@ import { useHistoryStore } from '../../store/historyStore'
 import { listen } from '@tauri-apps/api/event'
 import { windowManager } from '../../utils/WindowManager'
 import RightFloatingPanelShell from './RightFloatingPanelShell'
-import { coercePivotFloat3 } from 'war3-model'
+import { coercePivotFloat3 } from '../../utils/pivotUtils'
 
 const { Text } = Typography
 
@@ -23,7 +23,7 @@ const INTERPOLATION_OPTIONS = [
 
 // --- 转换工具函数 ---
 
-const isAnimTrack = (value: any): value is { Keys: any[]; LineType?: number; GlobalSeqId?: number | null } => {
+const isAnimTrack = (value: any): value is { Keys: any[]; LineType?: number; InterpolationType?: number; GlobalSeqId?: number | null } => {
     return !!value && typeof value === 'object' && Array.isArray(value.Keys)
 }
 
@@ -152,7 +152,7 @@ const parseColorToNormalized = (
     color: Color | string | [number, number, number],
     fallback: [number, number, number]
 ): [number, number, number] => {
-    if (color?.toRgb && typeof color.toRgb === 'function') {
+    if (typeof color === 'object' && color !== null && 'toRgb' in color && typeof color.toRgb === 'function') {
         const rgb = color.toRgb()
         return [
             clamp01((rgb?.r ?? fallback[0] * 255) / 255),
@@ -495,7 +495,7 @@ const GeosetAnimPanel: React.FC = () => {
     const openEditor = useCallback((field: 'Alpha' | 'Color') => {
         setEditingGeosetField(field);
 
-        let data = null;
+        let data: any = null;
         if (field === 'Alpha') {
             if (isAnimTrack(activeGeosetAnim?.Alpha)) data = activeGeosetAnim?.Alpha;
             else data = { LineType: 1, GlobalSeqId: null, Keys: [{ Frame: 0, Vector: [currentGeosetAlpha] }] };
@@ -515,7 +515,6 @@ const GeosetAnimPanel: React.FC = () => {
         };
 
         const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
-        payload.targetWindowId = windowId;
 
         void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload);
     }, [activeGeosetAnim, currentGeosetAlpha, currentGeosetColor, modelData]);

@@ -32,10 +32,11 @@ export interface DecodeTextureOptions {
     adjustments?: TextureAdjustments
 }
 
-type WorkerLike = {
+export type WorkerLike = {
     addEventListener: (type: 'message', listener: (event: any) => void) => void
     removeEventListener: (type: 'message', listener: (event: any) => void) => void
     postMessage: (message: any, transferOrOptions?: Transferable[] | StructuredSerializeOptions) => void
+    terminate?: () => void
 }
 
 type DecodedTextureImage = ImageData | ImageBitmap
@@ -277,7 +278,8 @@ function forceOpaqueAlphaIfNeeded(imageData: ImageData, forceOpaqueAlpha?: boole
 
 async function decodePngImageData(bytes: Uint8Array): Promise<ImageData | null> {
     try {
-        const blob = new Blob([bytes], { type: 'image/png' })
+        const blobBytes = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+        const blob = new Blob([blobBytes], { type: 'image/png' })
         const bitmap = await createImageBitmap(blob)
         const canvas =
             typeof OffscreenCanvas !== 'undefined'
@@ -285,7 +287,10 @@ async function decodePngImageData(bytes: Uint8Array): Promise<ImageData | null> 
                 : document.createElement('canvas')
         canvas.width = bitmap.width
         canvas.height = bitmap.height
-        const ctx = canvas.getContext('2d', { alpha: true, willReadFrequently: true })
+        const ctx = canvas.getContext('2d', { alpha: true, willReadFrequently: true }) as
+            | OffscreenCanvasRenderingContext2D
+            | CanvasRenderingContext2D
+            | null
         if (!ctx) return null
         ctx.clearRect(0, 0, bitmap.width, bitmap.height)
         ctx.drawImage(bitmap, 0, 0)

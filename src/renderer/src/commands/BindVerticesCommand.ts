@@ -194,9 +194,8 @@ export class BindVerticesCommand implements Command {
                     ...nextGeosets[geosetIndex],
                     Groups: rendererGeoset.Groups.map((group: number[]) => [...group]),
                     VertexGroup: rendererGeoset.VertexGroup instanceof Uint16Array
-                        ? new Uint16Array(rendererGeoset.VertexGroup)
-                        : new Uint8Array(rendererGeoset.VertexGroup),
-                    TotalGroupsCount: rendererGeoset.TotalGroupsCount
+                        ? Array.from(rendererGeoset.VertexGroup)
+                        : new Uint8Array(rendererGeoset.VertexGroup)
                 }
             })
             useModelStore.getState().setGeosets(nextGeosets as any)

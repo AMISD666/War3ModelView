@@ -52,8 +52,13 @@ const CollisionShapeDialog: React.FC<CollisionShapeDialogProps> = ({
     const [form] = Form.useForm()
     const { getNodeById, updateNode } = useModelStore()
 
-    const currentNode =
-        nodeId !== null ? (isStandalone ? (standaloneNode as CollisionShapeNode | null) : (getNodeById(nodeId) as CollisionShapeNode)) : null
+    const getCurrentSourceNode = useCallback((): CollisionShapeNode | null => {
+        if (nodeId === null) return null
+        if (isStandalone) {
+            return (standaloneNode as CollisionShapeNode | null) ?? null
+        }
+        return (useModelStore.getState().getNodeById(nodeId) as CollisionShapeNode | undefined) ?? null
+    }, [isStandalone, nodeId, standaloneNode])
 
     const applyNodeToStore = useCallback(
         (next: CollisionShapeNode) => {
@@ -123,12 +128,13 @@ const CollisionShapeDialog: React.FC<CollisionShapeDialogProps> = ({
     const handleOk = async () => {
         try {
             const values = await form.validateFields()
-            if (!currentNode || nodeId === null) return
+            const sourceNode = getCurrentSourceNode()
+            if (!sourceNode || nodeId === null) return
             const v1: [number, number, number] = [values.V1X, values.V1Y, values.V1Z]
             const v2: [number, number, number] = [values.V2X, values.V2Y, values.V2Z]
             const isBox = values.ShapeType === 'Box'
             applyNodeToStore({
-                ...currentNode,
+                ...sourceNode,
                 ShapeType: values.ShapeType,
                 Shape: isBox ? 0 : 2,
                 Vertex1: v1,

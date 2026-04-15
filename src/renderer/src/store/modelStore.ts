@@ -3,7 +3,7 @@
  */
 
 import { create } from 'zustand';
-import { mat4, vec3, mat3 } from 'gl-matrix';
+import { mat4, vec3, mat3, quat } from 'gl-matrix';
 import { ModelData } from '../types/model';
 import { ModelNode, NodeType } from '../types/node';
 import { Tab, TabSnapshot } from '../types/store';
@@ -148,7 +148,7 @@ const sanitizeGeosetUiState = (
     geosetCount: number
 ) => {
     const isValidIndex = (value: number | null | undefined): value is number =>
-        Number.isInteger(value) && value >= 0 && value < geosetCount;
+        typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < geosetCount;
 
     const hiddenGeosetIds = Array.from(new Set(state.hiddenGeosetIds.filter((value) => isValidIndex(value))));
     const selectedGeosetIndices = Array.from(new Set(state.selectedGeosetIndices.filter((value) => isValidIndex(value))));
@@ -241,6 +241,9 @@ interface ModelState {
         rotation: [number, number, number],
         scale: [number, number, number]
     };
+    globalTransformTracker: {
+        rotation: [number, number, number]
+    };
     setPreviewTransform: (transform: Partial<ModelState['previewTransform']>) => void;
     resetPreviewTransform: () => void;
     reset: () => void;
@@ -321,6 +324,7 @@ interface ModelState {
     replaceNodes: (nodes: ModelNode[], options?: { triggerReload?: boolean }) => void;
 
     // Recalculate Actions
+    recalculateExtents: () => void;
     recalculateNormals: () => void;
     repairModel: () => void;
     addDeathAnimation: () => void;
@@ -368,33 +372,40 @@ export function extractNodesFromModel(data: ModelData | null): ModelNode[] {
     const nodes: ModelNode[] = [];
     const d = data as any; // Allow access to potential plural properties
 
+    const getFirstArrayForKeys = (keys: string[]): any[] | null => {
+        for (const key of keys) {
+            if (Array.isArray(d[key])) {
+                return d[key];
+            }
+        }
+        return null;
+    };
+
     // Helper to extract nodes from multiple potential keys
     const extract = (keys: string[], type: NodeType) => {
-        keys.forEach(key => {
-            if (d[key] && Array.isArray(d[key])) {
-                d[key].forEach((item: any) => {
-                    const node: any = { ...item, type };
+        const items = getFirstArrayForKeys(keys);
+        if (!items) return;
+        items.forEach((item: any) => {
+            const node: any = { ...item, type };
 
-                    // Extract Billboard flags from Flags bitfield into boolean properties
-                    // NodeFlags: Billboarded=8, BillboardedLockX=16, BillboardedLockY=32, BillboardedLockZ=64, CameraAnchored=128
-                    if (item.Flags !== undefined) {
-                        node.Billboarded = (item.Flags & 8) !== 0;
-                        node.BillboardedLockX = (item.Flags & 16) !== 0;
-                        node.BillboardedLockY = (item.Flags & 32) !== 0;
-                        node.BillboardedLockZ = (item.Flags & 64) !== 0;
-                        node.CameraAnchored = (item.Flags & 128) !== 0;
+            // Extract Billboard flags from Flags bitfield into boolean properties
+            // NodeFlags: Billboarded=8, BillboardedLockX=16, BillboardedLockY=32, BillboardedLockZ=64, CameraAnchored=128
+            if (item.Flags !== undefined) {
+                node.Billboarded = (item.Flags & 8) !== 0;
+                node.BillboardedLockX = (item.Flags & 16) !== 0;
+                node.BillboardedLockY = (item.Flags & 32) !== 0;
+                node.BillboardedLockZ = (item.Flags & 64) !== 0;
+                node.CameraAnchored = (item.Flags & 128) !== 0;
 
-                        // Extract DontInherit flags (NodeFlags: 1/2/4)
-                        node.DontInherit = {
-                            Translation: (item.Flags & 1) !== 0,  // DontInheritTranslation
-                            Rotation: (item.Flags & 2) !== 0,     // DontInheritRotation
-                            Scaling: (item.Flags & 4) !== 0       // DontInheritScaling
-                        };
-                    }
-
-                    nodes.push(node as ModelNode);
-                });
+                // Extract DontInherit flags (NodeFlags: 1/2/4)
+                node.DontInherit = {
+                    Translation: (item.Flags & 1) !== 0,  // DontInheritTranslation
+                    Rotation: (item.Flags & 2) !== 0,     // DontInheritRotation
+                    Scaling: (item.Flags & 4) !== 0       // DontInheritScaling
+                };
             }
+
+            nodes.push(node as ModelNode);
         });
     };
 
@@ -404,107 +415,104 @@ export function extractNodesFromModel(data: ModelData | null): ModelNode[] {
 
     // Special handling for Light nodes to map war3-model naming to our UI naming
     const lightKeys = ['Light', 'Lights'];
-    lightKeys.forEach(key => {
-        if (d[key] && Array.isArray(d[key])) {
-            d[key].forEach((item: any) => {
-                const node: any = { ...item, type: NodeType.LIGHT };
+    const lightItems = getFirstArrayForKeys(lightKeys);
+    if (lightItems) {
+        lightItems.forEach((item: any) => {
+            const node: any = { ...item, type: NodeType.LIGHT };
 
-                // Map war3-model naming to our UI naming
-                // AmbColor -> AmbientColor
-                if (item.AmbColor !== undefined) {
-                    node.AmbientColor = item.AmbColor instanceof Float32Array
-                        ? Array.from(item.AmbColor)
-                        : item.AmbColor;
-                }
-                // AmbIntensity -> AmbientIntensity
-                if (item.AmbIntensity !== undefined) {
-                    node.AmbientIntensity = item.AmbIntensity;
-                }
-                // Color - convert Float32Array to array for UI
-                if (item.Color instanceof Float32Array) {
-                    node.Color = Array.from(item.Color);
-                }
+            // Map war3-model naming to our UI naming
+            // AmbColor -> AmbientColor
+            if (item.AmbColor !== undefined) {
+                node.AmbientColor = item.AmbColor instanceof Float32Array
+                    ? Array.from(item.AmbColor)
+                    : item.AmbColor;
+            }
+            // AmbIntensity -> AmbientIntensity
+            if (item.AmbIntensity !== undefined) {
+                node.AmbientIntensity = item.AmbIntensity;
+            }
+            // Color - convert Float32Array to array for UI
+            if (item.Color instanceof Float32Array) {
+                node.Color = Array.from(item.Color);
+            }
 
-                nodes.push(node as ModelNode);
-            });
-        }
-    });
+            nodes.push(node as ModelNode);
+        });
+    }
 
     extract(['ParticleEmitter', 'ParticleEmitters'], NodeType.PARTICLE_EMITTER);
 
     // Special handling for ParticleEmitter2 to map properties
     const pe2Keys = ['ParticleEmitter2', 'ParticleEmitters2'];
-    pe2Keys.forEach(key => {
-        if (d[key] && Array.isArray(d[key])) {
-            d[key].forEach((item: any) => {
-                // Map raw parser data to ParticleEmitter2Node
-                const node: any = { ...item, type: NodeType.PARTICLE_EMITTER_2 };
+    const pe2Items = getFirstArrayForKeys(pe2Keys);
+    if (pe2Items) {
+        pe2Items.forEach((item: any) => {
+            // Map raw parser data to ParticleEmitter2Node
+            const node: any = { ...item, type: NodeType.PARTICLE_EMITTER_2 };
 
-                // Map Arrays
-                // Fix: extract into ParticleEmitter2Node property names
-                if (item.Alpha) node.Alpha = Array.from(item.Alpha);
-                if (item.ParticleScaling) node.ParticleScaling = Array.from(item.ParticleScaling);
-                if (item.SegmentColor) {
-                    node.SegmentColor = item.SegmentColor.map((c: any) => Array.from(c));
-                }
+            // Map Arrays
+            // Fix: extract into ParticleEmitter2Node property names
+            if (item.Alpha) node.Alpha = Array.from(item.Alpha);
+            if (item.ParticleScaling) node.ParticleScaling = Array.from(item.ParticleScaling);
+            if (item.SegmentColor) {
+                node.SegmentColor = item.SegmentColor.map((c: any) => Array.from(c));
+            }
 
-                // Convert UV animation TypedArrays to regular arrays for UI
-                // These are Uint32Array(3) [start, end, repeat] in parsed MDX
-                if (item.LifeSpanUVAnim) {
-                    node.LifeSpanUVAnim = Array.from(item.LifeSpanUVAnim);
-                }
-                if (item.DecayUVAnim) {
-                    node.DecayUVAnim = Array.from(item.DecayUVAnim);
-                }
-                if (item.TailUVAnim) {
-                    node.TailUVAnim = Array.from(item.TailUVAnim);
-                }
-                if (item.TailDecayUVAnim) {
-                    node.TailDecayUVAnim = Array.from(item.TailDecayUVAnim);
-                }
+            // Convert UV animation TypedArrays to regular arrays for UI
+            // These are Uint32Array(3) [start, end, repeat] in parsed MDX
+            if (item.LifeSpanUVAnim) {
+                node.LifeSpanUVAnim = Array.from(item.LifeSpanUVAnim);
+            }
+            if (item.DecayUVAnim) {
+                node.DecayUVAnim = Array.from(item.DecayUVAnim);
+            }
+            if (item.TailUVAnim) {
+                node.TailUVAnim = Array.from(item.TailUVAnim);
+            }
+            if (item.TailDecayUVAnim) {
+                node.TailDecayUVAnim = Array.from(item.TailDecayUVAnim);
+            }
 
-                // Map FrameFlags
-                if (item.FrameFlags !== undefined) {
-                    node.Head = (item.FrameFlags & 1) !== 0;
-                    node.Tail = (item.FrameFlags & 2) !== 0;
-                }
+            // Map FrameFlags
+            if (item.FrameFlags !== undefined) {
+                node.Head = (item.FrameFlags & 1) !== 0;
+                node.Tail = (item.FrameFlags & 2) !== 0;
+            }
 
-                // Map Flags
-                if (item.Flags !== undefined) {
-                    node.Unshaded = (item.Flags & 32768) !== 0;
-                    node.SortPrimsFarZ = (item.Flags & 65536) !== 0;
-                    node.LineEmitter = (item.Flags & 131072) !== 0;
-                    node.Unfogged = (item.Flags & 262144) !== 0;
-                    node.ModelSpace = (item.Flags & 524288) !== 0;
-                    node.XYQuad = (item.Flags & 1048576) !== 0;
-                }
-                // Fix: Squirt is a separate boolean property in the library object for PE2
-                node.Squirt = !!item.Squirt;
+            // Map Flags
+            if (item.Flags !== undefined) {
+                node.Unshaded = (item.Flags & 32768) !== 0;
+                node.SortPrimsFarZ = (item.Flags & 65536) !== 0;
+                node.LineEmitter = (item.Flags & 131072) !== 0;
+                node.Unfogged = (item.Flags & 262144) !== 0;
+                node.ModelSpace = (item.Flags & 524288) !== 0;
+                node.XYQuad = (item.Flags & 1048576) !== 0;
+            }
+            // Fix: Squirt is a separate boolean property in the library object for PE2
+            node.Squirt = !!item.Squirt;
 
-                nodes.push(node);
-            });
-        }
-    });
+            nodes.push(node);
+        });
+    }
 
     // Special handling for RibbonEmitter to convert Color Float32Array
     const ribbonKeys = ['RibbonEmitter', 'RibbonEmitters'];
-    ribbonKeys.forEach(key => {
-        if (d[key] && Array.isArray(d[key])) {
-            d[key].forEach((item: any) => {
-                const node: any = { ...item, type: NodeType.RIBBON_EMITTER };
+    const ribbonItems = getFirstArrayForKeys(ribbonKeys);
+    if (ribbonItems) {
+        ribbonItems.forEach((item: any) => {
+            const node: any = { ...item, type: NodeType.RIBBON_EMITTER };
 
-                // Color - convert Float32Array to array for UI
-                if (item.Color instanceof Float32Array) {
-                    node.Color = Array.from(item.Color);
-                    // // // console.log('[ModelStore] RibbonEmitter Color converted:', node.Color);
-                } else if (Array.isArray(item.Color)) {
-                    node.Color = item.Color;
-                }
+            // Color - convert Float32Array to array for UI
+            if (item.Color instanceof Float32Array) {
+                node.Color = Array.from(item.Color);
+                // // // console.log('[ModelStore] RibbonEmitter Color converted:', node.Color);
+            } else if (Array.isArray(item.Color)) {
+                node.Color = item.Color;
+            }
 
-                nodes.push(node as ModelNode);
-            });
-        }
-    });
+            nodes.push(node as ModelNode);
+        });
+    }
     extract(['EventObject', 'EventObjects'], NodeType.EVENT_OBJECT);
     extract(['CollisionShape', 'CollisionShapes'], NodeType.COLLISION_SHAPE);
     extract(['ParticleEmitterPopcorn', 'ParticleEmitterPopcorns'], NodeType.PARTICLE_EMITTER_POPCORN);
@@ -533,7 +541,17 @@ export function extractNodesFromModel(data: ModelData | null): ModelNode[] {
             const triplet = pivotVec3ToTuple(p)
             if (triplet) any.PivotPoint = triplet
         }
-    }    return nodes;
+    }
+
+    const uniqueNodes = new Map<number, ModelNode>();
+    nodes.forEach((node) => {
+        if (typeof node?.ObjectId !== 'number' || Number.isNaN(node.ObjectId)) return;
+        if (!uniqueNodes.has(node.ObjectId)) {
+            uniqueNodes.set(node.ObjectId, node);
+        }
+    });
+
+    return Array.from(uniqueNodes.values()).sort((a, b) => a.ObjectId - b.ObjectId);
 }
 
 /**
@@ -547,10 +565,21 @@ function updateModelDataWithNodes(
     if (!modelData) return null;
 
     const updated = { ...modelData };
+    const uniqueNodes = Array.from(
+        nodes.reduce((map, node) => {
+            if (typeof node?.ObjectId !== 'number' || Number.isNaN(node.ObjectId)) {
+                return map;
+            }
+            if (!map.has(node.ObjectId)) {
+                map.set(node.ObjectId, node);
+            }
+            return map;
+        }, new Map<number, ModelNode>()).values()
+    );
 
     // Reconstruct Flags from boolean properties before processing
     const modelPivotPoints = (modelData as any).PivotPoints;
-    const nodesWithFlags = nodes.map(node => {
+    const nodesWithFlags = uniqueNodes.map(node => {
         const n = node as any;
         const pivotPoint = resolvePivotForPersist(
             node.PivotPoint,
@@ -617,7 +646,10 @@ function updateModelDataWithNodes(
                 // 规范为 [0,1]³ 再写入 Float32Array，避免错误倍乘或非有限值导致渲染/保存异常
                 formattedNode.SegmentColor = n.SegmentColor.map((c: any) => {
                     const a = Array.isArray(c) || ArrayBuffer.isView(c) ? c : null;
-                    if (!a || a.length < 3) {
+                    const length = a
+                        ? (Array.isArray(a) ? a.length : Number((a as unknown as ArrayLike<number>).length ?? 0))
+                        : 0;
+                    if (!a || length < 3) {
                         return new Float32Array([1, 1, 1]);
                     }
                     let r = Number(a[0]);
@@ -762,6 +794,16 @@ function updateModelDataWithNodes(
     updated.CollisionShapes = orderedNodes.filter(n => n.type === NodeType.COLLISION_SHAPE);
     (updated as any).ParticleEmitterPopcorns = orderedNodes.filter(n => n.type === NodeType.PARTICLE_EMITTER_POPCORN);
     updated.Cameras = cameras; // Camera nodes don't have ObjectId
+    delete (updated as any).Bone;
+    delete (updated as any).Helper;
+    delete (updated as any).Attachment;
+    delete (updated as any).Light;
+    delete (updated as any).ParticleEmitter;
+    delete (updated as any).ParticleEmitter2;
+    delete (updated as any).RibbonEmitter;
+    delete (updated as any).EventObject;
+    delete (updated as any).CollisionShape;
+    delete (updated as any).ParticleEmitterPopcorn;
     if ((updated as any).Camera !== undefined) {
         delete (updated as any).Camera;
     }
@@ -1010,7 +1052,7 @@ function normalizeAnimVector(anim: any, size: number, isInt: boolean): any {
     const toTyped = (val: any): Int32Array | Float32Array => {
         if (val instanceof Type) return val as Int32Array | Float32Array;
         if (ArrayBuffer.isView(val)) {
-            return new Type(Array.from(val as ArrayLike<number>).slice(0, size)) as Int32Array | Float32Array;
+            return new Type(Array.from(val as unknown as ArrayLike<number>).slice(0, size)) as Int32Array | Float32Array;
         }
         if (Array.isArray(val)) {
             return new Type(val.slice(0, size)) as Int32Array | Float32Array;
@@ -1072,6 +1114,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
     // Renderer reload trigger
     rendererReloadTrigger: 0,
+    materialReloadTrigger: 0,
 
     // Geoset Visibility State Initial Values
     hiddenGeosetIds: [],
@@ -1123,6 +1166,9 @@ export const useModelStore = create<ModelState>((set, get) => ({
         translation: [0, 0, 0],
         rotation: [0, 0, 0],
         scale: [1, 1, 1]
+    },
+    globalTransformTracker: {
+        rotation: [0, 0, 0]
     },
 
     setPreviewTransform: (transform) => set(state => ({
@@ -1201,6 +1247,9 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 selectedGeosetIndices: [],
                 materialManagerPreview: null,
                 nodeEditorPreview: null,
+                globalTransformTracker: {
+                    rotation: [0, 0, 0]
+                },
             };
 
             const activeTabId = state.activeTabId
@@ -1277,12 +1326,12 @@ export const useModelStore = create<ModelState>((set, get) => ({
             }
 
             const modelData = { ...state.modelData };
-            const sequences = [...modelData.Sequences];
+            const sequences = [...(modelData.Sequences || [])];
             const seqToDelete = sequences[index];
             if (!seqToDelete) return {};
             const rawInterval = Array.isArray(seqToDelete.Interval)
                 ? seqToDelete.Interval
-                : (seqToDelete.Interval ? Array.from(seqToDelete.Interval as ArrayLike<number>) : [0, 0]);
+                : (seqToDelete.Interval ? Array.from(seqToDelete.Interval as unknown as ArrayLike<number>) : [0, 0]);
             const start = Number(rawInterval[0] ?? 0);
             const end = Number(rawInterval[1] ?? 0);
 
@@ -1334,7 +1383,10 @@ export const useModelStore = create<ModelState>((set, get) => ({
         set((state) => {
             if (!state.modelData) return {};
             return {
-                modelData: { ...state.modelData, GlobalSequences: sequences }
+                modelData: {
+                    ...state.modelData,
+                    GlobalSequences: sequences.map((duration) => ({ Duration: duration }))
+                }
             };
         });
     },
@@ -1373,14 +1425,14 @@ export const useModelStore = create<ModelState>((set, get) => ({
         set((state) => {
             const updatedNodes = state.nodes.map((node) => {
                 if (node.ObjectId !== objectId) return node;
-                let merged: ModelNode = { ...node, ...updates };
+                let merged = { ...node, ...updates } as ModelNode;
                 // 未显式改轴心时，用全局 PivotPoints 覆盖节点副本，避免粒子等热同步把 Float32 污染成 214,168,178
                 if (!('PivotPoint' in updates)) {
                     const fromTable = pivotVec3ToTuple(
                         (state.modelData as any)?.PivotPoints?.[objectId]
                     );
                     if (fromTable) {
-                        merged = { ...merged, PivotPoint: fromTable };
+                        merged = { ...merged, PivotPoint: fromTable } as ModelNode;
                     }
                 }
                 return merged;
@@ -1404,13 +1456,13 @@ export const useModelStore = create<ModelState>((set, get) => ({
         set((state) => {
             const updatedNodes = state.nodes.map((node) => {
                 if (node.ObjectId !== objectId) return node;
-                let merged: ModelNode = { ...node, ...updates };
+                let merged = { ...node, ...updates } as ModelNode;
                 if (!('PivotPoint' in updates)) {
                     const fromTable = pivotVec3ToTuple(
                         (state.modelData as any)?.PivotPoints?.[objectId]
                     );
                     if (fromTable) {
-                        merged = { ...merged, PivotPoint: fromTable };
+                        merged = { ...merged, PivotPoint: fromTable } as ModelNode;
                     }
                 }
                 return merged;
@@ -2331,13 +2383,13 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 const update = updates.find((u) => u.objectId === node.ObjectId);
                 if (!update) return node;
                 hasChanges = true;
-                let merged: ModelNode = { ...node, ...update.data };
+                let merged = { ...node, ...update.data } as ModelNode;
                 if (!('PivotPoint' in (update.data || {}))) {
                     const fromTable = pivotVec3ToTuple(
                         (state.modelData as any)?.PivotPoints?.[node.ObjectId]
                     );
                     if (fromTable) {
-                        merged = { ...merged, PivotPoint: fromTable };
+                        merged = { ...merged, PivotPoint: fromTable } as ModelNode;
                     }
                 }
                 return merged;
@@ -2570,10 +2622,48 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
             // 8. Re-sync nodes state and recalculate derived data
             const updatedNodes = extractNodesFromModel(modelData);
-            calculateModelExtent(modelData);            return {
+            calculateModelExtent(modelData);
+
+            let nextTrackedRotation = state.globalTransformTracker.rotation
+            if (rotation) {
+                const currentQuat = quat.create()
+                quat.fromEuler(
+                    currentQuat,
+                    state.globalTransformTracker.rotation[0],
+                    state.globalTransformTracker.rotation[1],
+                    state.globalTransformTracker.rotation[2]
+                )
+                const deltaQuat = quat.create()
+                quat.fromEuler(deltaQuat, rotation[0], rotation[1], rotation[2])
+                const nextQuat = quat.create()
+                quat.multiply(nextQuat, deltaQuat, currentQuat)
+
+                const x = nextQuat[0], y = nextQuat[1], z = nextQuat[2], w = nextQuat[3]
+                const sinrCosp = 2 * (w * x + y * z)
+                const cosrCosp = 1 - 2 * (x * x + y * y)
+                const roll = Math.atan2(sinrCosp, cosrCosp)
+
+                const sinp = 2 * (w * y - z * x)
+                const pitch = Math.abs(sinp) >= 1 ? Math.sign(sinp) * Math.PI / 2 : Math.asin(sinp)
+
+                const sinyCosp = 2 * (w * z + x * y)
+                const cosyCosp = 1 - 2 * (y * y + z * z)
+                const yaw = Math.atan2(sinyCosp, cosyCosp)
+
+                nextTrackedRotation = [
+                    roll * 180 / Math.PI,
+                    pitch * 180 / Math.PI,
+                    yaw * 180 / Math.PI
+                ]
+            }
+
+            return {
                 modelData: { ...modelData },
                 nodes: updatedNodes,
                 rendererReloadTrigger: state.rendererReloadTrigger + (suppressReload ? 0 : 1),
+                globalTransformTracker: {
+                    rotation: nextTrackedRotation
+                },
                 ...markActiveTabDirtyState(state)
             };
         });
@@ -2583,8 +2673,11 @@ export const useModelStore = create<ModelState>((set, get) => ({
         set((state) => {
             if (!state.modelData) return {};
             calculateModelExtent(state.modelData);
-            // Force update
-            return { modelData: { ...state.modelData }, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
+            return {
+                modelData: { ...state.modelData },
+                rendererReloadTrigger: state.rendererReloadTrigger + 1,
+                ...markActiveTabDirtyState(state)
+            };
         });
     },
 
@@ -2592,8 +2685,11 @@ export const useModelStore = create<ModelState>((set, get) => ({
         set((state) => {
             if (!state.modelData) return {};
             calculateModelNormals(state.modelData);
-            // Force update
-            return { modelData: { ...state.modelData }, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
+            return {
+                modelData: { ...state.modelData },
+                rendererReloadTrigger: state.rendererReloadTrigger + 1,
+                ...markActiveTabDirtyState(state)
+            };
         });
     },
 
@@ -2787,7 +2883,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                     distance: cam.distance,
                     theta: cam.theta,
                     phi: cam.phi,
-                    target: vec3.clone(cam.target as vec3)
+                    target: [Number(cam.target[0]), Number(cam.target[1]), Number(cam.target[2])] as [number, number, number]
                 } : null;
 
                 return {
@@ -2930,7 +3026,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             distance: cam.distance,
             theta: cam.theta,
             phi: cam.phi,
-            target: vec3.clone(cam.target as vec3)
+            target: [Number(cam.target[0]), Number(cam.target[1]), Number(cam.target[2])] as [number, number, number]
         } : null;
 
         const currentRenderer = useRendererStore.getState().renderer;
@@ -2969,7 +3065,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                     if (t.snapshot.renderer) {
                         try { (t.snapshot.renderer as any).destroy(); } catch (e) { }
                     }
-                    return { ...t, snapshot: { ...t.snapshot, renderer: null } };
+                    return { ...t, snapshot: { ...t.snapshot, renderer: null, lastActive: t.snapshot.lastActive ?? Date.now() } };
                 }
                 return t;
             });
@@ -3001,10 +3097,12 @@ export const useModelStore = create<ModelState>((set, get) => ({
         if (state.cameraStateRef && snapshot.cameraState) {
             const currentCam = state.cameraStateRef.current;
             const snap = snapshot.cameraState;
-            currentCam.distance = snap.distance;
-            currentCam.theta = snap.theta;
-            currentCam.phi = snap.phi;
-            vec3.copy(currentCam.target, snap.target as vec3);
+            if (currentCam) {
+                currentCam.distance = snap.distance;
+                currentCam.theta = snap.theta;
+                currentCam.phi = snap.phi;
+                vec3.copy(currentCam.target as vec3, snap.target as vec3);
+            }
         }    },
 
     reset: () => {
@@ -3038,6 +3136,9 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 translation: [0, 0, 0],
                 rotation: [0, 0, 0],
                 scale: [1, 1, 1]
+            },
+            globalTransformTracker: {
+                rotation: [0, 0, 0]
             },
             materialManagerPreview: null,
             nodeEditorPreview: null,

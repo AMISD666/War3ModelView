@@ -1,4 +1,5 @@
-import { parseMDX, parseMDL, generateMDX, generateMDL, coercePivotFloat3 } from 'war3-model';
+import { parseMDX, parseMDL, generateMDX, generateMDL } from 'war3-model';
+import { coercePivotFloat3 } from './pivotUtils';
 
 /**
  * Checks if a value is an animation vector (contains keys).

@@ -138,8 +138,8 @@ export interface TabSnapshot {
         target: [number, number, number];
     } | null;
     // Cache for optimized tab switching
-    renderer?: any;
-    lastActive?: number;
+    renderer: any | null;
+    lastActive: number;
 }
 
 // Tab definition

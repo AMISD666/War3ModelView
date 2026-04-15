@@ -4,7 +4,7 @@
 
 import React from 'react';
 import { ApartmentOutlined } from '@ant-design/icons';
-import { coercePivotFloat3 } from 'war3-model';
+import { coercePivotFloat3 } from './pivotUtils';
 import type { ModelNode } from '../types/node';
 import { NodeType } from '../types/node';
 

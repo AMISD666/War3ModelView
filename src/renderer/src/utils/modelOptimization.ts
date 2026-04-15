@@ -89,7 +89,7 @@ const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(ma
 
 const toFloatArray = (value: any): Float32Array => {
     if (value instanceof Float32Array) return value;
-    if (ArrayBuffer.isView(value)) return new Float32Array(Array.from(value as ArrayLike<number>));
+    if (ArrayBuffer.isView(value)) return new Float32Array(Array.from(value as unknown as ArrayLike<number>));
     if (Array.isArray(value)) return new Float32Array(value.map((n) => Number(n) || 0));
     if (value && typeof value === 'object') return new Float32Array(Object.values(value).map((n) => Number(n) || 0));
     return new Float32Array(0);
@@ -98,7 +98,7 @@ const toFloatArray = (value: any): Float32Array => {
 const toUint32FaceArray = (faces: any): Uint32Array => {
     if (faces instanceof Uint32Array) return faces;
     if (faces instanceof Uint16Array) return new Uint32Array(faces);
-    if (ArrayBuffer.isView(faces)) return new Uint32Array(Array.from(faces as ArrayLike<number>));
+    if (ArrayBuffer.isView(faces)) return new Uint32Array(Array.from(faces as unknown as ArrayLike<number>));
     if (Array.isArray(faces)) return new Uint32Array(faces.map((n) => Number(n) || 0));
     if (faces && typeof faces === 'object') return new Uint32Array(Object.values(faces).map((n) => Number(n) || 0));
     return new Uint32Array(0);
@@ -152,7 +152,7 @@ const normalDot = (normals: Float32Array | null, ia: number, ib: number): number
 
 const toVector = (value: any): number[] => {
     if (typeof value === 'number') return [Number.isFinite(value) ? value : 0];
-    if (ArrayBuffer.isView(value)) return Array.from(value as ArrayLike<number>).map((n) => Number(n) || 0);
+    if (ArrayBuffer.isView(value)) return Array.from(value as unknown as ArrayLike<number>).map((n) => Number(n) || 0);
     if (Array.isArray(value)) return value.map((n) => Number(n) || 0);
     if (value && typeof value === 'object') return Object.values(value).map((n) => Number(n) || 0);
     return [0];
@@ -327,7 +327,7 @@ const packGeoset = (geoset: any): PackedGeoset => {
     const rawVertexGroup = geoset?.VertexGroup;
     const vertexGroup = new Uint16Array(vertexCount);
     if (rawVertexGroup && (Array.isArray(rawVertexGroup) || ArrayBuffer.isView(rawVertexGroup))) {
-        const src = ArrayBuffer.isView(rawVertexGroup) ? Array.from(rawVertexGroup as ArrayLike<number>) : rawVertexGroup;
+        const src = ArrayBuffer.isView(rawVertexGroup) ? Array.from(rawVertexGroup as unknown as ArrayLike<number>) : rawVertexGroup;
         for (let i = 0; i < Math.min(vertexCount, src.length); i++) {
             vertexGroup[i] = Math.max(0, Number(src[i]) || 0);
         }

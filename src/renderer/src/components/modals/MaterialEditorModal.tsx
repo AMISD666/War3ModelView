@@ -1025,7 +1025,6 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         };
 
         const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
-        payload.targetWindowId = windowId;
 
         void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload);
     }
@@ -1088,6 +1087,14 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         const dot = fileName.lastIndexOf('.')
         if (dot <= 0) return { stem: fileName, ext: '' }
         return { stem: fileName.slice(0, dot), ext: fileName.slice(dot) }
+    }
+
+    const areBinaryContentsEqual = (left: Uint8Array, right: Uint8Array): boolean => {
+        if (left.length !== right.length) return false
+        for (let index = 0; index < left.length; index++) {
+            if (left[index] !== right[index]) return false
+        }
+        return true
     }
 
     const tryParseFileUriToPath = (uri: string): string | null => {
@@ -1180,11 +1187,35 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         let targetFileName = originalFileName
         let targetAbsPath = `${modelDir}\\${targetFileName}`
         const sourceSize = await size(sourcePath).catch(() => null)
+        let sourceBytesCache: Uint8Array | null | undefined
 
-        // Same-name file exists: reuse it when file size matches.
+        const readSourceBytes = async (): Promise<Uint8Array | null> => {
+            if (sourceBytesCache !== undefined) return sourceBytesCache
+            sourceBytesCache = await readFile(sourcePath).catch(() => null)
+            return sourceBytesCache
+        }
+
+        const isSameFileContent = async (candidateAbsPath: string, candidateSize: number | null): Promise<boolean> => {
+            if (sourceSize === null || candidateSize === null || sourceSize !== candidateSize) {
+                return false
+            }
+            if (normalizeTexturePathKey(candidateAbsPath) === normalizeTexturePathKey(sourcePath)) {
+                return true
+            }
+            const [sourceBytes, candidateBytes] = await Promise.all([
+                readSourceBytes(),
+                readFile(candidateAbsPath).catch(() => null)
+            ])
+            if (!sourceBytes || !candidateBytes) {
+                return false
+            }
+            return areBinaryContentsEqual(sourceBytes, candidateBytes)
+        }
+
+        // Same-name file exists: only reuse it when the file content is actually identical.
         if (await exists(targetAbsPath)) {
             const targetSize = await size(targetAbsPath).catch(() => null)
-            if (sourceSize !== null && targetSize !== null && sourceSize === targetSize) {
+            if (await isSameFileContent(targetAbsPath, targetSize)) {
                 return {
                     relativePath: targetFileName,
                     copied: false
@@ -1198,7 +1229,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                 const candidateFileName = `${stem}_${index}${ext}`
                 const candidateAbsPath = `${modelDir}\\${candidateFileName}`
                 const candidateSize = await size(candidateAbsPath).catch(() => null)
-                if (sourceSize !== null && candidateSize !== null && sourceSize === candidateSize) {
+                if (await isSameFileContent(candidateAbsPath, candidateSize)) {
                     return {
                         relativePath: candidateFileName,
                         copied: false

@@ -119,6 +119,14 @@ const RibbonEmitterDialog: React.FC<RibbonEmitterDialogProps> = ({
                 : (getNodeById(nodeId) as RibbonEmitterNode)
             : null
 
+    const getCurrentSourceNode = useCallback((): RibbonEmitterNode | null => {
+        if (nodeId === null) return null
+        if (isStandalone) {
+            return (standaloneNode as RibbonEmitterNode | null) ?? null
+        }
+        return (useModelStore.getState().getNodeById(nodeId) as RibbonEmitterNode | undefined) ?? null
+    }, [isStandalone, nodeId, standaloneNode])
+
     const applyNodeToStore = useCallback(
         (next: RibbonEmitterNode) => {
             if (nodeId === null) return
@@ -218,8 +226,9 @@ const RibbonEmitterDialog: React.FC<RibbonEmitterDialogProps> = ({
     const handleOk = async () => {
         try {
             const values = await form.validateFields()
-            if (!currentNode || nodeId === null) return
-            const currentAny = currentNode as any
+            const sourceNode = getCurrentSourceNode()
+            if (!sourceNode || nodeId === null) return
+            const currentAny = sourceNode as any
             const toFiniteNumber = (val: any, fallback: number): number => typeof val === 'number' && Number.isFinite(val) ? val : fallback
             const preserveAnimOrUseStatic = (prop: string, formVal: any, fallback: number): any =>
                 dynamicProps[prop] && isAnimVector(currentAny[prop]) ? currentAny[prop] : toFiniteNumber(formVal, fallback)
@@ -227,7 +236,7 @@ const RibbonEmitterDialog: React.FC<RibbonEmitterDialogProps> = ({
             const columns = Math.max(1, Math.round(toFiniteNumber(values.Columns, toFiniteNumber(currentAny.Columns, 1))))
             const materialIdRaw = toFiniteNumber(values.MaterialID, toFiniteNumber(currentAny.MaterialID, 0))
             const updatedNode: RibbonEmitterNode = {
-                ...currentNode,
+                ...sourceNode,
                 HeightAbove: preserveAnimOrUseStatic('HeightAbove', values.HeightAbove, getStaticValue(currentAny.HeightAbove, 0)),
                 HeightBelow: preserveAnimOrUseStatic('HeightBelow', values.HeightBelow, getStaticValue(currentAny.HeightBelow, 0)),
                 Alpha: preserveAnimOrUseStatic('Alpha', values.Alpha, getStaticValue(currentAny.Alpha, 1)),

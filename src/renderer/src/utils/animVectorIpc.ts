@@ -79,7 +79,7 @@ export function vectorToPlainArray(v: unknown, opts?: VectorPlainOptions): numbe
         out = opts?.isInt ? uint8ToInt32Numbers(v) : uint8ToFloat32Numbers(v)
     } else if (ArrayBuffer.isView(v)) {
         // 其他 TypedArray（如 Uint16）：保持按元素枚举；若遇 MsgPack 异常再单独处理
-        out = Array.from(v as ArrayLike<number>)
+        out = Array.from(v as unknown as ArrayLike<number>)
     } else if (typeof v === 'object') {
         const keys = Object.keys(v as object)
             .map((n) => parseInt(n, 10))

@@ -1113,28 +1113,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
             )
         ]
 
-        const handleUvKeyDown = (event: KeyboardEvent) => {
-            if (useSelectionStore.getState().mainMode !== 'uv') return
-            const key = event.key.toLowerCase()
-            if (key === 'w') {
-                setTransformMode('translate')
-                event.preventDefault()
-                event.stopPropagation()
-            } else if (key === 'e') {
-                setTransformMode('rotate')
-                event.preventDefault()
-                event.stopPropagation()
-            } else if (key === 'r') {
-                setTransformMode('scale')
-                event.preventDefault()
-                event.stopPropagation()
-            }
-        }
-
-        window.addEventListener('keydown', handleUvKeyDown, true)
-
         return () => {
-            window.removeEventListener('keydown', handleUvKeyDown, true)
             unsubscribeHandlers.forEach((unsubscribe) => unsubscribe())
         }
     }, [undo, redo])
@@ -1482,7 +1461,6 @@ const UVEditor: React.FC<UVEditorProps> = ({
 }
 
 export default UVEditor
-
 
 
 

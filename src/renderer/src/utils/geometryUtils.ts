@@ -186,7 +186,12 @@ export function recalculateAllNormals(
  * Optimized: Uses basic loops to avoid object allocations per vertex.
  */
 export function calculateGeosetExtent(geoset: any): void {
-    if (!geoset?.Vertices || geoset.Vertices.length === 0) return;
+    if (!geoset?.Vertices || geoset.Vertices.length === 0) {
+        geoset.MinimumExtent = undefined;
+        geoset.MaximumExtent = undefined;
+        geoset.BoundsRadius = 0;
+        return;
+    }
 
     const vertices = geoset.Vertices;
     const vertexCount = vertices.length / 3;
@@ -229,10 +234,8 @@ export function calculateModelExtent(modelData: any): void {
     let hasValidExtent = false;
 
     for (const geoset of modelData.Geosets) {
-        // Ensure geoset has extent calculated
-        if (!geoset.MinimumExtent || !geoset.MaximumExtent) {
-            calculateGeosetExtent(geoset);
-        }
+        // Manual recalc must always use the latest vertex data, not stale cached extents.
+        calculateGeosetExtent(geoset);
 
         if (geoset.MinimumExtent && geoset.MaximumExtent) {
             const min = geoset.MinimumExtent;
@@ -250,13 +253,25 @@ export function calculateModelExtent(modelData: any): void {
         }
     }
 
-    if (hasValidExtent && modelData.Info) {
-        modelData.Info.MinimumExtent = new Float32Array([minX, minY, minZ]);
-        modelData.Info.MaximumExtent = new Float32Array([maxX, maxY, maxZ]);
+    if (hasValidExtent) {
+        const minimumExtent = new Float32Array([minX, minY, minZ]);
+        const maximumExtent = new Float32Array([maxX, maxY, maxZ]);
         const dx = maxX - minX;
         const dy = maxY - minY;
         const dz = maxZ - minZ;
-        modelData.Info.BoundsRadius = Math.sqrt(dx * dx + dy * dy + dz * dz) / 2;
+        const boundsRadius = Math.sqrt(dx * dx + dy * dy + dz * dz) / 2;
+
+        // Keep both legacy Info.* and top-level model extents in sync.
+        modelData.MinimumExtent = minimumExtent;
+        modelData.MaximumExtent = maximumExtent;
+        modelData.BoundsRadius = boundsRadius;
+
+        if (!modelData.Info) {
+            modelData.Info = {};
+        }
+        modelData.Info.MinimumExtent = new Float32Array(minimumExtent);
+        modelData.Info.MaximumExtent = new Float32Array(maximumExtent);
+        modelData.Info.BoundsRadius = boundsRadius;
     }
 }
 

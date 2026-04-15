@@ -48,15 +48,36 @@ export const useMessageStore = create<MessageState>((set) => ({
     clearAll: () => set({ messages: [] })
 }));
 
-// Helper functions for imperative usage
-export const showMessage = (type: MessageType, title: string, content: React.ReactNode, duration: number = 3000): string => {
+// Helper functions for imperative usage.
+// Legacy code still calls showMessage(content, type); keep that shape temporarily while call sites are cleaned up.
+export function showMessage(type: MessageType, title: string, content: React.ReactNode, duration?: number): string;
+export function showMessage(content: React.ReactNode, type: MessageType): string;
+export function showMessage(
+    arg1: MessageType | React.ReactNode,
+    arg2: string | MessageType,
+    arg3?: React.ReactNode,
+    arg4: number = 3000
+): string {
+    if (
+        arg3 === undefined &&
+        typeof arg2 === 'string' &&
+        ['info', 'success', 'warning', 'error', 'confirm', 'loading'].includes(arg2)
+    ) {
+        return useMessageStore.getState().addMessage({
+            type: arg2 as MessageType,
+            title: typeof arg1 === 'string' ? arg1 : '提示',
+            content: arg1,
+            duration: arg4
+        });
+    }
+
     return useMessageStore.getState().addMessage({
-        type,
-        title,
-        content,
-        duration
+        type: arg1 as MessageType,
+        title: String(arg2),
+        content: arg3,
+        duration: arg4
     });
-};
+}
 
 export const showConfirm = (title: string, content: React.ReactNode, width?: number): Promise<boolean> => {
     return new Promise((resolve) => {

@@ -58,8 +58,17 @@ const EventObjectDialog: React.FC<EventObjectDialogProps> = ({
     const [eventFrames, setEventFrames] = useState<number[]>([])
     const [newFrame, setNewFrame] = useState<number>(0)
     const [selectedFrameIndex, setSelectedFrameIndex] = useState<number | null>(null)
-    const currentNode = nodeId !== null ? (getNodeById(nodeId) as EventObjectNode) : null
+    const globalSequenceId = Form.useWatch('GlobalSequenceId', form)
+    const currentNode = nodeId !== null ? (isStandalone ? (standaloneNode as EventObjectNode | null) : (getNodeById(nodeId) as EventObjectNode)) : null
     const sequences = modelData?.Sequences || []
+
+    const getCurrentSourceNode = React.useCallback((): EventObjectNode | null => {
+        if (nodeId === null) return null
+        if (isStandalone) {
+            return (standaloneNode as EventObjectNode | null) ?? null
+        }
+        return (useModelStore.getState().getNodeById(nodeId) as EventObjectNode | undefined) ?? null
+    }, [isStandalone, nodeId, standaloneNode])
 
     const applyNodeToStore = React.useCallback(
         (next: EventObjectNode) => {
@@ -116,9 +125,10 @@ const EventObjectDialog: React.FC<EventObjectDialogProps> = ({
     const handleOk = async () => {
         try {
             const values = await form.validateFields()
-            if (!currentNode || nodeId === null) return
+            const sourceNode = getCurrentSourceNode()
+            if (!sourceNode || nodeId === null) return
             applyNodeToStore({
-                ...currentNode,
+                ...sourceNode,
                 EventTrack: eventFrames as any,
                 GlobalSequenceId: values.GlobalSequenceId >= 0 ? values.GlobalSequenceId : undefined,
             })
@@ -174,7 +184,14 @@ const EventObjectDialog: React.FC<EventObjectDialogProps> = ({
                 <legend style={legendStyle}>{uiText.eventObjectDialog.other}</legend>
                 <div style={{ display: 'flex', alignItems: 'center' }}>
                     <span style={{ width: 100, color: '#888' }}>{uiText.eventObjectDialog.globalSequenceId}</span>
-                    <Form.Item name="GlobalSequenceId" noStyle><GlobalSequenceSelect style={{ flex: 1 }} /></Form.Item>
+                    <Form.Item name="GlobalSequenceId" noStyle>
+                        <GlobalSequenceSelect
+                            value={typeof globalSequenceId === 'number' ? globalSequenceId : -1}
+                            onChange={(value) => form.setFieldValue('GlobalSequenceId', value ?? -1)}
+                            isStandalone={isStandalone}
+                            style={{ flex: 1 }}
+                        />
+                    </Form.Item>
                 </div>
             </fieldset>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>

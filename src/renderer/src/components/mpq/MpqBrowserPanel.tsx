@@ -119,10 +119,13 @@ const toUint8Array = (payload: any): Uint8Array | null => {
 };
 
 const toTightArrayBuffer = (bytes: Uint8Array): ArrayBuffer => {
-    if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
+    if (bytes.buffer instanceof ArrayBuffer && bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
         return bytes.buffer;
     }
-    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    if (bytes.buffer instanceof ArrayBuffer) {
+        return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    }
+    return bytes.slice().buffer;
 };
 
 const sanitizeRelativeExportPath = (path: string): string | null => {

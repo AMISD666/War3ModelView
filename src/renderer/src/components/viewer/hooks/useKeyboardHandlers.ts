@@ -8,6 +8,7 @@ import { vec3 } from 'gl-matrix'
 import { useModelStore } from '../../../store/modelStore'
 import { useSelectionStore } from '../../../store/selectionStore'
 import { commandManager } from '../../../utils/CommandManager'
+import { normalizeKeyComboFromEvent } from '../../../shortcuts/utils'
 import { getPos } from '../types'
 import type { CameraState } from '../types'
 
@@ -26,72 +27,6 @@ export function useKeyboardHandlers({
     syncCameraToOrbit,
     onToggleWireframe
 }: UseKeyboardHandlersParams) {
-
-    // Main keyboard handler
-    const handleKeyDown = useCallback((e: KeyboardEvent) => {
-        // Ignore if input is focused
-        if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) {
-            return
-        }
-
-        switch (e.key.toLowerCase()) {
-            case 'f': // Toggle wireframe/textured render mode
-                onToggleWireframe()
-                break
-            case '0': // Camera Reset / Focus
-                vec3.set(targetCamera.current.target, 0, 0, 0)
-                targetCamera.current.distance = 500
-                targetCamera.current.theta = Math.PI / 4
-                targetCamera.current.phi = Math.PI / 4
-                syncCameraToOrbit()
-                break
-            case '1': // Front
-                targetCamera.current.theta = -Math.PI / 2
-                targetCamera.current.phi = Math.PI / 2
-                syncCameraToOrbit()
-                break
-            case '2': // Back
-                targetCamera.current.theta = Math.PI / 2
-                targetCamera.current.phi = Math.PI / 2
-                syncCameraToOrbit()
-                break
-            case '3': // Left
-                targetCamera.current.theta = 0
-                targetCamera.current.phi = Math.PI / 2
-                syncCameraToOrbit()
-                break
-            case '4': // Right
-                targetCamera.current.theta = Math.PI
-                targetCamera.current.phi = Math.PI / 2
-                syncCameraToOrbit()
-                break
-            case '5': // Top
-                targetCamera.current.phi = 0.01
-                syncCameraToOrbit()
-                break
-            case '6': // Bottom
-                targetCamera.current.phi = Math.PI - 0.01
-                syncCameraToOrbit()
-                break
-            case '`': // View selected camera (~ key) - Toggle mode
-                handleCameraViewToggle()
-                break
-            case 'z':
-                if (e.ctrlKey || e.metaKey) {
-                    if (e.shiftKey) {
-                        commandManager.redo()
-                    } else {
-                        commandManager.undo()
-                    }
-                }
-                break
-            case 'y':
-                if (e.ctrlKey || e.metaKey) {
-                    commandManager.redo()
-                }
-                break
-        }
-    }, [onToggleWireframe, syncCameraToOrbit])
 
     // Toggle camera view mode (~ key)
     const handleCameraViewToggle = useCallback(() => {
@@ -157,15 +92,81 @@ export function useKeyboardHandlers({
         }
     }, [syncCameraToOrbit, targetCamera, inCameraView, previousCameraState])
 
+    // Main keyboard handler
+    const handleKeyDown = useCallback((e: KeyboardEvent) => {
+        // Ignore if input is focused
+        if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) {
+            return
+        }
+
+        const combo = normalizeKeyComboFromEvent(e)
+        if (!combo) return
+
+        switch (combo) {
+            case 'F': // Toggle wireframe/textured render mode
+                onToggleWireframe()
+                break
+            case '0': // Camera Reset / Focus
+                vec3.set(targetCamera.current.target, 0, 0, 0)
+                targetCamera.current.distance = 500
+                targetCamera.current.theta = Math.PI / 4
+                targetCamera.current.phi = Math.PI / 4
+                syncCameraToOrbit()
+                break
+            case '1': // Front
+                targetCamera.current.theta = -Math.PI / 2
+                targetCamera.current.phi = Math.PI / 2
+                syncCameraToOrbit()
+                break
+            case '2': // Back
+                targetCamera.current.theta = Math.PI / 2
+                targetCamera.current.phi = Math.PI / 2
+                syncCameraToOrbit()
+                break
+            case '3': // Left
+                targetCamera.current.theta = 0
+                targetCamera.current.phi = Math.PI / 2
+                syncCameraToOrbit()
+                break
+            case '4': // Right
+                targetCamera.current.theta = Math.PI
+                targetCamera.current.phi = Math.PI / 2
+                syncCameraToOrbit()
+                break
+            case '5': // Top
+                targetCamera.current.phi = 0.01
+                syncCameraToOrbit()
+                break
+            case '6': // Bottom
+                targetCamera.current.phi = Math.PI - 0.01
+                syncCameraToOrbit()
+                break
+            case 'Backquote':
+            case 'Shift+Backquote': // View selected camera (~ key) - Toggle mode
+                handleCameraViewToggle()
+                break
+            case 'Ctrl+Z':
+            case 'Meta+Z':
+                commandManager.undo()
+                break
+            case 'Ctrl+Shift+Z':
+            case 'Meta+Shift+Z':
+            case 'Ctrl+Y':
+            case 'Meta+Y':
+                commandManager.redo()
+                break
+        }
+    }, [handleCameraViewToggle, onToggleWireframe, syncCameraToOrbit, targetCamera])
+
     // Transform mode keyboard shortcuts (W, E, R)
     useEffect(() => {
         const handleTransformKeys = (e: KeyboardEvent) => {
             if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) return
 
-            const key = e.key.toLowerCase()
-            if (key === 'w') useSelectionStore.getState().setTransformMode('translate')
-            if (key === 'e') useSelectionStore.getState().setTransformMode('rotate')
-            if (key === 'r') useSelectionStore.getState().setTransformMode('scale')
+            const combo = normalizeKeyComboFromEvent(e)
+            if (combo === 'W') useSelectionStore.getState().setTransformMode('translate')
+            if (combo === 'E') useSelectionStore.getState().setTransformMode('rotate')
+            if (combo === 'R') useSelectionStore.getState().setTransformMode('scale')
         }
         window.addEventListener('keydown', handleTransformKeys)
         return () => window.removeEventListener('keydown', handleTransformKeys)
@@ -176,14 +177,18 @@ export function useKeyboardHandlers({
         const handleUndoRedo = (e: KeyboardEvent) => {
             if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) return
 
-            if (e.ctrlKey || e.metaKey) {
-                if (e.key === 'z') {
-                    e.preventDefault()
-                    commandManager.undo()
-                } else if (e.key === 'y') {
-                    e.preventDefault()
-                    commandManager.redo()
-                }
+            const combo = normalizeKeyComboFromEvent(e)
+            if (combo === 'Ctrl+Z' || combo === 'Meta+Z') {
+                e.preventDefault()
+                commandManager.undo()
+            } else if (
+                combo === 'Ctrl+Y' ||
+                combo === 'Meta+Y' ||
+                combo === 'Ctrl+Shift+Z' ||
+                combo === 'Meta+Shift+Z'
+            ) {
+                e.preventDefault()
+                commandManager.redo()
             }
         }
         window.addEventListener('keydown', handleUndoRedo)

@@ -5,7 +5,7 @@ import type { Color } from 'antd/es/color-picker'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker'
 import { PlusOutlined } from '@ant-design/icons'
-import { coercePivotFloat3 } from 'war3-model'
+import { coercePivotFloat3 } from '../../utils/pivotUtils'
 
 const { Text } = Typography
 const { Option } = Select

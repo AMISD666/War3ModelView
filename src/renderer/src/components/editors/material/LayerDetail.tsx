@@ -89,8 +89,6 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
         };
 
         const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
-        payload.targetWindowId = windowId;
-
         void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload);
     }
 

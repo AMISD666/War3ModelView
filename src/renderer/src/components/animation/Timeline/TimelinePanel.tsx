@@ -810,8 +810,9 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 })
             }
 
-            geosetIdsForTimeline.forEach((geosetId) => {
-                const geosetAnim = (modelData as any).GeosetAnims.find((anim: any) => Number(anim?.GeosetId) === Number(geosetId))
+            geosetIdsForTimeline.forEach((geosetIdRaw) => {
+                const geosetId = Number(geosetIdRaw)
+                const geosetAnim = (modelData as any).GeosetAnims.find((anim: any) => Number(anim?.GeosetId) === geosetId)
                 addGeosetKeys(geosetId, geosetAnim?.Alpha, 'GeosetAlpha', '#fadb14')
                 addGeosetKeys(geosetId, geosetAnim?.Color, 'GeosetColor', '#ff85c0')
             })

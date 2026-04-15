@@ -294,6 +294,14 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
                 : (getNodeById(nodeId) as ParticleEmitter2Node))
             : null;
 
+    const getCurrentSourceNode = React.useCallback((): ParticleEmitter2Node | null => {
+        if (nodeId === null) return null;
+        if (isStandalone) {
+            return (standaloneNode as ParticleEmitter2Node | null) ?? null;
+        }
+        return (useModelStore.getState().getNodeById(nodeId) as ParticleEmitter2Node | undefined) ?? null;
+    }, [isStandalone, nodeId, standaloneNode]);
+
     const applyCommittedNode = React.useCallback(
         (next: ParticleEmitter2Node, history?: { name: string; undoNode: any; redoNode: any }) => {
             if (nodeId === null) return;
@@ -410,6 +418,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
             initialNodeRef.current = null;
             isCommittingRef.current = false;
             didRealtimePreviewRef.current = false;
+            suppressAutoPreviewRef.current = false;
             formHydratedForNodeIdRef.current = null;
             hueBaseColorsRef.current = null;
             alphaBaseValuesRef.current = null;
@@ -434,6 +443,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
         if (!sourceNode) return;
 
         formHydratedForNodeIdRef.current = nodeId;
+        suppressAutoPreviewRef.current = true;
 
         const currentNode = sourceNode;
         if (!initialNodeRef.current && currentNode) {
@@ -568,16 +578,24 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
                 newAnimDataMap[propName] = animData;
             }
         });
+        animDataMapRef.current = newAnimDataMap;
         setAnimDataMap(newAnimDataMap);
+
+        const hydrationUnlockTimer = window.setTimeout(() => {
+            suppressAutoPreviewRef.current = false;
+        }, 0);
+
+        return () => {
+            clearTimeout(hydrationUnlockTimer);
+            suppressAutoPreviewRef.current = false;
+        };
     }, [clearPreviewNode, visible, nodeId, isStandalone, standaloneNode]);
 
     const applyRealtimeTexture = (textureId: number) => {
-        if (nodeId === null || !currentNode) return;
+        const sourceNode = getCurrentSourceNode();
+        if (nodeId === null || !sourceNode) return;
         const textureCount = modelData?.Textures?.length || 0;
         if (textureId >= textureCount && textureId !== -1) return;
-        const sourceNode = isStandalone
-            ? (currentNode as ParticleEmitter2Node)
-            : ((getNodeById(nodeId) as ParticleEmitter2Node) || currentNode);
         const safeTextureId = Number.isInteger(textureId) ? textureId : -1;
         const previewNode: ParticleEmitter2Node = {
             ...sourceNode,
@@ -593,30 +611,31 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
     };
 
     const buildUpdatedNodeFromValues = useCallback((values: any): ParticleEmitter2Node | null => {
-        if (!currentNode) return null;
+        const sourceNode = getCurrentSourceNode();
+        if (!sourceNode) return null;
 
         const animMap = animDataMapRef.current;
-        const currentSegmentColor = Array.isArray(currentNode.SegmentColor) && currentNode.SegmentColor.length >= 3
-            ? currentNode.SegmentColor
+        const currentSegmentColor: SegmentColorTuple = Array.isArray(sourceNode.SegmentColor) && sourceNode.SegmentColor.length >= 3
+            ? sourceNode.SegmentColor as SegmentColorTuple
             : [[1, 1, 1], [1, 1, 1], [1, 1, 1]];
-        const currentAlpha = Array.isArray(currentNode.Alpha) && currentNode.Alpha.length >= 3
-            ? currentNode.Alpha
+        const currentAlpha = Array.isArray(sourceNode.Alpha) && sourceNode.Alpha.length >= 3
+            ? sourceNode.Alpha
             : [255, 255, 255];
-        const currentScaling = Array.isArray(currentNode.ParticleScaling) && currentNode.ParticleScaling.length >= 3
-            ? currentNode.ParticleScaling
+        const currentScaling = Array.isArray(sourceNode.ParticleScaling) && sourceNode.ParticleScaling.length >= 3
+            ? sourceNode.ParticleScaling
             : [10, 10, 10];
         const updatedNode: ParticleEmitter2Node = {
-            ...currentNode,
-            TextureID: getFiniteNumber(values.TextureID, getFiniteNumber(currentNode.TextureID, -1)),
-            FilterMode: values.FilterMode ?? currentNode.FilterMode ?? 0,
-            Rows: Math.max(1, getFiniteNumber(values.Rows, getFiniteNumber(currentNode.Rows, 1))),
-            Columns: Math.max(1, getFiniteNumber(values.Columns, getFiniteNumber(currentNode.Columns, 1))),
-            PriorityPlane: getFiniteNumber(values.PriorityPlane, getFiniteNumber(currentNode.PriorityPlane, 0)),
-            ReplaceableId: getFiniteNumber(values.ReplaceableId, getFiniteNumber(currentNode.ReplaceableId, 0)),
+            ...sourceNode,
+            TextureID: getFiniteNumber(values.TextureID, getFiniteNumber(sourceNode.TextureID, -1)),
+            FilterMode: values.FilterMode ?? sourceNode.FilterMode ?? 0,
+            Rows: Math.max(1, getFiniteNumber(values.Rows, getFiniteNumber(sourceNode.Rows, 1))),
+            Columns: Math.max(1, getFiniteNumber(values.Columns, getFiniteNumber(sourceNode.Columns, 1))),
+            PriorityPlane: getFiniteNumber(values.PriorityPlane, getFiniteNumber(sourceNode.PriorityPlane, 0)),
+            ReplaceableId: getFiniteNumber(values.ReplaceableId, getFiniteNumber(sourceNode.ReplaceableId, 0)),
             SegmentColor: [
-                values.Seg1Color ? fromAntdColor(values.Seg1Color) : currentSegmentColor[0],
-                values.Seg2Color ? fromAntdColor(values.Seg2Color) : currentSegmentColor[1],
-                values.Seg3Color ? fromAntdColor(values.Seg3Color) : currentSegmentColor[2],
+                values.Seg1Color ? fromAntdColor(values.Seg1Color) as [number, number, number] : currentSegmentColor[0],
+                values.Seg2Color ? fromAntdColor(values.Seg2Color) as [number, number, number] : currentSegmentColor[1],
+                values.Seg3Color ? fromAntdColor(values.Seg3Color) as [number, number, number] : currentSegmentColor[2],
             ],
             Alpha: [
                 clamp(getFiniteNumber(values.Seg1Alpha, currentAlpha[0]), 0, 255),
@@ -629,38 +648,38 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
                 Math.max(0, getFiniteNumber(values.Seg3Scaling, currentScaling[2])),
             ],
             LifeSpanUVAnim: [
-                getFiniteNumber(values.HeadLifeSpanStart, currentNode.LifeSpanUVAnim?.[0] ?? 0),
-                getFiniteNumber(values.HeadLifeSpanEnd, currentNode.LifeSpanUVAnim?.[1] ?? 0),
-                Math.max(1, getFiniteNumber(values.HeadLifeSpanRepeat, currentNode.LifeSpanUVAnim?.[2] ?? 1))
+                getFiniteNumber(values.HeadLifeSpanStart, sourceNode.LifeSpanUVAnim?.[0] ?? 0),
+                getFiniteNumber(values.HeadLifeSpanEnd, sourceNode.LifeSpanUVAnim?.[1] ?? 0),
+                Math.max(1, getFiniteNumber(values.HeadLifeSpanRepeat, sourceNode.LifeSpanUVAnim?.[2] ?? 1))
             ],
             DecayUVAnim: [
-                getFiniteNumber(values.HeadDecayStart, currentNode.DecayUVAnim?.[0] ?? 0),
-                getFiniteNumber(values.HeadDecayEnd, currentNode.DecayUVAnim?.[1] ?? 0),
-                Math.max(1, getFiniteNumber(values.HeadDecayRepeat, currentNode.DecayUVAnim?.[2] ?? 1))
+                getFiniteNumber(values.HeadDecayStart, sourceNode.DecayUVAnim?.[0] ?? 0),
+                getFiniteNumber(values.HeadDecayEnd, sourceNode.DecayUVAnim?.[1] ?? 0),
+                Math.max(1, getFiniteNumber(values.HeadDecayRepeat, sourceNode.DecayUVAnim?.[2] ?? 1))
             ],
             TailUVAnim: [
-                getFiniteNumber(values.TailLifeSpanStart, currentNode.TailUVAnim?.[0] ?? 0),
-                getFiniteNumber(values.TailLifeSpanEnd, currentNode.TailUVAnim?.[1] ?? 0),
-                Math.max(1, getFiniteNumber(values.TailLifeSpanRepeat, currentNode.TailUVAnim?.[2] ?? 1))
+                getFiniteNumber(values.TailLifeSpanStart, sourceNode.TailUVAnim?.[0] ?? 0),
+                getFiniteNumber(values.TailLifeSpanEnd, sourceNode.TailUVAnim?.[1] ?? 0),
+                Math.max(1, getFiniteNumber(values.TailLifeSpanRepeat, sourceNode.TailUVAnim?.[2] ?? 1))
             ],
             TailDecayUVAnim: [
-                getFiniteNumber(values.TailDecayStart, currentNode.TailDecayUVAnim?.[0] ?? 0),
-                getFiniteNumber(values.TailDecayEnd, currentNode.TailDecayUVAnim?.[1] ?? 0),
-                Math.max(1, getFiniteNumber(values.TailDecayRepeat, currentNode.TailDecayUVAnim?.[2] ?? 1))
+                getFiniteNumber(values.TailDecayStart, sourceNode.TailDecayUVAnim?.[0] ?? 0),
+                getFiniteNumber(values.TailDecayEnd, sourceNode.TailDecayUVAnim?.[1] ?? 0),
+                Math.max(1, getFiniteNumber(values.TailDecayRepeat, sourceNode.TailDecayUVAnim?.[2] ?? 1))
             ],
-            TailLength: getFiniteNumber(values.TailLength, getFiniteNumber(currentNode.TailLength, 0)),
-            Time: getFiniteNumber(values.Time, getFiniteNumber(currentNode.Time, 0.5)),
-            LifeSpan: Math.max(0.001, getFiniteNumber(values.LifeSpan, getFiniteNumber(currentNode.LifeSpan, 1))),
-            Unshaded: values.Unshaded ?? currentNode.Unshaded ?? true,
-            Unfogged: values.Unfogged ?? currentNode.Unfogged ?? false,
-            SortPrimsFarZ: values.SortPrimsFarZ ?? currentNode.SortPrimsFarZ ?? false,
-            LineEmitter: values.LineEmitter ?? currentNode.LineEmitter ?? false,
-            ModelSpace: values.ModelSpace ?? currentNode.ModelSpace ?? false,
-            XYQuad: values.XYQuad ?? currentNode.XYQuad ?? false,
-            Squirt: values.Squirt ?? currentNode.Squirt ?? false,
-            Head: values.Head ?? currentNode.Head ?? true,
-            Tail: values.Tail ?? currentNode.Tail ?? false,
-            Visibility: getFiniteNumber(values.Visibility, getStaticValue(currentNode.Visibility, 1)),
+            TailLength: getFiniteNumber(values.TailLength, getFiniteNumber(sourceNode.TailLength, 0)),
+            Time: getFiniteNumber(values.Time, getFiniteNumber(sourceNode.Time, 0.5)),
+            LifeSpan: Math.max(0.001, getFiniteNumber(values.LifeSpan, getFiniteNumber(sourceNode.LifeSpan, 1))),
+            Unshaded: values.Unshaded ?? sourceNode.Unshaded ?? true,
+            Unfogged: values.Unfogged ?? sourceNode.Unfogged ?? false,
+            SortPrimsFarZ: values.SortPrimsFarZ ?? sourceNode.SortPrimsFarZ ?? false,
+            LineEmitter: values.LineEmitter ?? sourceNode.LineEmitter ?? false,
+            ModelSpace: values.ModelSpace ?? sourceNode.ModelSpace ?? false,
+            XYQuad: values.XYQuad ?? sourceNode.XYQuad ?? false,
+            Squirt: values.Squirt ?? sourceNode.Squirt ?? false,
+            Head: values.Head ?? sourceNode.Head ?? true,
+            Tail: values.Tail ?? sourceNode.Tail ?? false,
+            Visibility: getFiniteNumber(values.Visibility, getStaticValue(sourceNode.Visibility, 1)),
         };
         const frameFlags =
             (updatedNode.Head ? 1 : 0) |
@@ -688,7 +707,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
             } else {
                 (updatedNode as any)[prop] = getFiniteNumber(
                     values[prop],
-                    getStaticValue((currentNode as any)[prop], 0)
+                    getStaticValue((sourceNode as any)[prop], 0)
                 );
                 if (animKey) {
                     delete (updatedNode as any)[animKey];
@@ -705,7 +724,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
         });
 
         return updatedNode;
-    }, [currentNode]);
+    }, [getCurrentSourceNode]);
 
     const buildPreviewNode = useCallback(() => {
         const values = form.getFieldsValue();
@@ -734,6 +753,28 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
         const nextNode: ParticleEmitter2Node = overrides ? { ...updatedNode, ...overrides } : updatedNode;
         applyCommittedNode(nextNode);
     }, [applyCommittedNode, buildUpdatedNodeFromValues, form, isStandalone, nodeId]);
+
+    useEffect(() => {
+        if (!isStandalone || nodeId === null) return;
+        if (suppressAutoPreviewRef.current) return;
+        if (formHydratedForNodeIdRef.current !== nodeId) return;
+
+        if (standaloneDraftCommitTimerRef.current !== null) {
+            clearTimeout(standaloneDraftCommitTimerRef.current);
+        }
+
+        standaloneDraftCommitTimerRef.current = window.setTimeout(() => {
+            standaloneDraftCommitTimerRef.current = null;
+            syncStandaloneDraft();
+        }, 0);
+
+        return () => {
+            if (standaloneDraftCommitTimerRef.current !== null) {
+                clearTimeout(standaloneDraftCommitTimerRef.current);
+                standaloneDraftCommitTimerRef.current = null;
+            }
+        };
+    }, [animDataMap, isStandalone, nodeId, syncStandaloneDraft]);
 
     const flushPreviewNowWithOverrides = useCallback((overrides?: Partial<ParticleEmitter2Node>) => {
         if (isStandalone) {
@@ -770,12 +811,13 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
     }, [isStandalone, schedulePreview, syncStandaloneDraft]);
 
     const commitCurrentValues = useCallback(() => {
-        if (!currentNode || nodeId === null) return false;
+        const sourceNode = getCurrentSourceNode();
+        if (!sourceNode || nodeId === null) return false;
         const values = form.getFieldsValue();
         const updatedNode = buildUpdatedNodeFromValues(values);
         if (!updatedNode) return false;
 
-        const oldNode = initialNodeRef.current || currentNode;
+        const oldNode = initialNodeRef.current || sourceNode;
         isCommittingRef.current = true;
         applyCommittedNode(updatedNode, {
             name: `Edit Particle Emitter`,
@@ -783,7 +825,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
             redoNode: updatedNode,
         });
         return true;
-    }, [applyCommittedNode, buildUpdatedNodeFromValues, currentNode, form, nodeId]);
+    }, [applyCommittedNode, buildUpdatedNodeFromValues, form, getCurrentSourceNode, nodeId]);
 
     useEffect(() => {
         commitOnUnmountRef.current = commitCurrentValues;
@@ -808,11 +850,6 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
 
         return () => {
             try {
-                commitOnUnmountRef.current?.();
-            } catch (error) {
-                console.error('[ParticleEmitter2Dialog] failed to commit standalone changes on close:', error);
-            }
-            try {
                 clearPreviewOnUnmountRef.current?.();
             } catch (error) {
                 console.error('[ParticleEmitter2Dialog] failed to clear standalone preview on close:', error);
@@ -822,7 +859,9 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
 
     const handleCancel = () => {
         setPresetModalOpen(false);
-        commitCurrentValues();
+        if (!isStandalone) {
+            commitCurrentValues();
+        }
         onClose();
     };
 
@@ -911,7 +950,6 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
         };
 
         const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
-        payload.targetWindowId = windowId;
 
         void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload);
     };

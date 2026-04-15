@@ -52,7 +52,8 @@ const toVec = (input: any, size: number, fallback: number[]) => {
     return out.slice(0, size)
 }
 
-const isTrack = (value: any): value is { Keys: any[] } => !!value && typeof value === 'object' && Array.isArray(value.Keys)
+const isTrack = (value: any): value is { Keys: any[]; GlobalSeqId?: number; InterpolationType?: number } =>
+    !!value && typeof value === 'object' && Array.isArray(value.Keys)
 
 const sampleTrack = (track: any, frame: number, fallback: number[]) => {
     if (!isTrack(track) || track.Keys.length === 0) return [...fallback]
@@ -104,7 +105,10 @@ const toUint8Array = (payload: any): Uint8Array | null => {
 const toArrayBuffer = (payload: any): ArrayBuffer | null => {
     const bytes = toUint8Array(payload)
     if (!bytes) return null
-    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+    if (bytes.buffer instanceof ArrayBuffer) {
+        return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+    }
+    return bytes.slice().buffer
 }
 
 const imageDataToDataUrl = (imageData: ImageData): string | null => {
@@ -844,7 +848,7 @@ const TextureAnimGizmoPanel: React.FC = () => {
         const oldInterpolationType = typeof oldTrack?.InterpolationType === 'number' ? oldTrack.InterpolationType : 1
 
         const track = isTrack(oldTrack)
-            ? oldTrack
+            ? { ...oldTrack }
             : { InterpolationType: oldInterpolationType, GlobalSeqId: oldGlobalSeqId, Keys: [] as any[] }
         const nextGlobalSeqId = patch.GlobalSeqId ?? oldGlobalSeqId
         const nextInterpolationType = patch.InterpolationType ?? oldInterpolationType
@@ -896,8 +900,6 @@ const TextureAnimGizmoPanel: React.FC = () => {
         };
 
         const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
-        payload.targetWindowId = windowId;
-
         void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload);
     }, [ensureSelection, currentTrackEditorData, activeTrackMeta, trackEditorVectorSize, modelData])
 

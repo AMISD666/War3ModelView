@@ -2,7 +2,7 @@
 import { Button, Modal, Tag, Typography, Tooltip } from 'antd'
 import { shortcutActions, ShortcutAction } from '../shortcuts/actions'
 import { getDefaultBindings, useShortcutStore } from '../store/shortcutStore'
-import { formatKeyCombo, normalizeKeyComboFromEvent } from '../shortcuts/utils'
+import { formatKeyCombo, normalizeKeyCombo, normalizeKeyComboFromEvent } from '../shortcuts/utils'
 import { UndoOutlined, DeleteOutlined, EditOutlined, GlobalOutlined, EyeOutlined, BuildOutlined, ScissorOutlined, PlayCircleOutlined, BlockOutlined } from '@ant-design/icons'
 
 const { Text, Title } = Typography
@@ -227,6 +227,7 @@ export const ShortcutSettingsPanel: React.FC = () => {
 
             const combo = normalizeKeyComboFromEvent(e)
             if (!combo) return
+            const normalizedCombo = normalizeKeyCombo(combo)
 
             const actionId = editingActionId
             const currentAction = shortcutActions.find((action) => action.id === actionId)
@@ -238,12 +239,12 @@ export const ShortcutSettingsPanel: React.FC = () => {
             const conflict = shortcutActions.find((action) => {
                 if (action.id === editingActionId) return false
                 if (!hasContextOverlap(action, currentAction)) return false
-                const effective = getEffectiveBindings(bindings, action.id)
-                return effective.some((binding) => binding === combo)
+                const effective = getEffectiveBindings(bindings, action.id).map(normalizeKeyCombo)
+                return effective.some((binding) => binding === normalizedCombo)
             })
 
             const applyBinding = () => {
-                setBindings(actionId, [combo])
+                setBindings(actionId, [normalizedCombo])
                 setEditingActionId(null)
             }
 
@@ -257,7 +258,8 @@ export const ShortcutSettingsPanel: React.FC = () => {
                     centered: true,
                     className: 'dark-theme-modal',
                     onOk: () => {
-                        const next = getEffectiveBindings(bindings, conflict.id).filter((binding) => binding !== combo)
+                        const next = getEffectiveBindings(bindings, conflict.id)
+                            .filter((binding) => normalizeKeyCombo(binding) !== normalizedCombo)
                         setBindings(conflict.id, next)
                         applyBinding()
                     }

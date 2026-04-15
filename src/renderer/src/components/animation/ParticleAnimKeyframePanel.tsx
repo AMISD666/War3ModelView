@@ -278,8 +278,8 @@ const ParticleAnimKeyframePanel: React.FC = () => {
                                 </Text>
                                 <InputNumber
                                     size="small"
-                                    min={track.min}
-                                    max={track.max}
+                                    min={'min' in track ? track.min : undefined}
+                                    max={'max' in track ? track.max : undefined}
                                     step={track.step}
                                     value={inputs[track.propName]}
                                     onChange={(value) => handleInputChange(track.propName, value)}
