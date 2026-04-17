@@ -130,8 +130,6 @@ Windows 目标包含 `nsis` 安装包配置（见 `src-tauri/tauri.conf.json`）
 
 - `src/renderer/`：前端（React/Vite）主工程
 - `src-tauri/`：Tauri 2 桌面壳（Rust）
-- `docs/`：项目文档（开发约束、回归清单、格式说明等）
-
 ---
 
 
