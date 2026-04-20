@@ -4,11 +4,10 @@ import { DraggableModal } from '../DraggableModal'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useHistoryStore } from '../../store/historyStore'
-import { listen } from '@tauri-apps/api/event'
 import { windowManager } from '../../utils/WindowManager'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useRpcClient } from '../../hooks/useRpc'
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
+import { useWindowEvent } from '../../hooks/useWindowEvent'
 import { vectorToPlainArray } from '../../utils/animVectorIpc'
 import { coercePivotFloat3 } from '../../utils/pivotUtils'
 
@@ -415,49 +414,33 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
         return nextAnims
     }
 
-    useEffect(() => {
+    useWindowEvent<any>('IPC_KEYFRAME_SAVE', (event) => {
         if (!visible) return
 
-        let disposed = false
-        let unsubscribe: (() => void) | undefined
+        const payload = event.payload
+        if (payload?.callerId !== 'GeosetVisibilityToolModal') return
 
-        listen('IPC_KEYFRAME_SAVE', (event) => {
-            const payload = event.payload as any
-            if (payload?.callerId !== 'GeosetVisibilityToolModal') return
+        const targetGeosetId = editingGeosetIdRef.current
+        if (targetGeosetId === null) return
 
-            const targetGeosetId = editingGeosetIdRef.current
-            if (targetGeosetId === null) return
-
-            const nextAnims = [...localAnimsRef.current]
-            let animIndex = getAnimIndexByGeosetId(nextAnims, targetGeosetId)
-            if (animIndex < 0) {
-                nextAnims.push(createDefaultGeosetAnim(targetGeosetId))
-                animIndex = nextAnims.length - 1
-            }
-
-            nextAnims[animIndex] = {
-                ...nextAnims[animIndex],
-                Alpha: {
-                    ...payload.data,
-                    Keys: ensureDefaultVisibleKey(normalizeAlphaKeys(payload.data?.Keys || []))
-                }
-            }
-
-            applyImmediateChange(nextAnims, 'Edit Geoset Alpha Track')
-            setEditingGeosetId(null)
-        }).then((unlisten) => {
-            if (disposed) {
-                unlisten()
-                return
-            }
-            unsubscribe = unlisten
-        }).catch(console.error)
-
-        return () => {
-            disposed = true
-            if (unsubscribe) unsubscribe()
+        const nextAnims = [...localAnimsRef.current]
+        let animIndex = getAnimIndexByGeosetId(nextAnims, targetGeosetId)
+        if (animIndex < 0) {
+            nextAnims.push(createDefaultGeosetAnim(targetGeosetId))
+            animIndex = nextAnims.length - 1
         }
-    }, [visible]);
+
+        nextAnims[animIndex] = {
+            ...nextAnims[animIndex],
+            Alpha: {
+                ...payload.data,
+                Keys: ensureDefaultVisibleKey(normalizeAlphaKeys(payload.data?.Keys || []))
+            }
+        }
+
+        applyImmediateChange(nextAnims, 'Edit Geoset Alpha Track')
+        setEditingGeosetId(null)
+    }, visible)
 
     const openAlphaTextEditor = (sequence: SequenceItem) => {
         if (selectedGeosetIds.length === 0) {
@@ -659,7 +642,7 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
 
     if (isStandalone) {
         return (
-            <StandaloneWindowFrame title="多边形动作显隐工具" onClose={() => getCurrentWindow().hide()}>
+            <StandaloneWindowFrame title="多边形动作显隐工具" onClose={onClose}>
                 <div style={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: '#1e1e1e' }}>
                     <div style={{ flex: 1, padding: 10, overflow: 'auto' }}>
                         {innerContent}

@@ -5,7 +5,7 @@ import { invoke } from '@tauri-apps/api/core'
 // @ts-ignore
 import { decodeBLP, getBLPImageData } from 'war3-model'
 import { Button, Tooltip } from 'antd'
-import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
+import { PositiveStepInput } from '@renderer/components/common/PositiveStepInput'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useRendererStore } from '../../store/rendererStore'
 import { registerShortcutHandler } from '../../shortcuts/manager'
@@ -1346,16 +1346,12 @@ const UVEditor: React.FC<UVEditorProps> = ({
                             onClick={() => setSnapTranslateEnabled(!snapTranslateEnabled)}
                         >{'\u8ddd'}</Button>
                     </Tooltip>
-                    <InputNumber
-                        size="small"
+                    <PositiveStepInput
                         min={0.001}
                         step={0.1}
                         value={snapTranslateStep}
-                        controls={false}
-                        onChange={(value) => {
-                            const next = typeof value === 'number' && value > 0 ? value : 0.001
-                            setSnapTranslateStep(next)
-                        }}
+                        precision={3}
+                        onCommit={setSnapTranslateStep}
                         style={snapInputFloatingStyle}
                     />
                 </div>
@@ -1367,16 +1363,12 @@ const UVEditor: React.FC<UVEditorProps> = ({
                             onClick={() => setSnapRotateEnabled(!snapRotateEnabled)}
                         >{'\u89d2'}</Button>
                     </Tooltip>
-                    <InputNumber
-                        size="small"
+                    <PositiveStepInput
                         min={1}
                         step={1}
                         value={snapRotateStep}
-                        controls={false}
-                        onChange={(value) => {
-                            const next = typeof value === 'number' && value > 0 ? value : 1
-                            setSnapRotateStep(next)
-                        }}
+                        precision={0}
+                        onCommit={setSnapRotateStep}
                         style={snapInputFloatingStyle}
                     />
                 </div>
@@ -1461,7 +1453,6 @@ const UVEditor: React.FC<UVEditorProps> = ({
 }
 
 export default UVEditor
-
 
 
 

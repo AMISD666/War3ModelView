@@ -14,6 +14,8 @@ export type NodeEditorKind =
 /** 主窗口广播给独立节点编辑器的快照。 */
 export interface NodeEditorRpcState {
     snapshotVersion: number
+    /** 每次打开节点编辑器都会递增，用于区分同一节点的连续编辑会话。 */
+    sessionNonce: number
     kind: NodeEditorKind | ''
     objectId: number
     /** 当前编辑节点的深拷贝，仅用于独立窗口初始化。 */

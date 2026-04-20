@@ -1,10 +1,10 @@
 ﻿import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 import StandaloneToolWindowRouter, { isStandaloneToolWindowLabel } from './components/detached/StandaloneToolWindowRouter'
-import { invoke } from '@tauri-apps/api/core'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { windowManager } from './utils/WindowManager'
 import { useRef } from 'react'
 import AppErrorBoundary from './components/common/AppErrorBoundary'
+import { desktopGateway } from './infrastructure/desktop'
+import { windowGateway } from './infrastructure/window'
 
 const MainLayoutNew = lazy(() => import('./components/MainLayoutNew'))
 const ActivationModal = lazy(() => import('./components/modals/ActivationModal'))
@@ -37,7 +37,7 @@ function App(): JSX.Element {
             setShouldMountMainLayout(true)
         })
 
-        const unlistenPromise = getCurrentWindow().onCloseRequested(async (event) => {
+        const unlistenPromise = windowGateway.onCurrentCloseRequested(async (event) => {
             if (event.isPreventDefault() || isClosingRef.current) {
                 return
             }
@@ -46,9 +46,8 @@ function App(): JSX.Element {
             isClosingRef.current = true
 
             try {
-                const currentWindow = getCurrentWindow()
                 await windowManager.destroyAllWindows().catch(console.error)
-                await currentWindow.destroy()
+                await windowGateway.destroyCurrentWindow()
             } catch (error) {
                 console.error('[App] graceful exit failed:', error)
                 isClosingRef.current = false
@@ -90,7 +89,7 @@ function App(): JSX.Element {
 
     const checkActivation = async () => {
         try {
-            const status = await invoke<ActivationStatus>('get_activation_status')
+            const status = await desktopGateway.invoke<ActivationStatus>('get_activation_status')
             setIsActivated(status.is_activated)
         } catch (e: any) {
             console.error('Activation check failed:', e)

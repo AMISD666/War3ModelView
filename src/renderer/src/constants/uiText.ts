@@ -38,6 +38,7 @@ export const uiText = {
         transformModel: '修改模型位置/旋转/缩放',
         modelOptimize: '模型优化',
         modelMerge: '模型合并',
+        globalColorAdjust: '全局颜色调整',
         dissolveEffect: '消散动画工具',
         geosetVisibilityTool: '多边形显隐工具',
         addDeathAnimation: '添加死亡动画',

@@ -6,11 +6,10 @@ import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker'
 import { DraggableModal } from '../DraggableModal'
 import { useModelStore } from '../../store/modelStore'
 import { useHistoryStore } from '../../store/historyStore'
-import { listen } from '@tauri-apps/api/event'
-import { emit } from '@tauri-apps/api/event'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { CloseOutlined } from '@ant-design/icons'
 import { GlobalSequenceSelect } from '../common/GlobalSequenceSelect'
+import { useWindowEvent } from '../../hooks/useWindowEvent'
+import { windowGateway } from '../../infrastructure/window'
 import {
     cloneAnimVectorForIpc,
     isKeyframeAnimVectorIntTrack,
@@ -75,13 +74,17 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
     const [gridInterval, setGridInterval] = useState<number>(66)
 
     // TextureID Batch Generation State
-    const textureCount = modelData?.Textures?.length || 1
-    const [textureBatchCount, setTextureBatchCount] = useState<number>(textureCount)
     const [textureBatchStartFrame, setTextureBatchStartFrame] = useState<number>(0)
     const [textureBatchInterval, setTextureBatchInterval] = useState<number>(100)
+    const [textureBatchRepeatCount, setTextureBatchRepeatCount] = useState<number>(2)
 
     // Check if editing TextureID
-    const isTextureIDField = fieldName === 'TextureID' || title.includes('TextureID')
+    const isTextureIDField =
+        fieldName === 'TextureID' ||
+        fieldName.startsWith('TextureID_') ||
+        title.includes('TextureID') ||
+        title.includes('贴图 ID') ||
+        title.includes('贴图ID')
     const isColorField = vectorSize === 3 && (
         fieldName.toLowerCase().includes('color') ||
         title.includes('颜色') ||
@@ -184,6 +187,41 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
     const parsedKeys = useMemo(() => {
         return parseText(deferredText, vectorSize)
     }, [deferredText, vectorSize])
+    const currentTextureId = useMemo(() => {
+        const readScalar = (source: any): number | null => {
+            if (typeof source === 'number' && Number.isFinite(source)) {
+                return Math.max(0, Math.round(source))
+            }
+            if (!source || typeof source !== 'object') {
+                return null
+            }
+
+            const directVectorValue = Array.isArray(source.Vector) ? Number(source.Vector[0]) : Number(source.Vector)
+            if (Number.isFinite(directVectorValue)) {
+                return Math.max(0, Math.round(directVectorValue))
+            }
+
+            const keys = Array.isArray(source.Keys) ? source.Keys : []
+            if (keys.length === 0) {
+                return null
+            }
+
+            const firstKey = keys[0]
+            if (typeof firstKey?.Value === 'number' && Number.isFinite(firstKey.Value)) {
+                return Math.max(0, Math.round(firstKey.Value))
+            }
+
+            const rawVector = Array.isArray(firstKey?.Vector) ? firstKey.Vector[0] : firstKey?.Vector
+            const parsedVector = Number(rawVector)
+            if (Number.isFinite(parsedVector)) {
+                return Math.max(0, Math.round(parsedVector))
+            }
+
+            return null
+        }
+
+        return readScalar(initialData) ?? readScalar(parsedKeys[0]) ?? 0
+    }, [initialData, parsedKeys])
 
     const clamp01 = (value: number) => Math.min(1, Math.max(0, value))
     const toHex = (r: number, g: number, b: number) => {
@@ -497,11 +535,22 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
 
     // Handle TextureID Batch Generation
     const handleTextureIDBatchGenerate = () => {
-        const newKeys: any[] = []
-        for (let i = 0; i < textureBatchCount; i++) {
+        const safeStartFrame = Math.max(0, Math.round(Number(textureBatchStartFrame) || 0))
+        const safeInterval = Math.max(1, Math.round(Number(textureBatchInterval) || 100))
+        const safeRepeatCount = Math.max(1, Math.round(Number(textureBatchRepeatCount) || 2))
+        const newKeys: any[] = [
+            {
+                Frame: safeStartFrame,
+                Vector: [0],
+                InTan: [0],
+                OutTan: [0]
+            }
+        ]
+
+        for (let i = 1; i <= safeRepeatCount; i++) {
             newKeys.push({
-                Frame: textureBatchStartFrame + i * textureBatchInterval,
-                Vector: [i],
+                Frame: safeStartFrame + i * safeInterval,
+                Vector: [currentTextureId],
                 InTan: [0],
                 OutTan: [0]
             })
@@ -531,67 +580,63 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
         }
     }, [visible, initialData, vectorSize, fieldName, isStandalone])
 
-    useEffect(() => {
-        if (!isStandalone) return;
+    useWindowEvent<any>('IPC_KEYFRAME_INIT', (event) => {
+        const payload = event.payload
+        if (!payload) return
 
-        const currentWindowLabel = getCurrentWindow().label;        const unlisten = listen('IPC_KEYFRAME_INIT', (event) => {
-            const payload = event.payload as any;
-            if (!payload) return;
+        const currentWindowLabel = windowGateway.getCurrentWindowLabel()
+        const tid = payload.targetWindowId as string | undefined
+        if (tid && currentWindowLabel && tid.toLowerCase() !== String(currentWindowLabel).toLowerCase()) {
+            return
+        }
 
-            const tid = payload.targetWindowId as string | undefined;
-            if (tid && currentWindowLabel && tid.toLowerCase() !== String(currentWindowLabel).toLowerCase()) {
-                return;
-            }            // 优先用 initialDataJson：主进程已用 JSON 字符串传递，避免嵌套对象跨 WebView 时 float 被错成 128 等整数
-            const vSize = payload.vectorSize || 1
-            const fName = payload.fieldName || ''
-            const intOpts = { isInt: isKeyframeAnimVectorIntTrack(fName) }
+        // 优先用 initialDataJson：主进程已用 JSON 字符串传递，避免嵌套对象跨 WebView 时 float 被错成 128 等整数
+        const vSize = payload.vectorSize || 1
+        const fName = payload.fieldName || ''
+        const intOpts = { isInt: isKeyframeAnimVectorIntTrack(fName) }
 
-            let rawInit: unknown = undefined
-            if (typeof payload.initialDataJson === 'string' && payload.initialDataJson.length > 0) {
-                try {
-                    rawInit = JSON.parse(payload.initialDataJson)
-                } catch {
-                    rawInit = payload.initialData
-                }
-            } else {
+        let rawInit: unknown = undefined
+        if (typeof payload.initialDataJson === 'string' && payload.initialDataJson.length > 0) {
+            try {
+                rawInit = JSON.parse(payload.initialDataJson)
+            } catch {
                 rawInit = payload.initialData
             }
-            const initData =
-                rawInit && typeof rawInit === 'object' && Array.isArray((rawInit as any).Keys)
-                    ? (cloneAnimVectorForIpc(rawInit, intOpts) as any)
-                    : rawInit
-            const titleStr = payload.title || 'Keyframe Editor';
-            const normalizedInitData = initData && Array.isArray(initData.Keys)
-                ? { ...initData, Keys: normalizeKeys(initData.Keys, vSize, fName) }
-                : initData;
+        } else {
+            rawInit = payload.initialData
+        }
 
-            void getCurrentWindow().setTitle(titleStr).catch(() => {})
-            setStandaloneData({
-                initialData: normalizedInitData,
-                title: titleStr,
-                vectorSize: vSize,
-                globalSequences: payload.globalSequences || [],
-                sequences: payload.sequences || [],
-                fieldName: fName,
-                callerId: payload.callerId || ''
-            });
-            setStandaloneReady(true)
+        const initData =
+            rawInit && typeof rawInit === 'object' && Array.isArray((rawInit as any).Keys)
+                ? (cloneAnimVectorForIpc(rawInit, intOpts) as any)
+                : rawInit
+        const titleStr = payload.title || 'Keyframe Editor'
+        const normalizedInitData = initData && Array.isArray(initData.Keys)
+            ? { ...initData, Keys: normalizeKeys(initData.Keys, vSize, fName) }
+            : initData
 
-            setLineType(initData?.LineType ?? 0);
-            setGlobalSeqId(initData?.GlobalSeqId ?? null);
+        void windowGateway.setCurrentWindowTitle(titleStr).catch(() => {})
+        setStandaloneData({
+            initialData: normalizedInitData,
+            title: titleStr,
+            vectorSize: vSize,
+            globalSequences: payload.globalSequences || [],
+            sequences: payload.sequences || [],
+            fieldName: fName,
+            callerId: payload.callerId || ''
+        })
+        setStandaloneReady(true)
 
-            if (normalizedInitData && normalizedInitData.Keys && normalizedInitData.Keys.length > 0) {
-                setText(generateText(normalizedInitData.Keys, (initData as any)?.LineType ?? 0, vSize));
-            } else {
-                const defVector = vSize === 4 ? [0, 0, 0, 1] : new Array(vSize).fill(titleStr.includes('Scale') ? 1 : (fName.includes('Alpha') ? 1 : 0));
-                setText(generateText([{ Frame: 0, Vector: defVector, InTan: new Array(vSize).fill(0), OutTan: new Array(vSize).fill(0) }], 0, vSize));
-            }
-        });
+        setLineType(initData?.LineType ?? 0)
+        setGlobalSeqId(initData?.GlobalSeqId ?? null)
 
-        return () => {
-            unlisten.then(f => f());
-        };
-    }, [isStandalone]);
+        if (normalizedInitData && normalizedInitData.Keys && normalizedInitData.Keys.length > 0) {
+            setText(generateText(normalizedInitData.Keys, (initData as any)?.LineType ?? 0, vSize))
+        } else {
+            const defVector = vSize === 4 ? [0, 0, 0, 1] : new Array(vSize).fill(titleStr.includes('Scale') ? 1 : (fName.includes('Alpha') ? 1 : 0))
+            setText(generateText([{ Frame: 0, Vector: defVector, InTan: new Array(vSize).fill(0), OutTan: new Array(vSize).fill(0) }], 0, vSize))
+        }
+    }, isStandalone)
 
 
     const { push } = useHistoryStore()
@@ -627,18 +672,19 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
 
         onOk && onOk(result)
 
-        if (isStandalone) {            emit('IPC_KEYFRAME_SAVE', {
+        if (isStandalone) {
+            void windowGateway.emit('IPC_KEYFRAME_SAVE', {
                 callerId: standaloneData.callerId,
                 fieldName: standaloneData.fieldName,
                 data: result
-            });
-            getCurrentWindow().hide();
+            })
+            void windowGateway.hideCurrentWindow()
         }
     }
 
     const handleCancel = () => {
         if (isStandalone) {
-            getCurrentWindow().hide();
+            void windowGateway.hideCurrentWindow()
         } else {
             onCancel && onCancel();
         }
@@ -734,16 +780,6 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
                         <div style={{ marginBottom: 6, color: '#b0b0b0', fontSize: 12 }}>贴图ID批量生成</div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                                <span style={{ color: '#ccc', fontSize: 12 }}>张数:</span>
-                                <InputNumber
-                                    min={1}
-                                    value={textureBatchCount}
-                                    onChange={(v) => setTextureBatchCount(v || 1)}
-                                    style={{ width: 60 }}
-                                    size="small"
-                                />
-                            </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                                 <span style={{ color: '#ccc', fontSize: 12 }}>起始帧:</span>
                                 <InputNumber
                                     min={0}
@@ -754,12 +790,22 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
                                 />
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                                <span style={{ color: '#ccc', fontSize: 12 }}>间隔:</span>
+                                <span style={{ color: '#ccc', fontSize: 12 }}>间隔帧:</span>
                                 <InputNumber
                                     min={1}
                                     value={textureBatchInterval}
                                     onChange={(v) => setTextureBatchInterval(v || 100)}
                                     style={{ width: 60 }}
+                                    size="small"
+                                />
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                <span style={{ color: '#ccc', fontSize: 12 }}>生成次数:</span>
+                                <InputNumber
+                                    min={1}
+                                    value={textureBatchRepeatCount}
+                                    onChange={(v) => setTextureBatchRepeatCount(v || 2)}
+                                    style={{ width: 70 }}
                                     size="small"
                                 />
                             </div>
@@ -898,5 +944,3 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
 }
 
 export default KeyframeEditor
-
-

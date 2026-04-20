@@ -8,19 +8,20 @@ import { UndoOutlined } from '@ant-design/icons';
 import { DraggableModal } from '../DraggableModal';
 import { NodeEditorStandaloneShell } from '../common/NodeEditorStandaloneShell';
 import AppErrorBoundary from '../common/AppErrorBoundary';
-import { listen } from '@tauri-apps/api/event';
 import { windowManager } from '../../utils/WindowManager';
 import type { Color } from 'antd/es/color-picker';
 import type { ParticleEmitter2Node } from '../../types/node';
 import { useModelStore } from '../../store/modelStore';
-import { useHistoryStore } from '../../store/historyStore';
 import { getDraggedTextureIndex } from '../../utils/textureDragDrop';
 import { saveParticleEmitter2Preset } from '../../services/particleEmitter2PresetService';
 import { showMessage } from '../../store/messageStore';
 import { uiText } from '../../constants/uiText';
 import { MATERIAL_FILTER_MODE_OPTIONS } from '../../constants/filterModes';
 import { useNodeEditorPreview } from '../../hooks/useNodeEditorPreview';
+import { useWindowEvent } from '../../hooks/useWindowEvent';
 import { NODE_EDITOR_COMMANDS, type NodeEditorCommandSender } from '../../types/nodeEditorRpc';
+import { nodeEditorCommandHandler } from '../../application/commands';
+import { KEYFRAME_SAVE_EVENT, type KeyframeSavePayload } from '../../application/window-bridge';
 
 const DEFERRED_PREVIEW_FIELD_NAMES = new Set([
     'Visibility',
@@ -276,7 +277,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
     standaloneModelPath,
 }) => {
     const [form] = Form.useForm();
-    const { getNodeById, updateNode, modelData: storeModelData, modelPath: storeModelPath, setNodeEditorPreview, clearNodeEditorPreview } = useModelStore();
+    const { getNodeById, modelData: storeModelData, modelPath: storeModelPath } = useModelStore();
     const modelData = isStandalone ? standaloneModelData : storeModelData;
     const modelPath = isStandalone ? (standaloneModelPath ?? '') : storeModelPath;
     const [isTextureDropActive, setIsTextureDropActive] = useState(false);
@@ -309,25 +310,17 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
                 standaloneEmit(NODE_EDITOR_COMMANDS.applyNodeUpdate, { objectId: nodeId, node: next, history });
                 return;
             }
-            clearNodeEditorPreview();
-            if (history) {
-                useHistoryStore.getState().push({
-                    name: history.name,
-                    undo: () => updateNode(nodeId, history.undoNode),
-                    redo: () => updateNode(nodeId, history.redoNode),
-                });
-            }
-            updateNode(nodeId, next);
+            nodeEditorCommandHandler.applyNodeUpdate({ objectId: nodeId, node: next, history });
         },
-        [clearNodeEditorPreview, isStandalone, standaloneEmit, nodeId, updateNode]
+        [isStandalone, standaloneEmit, nodeId]
     );
     const clearPreviewNode = React.useCallback(() => {
         if (isStandalone && standaloneEmit) {
             standaloneEmit(NODE_EDITOR_COMMANDS.clearNodePreview, { objectId: nodeId });
             return;
         }
-        clearNodeEditorPreview();
-    }, [clearNodeEditorPreview, isStandalone, nodeId, standaloneEmit]);
+        nodeEditorCommandHandler.clearNodePreview({ objectId: nodeId });
+    }, [isStandalone, nodeId, standaloneEmit]);
     const initialNodeRef = React.useRef<ParticleEmitter2Node | null>(null);
     const isCommittingRef = React.useRef(false);
     const didRealtimePreviewRef = React.useRef(false);
@@ -684,7 +677,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
         const frameFlags =
             (updatedNode.Head ? 1 : 0) |
             (updatedNode.Tail ? 2 : 0);
-        (updatedNode as any).FrameFlags = frameFlags || 1;
+        (updatedNode as any).FrameFlags = frameFlags;
 
         const dynamicProps: Array<{ prop: string }> = [
             { prop: 'EmissionRate' },
@@ -740,8 +733,6 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
         currentNodeObjectId: currentNode?.ObjectId ?? null,
         isStandalone,
         standaloneEmit,
-        setStorePreview: ({ objectId, node }) => setNodeEditorPreview({ objectId, node }),
-        clearStorePreview: clearNodeEditorPreview,
         buildPreviewNode,
     });
 
@@ -905,33 +896,27 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
 
     const [currentEditingTitle, setCurrentEditingTitle] = useState<string>('');
 
-    useEffect(() => {
-        const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
-            const payload = event.payload as any;
-            if (payload && payload.callerId === 'ParticleEmitter2Dialog') {
-                if (currentEditingProp) {
-                    setAnimDataMap((prev) => {
-                        const next = {
-                            ...prev,
-                            [currentEditingProp]: payload.data,
-                        };
-                        animDataMapRef.current = next;
-                        return next;
-                    });
-                    setCurrentEditingProp(null);
-                    if (isStandalone) {
-                        syncStandaloneDraft();
-                    } else {
-                        schedulePreview();
-                    }
-                }
-            }
-        });
+    useWindowEvent<KeyframeSavePayload>(KEYFRAME_SAVE_EVENT, (event) => {
+        const payload = event.payload;
+        if (!payload || payload.callerId !== 'ParticleEmitter2Dialog' || !currentEditingProp) {
+            return;
+        }
 
-        return () => {
-            unlisten.then(f => f());
-        };
-    }, [currentEditingProp, isStandalone, schedulePreview, syncStandaloneDraft]);
+        setAnimDataMap((prev) => {
+            const next = {
+                ...prev,
+                [currentEditingProp]: payload.data,
+            };
+            animDataMapRef.current = next;
+            return next;
+        });
+        setCurrentEditingProp(null);
+        if (isStandalone) {
+            syncStandaloneDraft();
+        } else {
+            schedulePreview();
+        }
+    });
 
     const handleOpenKeyframeEditor = (propName: string, title: string) => {
         setCurrentEditingProp(propName);

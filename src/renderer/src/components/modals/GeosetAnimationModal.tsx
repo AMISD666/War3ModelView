@@ -9,9 +9,8 @@ import { useSelectionStore } from '../../store/selectionStore'
 import { useHistoryStore } from '../../store/historyStore'
 import { PlusOutlined, EditOutlined, DeleteOutlined, CloseOutlined } from '@ant-design/icons'
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useRpcClient } from '../../hooks/useRpc'
-import { listen } from '@tauri-apps/api/event'
+import { useWindowEvent } from '../../hooks/useWindowEvent'
 import { windowManager } from '../../utils/WindowManager'
 import { coercePivotFloat3 } from '../../utils/pivotUtils'
 import { vectorToPlainArray } from '../../utils/animVectorIpc'
@@ -321,21 +320,11 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
     }
 
     // Subscribe to IPC_KEYFRAME_SAVE for standalone returns
-    useEffect(() => {
-        if (!isStandalone) return;
-
-        const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
-            const payload = event.payload as any;
-            if (payload && payload.callerId === 'GeosetAnimationModal') {                if (editingField && selectedIndex >= 0) {
-                    updateLocalAnim(selectedIndex, { [editingField]: payload.data });
-                }
-            }
-        });
-
-        return () => {
-            unlisten.then(f => f());
-        };
-    }, [isStandalone, editingField, selectedIndex, localAnims]);
+    useWindowEvent<any>('IPC_KEYFRAME_SAVE', (event) => {
+        const payload = event.payload
+        if (payload?.callerId !== 'GeosetAnimationModal' || !editingField || selectedIndex < 0) return
+        updateLocalAnim(selectedIndex, { [editingField]: payload.data })
+    }, Boolean(isStandalone))
 
     // Open keyframe editor
     const openKeyframeEditor = (field: string, vectorSize: number) => {

@@ -1,4 +1,4 @@
-import { parseMDX, parseMDL } from 'war3-model';
+import { modelSerializationGateway } from '../infrastructure/serialization';
 
 export interface BoneMatchResult {
     model1BoneCount: number;
@@ -40,12 +40,7 @@ export const collectAllNodes = (model: any): Map<string, any> => {
 };
 
 export const parseModelBuffer = (buffer: ArrayBuffer, filePath: string): any => {
-    const ext = filePath.toLowerCase().split('.').pop();
-    if (ext === 'mdl') {
-        const text = new TextDecoder().decode(buffer);
-        return parseMDL(text);
-    }
-    return parseMDX(buffer);
+    return modelSerializationGateway.parse(buffer, filePath);
 };
 
 export const computeBoneMatch = (model1: any, model2: any): BoneMatchResult => {

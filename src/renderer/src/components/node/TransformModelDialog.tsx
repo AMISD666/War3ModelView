@@ -6,6 +6,8 @@ import { DraggableModal } from '../DraggableModal'
 import { useModelStore } from '../../store/modelStore'
 import { useUIStore } from '../../store/uiStore'
 import { uiText } from '../../constants/uiText'
+import { commandManager } from '../../utils/CommandManager'
+import { GlobalTransformCommand } from '../../commands/GlobalTransformCommand'
 
 type TransformCoordinateMode = 'relative' | 'world'
 
@@ -76,7 +78,7 @@ function decomposeMatrix(matrix: mat4): {
 
 export const TransformModelDialog: React.FC = () => {
     const { showTransformModelDialog, setTransformModelDialogVisible } = useUIStore()
-    const { transformModel, modelData, globalTransformTracker } = useModelStore()
+    const { modelData, globalTransformTracker } = useModelStore()
     const [form] = Form.useForm()
     const [syncScale, setSyncScale] = useState(true)
     const [coordinateMode, setCoordinateMode] = useState<TransformCoordinateMode>('relative')
@@ -186,11 +188,12 @@ export const TransformModelDialog: React.FC = () => {
             const hasScale = !!scaleOps && (scaleOps[0] !== 1 || scaleOps[1] !== 1 || scaleOps[2] !== 1)
 
             if (hasTranslation || hasRotation || hasScale) {
-                transformModel({
-                    translation: hasTranslation ? translationOps : undefined,
-                    rotation: hasRotation ? rotationOps : undefined,
-                    scale: hasScale ? scaleOps : undefined,
-                })
+                const cmd = new GlobalTransformCommand({
+                    translation: hasTranslation ? translationOps! : [0, 0, 0],
+                    rotation: hasRotation ? rotationOps! : [0, 0, 0],
+                    scale: hasScale ? scaleOps! : [1, 1, 1],
+                }, null, currentModelCenter)
+                commandManager.execute(cmd)
             }
 
             setTransformModelDialogVisible(false)

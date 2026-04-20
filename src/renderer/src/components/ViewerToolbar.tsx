@@ -1,4 +1,3 @@
-import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import React from 'react';
 import { Button, Tooltip, Space, message } from 'antd';
 import {
@@ -22,7 +21,9 @@ import {
     GlobalOutlined, // Global Transform
     CameraOutlined, // Gizmo Facing
     AimOutlined, // Pivot
-    FullscreenOutlined // Fit to View
+    FullscreenOutlined, // Fit to View
+    SwapOutlined,
+    VerticalAlignMiddleOutlined
 } from '@ant-design/icons';
 
 import { SelectionId, useSelectionStore } from '../store/selectionStore';
@@ -30,9 +31,11 @@ import { useModelStore } from '../store/modelStore';
 import { useRendererStore } from '../store/rendererStore';
 import { useCommandManager } from '../utils/CommandManager';
 import { BindVerticesCommand } from '../commands/BindVerticesCommand';
+import { MirrorModelCommand } from '../commands/MirrorModelCommand';
 import { NodeType } from '../types/node';
 import { getNodeIcon } from '../utils/nodeUtils';
 import { markNodeManagerListScrollFromTree } from '../utils/nodeManagerListScrollBridge';
+import { PositiveStepInput } from './common/PositiveStepInput';
 
 interface ViewerToolbarProps {
     onRecalculateNormals?: () => void
@@ -360,6 +363,16 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         message.success(`已解绑 ${selectedVertexIds.length} 个顶点从骨骼 ${boneId}`)
     }
 
+    const handleMirrorModel = (axis: 'y' | 'z') => {
+        if (!_modelData) {
+            message.warning('当前没有可镜像的模型')
+            return
+        }
+
+        executeCommand(new MirrorModelCommand(axis))
+        message.success(axis === 'y' ? '已执行左右镜像' : '已执行垂直镜像')
+    }
+
     if (mainMode === 'uv') return null;
 
     // Check if selected vertices are all from the same geoset (required for weld)
@@ -626,16 +639,12 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                             style={snapButtonStyle}
                          icon={<DragOutlined />} />
                     </Tooltip>
-                    <InputNumber
-                        size="small"
+                    <PositiveStepInput
                         min={0.001}
                         step={0.1}
                         value={snapTranslateStep}
-                        controls={false}
-                        onChange={(value) => {
-                            const next = typeof value === 'number' && value > 0 ? value : 0.001
-                            setSnapTranslateStep(next)
-                        }}
+                        precision={3}
+                        onCommit={setSnapTranslateStep}
                         style={snapInputFloatingStyle}
                     />
                 </div>
@@ -647,16 +656,12 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                             style={snapButtonStyle}
                          icon={<RedoOutlined />} />
                     </Tooltip>
-                    <InputNumber
-                        size="small"
+                    <PositiveStepInput
                         min={1}
                         step={1}
                         value={snapRotateStep}
-                        controls={false}
-                        onChange={(value) => {
-                            const next = typeof value === 'number' && value > 0 ? value : 1
-                            setSnapRotateStep(next)
-                        }}
+                        precision={0}
+                        onCommit={setSnapRotateStep}
                         style={snapInputFloatingStyle}
                     />
                 </div>
@@ -679,6 +684,18 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                                 全局变换
                             </Button>
                         </Tooltip>
+                        <Tooltip title="左右镜像">
+                            <Button
+                                icon={<SwapOutlined />}
+                                onClick={() => handleMirrorModel('y')}
+                            />
+                        </Tooltip>
+                        <Tooltip title="垂直镜像">
+                            <Button
+                                icon={<VerticalAlignMiddleOutlined style={{ transform: 'rotate(90deg)' }} />}
+                                onClick={() => handleMirrorModel('z')}
+                            />
+                        </Tooltip>
                     </Space>
                     <div style={dividerStyle} />
                 </>
@@ -695,8 +712,5 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         </div>
     );
 };
-
-
-
 
 

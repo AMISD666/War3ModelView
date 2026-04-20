@@ -1,6 +1,6 @@
 import React from 'react'
 import { Alert } from 'antd'
-import { getCurrentWindow } from '@tauri-apps/api/window'
+import { windowGateway } from '../../infrastructure/window'
 import CameraManagerModal from '../modals/CameraManagerModal'
 import GeosetEditorModal from '../modals/GeosetEditorModal'
 import GeosetAnimationModal from '../modals/GeosetAnimationModal'
@@ -12,6 +12,7 @@ import GlobalSequenceModal from '../modals/GlobalSequenceModal'
 import GeosetVisibilityToolModal from '../modals/GeosetVisibilityToolModal'
 import ModelOptimizeModal from '../modals/ModelOptimizeModal'
 import ModelMergeModal from '../modals/ModelMergeModal'
+import GlobalColorAdjustModal from '../modals/GlobalColorAdjustModal'
 import DissolveEffectModal from '../modals/DissolveEffectModal'
 import KeyframeEditor from '../editors/KeyframeEditor'
 import NodeEditorStandalone from './NodeEditorStandalone'
@@ -29,6 +30,7 @@ export const isStandaloneToolWindowLabel = (windowLabel: string | null | undefin
         || windowLabel === 'geosetVisibilityTool'
         || windowLabel === 'modelOptimize'
         || windowLabel === 'modelMerge'
+        || windowLabel === 'globalColorAdjust'
         || windowLabel === 'dissolveEffect'
         || windowLabel === 'nodeEditor'
         || windowLabel.startsWith('keyframeEditor_')
@@ -41,7 +43,7 @@ interface StandaloneToolWindowRouterProps {
 const StandaloneToolWindowRouter: React.FC<StandaloneToolWindowRouterProps> = ({ windowLabel }) => {
     const handleHide = async () => {
         try {
-            await getCurrentWindow().hide()
+            await windowGateway.hideCurrentWindow()
         } catch (error) {
             console.error('[StandaloneToolWindowRouter] hide failed:', error)
         }
@@ -89,6 +91,10 @@ const StandaloneToolWindowRouter: React.FC<StandaloneToolWindowRouterProps> = ({
 
     if (windowLabel === 'modelMerge') {
         return <ModelMergeModal visible={true} onClose={handleHide} isStandalone={true} />
+    }
+
+    if (windowLabel === 'globalColorAdjust') {
+        return <GlobalColorAdjustModal visible={true} onClose={handleHide} isStandalone={true} />
     }
 
     if (windowLabel === 'dissolveEffect') {

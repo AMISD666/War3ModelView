@@ -9,6 +9,7 @@ import { uiText } from '../../constants/uiText'
 import { useModelStore } from '../../store/modelStore'
 import type { RibbonEmitterNode } from '../../types/node'
 import { NODE_EDITOR_COMMANDS, type NodeEditorCommandSender } from '../../types/nodeEditorRpc'
+import { nodeEditorCommandHandler } from '../../application/commands'
 
 interface RibbonEmitterDialogProps {
     visible: boolean
@@ -109,7 +110,7 @@ const RibbonEmitterDialog: React.FC<RibbonEmitterDialogProps> = ({
     standaloneModelData,
 }) => {
     const [form] = Form.useForm()
-    const { getNodeById, updateNode, modelData: storeModelData } = useModelStore()
+    const { getNodeById, modelData: storeModelData } = useModelStore()
     const modelData = isStandalone ? standaloneModelData : storeModelData
 
     const currentNode =
@@ -134,9 +135,9 @@ const RibbonEmitterDialog: React.FC<RibbonEmitterDialogProps> = ({
                 standaloneEmit(NODE_EDITOR_COMMANDS.applyNodeUpdate, { objectId: nodeId, node: next })
                 return
             }
-            updateNode(nodeId, next)
+            nodeEditorCommandHandler.applyNodeUpdate({ objectId: nodeId, node: next })
         },
-        [isStandalone, nodeId, standaloneEmit, updateNode]
+        [isStandalone, nodeId, standaloneEmit]
     )
 
     const [dynamicProps, setDynamicProps] = useState<Record<string, boolean>>({})

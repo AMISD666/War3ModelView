@@ -6,12 +6,11 @@ import { useHistoryStore } from '../../store/historyStore';
 import { useSelectionStore } from '../../store/selectionStore';
 import { DraggableModal } from '../DraggableModal';
 import DynamicField from '../node/DynamicField';
-import { listen } from '@tauri-apps/api/event';
 import { windowManager } from '../../utils/WindowManager';
-
 import { useRpcClient } from '../../hooks/useRpc';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { CloseOutlined } from '@ant-design/icons';
+import { useWindowEvent } from '../../hooks/useWindowEvent';
+import { windowGateway } from '../../infrastructure/window';
 
 interface TextureAnimationManagerModalProps {
     visible: boolean;
@@ -188,27 +187,14 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
         saveToBackend('TOGGLE_BLOCK', newAnims, newAnims);
     };
 
-    useEffect(() => {
-        let active = true;
-        const unlistenPromise = listen('IPC_KEYFRAME_SAVE', (event) => {
-            if (!active) return;
-            const payload = event.payload as any;
-            if (payload && payload.callerId === 'TextureAnimationManagerModal') {
-                if (editingBlock) {
-                    const { index, field } = editingBlock;
-                    updateAnim(index, { [field]: payload.data });
-                    setEditingBlock(null);
-                }
-            }
-        });
+    useWindowEvent<any>('IPC_KEYFRAME_SAVE', (event) => {
+        const payload = event.payload;
+        if (payload?.callerId !== 'TextureAnimationManagerModal' || !editingBlock) return;
 
-        return () => {
-            active = false;
-            unlistenPromise.then(f => {
-                if (typeof f === 'function') f();
-            });
-        };
-    }, [editingBlock, localAnims]);
+        const { index, field } = editingBlock;
+        updateAnim(index, { [field]: payload.data });
+        setEditingBlock(null);
+    });
 
     const getCurrentEditorData = (index: number, field: string) => {
         if (index < 0) return null;
@@ -297,7 +283,7 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
             {isStandalone && (
                 <div data-tauri-drag-region style={{ height: 32, flexShrink: 0, backgroundColor: '#333333', borderBottom: '1px solid #4a4a4a', display: 'flex', alignItems: 'center', padding: '0 16px', justifyContent: 'space-between', userSelect: 'none' }}>
                     <span data-tauri-drag-region style={{ color: '#e8e8e8', fontSize: 13, fontWeight: 'bold' }}>贴图动画管理器</span>
-                    <Button type="text" size="small" icon={<CloseOutlined />} onClick={() => getCurrentWindow().hide()} style={{ color: '#b0b0b0' }} />
+                    <Button type="text" size="small" icon={<CloseOutlined />} onClick={() => windowGateway.hideCurrentWindow()} style={{ color: '#b0b0b0' }} />
                 </div>
             )}
             <div style={{ flex: 1, background: '#222', border: isStandalone ? 'none' : '1px solid #444', overflow: 'hidden', display: 'flex', flexDirection: 'column', minHeight: 0 }}>

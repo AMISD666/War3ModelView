@@ -21,7 +21,7 @@ import { AxisIndicator } from './AxisIndicator'
 import { readFile } from '@tauri-apps/plugin-fs'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { DEFAULT_TEXTURE_ADJUSTMENTS, TextureAdjustments, applyTextureAdjustments, isDefaultTextureAdjustments, normalizeTextureAdjustments } from '../utils/textureAdjustments'
+import { DEFAULT_TEXTURE_ADJUSTMENTS, TEXTURE_ADJUSTMENTS_KEY, TextureAdjustments, applyTextureAdjustments, isDefaultTextureAdjustments, normalizeTextureAdjustments } from '../utils/textureAdjustments'
 import { useUIStore } from '../store/uiStore'
 import { useSelectionStore } from '../store/selectionStore'
 import { useModelStore } from '../store/modelStore'
@@ -59,10 +59,37 @@ const toTextureUpdateUint8Array = (payload: any): Uint8ClampedArray | null => {
 
 const getLiveTextureSourceKey = (modelPath: string, imagePath: string): string => `${modelPath || ''}::${normalizePath(imagePath || '')}`
 
+const getTextureAdjustmentSignature = (texture: any): string => {
+  const raw = texture?.[TEXTURE_ADJUSTMENTS_KEY]
+  if (!raw) return ''
+  const normalized = normalizeTextureAdjustments(raw)
+  return [
+    normalized.hue,
+    normalized.brightness,
+    normalized.saturation,
+    normalized.opacity,
+    normalized.colorize ? 1 : 0,
+  ].join('|')
+}
+
 type LiveTextureAdjustPayload = {
   modelPath: string
   imagePath: string
   adjustments: TextureAdjustments
+}
+
+type TextureReloadRequest = {
+  renderer: any
+  modelPath: string
+  targetPaths: string[]
+  version: number
+}
+
+type TextureReloadSchedulerState = {
+  timer: ReturnType<typeof setTimeout> | null
+  running: boolean
+  queued: TextureReloadRequest | null
+  version: number
 }
 import { GlobalTransformCommand } from '../commands/GlobalTransformCommand'
 import { copyVertices, copyFaces, VertexCopyBuffer } from '../utils/vertexOperations'
@@ -366,6 +393,12 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   const missingTextures = useRendererStore((state) => state.missingTextures)
   const glRef = useRef<WebGL2RenderingContext | WebGLRenderingContext | null>(null)
   const needsRendererUpdateRef = useRef(false)
+  const textureReloadSchedulerRef = useRef<TextureReloadSchedulerState>({
+    timer: null,
+    running: false,
+    queued: null,
+    version: 0,
+  })
   const animationFrameId = useRef<number | null>(null)
   const shouldRunRenderLoop = useRef<boolean>(true) // Flag to stop RAF loop on cleanup
   const lastRenderErrorReportTimeRef = useRef<number>(0)
@@ -858,6 +891,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
   const showVerticesRef = useRef(getShowVerticesForCurrentContext())
   const enableLightingRef = useRef(useRendererStore.getState().enableLighting)
   const vertexSettingsRef = useRef(useRendererStore.getState().vertexSettings)
+  const liveVertexRenderRevisionRef = useRef(0)
 
   // Cache for bound vertex highlighting (to avoid per-frame recalculation)
   const boundVerticesCache = useRef<{ boneId: number, vertices: number[] } | null>(null)
@@ -933,6 +967,10 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     // Update when mode/sub-mode changes even if rendererStore doesn't change.
     showVerticesRef.current = getShowVerticesForCurrentContext()
   }, [appMainMode, animationSubMode])
+
+  const invalidateLiveVertexPointCache = () => {
+    liveVertexRenderRevisionRef.current += 1
+  }
 
   useEffect(() => {
     isHealthBarSelectedRef.current = isHealthBarSelected
@@ -3842,21 +3880,111 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
     }
   }
 
+  const runQueuedTextureReload = useCallback((request: TextureReloadRequest) => {
+    const scheduler = textureReloadSchedulerRef.current
+    scheduler.running = true
+
+    const shouldUseResult = () =>
+      scheduler.version === request.version &&
+      request.renderer === rendererRef.current
+
+    const guardedRenderer = {
+      setTextureImageData: (path: string, images: ImageData[]) => {
+        if (!shouldUseResult()) return
+        request.renderer.setTextureImageData(path, images)
+      }
+    }
+
+    void loadAllTextures(
+      request.renderer.model,
+      guardedRenderer,
+      request.modelPath,
+      textureWorkers,
+      undefined,
+      {
+        yieldUploads: true,
+        targetPaths: request.targetPaths,
+        workerDecodeMinTextures: 1,
+        workerDecodeMinBytes: 1
+      }
+    ).then((results) => {
+      if (!shouldUseResult()) return
+      const failed = results.filter((result) => !result.loaded)
+      if (failed.length > 0) {
+        failed.forEach((result) => {
+          console.warn('[Viewer] Failed to load adjusted texture:', result.path, result.error)
+        })
+      }
+      if (request.renderer.modelInstance?.syncMaterials) {
+        request.renderer.modelInstance.syncMaterials()
+      }
+    }).catch((e) => {
+      if (shouldUseResult()) {
+        console.error('[Viewer] Error loading adjusted textures via lightweight sync:', e)
+      }
+    }).finally(() => {
+      scheduler.running = false
+      const next = scheduler.queued
+      if (!next) return
+      scheduler.queued = null
+      if (scheduler.timer) {
+        clearTimeout(scheduler.timer)
+      }
+      scheduler.timer = setTimeout(() => {
+        scheduler.timer = null
+        runQueuedTextureReload(next)
+      }, 80)
+    })
+  }, [textureWorkers])
+
+  const scheduleTextureReload = useCallback((request: Omit<TextureReloadRequest, 'version'>) => {
+    const scheduler = textureReloadSchedulerRef.current
+    scheduler.version += 1
+    scheduler.queued = {
+      ...request,
+      version: scheduler.version,
+    }
+
+    if (scheduler.timer) {
+      clearTimeout(scheduler.timer)
+    }
+
+    scheduler.timer = setTimeout(() => {
+      scheduler.timer = null
+      if (scheduler.running) return
+      const next = scheduler.queued
+      if (!next) return
+      scheduler.queued = null
+      runQueuedTextureReload(next)
+    }, 220)
+  }, [runQueuedTextureReload])
+
+  useEffect(() => () => {
+    const scheduler = textureReloadSchedulerRef.current
+    if (scheduler.timer) {
+      clearTimeout(scheduler.timer)
+      scheduler.timer = null
+    }
+    scheduler.queued = null
+    scheduler.version += 1
+  }, [])
+
   // Watch for renderer reload trigger from store (e.g., when particles are updated)
   const lastReloadTrigger = useRef(0) // Start at 0 to match initial store value
+  const lastSyncedModelDataRef = useRef<any>(null)
   const lastGeosetAnimsRef = useRef<any[] | undefined>(undefined)
   useEffect(() => {
     // Skip only initial mount (when trigger is still 0)
     // After that, any change should trigger sync
     const isInitialMount = rendererReloadTrigger === 0
     const hasChanged = rendererReloadTrigger !== lastReloadTrigger.current
+    const modelDataChanged = modelData !== lastSyncedModelDataRef.current
 
-    if (!isInitialMount && hasChanged) {
+    if (((!isInitialMount && hasChanged) || modelDataChanged) && renderer && modelData) {
       if (import.meta.env.DEV) {      }
 
       // Sync model data to renderer without recreating the entire renderer
       // This is the LIGHTWEIGHT SYNC approach - only updates internal data arrays
-      if (renderer && modelData) {
         const modelPathHint = (modelData as any)?.__modelPath || (modelData as any)?.path || ''
           ; (renderer as any).__modelPath = modelPath || modelPathHint || (renderer as any).__modelPath || ''
         // Check for structural changes that require full reload
@@ -3864,12 +3992,14 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           delete (modelData as any).__forceFullReload
           reloadRendererWithData(modelData, modelPath || '')
           lastReloadTrigger.current = rendererReloadTrigger
+          lastSyncedModelDataRef.current = modelData
           return
         }
         const { needsReload, reason } = checkForStructuralChanges(modelData, renderer.model)
 
         if (needsReload) {          reloadRendererWithData(modelData, modelPath || '')
           lastReloadTrigger.current = rendererReloadTrigger
+          lastSyncedModelDataRef.current = modelData
           return
         }
         // === NODES ===
@@ -3969,9 +4099,20 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
         // Keep Textures ahead of Materials so layers referencing a newly imported TextureID
         // never observe the old texture array during the same lightweight sync tick.
         if (modelData.Textures && modelData.Textures.length > 0) {
-          // Detect new textures that need to be loaded
-          const oldTexturePaths = new Set(renderer.model.Textures?.map((t: any) => t.Image) || [])
-          const newTextures = modelData.Textures.filter((t: any) => !oldTexturePaths.has(t.Image))
+          // Detect textures that need GPU upload because the path is new or the pending color adjustment changed.
+          const oldTexturesByPath = new Map<string, any>()
+          ;(renderer.model.Textures || []).forEach((texture: any) => {
+            if (typeof texture?.Image === 'string' && texture.Image.length > 0) {
+              oldTexturesByPath.set(texture.Image, texture)
+            }
+          })
+          const texturesToLoad = modelData.Textures.filter((texture: any) => {
+            const imagePath = texture?.Image
+            if (typeof imagePath !== 'string' || imagePath.length === 0) return false
+            const oldTexture = oldTexturesByPath.get(imagePath)
+            if (!oldTexture) return true
+            return getTextureAdjustmentSignature(oldTexture) !== getTextureAdjustmentSignature(texture)
+          })
 
           // Update the textures array first
           renderer.model.Textures = modelData.Textures
@@ -3983,32 +4124,12 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             ;(renderer as any).syncTextureWrapParametersFromModel()
           }
 
-          // Load any new textures asynchronously
-          if (newTextures.length > 0) {            const textureModelPath = (renderer as any).__modelPath || modelPath || (modelData as any)?.__modelPath || (modelData as any)?.path || ''
-            void loadAllTextures(
-              renderer.model,
+          // Load new or color-adjusted textures through a latest-wins queue.
+          if (texturesToLoad.length > 0) {            const textureModelPath = (renderer as any).__modelPath || modelPath || (modelData as any)?.__modelPath || (modelData as any)?.path || ''
+            scheduleTextureReload({
               renderer,
-              textureModelPath,
-              textureWorkers,
-              undefined,
-              {
-                yieldUploads: true,
-                targetPaths: newTextures.map((texture: any) => texture.Image).filter(Boolean),
-                workerDecodeMinTextures: 1,
-                workerDecodeMinBytes: 1
-              }
-            ).then((results) => {
-              const failed = results.filter((result) => !result.loaded)
-              if (failed.length > 0) {
-                failed.forEach((result) => {
-                  console.warn('[Viewer] Failed to load new texture:', result.path, result.error)
-                })
-              }
-              // After all textures loaded, rebuild material layer cache
-              if ((renderer as any).modelInstance?.syncMaterials) {
-                (renderer as any).modelInstance.syncMaterials()              }
-            }).catch((e) => {
-              console.error('[Viewer] Error loading new textures via lightweight sync:', e)
+              modelPath: textureModelPath,
+              targetPaths: Array.from(new Set(texturesToLoad.map((texture: any) => texture.Image).filter(Boolean))),
             })
           }
         } else if (Array.isArray(modelData.Textures) && modelData.Textures.length === 0) {
@@ -4143,8 +4264,9 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
           ; (renderer.model as any).Extents = (modelData as any).Extents
         }
 
+        needsRendererUpdateRef.current = true
+        lastSyncedModelDataRef.current = modelData
         if (import.meta.env.DEV) {        }
-      }
     }
     lastReloadTrigger.current = rendererReloadTrigger
   }, [rendererReloadTrigger, modelData, renderer])
@@ -5447,6 +5569,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             const { hiddenGeosetIds, forceShowAllGeosets, hoveredGeosetId } = useModelStore.getState()
             // Get color settings from rendererStore
             const { vertexColor, selectionColor, hoverColor, vertexRenderRevision } = useRendererStore.getState()
+            const effectiveVertexRenderRevision = vertexRenderRevision + liveVertexRenderRevisionRef.current
             const vertexColorRgb = hexToRgb(vertexColor)
             const selectionColorRgb = hexToRgb(selectionColor)
             const hoverColorRgb = hexToRgb(hoverColor)
@@ -5492,7 +5615,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                       hoverPointSize,
                       vertexSettingsRef.current.enableDepth,
                       true,
-                      vertexRenderRevision
+                      effectiveVertexRenderRevision
                     )
                   } else {
                     debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, geoset.Vertices, [...hoverColorRgb, 1], hoverPointSize, vertexSettingsRef.current.enableDepth)
@@ -5509,7 +5632,7 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
                       basePointSize,
                       vertexSettingsRef.current.enableDepth,
                       true,
-                      vertexRenderRevision
+                      effectiveVertexRenderRevision
                     )
                   } else {
                     debugRenderer.current.renderPoints(gl as WebGLRenderingContext, mvMatrix, pMatrix, geoset.Vertices, [...vertexColorRgb, 0.8], basePointSize, vertexSettingsRef.current.enableDepth)
@@ -6557,6 +6680,9 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
             (rendererRef.current as any).updateGeosetVertices(geosetIndex, geoset.Vertices)
           }
         })
+        if (affectedGeosets.size > 0) {
+          invalidateLiveVertexPointCache()
+        }
 
       } else if (transformMode === 'translate' && mainMode === 'animation' && (subMode === 'binding' || subMode === 'keyframe')) {
         const { selectedNodeIds } = useSelectionStore.getState()
@@ -6859,6 +6985,9 @@ const Viewer = forwardRef((props: ViewerProps, ref: React.Ref<ViewerRef>) => {
               (rendererRef.current as any).updateGeosetVertices(geosetIndex, geoset.Vertices)
             }
           })
+          if (affectedGeosets.size > 0) {
+            invalidateLiveVertexPointCache()
+          }
         }
       }
       // === ANIMATION MODE: ROTATE & SCALE PREVIEW ===

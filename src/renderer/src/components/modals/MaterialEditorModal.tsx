@@ -3,8 +3,6 @@ import { Button, List, Card, Checkbox, Select, Typography, message } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { DraggableModal } from '../DraggableModal'
-import { listen } from '@tauri-apps/api/event'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { windowManager } from '../../utils/WindowManager'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
@@ -15,6 +13,7 @@ import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
 import { markStandalonePerf, markStandalonePerfOnce } from '../../utils/standalonePerf'
 import { MATERIAL_FILTER_MODE_OPTIONS } from '../../constants/filterModes'
 import { getMaterialTrackEditorTitle, getMaterialTrackFieldName } from '../../utils/materialAnimShared'
+import { useMaterialEditorStandaloneEvents } from './material-editor/useMaterialEditorStandaloneEvents'
 
 const { Text } = Typography
 
@@ -24,6 +23,9 @@ const createEditorId = (prefix: string): string => {
     }
     return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
+
+const DEFAULT_BASE_LAYER_FILTER_MODE = 0
+const DEFAULT_ADDED_LAYER_FILTER_MODE = 2
 
 function cloneDeep<T>(value: T): T {
     try {
@@ -853,7 +855,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         // Include a default layer with TextureID 0 so the geoset renders correctly
         const defaultLayer = {
             __editorLayerId: createEditorId('layer'),
-            FilterMode: 0,
+            FilterMode: DEFAULT_BASE_LAYER_FILTER_MODE,
             TextureID: 0,
             Alpha: 1,
             Unshaded: true, // Prevent lighting issues hiding the model
@@ -928,7 +930,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         if (selectedMaterialIndex < 0) return
         const newLayer = {
             __editorLayerId: createEditorId('layer'),
-            FilterMode: 0,
+            FilterMode: DEFAULT_ADDED_LAYER_FILTER_MODE,
             TextureID: 0,  // Default to first texture (index 0) instead of -1 (invalid)
             Alpha: 1,
             Unshaded: true,
@@ -984,22 +986,6 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             setSelectedLayerIndex(selectedLayerIndex - 1)
         }
     }
-
-    // Keyframe Logic
-    useEffect(() => {
-        const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
-            const payload = event.payload as any;
-            if (payload && payload.callerId === 'MaterialEditorModal') {
-                if (editingField && selectedMaterialIndex >= 0 && selectedLayerIndex >= 0) {
-                    updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { [editingField]: payload.data })
-                }
-            }
-        });
-
-        return () => {
-            unlisten.then(f => f());
-        };
-    }, [editingField, selectedMaterialIndex, selectedLayerIndex]);
 
     const openKeyframeEditor = (field: string, vectorSize: number) => {
         setEditingField(field)
@@ -1281,6 +1267,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                 textureId = currentTextures.length
                 currentTextures.push({
                     Image: modelTexturePath,
+                    Path: modelTexturePath,
                     ReplaceableId: 0,
                     Flags: 0
                 })
@@ -1339,6 +1326,27 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         }
     }
 
+    useMaterialEditorStandaloneEvents({
+        visible,
+        isStandalone,
+        editingField,
+        selectedMaterialIndex,
+        selectedLayerIndex,
+        onApplyKeyframe: (field, data) => {
+            updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { [field]: data })
+        },
+        onFinishKeyframeEdit: () => {
+            setEditingField(null)
+        },
+        isSupportedTextureFile,
+        detailsDropSurfaceRef,
+        layerTextureDropSurfaceRef,
+        textureDropZoneRef,
+        isPointInsideElement,
+        setIsTextureDropActive,
+        handleExternalTexturePaths,
+    })
+
     useEffect(() => {
         if (!visible) return
         const onExternalFileDrop = async (evt: Event) => {
@@ -1359,61 +1367,6 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         window.addEventListener('war3-external-file-drop', onExternalFileDrop as EventListener)
         return () => window.removeEventListener('war3-external-file-drop', onExternalFileDrop as EventListener)
     }, [visible, selectedMaterialIndex, selectedLayerIndex, modelData, modelPath, localMaterials])
-    useEffect(() => {
-        if (!isStandalone || !visible) return
-        let disposed = false
-        let unlistenDrop: (() => void) | undefined
-        let unlistenDragEnter: (() => void) | undefined
-        let unlistenDragLeave: (() => void) | undefined
-        const setupStandaloneDragDrop = async () => {
-            const currentWindowLabel = getCurrentWindow().label
-            const isHitTarget = (position?: { x: number; y: number } | null) => {
-                const dropTargets = [detailsDropSurfaceRef.current, layerTextureDropSurfaceRef.current, textureDropZoneRef.current].filter(Boolean) as HTMLElement[]
-                if (dropTargets.length === 0) return false
-                if (!position) return true
-                return dropTargets.some((element) => isPointInsideElement(position.x, position.y, element))
-            }
-
-            unlistenDragEnter = await listen<{ paths?: string[]; position?: { x: number; y: number } }>('tauri://drag-enter', (event) => {
-                if (disposed) return
-                const sourceWindowLabel = (event as any)?.windowLabel
-                if (sourceWindowLabel && sourceWindowLabel !== currentWindowLabel) return
-                const supportedPaths = (event.payload?.paths || []).filter(isSupportedTextureFile)
-                if (supportedPaths.length === 0) return
-                if (!isHitTarget(event.payload?.position)) return
-                setIsTextureDropActive(true)
-            })
-
-            unlistenDragLeave = await listen('tauri://drag-leave', () => {
-                if (disposed) return
-                setIsTextureDropActive(false)
-            })
-
-            unlistenDrop = await listen<{ paths?: string[]; position?: { x: number; y: number } }>('tauri://drag-drop', async (event) => {
-                if (disposed) return
-                const sourceWindowLabel = (event as any)?.windowLabel
-                if (sourceWindowLabel && sourceWindowLabel !== currentWindowLabel) return
-                const supportedPaths = (event.payload?.paths || []).filter(isSupportedTextureFile)
-                if (supportedPaths.length === 0) return
-                const position = event.payload?.position
-                if (position && ![detailsDropSurfaceRef.current, layerTextureDropSurfaceRef.current, textureDropZoneRef.current].some((element) => isPointInsideElement(position.x, position.y, element))) {
-                    return
-                }
-                await handleExternalTexturePaths(supportedPaths)
-            })
-        }
-        setupStandaloneDragDrop().catch((error) => {
-            console.error('[MaterialEditorModal] Failed to setup standalone drag-drop:', error)
-        })
-        return () => {
-            disposed = true
-            unlistenDrop?.()
-            unlistenDragEnter?.()
-            unlistenDragLeave?.()
-            setIsTextureDropActive(false)
-        }
-    }, [isStandalone, visible, selectedMaterialIndex, selectedLayerIndex, modelData, modelPath, localMaterials])
-
     const effectiveTextures = localTextures.length > 0 ? localTextures : ((modelData as any)?.Textures || [])
     const textureCount = effectiveTextures.length || 0
     const textureOptions = Array.from({ length: textureCount }, (_, i) => {

@@ -20,6 +20,7 @@ const WARMUP_WINDOWS: WarmWindowSpec[] = [
     { id: 'keyframeEditor_0', title: '关键帧编辑器' },
     { id: 'keyframeEditor_1', title: '关键帧编辑器' },
     { id: 'modelMerge', title: '模型合并' },
+    { id: 'globalColorAdjust', title: '全局颜色调整' },
     { id: 'nodeEditor', title: '节点编辑器' },
     { id: 'dissolveEffect', title: '消散动画工具' },
 ]
@@ -44,6 +45,7 @@ export const prefetchStandaloneLazyChunks = (): void => {
     void Promise.allSettled([
         import('../components/modals/ModelOptimizeModal'),
         import('../components/modals/ModelMergeModal'),
+        import('../components/modals/GlobalColorAdjustModal'),
         import('../components/modals/CameraManagerModal'),
         import('../components/modals/GeosetEditorModal'),
         import('../components/modals/GeosetVisibilityToolModal'),

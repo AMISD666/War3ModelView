@@ -1,21 +1,11 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Button, Typography, Divider, Segmented, Spin, Progress } from 'antd';
-import { parseMDX, parseMDL } from 'war3-model';
 import { useRpcClient } from '../../hooks/useRpc';
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame';
 import { useModelStore } from '../../store/modelStore';
+import { desktopGateway } from '../../infrastructure/desktop';
 
 const { Text } = Typography;
-
-/* ------------------------------------------------------------------ */
-/*  Tauri FS helpers (lazy-imported so component still renders in web) */
-/* ------------------------------------------------------------------ */
-let tauriDialog: any = null;
-let tauriFs: any = null;
-const ensureTauri = async () => {
-    if (!tauriDialog) tauriDialog = await import('@tauri-apps/plugin-dialog');
-    if (!tauriFs) tauriFs = await import('@tauri-apps/plugin-fs');
-};
 
 /* ------------------------------------------------------------------ */
 import {
@@ -28,6 +18,15 @@ import {
 } from '../../utils/modelMerge';
 
 type MergeMode = 'geosets' | 'animations'
+
+const toArrayBuffer = (bytes: ArrayBuffer | Uint8Array): ArrayBuffer => {
+    if (bytes instanceof ArrayBuffer) {
+        return bytes
+    }
+    const copy = new Uint8Array(bytes.byteLength)
+    copy.set(bytes)
+    return copy.buffer
+}
 
 interface ModelMergeModalProps {
     visible: boolean;
@@ -69,13 +68,8 @@ const ModelMergeModal: React.FC<ModelMergeModalProps> = ({ visible, onClose, isS
         // RPC doesn't send modelData (too large), so read from disk
         const loadFromDisk = async () => {
             try {
-                await ensureTauri();
-                const buffer = await tauriFs.readFile(rpcState.modelPath);
-                const arrayBuffer = buffer instanceof ArrayBuffer
-                    ? buffer
-                    : buffer.buffer instanceof ArrayBuffer
-                        ? buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
-                        : buffer.slice().buffer;
+                const buffer = await desktopGateway.readFile(rpcState.modelPath);
+                const arrayBuffer = toArrayBuffer(buffer);
                 const parsed = parseModelBuffer(arrayBuffer, rpcState.modelPath);
                 setModel1Data(parsed);
             } catch (err) {
@@ -109,23 +103,19 @@ const ModelMergeModal: React.FC<ModelMergeModalProps> = ({ visible, onClose, isS
     /* ---- file picker ---- */
     const pickFile = useCallback(async (target: 'model1' | 'model2') => {
         try {
-            await ensureTauri();
-            const result = await tauriDialog.open({
+            const result = await desktopGateway.openFileDialog({
                 title: target === 'model1' ? '选择基准模型 (模型1)' : '选择合并来源 (模型2)',
                 filters: [{ name: 'War3 Model', extensions: ['mdx', 'mdl'] }],
                 multiple: false,
             });
             if (!result) return;
-            const filePath = typeof result === 'string' ? result : (result as any).path || String(result);
+            const filePath = Array.isArray(result) ? result[0] : result;
+            if (!filePath) return;
             setLoading(true);
             setStatusMsg(`正在加载 ${filePath.split('\\').pop() || filePath.split('/').pop()}...`);
 
-            const buffer = await tauriFs.readFile(filePath);
-            const arrayBuffer = buffer instanceof ArrayBuffer
-                ? buffer
-                : buffer.buffer instanceof ArrayBuffer
-                    ? buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
-                    : buffer.slice().buffer;
+            const buffer = await desktopGateway.readFile(filePath);
+            const arrayBuffer = toArrayBuffer(buffer);
             const parsed = parseModelBuffer(arrayBuffer, filePath);
 
             if (target === 'model1') {

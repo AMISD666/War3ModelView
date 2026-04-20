@@ -7,6 +7,7 @@ import { uiText } from '../../constants/uiText'
 import { useModelStore } from '../../store/modelStore'
 import type { CollisionShapeNode } from '../../types/node'
 import { NODE_EDITOR_COMMANDS, type NodeEditorCommandSender } from '../../types/nodeEditorRpc'
+import { nodeEditorCommandHandler } from '../../application/commands'
 
 interface CollisionShapeDialogProps {
     visible: boolean
@@ -50,7 +51,7 @@ const CollisionShapeDialog: React.FC<CollisionShapeDialogProps> = ({
     standaloneEmit,
 }) => {
     const [form] = Form.useForm()
-    const { getNodeById, updateNode } = useModelStore()
+    const { getNodeById } = useModelStore()
 
     const getCurrentSourceNode = useCallback((): CollisionShapeNode | null => {
         if (nodeId === null) return null
@@ -67,9 +68,9 @@ const CollisionShapeDialog: React.FC<CollisionShapeDialogProps> = ({
                 standaloneEmit(NODE_EDITOR_COMMANDS.applyNodeUpdate, { objectId: nodeId, node: next })
                 return
             }
-            updateNode(nodeId, next)
+            nodeEditorCommandHandler.applyNodeUpdate({ objectId: nodeId, node: next })
         },
-        [isStandalone, nodeId, standaloneEmit, updateNode]
+        [isStandalone, nodeId, standaloneEmit]
     )
 
     const formHydratedForNodeIdRef = React.useRef<number | null>(null)

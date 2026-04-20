@@ -484,6 +484,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
                         <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onTransformModel(); closeMenu() }}>{uiText.menu.transformModel}</div>
                         <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('modelOptimize'); closeMenu() }}>{uiText.menu.modelOptimize}</div>
                         <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('modelMerge'); closeMenu() }}>{uiText.menu.modelMerge}</div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('globalColorAdjust'); closeMenu() }}>{uiText.menu.globalColorAdjust}</div>
                         <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('geosetVisibilityTool'); closeMenu() }}>{uiText.menu.geosetVisibilityTool}</div>
                         <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('dissolveEffect'); closeMenu() }}>{uiText.menu.dissolveEffect}</div>
                         <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onAddDeathAnimation(); closeMenu() }}>{uiText.menu.addDeathAnimation}</div>

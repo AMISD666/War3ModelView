@@ -359,7 +359,9 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
         if (selectedIndex < 0) return
         const newPath = pathInputValue
         if (newPath === (localTextures[selectedIndex]?.Image ?? '')) return
-        updateLocalTexture(selectedIndex, { Image: newPath })
+        updateLocalTexture(selectedIndex, newPath.trim()
+            ? { Image: newPath, ReplaceableId: 0 }
+            : { Image: newPath })
     }
 
     useEffect(() => {
@@ -1103,7 +1105,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
             const isBlp = imagePath.toLowerCase().endsWith('.blp')
             const isTga = imagePath.toLowerCase().endsWith('.tga')
             const isSupported = isBlp || isTga
-            const isReplaceable = texture.ReplaceableId === 1 || texture.ReplaceableId === 2
+            const isReplaceable = !normalizedImagePath && (texture.ReplaceableId === 1 || texture.ReplaceableId === 2)
 
             setIsLoadingPreview(true)
             setPreviewError(null)
@@ -2085,4 +2087,3 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
 }
 
 export default TextureEditorModal
-

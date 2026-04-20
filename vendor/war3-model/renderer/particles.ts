@@ -22,7 +22,8 @@ const particleWorldSpeed = vec3.create();
 const tailCameraVec = vec3.create();
 const particleHeadVec = vec3.create();
 const emitterScaleVec = vec3.create();
-const emitterRotationQuat = quat.create();
+const emitterLinearMat3 = mat3.create();
+const emitterNormalMat3 = mat3.create();
 const particleRotationQuat = quat.create();
 const planeTiltQuat = quat.create();
 const localDirection = vec3.create();
@@ -61,10 +62,36 @@ function hasParticleFlag(props: ParticleEmitter2, flag: ParticleEmitter2Flags): 
     }
 }
 
+function resolveFrameFlags(frameFlags: unknown): number {
+    return typeof frameFlags === 'number' ? (frameFlags & 0x3) : 1;
+}
+
 function getEmitterMatrix(rendererData: RendererData, objectId: number): mat4 {
     const nodeWrapper = rendererData?.nodes?.[objectId];
     const matrix = nodeWrapper?.matrix;
     return matrix || identityEmitterMatrix;
+}
+
+function transformDirectionByEmitterMatrix(out: vec3, direction: vec3, emitterMatrix: mat4): void {
+    mat3.fromMat4(emitterLinearMat3, emitterMatrix);
+    vec3.transformMat3(out, direction, emitterLinearMat3);
+}
+
+function transformPlaneNormalByEmitterMatrix(out: vec3, normal: vec3, emitterMatrix: mat4): void {
+    if (mat3.normalFromMat4(emitterNormalMat3, emitterMatrix)) {
+        vec3.transformMat3(out, normal, emitterNormalMat3);
+    } else {
+        vec3.copy(out, normal);
+    }
+}
+
+function getSignedEmitterZScale(emitterMatrix: mat4): number {
+    vec3.set(emitterScaleVec, emitterMatrix[8], emitterMatrix[9], emitterMatrix[10]);
+    const len = vec3.length(emitterScaleVec);
+    if (len < 1e-6) {
+        return 1;
+    }
+    return emitterScaleVec[2] < 0 ? -len : len;
 }
 
 const ZERO_PIVOT: [number, number, number] = [0, 0, 0];
@@ -240,7 +267,7 @@ export class ParticlesController {
             for (let i = 0; i < rendererData.model.ParticleEmitters2.length; ++i) {
                 const particleEmitter = rendererData.model.ParticleEmitters2[i];
                 // Apply same defaults as syncEmitters to ensure consistency
-                const frameFlags = particleEmitter.FrameFlags || 1;
+                const frameFlags = resolveFrameFlags(particleEmitter.FrameFlags);
                 const lifeSpan = particleEmitter.LifeSpan || 1;
 
                 const emitter: ParticleEmitterWrapper = {
@@ -286,7 +313,7 @@ export class ParticlesController {
     }
 
     private createEmitterWrapper(particleEmitter: ParticleEmitter2, index: number): ParticleEmitterWrapper {
-        const frameFlags = particleEmitter.FrameFlags || 1;
+        const frameFlags = resolveFrameFlags(particleEmitter.FrameFlags);
         const lifeSpan = particleEmitter.LifeSpan || 1;
 
         const emitter: ParticleEmitterWrapper = {
@@ -462,7 +489,7 @@ export class ParticlesController {
             const emitter = this.emitters[i];
             const oldProps = emitter.props;
             const previousType = emitter.type || 1;
-            const nextType = newProps.FrameFlags || 1;
+            const nextType = resolveFrameFlags(newProps.FrameFlags);
 
             if (previousType !== nextType) {
                 this.destroyEmitterWrapper(emitter);
@@ -475,7 +502,6 @@ export class ParticlesController {
 
             const needsInitialSync = emitter._needsInitialSync === true;
             const propsChanged = needsInitialSync ||
-                oldProps !== newProps ||
                 oldProps.LifeSpan !== newProps.LifeSpan ||
                 oldProps.FrameFlags !== newProps.FrameFlags ||
                 oldProps.EmissionRate !== newProps.EmissionRate ||
@@ -1171,17 +1197,13 @@ export class ParticlesController {
             mat3.identity(particle.orientation);
         } else {
             vec3.transformMat4(particle.pos, localPos, emitterMatrix);
-
-            mat4.getRotation(emitterRotationQuat, emitterMatrix);
-            mat4.getScaling(emitterScaleVec, emitterMatrix);
-
-            vec3.transformQuat(particle.speed, localDirection, emitterRotationQuat);
-            vec3.multiply(particle.speed, particle.speed, emitterScaleVec);
-            mat3.fromQuat(particle.orientation, emitterRotationQuat);
+            transformDirectionByEmitterMatrix(particle.speed, localDirection, emitterMatrix);
+            if (!mat3.normalFromMat4(particle.orientation, emitterMatrix)) {
+                mat3.identity(particle.orientation);
+            }
         }
 
-        mat4.getScaling(emitterScaleVec, emitterMatrix);
-        particle.gravity = this.interp.animVectorVal(emitter.props.Gravity, 0) * (emitterScaleVec[2] || 1);
+        particle.gravity = this.interp.animVectorVal(emitter.props.Gravity, 0) * getSignedEmitterZScale(emitterMatrix);
 
         if (hasParticleFlag(emitter.props, ParticleEmitter2Flags.XYQuad)) {
             particle.angle = Math.atan2(particle.speed[1], particle.speed[0]) - Math.PI + Math.PI / 8;
@@ -1244,10 +1266,7 @@ export class ParticlesController {
         if (isModelSpace) {
             const currentEmitterMatrix = getEmitterMatrix(this.rendererData, emitter.props.ObjectId);
             vec3.transformMat4(particleWorldPos, particle.pos, currentEmitterMatrix);
-            mat4.getRotation(emitterRotationQuat, currentEmitterMatrix);
-            mat4.getScaling(emitterScaleVec, currentEmitterMatrix);
-            vec3.transformQuat(particleWorldSpeed, particle.speed, emitterRotationQuat);
-            vec3.multiply(particleWorldSpeed, particleWorldSpeed, emitterScaleVec);
+            transformDirectionByEmitterMatrix(particleWorldSpeed, particle.speed, currentEmitterMatrix);
         } else {
             vec3.copy(particleWorldPos, particle.pos);
             vec3.copy(particleWorldSpeed, particle.speed);
@@ -1267,8 +1286,7 @@ export class ParticlesController {
 
                     if (isModelSpace) {
                         const currentEmitterMatrix = getEmitterMatrix(this.rendererData, emitter.props.ObjectId);
-                        mat4.getRotation(emitterRotationQuat, currentEmitterMatrix);
-                        vec3.transformQuat(particlePlaneNormal, worldUnitZ, emitterRotationQuat);
+                        transformPlaneNormalByEmitterMatrix(particlePlaneNormal, worldUnitZ, currentEmitterMatrix);
                     } else {
                         vec3.transformMat3(particlePlaneNormal, worldUnitZ, particle.orientation);
                     }

@@ -4,15 +4,16 @@ import { SmartInputNumber as InputNumber } from '@renderer/components/common/Sma
 import { DraggableModal } from '../DraggableModal'
 import { NodeEditorStandaloneShell } from '../common/NodeEditorStandaloneShell'
 import AppErrorBoundary from '../common/AppErrorBoundary'
-import { listen } from '@tauri-apps/api/event'
 import { windowManager } from '../../utils/WindowManager'
 import type { ModelNode } from '../../types/node'
 import { useModelStore } from '../../store/modelStore'
-import { useHistoryStore } from '../../store/historyStore'
 import { validateNodeName } from '../../utils/nodeUtils'
 import { uiText } from '../../constants/uiText'
 import { useNodeEditorPreview } from '../../hooks/useNodeEditorPreview'
+import { useWindowEvent } from '../../hooks/useWindowEvent'
 import { NODE_EDITOR_COMMANDS, type NodeEditorCommandSender } from '../../types/nodeEditorRpc'
+import { nodeEditorCommandHandler } from '../../application/commands'
+import { KEYFRAME_SAVE_EVENT, type KeyframeSavePayload } from '../../application/window-bridge'
 
 interface NodeDialogProps {
     visible: boolean
@@ -36,7 +37,7 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
     standaloneAllNodes,
 }) => {
     const [form] = Form.useForm()
-    const { getNodeById, updateNode, getAllNodes, modelData: storeModelData, setNodeEditorPreview, clearNodeEditorPreview } = useModelStore()
+    const { getNodeById, getAllNodes, modelData: storeModelData } = useModelStore()
     const modelData = isStandalone ? standaloneModelData : storeModelData
 
     const currentNode = nodeId !== null ? (isStandalone ? standaloneNode ?? null : getNodeById(nodeId)) : null
@@ -59,27 +60,17 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
                 return
             }
 
-            clearNodeEditorPreview()
-
-            if (history) {
-                useHistoryStore.getState().push({
-                    name: history.name,
-                    undo: () => updateNode(nodeId, history.undoNode),
-                    redo: () => updateNode(nodeId, history.redoNode),
-                })
-            }
-
-            updateNode(nodeId, next)
+            nodeEditorCommandHandler.applyNodeUpdate({ objectId: nodeId, node: next, history })
         },
-        [clearNodeEditorPreview, isStandalone, standaloneEmit, nodeId, updateNode]
+        [isStandalone, standaloneEmit, nodeId]
     )
     const clearPreviewNode = React.useCallback(() => {
         if (isStandalone && standaloneEmit) {
             standaloneEmit(NODE_EDITOR_COMMANDS.clearNodePreview, { objectId: nodeId })
             return
         }
-        clearNodeEditorPreview()
-    }, [clearNodeEditorPreview, isStandalone, nodeId, standaloneEmit])
+        nodeEditorCommandHandler.clearNodePreview({ objectId: nodeId })
+    }, [isStandalone, nodeId, standaloneEmit])
 
     const globalSequences: number[] = (modelData?.GlobalSequences || []).map((gs: any) =>
         typeof gs === 'number' ? gs : (gs.Duration ?? 0)
@@ -163,8 +154,6 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
         currentNodeObjectId: currentNode?.ObjectId ?? null,
         isStandalone,
         standaloneEmit,
-        setStorePreview: ({ objectId, node }) => setNodeEditorPreview({ objectId, node }),
-        clearStorePreview: clearNodeEditorPreview,
         buildPreviewNode: () => buildUpdatedNodeFromValues(form.getFieldsValue()),
     })
 
@@ -199,37 +188,31 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
         }
     }
 
-    useEffect(() => {
-        const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
-            const payload = event.payload as any
-            if (payload && payload.callerId === 'NodeDialog') {
-                const targetProp = payload.fieldName || currentEditingPropRef.current
-                if (targetProp === 'Translation') setTranslationAnim(payload.data)
-                else if (targetProp === 'Rotation') setRotationAnim(payload.data)
-                else if (targetProp === 'Scaling') setScalingAnim(payload.data)
+    useWindowEvent<KeyframeSavePayload>(KEYFRAME_SAVE_EVENT, (event) => {
+        const payload = event.payload
+        if (!payload || payload.callerId !== 'NodeDialog') return
 
-                if (isStandalone && nodeId !== null) {
-                    const values = form.getFieldsValue()
-                    const nextNode = buildUpdatedNodeFromValues(values, {
-                        translationAnim: targetProp === 'Translation' ? payload.data : undefined,
-                        rotationAnim: targetProp === 'Rotation' ? payload.data : undefined,
-                        scalingAnim: targetProp === 'Scaling' ? payload.data : undefined,
-                    })
-                    if (nextNode && standaloneEmit) {
-                        standaloneEmit(NODE_EDITOR_COMMANDS.applyNodeUpdate, { objectId: nodeId, node: nextNode })
-                    }
-                }
+        const targetProp = payload.fieldName || currentEditingPropRef.current
+        if (targetProp === 'Translation') setTranslationAnim(payload.data)
+        else if (targetProp === 'Rotation') setRotationAnim(payload.data)
+        else if (targetProp === 'Scaling') setScalingAnim(payload.data)
 
-                currentEditingPropRef.current = ''
-                setCurrentEditingProp('')
-                schedulePreview()
+        if (isStandalone && nodeId !== null) {
+            const values = form.getFieldsValue()
+            const nextNode = buildUpdatedNodeFromValues(values, {
+                translationAnim: targetProp === 'Translation' ? payload.data : undefined,
+                rotationAnim: targetProp === 'Rotation' ? payload.data : undefined,
+                scalingAnim: targetProp === 'Scaling' ? payload.data : undefined,
+            })
+            if (nextNode && standaloneEmit) {
+                standaloneEmit(NODE_EDITOR_COMMANDS.applyNodeUpdate, { objectId: nodeId, node: nextNode })
             }
-        })
-
-        return () => {
-            unlisten.then((f) => f())
         }
-    }, [buildUpdatedNodeFromValues, form, isStandalone, nodeId, schedulePreview, standaloneEmit])
+
+        currentEditingPropRef.current = ''
+        setCurrentEditingProp('')
+        schedulePreview()
+    })
 
     const handleOpenKeyframeEditor = (propName: string, title: string, vectorSize: number) => {
         currentEditingPropRef.current = propName

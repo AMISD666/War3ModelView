@@ -82,6 +82,10 @@ export const formatKeyCombo = (combo: string): string => {
 const normalizeKey = (e: KeyboardEvent): string | null => {
     if (MODIFIER_KEYS.has(e.key)) return null
 
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+        return e.key
+    }
+
     if (e.key === '`' || e.key === '~') {
         return 'Backquote'
     }

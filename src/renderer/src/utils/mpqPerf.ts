@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core'
+import { desktopGateway } from '../infrastructure/desktop'
 import { markStandalonePerf } from './standalonePerf'
 
 type MpqReadAggregate = {
@@ -121,7 +121,7 @@ export async function invokeReadMpqFile<T = Uint8Array>(path: string, source: st
     const startedAt = performance.now()
 
     try {
-        const payload = await invoke<T>('read_mpq_file', { path: normalizedPath })
+        const payload = await desktopGateway.invoke<T>('read_mpq_file', { path: normalizedPath })
         recordMpqReadMetric(source, normalizedPath, performance.now() - startedAt, payload, true)
         return payload
     } catch (error) {

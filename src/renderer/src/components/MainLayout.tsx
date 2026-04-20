@@ -19,62 +19,64 @@ const AnimationPanel = React.lazy(() => import('./AnimationPanel'))
 const EditorPanel = React.lazy(() => import('./EditorPanel'))
 
 import { GeosetVisibilityPanel } from './GeosetVisibilityPanel'
-import { open } from '@tauri-apps/plugin-dialog'
-import { generateMDL, generateMDX } from 'war3-model'
-import { getRecentFiles, addRecentFile, clearRecentFiles, replaceRecentModelPath, RecentFile } from '../services/historyService'
+import { getRecentFiles, clearRecentFiles, replaceRecentModelPath, RecentFile } from '../services/historyService'
 import { useModelStore, mergeMaterialManagerPreview, mergeNodeEditorPreview } from '../store/modelStore'
 import { NodeType } from '../types/node'
 import { useUIStore } from '../store/uiStore'
 import { useSelectionStore } from '../store/selectionStore'
 import { useRendererStore } from '../store/rendererStore'
-import { useHistoryStore } from '../store/historyStore'
 import { GlobalMessageLayer } from './GlobalMessageLayer'
 import { showMessage, showConfirm } from '../store/messageStore'
 import { registerShortcutHandler } from '../shortcuts/manager'
-import { getCurrentWindow } from '@tauri-apps/api/window';
-import { emit } from '@tauri-apps/api/event'
 import { Button } from 'antd';
 import AppErrorBoundary from './common/AppErrorBoundary'
-import {
-    applyTextureAdjustments,
-    normalizeTextureAdjustments,
-    isDefaultTextureAdjustments,
-    TEXTURE_ADJUSTMENTS_KEY
-} from '../utils/textureAdjustments'
+import { TEXTURE_ADJUSTMENTS_KEY } from '../utils/textureAdjustments'
 import { windowManager } from '../utils/WindowManager'
-import { pruneModelKeyframes, repairClassicModelData } from '../utils/modelUtils'
 import {
-    NODE_EDITOR_COMMANDS,
-    type ApplyNodeUpdatePayload,
-    type ClearNodePreviewPayload,
-    type NodeEditorCommand,
-    type NodeEditorNodePayload,
     type NodeEditorRpcState,
-    type RenameNodePayload,
 } from '../types/nodeEditorRpc'
+import { historyCommandService, modelDocumentCommandHandler, nodeEditorCommandHandler } from '../application/commands'
 import { useRpcServer } from '../hooks/useRpc'
 import { markStandalonePerf } from '../utils/standalonePerf'
 import { parseModelBuffer, mergeGeosets, mergeAnimations } from '../utils/modelMerge'
-import { readFile, copyFile } from '@tauri-apps/plugin-fs'
+import { desktopGateway } from '../infrastructure/desktop'
+import { windowGateway } from '../infrastructure/window'
+import { saveCurrentModelWorkflow, type TextureAssetOperationResult, type SaveValidationContext } from '../application/model-save'
+import { DEFAULT_IMPORT_FILE_DIALOG_OPTIONS, openModelWorkflow } from '../application/model-open'
+import { useAppShellController } from '../application/shell/useAppShellController'
+import { useModelToolsController } from '../application/model-tools/useModelToolsController'
+import {
+    cameraManagerCommandHandler,
+    createCameraNodeFromOrbitView,
+    geosetAnimationCommandHandler,
+    geosetEditorCommandHandler,
+    geosetVisibilityCommandHandler,
+    globalColorAdjustCommandHandler,
+    globalSequenceManagerCommandHandler,
+    type GlobalColorAdjustRpcState,
+    type GlobalSequenceManagerRpcState,
+    getOrbitCameraViewFromModelCamera,
+    materialManagerCommandHandler,
+    type SequenceManagerRpcState,
+    sequenceManagerCommandHandler,
+    stripGeosetDataForToolWindow,
+    textureAnimationCommandHandler,
+    textureManagerCommandHandler,
+    toolWindowOrchestrator,
+    toGlobalSequenceDurations,
+    ToolWindowBroadcastCoordinator,
+    ToolWindowSnapshotCache,
+    type MaterialManagerPatch,
+    type MaterialManagerRpcState,
+    type TextureManagerPatch,
+    type TextureManagerRpcState,
+} from '../application/window-bridge'
 import { uiText } from '../constants/uiText'
-import { getToolWindowSize } from '../constants/windowLayouts'
-
-/**
- * Normalize model data before saving to ensure typed arrays are correct.
- * The war3-model library expects Uint32Array for Intervals and Float32Array for extents,
- * but JSON.stringify/parse (used for cloning in editors) converts these to regular arrays.
- * 
- * Uses structuredClone to preserve existing typed arrays while only converting
- * regular arrays that need to be typed arrays.
- */
-const AUTO_UPDATE_CHECK_DATE_KEY = 'lastAutoUpdateCheck'
-
-const toGlobalSequenceDurations = (values: any[] | undefined | null): number[] => {
-    if (!Array.isArray(values)) return []
-    return values
-        .map((value) => (typeof value === 'number' ? value : value?.Duration))
-        .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
-}
+import { useGlobalColorAdjustStore } from '../store/globalColorAdjustStore'
+import { applyGlobalColorAdjustmentsToModel } from '../services/globalColorAdjustModelService'
+import { commitSavedModelToStore } from '../services/commitSavedModelService'
+import { getBasename, getDirname, joinPath, normalizeWindowsPath } from '../utils/windowsPath'
+import { AboutDialog } from './shell/AboutDialog'
 
 const toArrayBuffer = (value: ArrayBuffer | Uint8Array): ArrayBuffer => {
     if (value instanceof ArrayBuffer) return value
@@ -85,1717 +87,6 @@ const toArrayBuffer = (value: ArrayBuffer | Uint8Array): ArrayBuffer => {
     return value.slice().buffer
 }
 
-type TextureManagerSnapshot = {
-    textures: any[]
-    materials: any[]
-    geosets: any[]
-    globalSequences: any[]
-    modelPath: string | null | undefined
-}
-
-type TextureManagerRpcState = {
-    snapshotVersion: number
-    snapshot: TextureManagerSnapshot
-    pickedGeosetIndex: number | null
-    selectedMaterialIndex: number | null
-    selectedMaterialLayerIndex: number | null
-}
-
-type TextureManagerPatch = {
-    pickedGeosetIndex: number | null
-}
-
-type MaterialManagerSnapshot = {
-    materials: any[]
-    textures: any[]
-    geosets: any[]
-    globalSequences: any[]
-    sequences: any[]
-    textureAnims: any[]
-    modelPath: string | null | undefined
-}
-
-type MaterialManagerRpcState = {
-    snapshotVersion: number
-    snapshot: MaterialManagerSnapshot
-    pickedGeosetIndex: number | null
-    selectedMaterialIndex: number | null
-    selectedMaterialLayerIndex: number | null
-}
-
-type MaterialManagerPatch = {
-    pickedGeosetIndex?: number | null
-    selectedMaterialIndex?: number | null
-    selectedMaterialLayerIndex?: number | null
-}
-
-function prepareModelDataForSave(modelData: any): any {
-    if (!modelData) return modelData;
-
-    // Use structuredClone to preserve typed arrays (available in modern browsers)
-    // Falls back to the original data if structuredClone isn't available
-    let data: any;
-    const typeMap: Record<number, number> = { 0: 0, 1: 1, 2: 2 };
-    try {
-        data = structuredClone(modelData);
-    } catch {
-        // Fallback: work with original data (will mutate it)
-        // // console.warn('[MainLayout] structuredClone not available, modifying original data');
-        data = modelData;
-    }
-
-    // Helper to robustly convert object-like arrays (possibly sparse) to TypedArray
-    const objectToTypedArray = (obj: any, Constructor: any) => {
-        const keys = Object.keys(obj);
-        const numKeys = keys.filter(k => !isNaN(Number(k)) && Number(k) >= 0).map(Number);
-
-        // If we found numeric keys, use them to reconstruct array respecting indices
-        if (numKeys.length > 0) {
-            const maxKey = Math.max(...numKeys);
-            const arr = new Constructor(maxKey + 1);
-            numKeys.forEach(k => arr[k] = Number(obj[k]));
-            return arr;
-        }
-
-        // Fallback: just use values
-        return new Constructor(Object.values(obj).map(Number));
-    };
-
-    // Helper to convert array-like to typed array if needed
-    const toUint32Array = (arr: any): Uint32Array => {
-        if (arr instanceof Uint32Array) return arr;
-        if (Array.isArray(arr)) return new Uint32Array(arr);
-        if (arr && typeof arr === 'object') {
-            return objectToTypedArray(arr, Uint32Array);
-        }
-        return new Uint32Array([0, 0]);
-    };
-
-    const normalizeInterval = (interval: any): Uint32Array => {
-        let start = 0;
-        let end = 0;
-        if (interval instanceof Uint32Array || ArrayBuffer.isView(interval)) {
-            start = Number((interval as unknown as ArrayLike<number>)[0]);
-            end = Number((interval as unknown as ArrayLike<number>)[1]);
-        } else if (Array.isArray(interval)) {
-            start = Number(interval[0]);
-            end = Number(interval[1]);
-        } else if (interval && typeof interval === 'object') {
-            const values = Object.values(interval).map(Number);
-            start = Number(values[0]);
-            end = Number(values[1]);
-        }
-        if (!Number.isFinite(start)) start = 0;
-        if (!Number.isFinite(end)) end = 0;
-        start = Math.max(0, Math.floor(start));
-        end = Math.max(0, Math.floor(end));
-        if (start > end) {
-            const temp = start;
-            start = end;
-            end = temp;
-        }
-        return new Uint32Array([start, end]);
-    };
-
-    const toFloat32Array = (arr: any, size: number = 3): Float32Array => {
-        // Always ensure output array is exactly 'size' elements
-        const result = new Float32Array(size);
-
-        if (arr instanceof Float32Array) {
-            for (let i = 0; i < Math.min(size, arr.length); i++) {
-                result[i] = arr[i];
-            }
-            return result;
-        }
-        if (Array.isArray(arr)) {
-            for (let i = 0; i < Math.min(size, arr.length); i++) {
-                result[i] = Number(arr[i]) || 0;
-            }
-            return result;
-        }
-        // Handle object-like {0: x, 1: y, 2: z} from bad clones
-        if (arr && typeof arr === 'object') {
-            const values = Object.values(arr).map(Number);
-            for (let i = 0; i < Math.min(size, values.length); i++) {
-                result[i] = values[i] || 0;
-            }
-            return result;
-        }
-        return result; // Returns zero-filled array of correct size
-    };
-
-    // Helper for variable-length float arrays (Vertices, Normals, etc.)
-    const toDynamicFloat32Array = (arr: any): Float32Array => {
-        if (arr instanceof Float32Array) return arr;
-        if (Array.isArray(arr)) return new Float32Array(arr);
-        if (arr && typeof arr === 'object') {
-            return objectToTypedArray(arr, Float32Array);
-        }
-        return new Float32Array(0);
-    };
-
-    const toUint16Array = (arr: any): Uint16Array => {
-        if (arr instanceof Uint16Array) return arr;
-        if (Array.isArray(arr)) return new Uint16Array(arr);
-        if (arr && typeof arr === 'object') {
-            return objectToTypedArray(arr, Uint16Array);
-        }
-        return new Uint16Array(0);
-    };
-
-    const toUint8Array = (arr: any): Uint8Array => {
-        if (arr instanceof Uint8Array) return arr;
-        if (Array.isArray(arr)) return new Uint8Array(arr);
-        if (arr && typeof arr === 'object') {
-            return objectToTypedArray(arr, Uint8Array);
-        }
-        return new Uint8Array(0);
-    };
-
-    // Clamp numeric values to [0,255] to avoid Uint8 wraparound on save
-    const toUint8ClampedArray = (arr: any): Uint8Array => {
-        if (arr instanceof Uint8Array) return arr;
-        let values: number[] = [];
-        if (ArrayBuffer.isView(arr)) {
-            values = Array.from(arr as unknown as ArrayLike<number>);
-        } else if (Array.isArray(arr)) {
-            values = arr;
-        } else if (arr && typeof arr === 'object') {
-            values = Object.values(arr).map(Number);
-        }
-        const result = new Uint8Array(values.length);
-        for (let i = 0; i < values.length; i++) {
-            const num = Number(values[i]);
-            if (!Number.isFinite(num) || num < 0) {
-                result[i] = 0;
-            } else if (num > 255) {
-                result[i] = 255;
-            } else {
-                result[i] = num;
-            }
-        }
-        return result;
-    };
-
-    const toTypedVector = (
-        value: any,
-        vectorSize: number,
-        isInt: boolean,
-        defaultVec?: number[] | ArrayLike<number>
-    ): Int32Array | Float32Array => {
-        const Type = isInt ? Int32Array : Float32Array;
-        const result = new Type(vectorSize);
-        if (defaultVec) {
-            const defArr = ArrayBuffer.isView(defaultVec) ? Array.from(defaultVec as unknown as ArrayLike<number>) : Array.from(defaultVec as number[]);
-            for (let i = 0; i < vectorSize; i++) {
-                const num = Number(defArr[i]);
-                if (Number.isFinite(num)) {
-                    result[i] = num;
-                }
-            }
-        }
-
-        if (value === undefined || value === null) {
-            return result;
-        }
-
-        const assignValue = (index: number, val: any) => {
-            const num = Number(val);
-            if (Number.isFinite(num) && index >= 0 && index < vectorSize) {
-                result[index] = num;
-            }
-        };
-
-        if (typeof value === 'number') {
-            assignValue(0, value);
-            return result;
-        }
-
-        if (value instanceof Type || ArrayBuffer.isView(value)) {
-            const arr = Array.from(value as unknown as ArrayLike<number>);
-            for (let i = 0; i < Math.min(vectorSize, arr.length); i++) {
-                assignValue(i, arr[i]);
-            }
-            return result;
-        }
-
-        if (Array.isArray(value)) {
-            for (let i = 0; i < Math.min(vectorSize, value.length); i++) {
-                assignValue(i, value[i]);
-            }
-            return result;
-        }
-
-        if (typeof value === 'object') {
-            const numericKeys = Object.keys(value)
-                .map(k => Number(k))
-                .filter(k => Number.isFinite(k));
-            if (numericKeys.length > 0) {
-                numericKeys.forEach(k => assignValue(k, value[k]));
-            } else {
-                const arr = Object.values(value) as any[];
-                for (let i = 0; i < Math.min(vectorSize, arr.length); i++) {
-                    assignValue(i, arr[i]);
-                }
-            }
-        }
-
-        return result;
-    };
-
-    // Fix AnimVector to ensure Keys is a real array and Vectors are typed arrays
-    const fixAnimVector = (
-        animVec: any,
-        vectorSize: number = 3,
-        isInt: boolean = false,
-        defaultVec?: number[] | ArrayLike<number>,
-        globalSeqCount?: number
-    ): any => {
-        if (!animVec) return null;
-        // If it's not an object, return null
-        if (typeof animVec !== 'object') return null;
-        const lineTypeMap: Record<string, number> = {
-            DontInterp: 0,
-            Linear: 1,
-            Hermite: 2,
-            Bezier: 3
-        };
-        if (typeof animVec.LineType === 'string' && animVec.LineType in lineTypeMap) {
-            animVec.LineType = lineTypeMap[animVec.LineType];
-        }
-        // If Keys is not a proper array, convert or return null
-        if (animVec.Keys) {
-            if (!Array.isArray(animVec.Keys)) {
-                // Try to convert object-like {0: k1, 1: k2} to array
-                if (typeof animVec.Keys === 'object') {
-                    animVec.Keys = Object.values(animVec.Keys);
-                } else {
-                    animVec.Keys = [];
-                }
-            }
-            // Fix each Key's Vector, InTan, OutTan to be typed arrays
-            animVec.Keys.forEach((key: any) => {
-                const frame = Number(key.Frame ?? key.Time ?? 0);
-                key.Frame = Number.isFinite(frame) && frame >= 0 ? Math.floor(frame) : 0;
-
-                key.Vector = toTypedVector(key.Vector, vectorSize, isInt, defaultVec);
-
-                const needsTangents = animVec.LineType === 2 || animVec.LineType === 3;
-                if (needsTangents) {
-                    key.InTan = toTypedVector(key.InTan, vectorSize, isInt);
-                    key.OutTan = toTypedVector(key.OutTan, vectorSize, isInt);
-                } else {
-                    if (key.InTan && !(key.InTan instanceof Float32Array) && !(key.InTan instanceof Int32Array)) {
-                        key.InTan = toTypedVector(key.InTan, vectorSize, isInt);
-                    }
-                    if (key.OutTan && !(key.OutTan instanceof Float32Array) && !(key.OutTan instanceof Int32Array)) {
-                        key.OutTan = toTypedVector(key.OutTan, vectorSize, isInt);
-                    }
-                }
-            });
-            animVec.Keys = animVec.Keys
-                .filter((key: any) => ArrayBuffer.isView(key?.Vector) && key.Vector.length === vectorSize)
-                .sort((a: any, b: any) => a.Frame - b.Frame)
-                .filter((key: any, index: number, keys: any[]) =>
-                    index === keys.length - 1 || key.Frame !== keys[index + 1].Frame
-                );
-        } else {
-            // No Keys, this AnimVector is invalid - make it empty
-            animVec.Keys = [];
-        }
-        // Ensure LineType is valid
-        if (animVec.LineType === undefined || animVec.LineType === null || ![0, 1, 2, 3].includes(animVec.LineType)) {
-            animVec.LineType = 1; // Default to Linear
-        }
-        if (animVec.GlobalSeqId === undefined) {
-            animVec.GlobalSeqId = null;
-        } else if (typeof animVec.GlobalSeqId !== 'number' || !Number.isFinite(animVec.GlobalSeqId)) {
-            animVec.GlobalSeqId = null;
-        }
-        if (typeof globalSeqCount === 'number' && globalSeqCount > 0 && typeof animVec.GlobalSeqId === 'number') {
-            if (animVec.GlobalSeqId < 0 || animVec.GlobalSeqId >= globalSeqCount) {
-                animVec.GlobalSeqId = null;
-            }
-        }
-        return animVec;
-    };
-
-    // Ensure any value becomes a valid AnimVector (or null)
-    const ensureAnimVector = (
-        value: any,
-        vectorSize: number = 3,
-        isInt: boolean = false,
-        defaultVec?: number[] | ArrayLike<number>,
-        globalSeqCount?: number
-    ): any => {
-        if (!value) return null;
-        if (value && typeof value === 'object' && Array.isArray(value.Keys)) {
-            return fixAnimVector(value, vectorSize, isInt, defaultVec, globalSeqCount);
-        }
-        const vec = toTypedVector(value, vectorSize, isInt, defaultVec);
-        return {
-            LineType: 1,
-            GlobalSeqId: null,
-            Keys: [{ Frame: 0, Vector: vec }]
-        };
-    };
-
-    // Fix Node's animation properties (Translation, Rotation, Scaling)
-    const fixNode = (node: any, globalSeqCount?: number): void => {
-        if (!node) return;
-        if (node.Translation) {
-            node.Translation = ensureAnimVector(node.Translation, 3, false, [0, 0, 0], globalSeqCount);
-            if (!node.Translation || !node.Translation.Keys || node.Translation.Keys.length === 0) {
-                node.Translation = null;
-            }
-        }
-        if (node.Rotation) {
-            node.Rotation = ensureAnimVector(node.Rotation, 4, false, [0, 0, 0, 1], globalSeqCount);
-            if (!node.Rotation || !node.Rotation.Keys || node.Rotation.Keys.length === 0) {
-                node.Rotation = null;
-            }
-        }
-        if (node.Scaling) {
-            node.Scaling = ensureAnimVector(node.Scaling, 3, false, [1, 1, 1], globalSeqCount);
-            if (!node.Scaling || !node.Scaling.Keys || node.Scaling.Keys.length === 0) {
-                node.Scaling = null;
-            }
-        }
-        // Ensure required fields
-        if (node.Flags === undefined) node.Flags = 0;
-        if (node.ObjectId === undefined) node.ObjectId = 0;
-        if (node.Parent === undefined) node.Parent = -1;
-        if (!node.Name) node.Name = 'UnnamedNode';
-    };
-
-    // Fix Sequences - most critical for animation fix
-    if (data.Sequences && Array.isArray(data.Sequences)) {
-        // // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Sequences.length} sequences`);
-        data.Sequences.forEach((seq: any, index: number) => {
-            // Always log interval info for debugging
-            const intervalType = seq.Interval ? (seq.Interval instanceof Uint32Array ? 'Uint32Array' : Array.isArray(seq.Interval) ? 'Array' : typeof seq.Interval) : 'undefined';
-            const intervalValues = seq.Interval ? `[${seq.Interval[0]}, ${seq.Interval[1]}]` : 'N/A';
-            // console.log(`[MainLayout] Sequence ${index} "${seq.Name}" Interval (${intervalType}): ${intervalValues}`);
-
-            seq.Interval = normalizeInterval(seq.Interval);
-            if (seq.MinimumExtent && !(seq.MinimumExtent instanceof Float32Array)) {
-                seq.MinimumExtent = toFloat32Array(seq.MinimumExtent);
-            }
-            if (seq.MaximumExtent && !(seq.MaximumExtent instanceof Float32Array)) {
-                seq.MaximumExtent = toFloat32Array(seq.MaximumExtent);
-            }
-            if (!seq.MinimumExtent) seq.MinimumExtent = new Float32Array(3);
-            if (!seq.MaximumExtent) seq.MaximumExtent = new Float32Array(3);
-            if (seq.BoundsRadius === undefined || seq.BoundsRadius === null) {
-                seq.BoundsRadius = 0;
-            }
-            if (seq.MoveSpeed === undefined || seq.MoveSpeed === null) {
-                seq.MoveSpeed = 0;
-            }
-            if (seq.Rarity === undefined || seq.Rarity === null) {
-                seq.Rarity = 0;
-            }
-            if (seq.NonLooping === undefined || seq.NonLooping === null) {
-                seq.NonLooping = false;
-            } else {
-                seq.NonLooping = !!seq.NonLooping;
-            }
-        });
-    }
-
-    // Fix Model Info extents
-    if (data.Info) {
-        if (data.Info.MinimumExtent && !(data.Info.MinimumExtent instanceof Float32Array)) {
-            data.Info.MinimumExtent = toFloat32Array(data.Info.MinimumExtent);
-        }
-        if (data.Info.MaximumExtent && !(data.Info.MaximumExtent instanceof Float32Array)) {
-            data.Info.MaximumExtent = toFloat32Array(data.Info.MaximumExtent);
-        }
-        if (!data.Info.MinimumExtent) data.Info.MinimumExtent = new Float32Array(3);
-        if (!data.Info.MaximumExtent) data.Info.MaximumExtent = new Float32Array(3);
-        if (data.Info.BoundsRadius === undefined || data.Info.BoundsRadius === null) {
-            data.Info.BoundsRadius = 0;
-        }
-        if (data.Info.BlendTime === undefined || data.Info.BlendTime === null) {
-            data.Info.BlendTime = 0;
-        }
-        if (!data.Info.Name) {
-            data.Info.Name = '';
-        }
-    }
-
-    // Fix GlobalSequences
-    if (data.GlobalSequences && Array.isArray(data.GlobalSequences)) {
-        data.GlobalSequences = data.GlobalSequences.map((value: any) => {
-            const num = Number(value);
-            return Number.isFinite(num) && num >= 0 ? Math.floor(num) : 0;
-        });
-    }
-    const globalSeqCount = data.GlobalSequences?.length || 0;
-
-    // Fix Textures
-    if (data.Textures && Array.isArray(data.Textures)) {
-        data.Textures.forEach((texture: any) => {
-            if (texture.ReplaceableId === undefined || texture.ReplaceableId === null) {
-                texture.ReplaceableId = 0;
-            }
-            if (typeof texture.ReplaceableId === 'number' && texture.ReplaceableId < 0) {
-                texture.ReplaceableId = 0;
-            }
-            const normalizeTexturePath = (value: any): string => {
-                if (typeof value === 'string') return value;
-                if (Array.isArray(value)) return value.join('');
-                if (value && typeof value === 'object') {
-                    return Object.values(value).join('');
-                }
-                return '';
-            };
-            const rawImage = texture.Image ?? texture.Path ?? '';
-            const normalizedImage = normalizeTexturePath(rawImage).replace(/\//g, '\\');
-            texture.Image = normalizedImage;
-            if (!texture.Path) {
-                texture.Path = normalizedImage;
-            }
-            if (texture.Flags === undefined || texture.Flags === null) {
-                texture.Flags = 0;
-            }
-
-            const baseFlags = typeof texture.Flags === 'number' ? texture.Flags : 0;
-            let flags = baseFlags & ~(1 | 2);
-            const applyFlag = (prop: string, bit: number) => {
-                if (texture[prop] === true) {
-                    flags |= bit;
-                } else if (texture[prop] === false) {
-                    // Explicitly cleared
-                } else if (baseFlags & bit) {
-                    flags |= bit;
-                }
-            };
-            applyFlag('WrapWidth', 1);
-            applyFlag('WrapHeight', 2);
-            texture.Flags = flags;
-        });
-    }
-
-    // Fix Geoset data
-    if (data.Geosets && Array.isArray(data.Geosets)) {
-        data.Geosets.forEach((geoset: any) => {
-            if (!geoset) return;
-            // Use toDynamicFloat32Array for variable length arrays
-            if (geoset.Vertices && !(geoset.Vertices instanceof Float32Array)) {
-                geoset.Vertices = toDynamicFloat32Array(geoset.Vertices);
-            }
-            if (geoset.Normals && !(geoset.Normals instanceof Float32Array)) {
-                geoset.Normals = toDynamicFloat32Array(geoset.Normals);
-            }
-            if (geoset.Faces && !(geoset.Faces instanceof Uint16Array)) {
-                geoset.Faces = toUint16Array(geoset.Faces);
-            }
-            if (geoset.VertexGroup) {
-                const vertexGroupValues = Array.from(geoset.VertexGroup as unknown as ArrayLike<number>, (value) => Number(value) || 0);
-                const maxGroupIndex = vertexGroupValues.reduce((max, value) => Math.max(max, Math.floor(value)), 0);
-                const TypedArrayCtor = maxGroupIndex > 255 ? Uint16Array : Uint8Array;
-                if (!(geoset.VertexGroup instanceof TypedArrayCtor)) {
-                    geoset.VertexGroup = new TypedArrayCtor(vertexGroupValues);
-                }
-            }
-            if (geoset.MinimumExtent && !(geoset.MinimumExtent instanceof Float32Array)) {
-                geoset.MinimumExtent = toFloat32Array(geoset.MinimumExtent);
-            }
-            if (geoset.MaximumExtent && !(geoset.MaximumExtent instanceof Float32Array)) {
-                geoset.MaximumExtent = toFloat32Array(geoset.MaximumExtent);
-            }
-            if (geoset.TVertices) {
-                if (Array.isArray(geoset.TVertices)) {
-                    // Array of arrays format (from mdx parser usually)
-                    geoset.TVertices = geoset.TVertices.map((tv: any) =>
-                        tv instanceof Float32Array ? tv : toDynamicFloat32Array(tv)
-                    );
-                } else if (geoset.TVertices instanceof Float32Array) {
-                    // Single large array already typed
-                    geoset.TVertices = [geoset.TVertices];
-                } else {
-                    // Single object-like array or unknown format
-                    geoset.TVertices = [toDynamicFloat32Array(geoset.TVertices)];
-                }
-            }
-            if (geoset.Tangents && !(geoset.Tangents instanceof Float32Array)) {
-                geoset.Tangents = toDynamicFloat32Array(geoset.Tangents);
-            }
-            if (geoset.SkinWeights && !(geoset.SkinWeights instanceof Uint8Array)) {
-                geoset.SkinWeights = toUint8Array(geoset.SkinWeights);
-            }
-            if (geoset.Anims && Array.isArray(geoset.Anims)) {
-                geoset.Anims.forEach((anim: any) => {
-                    if (anim.MinimumExtent && !(anim.MinimumExtent instanceof Float32Array)) {
-                        anim.MinimumExtent = toFloat32Array(anim.MinimumExtent);
-                    }
-                    if (anim.MaximumExtent && !(anim.MaximumExtent instanceof Float32Array)) {
-                        anim.MaximumExtent = toFloat32Array(anim.MaximumExtent);
-                    }
-                });
-            }
-
-            // Sanity checks for array lengths (prevent corrupt exports)
-            const vertexCount = geoset.Vertices ? Math.floor(geoset.Vertices.length / 3) : 0;
-            if (geoset.Vertices && geoset.Vertices.length % 3 !== 0) {
-                geoset.Vertices = geoset.Vertices.subarray(0, vertexCount * 3);
-            }
-            if (geoset.Normals) {
-                const expected = vertexCount * 3;
-                if (geoset.Normals.length !== expected) {
-                    const fixed = new Float32Array(expected);
-                    fixed.set(geoset.Normals.subarray(0, expected));
-                    geoset.Normals = fixed;
-                }
-            } else if (vertexCount > 0) {
-                geoset.Normals = buildFallbackNormals(vertexCount);
-            }
-            if (geoset.VertexGroup) {
-                if (geoset.VertexGroup.length !== vertexCount) {
-                    const TypedArrayCtor = geoset.VertexGroup instanceof Uint16Array ? Uint16Array : Uint8Array;
-                    const fixed = new TypedArrayCtor(vertexCount);
-                    fixed.set(geoset.VertexGroup.subarray(0, vertexCount));
-                    geoset.VertexGroup = fixed;
-                }
-            }
-            if (geoset.Faces) {
-                const faceCount = Math.floor(geoset.Faces.length / 3);
-                if (geoset.Faces.length % 3 !== 0) {
-                    geoset.Faces = geoset.Faces.subarray(0, faceCount * 3);
-                }
-                for (let i = 0; i < geoset.Faces.length; i++) {
-                    if (geoset.Faces[i] >= vertexCount || geoset.Faces[i] < 0) {
-                        geoset.Faces[i] = 0;
-                    }
-                }
-            }
-            if (geoset.TVertices && Array.isArray(geoset.TVertices)) {
-                geoset.TVertices = geoset.TVertices.map((tv: any) => {
-                    const typed = tv instanceof Float32Array ? tv : toDynamicFloat32Array(tv);
-                    const expected = vertexCount * 2;
-                    if (typed.length === expected) return typed;
-                    const fixed = new Float32Array(expected);
-                    fixed.set(typed.subarray(0, expected));
-                    return fixed;
-                });
-            } else if (vertexCount > 0) {
-                geoset.TVertices = [new Float32Array(vertexCount * 2)];
-            }
-            if (geoset.Tangents && geoset.Tangents.length % 4 !== 0) {
-                const tangentCount = Math.floor(geoset.Tangents.length / 4);
-                geoset.Tangents = geoset.Tangents.subarray(0, tangentCount * 4);
-            }
-            if (!geoset.Anims) {
-                geoset.Anims = [];
-            }
-        });
-    }
-
-    // Fix GeosetAnims
-    if (data.GeosetAnims && Array.isArray(data.GeosetAnims)) {
-        const geosetCount = data.Geosets?.length || 0;
-        data.GeosetAnims.forEach((anim: any) => {
-            if (typeof anim.Flags !== 'number') {
-                anim.Flags = 0;
-            }
-            if (anim.GeosetId === undefined || anim.GeosetId === null) {
-                anim.GeosetId = null;
-            } else if (typeof anim.GeosetId !== 'number' || anim.GeosetId < 0 || anim.GeosetId >= geosetCount) {
-                anim.GeosetId = geosetCount > 0 ? 0 : null;
-            }
-            if (anim.Color instanceof Float32Array) {
-                // Keep static color
-            } else if (anim.Color && Array.isArray(anim.Color)) {
-                anim.Color = new Float32Array(anim.Color.slice(0, 3));
-            } else if (anim.Color && typeof anim.Color === 'object') {
-                if (Array.isArray((anim.Color as any).Keys)) {
-                    anim.Color = ensureAnimVector(anim.Color, 3, false, [1, 1, 1], globalSeqCount) ?? new Float32Array([1, 1, 1]);
-                } else {
-                    anim.Color = toFloat32Array(anim.Color, 3);
-                }
-            }
-            if (anim.Alpha && typeof anim.Alpha === 'object') {
-                anim.Alpha = ensureAnimVector(anim.Alpha, 1, false, undefined, globalSeqCount) ?? anim.Alpha;
-            }
-            if (typeof anim.Alpha === 'number') {
-                if (anim.Alpha < 0) anim.Alpha = 0;
-                if (anim.Alpha > 1) anim.Alpha = 1;
-            }
-            if (typeof anim.UseColor === 'boolean') {
-                const flags = typeof anim.Flags === 'number' ? anim.Flags : 0;
-                anim.Flags = anim.UseColor ? (flags | 2) : (flags & ~2);
-            }
-            if (typeof anim.DropShadow === 'boolean') {
-                const flags = typeof anim.Flags === 'number' ? anim.Flags : 0;
-                anim.Flags = anim.DropShadow ? (flags | 1) : (flags & ~1);
-            }
-        });
-    }
-
-    // Fix TextureAnims (TVertexAnim)
-    if (data.TextureAnims && Array.isArray(data.TextureAnims)) {
-        data.TextureAnims.forEach((anim: any) => {
-            if (anim.Translation) {
-                anim.Translation = ensureAnimVector(anim.Translation, 3, false, [0, 0, 0], globalSeqCount);
-            }
-            if (anim.Rotation) {
-                anim.Rotation = ensureAnimVector(anim.Rotation, 4, false, [0, 0, 0, 1], globalSeqCount);
-            }
-            if (anim.Scaling) {
-                anim.Scaling = ensureAnimVector(anim.Scaling, 3, false, [1, 1, 1], globalSeqCount);
-            }
-        });
-    }
-
-    // Fix PivotPoints
-    if (data.PivotPoints && Array.isArray(data.PivotPoints)) {
-        data.PivotPoints = data.PivotPoints.map((pp: any) =>
-            pp instanceof Float32Array ? pp : toFloat32Array(pp)
-        );
-    }
-
-    // Fix Node PivotPoints
-    const nodeArrays = ['Nodes', 'Bones', 'Helpers', 'Attachments', 'Lights',
-        'ParticleEmitters', 'ParticleEmitters2', 'RibbonEmitters',
-        'EventObjects', 'CollisionShapes', 'Cameras'];
-    nodeArrays.forEach(key => {
-        if (data[key] && Array.isArray(data[key])) {
-            data[key].forEach((node: any) => {
-                if (node.PivotPoint && !(node.PivotPoint instanceof Float32Array)) {
-                    node.PivotPoint = toFloat32Array(node.PivotPoint);
-                }
-            });
-        }
-    });
-
-    // Fix Light node properties - ensure Color/AmbColor are Float32Array or valid AnimVector, and Visibility is valid
-    if (data.Lights && Array.isArray(data.Lights)) {
-        // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Lights.length} lights`);
-        data.Lights.forEach((light: any) => {
-            const isAnimVector = (val: any): boolean => {
-                return val && typeof val === 'object' && Array.isArray(val.Keys);
-            };
-            // FIRST: Map our naming convention to war3-model naming convention
-            // This must happen BEFORE we process/default the war3-model properties!
-
-            // Map AmbientColor (our naming) to AmbColor (war3-model naming)
-            if (light.AmbientColor !== undefined) {
-                if (Array.isArray(light.AmbientColor)) {
-                    light.AmbColor = new Float32Array(light.AmbientColor);
-                } else if (light.AmbientColor instanceof Float32Array) {
-                    light.AmbColor = light.AmbientColor;
-                }
-                // Don't delete AmbientColor - keep for UI compatibility
-            }
-
-            // Map AmbientIntensity to AmbIntensity
-            if (light.AmbientIntensity !== undefined) {
-                light.AmbIntensity = light.AmbientIntensity;
-            }
-
-            // SECOND: Process Color - should be Float32Array or AnimVector with Keys array
-            if (light.Color) {
-                if (Array.isArray(light.Color)) {
-                    light.Color = new Float32Array(light.Color);
-                } else if (typeof light.Color === 'object' && !(light.Color instanceof Float32Array)) {
-                    if (isAnimVector(light.Color)) {
-                        light.Color = fixAnimVector(light.Color, 3, false, [1, 1, 1], globalSeqCount);
-                    } else {
-                        // Invalid AnimVector, convert to static color
-                        light.Color = toFloat32Array(light.Color, 3);
-                    }
-                }
-            } else {
-                light.Color = new Float32Array([1, 1, 1]);
-            }
-
-            // THIRD: Process AmbColor (after mapping from AmbientColor)
-            if (light.AmbColor) {
-                if (Array.isArray(light.AmbColor)) {
-                    light.AmbColor = new Float32Array(light.AmbColor);
-                } else if (typeof light.AmbColor === 'object' && !(light.AmbColor instanceof Float32Array)) {
-                    if (isAnimVector(light.AmbColor)) {
-                        light.AmbColor = fixAnimVector(light.AmbColor, 3, false, [1, 1, 1], globalSeqCount);
-                    } else {
-                        light.AmbColor = toFloat32Array(light.AmbColor, 3);
-                    }
-                }
-            } else {
-                light.AmbColor = new Float32Array([1, 1, 1]);
-            }
-
-            // Ensure AmbIntensity exists (after mapping from AmbientIntensity)
-            if (light.AmbIntensity === undefined) {
-                light.AmbIntensity = 0;
-            }
-            if (light.Intensity === undefined) {
-                light.Intensity = 1;
-            }
-            if (light.AttenuationStart === undefined || light.AttenuationStart === null) {
-                light.AttenuationStart = 80;
-            }
-            if (light.AttenuationEnd === undefined || light.AttenuationEnd === null) {
-                light.AttenuationEnd = 200;
-            }
-
-            // Ensure static numeric properties exist as numbers (not AnimVector if they're simple values)
-            if (light.Intensity !== undefined && typeof light.Intensity === 'object' && light.Intensity !== null) {
-                if (isAnimVector(light.Intensity)) {
-                    light.Intensity = fixAnimVector(light.Intensity, 1, false, undefined, globalSeqCount);
-                } else {
-                    light.Intensity = 1; // Default to 1 if malformed
-                }
-            }
-
-            if (light.AmbIntensity !== undefined && typeof light.AmbIntensity === 'object' && light.AmbIntensity !== null) {
-                if (isAnimVector(light.AmbIntensity)) {
-                    light.AmbIntensity = fixAnimVector(light.AmbIntensity, 1, false, undefined, globalSeqCount);
-                } else {
-                    light.AmbIntensity = 0; // Default ambient intensity
-                }
-            }
-
-            if (light.AttenuationStart !== undefined && typeof light.AttenuationStart === 'object' && light.AttenuationStart !== null) {
-                if (isAnimVector(light.AttenuationStart)) {
-                    light.AttenuationStart = fixAnimVector(light.AttenuationStart, 1, true, undefined, globalSeqCount);
-                } else {
-                    light.AttenuationStart = 80;
-                }
-            }
-
-            if (light.AttenuationEnd !== undefined && typeof light.AttenuationEnd === 'object' && light.AttenuationEnd !== null) {
-                if (isAnimVector(light.AttenuationEnd)) {
-                    light.AttenuationEnd = fixAnimVector(light.AttenuationEnd, 1, true, undefined, globalSeqCount);
-                } else {
-                    light.AttenuationEnd = 200;
-                }
-            }
-
-            // Visibility - must be undefined or a valid AnimVector, NOT a number
-            // In war3-model, if Visibility is present, it must be an AnimVector
-            if (light.Visibility !== undefined) {
-                if (typeof light.Visibility === 'number') {
-                    // Static visibility - just remove it (defaults to visible)
-                    delete light.Visibility;
-                } else if (typeof light.Visibility === 'object' && light.Visibility !== null) {
-                    if (isAnimVector(light.Visibility)) {
-                        light.Visibility = fixAnimVector(light.Visibility, 1, false, undefined, globalSeqCount);
-                    } else {
-                        // Malformed AnimVector - remove it
-                        delete light.Visibility;
-                    }
-                }
-            }
-
-            light.LightType = typeMap[light.LightType] ?? 0;
-
-
-            // console.log(`[MainLayout] Light "${light.Name}": Type=${light.LightType}, Intensity=${light.Intensity}, AmbIntensity=${light.AmbIntensity}, AmbColor=[${light.AmbColor[0]?.toFixed(2)},${light.AmbColor[1]?.toFixed(2)},${light.AmbColor[2]?.toFixed(2)}]`);
-        });
-    }
-    // Fix ParticleEmitter2 Flags - convert boolean properties to bitmask
-    // ParticleEmitter2Flags: Unshaded=32768, SortPrimsFarZ=65536, LineEmitter=131072,
-    //                        Unfogged=262144, ModelSpace=524288, XYQuad=1048576
-    // ParticleEmitter2FramesFlags: Head=1, Tail=2
-    if (data.ParticleEmitters2 && Array.isArray(data.ParticleEmitters2)) {
-        // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.ParticleEmitters2.length} particle emitters`);
-        data.ParticleEmitters2.forEach((emitter: any) => {
-            const isAnimVector = (val: any): boolean => {
-                return val && typeof val === 'object' && Array.isArray(val.Keys);
-            };
-            const animProps: Array<{ prop: string, animKey: string }> = [
-                { prop: 'EmissionRate', animKey: 'EmissionRateAnim' },
-                { prop: 'Speed', animKey: 'SpeedAnim' },
-                { prop: 'Variation', animKey: 'VariationAnim' },
-                { prop: 'Latitude', animKey: 'LatitudeAnim' },
-                { prop: 'Width', animKey: 'WidthAnim' },
-                { prop: 'Length', animKey: 'LengthAnim' },
-                { prop: 'Gravity', animKey: 'GravityAnim' },
-                { prop: 'Visibility', animKey: 'VisibilityAnim' },
-            ];
-
-            const fixEmitterAnimProps = (emitter: any, props: typeof animProps) => {
-                const ensureScalarZeroAtFrame0 = (track: any) => {
-                    if (!isAnimVector(track)) return
-                    if (!Array.isArray(track.Keys)) {
-                        track.Keys = []
-                    }
-                    const hasFrame0 = track.Keys.some((key: any) => Number(key?.Frame) === 0)
-                    if (!hasFrame0) {
-                        track.Keys.push({
-                            Frame: 0,
-                            Vector: toTypedVector([0], 1, false, [0])
-                        })
-                    }
-                    track.Keys.sort((a: any, b: any) => Number(a?.Frame ?? 0) - Number(b?.Frame ?? 0))
-                }
-
-                props.forEach(({ prop, animKey }) => {
-                    if (!emitter[prop] && emitter[animKey]) {
-                        emitter[prop] = emitter[animKey];
-                    }
-                    if (isAnimVector(emitter[prop])) {
-                        emitter[prop] = fixAnimVector(emitter[prop], 1, false, undefined, globalSeqCount);
-                    }
-                    if (isAnimVector(emitter[animKey])) {
-                        emitter[animKey] = fixAnimVector(emitter[animKey], 1, false, undefined, globalSeqCount);
-                    }
-                    // Width/Length tracks should always have a frame-0 default key (0 -> 0).
-                    if (prop === 'Width' || prop === 'Length') {
-                        ensureScalarZeroAtFrame0(emitter[prop]);
-                        ensureScalarZeroAtFrame0(emitter[animKey]);
-                    }
-                });
-            };
-
-            fixEmitterAnimProps(emitter, animProps);
-
-            // Reconstruct Flags bitmask from individual boolean properties.
-            // Preserve existing bits if the boolean is undefined (raw parser output doesn't include booleans).
-            const particleFlagMask = 32768 | 65536 | 131072 | 262144 | 524288 | 1048576;
-            const baseFlags = typeof emitter.Flags === 'number' ? emitter.Flags : 0;
-            let flags = baseFlags & ~particleFlagMask;
-
-            const applyFlag = (prop: string, bit: number) => {
-                if (emitter[prop] === true) {
-                    flags |= bit;
-                } else if (emitter[prop] === false) {
-                    // Explicitly cleared
-                } else if (baseFlags & bit) {
-                    flags |= bit;
-                }
-            };
-
-            applyFlag('Unshaded', 32768);
-            applyFlag('SortPrimsFarZ', 65536);
-            applyFlag('LineEmitter', 131072);
-            applyFlag('Unfogged', 262144);
-            applyFlag('ModelSpace', 524288);
-            applyFlag('XYQuad', 1048576);
-
-            emitter.Flags = flags;
-
-            // Reconstruct FrameFlags from Head/Tail booleans
-            let frameFlags = 0;
-            if (emitter.Head === true) frameFlags |= 1;
-            if (emitter.Tail === true) frameFlags |= 2;
-            if (emitter.Head === undefined && emitter.Tail === undefined) {
-                frameFlags = emitter.FrameFlags || 0;
-            }
-            emitter.FrameFlags = frameFlags;
-
-            // Fix Squirt
-            if (emitter.Squirt !== undefined) {
-                emitter.Squirt = !!emitter.Squirt;
-            }
-
-            // Fix SegmentColor - must be array of 3 Float32Array(3) color vectors
-            if (emitter.SegmentColor) {
-                if (Array.isArray(emitter.SegmentColor)) {
-                    emitter.SegmentColor = emitter.SegmentColor.map((color: any) => {
-                        if (color instanceof Float32Array) return color;
-                        if (Array.isArray(color)) return new Float32Array(color);
-                        if (color && typeof color === 'object') {
-                            return new Float32Array([color[0] || 1, color[1] || 1, color[2] || 1]);
-                        }
-                        return new Float32Array([1, 1, 1]); // Default white
-                    });
-                    // Ensure exactly 3 colors
-                    while (emitter.SegmentColor.length < 3) {
-                        emitter.SegmentColor.push(new Float32Array([1, 1, 1]));
-                    }
-                } else {
-                    // Invalid SegmentColor, set default
-                    emitter.SegmentColor = [
-                        new Float32Array([1, 1, 1]),
-                        new Float32Array([1, 1, 1]),
-                        new Float32Array([1, 1, 1])
-                    ];
-                }
-            }
-
-            // Fix Alpha - must be Uint8Array(3) or array of 3 numbers
-            if (emitter.Alpha) {
-                if (!(emitter.Alpha instanceof Uint8Array)) {
-                    if (Array.isArray(emitter.Alpha)) {
-                        emitter.Alpha = new Uint8Array(emitter.Alpha);
-                    } else if (typeof emitter.Alpha === 'object') {
-                        emitter.Alpha = new Uint8Array([emitter.Alpha[0] || 255, emitter.Alpha[1] || 255, emitter.Alpha[2] || 0]);
-                    } else {
-                        emitter.Alpha = new Uint8Array([255, 255, 0]);
-                    }
-                }
-            }
-
-            // Fix ParticleScaling - must be Float32Array(3)
-            if (emitter.ParticleScaling) {
-                if (!(emitter.ParticleScaling instanceof Float32Array)) {
-                    if (Array.isArray(emitter.ParticleScaling)) {
-                        emitter.ParticleScaling = new Float32Array(emitter.ParticleScaling);
-                    } else if (typeof emitter.ParticleScaling === 'object') {
-                        emitter.ParticleScaling = new Float32Array([
-                            emitter.ParticleScaling[0] || 1,
-                            emitter.ParticleScaling[1] || 1,
-                            emitter.ParticleScaling[2] || 1
-                        ]);
-                    } else {
-                        emitter.ParticleScaling = new Float32Array([1, 1, 1]);
-                    }
-                }
-            }
-
-            // Fix UV animations - must be Uint32Array(3)
-            const uvAnims = ['LifeSpanUVAnim', 'DecayUVAnim', 'TailUVAnim', 'TailDecayUVAnim'];
-            uvAnims.forEach(animName => {
-                if (emitter[animName]) {
-                    if (!(emitter[animName] instanceof Uint32Array)) {
-                        emitter[animName] = new Uint32Array(emitter[animName]);
-                    }
-                } else {
-                    emitter[animName] = new Uint32Array([0, 0, 1]); // Default start, end, repeat
-                }
-            });
-
-            // Fix Squirt
-            if (emitter.Squirt !== undefined) {
-                emitter.Squirt = !!emitter.Squirt;
-            }
-
-            // console.log(`[MainLayout] ParticleEmitter2 "${emitter.Name}": Flags=${flags}, FrameFlags=${frameFlags}`);
-        });
-    }
-
-    // Fix ParticleEmitterPopcorn
-    if (data.ParticleEmitterPopcorns && Array.isArray(data.ParticleEmitterPopcorns)) {
-        data.ParticleEmitterPopcorns.forEach((emitter: any) => {
-            const isAnimVector = (val: any): boolean => {
-                return val && typeof val === 'object' && Array.isArray(val.Keys);
-            };
-            const animProps: Array<{ prop: string, animKey: string }> = [
-                { prop: 'LifeSpan', animKey: 'LifeSpanAnim' },
-                { prop: 'EmissionRate', animKey: 'EmissionRateAnim' },
-                { prop: 'Speed', animKey: 'SpeedAnim' },
-                { prop: 'Color', animKey: 'ColorAnim' },
-                { prop: 'Alpha', animKey: 'AlphaAnim' },
-                { prop: 'Visibility', animKey: 'VisibilityAnim' },
-            ];
-
-            animProps.forEach(({ prop, animKey }) => {
-                if (!emitter[prop] && emitter[animKey]) {
-                    emitter[prop] = emitter[animKey];
-                }
-                if (isAnimVector(emitter[prop])) {
-                    emitter[prop] = fixAnimVector(emitter[prop], 1, false, undefined, globalSeqCount);
-                }
-                if (isAnimVector(emitter[animKey])) {
-                    emitter[animKey] = fixAnimVector(emitter[animKey], 1, false, undefined, globalSeqCount);
-                }
-            });
-
-            // Ensure Color is Float32Array if static
-            if (emitter.Color && Array.isArray(emitter.Color)) {
-                emitter.Color = new Float32Array(emitter.Color);
-            }
-        });
-    }
-
-    // Fix RibbonEmitters
-    if (data.RibbonEmitters && Array.isArray(data.RibbonEmitters)) {
-        // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.RibbonEmitters.length} ribbon emitters`);
-        data.RibbonEmitters.forEach((emitter: any) => {
-            const isAnimVector = (val: any): boolean => {
-                return val && typeof val === 'object' && Array.isArray(val.Keys);
-            };
-            const animProps: Array<{ prop: string, animKey: string }> = [
-                { prop: 'Height', animKey: 'HeightAnim' },
-                { prop: 'Alpha', animKey: 'AlphaAnim' },
-                { prop: 'Color', animKey: 'ColorAnim' },
-                { prop: 'Visibility', animKey: 'VisibilityAnim' },
-            ];
-
-            animProps.forEach(({ prop, animKey }) => {
-                if (!emitter[prop] && emitter[animKey]) {
-                    emitter[prop] = emitter[animKey];
-                }
-                if (isAnimVector(emitter[prop])) {
-                    emitter[prop] = fixAnimVector(emitter[prop], 1, false, undefined, globalSeqCount);
-                }
-                if (isAnimVector(emitter[animKey])) {
-                    emitter[animKey] = fixAnimVector(emitter[animKey], 1, false, undefined, globalSeqCount);
-                }
-            });
-
-            // Ensure Color is Float32Array if static
-            if (emitter.Color && Array.isArray(emitter.Color)) {
-                emitter.Color = new Float32Array(emitter.Color);
-            }
-        });
-    }
-
-    // Fix Cameras - ensure Position and TargetPosition are Float32Arrays
-    if (data.Cameras && Array.isArray(data.Cameras)) {
-        // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Cameras.length} cameras`);
-        data.Cameras.forEach((camera: any) => {
-            if (camera.FieldOfView === undefined || camera.FieldOfView === null) {
-                camera.FieldOfView = 0.7853; // ~45 deg
-            }
-            if (camera.NearClip === undefined || camera.NearClip === null) {
-                camera.NearClip = 16;
-            }
-            if (camera.FarClip === undefined || camera.FarClip === null) {
-                camera.FarClip = 5000;
-            }
-            if (camera.Position) {
-                camera.Position = toFloat32Array(camera.Position, 3);
-            } else {
-                camera.Position = new Float32Array([0, 0, 0]);
-            }
-            if (camera.TargetPosition) {
-                camera.TargetPosition = toFloat32Array(camera.TargetPosition, 3);
-            } else {
-                camera.TargetPosition = new Float32Array([0, 0, 0]);
-            }
-            if (camera.Target !== undefined && !(camera.Target instanceof Float32Array)) {
-                camera.Target = toFloat32Array(camera.Target, 3);
-            }
-            if (camera.Translation) {
-                camera.Translation = ensureAnimVector(camera.Translation, 3, false, [0, 0, 0], globalSeqCount);
-            }
-            if (camera.TargetTranslation) {
-                camera.TargetTranslation = ensureAnimVector(camera.TargetTranslation, 3, false, [0, 0, 0], globalSeqCount);
-            }
-            if (camera.Rotation) {
-                camera.Rotation = ensureAnimVector(camera.Rotation, 1, false, [0], globalSeqCount);
-            }
-        });
-    }
-
-    // Fix CollisionShapes - ensure Vertices are Float32Arrays
-    if (data.CollisionShapes && Array.isArray(data.CollisionShapes)) {
-        // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.CollisionShapes.length} collision shapes`);
-        data.CollisionShapes.forEach((shape: any) => {
-            // Shape 0 = Box (6 floats), Shape 2 = Sphere (3 floats)
-            const vertexCount = shape.Shape === 0 ? 6 : 3;
-            if (shape.Vertices) {
-                // Fix: Vertex1/Vertex2/Vertices in CollisionShape are vectors [x, y, z]
-                // and should NOT be flattened into a single large Float32Array if they are stored as arrays of arrays.
-                // However, war3-model MDX generator expects a flattened Float32Array for 'Vertices' field.
-                if (Array.isArray(shape.Vertices[0])) {
-                    // It's [[x,y,z], [x,y,z]] - flatten it
-                    const flattened = new Float32Array(shape.Vertices.length * 3);
-                    for (let i = 0; i < shape.Vertices.length; i++) {
-                        flattened[i * 3] = shape.Vertices[i][0];
-                        flattened[i * 3 + 1] = shape.Vertices[i][1];
-                        flattened[i * 3 + 2] = shape.Vertices[i][2];
-                    }
-                    shape.Vertices = flattened;
-                } else {
-                    shape.Vertices = toFloat32Array(shape.Vertices, vertexCount);
-                }
-            } else {
-                shape.Vertices = new Float32Array(vertexCount);
-            }
-            fixNode(shape, globalSeqCount); // CollisionShapes are also Nodes
-        });
-    }
-
-    // Fix all node-type arrays to ensure AnimVector data is valid
-    const nodeArrayNames = ['Bones', 'Helpers', 'Attachments', 'EventObjects', 'Lights', 'RibbonEmitters', 'ParticleEmitters', 'ParticleEmitters2', 'ParticleEmitterPopcorns'];
-    nodeArrayNames.forEach(arrayName => {
-        if (data[arrayName] && Array.isArray(data[arrayName])) {
-            data[arrayName].forEach((node: any) => fixNode(node, globalSeqCount));
-        }
-    });
-
-    // Fix Attachment-specific properties
-    if (data.Attachments && Array.isArray(data.Attachments)) {
-        data.Attachments.forEach((attachment: any) => {
-            // Ensure AttachmentID is defined
-            if (attachment.AttachmentID === undefined) {
-                attachment.AttachmentID = 0;
-            }
-            // Path must be a string (empty is fine for war3-model)
-            if (attachment.Path === undefined) {
-                attachment.Path = '';
-            }
-            // Visibility is an AnimVector - fix or remove if invalid
-            if (attachment.Visibility) {
-                attachment.Visibility = fixAnimVector(attachment.Visibility, 1, false, undefined, globalSeqCount);
-                if (!attachment.Visibility || !attachment.Visibility.Keys || attachment.Visibility.Keys.length === 0) {
-                    delete attachment.Visibility;
-                }
-            }
-        });
-    }
-
-    // Fix Geosets - ensure TotalGroupsCount is consistent with Groups array
-    if (data.Geosets && Array.isArray(data.Geosets)) {
-        // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Geosets.length} geosets`);
-        const materialCount = data.Materials?.length || 0;
-        data.Geosets.forEach((geoset: any, index: number) => {
-            const vertexCount = geoset.Vertices ? Math.floor(geoset.Vertices.length / 3) : 0;
-
-            // Normalize Groups to number[][]
-            if (geoset.Groups && Array.isArray(geoset.Groups)) {
-                geoset.Groups = geoset.Groups.map((group: any) => {
-                    const matrices = Array.isArray(group)
-                        ? group
-                        : Array.isArray(group?.matrices)
-                            ? group.matrices
-                            : [];
-                    return matrices.map((value: any) => {
-                        const num = Number(value);
-                        if (!Number.isFinite(num) || num < 0) return 0;
-                        return Math.floor(num);
-                    });
-                });
-            } else if (!geoset.Groups) {
-                geoset.Groups = [];
-            }
-
-            if (geoset.Groups.length === 0 && vertexCount > 0) {
-                geoset.Groups = [[0]];
-            }
-
-            // Recalculate TotalGroupsCount from Groups array
-            const totalCount = geoset.Groups.reduce((sum: number, group: any) => {
-                return sum + (Array.isArray(group) ? group.length : 0);
-            }, 0);
-            if (geoset.TotalGroupsCount !== totalCount) {                geoset.TotalGroupsCount = totalCount;
-            }
-
-            const maxGroupIndex = Math.max(0, geoset.Groups.length - 1);
-            const VertexGroupCtor = maxGroupIndex > 255 ? Uint16Array : Uint8Array;
-
-            // Ensure VertexGroup exists and uses a wide-enough integer type
-            if (!geoset.VertexGroup) {
-                geoset.VertexGroup = new VertexGroupCtor(vertexCount);
-            } else if (!(geoset.VertexGroup instanceof VertexGroupCtor)) {
-                geoset.VertexGroup = new VertexGroupCtor(Array.from(geoset.VertexGroup as unknown as ArrayLike<number>, (value) => Number(value) || 0));
-            }
-            if (geoset.VertexGroup.length !== vertexCount) {
-                const fixed = new VertexGroupCtor(vertexCount);
-                fixed.set(geoset.VertexGroup.subarray(0, vertexCount));
-                geoset.VertexGroup = fixed;
-            }
-            if (maxGroupIndex >= 0) {
-                for (let i = 0; i < geoset.VertexGroup.length; i++) {
-                    if (geoset.VertexGroup[i] > maxGroupIndex) {
-                        geoset.VertexGroup[i] = 0;
-                    }
-                }
-            }
-
-            // MaterialID bounds
-            if (typeof geoset.MaterialID !== 'number' || geoset.MaterialID < 0 || (materialCount > 0 && geoset.MaterialID >= materialCount)) {
-                geoset.MaterialID = 0;
-            }
-            if (geoset.SelectionGroup === undefined || geoset.SelectionGroup === null) {
-                geoset.SelectionGroup = 0;
-            }
-            if (geoset.Unselectable === undefined) {
-                geoset.Unselectable = false;
-            }
-
-            // Ensure Faces is Uint16Array
-            if (geoset.Faces && !(geoset.Faces instanceof Uint16Array)) {
-                geoset.Faces = toUint16Array(geoset.Faces);
-            }
-        });
-    }
-
-    // Fix Materials - ensure all layer properties are valid for MDX generator
-    if (data.Materials && Array.isArray(data.Materials)) {
-        // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Materials.length} materials`);
-        data.Materials.forEach((material: any, matIndex: number) => {
-            // Ensure material properties
-            if (material.PriorityPlane === undefined) material.PriorityPlane = 0;
-            if (material.RenderMode === undefined) material.RenderMode = 0;
-
-            // Rebuild RenderMode from boolean flags when provided
-            const renderMask = 1 | 16 | 32;
-            const baseRenderMode = typeof material.RenderMode === 'number' ? material.RenderMode : 0;
-            let renderMode = baseRenderMode & ~renderMask;
-            const applyRenderFlag = (value: any, bit: number) => {
-                if (value === true) {
-                    renderMode |= bit;
-                } else if (value === false) {
-                    // Explicitly cleared
-                } else if (baseRenderMode & bit) {
-                    renderMode |= bit;
-                }
-            };
-            applyRenderFlag(material.ConstantColor, 1);
-            const sortPrims = material.SortPrimsFarZ ?? material.SortPrimitivesFarZ;
-            applyRenderFlag(sortPrims, 16);
-            applyRenderFlag(material.FullResolution, 32);
-            material.RenderMode = renderMode;
-
-            if (material.Layers && Array.isArray(material.Layers)) {
-                material.Layers.forEach((layer: any, layerIndex: number) => {
-                    // FilterMode - required, default to 0 (None)
-                    let filterModeValue: any = layer.FilterMode;
-                    if (filterModeValue === undefined && layer.filterMode !== undefined) {
-                        filterModeValue = layer.filterMode;
-                    }
-                    if (filterModeValue && typeof filterModeValue === 'object' && 'value' in filterModeValue) {
-                        filterModeValue = (filterModeValue as any).value;
-                    }
-                    if (filterModeValue === undefined || filterModeValue === null) {
-                        filterModeValue = 0;
-                    }
-                    if (typeof filterModeValue === 'string') {
-                        const normalized = filterModeValue.replace(/\\s+/g, '').toLowerCase();
-                        const map: Record<string, number> = {
-                            none: 0,
-                            transparent: 1,
-                            blend: 2,
-                            additive: 3,
-                            addalpha: 4,
-                            modulate: 5,
-                            modulate2x: 6
-                        };
-                        if (/^\d+$/.test(normalized)) {
-                            filterModeValue = Number.parseInt(normalized, 10);
-                        } else {
-                            filterModeValue = map[normalized] ?? 0;
-                        }
-                    }
-                    if (typeof filterModeValue !== 'number' || !Number.isFinite(filterModeValue)) {
-                        filterModeValue = 0;
-                    }
-                    layer.FilterMode = Math.max(0, Math.min(6, Math.floor(filterModeValue)));
-
-                    // Shading - required, default to 0
-                    const shadingMask = 1 | 2 | 16 | 32 | 64 | 128;
-                    const baseShading = typeof layer.Shading === 'number' ? layer.Shading : 0;
-                    let shading = baseShading & ~shadingMask;
-                    const applyShadingFlag = (value: any, bit: number) => {
-                        if (value === true) {
-                            shading |= bit;
-                        } else if (value === false) {
-                            // Explicitly cleared
-                        } else if (baseShading & bit) {
-                            shading |= bit;
-                        }
-                    };
-                    applyShadingFlag(layer.Unshaded, 1);
-                    const sphereEnv = layer.SphereEnvMap ?? layer.SphereEnvironmentMap;
-                    applyShadingFlag(sphereEnv, 2);
-                    applyShadingFlag(layer.TwoSided, 16);
-                    applyShadingFlag(layer.Unfogged, 32);
-                    applyShadingFlag(layer.NoDepthTest, 64);
-                    applyShadingFlag(layer.NoDepthSet, 128);
-                    layer.Shading = shading;
-
-                    // TextureID - can be number or AnimVector, default to 0
-                    if (layer.TextureID === undefined || layer.TextureID === null) {
-                        layer.TextureID = 0;
-                    } else if (typeof layer.TextureID === 'string') {
-                        const parsedTextureId = Number(layer.TextureID);
-                        layer.TextureID = Number.isFinite(parsedTextureId) ? Math.floor(parsedTextureId) : 0;
-                    } else if (typeof layer.TextureID === 'object') {
-                        // Fix AnimVector Key Vectors to be Int32Array
-                        layer.TextureID = ensureAnimVector(layer.TextureID, 1, true, undefined, globalSeqCount) ?? layer.TextureID;
-                    }
-                    if (typeof layer.TextureID === 'number') {
-                        const texCount = data.Textures?.length || 0;
-                        if (texCount > 0 && (layer.TextureID < 0 || layer.TextureID >= texCount)) {
-                            layer.TextureID = 0;
-                        }
-                    }
-
-                    // TVertexAnimId - can be null or number, convert undefined to null
-                    if (layer.TVertexAnimId === undefined && layer.TextureAnimationId !== undefined) {
-                        layer.TVertexAnimId = layer.TextureAnimationId;
-                    }
-                    if (layer.TVertexAnimId === undefined) {
-                        layer.TVertexAnimId = null;
-                    }
-                    if (typeof layer.TVertexAnimId === 'number') {
-                        const tvAnimCount = data.TextureAnims?.length || 0;
-                        if (layer.TVertexAnimId < 0 || (tvAnimCount > 0 && layer.TVertexAnimId >= tvAnimCount)) {
-                            layer.TVertexAnimId = null;
-                        }
-                    }
-
-                    // CoordId - required, default to 0
-                    if (layer.CoordId === undefined || layer.CoordId === null) {
-                        layer.CoordId = 0;
-                    }
-
-                    // Alpha - required, default to 1
-                    if (layer.Alpha === undefined || layer.Alpha === null) {
-                        layer.Alpha = 1;
-                    } else if (typeof layer.Alpha === 'object') {
-                        // Fix AnimVector Key Vectors to be Float32Array
-                        layer.Alpha = ensureAnimVector(layer.Alpha, 1, false, undefined, globalSeqCount) ?? layer.Alpha;
-                    } else if (typeof layer.Alpha === 'number') {
-                        if (layer.Alpha < 0) layer.Alpha = 0;
-                        if (layer.Alpha > 1) layer.Alpha = 1;
-                    }
-
-                    // Optional HD/extended layer properties
-                    if (layer.EmissiveGain !== undefined && layer.EmissiveGain !== null) {
-                        if (typeof layer.EmissiveGain === 'object') {
-                            layer.EmissiveGain = ensureAnimVector(layer.EmissiveGain, 1, false, undefined, globalSeqCount) ?? layer.EmissiveGain;
-                        }
-                    }
-                    if (layer.FresnelColor !== undefined && layer.FresnelColor !== null) {
-                        if (layer.FresnelColor instanceof Float32Array) {
-                            // ok
-                        } else if (layer.FresnelColor && typeof layer.FresnelColor === 'object' && Array.isArray(layer.FresnelColor.Keys)) {
-                            layer.FresnelColor = fixAnimVector(layer.FresnelColor, 3, false, [1, 1, 1], globalSeqCount);
-                        } else {
-                            layer.FresnelColor = toFloat32Array(layer.FresnelColor, 3);
-                        }
-                    }
-                    if (layer.FresnelOpacity !== undefined && layer.FresnelOpacity !== null) {
-                        if (typeof layer.FresnelOpacity === 'object') {
-                            layer.FresnelOpacity = ensureAnimVector(layer.FresnelOpacity, 1, false, undefined, globalSeqCount) ?? layer.FresnelOpacity;
-                        }
-                    }
-                    if (layer.FresnelTeamColor !== undefined && layer.FresnelTeamColor !== null) {
-                        if (typeof layer.FresnelTeamColor === 'object') {
-                            layer.FresnelTeamColor = ensureAnimVector(layer.FresnelTeamColor, 1, false, undefined, globalSeqCount) ?? layer.FresnelTeamColor;
-                        }
-                    }
-
-                    const extraTextureIds = [
-                        'NormalTextureID',
-                        'ORMTextureID',
-                        'EmissiveTextureID',
-                        'TeamColorTextureID',
-                        'ReflectionsTextureID'
-                    ];
-                    extraTextureIds.forEach((key) => {
-                        if (layer[key] === undefined || layer[key] === null) return;
-                        if (typeof layer[key] === 'object') {
-                            layer[key] = ensureAnimVector(layer[key], 1, true, undefined, globalSeqCount) ?? layer[key];
-                        }
-                        if (typeof layer[key] === 'number') {
-                            const texCount = data.Textures?.length || 0;
-                            if (texCount > 0 && (layer[key] < 0 || layer[key] >= texCount)) {
-                                layer[key] = 0;
-                            }
-                        }
-                    });
-
-                    // console.log(`[MainLayout] Material[${matIndex}].Layer[${layerIndex}]: FilterMode=${layer.FilterMode}, Shading=${layer.Shading}, TextureID=${typeof layer.TextureID === 'number' ? layer.TextureID : 'AnimVector'}, TVertexAnimId=${layer.TVertexAnimId}, CoordId=${layer.CoordId}, Alpha=${typeof layer.Alpha === 'number' ? layer.Alpha : 'AnimVector'}`);
-                });
-            }
-        });
-    }
-
-    repairClassicModelData(data);
-
-    return data;
-}
-
-/**
- * Validate model data before export to catch potential format errors.
- * Returns an array of warning/error messages, empty array if valid.
- */
-function validateModelData(data: any): string[] {
-    const errors: string[] = [];
-
-    if (!data) {
-        errors.push('Model data is null or undefined');
-        return errors;
-    }
-
-    if (typeof data.Version !== 'number' || data.Version < 800) {
-        errors.push(`Invalid model Version=${data.Version}; classic export requires version 800 or higher`);
-    }
-
-    // 1. Check ObjectId uniqueness
-    const allNodeArrays = [
-        ...(data.Bones || []),
-        ...(data.Lights || []),
-        ...(data.Helpers || []),
-        ...(data.Attachments || []),
-        ...(data.ParticleEmitters || []),
-        ...(data.ParticleEmitters2 || []),
-        ...(data.RibbonEmitters || []),
-        ...(data.EventObjects || []),
-        ...(data.CollisionShapes || []),
-        ...(data.ParticleEmitterPopcorns || []) // Added Popcorn emitters
-    ];
-
-    const objectIds = allNodeArrays.map((n: any) => n.ObjectId);
-    const uniqueIds = new Set(objectIds);
-    if (uniqueIds.size !== objectIds.length) {
-        errors.push(`Duplicate ObjectIds detected: ${objectIds.length} nodes but only ${uniqueIds.size} unique IDs`);
-    }
-
-    // 2. Check for gaps in ObjectId sequence
-    const sortedIds = [...uniqueIds].filter(id => typeof id === 'number').sort((a, b) => a - b);
-    for (let i = 0; i < sortedIds.length; i++) {
-        if (sortedIds[i] !== i) {
-            errors.push(`ObjectId sequence has gaps: expected ${i}, found ${sortedIds[i]}`);
-            break;
-        }
-    }
-
-    // 3. Validate Parent references
-    const validIds = new Set(sortedIds);
-    validIds.add(-1); // -1 is valid (root)
-    for (const node of allNodeArrays) {
-        if (node.Parent !== undefined && node.Parent !== null && !validIds.has(node.Parent)) {
-            errors.push(`Node "${node.Name}" (ObjectId=${node.ObjectId}) has invalid Parent=${node.Parent}`);
-        }
-    }
-
-    // 4. Check PivotPoints count
-    const expectedPivotCount = sortedIds.length > 0 ? sortedIds[sortedIds.length - 1] + 1 : 0;
-    const actualPivotCount = data.PivotPoints?.length || 0;
-    if (actualPivotCount !== expectedPivotCount) {
-        errors.push(`PivotPoints count mismatch: expected ${expectedPivotCount}, found ${actualPivotCount}`);
-    }
-
-    // 5. Check node type order (WC3 format requirement)
-    const typeOrder = ['Bone', 'Light', 'Helper', 'Attachment', 'ParticleEmitter', 'ParticleEmitter2', 'RibbonEmitter', 'EventObject', 'CollisionShape', 'ParticleEmitterPopcorn'];
-    let lastTypeIndex = -1;
-    let lastObjectId = -1;
-
-    for (const typeName of typeOrder) {
-        const arrayName = typeName === 'Bone' ? 'Bones' :
-            typeName === 'Light' ? 'Lights' :
-                typeName === 'Helper' ? 'Helpers' :
-                    typeName === 'Attachment' ? 'Attachments' :
-                        typeName === 'ParticleEmitter' ? 'ParticleEmitters' :
-                            typeName === 'ParticleEmitter2' ? 'ParticleEmitters2' :
-                                typeName === 'RibbonEmitter' ? 'RibbonEmitters' :
-                                    typeName === 'EventObject' ? 'EventObjects' :
-                                        typeName === 'CollisionShape' ? 'CollisionShapes' :
-                                            'ParticleEmitterPopcorns'; // Added Popcorn
-
-        const nodes = data[arrayName] || [];
-        for (const node of nodes) {
-            if (node.ObjectId < lastObjectId) {
-                // This is okay if it's within the same type, but not across types
-            }
-            lastObjectId = Math.max(lastObjectId, node.ObjectId);
-        }
-    }
-
-    // 6. Check for missing required fields
-    for (const node of allNodeArrays) {
-        if (node.ObjectId === undefined || node.ObjectId === null) {
-            errors.push(`Node "${node.Name}" is missing ObjectId`);
-        }
-        if (!node.PivotPoint && !data.PivotPoints?.[node.ObjectId]) {
-            errors.push(`Node "${node.Name}" (ObjectId=${node.ObjectId}) is missing PivotPoint`);
-        }
-    }
-
-    // 7. Check Geoset integrity
-    if (data.Geosets) {
-        for (let i = 0; i < data.Geosets.length; i++) {
-            const geoset = data.Geosets[i];
-            if (!geoset.Vertices || geoset.Vertices.length === 0) {
-                errors.push(`Geoset ${i} has no vertices`);
-            }
-            if (!geoset.Faces || geoset.Faces.length === 0) {
-                errors.push(`Geoset ${i} has no faces`);
-            }
-            const vertexCount = geoset.Vertices ? Math.floor(geoset.Vertices.length / 3) : 0;
-            if (geoset.Vertices && geoset.Vertices.length % 3 !== 0) {
-                errors.push(`Geoset ${i} vertex buffer length is not divisible by 3`);
-            }
-            if (geoset.Faces && geoset.Faces.length % 3 !== 0) {
-                errors.push(`Geoset ${i} face index count is not divisible by 3`);
-            }
-            if (geoset.VertexGroup && geoset.VertexGroup.length !== vertexCount) {
-                errors.push(`Geoset ${i} VertexGroup length mismatch (expected ${vertexCount}, found ${geoset.VertexGroup.length})`);
-            }
-            if (geoset.Groups && geoset.Groups.length > 256) {
-                errors.push(`Geoset ${i} has ${geoset.Groups.length} matrix groups; MDX800 supports at most 256`);
-            }
-            if (geoset.Groups && geoset.VertexGroup) {
-                const maxGroupIndex = geoset.Groups.length - 1;
-                if (maxGroupIndex >= 0) {
-                    for (let v = 0; v < geoset.VertexGroup.length; v++) {
-                        if (geoset.VertexGroup[v] > maxGroupIndex) {
-                            errors.push(`Geoset ${i} VertexGroup index out of range at vertex ${v}`);
-                            break;
-                        }
-                    }
-                }
-            }
-            if (typeof geoset.MaterialID === 'number') {
-                const materialCount = data.Materials?.length || 0;
-                if (materialCount > 0 && (geoset.MaterialID < 0 || geoset.MaterialID >= materialCount)) {
-                    errors.push(`Geoset ${i} MaterialID out of range`);
-                }
-            }
-            // Check bone references in Groups
-            if (geoset.Groups) {
-                for (let g = 0; g < geoset.Groups.length; g++) {
-                    const group = geoset.Groups[g];
-                    if (Array.isArray(group)) {
-                        for (const boneId of group) {
-                            if (!validIds.has(boneId) && boneId !== -1) {
-                                errors.push(`Geoset ${i} Group ${g} references invalid bone ObjectId=${boneId}`);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // 8. Check texture paths
-    if (data.Textures && Array.isArray(data.Textures)) {
-        for (let i = 0; i < data.Textures.length; i++) {
-            const tex = data.Textures[i];
-            const image = typeof tex?.Image === 'string' ? tex.Image : '';
-            const replaceableId = Number(tex?.ReplaceableId ?? 0);
-            if ((!image || image.trim() === '') && replaceableId === 0) {
-                errors.push(`Texture ${i} has empty Image path (Image="${tex?.Image ?? ''}", Path="${tex?.Path ?? ''}")`);
-            }
-        }
-    }
-
-    // 9. Check Sequences integrity
-    if (data.Sequences && Array.isArray(data.Sequences)) {
-        data.Sequences.forEach((seq: any, index: number) => {
-            if (!seq.Interval || seq.Interval.length !== 2) {
-                errors.push(`Sequence ${index} "${seq.Name || ''}" has invalid Interval`);
-                return;
-            }
-            const start = Number(seq.Interval[0]);
-            const end = Number(seq.Interval[1]);
-            if (!Number.isFinite(start) || !Number.isFinite(end)) {
-                errors.push(`Sequence ${index} "${seq.Name || ''}" Interval has non-numeric values`);
-            } else if (start > end) {
-                errors.push(`Sequence ${index} "${seq.Name || ''}" Interval start > end`);
-            }
-        });
-    }
-
-    return errors;
-}
-
-
-
-/**
- * Utility to strip heavy typed arrays (Vertices, Faces, Normals) from model data
- * to reduce IPC overhead when tool windows only need metadata/structure.
- */
-function stripHeavyModelData(model: any) {
-    if (!model) return null;
-    try {
-        const stripped: any = { ...model };
-        if (model.Geosets) {
-            stripped.Geosets = model.Geosets.map((g: any) => ({
-                ...g,
-                Vertices: undefined,
-                Faces: undefined,
-                Normals: undefined,
-                TVertices: undefined,
-                VertexGroups: undefined,
-                MatrixGroups: undefined,
-                MatrixIndices: undefined
-            }));
-        }
-        return stripped;
-    } catch (e) {
-        console.error('[MainLayout] Failed to strip model data', e);
-        return model;
-    }
-}
-
-/**
- * Utility to strip heavy typed arrays (Vertices, Faces, Normals) from geoset data
- */
-function stripGeosetData(geosets: any[]) {
-    if (!geosets) return [];
-    try {
-        return geosets.map((g: any, index: number) => ({
-            ...g,
-            index, // Keep track of original index
-            Vertices: undefined,
-            Faces: undefined,
-            Normals: undefined,
-            TVertices: undefined,
-            VertexGroups: undefined,
-            MatrixGroups: undefined,
-            MatrixIndices: undefined
-        }));
-    } catch (e) {
-        console.error('[MainLayout] Failed to strip geoset data', e);
-        return geosets;
-    }
-}
-
-const GEOSET_METADATA_MERGE_KEYS = ['MaterialID', 'SelectionGroup'] as const
-
-function extractGeosetMetadataPatch(incomingGeoset: any) {
-    const patch: Record<string, unknown> = {}
-    for (const key of GEOSET_METADATA_MERGE_KEYS) {
-        if (incomingGeoset && incomingGeoset[key] !== undefined) {
-            patch[key] = incomingGeoset[key]
-        }
-    }
-    return patch
-}
-
-function mergeGeosetMetadata(existingGeosets: any[] | undefined, incomingGeosets: any[] | undefined) {
-    if (!Array.isArray(incomingGeosets)) return undefined
-    if (!Array.isArray(existingGeosets) || existingGeosets.length === 0) {
-        return incomingGeosets.map((geoset) => extractGeosetMetadataPatch(geoset))
-    }
-
-    const merged = existingGeosets.map((geoset) => geoset)
-    incomingGeosets.forEach((incomingGeoset, fallbackIndex) => {
-        const targetIndex = Number.isInteger(incomingGeoset?.index) ? incomingGeoset.index : fallbackIndex
-        if (targetIndex < 0 || targetIndex >= merged.length) return
-        const baseGeoset = merged[targetIndex]
-        if (!baseGeoset) return
-        const incomingRest = extractGeosetMetadataPatch(incomingGeoset)
-        merged[targetIndex] = {
-            ...baseGeoset,
-            ...incomingRest
-        }
-    })
-    return merged
-}
-
-function buildFallbackNormals(vertexCount: number): Float32Array {
-    const normals = new Float32Array(vertexCount * 3)
-    for (let i = 2; i < normals.length; i += 3) {
-        normals[i] = 1
-    }
-    return normals
-}
-
-/**
- * Utility to strip heavy keyframe data from nodes to reduce IPC overhead.
- * Useful for tools that only need node hierarchy, names, and ObjectIds.
- */
-function stripNodeData(nodes: any[]) {
-    if (!nodes) return [];
-    try {
-        return nodes.map((n: any) => ({
-            ...n,
-            Translation: undefined,
-            Rotation: undefined,
-            Scaling: undefined,
-            Visibility: undefined,
-            // Keep essential metadata
-            ObjectId: n.ObjectId,
-            Parent: n.Parent,
-            Name: n.Name,
-            type: n.type
-        }));
-    } catch (e) {
-        console.error('[MainLayout] Failed to strip node data', e);
-        return nodes;
-    }
-}
-
 const MainLayout: React.FC = () => {
     // Zustand stores
     const modelPath = useModelStore(state => state.modelPath)
@@ -1803,6 +94,30 @@ const MainLayout: React.FC = () => {
     const setZustandModelData = useModelStore(state => state.setModelData)
     const addTab = useModelStore(state => state.addTab)
     const setZustandLoading = useModelStore(state => state.setLoading)
+    const {
+        showAbout,
+        setShowAbout,
+        showDebugConsole,
+        setShowDebugConsole,
+        activationStatus,
+        activationCode,
+        setActivationCode,
+        activationLoading,
+        activationError,
+        checkUpdate,
+        showChangelog,
+        activate,
+    } = useAppShellController()
+    const {
+        recalculateNormals,
+        recalculateExtents,
+        repairModel,
+        addDeathAnimation,
+        removeLights,
+        mergeSameMaterials,
+        cleanUnusedMaterials,
+        cleanUnusedTextures,
+    } = useModelToolsController()
     const showCreateNodeDialog = useUIStore(state => state.showCreateNodeDialog);
     const setCreateNodeDialogVisible = useUIStore(state => state.setCreateNodeDialogVisible);
     const showTransformModelDialog = useUIStore(state => state.showTransformModelDialog);
@@ -1889,18 +204,6 @@ const MainLayout: React.FC = () => {
         }
         setPlaying(true)
     }, [isLooping, setLooping, isPlaying, getPlaybackInterval, currentFrame, setFrame, renderer, setPlaying])
-    // Utility to strip heavy typed arrays from geosets before RPC broadcast
-    const stripGeosetData = (geosets: any[] | undefined) => {
-        if (!geosets || !Array.isArray(geosets)) return [];
-        return geosets.map((g, index) => ({
-            index,
-            MaterialID: g.MaterialID,
-            SelectionGroup: g.SelectionGroup,
-            vertexCount: g.Vertices ? g.Vertices.length / 3 : 0,
-            faceCount: g.Faces ? g.Faces.length / 3 : 0,
-            // Exclude huge arrays: Vertices, Faces, Normals, TVertices, Tangents
-        }));
-    };
     const toRpcSafeNodeSnapshot = (value: any): any => {
         if (value == null) return value
         if (ArrayBuffer.isView(value)) {
@@ -1921,7 +224,6 @@ const MainLayout: React.FC = () => {
 
     const [showGeosetModal, setShowGeosetModal] = useState<boolean>(false)
     const [showModelOptimizeModal, setShowModelOptimizeModal] = useState<boolean>(false)
-    const [showAbout, setShowAbout] = useState<boolean>(false)
     const [modelOptimizeRunning, setModelOptimizeRunning] = useState<boolean>(false)
     const [modelOptimizeLastResult, setModelOptimizeLastResult] = useState<string>('')
     const modelOptimizeRunningRef = useRef(false)
@@ -1931,54 +233,18 @@ const MainLayout: React.FC = () => {
     const modelData = useModelStore(state => state.modelData)
     const materialManagerPreview = useModelStore(state => state.materialManagerPreview)
     const nodeEditorPreview = useModelStore(state => state.nodeEditorPreview)
+    const globalColorAdjustSettings = useGlobalColorAdjustStore(state => state.settings)
     const viewerModelData = useMemo(
-        () => mergeNodeEditorPreview(mergeMaterialManagerPreview(modelData, materialManagerPreview), nodeEditorPreview),
-        [modelData, materialManagerPreview, nodeEditorPreview]
+        () => applyGlobalColorAdjustmentsToModel(
+            mergeNodeEditorPreview(mergeMaterialManagerPreview(modelData, materialManagerPreview), nodeEditorPreview),
+            globalColorAdjustSettings
+        ),
+        [modelData, materialManagerPreview, nodeEditorPreview, globalColorAdjustSettings]
     )
     const standaloneWarmupStartedRef = useRef(false)
-    const textureManagerSnapshotCacheRef = useRef({
-        snapshotVersion: 0,
-        snapshot: {
-            textures: [],
-            materials: [],
-            geosets: [],
-            globalSequences: [],
-            modelPath: undefined,
-        } as TextureManagerSnapshot,
-        sourceRefs: {
-            textures: null as any[] | null,
-            materials: null as any[] | null,
-            geosets: null as any[] | null,
-            globalSequences: null as any[] | null,
-            modelPath: undefined as string | null | undefined,
-        },
-    })
-    const materialManagerSnapshotCacheRef = useRef({
-        snapshotVersion: 0,
-        snapshot: {
-            materials: [],
-            textures: [],
-            geosets: [],
-            globalSequences: [],
-            sequences: [],
-            textureAnims: [],
-            modelPath: undefined,
-        } as MaterialManagerSnapshot,
-        sourceRefs: {
-            materials: null as any[] | null,
-            textures: null as any[] | null,
-            geosets: null as any[] | null,
-            globalSequences: null as any[] | null,
-            sequences: null as any[] | null,
-            textureAnims: null as any[] | null,
-            modelPath: undefined as string | null | undefined,
-        },
-    })
-    const standaloneSnapshotDispatchRef = useRef({
-        textureManager: -1,
-        materialManager: -1,
-        nodeEditor: -1,
-    })
+    const toolWindowSnapshotCacheRef = useRef(new ToolWindowSnapshotCache())
+    const toolWindowBroadcastCoordinatorRef = useRef(new ToolWindowBroadcastCoordinator())
+    const cameraManagerBroadcasterRef = useRef<(state: { cameras: unknown[]; globalSequences: number[] }) => void>(() => { })
 
     const nodeEditorSnapshotCacheRef = useRef({
         snapshotVersion: 0,
@@ -1992,6 +258,7 @@ const MainLayout: React.FC = () => {
         if (!session) {
             return {
                 snapshotVersion: 0,
+                sessionNonce: 0,
                 kind: '',
                 objectId: -1,
                 node: null,
@@ -2013,7 +280,7 @@ const MainLayout: React.FC = () => {
         } catch {
             nodeJson = String(Date.now())
         }
-        const sessionKey = `${session.kind}:${session.objectId}`
+        const sessionKey = `${session.kind}:${session.objectId}:${session.sessionNonce}`
         if (cache.sessionKey !== sessionKey || cache.lastNodeJson !== nodeJson) {
             cache.snapshotVersion += 1
             cache.sessionKey = sessionKey
@@ -2030,6 +297,7 @@ const MainLayout: React.FC = () => {
         }
         return {
             snapshotVersion: cache.snapshotVersion,
+            sessionNonce: session.sessionNonce,
             kind: session.kind,
             objectId: session.objectId,
             node: cloned,
@@ -2047,102 +315,26 @@ const MainLayout: React.FC = () => {
 
     const ensureTextureManagerSnapshotState = useCallback((): TextureManagerRpcState => {
         const liveModelState = useModelStore.getState()
-        const liveModelData = liveModelState.modelData
-        const preview = liveModelState.materialManagerPreview
-        const cache = textureManagerSnapshotCacheRef.current
-        const nextSourceRefs = {
-            textures: preview?.textures ?? liveModelData?.Textures ?? null,
-            materials: preview?.materials ?? liveModelData?.Materials ?? null,
-            geosets: preview?.geosets ?? liveModelData?.Geosets ?? null,
-            globalSequences: toGlobalSequenceDurations(liveModelData?.GlobalSequences),
+        const selectionState = useSelectionStore.getState()
+        return toolWindowSnapshotCacheRef.current.buildTextureManagerState({
+            modelData: liveModelState.modelData,
             modelPath: liveModelState.modelPath,
-        }
-
-        const snapshotChanged =
-            cache.sourceRefs.textures !== nextSourceRefs.textures ||
-            cache.sourceRefs.materials !== nextSourceRefs.materials ||
-            cache.sourceRefs.geosets !== nextSourceRefs.geosets ||
-            cache.sourceRefs.globalSequences !== nextSourceRefs.globalSequences ||
-            cache.sourceRefs.modelPath !== nextSourceRefs.modelPath
-
-        if (snapshotChanged) {
-            cache.snapshotVersion += 1
-            cache.sourceRefs = nextSourceRefs
-            cache.snapshot = {
-                textures: preview?.textures ?? liveModelData?.Textures ?? [],
-                materials: preview?.materials ?? liveModelData?.Materials ?? [],
-                geosets: stripGeosetData(preview?.geosets ?? liveModelData?.Geosets),
-                globalSequences: toGlobalSequenceDurations(liveModelData?.GlobalSequences),
-                modelPath: liveModelState.modelPath,
-            }
-            markStandalonePerf('texture_snapshot_cached', {
-                snapshotVersion: cache.snapshotVersion,
-                textureCount: cache.snapshot.textures.length,
-                materialCount: cache.snapshot.materials.length,
-                geosetCount: cache.snapshot.geosets.length,
-            })
-        }
-
-        return {
-            snapshotVersion: cache.snapshotVersion,
-            snapshot: cache.snapshot,
-            pickedGeosetIndex: useSelectionStore.getState().pickedGeosetIndex ?? null,
-            selectedMaterialIndex: useSelectionStore.getState().selectedMaterialIndex ?? null,
-            selectedMaterialLayerIndex: useSelectionStore.getState().selectedMaterialLayerIndex ?? null,
-        }
+            materialManagerPreview: liveModelState.materialManagerPreview,
+            selection: selectionState,
+            markPerf: markStandalonePerf,
+        })
     }, [])
 
     const ensureMaterialManagerSnapshotState = useCallback((): MaterialManagerRpcState => {
         const liveModelState = useModelStore.getState()
-        const liveModelData = liveModelState.modelData
-        const preview = liveModelState.materialManagerPreview
-        const cache = materialManagerSnapshotCacheRef.current
-        const nextSourceRefs = {
-            materials: preview?.materials ?? liveModelData?.Materials ?? null,
-            textures: preview?.textures ?? liveModelData?.Textures ?? null,
-            geosets: preview?.geosets ?? liveModelData?.Geosets ?? null,
-            globalSequences: toGlobalSequenceDurations(liveModelData?.GlobalSequences),
-            sequences: liveModelData?.Sequences || null,
-            textureAnims: liveModelData?.TextureAnims || null,
+        const selectionState = useSelectionStore.getState()
+        return toolWindowSnapshotCacheRef.current.buildMaterialManagerState({
+            modelData: liveModelState.modelData,
             modelPath: liveModelState.modelPath,
-        }
-
-        const snapshotChanged =
-            cache.sourceRefs.materials !== nextSourceRefs.materials ||
-            cache.sourceRefs.textures !== nextSourceRefs.textures ||
-            cache.sourceRefs.geosets !== nextSourceRefs.geosets ||
-            cache.sourceRefs.globalSequences !== nextSourceRefs.globalSequences ||
-            cache.sourceRefs.sequences !== nextSourceRefs.sequences ||
-            cache.sourceRefs.textureAnims !== nextSourceRefs.textureAnims ||
-            cache.sourceRefs.modelPath !== nextSourceRefs.modelPath
-
-        if (snapshotChanged) {
-            cache.snapshotVersion += 1
-            cache.sourceRefs = nextSourceRefs
-            cache.snapshot = {
-                materials: preview?.materials ?? liveModelData?.Materials ?? [],
-                textures: preview?.textures ?? liveModelData?.Textures ?? [],
-                geosets: stripGeosetData(preview?.geosets ?? liveModelData?.Geosets),
-                globalSequences: toGlobalSequenceDurations(liveModelData?.GlobalSequences),
-                sequences: liveModelData?.Sequences || [],
-                textureAnims: liveModelData?.TextureAnims || [],
-                modelPath: liveModelState.modelPath,
-            }
-            markStandalonePerf('material_snapshot_cached', {
-                snapshotVersion: cache.snapshotVersion,
-                materialCount: cache.snapshot.materials.length,
-                textureCount: cache.snapshot.textures.length,
-                geosetCount: cache.snapshot.geosets.length,
-            })
-        }
-
-        return {
-            snapshotVersion: cache.snapshotVersion,
-            snapshot: cache.snapshot,
-            pickedGeosetIndex: useSelectionStore.getState().pickedGeosetIndex ?? null,
-            selectedMaterialIndex: useSelectionStore.getState().selectedMaterialIndex ?? null,
-            selectedMaterialLayerIndex: useSelectionStore.getState().selectedMaterialLayerIndex ?? null,
-        }
+            materialManagerPreview: liveModelState.materialManagerPreview,
+            selection: selectionState,
+            markPerf: markStandalonePerf,
+        })
     }, [])
     // RPC Server for modelOptimize standalone window
     const getModelOptimizeState = useCallback(() => {
@@ -2197,11 +389,11 @@ const MainLayout: React.FC = () => {
                     }
 
                     const snapshotAfter = result.model;
-                    setZustandModelData(snapshotAfter, currentPath || null);
-                    useHistoryStore.getState().push({
+                    modelDocumentCommandHandler.replaceModelData({
                         name: '模型多边形优化',
-                        undo: () => setZustandModelData(structuredClone(snapshotBefore), currentPath || null),
-                        redo: () => setZustandModelData(structuredClone(snapshotAfter), currentPath || null)
+                        before: snapshotBefore,
+                        after: snapshotAfter,
+                        path: currentPath || null,
                     });
 
                     const elapsed = Math.round(performance.now() - startedAt);
@@ -2225,11 +417,12 @@ const MainLayout: React.FC = () => {
                     }
 
                     const snapshotAfter = result.model;
-                    setZustandModelData(snapshotAfter, currentPath || null, { skipAutoRecalculate: true });
-                    useHistoryStore.getState().push({
+                    modelDocumentCommandHandler.replaceModelData({
                         name: '模型关键帧优化',
-                        undo: () => setZustandModelData(structuredClone(snapshotBefore), currentPath || null, { skipAutoRecalculate: true }),
-                        redo: () => setZustandModelData(structuredClone(snapshotAfter), currentPath || null, { skipAutoRecalculate: true })
+                        before: snapshotBefore,
+                        after: snapshotAfter,
+                        path: currentPath || null,
+                        options: { skipAutoRecalculate: true },
                     });
 
                     const elapsed = Math.round(performance.now() - startedAt);
@@ -2295,7 +488,7 @@ const MainLayout: React.FC = () => {
 
             try {
                 // Read model2 directly from disk in MainLayout to prevent RPC serialization from destroying TypedArrays
-                const buffer = await readFile(payload.model2Path);
+                const buffer = await desktopGateway.readFile(payload.model2Path);
                 const arrayBuffer = toArrayBuffer(buffer as ArrayBuffer | Uint8Array);
                 const model2Data = parseModelBuffer(arrayBuffer, payload.model2Path);
 
@@ -2314,7 +507,7 @@ const MainLayout: React.FC = () => {
                                     try {
                                         const srcPath = dir2.endsWith('\\') || dir2.endsWith('/') ? `${dir2}${tex.Image}` : `${dir2}\\${tex.Image}`;
                                         const destPath = dir1.endsWith('\\') || dir1.endsWith('/') ? `${dir1}${tex.Image}` : `${dir1}\\${tex.Image}`;
-                                        await copyFile(srcPath, destPath);                                    } catch(e) {
+                                        await desktopGateway.copyFile(srcPath, destPath);                                    } catch(e) {
                                         // Ignore, might be an MPQ texture or already exists
                                     }
                                 }
@@ -2325,19 +518,12 @@ const MainLayout: React.FC = () => {
                     mergedModel = mergeAnimations(currentModel, model2Data);
                 }
 
-                setZustandModelData(mergedModel, currentPath || null);
-                // Force renderer to fully reload the model (new geosets/bones need re-parsing)
-                useModelStore.setState(s => ({ rendererReloadTrigger: s.rendererReloadTrigger + 1 }));
-                useHistoryStore.getState().push({
+                modelDocumentCommandHandler.replaceModelData({
                     name: '模型合并',
-                    undo: () => {
-                        setZustandModelData(snapshotBefore ? structuredClone(snapshotBefore) : null, currentPath || null);
-                        useModelStore.setState(s => ({ rendererReloadTrigger: s.rendererReloadTrigger + 1 }));
-                    },
-                    redo: () => {
-                        setZustandModelData(structuredClone(mergedModel), currentPath || null);
-                        useModelStore.setState(s => ({ rendererReloadTrigger: s.rendererReloadTrigger + 1 }));
-                    }
+                    before: snapshotBefore,
+                    after: mergedModel,
+                    path: currentPath || null,
+                    forceRendererReload: true,
                 });
                 showMessage('success', '模型合并', '模型合并完成');
             } catch (err) {
@@ -2408,24 +594,7 @@ const MainLayout: React.FC = () => {
 
 
     useEffect(() => {
-        if (!modelData || standaloneWarmupStartedRef.current) return
-
-        standaloneWarmupStartedRef.current = true
-
-        let disposed = false
-        let cleanup: (() => void) | undefined
-
-        void import('../utils/standaloneWarmup').then(({ scheduleStandaloneWarmup }) => {
-            if (disposed) {
-                return
-            }
-            cleanup = scheduleStandaloneWarmup()
-        })
-
-        return () => {
-            disposed = true
-            cleanup?.()
-        }
+        return toolWindowOrchestrator.scheduleStandaloneWarmup(!!modelData, standaloneWarmupStartedRef)
     }, [modelData]);
     // Persistent settings
     // Persistent settings replaced by store
@@ -2472,6 +641,7 @@ const MainLayout: React.FC = () => {
     const isSavingRef = useRef(false); // Track if a save operation is in progress
     const isExternalModelDragRef = useRef(false);
     const bypassClosePromptRef = useRef(false);
+    const lastGlobalColorModelPathRef = useRef<string | null | undefined>(undefined);
     const panelStateRef = useRef({
         activeEditor: null as string | null,
         showGeosetAnimModal: false,
@@ -2524,6 +694,16 @@ const MainLayout: React.FC = () => {
         showAbout
     ])
 
+    useEffect(() => {
+        const nextModelPath = modelPath || null;
+        const previousModelPath = lastGlobalColorModelPathRef.current;
+        lastGlobalColorModelPathRef.current = nextModelPath;
+        if (previousModelPath === undefined || previousModelPath === nextModelPath) {
+            return;
+        }
+        useGlobalColorAdjustStore.getState().resetSettings();
+    }, [modelPath])
+
     // Intercept native window close during save operations and reset state on refresh
     useEffect(() => {
         if (hasResetStore.current) return;
@@ -2536,22 +716,20 @@ const MainLayout: React.FC = () => {
             const { useSelectionStore } = await import('../store/selectionStore');
             const { useUIStore } = await import('../store/uiStore');
             const { useRendererStore } = await import('../store/rendererStore');
-            const { useHistoryStore } = await import('../store/historyStore');
             const { useMessageStore } = await import('../store/messageStore');
 
             useModelStore.getState().reset();
             useSelectionStore.getState().reset();
             useUIStore.getState().reset();
             useRendererStore.getState().reset();
-            useHistoryStore.getState().clear();
+            historyCommandService.clear();
             useMessageStore.getState().clearAll();        };
 
         doReset();
 
         let unlisten: (() => void) | undefined;
         (async () => {
-            const win = getCurrentWindow();
-            unlisten = await win.onCloseRequested(async (event) => {
+            unlisten = await windowGateway.onCurrentCloseRequested(async (event) => {
                 if (bypassClosePromptRef.current) return;
                 if (isSavingRef.current) {
                     event.preventDefault();
@@ -2564,7 +742,7 @@ const MainLayout: React.FC = () => {
                     const shouldClose = await showConfirm('未保存的修改', '模型已修改，是否保存后再退出？');
                     if (!shouldClose) return;
                     bypassClosePromptRef.current = true;
-                    getCurrentWindow().close();
+                    void windowGateway.closeCurrentWindow();
                 }
             });
         })();
@@ -2578,10 +756,9 @@ const MainLayout: React.FC = () => {
     useEffect(() => {
         const checkCliCopyPath = async () => {
             try {
-                const { invoke } = await import('@tauri-apps/api/core');
-                const copyPath = await invoke<string | null>('get_cli_copy_path');
+                const copyPath = await desktopGateway.invoke<string | null>('get_cli_copy_path');
                 if (copyPath) {
-                    const result = await invoke<string>('copy_model_with_textures', { modelPath: copyPath });
+                    const result = await desktopGateway.invoke<string>('copy_model_with_textures', { modelPath: copyPath });
                     showMessage('success', '??', result);
                     return true;
                 }
@@ -2599,9 +776,8 @@ const MainLayout: React.FC = () => {
             const copyHandled = await checkCliCopyPath();
             if (copyHandled) return;
             try {
-                const { invoke } = await import('@tauri-apps/api/core');
-                const cliPaths = await invoke<string[]>('get_cli_file_paths');
-                const pendingPaths = await invoke<string[]>('get_pending_open_files');
+                const cliPaths = await desktopGateway.invoke<string[]>('get_cli_file_paths');
+                const pendingPaths = await desktopGateway.invoke<string[]>('get_pending_open_files');
 
                 // Combine and unique
                 const allPaths = Array.from(new Set([...cliPaths, ...pendingPaths]));
@@ -2611,12 +787,12 @@ const MainLayout: React.FC = () => {
                     if (savedPaths && !mpqLoaded) {                        try {
                             const paths = JSON.parse(savedPaths);
                             try {
-                                await invoke('set_mpq_paths', { paths });
+                                await desktopGateway.invoke('set_mpq_paths', { paths });
                             } catch (e) {
                                 console.warn('[MainLayout] Failed to sync MPQ paths:', e);
                             }
                             const results = await Promise.allSettled(
-                                paths.map((path: string) => invoke('load_mpq', { path }))
+                                paths.map((path: string) => desktopGateway.invoke('load_mpq', { path }))
                             );
                             const successCount = results.filter(r => r.status === 'fulfilled').length;
                             if (successCount > 0) {
@@ -2627,14 +803,17 @@ const MainLayout: React.FC = () => {
                     }
 
                     // Now load all models via tab system sequentially
-                    for (const cliPath of allPaths) {
-                        if (processedHotOpenPaths.current.has(cliPath)) {                            continue;
-                        }
-                        processedHotOpenPaths.current.add(cliPath);
-                        openModelAsTab(cliPath);
-                        // Small delay between tabs to allow state to settle
-                        await new Promise(resolve => setTimeout(resolve, 40));
-                    }
+                    await openModelWorkflow.openPathsSequentially({
+                        paths: allPaths,
+                        source: 'cli-hot-open',
+                        addToRecent: false,
+                        acceptPath: (path) => openModelWorkflow.isOpenableModelFile(path),
+                        processedPaths: processedHotOpenPaths.current,
+                        delayMs: 40,
+                    }, {
+                        openModelAsTab,
+                        setRecentFiles,
+                    })
                 }
             } catch (e) {
                 console.error('[MainLayout] Failed to get CLI file paths:', e);
@@ -2647,104 +826,38 @@ const MainLayout: React.FC = () => {
     useEffect(() => {
         // Check if running in Electron and api is available
         const api = (window as any).api;
-        if (api && api.onOpenFile) {            api.onOpenFile((filePath: string) => {                if (!filePath || !(filePath.endsWith('.mdx') || filePath.endsWith('.mdl'))) {
-                    return;
-                }
-
-                if (processedHotOpenPaths.current.has(filePath)) {                    return;
-                }
-
-                processedHotOpenPaths.current.add(filePath);
-                openModelAsTab(filePath);
+        if (api && api.onOpenFile) {            api.onOpenFile((filePath: string) => {
+                openModelWorkflow.openPath({
+                    path: filePath,
+                    source: 'electron-open',
+                    addToRecent: false,
+                    acceptPath: (path) => openModelWorkflow.isOpenableModelFile(path),
+                    processedPaths: processedHotOpenPaths.current,
+                }, {
+                    openModelAsTab,
+                    setRecentFiles,
+                })
             });
         }
     }, [openModelAsTab]);
 
-    const handleAddCameraFromView = () => {
-        if (viewerRef.current) {
-            const cam = viewerRef.current.getCamera()
-            const { addNode, nodes } = useModelStore.getState()
-
-            // Calculate Position and Target
-            // In War3 MDX, Camera has Position and Target.
-            // Viewer uses Orbit Camera: Target, Distance, Theta, Phi.
-            // Position = Target + SphericalToCartesian(Distance, Theta, Phi)
-
-            const { distance, theta, phi, target } = cam
-
-            // Calculate Camera Position
-            const cx = distance * Math.sin(phi) * Math.cos(theta)
-            const cy = distance * Math.sin(phi) * Math.sin(theta)
-            const cz = distance * Math.cos(phi)
-
-            const cameraPos = [cx + target[0], cy + target[1], cz + target[2]]
-
-            // Create camera with required Position/TargetPosition (Float32Array) for MDX generator
-            // And optional Translation/TargetTranslation (AnimVector) for animation
-            const newCamera = {
-                Name: `Camera ${nodes.filter((n: any) => n.type === NodeType.CAMERA).length + 1}`,
-                type: NodeType.CAMERA,
-                FieldOfView: 0.7853, // 45 deg
-                NearClip: 16,
-                FarClip: 5000,
-                // Static Position/TargetPosition required by MDX format (Float32Array)
-                Position: new Float32Array([cameraPos[0], cameraPos[1], cameraPos[2]]),
-                TargetPosition: new Float32Array([target[0], target[1], target[2]]),
-                // Animated Translation/TargetTranslation (optional, for camera animation keyframes)
-                Translation: {
-                    LineType: 0,
-                    GlobalSeqId: null,
-                    Keys: [{ Frame: 0, Vector: new Float32Array([cameraPos[0], cameraPos[1], cameraPos[2]]) }]
-                },
-                TargetTranslation: {
-                    LineType: 0,
-                    GlobalSeqId: null,
-                    Keys: [{ Frame: 0, Vector: new Float32Array([target[0], target[1], target[2]]) }]
-                }
-            }
-
-            addNode(newCamera as any)
+    const createCameraFromCurrentView = useCallback(() => {
+        const camera = viewerRef.current?.getCamera()
+        if (!camera) {
+            return null
         }
-    }
+        const nextCameraNumber = useModelStore.getState().nodes.filter((node: any) => node.type === NodeType.CAMERA).length + 1
+        return createCameraNodeFromOrbitView(camera, nextCameraNumber)
+    }, [])
 
-    const handleViewCamera = (cameraNode: any) => {
-        if (viewerRef.current && cameraNode) {            const isArrayLike = (v: any) => Array.isArray(v) || v instanceof Float32Array || ArrayBuffer.isView(v);
-            const toArray = (v: any) => v instanceof Float32Array ? Array.from(v) : v;
-
-            const getPos = (prop: any, directProp?: any) => {
-                if (directProp && isArrayLike(directProp)) return toArray(directProp)
-                if (isArrayLike(prop)) return toArray(prop)
-                if (prop && prop.Keys && prop.Keys.length > 0) {
-                    const v = prop.Keys[0].Vector
-                    return v ? toArray(v) : [0, 0, 0]
-                }
-                return [0, 0, 0]
-            }
-
-            const pos = getPos(cameraNode.Translation, cameraNode.Position)
-            const target = getPos(cameraNode.TargetTranslation, cameraNode.TargetPosition)
-            const dx = pos[0] - target[0]
-            const dy = pos[1] - target[1]
-            const dz = pos[2] - target[2]
-
-            let distance = Math.sqrt(dx * dx + dy * dy + dz * dz)
-            if (distance < 0.1) distance = 100;
-
-            let phi = Math.acos(dz / distance)
-            if (isNaN(phi)) phi = Math.PI / 4;
-            phi = Math.max(0.01, Math.min(Math.PI - 0.01, phi))
-
-            let theta = Math.atan2(dy, dx)
-            if (isNaN(theta)) theta = 0;            viewerRef.current.setCamera({
-                distance,
-                theta,
-                phi,
-                target: [target[0], target[1], target[2]]
-            })
+    const focusCameraInViewer = useCallback((cameraNode: Record<string, any>) => {
+        const nextView = getOrbitCameraViewFromModelCamera(cameraNode)
+        if (viewerRef.current && nextView) {
+            viewerRef.current.setCamera(nextView)
         }
-    }
+    }, [])
 
-    // RPC Server for Camera Manager (moved here to avoid ReferenceError on handleAddCameraFromView)
+    // RPC Server for Camera Manager
     const nodes = useModelStore(state => state.nodes);
     const getCameraManagerState = useCallback(() => {
         const rawCameras = Array.isArray((modelData as any)?.Cameras) ? (modelData as any).Cameras : [];
@@ -2754,90 +867,39 @@ const MainLayout: React.FC = () => {
         };
     }, [nodes, modelData]);
 
+    const createCameraManagerDependencies = useCallback(() => ({
+        getCameras: () => {
+            const latestStore = useModelStore.getState();
+            return (Array.isArray((latestStore.modelData as any)?.Cameras)
+                ? (latestStore.modelData as any).Cameras
+                : latestStore.nodes.filter((node) => node.type === NodeType.CAMERA)) as any[];
+        },
+        syncCameraManager: () => {
+            const latestStore = useModelStore.getState();
+            const latestModelData = latestStore.modelData;
+            const latestCameras = Array.isArray((latestModelData as any)?.Cameras)
+                ? (latestModelData as any).Cameras
+                : latestStore.nodes.filter((node) => node.type === NodeType.CAMERA);
+            cameraManagerBroadcasterRef.current({
+                cameras: latestCameras,
+                globalSequences: toGlobalSequenceDurations(latestModelData?.GlobalSequences)
+            });
+        },
+        viewportBridge: {
+            createCameraFromCurrentView,
+            focusCamera: focusCameraInViewer,
+        },
+    }), [createCameraFromCurrentView, focusCameraInViewer]);
+
+    const handleAddCameraFromView = useCallback(() => {
+        cameraManagerCommandHandler.handle('EXECUTE_CAMERA_ACTION', {
+            action: 'ADD_FROM_VIEW',
+        }, createCameraManagerDependencies())
+    }, [createCameraManagerDependencies])
+
     const handleCameraCommand = useCallback((command: string, payload: any) => {
-        if (command === 'EXECUTE_CAMERA_ACTION') {
-            const { action, payload: actionPayload } = payload;
-            const historyStore = useHistoryStore.getState();
-            const getCameras = () => {
-                const latestStore = useModelStore.getState();
-                return (Array.isArray((latestStore.modelData as any)?.Cameras)
-                    ? (latestStore.modelData as any).Cameras
-                    : latestStore.nodes.filter((node) => node.type === NodeType.CAMERA)) as any[];
-            };
-            const setCameras = (cameras: any[]) => {
-                useModelStore.getState().setCameras(cameras);
-            };
-            const syncCameraManagerNow = () => {
-                const latestStore = useModelStore.getState();
-                const latestModelData = latestStore.modelData;
-                const latestCameras = Array.isArray((latestModelData as any)?.Cameras)
-                    ? (latestModelData as any).Cameras
-                    : latestStore.nodes.filter((node) => node.type === NodeType.CAMERA);
-                rpcRefs.current.broadcastCameraManager({
-                    cameras: latestCameras,
-                    globalSequences: toGlobalSequenceDurations(latestModelData?.GlobalSequences)
-                });
-            };
-
-            if (action === 'ADD') {
-                const previousCameras = JSON.parse(JSON.stringify(getCameras()));
-                const nextCameras = [...previousCameras, actionPayload];
-
-                historyStore.push({
-                    name: 'Add Camera',
-                    undo: () => setCameras(previousCameras),
-                    redo: () => setCameras(nextCameras)
-                });
-                setCameras(nextCameras);
-                syncCameraManagerNow();
-            } else if (action === 'DELETE') {
-                const cameraIndex = typeof actionPayload.cameraIndex === 'number' ? actionPayload.cameraIndex : -1;
-                const previousCameras = JSON.parse(JSON.stringify(getCameras()));
-                if (cameraIndex >= 0 && cameraIndex < previousCameras.length) {
-                    const nextCameras = previousCameras.filter((_: any, index: number) => index !== cameraIndex);
-                    historyStore.push({
-                        name: 'Delete Camera',
-                        undo: () => setCameras(previousCameras),
-                        redo: () => setCameras(nextCameras)
-                    });
-                    setCameras(nextCameras);
-                    syncCameraManagerNow();
-                }
-            } else if (action === 'UPDATE') {
-                const { data: updates } = actionPayload;
-                const cameraIndex = typeof actionPayload.cameraIndex === 'number' ? actionPayload.cameraIndex : -1;
-                const previousCameras = JSON.parse(JSON.stringify(getCameras()));
-                if (cameraIndex >= 0 && cameraIndex < previousCameras.length) {
-                    const oldData: any = {};
-                    Object.keys(updates).forEach(key => {
-                        oldData[key] = previousCameras[cameraIndex]?.[key];
-                    });
-                    const nextCameras = previousCameras.map((camera: any, index: number) =>
-                        index === cameraIndex ? { ...camera, ...updates } : camera
-                    );
-                    historyStore.push({
-                        name: 'Update Camera',
-                        undo: () => setCameras(previousCameras.map((camera: any, index: number) =>
-                            index === cameraIndex ? { ...camera, ...oldData } : camera
-                        )),
-                        redo: () => setCameras(nextCameras)
-                    });
-                    setCameras(nextCameras);
-                    syncCameraManagerNow();
-                }
-            } else if (action === 'ADD_FROM_VIEW') {
-                handleAddCameraFromView();
-                setTimeout(syncCameraManagerNow, 0);
-            } else if (action === 'VIEW_CAMERA') {
-                const cameraIndex = typeof actionPayload.cameraIndex === 'number' ? actionPayload.cameraIndex : -1;
-                const cameraList = getCameras();
-                const cameraNode = cameraIndex >= 0 && cameraIndex < cameraList.length ? cameraList[cameraIndex] : null;
-                if (cameraNode) {
-                    handleViewCamera(cameraNode as any);
-                }
-            }
-        }
-    }, [handleAddCameraFromView, handleViewCamera]);
+        cameraManagerCommandHandler.handle(command, payload, createCameraManagerDependencies())
+    }, [createCameraManagerDependencies]);
 
     const { broadcastSync: broadcastCameraManager } = useRpcServer(
         'cameraManager',
@@ -2866,16 +928,7 @@ const MainLayout: React.FC = () => {
     }, []);
 
     const handleGeosetCommand = useCallback((command: string, payload: any) => {
-        if (command === 'EXECUTE_GEOSET_ACTION') {
-            const { action, payload: actionPayload } = payload;
-            if (action === 'SAVE_ALL') {
-                const currentGeosets = useModelStore.getState().modelData?.Geosets;
-                const mergedGeosets = mergeGeosetMetadata(currentGeosets, actionPayload);
-                if (mergedGeosets) {
-                    useModelStore.getState().setGeosets(mergedGeosets);
-                }
-            }
-        }
+        geosetEditorCommandHandler.handle(command, payload)
     }, []);
 
     const { broadcastSync: broadcastGeosetEditor } = useRpcServer(
@@ -2890,29 +943,9 @@ const MainLayout: React.FC = () => {
         return ensureTextureManagerSnapshotState()
     }, [ensureTextureManagerSnapshotState]);
     const handleTextureCommand = useCallback((command: string, payload: any) => {
-        if (command === 'SAVE_TEXTURES' && payload.textures) {            useModelStore.getState().setTextures(payload.textures);
-            showMessage('success', '纹理已更新', '贴图修改已同步到模型');
-        } else if (command === 'EXECUTE_TEXTURE_ACTION') {
-            const { action, payload: actionPayload } = payload;
-            if (action === 'SAVE_TEXTURES') {
-                useModelStore.getState().setTextures(actionPayload);
-            } else if (action === 'SAVE_TEXTURES_WITH_MATERIALS') {
-                const currentGeosets = useModelStore.getState().modelData?.Geosets
-                const mergedGeosets = mergeGeosetMetadata(currentGeosets, actionPayload?.geosets)
-                useModelStore.getState().setVisualDataPatch({
-                    Textures: actionPayload?.textures || [],
-                    Materials: Array.isArray(actionPayload?.materials) ? actionPayload.materials : undefined,
-                    Geosets: mergedGeosets
-                });
-            } else if (action === 'SET_TEXTURE_SAVE_MODE') {
-                useRendererStore.getState().setTextureSaveMode(actionPayload?.mode === 'save_as' ? 'save_as' : 'overwrite');
-            } else if (action === 'SET_TEXTURE_SAVE_SUFFIX') {
-                const nextSuffix = typeof actionPayload?.suffix === 'string' ? actionPayload.suffix : '';
-                useRendererStore.getState().setTextureSaveSuffix(nextSuffix);
-            } else if (action === 'RELOAD_RENDERER') {
-                useModelStore.getState().triggerRendererReload();
-            }
-        }
+        textureManagerCommandHandler.handle(command, payload, {
+            onTexturesSaved: () => showMessage('success', '纹理已更新', '贴图修改已同步到模型'),
+        })
     }, [showMessage]);
 
     const { broadcastSync: broadcastTextureManager, broadcastPatch: broadcastTextureManagerPatch } = useRpcServer<TextureManagerRpcState, TextureManagerPatch>(
@@ -2942,17 +975,8 @@ const MainLayout: React.FC = () => {
     }, []);
 
     const handleGeosetVisibilityCommand = useCallback((command: string, payload: any) => {
-        if (command === 'EXECUTE_VISIBILITY_ACTION') {
-            const { action, payload: actionPayload } = payload;
-            if (action === 'SAVE_ANIMS') {
-                useModelStore.getState().setGeosetAnims(actionPayload);
-            } else if (action === 'SET_SEQUENCE') {
-                useModelStore.getState().setSequence(actionPayload);
-            } else if (action === 'SET_FRAME') {
-                useModelStore.getState().setFrame(actionPayload);
-            }
-        }
-    }, [useModelStore]);
+        geosetVisibilityCommandHandler.handle(command, payload)
+    }, []);
 
     const { broadcastSync: broadcastGeosetVisibilityTool } = useRpcServer(
         'geosetVisibilityTool',
@@ -2977,12 +1001,7 @@ const MainLayout: React.FC = () => {
     }, []);
 
     const handleGeosetAnimCommand = useCallback((command: string, payload: any) => {
-        if (command === 'EXECUTE_ANIM_ACTION') {
-            const { action, payload: actionPayload } = payload;
-            if (action === 'UPDATE_GEOSET_ANIMS') {
-                useModelStore.getState().setGeosetAnims(actionPayload);
-            }
-        }
+        geosetAnimationCommandHandler.handle(command, payload)
     }, []);
 
     const { broadcastSync: broadcastGeosetAnimManager } = useRpcServer(
@@ -3009,21 +1028,7 @@ const MainLayout: React.FC = () => {
     }, []);
 
     const handleTextureAnimCommand = useCallback((command: string, payload: any) => {
-        if (command === 'EXECUTE_TEXTURE_ANIM_ACTION') {
-            const { action, payload: actionPayload } = payload;
-            if (action === 'ADD' || action === 'DELETE' || action === 'UPDATE' || action === 'TOGGLE_BLOCK' || action === 'SAVE_ALL') {
-                // Robustness: if actionPayload is an object with newAnims, use that, otherwise use it directly
-                const anims = (actionPayload && typeof actionPayload === 'object' && !Array.isArray(actionPayload) && actionPayload.newAnims)
-                    ? actionPayload.newAnims
-                    : actionPayload;
-
-                if (Array.isArray(anims)) {
-                    useModelStore.getState().setTextureAnims(anims);
-                } else {
-                    console.error('[MainLayout] Received invalid TextureAnims payload (not an array):', actionPayload);
-                }
-            }
-        }
+        textureAnimationCommandHandler.handle(command, payload)
     }, []);
 
     const { broadcastSync: broadcastTextureAnimManager } = useRpcServer(
@@ -3037,28 +1042,7 @@ const MainLayout: React.FC = () => {
         return ensureMaterialManagerSnapshotState()
     }, [ensureMaterialManagerSnapshotState])
     const handleMaterialCommand = useCallback((command: string, payload: any) => {
-        if (command === 'EXECUTE_MATERIAL_ACTION') {
-            const { action, payload: actionPayload } = payload;
-            if (action === 'SAVE_MATERIALS') {
-                const currentGeosets = useModelStore.getState().modelData?.Geosets
-                const mergedGeosets = mergeGeosetMetadata(currentGeosets, actionPayload.geosets)
-                // 仅更新预览层；写入权威 modelData 在「保存/另存为」时 commit
-                useModelStore.getState().setMaterialManagerPreview({
-                    textures: actionPayload.textures,
-                    materials: actionPayload.materials,
-                    geosets: mergedGeosets,
-                });
-            } else if (action === 'RELOAD_RENDERER') {
-                useModelStore.getState().triggerRendererReload();
-            } else if (action === 'SET_SELECTION') {
-                if (actionPayload && Object.prototype.hasOwnProperty.call(actionPayload, 'selectedMaterialIndex')) {
-                    useSelectionStore.getState().setSelectedMaterialIndex(actionPayload.selectedMaterialIndex ?? null)
-                }
-                if (actionPayload && Object.prototype.hasOwnProperty.call(actionPayload, 'selectedMaterialLayerIndex')) {
-                    useSelectionStore.getState().setSelectedMaterialLayerIndex(actionPayload.selectedMaterialLayerIndex ?? null)
-                }
-            }
-        }
+        materialManagerCommandHandler.handle(command, payload)
     }, []);
 
     const { broadcastSync: broadcastMaterialManager, broadcastPatch: broadcastMaterialManagerPatch } = useRpcServer<MaterialManagerRpcState, MaterialManagerPatch>(
@@ -3068,50 +1052,7 @@ const MainLayout: React.FC = () => {
     );
 
     const handleNodeEditorCommand = useCallback((command: string, payload: unknown) => {
-        if (command === NODE_EDITOR_COMMANDS.previewNodeUpdate) {
-            const previewPayload = payload as NodeEditorNodePayload | undefined
-            const objectId = previewPayload?.objectId
-            const node = previewPayload?.node
-            if (typeof objectId === 'number' && node != null) {
-                useModelStore.getState().setNodeEditorPreview({ objectId, node })
-            }
-            return
-        }
-        if (command === NODE_EDITOR_COMMANDS.clearNodePreview) {
-            const clearPayload = payload as ClearNodePreviewPayload | undefined
-            if (clearPayload && clearPayload.objectId !== null && typeof clearPayload.objectId !== 'number') {
-                return
-            }
-            useModelStore.getState().clearNodeEditorPreview()
-            return
-        }
-        if (command === NODE_EDITOR_COMMANDS.applyNodeUpdate) {
-            const applyPayload = payload as ApplyNodeUpdatePayload | undefined
-            const objectId = applyPayload?.objectId
-            const node = applyPayload?.node
-            const history = applyPayload?.history
-            if (typeof objectId !== 'number' || node == null) {
-                return
-            }
-            useModelStore.getState().clearNodeEditorPreview()
-            if (history && typeof history.name === 'string') {
-                useHistoryStore.getState().push({
-                    name: history.name,
-                    undo: () => useModelStore.getState().updateNode(objectId, history.undoNode),
-                    redo: () => useModelStore.getState().updateNode(objectId, history.redoNode),
-                })
-            }
-            useModelStore.getState().updateNode(objectId, node)
-            return
-        }
-        if (command === NODE_EDITOR_COMMANDS.renameNode) {
-            const renamePayload = payload as RenameNodePayload | undefined
-            const objectId = renamePayload?.objectId
-            const name = renamePayload?.name
-            if (typeof objectId === 'number' && typeof name === 'string') {
-                useModelStore.getState().renameNode(objectId, name)
-            }
-        }
+        nodeEditorCommandHandler.handle(command, payload)
     }, [])
 
     const getNodeEditorState = useCallback(() => {
@@ -3124,7 +1065,7 @@ const MainLayout: React.FC = () => {
         handleNodeEditorCommand
     )
 
-    const getSequenceManagerState = useCallback(() => {
+    const getSequenceManagerState = useCallback((): SequenceManagerRpcState => {
         const state = useModelStore.getState();
         return {
             sequences: state.modelData?.Sequences || []
@@ -3132,38 +1073,16 @@ const MainLayout: React.FC = () => {
     }, []);
 
     const handleSequenceCommand = useCallback((command: string, payload: any) => {
-        if (command === 'SAVE_SEQUENCES') {
-            useModelStore.getState().setSequences(payload);
-        } else if (command === 'PRUNE_KEYFRAMES') {
-            const { modelData } = useModelStore.getState();
-            if (modelData) {
-                payload.forEach(([start, end]: [number, number]) => {
-                    pruneModelKeyframes(modelData, start, end);
-                });
-            }
-        } else if (command === 'APPLY_SEQUENCE_CHANGES') {
-            const { modelData, setSequences } = useModelStore.getState();
-            const nextSequences = Array.isArray(payload?.sequences) ? payload.sequences : [];
-            const deletedIntervals = Array.isArray(payload?.deletedIntervals) ? payload.deletedIntervals : [];
-            const shouldPrune = payload?.pruneKeyframes !== false;
-
-            if (modelData && shouldPrune) {
-                deletedIntervals.forEach(([start, end]: [number, number]) => {
-                    pruneModelKeyframes(modelData, start, end);
-                });
-            }
-
-            setSequences(nextSequences);
-        }
+        sequenceManagerCommandHandler.handle(command, payload)
     }, []);
 
-    const { broadcastSync: broadcastSequenceManager } = useRpcServer(
+    const { broadcastSync: broadcastSequenceManager } = useRpcServer<SequenceManagerRpcState>(
         'sequenceManager',
         getSequenceManagerState,
         handleSequenceCommand
     );
 
-    const getGlobalSeqManagerState = useCallback(() => {
+    const getGlobalSeqManagerState = useCallback((): GlobalSequenceManagerRpcState => {
         const state = useModelStore.getState();
         return {
             globalSequences: toGlobalSequenceDurations(state.modelData?.GlobalSequences)
@@ -3171,35 +1090,32 @@ const MainLayout: React.FC = () => {
     }, []);
 
     const handleGlobalSeqCommand = useCallback((command: string, payload: any) => {
-        if (command === 'EXECUTE_GLOBAL_SEQ_ACTION' && payload?.action === 'SAVE') {
-            const { updateGlobalSequences } = useModelStore.getState();
-            updateGlobalSequences(payload.globalSequences);
-        }
+        globalSequenceManagerCommandHandler.handle(command, payload)
     }, []);
 
-    const { broadcastSync: broadcastGlobalSeqManager } = useRpcServer(
+    const { broadcastSync: broadcastGlobalSeqManager } = useRpcServer<GlobalSequenceManagerRpcState>(
         'globalSequenceManager',
         getGlobalSeqManagerState,
         handleGlobalSeqCommand
     );
 
-    // Stable refs for RPC handlers to prevent effect re-mounting
-    const rpcRefs = useRef({
-        broadcastCameraManager, getCameraManagerState,
-        broadcastGeosetEditor, getGeosetManagerState,
-        broadcastGeosetVisibilityTool, getGeosetVisibilityState,
-        broadcastGeosetAnimManager, getGeosetAnimManagerState,
-        broadcastTextureManager, broadcastTextureManagerPatch, getTextureManagerState,
-        broadcastTextureAnimManager, getTextureAnimManagerState,
-        broadcastMaterialManager, broadcastMaterialManagerPatch, getMaterialManagerState,
-        broadcastNodeEditor, getNodeEditorState,
-        broadcastSequenceManager, getSequenceManagerState,
-        broadcastGlobalSeqManager, getGlobalSeqManagerState,
-        lastBroadcastTime: 0
-    });
+    const getGlobalColorAdjustState = useCallback((): GlobalColorAdjustRpcState => ({
+        settings: useGlobalColorAdjustStore.getState().settings
+    }), [])
+
+    const handleGlobalColorAdjustCommand = useCallback((command: string, payload: any) => {
+        globalColorAdjustCommandHandler.handle(command, payload)
+    }, [])
+
+    const { broadcastSync: broadcastGlobalColorAdjust } = useRpcServer<GlobalColorAdjustRpcState>(
+        'globalColorAdjust',
+        getGlobalColorAdjustState,
+        handleGlobalColorAdjustCommand
+    )
 
     useEffect(() => {
-        rpcRefs.current = {
+        cameraManagerBroadcasterRef.current = broadcastCameraManager
+        toolWindowBroadcastCoordinatorRef.current.setApi({
             broadcastCameraManager, getCameraManagerState,
             broadcastGeosetEditor, getGeosetManagerState,
             broadcastGeosetVisibilityTool, getGeosetVisibilityState,
@@ -3210,244 +1126,36 @@ const MainLayout: React.FC = () => {
             broadcastNodeEditor, getNodeEditorState,
             broadcastSequenceManager, getSequenceManagerState,
             broadcastGlobalSeqManager, getGlobalSeqManagerState,
-            lastBroadcastTime: rpcRefs.current.lastBroadcastTime
-        };
-    });
+            broadcastGlobalColorAdjust,
+        })
+    }, [
+        broadcastCameraManager, getCameraManagerState,
+        broadcastGeosetEditor, getGeosetManagerState,
+        broadcastGeosetVisibilityTool, getGeosetVisibilityState,
+        broadcastGeosetAnimManager, getGeosetAnimManagerState,
+        broadcastTextureManager, broadcastTextureManagerPatch, getTextureManagerState,
+        broadcastTextureAnimManager, getTextureAnimManagerState,
+        broadcastMaterialManager, broadcastMaterialManagerPatch, getMaterialManagerState,
+        broadcastNodeEditor, getNodeEditorState,
+        broadcastSequenceManager, getSequenceManagerState,
+        broadcastGlobalSeqManager, getGlobalSeqManagerState,
+        broadcastGlobalColorAdjust,
+    ])
 
     useEffect(() => {
-        void emit('active-model-changed', {
+        toolWindowBroadcastCoordinatorRef.current.broadcastGlobalColorAdjust(getGlobalColorAdjustState())
+    }, [globalColorAdjustSettings, getGlobalColorAdjustState])
+
+    useEffect(() => {
+        void desktopGateway.emit('active-model-changed', {
             activeTabId,
             modelPath: modelPath || '',
             hasModelData: !!modelData,
         }).catch(() => { })
     }, [activeTabId, modelPath, modelData])
 
-    // Push state to the standalone window whenever the model changes
-    // Optimized with selective synchronization (Data Stripping)
     useEffect(() => {
-        let prevModelData = useModelStore.getState().modelData;
-        let prevNodes = useModelStore.getState().nodes;
-
-        const performBroadcast = async (state: any) => {
-            const [
-                cameraManagerVisible,
-                geosetEditorVisible,
-                geosetVisibilityVisible,
-                geosetAnimVisible,
-                textureManagerVisible,
-                textureAnimVisible,
-                materialManagerVisible,
-                sequenceManagerVisible,
-                globalSeqVisible,
-                nodeEditorVisible,
-            ] = await Promise.all([
-                windowManager.isToolWindowVisible('cameraManager'),
-                windowManager.isToolWindowVisible('geosetEditor'),
-                windowManager.isToolWindowVisible('geosetVisibilityTool'),
-                windowManager.isToolWindowVisible('geosetAnimManager'),
-                windowManager.isToolWindowVisible('textureManager'),
-                windowManager.isToolWindowVisible('textureAnimManager'),
-                windowManager.isToolWindowVisible('materialManager'),
-                windowManager.isToolWindowVisible('sequenceManager'),
-                windowManager.isToolWindowVisible('globalSequenceManager'),
-                windowManager.isToolWindowVisible('nodeEditor'),
-            ]);
-
-            if (!cameraManagerVisible && !geosetEditorVisible && !geosetVisibilityVisible && !geosetAnimVisible && !textureManagerVisible && !textureAnimVisible && !materialManagerVisible && !sequenceManagerVisible && !globalSeqVisible && !nodeEditorVisible) {
-                return;
-            }
-
-            const {
-                broadcastCameraManager,
-                broadcastGeosetEditor,
-                broadcastGeosetVisibilityTool,
-                broadcastGeosetAnimManager,
-                broadcastTextureManager,
-                broadcastTextureAnimManager,
-                broadcastMaterialManager,
-                broadcastNodeEditor,
-                broadcastSequenceManager,
-                broadcastGlobalSeqManager,
-            } = rpcRefs.current;
-
-            const strippedGeosets = stripGeosetData(state.modelData?.Geosets);
-            const modelData = state.modelData;
-            const pickedGeosetIndex = useSelectionStore.getState().pickedGeosetIndex;
-            const textureManagerState = getTextureManagerState();
-            const materialManagerState = getMaterialManagerState();
-            const nodeEditorState = getNodeEditorState();
-
-            if (cameraManagerVisible) {
-                const rawCameras = Array.isArray((modelData as any)?.Cameras) ? (modelData as any).Cameras : [];
-                broadcastCameraManager({
-                    cameras: rawCameras.length > 0 ? rawCameras : state.nodes.filter(n => n.type === NodeType.CAMERA),
-                    globalSequences: toGlobalSequenceDurations(modelData?.GlobalSequences)
-                });
-            }
-
-            if (geosetEditorVisible) {
-                broadcastGeosetEditor({
-                    geosets: strippedGeosets,
-                    materialsCount: modelData?.Materials?.length || 0,
-                    selectedIndex: pickedGeosetIndex ?? state.selectedGeosetIndex ?? 0,
-                    pickedGeosetIndex,
-                });
-            }
-
-            if (geosetVisibilityVisible) {
-                broadcastGeosetVisibilityTool({
-                    geosets: strippedGeosets,
-                    sequences: modelData?.Sequences || [],
-                    geosetAnims: modelData?.GeosetAnims || [],
-                    geosetsAnims: modelData?.GeosetAnims || [],
-                    globalSequences: modelData?.GlobalSequences || [],
-                });
-            }
-
-            if (geosetAnimVisible) {
-                broadcastGeosetAnimManager({
-                    geosets: strippedGeosets.map(g => ({ index: (g as any).index })) as any,
-                    geosetAnims: modelData?.GeosetAnims || [],
-                    globalSequences: modelData?.GlobalSequences || [],
-                    pickedGeosetIndex,
-                });
-            }
-
-            if (textureManagerVisible) {
-                if (standaloneSnapshotDispatchRef.current.textureManager !== textureManagerState.snapshotVersion) {
-                    standaloneSnapshotDispatchRef.current.textureManager = textureManagerState.snapshotVersion
-                    broadcastTextureManager(textureManagerState);
-                } else {
-                    markStandalonePerf('snapshot_broadcast_skipped', {
-                        windowId: 'textureManager',
-                        snapshotVersion: textureManagerState.snapshotVersion,
-                        reason: 'snapshot_version_unchanged',
-                    })
-                }
-            }
-
-            if (textureAnimVisible) {
-                broadcastTextureAnimManager({
-                    textureAnims: modelData?.TextureAnims || [],
-                    globalSequences: modelData?.GlobalSequences || [],
-                    sequences: modelData?.Sequences || [],
-                    materials: modelData?.Materials || [],
-                    geosets: strippedGeosets as any,
-                    pickedGeosetIndex
-                });
-            }
-
-            if (materialManagerVisible) {
-                if (standaloneSnapshotDispatchRef.current.materialManager !== materialManagerState.snapshotVersion) {
-                    standaloneSnapshotDispatchRef.current.materialManager = materialManagerState.snapshotVersion
-                    broadcastMaterialManager(materialManagerState);
-                } else {
-                    markStandalonePerf('snapshot_broadcast_skipped', {
-                        windowId: 'materialManager',
-                        snapshotVersion: materialManagerState.snapshotVersion,
-                        reason: 'snapshot_version_unchanged',
-                    })
-                }
-            }
-
-            if (sequenceManagerVisible) {
-                broadcastSequenceManager({
-                    sequences: modelData?.Sequences || []
-                });
-            }
-
-            if (globalSeqVisible) {
-                broadcastGlobalSeqManager({
-                    globalSequences: toGlobalSequenceDurations(modelData?.GlobalSequences)
-                });
-            }
-
-            if (nodeEditorVisible) {
-                if (standaloneSnapshotDispatchRef.current.nodeEditor !== nodeEditorState.snapshotVersion) {
-                    standaloneSnapshotDispatchRef.current.nodeEditor = nodeEditorState.snapshotVersion
-                    broadcastNodeEditor(nodeEditorState);
-                } else {
-                    markStandalonePerf('snapshot_broadcast_skipped', {
-                        windowId: 'nodeEditor',
-                        snapshotVersion: nodeEditorState.snapshotVersion,
-                        reason: 'snapshot_version_unchanged',
-                    })
-                }
-            }
-        };
-
-        // Subscribe directly to Zustand
-        // Use a slight delay for initial model load (prevModelData is null) to allow main thread to prioritize WebGL/MPQ work
-        const unsubscribe = useModelStore.subscribe((state) => {
-            if (state.nodes !== prevNodes || state.modelData !== prevModelData) {
-                const isInitialLoad = !prevModelData && state.modelData;
-                prevNodes = state.nodes;
-                prevModelData = state.modelData;
-
-                if (isInitialLoad) {                    setTimeout(() => { void performBroadcast(useModelStore.getState()); }, 100);
-                } else {
-                    void performBroadcast(state);
-                }
-            }
-        });
-
-        let prevPickedGeosetIndex = useSelectionStore.getState().pickedGeosetIndex;
-        let prevSelectedMaterialIndex = useSelectionStore.getState().selectedMaterialIndex;
-        let prevSelectedMaterialLayerIndex = useSelectionStore.getState().selectedMaterialLayerIndex;
-        const unsubscribeSelection = useSelectionStore.subscribe((selectionState) => {
-            const geosetChanged = selectionState.pickedGeosetIndex !== prevPickedGeosetIndex;
-            const materialChanged = selectionState.selectedMaterialIndex !== prevSelectedMaterialIndex;
-            const materialLayerChanged = selectionState.selectedMaterialLayerIndex !== prevSelectedMaterialLayerIndex;
-
-            if (geosetChanged || materialChanged || materialLayerChanged) {
-                prevPickedGeosetIndex = selectionState.pickedGeosetIndex;
-                prevSelectedMaterialIndex = selectionState.selectedMaterialIndex;
-                prevSelectedMaterialLayerIndex = selectionState.selectedMaterialLayerIndex;
-
-                const liveModelState = useModelStore.getState();
-                const modelData = liveModelState.modelData;
-                const pickedGeosetIndex = selectionState.pickedGeosetIndex;
-                const selectedMaterialIndex = selectionState.selectedMaterialIndex;
-                const selectedMaterialLayerIndex = selectionState.selectedMaterialLayerIndex;
-                const strippedGeosets = stripGeosetData(modelData?.Geosets);
-
-                if (geosetChanged) {
-                    rpcRefs.current.broadcastGeosetEditor({
-                        geosets: strippedGeosets,
-                        materialsCount: modelData?.Materials?.length || 0,
-                        selectedIndex: pickedGeosetIndex ?? liveModelState.selectedGeosetIndex ?? 0,
-                        pickedGeosetIndex,
-                    });
-
-                    rpcRefs.current.broadcastTextureManagerPatch({
-                        pickedGeosetIndex,
-                    });
-
-                    rpcRefs.current.broadcastGeosetAnimManager({
-                        geosets: strippedGeosets.map(g => ({ index: (g as any).index })),
-                        geosetAnims: modelData?.GeosetAnims || [],
-                        globalSequences: modelData?.GlobalSequences || [],
-                        pickedGeosetIndex,
-                    });
-                }
-
-                rpcRefs.current.broadcastMaterialManagerPatch({
-                    ...(geosetChanged && { pickedGeosetIndex }),
-                    ...(materialChanged && { selectedMaterialIndex }),
-                    ...(materialLayerChanged && { selectedMaterialLayerIndex }),
-                });
-            }
-        });
-
-        // Initial broadcast after a short delay to ensure preloading started
-        setTimeout(() => {
-            void performBroadcast(useModelStore.getState());
-        }, 120);
-
-        return () => {
-            unsubscribe();
-            unsubscribeSelection();
-        };
+        return toolWindowBroadcastCoordinatorRef.current.attach(windowManager)
     }, []); // Zero dependencies: stable throughout lifecycle
 
     const handleEditorResizeStart = (e: React.MouseEvent) => {
@@ -3499,20 +1207,19 @@ const MainLayout: React.FC = () => {
     // Auto-load MPQs (DEFERRED for faster startup)
     useEffect(() => {
         const loadSavedMpqs = async () => {
-            const { invoke } = await import('@tauri-apps/api/core')
             const savedPaths = localStorage.getItem('mpq_paths')
 
             if (savedPaths) {
                 try {
                     const paths = JSON.parse(savedPaths)
                     try {
-                        await invoke('set_mpq_paths', { paths })
+                        await desktopGateway.invoke('set_mpq_paths', { paths })
                     } catch (e) {
                         console.warn('[MainLayout] Failed to sync MPQ paths:', e)
                     }
                     // OPTIMIZATION: Load all MPQs in parallel
                     const results = await Promise.allSettled(
-                        paths.map((path: string) => invoke('load_mpq', { path }))
+                        paths.map((path: string) => desktopGateway.invoke('load_mpq', { path }))
                     )
                     const successCount = results.filter(r => r.status === 'fulfilled').length
                     if (successCount > 0) {
@@ -3524,14 +1231,14 @@ const MainLayout: React.FC = () => {
                 }
             } else {
                 // Try auto-detection from Registry
-                try {                    const installPath = await invoke<string>('detect_warcraft_path')
+                try {                    const installPath = await desktopGateway.invoke<string>('detect_warcraft_path')
                     if (installPath) {                        const mpqs = ['war3.mpq', 'War3Patch.mpq', 'War3x.mpq', 'War3xLocal.mpq']
                         const basePath = installPath.endsWith('') ? installPath : `${installPath}`
                         const pathsToLoad = mpqs.map(mpq => `${basePath}${mpq}`)
 
                         // OPTIMIZATION: Load all MPQs in parallel
                         const results = await Promise.allSettled(
-                            pathsToLoad.map(path => invoke('load_mpq', { path }))
+                            pathsToLoad.map(path => desktopGateway.invoke('load_mpq', { path }))
                         )
 
                         const validPaths = pathsToLoad.filter((_, i) => results[i].status === 'fulfilled')
@@ -3539,7 +1246,7 @@ const MainLayout: React.FC = () => {
 
                         if (successCount > 0) {                            localStorage.setItem('mpq_paths', JSON.stringify(validPaths))
                             try {
-                                await invoke('set_mpq_paths', { paths: validPaths })
+                                await desktopGateway.invoke('set_mpq_paths', { paths: validPaths })
                             } catch (e) {
                                 console.warn('[MainLayout] Failed to sync MPQ paths:', e)
                             }
@@ -3563,8 +1270,7 @@ const MainLayout: React.FC = () => {
             return;
         }
         try {
-            const { invoke } = await import('@tauri-apps/api/core');
-            const result = await invoke<string>('copy_model_with_textures', { modelPath });
+            const result = await desktopGateway.invoke<string>('copy_model_with_textures', { modelPath });
             showMessage('success', '成功', result);
         } catch (err) {
             console.error('Copy failed:', err);
@@ -3577,18 +1283,10 @@ const MainLayout: React.FC = () => {
 
     const handleImport = useCallback(async () => {
         try {
-            const selected = await open({
-                multiple: false,
-                filters: [{
-                    name: '魔兽争霸3资源',
-                    extensions: ['mdx', 'mdl', 'blp', 'tga']
-                }]
-            })
-
-            if (selected && typeof selected === 'string') {
-                openModelAsTab(selected)
-                setRecentFiles(addRecentFile(selected))
-            }
+            await openModelWorkflow.openFromDialog({
+                openModelAsTab,
+                setRecentFiles,
+            }, DEFAULT_IMPORT_FILE_DIALOG_OPTIONS)
         } catch (error) {
             console.error('Failed to open file dialog:', error)
             setIsLoading(false)
@@ -3597,54 +1295,30 @@ const MainLayout: React.FC = () => {
     }, [openModelAsTab])
     handleImportRef.current = handleImport;
 
-    const handleModelLoaded = useCallback((data: any) => {        // setModelData(data) // No longer needed as we use store
-        setZustandModelData(data, data.path || modelPath, {
-            skipAutoRecalculate: true,
-            skipModelRebuild: true
-        }) // Ensure store is updated while keeping first-frame latency low
-        setIsLoading(false)
-        setZustandLoading(false)
-
-        // Reset State on New Model Load FIRST (before auto-play)
-        // Reset State on New Model Load FIRST (before auto-play)
-        // Guard: If model path is same, don't reset state (it's a reload/update)
-        const isSameModel = data.path === modelPath
-        if (!isSameModel) {
-            setMainMode('view')
-            useSelectionStore.getState().clearAllSelections()
-        }
-
-        // Auto-play first animation if available
-        if (data && data.Sequences && data.Sequences.length > 0) {
-            // Use a small timeout to ensure the renderer is ready
-            setTimeout(() => {
-                // Only reset sequence if it's a new model or we aren't playing anything valid
-                // This prevents resetting to 0 when deleting particles on same model
-                if (!isSameModel || useModelStore.getState().currentSequence === -1) {
-                    const preferredSequence = useModelStore.getState().currentSequence
-                    const nextSequence = preferredSequence >= 0 ? preferredSequence : 0
-                    useModelStore.getState().setSequence(nextSequence)
-                    useModelStore.getState().setPlaying(true)
-                } else {
-                }
-            }, 300)
-        } else {
-            // No sequences available, reset to no animation
-            useModelStore.getState().setSequence(-1)
-            setPlaying(false)
-        }
-
-        // Reset Camera (using a custom event or store if possible, but for now we rely on Viewer's internal reset if path changes)
-        // Actually Viewer handles camera reset on new model path if we implement it there, 
-        // but we can also force it here if we had access. 
-        // For now, the Viewer component will see the new modelPath and re-init.
+    const handleModelLoaded = useCallback((data: any) => {
+        openModelWorkflow.handleLoadedModel(data, {
+            currentModelPath: modelPath,
+            commitLoadedModel: setZustandModelData,
+            completeLoading: () => {
+                setIsLoading(false)
+                setZustandLoading(false)
+            },
+            setMainMode,
+            setPlaying,
+        })
     }, [setZustandModelData, setZustandLoading, modelPath, setMainMode, setPlaying])
 
 
     const handleOpen = handleImport // Alias for MenuBar
     const handleOpenRecent = useCallback((path: string) => {
-        openModelAsTab(path)
-        setRecentFiles(addRecentFile(path))
+        openModelWorkflow.openPath({
+            path,
+            source: 'recent',
+            addToRecent: true,
+        }, {
+            openModelAsTab,
+            setRecentFiles,
+        })
     }, [openModelAsTab])
 
     const handleClearRecentFiles = useCallback(() => {
@@ -3657,27 +1331,20 @@ const MainLayout: React.FC = () => {
         let unlistenDrop: (() => void) | undefined
         let unlistenEnter: (() => void) | undefined
         let unlistenLeave: (() => void) | undefined
-        const isOpenableModelFile = (filePath: string): boolean => {
-            const ext = filePath.toLowerCase().split('.').pop()
-            return ext === 'mdx' || ext === 'mdl'
-        }
-
         const setupDragDropListeners = async () => {
             try {
-                const { listen } = await import('@tauri-apps/api/event')
-
                 // Listen for file drop
-                unlistenDrop = await listen<{ paths?: string[]; position?: { x: number; y: number } }>('tauri://drag-drop', async (event) => {
+                unlistenDrop = await desktopGateway.listen<{ paths?: string[]; position?: { x: number; y: number } }>('tauri://drag-drop', async (event) => {
                     setIsDragging(false)
                     isExternalModelDragRef.current = false
                     const sourceWindowLabel = (event as any)?.windowLabel
-                    const currentWindowLabel = getCurrentWindow().label
+                    const currentWindowLabel = windowGateway.getCurrentWindowLabel()
                     if (sourceWindowLabel && sourceWindowLabel !== currentWindowLabel) return
 
                     const paths = Array.isArray(event.payload?.paths) ? event.payload.paths : []
                     if (!paths || paths.length === 0) return
 
-                    const filePath = paths.find(isOpenableModelFile)
+                    const filePath = paths.find((path) => openModelWorkflow.isOpenableModelFile(path))
                     if (!filePath) {
                         // Forward non-model external drops to feature-specific handlers (e.g. texture drop zones)
                         window.dispatchEvent(new CustomEvent('war3-external-file-drop', {
@@ -3687,18 +1354,25 @@ const MainLayout: React.FC = () => {
                             }
                         }))
                         return
-                    }                    openModelAsTab(filePath)
-                    setRecentFiles(addRecentFile(filePath))
+                    }
+                    openModelWorkflow.openPath({
+                        path: filePath,
+                        source: 'drag-drop',
+                        addToRecent: true,
+                    }, {
+                        openModelAsTab,
+                        setRecentFiles,
+                    })
                 })
 
                 // Listen for drag enter
-                unlistenEnter = await listen<{ paths?: string[] }>('tauri://drag-enter', (event) => {
+                unlistenEnter = await desktopGateway.listen<{ paths?: string[] }>('tauri://drag-enter', (event) => {
                     const sourceWindowLabel = (event as any)?.windowLabel
-                    const currentWindowLabel = getCurrentWindow().label
+                    const currentWindowLabel = windowGateway.getCurrentWindowLabel()
                     if (sourceWindowLabel && sourceWindowLabel !== currentWindowLabel) return
 
                     const paths = Array.isArray(event.payload?.paths) ? event.payload.paths : []
-                    const hasOpenableModel = paths.some(isOpenableModelFile)
+                    const hasOpenableModel = paths.some((path) => openModelWorkflow.isOpenableModelFile(path))
                     isExternalModelDragRef.current = hasOpenableModel
                     if (hasOpenableModel) {
                         setIsDragging(true)
@@ -3706,7 +1380,7 @@ const MainLayout: React.FC = () => {
                 })
 
                 // Listen for drag leave
-                unlistenLeave = await listen('tauri://drag-leave', () => {
+                unlistenLeave = await desktopGateway.listen('tauri://drag-leave', () => {
                     if (!isExternalModelDragRef.current) return
                     isExternalModelDragRef.current = false
                     setIsDragging(false)
@@ -3729,62 +1403,6 @@ const MainLayout: React.FC = () => {
 
 
 
-    const toUint8ArrayPayload = (payload: any): Uint8Array | null => {
-        if (!payload) return null;
-        if (payload instanceof Uint8Array) return payload;
-        if (payload instanceof ArrayBuffer) return new Uint8Array(payload);
-        if (ArrayBuffer.isView(payload)) {
-            return new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength);
-        }
-        if (Array.isArray(payload)) {
-            return new Uint8Array(payload);
-        }
-        if (typeof payload === 'string') {
-            try {
-                const binary = atob(payload);
-                const bytes = new Uint8Array(binary.length);
-                for (let i = 0; i < binary.length; i++) {
-                    bytes[i] = binary.charCodeAt(i);
-                }
-                return bytes;
-            } catch {
-                return null;
-            }
-        }
-        return null;
-    };
-
-    const normalizeWindowsPath = (path: string): string => path.replace(/\//g, '\\');
-    const isAbsoluteWindowsPath = (path: string): boolean =>
-        /^[a-zA-Z]:\\/.test(path) || path.startsWith('\\\\');
-    const getDirname = (path: string): string => {
-        const normalized = normalizeWindowsPath(path);
-        const idx = normalized.lastIndexOf('\\');
-        return idx >= 0 ? normalized.slice(0, idx) : normalized;
-    };
-    const getBasename = (path: string): string => {
-        const normalized = normalizeWindowsPath(path);
-        const idx = normalized.lastIndexOf('\\');
-        return idx >= 0 ? normalized.slice(idx + 1) : normalized;
-    };
-    const splitPathFileName = (path: string): { stem: string; ext: string } => {
-        const name = getBasename(path);
-        const dot = name.lastIndexOf('.');
-        if (dot <= 0) return { stem: name, ext: '' };
-        return { stem: name.slice(0, dot), ext: name.slice(dot) };
-    };
-    const isPathSeparator = (char: string): boolean => char === '/' || char === '\\';
-    const getPathDir = (path: string): string => {
-        const normalized = normalizeWindowsPath(path);
-        const idx = normalized.lastIndexOf('\\');
-        return idx >= 0 ? normalized.slice(0, idx) : '';
-    };
-    const joinPath = (dir: string, file: string): string => {
-        if (!dir) return file;
-        const normalizedDir = dir.replace(/[\\]+$/, '');
-        return `${normalizedDir}\\${file}`;
-    };
-
     const clearAdjustmentKeysInStoreTextures = () => {
         const state = useModelStore.getState();
         const textures = state.modelData?.Textures;
@@ -3796,208 +1414,51 @@ const MainLayout: React.FC = () => {
         });
     };
 
-    const buildTargetAssetPath = (targetModelDir: string, relativePath: string): string => {
-        const sanitizedDir = targetModelDir.replace(/[\\/]+$/, '')
-        const sanitizedRelative = normalizeWindowsPath(relativePath).replace(/^[\\/]+/, '')
-        return `${sanitizedDir}\\${sanitizedRelative}`
+    const confirmSaveValidation = async (
+        context: SaveValidationContext,
+        validationErrors: string[]
+    ): Promise<boolean> => {
+        const questionByContext: Record<SaveValidationContext, string> = {
+            save: '是否仍然保存?',
+            saveAs: '是否仍然保存?',
+            export: '是否仍然导出?',
+            convert: '是否仍然继续互转?',
+        }
+        const errorMsg = validationErrors.slice(0, 3).map(e => <div key={e}>{e}</div>);
+        const hasMore = validationErrors.length > 3;
+        return showConfirm('模型验证警告', (
+            <div>
+                <div>发现以下问题:</div>
+                <div style={{ color: '#ff4d4f', margin: '10px 0' }}>
+                    {errorMsg}
+                    {hasMore && <div>...还有 {validationErrors.length - 3} 个问题</div>}
+                </div>
+                <div>{questionByContext[context]}</div>
+            </div>
+        ));
     }
 
-    const copyReferencedTexturesToTarget = async (
-        preparedData: any,
-        sourceModelPath: string | null,
-        targetModelPath: string
-    ): Promise<{ copiedCount: number; failed: string[] }> => {
-        const textures = preparedData?.Textures
-        if (!Array.isArray(textures) || textures.length === 0 || !sourceModelPath) {
-            return { copiedCount: 0, failed: [] }
+    const showTextureFailureWarnings = (
+        textureEncodeResult: TextureAssetOperationResult,
+        textureCopyResult?: TextureAssetOperationResult
+    ) => {
+        if (textureEncodeResult.failed.length > 0) {
+            const lines = textureEncodeResult.failed.slice(0, 3).join('n');
+            showMessage(
+                'warning',
+                '部分贴图写出失败',
+                `${textureEncodeResult.failed.length} 个贴图写出失败：n${lines}${textureEncodeResult.failed.length > 3 ? 'n...' : ''}`
+            );
         }
-
-        const sourceModelDir = getDirname(sourceModelPath)
-        const targetModelDir = getDirname(targetModelPath)
-        if (!sourceModelDir || !targetModelDir) {
-            return { copiedCount: 0, failed: [] }
+        if (textureCopyResult && textureCopyResult.failed.length > 0) {
+            const lines = textureCopyResult.failed.slice(0, 3).join('n');
+            showMessage(
+                'warning',
+                '部分贴图复制失败',
+                `${textureCopyResult.failed.length} 个贴图复制失败：n${lines}${textureCopyResult.failed.length > 3 ? 'n...' : ''}`
+            );
         }
-
-        const normalizedSourceDir = normalizeWindowsPath(sourceModelDir).replace(/[\\/]+$/, '').toLowerCase()
-        const normalizedTargetDir = normalizeWindowsPath(targetModelDir).replace(/[\\/]+$/, '').toLowerCase()
-        if (normalizedSourceDir === normalizedTargetDir) {
-            return { copiedCount: 0, failed: [] }
-        }
-
-        const { readFile, writeFile, mkdir, exists } = await import('@tauri-apps/plugin-fs')
-        const copied = new Set<string>()
-        const failed: string[] = []
-        let copiedCount = 0
-
-        for (const texture of textures) {
-            const imagePathRaw = texture?.Image
-            const replaceableId = Number(texture?.ReplaceableId ?? 0)
-            if (typeof imagePathRaw !== 'string' || !imagePathRaw || replaceableId > 0) {
-                continue
-            }
-
-            const normalizedImagePath = normalizeWindowsPath(imagePathRaw)
-            if (isAbsoluteWindowsPath(normalizedImagePath)) {
-                continue
-            }
-
-            const sourceTexturePath = buildTargetAssetPath(sourceModelDir, normalizedImagePath)
-            const targetTexturePath = buildTargetAssetPath(targetModelDir, normalizedImagePath)
-            const dedupeKey = targetTexturePath.toLowerCase()
-            if (copied.has(dedupeKey)) {
-                continue
-            }
-
-            try {
-                if (!(await exists(sourceTexturePath))) {
-                    continue
-                }
-
-                const targetTextureDir = getDirname(targetTexturePath)
-                if (targetTextureDir) {
-                    await mkdir(targetTextureDir, { recursive: true })
-                }
-
-                const bytes = await readFile(sourceTexturePath)
-                await writeFile(targetTexturePath, bytes)
-                copied.add(dedupeKey)
-                copiedCount += 1
-            } catch (error: any) {
-                failed.push(`${normalizedImagePath} (${error?.message || String(error)})`)
-            }
-        }
-
-        return { copiedCount, failed }
     }
-    const encodeAdjustedTexturesOnSave = async (
-        preparedData: any,
-        sourceModelPath: string | null,
-        targetModelPath: string
-    ): Promise<{ encodedCount: number; failed: string[] }> => {
-        const textures = preparedData?.Textures;
-        if (!Array.isArray(textures) || textures.length === 0) {
-            return { encodedCount: 0, failed: [] };
-        }
-
-        const { writeFile, mkdir, exists } = await import('@tauri-apps/plugin-fs');
-        const { invoke } = await import('@tauri-apps/api/core');
-        const targetModelDir = getDirname(targetModelPath);
-        const decodeModelPath = sourceModelPath || targetModelPath;
-
-        const { textureSaveMode, textureSaveSuffix } = useRendererStore.getState();
-        const saveAsMode = textureSaveMode === 'save_as';
-        const baseSuffixRaw = typeof textureSaveSuffix === 'string' && textureSaveSuffix.trim().length > 0
-            ? textureSaveSuffix.trim()
-            : '_1';
-
-        const usedPaths = new Set<string>();
-        const normalizedPrefix = (input: string) => normalizeWindowsPath(input).toLowerCase();
-
-        textures.forEach((texture: any) => {
-            if (!texture?.Image) return;
-            usedPaths.add(normalizedPrefix(String(texture.Image)));
-        });
-
-        const resolveSaveAsPath = async (imagePathRaw: string): Promise<{ imagePath: string; outputPath: string }> => {
-            const normalizedImagePath = normalizeWindowsPath(imagePathRaw);
-            const isAbsolute = isAbsoluteWindowsPath(normalizedImagePath);
-            const originalDir = getPathDir(normalizedImagePath);
-            const { stem, ext } = splitPathFileName(normalizedImagePath);
-
-            const baseName = `${stem}${baseSuffixRaw}${ext}`;
-            const baseRelativePath = originalDir ? joinPath(originalDir, baseName) : baseName;
-
-            const buildOutput = (pathValue: string) => isAbsolute
-                ? pathValue
-                : buildTargetAssetPath(targetModelDir, pathValue);
-
-            let candidatePath = baseRelativePath;
-            let outputPath = buildOutput(candidatePath);
-            let attempt = 1;
-
-            while (usedPaths.has(normalizedPrefix(candidatePath)) || await exists(outputPath)) {
-                const nextName = `${stem}${baseSuffixRaw}${attempt}${ext}`;
-                candidatePath = originalDir ? joinPath(originalDir, nextName) : nextName;
-                outputPath = buildOutput(candidatePath);
-                attempt += 1;
-            }
-
-            usedPaths.add(normalizedPrefix(candidatePath));
-            return { imagePath: candidatePath, outputPath };
-        };
-
-        let encodedCount = 0;
-        const failed: string[] = [];
-
-        for (const texture of textures) {
-            const imagePathRaw = texture?.Image;
-            const adjustmentsRaw = texture?.[TEXTURE_ADJUSTMENTS_KEY];
-
-            if (typeof imagePathRaw !== 'string' || !imagePathRaw || !adjustmentsRaw) {
-                if (texture && Object.prototype.hasOwnProperty.call(texture, TEXTURE_ADJUSTMENTS_KEY)) {
-                    delete texture[TEXTURE_ADJUSTMENTS_KEY];
-                }
-                continue;
-            }
-
-            const normalizedAdjustments = normalizeTextureAdjustments(adjustmentsRaw);
-            const ext = imagePathRaw.toLowerCase().split('.').pop();
-            if (isDefaultTextureAdjustments(normalizedAdjustments) || (ext !== 'blp' && ext !== 'tga')) {
-                delete texture[TEXTURE_ADJUSTMENTS_KEY];
-                continue;
-            }
-
-            const { decodeTexture } = await import('./viewer/textureLoader')
-            const decodeResult = await decodeTexture(imagePathRaw, decodeModelPath);
-            if (!decodeResult.imageData) {
-                failed.push(`${imagePathRaw} (解码失败)`);
-                continue;
-            }
-
-            try {
-                const adjusted = applyTextureAdjustments(decodeResult.imageData, normalizedAdjustments);
-                const payload = await invoke<any>('encode_texture_image', {
-                    rgba: Array.from(adjusted.data),
-                    width: adjusted.width,
-                    height: adjusted.height,
-                    format: ext,
-                    blpQuality: 90
-                });
-                const bytes = toUint8ArrayPayload(payload);
-                if (!bytes || bytes.byteLength === 0) {
-                    failed.push(`${imagePathRaw} (编码失败)`);
-                    continue;
-                }
-
-                let outputPath: string;
-                if (saveAsMode) {
-                    const resolved = await resolveSaveAsPath(imagePathRaw);
-                    texture.Image = resolved.imagePath;
-                    if (texture.Path !== undefined) {
-                        texture.Path = resolved.imagePath;
-                    }
-                    outputPath = resolved.outputPath;
-                } else {
-                    const normalizedImagePath = normalizeWindowsPath(imagePathRaw);
-                    outputPath = isAbsoluteWindowsPath(normalizedImagePath)
-                        ? normalizedImagePath
-                        : buildTargetAssetPath(targetModelDir, normalizedImagePath);
-                }
-
-                const outputDir = getDirname(outputPath);
-                if (outputDir) {
-                    await mkdir(outputDir, { recursive: true });
-                }
-                await writeFile(outputPath, bytes);
-                delete texture[TEXTURE_ADJUSTMENTS_KEY];
-                encodedCount += 1;
-            } catch (error: any) {
-                failed.push(`${imagePathRaw} (${error?.message || String(error)})`);
-            }
-        }
-
-        return { encodedCount, failed };
-    };
 
     const handleSave = async (): Promise<boolean> => {
         if (isSavingRef.current) {
@@ -4008,78 +1469,31 @@ const MainLayout: React.FC = () => {
 
         try {
             isSavingRef.current = true;
-            const { writeFile } = await import('@tauri-apps/plugin-fs')
-
-            console.time('[MainLayout] SavePrep')
-            // Prepare model data with correct typed arrays
-            const normalizedData = useModelStore.getState().getModelDataForSave?.() ?? modelData;
-            const preparedData = prepareModelDataForSave(normalizedData);
-
-            // Cleanup invalid geosets BEFORE validation
-            cleanupInvalidGeosets(preparedData)
-
-            // Validate model data before export
-            const validationErrors = validateModelData(preparedData);
-            if (validationErrors.length > 0) {
-                console.warn('[MainLayout] Model validation warnings:', validationErrors);
-                // Show first 3 errors to user
-                const errorMsg = validationErrors.slice(0, 3).join('n');
-                const proceed = confirm(`模型验证发现以下问题:n${errorMsg}n${validationErrors.length > 3 ? `...还有 ${validationErrors.length - 3} 个问题` : ''}nn是否仍然保存?`);
-                if (!proceed) {
-                    isSavingRef.current = false;
-                    return false;
-                }
+            const modelState = useModelStore.getState();
+            const normalizedData = modelState.getModelDataForSave?.() ?? modelData;
+            const globalColorSettings = useGlobalColorAdjustStore.getState().settings;
+            const rendererState = useRendererStore.getState();
+            const saveResult = await saveCurrentModelWorkflow.savePreparedModel({
+                modelData: normalizedData,
+                nodes: modelState.nodes,
+                sourceModelPath: modelPath,
+                targetPath: modelPath,
+                globalColorSettings,
+                textureOptions: {
+                    textureSaveMode: rendererState.textureSaveMode,
+                    textureSaveSuffix: rendererState.textureSaveSuffix,
+                },
+                encodeAdjustedTextures: true,
+                validationContext: 'save',
+                confirmValidation: ({ context, validationErrors }) => confirmSaveValidation(context, validationErrors),
+            });
+            if (!saveResult) {
+                return false;
             }
-
-            console.timeEnd('[MainLayout] SavePrep')
-
-            const textureEncodeResult = await encodeAdjustedTexturesOnSave(preparedData, modelPath, modelPath);
-
-            if (modelPath.toLowerCase().endsWith('.mdl')) {
-                cleanupInvalidGeosets(preparedData)
-                console.time('[MainLayout] GenMDL')
-                const content = generateMDL(preparedData)
-                console.timeEnd('[MainLayout] GenMDL')
-
-                console.time('[MainLayout] FileWrite')
-                await writeFile(modelPath, new TextEncoder().encode(content))
-                console.timeEnd('[MainLayout] FileWrite')
-            } else {
-                cleanupInvalidGeosets(preparedData)
-                console.time('[MainLayout] GenMDX')
-                const buffer = generateMDX(preparedData)
-                console.timeEnd('[MainLayout] GenMDX')
-
-                console.time('[MainLayout] FileWrite')
-                await writeFile(modelPath, new Uint8Array(buffer))
-                console.timeEnd('[MainLayout] FileWrite')
-            }
-
-            if (textureEncodeResult.failed.length > 0) {
-                const lines = textureEncodeResult.failed.slice(0, 3).join('n');
-                showMessage(
-                    'warning',
-                    '部分贴图写出失败',
-                    `${textureEncodeResult.failed.length} 个贴图写出失败：n${lines}${textureEncodeResult.failed.length > 3 ? 'n...' : ''}`
-                );
-            }
-            if (textureEncodeResult.encodedCount > 0) {
-                const { textureSaveMode } = useRendererStore.getState();
-                if (textureSaveMode === 'save_as') {
-                    useModelStore.getState().setTextures(preparedData.Textures || []);
-                } else {
-                    clearAdjustmentKeysInStoreTextures();
-                }
-                try {
-                    const { invoke } = await import('@tauri-apps/api/core');
-                    await invoke('clear_texture_batch_cache');
-                } catch (e) {
-                    console.error('Failed to clear texture cache:', e);
-                }
-            }
-
-            useModelStore.getState().commitMaterialManagerPreviewToModel();
-            useHistoryStore.getState().markSaved();
+            showTextureFailureWarnings(saveResult.textureEncodeResult);
+            commitSavedModelToStore(saveResult.preparedData, saveResult.savedNodes ?? modelState.nodes);
+            useGlobalColorAdjustStore.getState().resetSettings();
+            historyCommandService.markSaved();
             useModelStore.getState().markTabSaved();
             showMessage('success', '保存成功', '模型已保存')
             return true;
@@ -4100,10 +1514,7 @@ const MainLayout: React.FC = () => {
         }
         if (!modelData) return false
         try {
-            const { save } = await import('@tauri-apps/plugin-dialog')
-            const { writeFile } = await import('@tauri-apps/plugin-fs')
-
-            const selected = await save({
+            const selected = await desktopGateway.saveFileDialog({
                 filters: [{
                     name: 'Warcraft 3 Models',
                     extensions: ['mdx', 'mdl']
@@ -4112,77 +1523,33 @@ const MainLayout: React.FC = () => {
 
             if (selected) {
                 isSavingRef.current = true;
-                // Prepare model data with correct typed arrays
-                const normalizedData = useModelStore.getState().getModelDataForSave?.() ?? modelData;
-                const preparedData = prepareModelDataForSave(normalizedData);
-
-                // Cleanup invalid geosets BEFORE validation
-                cleanupInvalidGeosets(preparedData)
-
-                // Validate model data before export
-                const validationErrors = validateModelData(preparedData);
-                if (validationErrors.length > 0) {
-                    console.warn('[MainLayout] SaveAs validation warnings:', validationErrors);
-                    const errorMsg = validationErrors.slice(0, 3).map(e => <div key={e}>{e}</div>);
-                    const hasMore = validationErrors.length > 3;
-                    const proceed = await showConfirm('模型验证警告', (
-                        <div>
-                            <div>发现以下问题:</div>
-                            <div style={{ color: '#ff4d4f', margin: '10px 0' }}>
-                                {errorMsg}
-                                {hasMore && <div>...还有 {validationErrors.length - 3} 个问题</div>}
-                            </div>
-                            <div>是否仍然保存?</div>
-                        </div>
-                    ));
-                    if (!proceed) return false;
+                const modelState = useModelStore.getState();
+                const normalizedData = modelState.getModelDataForSave?.() ?? modelData;
+                const globalColorSettings = useGlobalColorAdjustStore.getState().settings;
+                const rendererState = useRendererStore.getState();
+                const saveResult = await saveCurrentModelWorkflow.savePreparedModel({
+                    modelData: normalizedData,
+                    nodes: modelState.nodes,
+                    sourceModelPath: modelPath,
+                    targetPath: selected,
+                    globalColorSettings,
+                    textureOptions: {
+                        textureSaveMode: rendererState.textureSaveMode,
+                        textureSaveSuffix: rendererState.textureSaveSuffix,
+                    },
+                    copyReferencedTextures: true,
+                    encodeAdjustedTextures: true,
+                    validationContext: 'saveAs',
+                    confirmValidation: ({ context, validationErrors }) => confirmSaveValidation(context, validationErrors),
+                });
+                if (!saveResult) {
+                    return false;
                 }
-
-                const textureEncodeResult = await encodeAdjustedTexturesOnSave(preparedData, modelPath, selected);
-                const textureCopyResult = await copyReferencedTexturesToTarget(preparedData, modelPath, selected);
-                if (textureEncodeResult.encodedCount > 0) {
-                    const { textureSaveMode } = useRendererStore.getState();
-                    if (textureSaveMode === 'save_as') {
-                        useModelStore.getState().setTextures(preparedData.Textures || []);
-                    }
-                }
-
-                if (selected.toLowerCase().endsWith('.mdl')) {
-                    cleanupInvalidGeosets(preparedData)
-                    const content = generateMDL(preparedData)
-                    await writeFile(selected, new TextEncoder().encode(content))
-                } else {
-                    cleanupInvalidGeosets(preparedData)
-                    const buffer = generateMDX(preparedData)
-                    await writeFile(selected, new Uint8Array(buffer))
-                }
-                if (textureEncodeResult.failed.length > 0) {
-                    const lines = textureEncodeResult.failed.slice(0, 3).join('n');
-                    showMessage(
-                        'warning',
-                        '部分贴图写出失败',
-                        `${textureEncodeResult.failed.length} 个贴图写出失败：n${lines}${textureEncodeResult.failed.length > 3 ? 'n...' : ''}`
-                    );
-                }
-                if (textureCopyResult.failed.length > 0) {
-                    const lines = textureCopyResult.failed.slice(0, 3).join('n');
-                    showMessage(
-                        'warning',
-                        '部分贴图复制失败',
-                        `${textureCopyResult.failed.length} 个贴图复制失败：n${lines}${textureCopyResult.failed.length > 3 ? 'n...' : ''}`
-                    );
-                }
-                if (textureEncodeResult.encodedCount > 0) {
-                    try {
-                        const { invoke } = await import('@tauri-apps/api/core');
-                        await invoke('clear_texture_batch_cache');
-                    } catch (e) {
-                        console.error('Failed to clear texture cache:', e);
-                    }
-                }
-                useModelStore.getState().commitMaterialManagerPreviewToModel();
+                showTextureFailureWarnings(saveResult.textureEncodeResult, saveResult.textureCopyResult);
+                commitSavedModelToStore(saveResult.preparedData, saveResult.savedNodes ?? modelState.nodes);
+                useGlobalColorAdjustStore.getState().resetSettings();
                 // Update store with new path if needed, but for now just alert
-                useHistoryStore.getState().markSaved();
+                historyCommandService.markSaved();
                 useModelStore.getState().markTabSaved();
                 showMessage('success', '另存为成功', '模型已另存为: ' + selected)
                 return true;
@@ -4204,7 +1571,7 @@ const MainLayout: React.FC = () => {
                 showMessage('warning', '提示', '正在保存模型，请稍候再关闭...');
                 return true;
             }
-            getCurrentWindow().close();
+            void windowGateway.closeCurrentWindow();
             return true;
         };
 
@@ -4282,48 +1649,6 @@ const MainLayout: React.FC = () => {
                 useSelectionStore.getState().setMainMode('animation');
                 return true;
             }),
-            registerShortcutHandler('editor.nodeManager', () => {
-                toggleNodeManager();
-                return true;
-            }),
-            registerShortcutHandler('editor.cameraManager', () => {
-                windowManager.openToolWindow('cameraManager', '相机管理器', 680, 520);
-                return true;
-            }),
-            registerShortcutHandler('editor.geosetManager', () => {
-                windowManager.openToolWindow('geosetEditor', '多边形管理器', 850, 480);
-                return true;
-            }),
-            registerShortcutHandler('editor.geosetAnimManager', () => {
-                windowManager.openToolWindow('geosetVisibilityTool', '多边形动作显隐工具', 980, 560);
-                return true;
-            }),
-            registerShortcutHandler('editor.textureManager', () => {
-                windowManager.openToolWindow('textureManager', '贴图管理器', 920, 480).catch((err) => {
-                    console.error('[MainLayout] 打开贴图管理器失败:', err);
-                    showMessage('error', '贴图管理器', `无法打开：${err instanceof Error ? err.message : String(err)}`);
-                });
-                return true;
-            }),
-            registerShortcutHandler('editor.textureAnimManager', () => {
-                windowManager.openToolWindow('textureAnimManager', '贴图动画管理器', 800, 480);
-                return true;
-            }),
-            registerShortcutHandler('editor.materialManager', () => {
-                // Not rendering inline material modal anymore
-                // setShowMaterialModal(prev => !prev);
-                windowManager.openMaterialManager();
-                return true;
-            }),
-            registerShortcutHandler('editor.sequenceManager', () => {
-                // setShowSequenceModal(prev => !prev);
-                windowManager.openToolWindow('sequenceManager', '动画管理器', 660, 550);
-                return true;
-            }),
-            registerShortcutHandler('editor.globalSequenceManager', () => {
-                windowManager.openToolWindow('globalSequenceManager', '全局动作管理器', 300, 360);
-                return true;
-            }),
             registerShortcutHandler('view.top', () => {
                 setViewPreset({ type: 'top', time: Date.now() });
                 return true;
@@ -4372,13 +1697,21 @@ const MainLayout: React.FC = () => {
                 return true;
             }),
             registerShortcutHandler('edit.undo', () => {
-                useHistoryStore.getState().undo();
+                historyCommandService.undo();
                 return true;
             }),
             registerShortcutHandler('edit.redo', () => {
-                useHistoryStore.getState().redo();
+                historyCommandService.redo();
                 return true;
-            })
+            }),
+            ...toolWindowOrchestrator.registerEditorShortcuts({
+                windowManager,
+                toggleNodeManager,
+                toggleModelInfo,
+                toggleGeosetVisibility: () => { },
+                toggleInlineEditor: () => { },
+                reportOpenError: reportToolWindowOpenError,
+            }),
         ];
 
         return () => {
@@ -4399,12 +1732,9 @@ const MainLayout: React.FC = () => {
     const handleExportMDL = async () => {
         if (!modelData) return
         try {
-            const { save } = await import('@tauri-apps/plugin-dialog')
-            const { writeFile } = await import('@tauri-apps/plugin-fs')
-
             const defaultName = getModelBaseName() + '.mdl'
 
-            const selected = await save({
+            const selected = await desktopGateway.saveFileDialog({
                 defaultPath: defaultName,
                 filters: [{
                     name: 'MDL Models',
@@ -4420,35 +1750,20 @@ const MainLayout: React.FC = () => {
                 }
 
                 const normalizedData = useModelStore.getState().getModelDataForSave?.() ?? modelData;
-                const preparedData = prepareModelDataForSave(normalizedData)
-
-                // Cleanup invalid geosets BEFORE validation
-                cleanupInvalidGeosets(preparedData)
-                await copyReferencedTexturesToTarget(preparedData, modelPath, filePath)
-
-                // Validate before export
-                const validationErrors = validateModelData(preparedData);
-                if (validationErrors.length > 0) {
-                    console.warn('[MainLayout] Export MDL validation warnings:', validationErrors);
-                    const errorMsg = validationErrors.slice(0, 3).map(e => <div key={e}>{e}</div>);
-                    const hasMore = validationErrors.length > 3;
-                    const proceed = await showConfirm('模型验证警告', (
-                        <div>
-                            <div>发现以下问题:</div>
-                            <div style={{ color: '#ff4d4f', margin: '10px 0' }}>
-                                {errorMsg}
-                                {hasMore && <div>...还有 {validationErrors.length - 3} 个问题</div>}
-                            </div>
-                            <div>是否仍然导出?</div>
-                        </div>
-                    ));
-                    if (!proceed) return;
+                const saveResult = await saveCurrentModelWorkflow.savePreparedModel({
+                    modelData: normalizedData,
+                    sourceModelPath: modelPath,
+                    targetPath: filePath,
+                    copyReferencedTextures: true,
+                    format: 'mdl',
+                    validationContext: 'export',
+                    confirmValidation: ({ context, validationErrors }) => confirmSaveValidation(context, validationErrors),
+                })
+                if (!saveResult) {
+                    return;
                 }
 
-                cleanupInvalidGeosets(preparedData)
-
-                const content = generateMDL(preparedData)
-                await writeFile(filePath, new TextEncoder().encode(content))
+                showTextureFailureWarnings(saveResult.textureEncodeResult, saveResult.textureCopyResult);
                 showMessage('success', '导出成功', '已导出为 MDL: ' + filePath)
             }
         } catch (err) {
@@ -4460,12 +1775,9 @@ const MainLayout: React.FC = () => {
     const handleExportMDX = async () => {
         if (!modelData) return
         try {
-            const { save } = await import('@tauri-apps/plugin-dialog')
-            const { writeFile } = await import('@tauri-apps/plugin-fs')
-
             const defaultName = getModelBaseName() + '.mdx'
 
-            const selected = await save({
+            const selected = await desktopGateway.saveFileDialog({
                 defaultPath: defaultName,
                 filters: [{
                     name: 'MDX Models',
@@ -4481,37 +1793,20 @@ const MainLayout: React.FC = () => {
                 }
 
                 const normalizedData = useModelStore.getState().getModelDataForSave?.() ?? modelData;
-                const preparedData = prepareModelDataForSave(normalizedData)
-
-                // Cleanup invalid geosets BEFORE validation
-                cleanupInvalidGeosets(preparedData)
-                await copyReferencedTexturesToTarget(preparedData, modelPath, filePath)
-
-                // Validate before export
-                const validationErrors = validateModelData(preparedData);
-                if (validationErrors.length > 0) {
-                    console.warn('[MainLayout] Export MDX validation warnings:', validationErrors);
-                    const errorMsg = validationErrors.slice(0, 3).map(e => <div key={e}>{e}</div>);
-                    const hasMore = validationErrors.length > 3;
-                    const proceed = await showConfirm('模型验证警告', (
-                        <div>
-                            <div>发现以下问题:</div>
-                            <div style={{ color: '#ff4d4f', margin: '10px 0' }}>
-                                {errorMsg}
-                                {hasMore && <div>...还有 {validationErrors.length - 3} 个问题</div>}
-                            </div>
-                            <div>是否仍然导出?</div>
-                        </div>
-                    ));
-                    if (!proceed) return;
+                const saveResult = await saveCurrentModelWorkflow.savePreparedModel({
+                    modelData: normalizedData,
+                    sourceModelPath: modelPath,
+                    targetPath: filePath,
+                    copyReferencedTextures: true,
+                    format: 'mdx',
+                    validationContext: 'export',
+                    confirmValidation: ({ context, validationErrors }) => confirmSaveValidation(context, validationErrors),
+                })
+                if (!saveResult) {
+                    return;
                 }
 
-
-                // Cleanup invalid geosets before export (e.g., empty geosets from split operations)
-                cleanupInvalidGeosets(preparedData)
-
-                const buffer = generateMDX(preparedData)
-                await writeFile(filePath, new Uint8Array(buffer))
+                showTextureFailureWarnings(saveResult.textureEncodeResult, saveResult.textureCopyResult);
                 showMessage('success', '导出成功', '已导出为 MDX: ' + filePath)
             }
         } catch (err) {
@@ -4540,9 +1835,7 @@ const MainLayout: React.FC = () => {
         const targetPath = joinPath(sourceDir, `${baseName}${targetExt}`)
 
         try {
-            const { writeFile, exists } = await import('@tauri-apps/plugin-fs')
-
-            if (normalizeWindowsPath(targetPath).toLowerCase() !== lowerPath && await exists(targetPath)) {
+            if (normalizeWindowsPath(targetPath).toLowerCase() !== lowerPath && await desktopGateway.exists(targetPath)) {
                 const proceed = await showConfirm(
                     '目标文件已存在',
                     <div>检测到目标文件已存在，是否覆盖？<div style={{ marginTop: 8, color: '#999' }}>{targetPath}</div></div>
@@ -4553,39 +1846,20 @@ const MainLayout: React.FC = () => {
             }
 
             const normalizedData = useModelStore.getState().getModelDataForSave?.() ?? modelData
-            const preparedData = prepareModelDataForSave(normalizedData)
-
-            cleanupInvalidGeosets(preparedData)
-            await copyReferencedTexturesToTarget(preparedData, modelPath, targetPath)
-
-            const validationErrors = validateModelData(preparedData)
-            if (validationErrors.length > 0) {
-                const proceed = await showConfirm(
-                    '模型验证警告',
-                    <div>
-                        <div>发现以下问题：</div>
-                        <div style={{ color: '#ff4d4f', margin: '10px 0' }}>
-                            {validationErrors.slice(0, 3).map((error) => <div key={error}>{error}</div>)}
-                            {validationErrors.length > 3 && <div>...还有 {validationErrors.length - 3} 个问题</div>}
-                        </div>
-                        <div>是否仍然继续互转？</div>
-                    </div>
-                )
-                if (!proceed) {
-                    return false
-                }
+            const saveResult = await saveCurrentModelWorkflow.savePreparedModel({
+                modelData: normalizedData,
+                sourceModelPath: modelPath,
+                targetPath,
+                copyReferencedTextures: true,
+                format: targetExt === '.mdl' ? 'mdl' : 'mdx',
+                validationContext: 'convert',
+                confirmValidation: ({ context, validationErrors }) => confirmSaveValidation(context, validationErrors),
+            })
+            if (!saveResult) {
+                return false
             }
 
-            cleanupInvalidGeosets(preparedData)
-
-            if (targetExt === '.mdl') {
-                const content = generateMDL(preparedData)
-                await writeFile(targetPath, new TextEncoder().encode(content))
-            } else {
-                const buffer = generateMDX(preparedData)
-                await writeFile(targetPath, new Uint8Array(buffer))
-            }
-
+            showTextureFailureWarnings(saveResult.textureEncodeResult, saveResult.textureCopyResult);
             openModelAsTab(targetPath)
             setRecentFiles(replaceRecentModelPath(sourcePath, targetPath))
             showMessage('success', '互转成功', `已生成并打开: ${targetPath}`)
@@ -4597,189 +1871,27 @@ const MainLayout: React.FC = () => {
         }
     }
 
-
-    // Helper to remove empty/invalid geosets before export
-    const cleanupInvalidGeosets = (preparedData: any) => {
-        if (!preparedData.Geosets) return
-
-        const originalCount = preparedData.Geosets.length
-
-        // Debug: Log all geosets before filtering
-        // console.log(`[MainLayout] cleanupInvalidGeosets: Checking ${originalCount} geosets`)
-        preparedData.Geosets.forEach((geoset: any, index: number) => {
-            // console.log(`[MainLayout] Geoset ${index}: Vertices=${geoset.Vertices?.length || 'undefined'}, Faces=${geoset.Faces?.length || 'undefined'}, type(V)=${typeof geoset.Vertices}, type(F)=${typeof geoset.Faces}`)
-        })
-
-        preparedData.Geosets = preparedData.Geosets.filter((geoset: any, index: number) => {
-            // Only remove geosets that are truly empty (no vertices or no faces)
-            // This handles geosets that were emptied by split operations
-            const hasVertices = geoset.Vertices && geoset.Vertices.length > 0
-            const hasFaces = geoset.Faces && geoset.Faces.length > 0
-            const hasNormals = geoset.Normals && geoset.Normals.length > 0
-            const hasTv = Array.isArray(geoset.TVertices) && geoset.TVertices.length > 0
-
-            const isValid = hasVertices && hasFaces && hasNormals && hasTv
-
-            if (!isValid) {
-                console.warn(
-                    `[MainLayout] Removing invalid Geoset ${index}: vertices=${geoset.Vertices?.length || 0}, faces=${geoset.Faces?.length || 0}, normals=${geoset.Normals?.length || 0}, tverts=${geoset.TVertices?.length || 0}`
-                )
-            }
-            return isValid
-        })
-
-        // Ensure all remaining geosets have required properties for MDX generator
-        preparedData.Geosets.forEach((geoset: any, index: number) => {
-            // Anims is required by generate.ts:575
-            if (!geoset.Anims) {
-                geoset.Anims = []            }
-            // VertexGroup is required
-            if (!geoset.VertexGroup) {
-                geoset.VertexGroup = new Uint8Array(geoset.Vertices.length / 3)            }
-            // Groups is required
-            if (!geoset.Groups) {
-                geoset.Groups = [[0]]            }
-        })
-
-        if (preparedData.Geosets.length !== originalCount) {        }
-    }
-
-    const toggleEditor = (editor: string) => {
-        if (editor === 'camera') {
-            windowManager.openToolWindow('cameraManager', '相机管理器', 680, 520).catch(e => {
-                showMessage('error', '相机管理器', `无法打开: ${e instanceof Error ? e.message : String(e)}`);
-            });
-            return;
-        }
-        if (editor === 'geoset') {
-            windowManager.openToolWindow('geosetEditor', '多边形管理器', 850, 480).catch(e => {
-                showMessage('error', '多边形管理器', `无法打开: ${e instanceof Error ? e.message : String(e)}`);
-            });
-            return;
-        }
-        if (editor === 'geosetVisibilityTool') {
-            windowManager.openToolWindow('geosetVisibilityTool', '多边形动作显隐工具', 980, 560).catch(e => {
-                showMessage('error', '多边形显隐工具', `无法打开: ${e instanceof Error ? e.message : String(e)}`);
-            });
-            return;
-        }
-
-        setActiveEditor(activeEditor === editor ? null : editor)
-    }
-
-    // Debug Console State
-    const [showDebugConsole, setShowDebugConsole] = useState<boolean>(() => {
-        try {
-            const saved = localStorage.getItem('showDebugConsole');
-            return saved ? JSON.parse(saved) : false;
-        } catch { return false; }
-    })
-    const [showChangelog, setShowChangelog] = useState<boolean>(false)
-    const [activationStatus, setActivationStatus] = useState<{
-        is_activated: boolean;
-        license_type: string;
-        expiration_date: string | null;
-        days_remaining: number | null;
-        level: number;
-        level_name: string;
-    } | null>(null)
-    const [activationCode, setActivationCode] = useState<string>('')
-    const [activationLoading, setActivationLoading] = useState<boolean>(false)
-    const [activationError, setActivationError] = useState<string | null>(null)
-
-    useEffect(() => {
-        localStorage.setItem('showDebugConsole', JSON.stringify(showDebugConsole))
-        import('../utils/debugConsoleState').then(({ setDebugConsoleEnabled }) => {
-            setDebugConsoleEnabled(showDebugConsole)
-        })
-        import('@tauri-apps/api/core').then(({ invoke }) => {
-            invoke('toggle_console', { show: showDebugConsole }).catch(e => console.error('Failed to toggle console:', e))
-        })
-    }, [showDebugConsole])
-
-    // Fetch activation status when About modal opens
-    const fetchActivationStatus = useCallback(async () => {
-        try {
-            const { invoke } = await import('@tauri-apps/api/core');
-            const status: any = await invoke('get_activation_status');
-            setActivationStatus(status);
-        } catch (e) {
-            console.error('Failed to get activation status:', e);
-        }
-    }, []);
-
-    useEffect(() => {
-        if (showAbout) {
-            fetchActivationStatus();
-            setActivationError(null);
-        }
-    }, [showAbout, fetchActivationStatus])
-
-    const handleCheckUpdate = useCallback(async () => {
-        const today = new Date().toISOString().split('T')[0]
-        localStorage.setItem(AUTO_UPDATE_CHECK_DATE_KEY, today)
-        const { checkGiteeUpdate } = await import('../services/updateService')
-        await checkGiteeUpdate()
+    const reportToolWindowOpenError = useCallback((title: string, error: unknown) => {
+        showMessage('error', title, `无法打开: ${error instanceof Error ? error.message : String(error)}`)
     }, [])
 
-    const handleShowChangelog = useCallback(async () => {
-        const { showChangelog } = await import('../services/updateService')
-        await showChangelog()
-    }, [])
-
-    // Delay update check until after the first paint to keep startup responsive.
-    useEffect(() => {
-        let disposed = false
-
-        const timeoutId = window.setTimeout(() => {
-            const today = new Date().toISOString().split('T')[0]
-            if (localStorage.getItem(AUTO_UPDATE_CHECK_DATE_KEY) === today) {
-                return
-            }
-
-            localStorage.setItem(AUTO_UPDATE_CHECK_DATE_KEY, today)
-            void import('../services/updateService').then(({ checkGiteeUpdateSilent }) => {
-                if (disposed) {
-                    return
-                }
-
-                checkGiteeUpdateSilent()
-            })
-        }, 1500)
-
-        return () => {
-            disposed = true
-            window.clearTimeout(timeoutId)
-        }
-    }, []);
-
-    // Handle activation
-    const handleActivate = async () => {
-        if (!activationCode.trim()) {
-            setActivationError('请输入激活码');
-            return;
-        }
-
-        setActivationLoading(true);
-        setActivationError(null);
-
-        try {
-            const { invoke } = await import('@tauri-apps/api/core');
-            const result: any = await invoke('activate_software', { licenseCode: activationCode.trim() });
-            setActivationStatus(result);
-            setActivationCode('');
-
-            if (result.is_activated) {
-                alert(`激活成功！nn版本: ${result.level_name}n授权类型: ${result.license_type === 'PERM' ? '永久授权' : '时限授权'}`);
-            }
-        } catch (e: any) {
-            setActivationError(typeof e === 'string' ? e : (e.message || '激活失败'));
-        } finally {
-            setActivationLoading(false);
-        }
-    }
-
-
+    const handleToggleEditor = useCallback((editor: string) => {
+        toolWindowOrchestrator.openEditor(editor, {
+            windowManager,
+            toggleNodeManager,
+            toggleModelInfo,
+            toggleGeosetVisibility: () => setShowGeosetVisibility(!showGeosetVisibility),
+            toggleInlineEditor: (nextEditor) => setActiveEditor(activeEditor === nextEditor ? null : nextEditor),
+            reportOpenError: reportToolWindowOpenError,
+        })
+    }, [
+        activeEditor,
+        reportToolWindowOpenError,
+        setShowGeosetVisibility,
+        showGeosetVisibility,
+        toggleModelInfo,
+        toggleNodeManager,
+    ])
 
     return (
         <div
@@ -4849,8 +1961,8 @@ const MainLayout: React.FC = () => {
                 onChangeBackgroundColor={setBackgroundColor}
                 showFPS={showFPS}
                 onToggleFPS={() => setShowFPS(!showFPS)}
-                onCheckUpdate={handleCheckUpdate}
-                onShowChangelog={handleShowChangelog}
+                onCheckUpdate={checkUpdate}
+                onShowChangelog={showChangelog}
                 showGeosetVisibility={showGeosetVisibility}
                 onToggleGeosetVisibility={() => {
                     const newValue = !showGeosetVisibility;
@@ -4876,296 +1988,34 @@ const MainLayout: React.FC = () => {
                     const newVal = !showAttachments
                     setShowAttachments(newVal)
                 }}
-                onToggleEditor={(editor) => {                    if (editor === 'nodeManager') {
-                        toggleNodeManager()
-                    } else if (editor === 'modelInfo') {
-                        toggleModelInfo()
-                    } else if (editor === 'geosetVisibilityTool') {
-                        windowManager.openToolWindow('geosetVisibilityTool', '多边形动作显隐工具', 980, 560);
-                    } else if (editor === 'texture') {
-                        windowManager.openToolWindow('textureManager', '贴图管理器', 920, 480).catch((err) => {
-                            console.error('[MainLayout] 打开贴图管理器失败:', err);
-                            showMessage('error', '贴图管理器', `无法打开：${err instanceof Error ? err.message : String(err)}`);
-                        });
-                    } else if (editor === 'textureAnim') {
-                        windowManager.openToolWindow('textureAnimManager', '贴图动画管理器', 800, 480);
-                    } else if (editor === 'sequence') {
-                        // setShowSequenceModal(true)
-                        windowManager.openToolWindow('sequenceManager', '动画管理器', 600, 450)
-                    } else if (editor === 'camera') {
-                        windowManager.openToolWindow('cameraManager', '相机管理器', 700, 520);
-                    } else if (editor === 'material') {
-                        windowManager.openMaterialManager()
-                    } else if (editor === 'geoset') {
-                        windowManager.openToolWindow('geosetEditor', '多边形管理器', 640, 480);
-                    } else if (editor === 'geosetAnim') {
-                        windowManager.openToolWindow('geosetAnimManager', '多边形动画管理器', 800, 560);
-                    } else if (editor === 'globalSequence') {
-                        windowManager.openToolWindow('globalSequenceManager', '全局动作管理器', 300, 360);
-                    } else if (editor === 'modelOptimize') {
-                        // Open as native window using the WindowManager
-                        windowManager.openToolWindow('modelOptimize', '模型优化', 320, 520);
-                    } else if (editor === 'modelMerge') {
-                        windowManager.openToolWindow('modelMerge', '模型合并', 560, 500);
-                    } else if (editor === 'dissolveEffect') {
-                        const { width, height } = getToolWindowSize('dissolveEffect')
-                        windowManager.openToolWindow('dissolveEffect', '消散动画工具', width, height);
-                    } else if (editor === 'geosetVisibility') {
-                        setShowGeosetVisibility(!showGeosetVisibility)
-                    } else {                        toggleEditor(editor)
-                    }
-                }}
+                onToggleEditor={handleToggleEditor}
                 mainMode={mainMode}
                 onSetMainMode={setMainMode}
                 showDebugConsole={showDebugConsole}
                 onToggleDebugConsole={() => setShowDebugConsole(!showDebugConsole)}
                 onShowAbout={() => setShowAbout(true)}
-                onRecalculateNormals={() => {
-                    if (!useModelStore.getState().modelData) {
-                        showMessage('warning', '提示', '没有打开任何模型，请先打开一个模型。');
-                        return;
-                    }
-                    useModelStore.getState().recalculateNormals();
-                    showMessage('success', '成功', '已重新计算法线');
-                }}
-                onRecalculateExtents={() => {
-                    if (!useModelStore.getState().modelData) {
-                        showMessage('warning', '提示', '没有打开任何模型，请先打开一个模型。');
-                        return;
-                    }
-                    useModelStore.getState().recalculateExtents();
-                    showMessage('success', '成功', '已重新计算模型顶点范围');
-                }}
-                onRepairModel={() => {
-                    if (!useModelStore.getState().modelData) {
-                        showMessage('warning', '提示', '没有打开任何模型，请先打开一个模型。');
-                        return;
-                    }
-                    useModelStore.getState().repairModel();
-                    showMessage('success', '成功', '模型修复完成');
-                }}
-                onMergeSameMaterials={async () => {
-                    if (!modelData) return;
-                    const { mergeSameMaterials } = await import('../services/modelCleanupService');
-                    const result = mergeSameMaterials(modelData);
-                    if (result.removed > 0) {
-                        const modelStore = useModelStore.getState();
-                        modelStore.setModelData({
-                            ...modelData,
-                            Materials: [...(modelData.Materials || [])],
-                            Geosets: [...(modelData.Geosets || [])],
-                            RibbonEmitters: [...(modelData.RibbonEmitters || [])]
-                        }, modelStore.modelPath, {
-                            skipAutoRecalculate: true,
-                            skipModelRebuild: true
-                        });
-                        showMessage('success', '成功', result.message);
-                    } else {
-                        showMessage('info', '提示', result.message);
-                    }
-                }}
-                onCleanUnusedMaterials={async () => {
-                    if (!modelData) return;
-                    const { cleanUnusedMaterials } = await import('../services/modelCleanupService');
-                    const result = cleanUnusedMaterials(modelData);
-                    if (result.removed > 0) {
-                        const modelStore = useModelStore.getState();
-                        modelStore.setModelData({
-                            ...modelData,
-                            Materials: [...(modelData.Materials || [])],
-                            Geosets: [...(modelData.Geosets || [])],
-                            RibbonEmitters: [...(modelData.RibbonEmitters || [])]
-                        }, modelStore.modelPath, {
-                            skipAutoRecalculate: true,
-                            skipModelRebuild: true
-                        });
-                        showMessage('success', '成功', result.message);
-                    } else {
-                        showMessage('info', '提示', result.message);
-                    }
-                }}
-                onCleanUnusedTextures={async () => {
-                    if (!modelData) return;
-                    const { cleanUnusedTextures } = await import('../services/modelCleanupService');
-                    const result = cleanUnusedTextures(modelData);
-                    if (result.removed > 0) {
-                        useModelStore.getState().setTextures([...(modelData.Textures || [])]);
-                        showMessage('success', '成功', result.message);
-                    } else {
-                        showMessage('info', '提示', result.message);
-                    }
-                }}
+                onRecalculateNormals={recalculateNormals}
+                onRecalculateExtents={recalculateExtents}
+                onRepairModel={repairModel}
+                onMergeSameMaterials={mergeSameMaterials}
+                onCleanUnusedMaterials={cleanUnusedMaterials}
+                onCleanUnusedTextures={cleanUnusedTextures}
                 onTransformModel={() => setTransformModelDialogVisible(true)}
-                onAddDeathAnimation={() => {
-                    if (!useModelStore.getState().modelData) {
-                        showMessage('warning', '提示', '没有打开任何模型，请先打开一个模型。');
-                        return;
-                    }
-                    useModelStore.getState().addDeathAnimation();
-                    showMessage('success', '成功', '已添加/更新死亡动画');
-                }}
-                onRemoveLights={() => {
-                    if (!useModelStore.getState().modelData) {
-                        showMessage('warning', '提示', '没有打开任何模型，请先打开一个模型。');
-                        return;
-                    }
-                    useModelStore.getState().removeLights();
-                    showMessage('success', '成功', '已删除所有光照节点');
-                }}
+                onAddDeathAnimation={addDeathAnimation}
+                onRemoveLights={removeLights}
                 onCopyModel={handleCopyModel}
             />
 
-            {/* About Dialog */}
-            {showAbout && (
-                <div style={{
-                    position: 'fixed',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    zIndex: 2000
-                }} onClick={() => setShowAbout(false)}>
-                    <div style={{
-                        backgroundColor: '#333',
-                        padding: '20px',
-                        borderRadius: '8px',
-                        boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-                        minWidth: '300px',
-                        textAlign: 'center',
-                        border: '1px solid #555'
-                    }} onClick={e => e.stopPropagation()}>
-                        <h3 style={{ marginTop: 0, marginBottom: '15px' }}>{uiText.about.title}</h3>
-                        <p style={{ fontSize: '18px', margin: '10px 0' }}>{uiText.app.name} {uiText.app.version}</p>
-
-                        {/* Activation Status */}
-                        <div style={{
-                            marginTop: '15px',
-                            padding: '12px',
-                            backgroundColor: '#2a2a2a',
-                            borderRadius: '4px',
-                            textAlign: 'left'
-                        }}>
-                            <div style={{ marginBottom: '8px', color: '#aaa', fontSize: '12px' }}>{uiText.about.activationStatus}</div>
-                            {activationStatus ? (
-                                activationStatus.is_activated ? (
-                                    <>
-                                        <div style={{
-                                            color: activationStatus.level >= 2 ? '#ffc53d' : '#52c41a',
-                                            fontWeight: 'bold',
-                                            marginBottom: '4px',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            gap: '8px'
-                                        }}>
-                                            <span>✓ {activationStatus.level_name}</span>
-                                            <span style={{
-                                                fontSize: '11px',
-                                                padding: '2px 6px',
-                                                backgroundColor: activationStatus.level >= 2 ? '#ffc53d22' : '#52c41a22',
-                                                borderRadius: '3px',
-                                                color: activationStatus.level >= 2 ? '#ffc53d' : '#52c41a'
-                                            }}>
-                                                {activationStatus.license_type === 'PERM'
-                                                    ? uiText.about.permanent
-                                                    : activationStatus.license_type === 'QQ'
-                                                        ? uiText.about.qqVerification
-                                                        : uiText.about.timeLimited}
-                                            </span>
-                                        </div>
-                                        {(activationStatus.license_type === 'TIME' || activationStatus.license_type === 'QQ') && activationStatus.days_remaining !== null && (
-                                            <div style={{ color: activationStatus.days_remaining <= 7 ? '#ff7875' : '#eee', fontSize: '13px' }}>
-                                                {activationStatus.license_type === 'QQ' ? uiText.about.reviewDate : uiText.about.expirationDate}: {activationStatus.expiration_date} (剩余 {activationStatus.days_remaining} 天)
-                                            </div>
-                                        )}
-                                        {activationStatus.level < 2 && (
-                                            <div style={{ marginTop: '8px', fontSize: '12px', color: '#888' }}>
-                                                {uiText.about.upgradeHint}
-                                            </div>
-                                        )}
-                                    </>
-                                ) : (
-                                    <div style={{ color: '#ff7875' }}>{uiText.about.inactive}</div>
-                                )
-                            ) : (
-                                <div style={{ color: '#888' }}>{uiText.about.loading}</div>
-                            )}
-                        </div>
-
-                        {/* Activation Input */}
-                        <div style={{
-                            marginTop: '15px',
-                            padding: '12px',
-                            backgroundColor: '#2a2a2a',
-                            borderRadius: '4px',
-                            textAlign: 'left'
-                        }}>
-                            <div style={{ marginBottom: '8px', color: '#aaa', fontSize: '12px' }}>
-                                {activationStatus?.is_activated ? uiText.about.replaceActivationCode : uiText.about.enterActivationCode}
-                            </div>
-                            <div style={{ display: 'flex', gap: '8px' }}>
-                                <input
-                                    type="text"
-                                    value={activationCode}
-                                    onChange={(e) => setActivationCode(e.target.value)}
-                                    placeholder={uiText.about.activationPlaceholder}
-                                    style={{
-                                        flex: 1,
-                                        padding: '6px 10px',
-                                        backgroundColor: '#1e1e1e',
-                                        border: '1px solid #555',
-                                        borderRadius: '4px',
-                                        color: '#eee',
-                                        fontSize: '13px'
-                                    }}
-                                    onKeyDown={(e) => {
-                                        if (e.key === 'Enter' && !activationLoading) {
-                                            handleActivate();
-                                        }
-                                    }}
-                                />
-                                <button
-                                    onClick={handleActivate}
-                                    disabled={activationLoading}
-                                    style={{
-                                        padding: '6px 12px',
-                                        backgroundColor: activationLoading ? '#555' : '#52c41a',
-                                        color: 'white',
-                                        border: 'none',
-                                        borderRadius: '4px',
-                                        cursor: activationLoading ? 'not-allowed' : 'pointer',
-                                        fontSize: '13px'
-                                    }}
-                                >
-                                    {activationLoading ? uiText.about.activating : uiText.about.activate}
-                                </button>
-                            </div>
-                            {activationError && (
-                                <div style={{ marginTop: '8px', color: '#ff7875', fontSize: '12px' }}>
-                                    {activationError}
-                                </div>
-                            )}
-                        </div>
-
-                        <button
-                            onClick={() => setShowAbout(false)}
-                            style={{
-                                marginTop: '20px',
-                                padding: '6px 16px',
-                                backgroundColor: '#007acc',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '4px',
-                            }}
-                        >
-                            {uiText.about.confirm}
-                        </button>
-                    </div>
-                </div>
-            )}
+            <AboutDialog
+                open={showAbout}
+                activationStatus={activationStatus}
+                activationCode={activationCode}
+                activationLoading={activationLoading}
+                activationError={activationError}
+                onClose={() => setShowAbout(false)}
+                onActivationCodeChange={setActivationCode}
+                onActivate={activate}
+            />
 
 
             {showTextureAnimModal && (
@@ -5328,3 +2178,4 @@ const MainLayout: React.FC = () => {
 }
 
 export default MainLayout
+

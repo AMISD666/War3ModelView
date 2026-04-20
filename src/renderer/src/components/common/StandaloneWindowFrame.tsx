@@ -1,7 +1,7 @@
 ﻿import React, { useState, useEffect, useRef } from 'react';
 import { Button } from 'antd';
 import { CloseOutlined, MinusOutlined, PushpinOutlined, PushpinFilled } from '@ant-design/icons';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { windowGateway } from '../../infrastructure/window';
 import { markStandalonePerfOnce } from '../../utils/standalonePerf';
 
 interface StandaloneWindowFrameProps {
@@ -15,12 +15,12 @@ export const StandaloneWindowFrame: React.FC<StandaloneWindowFrameProps> = ({ ti
     const titleLabelRef = useRef(typeof title === 'string' ? title : 'custom-title');
 
     useEffect(() => {
-        getCurrentWindow().setAlwaysOnTop(isPinned).catch(console.error);
+        windowGateway.setCurrentWindowAlwaysOnTop(isPinned).catch(console.error);
     }, [isPinned]);
 
     const handleMinimize = async () => {
         try {
-            await getCurrentWindow().minimize();
+            await windowGateway.minimizeCurrentWindow();
         } catch (e) {
             console.error('Failed to minimize window:', e);
         }
@@ -35,7 +35,7 @@ export const StandaloneWindowFrame: React.FC<StandaloneWindowFrameProps> = ({ ti
             onClose();
         } else {
             try {
-                await getCurrentWindow().hide();
+                await windowGateway.hideCurrentWindow();
             } catch (e) {
                 console.error('Failed to hide window:', e);
             }

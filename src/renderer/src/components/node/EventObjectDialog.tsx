@@ -9,6 +9,7 @@ import { uiText } from '../../constants/uiText'
 import { useModelStore } from '../../store/modelStore'
 import type { EventObjectNode } from '../../types/node'
 import { NODE_EDITOR_COMMANDS, type NodeEditorCommandSender } from '../../types/nodeEditorRpc'
+import { nodeEditorCommandHandler } from '../../application/commands'
 
 interface EventObjectDialogProps {
     visible: boolean
@@ -53,7 +54,7 @@ const EventObjectDialog: React.FC<EventObjectDialogProps> = ({
     standaloneModelData,
 }) => {
     const [form] = Form.useForm()
-    const { getNodeById, updateNode, modelData: storeModelData } = useModelStore()
+    const { getNodeById, modelData: storeModelData } = useModelStore()
     const modelData = isStandalone ? standaloneModelData : storeModelData
     const [eventFrames, setEventFrames] = useState<number[]>([])
     const [newFrame, setNewFrame] = useState<number>(0)
@@ -77,9 +78,9 @@ const EventObjectDialog: React.FC<EventObjectDialogProps> = ({
                 standaloneEmit(NODE_EDITOR_COMMANDS.applyNodeUpdate, { objectId: nodeId, node: next })
                 return
             }
-            updateNode(nodeId, next)
+            nodeEditorCommandHandler.applyNodeUpdate({ objectId: nodeId, node: next })
         },
-        [isStandalone, nodeId, standaloneEmit, updateNode]
+        [isStandalone, nodeId, standaloneEmit]
     )
 
     const formHydratedForNodeIdRef = React.useRef<number | null>(null)

@@ -6,12 +6,13 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import 'antd/dist/reset.css'
 import './assets/index.css'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { markStandalonePerf } from './utils/standalonePerf'
 import AppErrorBoundary from './components/common/AppErrorBoundary'
+import { windowGateway } from './infrastructure/window'
 
 const ModelOptimizeModal = React.lazy(() => import('./components/modals/ModelOptimizeModal'))
 const ModelMergeModal = React.lazy(() => import('./components/modals/ModelMergeModal'))
+const GlobalColorAdjustModal = React.lazy(() => import('./components/modals/GlobalColorAdjustModal'))
 const CameraManagerModal = React.lazy(() => import('./components/modals/CameraManagerModal'))
 const GeosetEditorModal = React.lazy(() => import('./components/modals/GeosetEditorModal'))
 const GeosetVisibilityToolModal = React.lazy(() => import('./components/modals/GeosetVisibilityToolModal'))
@@ -81,50 +82,54 @@ if (targetWindow === 'modelOptimize') {
     RootComponent = renderWithinSuspense(
         <ModelOptimizeModal
             visible={true}
-            onClose={() => getCurrentWindow().hide()}
+            onClose={() => windowGateway.hideCurrentWindow()}
             modelData={null}
             isStandalone={true}
         />
     )
 } else if (targetWindow === 'modelMerge') {
     RootComponent = renderWithinSuspense(
-        <ModelMergeModal visible={true} onClose={() => getCurrentWindow().hide()} isStandalone={true} />
+        <ModelMergeModal visible={true} onClose={() => windowGateway.hideCurrentWindow()} isStandalone={true} />
+    )
+} else if (targetWindow === 'globalColorAdjust') {
+    RootComponent = renderWithinSuspense(
+        <GlobalColorAdjustModal visible={true} onClose={() => windowGateway.hideCurrentWindow()} isStandalone={true} />
     )
 } else if (targetWindow === 'cameraManager') {
     RootComponent = renderWithinSuspense(
-        <CameraManagerModal visible={true} onClose={() => getCurrentWindow().hide()} isStandalone={true} />
+        <CameraManagerModal visible={true} onClose={() => windowGateway.hideCurrentWindow()} isStandalone={true} />
     )
 } else if (targetWindow === 'geosetEditor') {
     RootComponent = renderWithinSuspense(
-        <GeosetEditorModal visible={true} onClose={() => getCurrentWindow().hide()} isStandalone={true} />
+        <GeosetEditorModal visible={true} onClose={() => windowGateway.hideCurrentWindow()} isStandalone={true} />
     )
 } else if (targetWindow === 'geosetVisibilityTool') {
     RootComponent = renderWithinSuspense(
-        <GeosetVisibilityToolModal visible={true} onClose={() => getCurrentWindow().hide()} isStandalone={true} />
+        <GeosetVisibilityToolModal visible={true} onClose={() => windowGateway.hideCurrentWindow()} isStandalone={true} />
     )
 } else if (targetWindow === 'geosetAnimManager') {
     RootComponent = renderWithinSuspense(
-        <GeosetAnimationModal visible={true} onClose={() => getCurrentWindow().hide()} isStandalone={true} />
+        <GeosetAnimationModal visible={true} onClose={() => windowGateway.hideCurrentWindow()} isStandalone={true} />
     )
 } else if (targetWindow === 'textureManager') {
     RootComponent = renderWithinSuspense(
-        <TextureEditorModal visible={true} onClose={() => getCurrentWindow().hide()} isStandalone={true} />
+        <TextureEditorModal visible={true} onClose={() => windowGateway.hideCurrentWindow()} isStandalone={true} />
     )
 } else if (targetWindow === 'textureAnimManager') {
     RootComponent = renderWithinSuspense(
-        <TextureAnimationManagerModal visible={true} onClose={() => getCurrentWindow().hide()} isStandalone={true} />
+        <TextureAnimationManagerModal visible={true} onClose={() => windowGateway.hideCurrentWindow()} isStandalone={true} />
     )
 } else if (targetWindow === 'materialManager') {
     RootComponent = renderWithinSuspense(
-        <MaterialEditorModal visible={true} onClose={() => getCurrentWindow().hide()} isStandalone={true} />
+        <MaterialEditorModal visible={true} onClose={() => windowGateway.hideCurrentWindow()} isStandalone={true} />
     )
 } else if (targetWindow === 'sequenceManager') {
     RootComponent = renderWithinSuspense(
-        <SequenceEditorModal visible={true} onClose={() => getCurrentWindow().hide()} isStandalone={true} />
+        <SequenceEditorModal visible={true} onClose={() => windowGateway.hideCurrentWindow()} isStandalone={true} />
     )
 } else if (targetWindow === 'globalSequenceManager') {
     RootComponent = renderWithinSuspense(
-        <GlobalSequenceModal visible={true} onClose={() => getCurrentWindow().hide()} isStandalone={true} />
+        <GlobalSequenceModal visible={true} onClose={() => windowGateway.hideCurrentWindow()} isStandalone={true} />
     )
 } else if (targetWindow === 'nodeEditor') {
     RootComponent = renderWithinSuspense(
@@ -132,13 +137,13 @@ if (targetWindow === 'modelOptimize') {
     )
 } else if (targetWindow === 'dissolveEffect') {
     RootComponent = renderWithinSuspense(
-        <DissolveEffectModal visible={true} onClose={() => getCurrentWindow().hide()} isStandalone={true} />
+        <DissolveEffectModal visible={true} onClose={() => windowGateway.hideCurrentWindow()} isStandalone={true} />
     )
 } else if (targetWindow?.startsWith('keyframeEditor')) {
     RootComponent = renderWithinSuspense(
         <KeyframeEditor
             visible={true}
-            onCancel={() => getCurrentWindow().hide()}
+            onCancel={() => windowGateway.hideCurrentWindow()}
             onOk={() => {}}
             initialData={null}
             isStandalone={true}

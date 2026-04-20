@@ -4,6 +4,8 @@
  * then sets up material layer Alpha keyframes and FilterMode.
  */
 
+import { desktopGateway } from '../infrastructure/desktop';
+
 export interface DissolveEffectParams {
     selectedGeosets: number[];
     dissolveTexturePath: string;
@@ -52,8 +54,6 @@ export async function executeDissolveEffect(
     modelPath: string,
     params: DissolveEffectParams
 ): Promise<DissolveEffectResult> {
-    const { readFile, writeFile, mkdir } = await import('@tauri-apps/plugin-fs');
-    const { invoke } = await import('@tauri-apps/api/core');
     const { decodeTexture, decodeTextureData, getTextureCandidatePaths } = await import('../components/viewer/textureLoader');
 
     const geosets = modelData.Geosets || [];
@@ -86,10 +86,12 @@ export async function executeDissolveEffect(
     });
 
     // 3. Decode dissolve texture
-    const dissolveBuffer = await readFile(params.dissolveTexturePath);
+    const dissolveBuffer = await desktopGateway.readFile(params.dissolveTexturePath);
     let dissolveImageData: ImageData | null = null;
     if (params.dissolveTexturePath.toLowerCase().endsWith('.png')) {
-        const blob = new Blob([dissolveBuffer], { type: 'image/png' });
+        const arrayBuffer = new ArrayBuffer(dissolveBuffer.byteLength);
+        new Uint8Array(arrayBuffer).set(dissolveBuffer);
+        const blob = new Blob([arrayBuffer], { type: 'image/png' });
         const bitmap = await createImageBitmap(blob);
         const c = document.createElement('canvas');
         c.width = bitmap.width; c.height = bitmap.height;
@@ -131,10 +133,10 @@ export async function executeDissolveEffect(
             const newImagePath = params.saveMode === 'overwrite' ? imagePath : addPathSuffix(imagePath, '_dissolve');
             const outputPath = `${modelDir}\\${newImagePath.replace(/\//g, '\\\\')}`;
             const outputDir = outputPath.substring(0, Math.max(outputPath.lastIndexOf('\\'), outputPath.lastIndexOf('/')));
-            if (outputDir) await mkdir(outputDir, { recursive: true }).catch(() => { });
+            if (outputDir) await desktopGateway.createDir(outputDir, { recursive: true }).catch(() => { });
 
             const ext = imagePath.toLowerCase().split('.').pop() || 'blp';
-            const payload = await invoke<any>('encode_texture_image', {
+            const payload = await desktopGateway.invoke<any>('encode_texture_image', {
                 rgba: Array.from(origData.data), width: origData.width, height: origData.height, format: ext, blpQuality: 90,
             });
 
@@ -146,7 +148,7 @@ export async function executeDissolveEffect(
 
             if (!bytes || bytes.byteLength === 0) continue;
 
-            await writeFile(outputPath, bytes);
+            await desktopGateway.writeFile(outputPath, bytes);
             tex.Image = newImagePath;
             if (tex.Path !== undefined) tex.Path = newImagePath;
             textureModifiedCount++;

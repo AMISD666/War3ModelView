@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { ConfigProvider, theme, type ThemeConfig } from 'antd'
-import { getCurrentWindow } from '@tauri-apps/api/window'
+import { windowGateway } from '../../infrastructure/window'
 import { useRpcClient } from '../../hooks/useRpc'
 import {
     NODE_EDITOR_COMMANDS,
@@ -35,6 +35,7 @@ const nodeEditorStandaloneTheme: ThemeConfig = {
 
 const initialRpcState: NodeEditorRpcState = {
     snapshotVersion: 0,
+    sessionNonce: 0,
     kind: '',
     objectId: -1,
     node: null,
@@ -57,10 +58,11 @@ const NodeEditorStandalone: React.FC = () => {
     const sessionKeyRef = useRef('')
     const [frozenNode, setFrozenNode] = useState<any>(null)
     const [frozenSessionKey, setFrozenSessionKey] = useState('')
+    const [closedSessionKey, setClosedSessionKey] = useState('')
     const [editorSessionRev, setEditorSessionRev] = useState(0)
     const activeSessionKey =
         state.kind && state.objectId >= 0
-            ? `${state.kind}:${state.objectId}`
+            ? `${state.kind}:${state.objectId}:${state.sessionNonce}`
             : ''
 
     useEffect(() => {
@@ -69,12 +71,14 @@ const NodeEditorStandalone: React.FC = () => {
             sessionKeyRef.current = key
             setFrozenNode(null)
             setFrozenSessionKey('')
+            setClosedSessionKey('')
         }
     }, [activeSessionKey])
 
     useEffect(() => {
         if (state.kind === 'rename') return
         if (!activeSessionKey) return
+        if (closedSessionKey === activeSessionKey) return
         if (frozenNode !== null && frozenSessionKey === activeSessionKey) return
         if (state.node && state.objectId >= 0 && state.kind) {
             try {
@@ -84,15 +88,16 @@ const NodeEditorStandalone: React.FC = () => {
             }
             setFrozenSessionKey(activeSessionKey)
         }
-    }, [activeSessionKey, state.node, state.objectId, state.kind, frozenNode, frozenSessionKey])
+    }, [activeSessionKey, closedSessionKey, state.node, state.objectId, state.kind, frozenNode, frozenSessionKey])
 
     const handleClose = async () => {
-        sessionKeyRef.current = ''
+        setClosedSessionKey(activeSessionKey)
+        sessionKeyRef.current = activeSessionKey
         setFrozenNode(null)
         setFrozenSessionKey('')
         setEditorSessionRev((v) => v + 1)
         try {
-            await getCurrentWindow().hide()
+            await windowGateway.hideCurrentWindow()
         } catch (e) {
             console.error('[NodeEditorStandalone] hide failed:', e)
         }
@@ -121,9 +126,10 @@ const NodeEditorStandalone: React.FC = () => {
             ? getNodeEditorWindowLayout(state.kind as NodeEditorKind).title
             : '节点编辑器'
 
-    const editorKey = `${state.kind}:${state.objectId}:${editorSessionRev}`
+    const editorKey = `${state.kind}:${state.objectId}:${state.sessionNonce}:${editorSessionRev}`
+    const isClosedSession = activeSessionKey !== '' && closedSessionKey === activeSessionKey
     const isFrozenNodeReady =
-        state.kind === 'rename' || (frozenNode !== null && frozenSessionKey === activeSessionKey)
+        !isClosedSession && (state.kind === 'rename' || (frozenNode !== null && frozenSessionKey === activeSessionKey))
 
     if (!state.kind || state.objectId < 0) {
         return (

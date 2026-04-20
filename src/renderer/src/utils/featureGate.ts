@@ -1,3 +1,5 @@
+import { desktopGateway } from '../infrastructure/desktop';
+
 /**
  * Feature Gate Utility
  * Manages license-based feature access for tiered activation system.
@@ -34,8 +36,7 @@ export async function getActivationStatus(forceRefresh: boolean = false): Promis
     }
 
     try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        cachedStatus = await invoke<ActivationStatus>('get_activation_status');
+        cachedStatus = await desktopGateway.invoke<ActivationStatus>('get_activation_status');
         cacheTime = now;
         return cachedStatus;
     } catch (error) {
@@ -123,8 +124,7 @@ export async function requireBasicFeature(featureName: string): Promise<boolean>
  * @returns ActivationStatus on success, throws on error
  */
 export async function activateSoftware(licenseCode: string): Promise<ActivationStatus> {
-    const { invoke } = await import('@tauri-apps/api/core');
-    const result = await invoke<ActivationStatus>('activate_software', { licenseCode });
+    const result = await desktopGateway.invoke<ActivationStatus>('activate_software', { licenseCode });
 
     // Clear cache so next check gets fresh data
     clearActivationCache();

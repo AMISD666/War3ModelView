@@ -7,10 +7,9 @@ import { useModelStore } from '../../store/modelStore';
 import { DraggableModal } from '../DraggableModal';
 import { useHistoryStore } from '../../store/historyStore';
 import { CameraNode, NodeType } from '../../types/node';
-import { listen } from '@tauri-apps/api/event';
 import { windowManager } from '../../utils/WindowManager';
 import { useRpcClient } from '../../hooks/useRpc';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { useWindowEvent } from '../../hooks/useWindowEvent';
 
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame';
 interface CameraManagerModalProps {
@@ -167,22 +166,14 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
         }
     };
 
-    React.useEffect(() => {
-        const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
-            const payload = event.payload as any;
-            if (payload && payload.callerId === 'CameraManagerModal') {
-                if (editingBlock) {
-                    const { index, field } = editingBlock;
-                    updateCamera(index, { [field]: payload.data });
-                    setEditingBlock(null);
-                }
-            }
-        });
+    useWindowEvent<any>('IPC_KEYFRAME_SAVE', (event) => {
+        const payload = event.payload
+        if (payload?.callerId !== 'CameraManagerModal' || !editingBlock) return
 
-        return () => {
-            unlisten.then(f => f());
-        };
-    }, [editingBlock, cameras]);
+        const { index, field } = editingBlock
+        updateCamera(index, { [field]: payload.data })
+        setEditingBlock(null)
+    })
 
     const openEditor = (index: number, field: string, _label: string) => {
         setEditingBlock({ index, field });
@@ -416,7 +407,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
 
     if (isStandalone) {
         return (
-            <StandaloneWindowFrame title="相机管理器" onClose={() => getCurrentWindow().hide()}>
+            <StandaloneWindowFrame title="相机管理器" onClose={onClose}>
                 <div style={{ flex: 1, overflowY: 'auto' }}>
                     {innerContent}
                 </div>

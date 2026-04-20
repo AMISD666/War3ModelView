@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Select, Button, Divider } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
-import { SmartInputNumber as InputNumber } from './SmartInputNumber';
+import { PositiveStepInput } from './PositiveStepInput';
 import { useModelStore } from '../../store/modelStore';
 import { useRpcClient } from '../../hooks/useRpc';
 
@@ -78,22 +78,15 @@ export const GlobalSequenceSelect: React.FC<GlobalSequenceSelectProps> = ({
 
     if (isEditing && value !== null && value >= 0) {
         return (
-            <InputNumber
+            <PositiveStepInput
                 value={sequences[value]}
                 size={size}
                 autoFocus
-                onPressEnter={(e: any) => {
-                    const val = parseFloat(e.target.value);
-                    if (!isNaN(val)) handleUpdateDuration(val);
-                }}
-                onBlur={(e: any) => {
-                    const val = parseFloat(e.target.value);
-                    if (!isNaN(val)) handleUpdateDuration(val);
-                    else setIsEditing(false);
-                }}
+                onCommit={handleUpdateDuration}
                 style={{ ...style, width: '100%' }}
                 min={0}
                 step={100}
+                precision={0}
             />
         );
     }

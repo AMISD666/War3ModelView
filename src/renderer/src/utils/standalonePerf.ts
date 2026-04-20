@@ -1,4 +1,4 @@
-import { emit } from '@tauri-apps/api/event'
+import { desktopGateway } from '../infrastructure/desktop'
 
 export const STANDALONE_PERF_EVENT = 'standalone-perf-event'
 
@@ -54,7 +54,7 @@ export const markStandalonePerf = (mark: string, detail?: Record<string, unknown
         perfWindow.__standalonePerfEntries = []
     }
     perfWindow.__standalonePerfEntries.push(entry)
-    emit(STANDALONE_PERF_EVENT, entry).catch(() => { })
+    desktopGateway.emit(STANDALONE_PERF_EVENT, entry).catch(() => { })
 
     // console output intentionally disabled
 

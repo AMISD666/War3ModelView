@@ -12,6 +12,7 @@ export type ToolWindowId =
     | 'geosetAnimManager'
     | 'modelOptimize'
     | 'modelMerge'
+    | 'globalColorAdjust'
     | 'dissolveEffect'
 
 export type WindowSize = {
@@ -31,6 +32,7 @@ export const TOOL_WINDOW_SIZES: Record<ToolWindowId, WindowSize> = {
     geosetAnimManager: { width: 800, height: 560 }, // 多边形动画管理器
     modelOptimize: { width: 320, height: 520 }, // 模型优化
     modelMerge: { width: 560, height: 500 }, // 模型合并
+    globalColorAdjust: { width: 550, height: 480 }, // 全局颜色调整
     dissolveEffect: { width: 600, height: 620 } // 消散动画工具
 }
 

@@ -1,15 +1,16 @@
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import React, { useEffect, useMemo, useState } from 'react'
 import { Button, Checkbox, Form, Input } from 'antd'
-import { listen } from '@tauri-apps/api/event'
 import { NodeEditorStandaloneShell } from '../common/NodeEditorStandaloneShell'
 import { DraggableModal } from '../DraggableModal'
 import { uiText } from '../../constants/uiText'
-import { useHistoryStore } from '../../store/historyStore'
 import { useModelStore } from '../../store/modelStore'
 import type { ParticleEmitterNode } from '../../types/node'
 import { NODE_EDITOR_COMMANDS, type NodeEditorCommandSender } from '../../types/nodeEditorRpc'
 import { windowManager } from '../../utils/WindowManager'
+import { nodeEditorCommandHandler } from '../../application/commands'
+import { KEYFRAME_SAVE_EVENT, type KeyframeSavePayload } from '../../application/window-bridge'
+import { useWindowEvent } from '../../hooks/useWindowEvent'
 
 interface ParticleEmitterDialogProps {
     visible: boolean
@@ -76,7 +77,7 @@ const ParticleEmitterDialog: React.FC<ParticleEmitterDialogProps> = ({
     standaloneModelData,
 }) => {
     const [form] = Form.useForm()
-    const { getNodeById, updateNode, modelData: storeModelData } = useModelStore()
+    const { getNodeById, modelData: storeModelData } = useModelStore()
     const modelData = isStandalone ? standaloneModelData : storeModelData
 
     const currentNode =
@@ -101,16 +102,9 @@ const ParticleEmitterDialog: React.FC<ParticleEmitterDialogProps> = ({
                 standaloneEmit(NODE_EDITOR_COMMANDS.applyNodeUpdate, { objectId: nodeId, node: next, history })
                 return
             }
-            if (history) {
-                useHistoryStore.getState().push({
-                    name: history.name,
-                    undo: () => updateNode(nodeId, history.undoNode),
-                    redo: () => updateNode(nodeId, history.redoNode),
-                })
-            }
-            updateNode(nodeId, next)
+            nodeEditorCommandHandler.applyNodeUpdate({ objectId: nodeId, node: next, history })
         },
-        [isStandalone, nodeId, standaloneEmit, updateNode]
+        [isStandalone, nodeId, standaloneEmit]
     )
 
     const [animDataMap, setAnimDataMap] = useState<Record<string, any>>({})
@@ -124,18 +118,13 @@ const ParticleEmitterDialog: React.FC<ParticleEmitterDialogProps> = ({
         [modelData?.GlobalSequences]
     )
 
-    useEffect(() => {
-        const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
-            const payload = event.payload as any
-            if (payload && payload.callerId === 'ParticleEmitterDialog' && currentEditingProp) {
-                setAnimDataMap((prev) => ({ ...prev, [currentEditingProp]: payload.data }))
-                setCurrentEditingProp(null)
-            }
-        })
-        return () => {
-            unlisten.then((f) => f())
+    useWindowEvent<KeyframeSavePayload>(KEYFRAME_SAVE_EVENT, (event) => {
+        const payload = event.payload
+        if (payload && payload.callerId === 'ParticleEmitterDialog' && currentEditingProp) {
+            setAnimDataMap((prev) => ({ ...prev, [currentEditingProp]: payload.data }))
+            setCurrentEditingProp(null)
         }
-    }, [currentEditingProp])
+    })
 
     const handleOpenKeyframeEditor = (propName: string, title: string) => {
         setCurrentEditingProp(propName)

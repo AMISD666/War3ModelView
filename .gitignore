@@ -27,6 +27,5 @@ node_modules/
 dist/
 out/
 keygen/
-PROJECT_STATUS.md
-update_log.txt
-PROJECT_STATUS.md
+*.md
+*.txt

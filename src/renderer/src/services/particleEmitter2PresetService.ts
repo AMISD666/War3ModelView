@@ -1,6 +1,5 @@
-﻿import { invoke } from '@tauri-apps/api/core'
-import { exists, mkdir, readDir, readFile, readTextFile, remove, writeFile, writeTextFile } from '@tauri-apps/plugin-fs'
 import { decodeTexture, getTextureCandidatePaths, normalizePath, REPLACEABLE_TEXTURES } from '../components/viewer/textureLoader'
+import { desktopGateway } from '../infrastructure/desktop'
 import { useModelStore } from '../store/modelStore'
 import { NodeType, ParticleEmitter2Node } from '../types/node'
 
@@ -64,8 +63,8 @@ const getFileExtension = (value: string): string => {
 }
 
 const copyFileByReadWrite = async (sourcePath: string, targetPath: string): Promise<void> => {
-    const bytes = await readFile(sourcePath)
-    await writeFile(targetPath, bytes)
+    const bytes = await desktopGateway.readFile(sourcePath)
+    await desktopGateway.writeFile(targetPath, bytes)
 }
 
 const withoutFileExtension = (value: string): string => {
@@ -79,9 +78,9 @@ const cloneValue = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 const getPresetId = (name: string): string => sanitizeSegment(name) || `preset_${Date.now()}`
 
 const getPresetRoot = async (): Promise<string> => {
-    const storageRoot = await invoke<string>('get_app_storage_root_cmd')
+    const storageRoot = await desktopGateway.invoke<string>('get_app_storage_root_cmd')
     const root = `${storageRoot}\\${PRESET_ROOT_DIR}`
-    await mkdir(root, { recursive: true })
+    await desktopGateway.createDir(root, { recursive: true })
     return root
 }
 
@@ -119,7 +118,7 @@ const toUint8ArrayPayload = (payload: any): Uint8Array | null => {
 
 const encodeImageDataToBytes = async (imagePath: string, imageData: ImageData): Promise<Uint8Array> => {
     const format = getFileExtension(imagePath)
-    const payload = await invoke<any>('encode_texture_image', {
+    const payload = await desktopGateway.invoke<any>('encode_texture_image', {
         rgba: Array.from(imageData.data),
         width: imageData.width,
         height: imageData.height,
@@ -137,13 +136,13 @@ const findLocalTextureSourcePath = async (imagePath: string, modelPath: string |
     const normalizedImagePath = normalizePath(imagePath)
 
     if (/^[a-zA-Z]:\\/.test(normalizedImagePath) || normalizedImagePath.startsWith('\\\\')) {
-        return (await exists(normalizedImagePath)) ? normalizedImagePath : null
+        return (await desktopGateway.exists(normalizedImagePath)) ? normalizedImagePath : null
     }
 
     if (modelPath && !modelPath.startsWith('dropped:')) {
         const candidates = getTextureCandidatePaths(modelPath, normalizedImagePath)
         for (const candidate of candidates) {
-            if (await exists(candidate)) {
+            if (await desktopGateway.exists(candidate)) {
                 return candidate
             }
         }
@@ -191,7 +190,7 @@ const exportTextureToPresetDir = async (
     }
 
     const bytes = await encodeImageDataToBytes(sourceImagePath, decodeResult.imageData)
-    await writeFile(targetPath, bytes)
+    await desktopGateway.writeFile(targetPath, bytes)
 
     return {
         fileName,
@@ -204,7 +203,7 @@ const readPresetManifest = async (presetId: string): Promise<ParticleEmitter2Pre
     try {
         const presetDir = await getPresetDir(presetId)
         const manifestPath = `${presetDir}\\${PRESET_MANIFEST_FILE}`
-        const content = await readTextFile(manifestPath)
+        const content = await desktopGateway.readTextFile(manifestPath)
         const parsed = JSON.parse(content) as ParticleEmitter2Preset
         if (!parsed?.id || !parsed?.name || !parsed?.emitter) {
             return null
@@ -285,7 +284,7 @@ const syncActiveTabSnapshot = (): void => {
 
 export const listParticleEmitter2Presets = async (): Promise<ParticleEmitter2PresetSummary[]> => {
     const root = await getPresetRoot()
-    const entries = await readDir(root).catch(() => [])
+    const entries = await desktopGateway.readDir(root).catch(() => [])
     const manifests = await Promise.all(
         entries
             .filter((entry) => entry.isDirectory && !!entry.name)
@@ -315,8 +314,8 @@ export const saveParticleEmitter2Preset = async ({
 
     const presetId = getPresetId(trimmedName)
     const presetDir = await getPresetDir(presetId)
-    await remove(presetDir, { recursive: true }).catch(() => {})
-    await mkdir(presetDir, { recursive: true })
+    await desktopGateway.removePath(presetDir, { recursive: true }).catch(() => {})
+    await desktopGateway.createDir(presetDir, { recursive: true })
 
     const preset: ParticleEmitter2Preset = {
         id: presetId,
@@ -333,7 +332,7 @@ export const saveParticleEmitter2Preset = async ({
     }
 
     const manifestPath = `${presetDir}\\${PRESET_MANIFEST_FILE}`
-    await writeTextFile(manifestPath, JSON.stringify(preset, null, 2))
+    await desktopGateway.writeTextFile(manifestPath, JSON.stringify(preset, null, 2))
     return preset
 }
 
@@ -366,7 +365,7 @@ export const createParticleEmitter2FromPreset = async ({
         const targetTexturePath = `${targetDirAbs}\\${targetFileName}`
         const targetTextureRelPath = normalizePath(`${targetDirRel}\\${targetFileName}`)
 
-        await mkdir(targetDirAbs, { recursive: true })
+        await desktopGateway.createDir(targetDirAbs, { recursive: true })
         await copyFileByReadWrite(presetTexturePath, targetTexturePath)
 
         const existingIndex = currentTextures.findIndex((texture: any) =>

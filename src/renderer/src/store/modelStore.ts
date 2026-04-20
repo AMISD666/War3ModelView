@@ -557,7 +557,7 @@ export function extractNodesFromModel(data: ModelData | null): ModelNode[] {
 /**
  * 将节点更新回模型数据
  */
-function updateModelDataWithNodes(
+export function updateModelDataWithNodes(
     modelData: ModelData | null,
     nodes: ModelNode[],
     reorderIds: boolean = true
@@ -1380,15 +1380,52 @@ export const useModelStore = create<ModelState>((set, get) => ({
     },
 
     updateGlobalSequences: (sequences) => {
+        const normalizedSequences = sequences.map((duration) => Math.max(0, Math.floor(Number(duration) || 0)));
         set((state) => {
             if (!state.modelData) return {};
+            const updatedModelData = {
+                ...state.modelData,
+                GlobalSequences: normalizedSequences.map((duration) => ({ Duration: duration }))
+            };
+            const updatedTabs = state.activeTabId
+                ? state.tabs.map((tab) => {
+                    if (tab.id !== state.activeTabId) {
+                        return tab;
+                    }
+                    return {
+                        ...tab,
+                        snapshot: {
+                            ...tab.snapshot,
+                            modelData: updatedModelData,
+                            modelPath: state.modelPath,
+                            nodes: sanitizeNodesArray(state.nodes),
+                            sequences: [...state.sequences],
+                            currentSequence: state.currentSequence,
+                            currentFrame: state.currentFrame,
+                            hiddenGeosetIds: [...state.hiddenGeosetIds],
+                            lastActive: Date.now()
+                        }
+                    };
+                })
+                : state.tabs;
             return {
-                modelData: {
-                    ...state.modelData,
-                    GlobalSequences: sequences.map((duration) => ({ Duration: duration }))
-                }
+                modelData: updatedModelData,
+                tabs: updatedTabs,
+                rendererReloadTrigger: state.rendererReloadTrigger + 1,
+                ...markActiveTabDirtyState(state)
             };
         });
+        const renderer = useRendererStore.getState().renderer;
+        if (renderer?.model) {
+            renderer.model.GlobalSequences = normalizedSequences;
+            if ((renderer as any).modelInstance?.syncGlobalSequences) {
+                try {
+                    (renderer as any).modelInstance.syncGlobalSequences();
+                } catch (error) {
+                    console.error('Failed to sync renderer global sequences', error);
+                }
+            }
+        }
     },
 
     setCameras: (cameras) => {
@@ -2461,6 +2498,14 @@ export const useModelStore = create<ModelState>((set, get) => ({
             // 2. Unique Object Tracking System
             // This prevents double-transforming arrays that are shared between lists
             const transformedArrays = new Set<any>();
+            const transformedNodes = new Set<any>();
+            const hasRotationDelta = !!rotation && rotation.some((value) => Math.abs(value) > 1e-6);
+            const deltaRotationQuat = quat.create();
+            const inverseDeltaRotationQuat = quat.create();
+            if (hasRotationDelta && rotation) {
+                quat.fromEuler(deltaRotationQuat, rotation[0], rotation[1], rotation[2]);
+                quat.invert(inverseDeltaRotationQuat, deltaRotationQuat);
+            }
 
             const transformPosition = (p: number[] | Float32Array | any) => {
                 if (!p) return;
@@ -2488,6 +2533,43 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 vec3.transformMat4(v, v, rotScaleMatrix);
                 p[0] = v[0]; p[1] = v[1]; p[2] = v[2];
                 transformedArrays.add(p);
+            };
+
+            const conjugateQuaternion = (value: number[] | Float32Array | any) => {
+                if (!hasRotationDelta || !value || typeof value !== 'object' || value.length < 4) return;
+                const x = Number(value[0]);
+                const y = Number(value[1]);
+                const z = Number(value[2]);
+                const w = Number(value[3]);
+                if (![x, y, z, w].every(Number.isFinite)) return;
+
+                const source = quat.fromValues(x, y, z, w);
+                const rotated = quat.create();
+                const next = quat.create();
+                quat.multiply(rotated, deltaRotationQuat, source);
+                quat.multiply(next, rotated, inverseDeltaRotationQuat);
+                value[0] = next[0];
+                value[1] = next[1];
+                value[2] = next[2];
+                value[3] = next[3];
+            };
+
+            const transformTranslationTrack = (track: any) => {
+                if (!track || !Array.isArray(track.Keys)) return;
+                track.Keys.forEach((key: any) => {
+                    transformVector(key?.Vector);
+                    transformVector(key?.InTan);
+                    transformVector(key?.OutTan);
+                });
+            };
+
+            const transformRotationTrack = (track: any) => {
+                if (!hasRotationDelta || !track || !Array.isArray(track.Keys)) return;
+                track.Keys.forEach((key: any) => {
+                    conjugateQuaternion(key?.Vector);
+                    conjugateQuaternion(key?.InTan);
+                    conjugateQuaternion(key?.OutTan);
+                });
             };
 
             // 3. Transform Pivot Points (Absolute Positions)
@@ -2533,25 +2615,21 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 const nodes = (modelData as any)[group];
                 if (nodes && Array.isArray(nodes)) {
                     for (const node of nodes) {
-                        const isRoot = node.Parent === -1 || node.Parent === undefined;
+                        if (!node || typeof node !== 'object' || transformedNodes.has(node)) {
+                            continue;
+                        }
+                        transformedNodes.add(node);
 
                         // 1. Transform PivotPoint (Absolute Position)
                         // All nodes need their PivotPoint transformed by TRS
                         if (node.PivotPoint) transformPosition(node.PivotPoint);
 
                         // 2. Transform Animation Tracks (Relative)
-                        // CRITICAL: Only transform animation tracks for ROOT nodes.
-                        // Child nodes inherit transformations through the bone hierarchy.
-                        // Also only apply Rotation/Scale (RS) to relative translation tracks.
-                        if (isRoot) {
-                            if (node.Translation && node.Translation.Values) {
-                                node.Translation.Values.forEach((val: any) => transformVector(val));
-                            }
-
-                            // Note: Rotation and Scaling tracks are not yet transformed here.
-                            // Prepending global rotation to quat/euler tracks is complex and
-                            // usually not needed for simple global translation/centering.
-                        }
+                        // For baked model-space rotation/scale, every node's local basis changes.
+                        // Translation tracks need RS applied to vectors, and rotation quaternions
+                        // need a coordinate-frame conjugation q' = g * q * g^-1.
+                        transformTranslationTrack(node.Translation);
+                        transformRotationTrack(node.Rotation);
                     }
                 }
             }

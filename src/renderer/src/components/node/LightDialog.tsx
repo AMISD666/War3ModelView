@@ -2,16 +2,17 @@ import { SmartInputNumber as InputNumber } from '@renderer/components/common/Sma
 import React, { useEffect, useState } from 'react'
 import { Button, Checkbox, Form, Select } from 'antd'
 import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker'
-import { listen } from '@tauri-apps/api/event'
 import type { Color } from 'antd/es/color-picker'
 import { NodeEditorStandaloneShell } from '../common/NodeEditorStandaloneShell'
 import { DraggableModal } from '../DraggableModal'
 import { uiText } from '../../constants/uiText'
-import { useHistoryStore } from '../../store/historyStore'
 import { useModelStore } from '../../store/modelStore'
 import type { LightNode } from '../../types/node'
 import { NODE_EDITOR_COMMANDS, type NodeEditorCommandSender } from '../../types/nodeEditorRpc'
 import { windowManager } from '../../utils/WindowManager'
+import { nodeEditorCommandHandler } from '../../application/commands'
+import { KEYFRAME_SAVE_EVENT, type KeyframeSavePayload } from '../../application/window-bridge'
+import { useWindowEvent } from '../../hooks/useWindowEvent'
 
 const { Option } = Select
 
@@ -60,7 +61,7 @@ const LightDialog: React.FC<LightDialogProps> = ({
     standaloneModelData,
 }) => {
     const [form] = Form.useForm()
-    const { getNodeById, updateNode, modelData: storeModelData } = useModelStore()
+    const { getNodeById, modelData: storeModelData } = useModelStore()
     const modelData = isStandalone ? standaloneModelData : storeModelData
     const currentNode =
         nodeId !== null ? (isStandalone ? (standaloneNode as LightNode | null) : (getNodeById(nodeId) as LightNode)) : null
@@ -74,22 +75,15 @@ const LightDialog: React.FC<LightDialogProps> = ({
     }, [isStandalone, nodeId, standaloneNode])
 
     const applyNodeToStore = React.useCallback(
-        (next: any, history?: { name: string; undoNode: any; redoNode: any }) => {
+        (next: LightNode, history?: { name: string; undoNode: LightNode; redoNode: LightNode }) => {
             if (nodeId === null) return
             if (isStandalone && standaloneEmit) {
                 standaloneEmit(NODE_EDITOR_COMMANDS.applyNodeUpdate, { objectId: nodeId, node: next, history })
                 return
             }
-            if (history) {
-                useHistoryStore.getState().push({
-                    name: history.name,
-                    undo: () => updateNode(nodeId, history.undoNode),
-                    redo: () => updateNode(nodeId, history.redoNode),
-                })
-            }
-            updateNode(nodeId, next)
+            nodeEditorCommandHandler.applyNodeUpdate({ objectId: nodeId, node: next, history })
         },
-        [isStandalone, nodeId, standaloneEmit, updateNode]
+        [isStandalone, nodeId, standaloneEmit]
     )
 
     const [animDataMap, setAnimDataMap] = useState<Record<string, any>>({})
@@ -171,18 +165,13 @@ const LightDialog: React.FC<LightDialogProps> = ({
         setAnimDataMap(newAnimDataMap)
     }, [visible, nodeId, isStandalone, standaloneNode, form])
 
-    useEffect(() => {
-        const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
-            const payload = event.payload as any
-            if (payload && payload.callerId === 'LightDialog' && currentEditingProp) {
-                setAnimDataMap((prev) => ({ ...prev, [currentEditingProp]: payload.data }))
-                setCurrentEditingProp(null)
-            }
-        })
-        return () => {
-            unlisten.then((f) => f())
+    useWindowEvent<KeyframeSavePayload>(KEYFRAME_SAVE_EVENT, (event) => {
+        const payload = event.payload
+        if (payload && payload.callerId === 'LightDialog' && currentEditingProp) {
+            setAnimDataMap((prev) => ({ ...prev, [currentEditingProp]: payload.data }))
+            setCurrentEditingProp(null)
         }
-    }, [currentEditingProp])
+    })
 
     const handleOpenKeyframeEditor = (propName: string, title: string, vectorSize: number = 1) => {
         setCurrentEditingProp(propName)

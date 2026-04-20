@@ -5,6 +5,7 @@ import {
     type NodeEditorCommandSender,
     type NodeEditorNodePayload,
 } from '../types/nodeEditorRpc'
+import { nodeEditorCommandHandler } from '../application/commands'
 
 type HistoryLike = {
     name: string
@@ -18,8 +19,6 @@ interface UseNodeEditorPreviewOptions<TNode> {
     currentNodeObjectId?: number | null
     isStandalone?: boolean
     standaloneEmit?: NodeEditorCommandSender
-    setStorePreview: (payload: { objectId: number; node: TNode }) => void
-    clearStorePreview: () => void
     buildPreviewNode: () => TNode | null
 }
 
@@ -29,8 +28,6 @@ export function useNodeEditorPreview<TNode>({
     currentNodeObjectId,
     isStandalone,
     standaloneEmit,
-    setStorePreview,
-    clearStorePreview,
     buildPreviewNode,
 }: UseNodeEditorPreviewOptions<TNode>) {
     const allowLivePreviewRef = useRef(false)
@@ -46,8 +43,8 @@ export function useNodeEditorPreview<TNode>({
             return
         }
 
-        setStorePreview({ objectId: nodeId, node: next })
-    }, [isStandalone, nodeId, setStorePreview, standaloneEmit])
+        nodeEditorCommandHandler.previewNodeUpdate({ objectId: nodeId, node: next })
+    }, [isStandalone, nodeId, standaloneEmit])
 
     const clearPreviewNode = useCallback(() => {
         if (isStandalone && standaloneEmit) {
@@ -56,8 +53,8 @@ export function useNodeEditorPreview<TNode>({
             return
         }
 
-        clearStorePreview()
-    }, [clearStorePreview, isStandalone, nodeId, standaloneEmit])
+        nodeEditorCommandHandler.clearNodePreview({ objectId: nodeId })
+    }, [isStandalone, nodeId, standaloneEmit])
 
     const flushPreview = useCallback(() => {
         previewRafRef.current = null

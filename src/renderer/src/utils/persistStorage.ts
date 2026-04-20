@@ -1,12 +1,11 @@
 import { createJSONStorage, StateStorage } from 'zustand/middleware'
-import { invoke } from '@tauri-apps/api/core'
-import { mkdir, readTextFile, remove, writeTextFile } from '@tauri-apps/plugin-fs'
+import { desktopGateway } from '../infrastructure/desktop'
 
 let storageRootPromise: Promise<string> | null = null
 
 const getStorageRoot = async (): Promise<string> => {
     if (!storageRootPromise) {
-        storageRootPromise = invoke<string>('get_app_storage_root_cmd')
+        storageRootPromise = desktopGateway.invoke<string>('get_app_storage_root_cmd')
     }
     return storageRootPromise
 }
@@ -17,7 +16,7 @@ const sanitizeKey = (key: string): string =>
 const getSettingsDir = async (): Promise<string> => {
     const root = await getStorageRoot()
     const dir = `${root}\\settings`
-    await mkdir(dir, { recursive: true })
+    await desktopGateway.createDir(dir, { recursive: true })
     return dir
 }
 
@@ -26,7 +25,7 @@ const createFileStorage = (): StateStorage => ({
         try {
             const dir = await getSettingsDir()
             const path = `${dir}\\${sanitizeKey(name)}.json`
-            return await readTextFile(path)
+            return await desktopGateway.readTextFile(path)
         } catch {
             return null
         }
@@ -34,13 +33,13 @@ const createFileStorage = (): StateStorage => ({
     setItem: async (name: string, value: string): Promise<void> => {
         const dir = await getSettingsDir()
         const path = `${dir}\\${sanitizeKey(name)}.json`
-        await writeTextFile(path, value)
+        await desktopGateway.writeTextFile(path, value)
     },
     removeItem: async (name: string): Promise<void> => {
         try {
             const dir = await getSettingsDir()
             const path = `${dir}\\${sanitizeKey(name)}.json`
-            await remove(path)
+            await desktopGateway.removePath(path)
         } catch {
             // Ignore missing file
         }

@@ -1,15 +1,32 @@
 import { useEffect, useState, useCallback, useRef, startTransition } from 'react';
-import { emit, listen } from '@tauri-apps/api/event';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import { debugLog } from '../utils/debugLog';
 import { normalizeRpcSyncPayload } from '../utils/rpcSerialization';
 import { markStandalonePerf } from '../utils/standalonePerf';
 import { windowManager } from '../utils/WindowManager';
+import { windowGateway } from '../infrastructure/window';
 
 const getPayloadKeyCount = (payload: unknown): number => {
     if (!payload || typeof payload !== 'object') return 0
     return Object.keys(payload as Record<string, unknown>).length
 }
+
+type WindowEventPayload<TPayload> = {
+    payload: TPayload
+}
+
+type RpcCommandEnvelope = {
+    command: string
+    payload: unknown
+}
+
+type ActiveModelChangedPayload = {
+    activeTabId: string | null
+    modelPath: string
+    hasModelData: boolean
+}
+
+const getEventPayload = <TPayload,>(event: unknown): TPayload =>
+    (event as WindowEventPayload<TPayload>).payload
 
 interface RpcClientOptions<TState, TPatch> {
     applyPatch?: (previousState: TState, patch: TPatch) => TState
@@ -35,7 +52,7 @@ export type UseRpcServerOptions = {
 export function useRpcServer<TState, TPatch = never>(
     windowId: string,
     getLatestState: () => TState,
-    onCommand?: (command: string, payload: any) => void,
+    onCommand?: (command: string, payload: unknown) => void,
     options?: UseRpcServerOptions
 ) {
     const getLatestStateRef = useRef(getLatestState);
@@ -60,7 +77,7 @@ export function useRpcServer<TState, TPatch = never>(
 
         debugLog(`[RPC Server][${windowId}] Mounting server hook...`);
 
-        listen(`rpc-req-${windowId}`, async () => {
+        windowGateway.listen(`rpc-req-${windowId}`, async () => {
             debugLog(`[RPC Server][${windowId}] Received request for sync from client.`);
             const state = getLatestStateRef.current();
             markStandalonePerf('snapshot_sent', {
@@ -74,7 +91,7 @@ export function useRpcServer<TState, TPatch = never>(
             else unsubscribeReq = unlisten;
         }).catch(console.error);
 
-        listen(`rpc-ready-${windowId}`, async () => {
+        windowGateway.listen(`rpc-ready-${windowId}`, async () => {
             debugLog(`[RPC Server][${windowId}] Child reported READY.`);
             const state = getLatestStateRef.current();
             markStandalonePerf('snapshot_sent', {
@@ -88,10 +105,11 @@ export function useRpcServer<TState, TPatch = never>(
             else unsubscribeReady = unlisten;
         }).catch(console.error);
 
-        listen<{ command: string, payload: any }>(`rpc-cmd-${windowId}`, (event) => {
-            debugLog(`[RPC Server][${windowId}] Received command: ${event.payload.command}`);
+        windowGateway.listen(`rpc-cmd-${windowId}`, (event) => {
+            const payload = getEventPayload<RpcCommandEnvelope>(event)
+            debugLog(`[RPC Server][${windowId}] Received command: ${payload.command}`);
             if (onCommandRef.current) {
-                onCommandRef.current(event.payload.command, event.payload.payload);
+                onCommandRef.current(payload.command, payload.payload);
             }
         }).then(unlisten => {
             if (!isMounted) unlisten();
@@ -199,7 +217,7 @@ export function useRpcClient<TState, TPatch = never>(
             windowId,
             snapshotId,
         });
-        emit(`rpc-applied-${windowId}`, { snapshotId }).catch(() => { });
+        windowGateway.emit(`rpc-applied-${windowId}`, { snapshotId }).catch(() => { });
         pendingSnapshotIdRef.current = null;
     }, [state, windowId]);
 
@@ -210,20 +228,19 @@ export function useRpcClient<TState, TPatch = never>(
         let unsubscribeActiveModelChanged: (() => void) | undefined;
         let hasReceivedData = false;
         const bootstrapTimeouts: number[] = [];
-        const currentWindow = getCurrentWindow();
-        const windowLabel = currentWindow.label;
+        const windowLabel = windowGateway.getCurrentWindowLabel();
 
         debugLog(`[RPC Client][${windowId}] Mounting client hook...`);
         markStandalonePerf('rpc_client_mounted', { windowId, windowLabel });
 
         const emitRequest = (reason: string) => {
             debugLog(`[RPC Client][${windowId}] Emitting req (${reason})...`);
-            emit(`rpc-req-${windowId}`).catch(e => debugLog(`[RPC Client] Emit Error: ${e}`));
+            windowGateway.emit(`rpc-req-${windowId}`).catch(e => debugLog(`[RPC Client] Emit Error: ${e}`));
         };
 
         const emitReady = () => {
             markStandalonePerf('child_ready_emitted', { windowId, windowLabel });
-            emit(`rpc-ready-${windowId}`).catch(e => debugLog(`[RPC Client] Ready Emit Error: ${e}`));
+            windowGateway.emit(`rpc-ready-${windowId}`).catch(e => debugLog(`[RPC Client] Ready Emit Error: ${e}`));
         };
 
         const clearBootstrapTimeouts = () => {
@@ -246,11 +263,11 @@ export function useRpcClient<TState, TPatch = never>(
             });
         };
 
-        listen<unknown>(`rpc-sync-${windowId}`, (event) => {
+        windowGateway.listen(`rpc-sync-${windowId}`, (event) => {
             const snapshotId = ++receivedSnapshotCounterRef.current;
 
             void (async () => {
-                const decoded = await normalizeRpcSyncPayload<TState>(event.payload);
+                const decoded = await normalizeRpcSyncPayload<TState>(getEventPayload<unknown>(event));
                 if (!isMounted) return;
                 // 异步解码完成顺序可能乱序，只应用仍与「当前最新接收序号」一致的那次快照
                 if (snapshotId !== receivedSnapshotCounterRef.current) return;
@@ -285,17 +302,18 @@ export function useRpcClient<TState, TPatch = never>(
             scheduleBootstrapRequests();
         }).catch(e => debugLog(`[RPC Client] Sync Listen Error: ${e}`));
 
-        listen<TPatch>(`rpc-patch-${windowId}`, (event) => {
+        windowGateway.listen(`rpc-patch-${windowId}`, (event) => {
             const applyPatch = applyPatchRef.current
             if (!applyPatch) {
                 return
             }
 
+            const payload = getEventPayload<TPatch>(event)
             markStandalonePerf('patch_received', {
                 windowId,
-                keyCount: getPayloadKeyCount(event.payload),
+                keyCount: getPayloadKeyCount(payload),
             })
-            setState((previousState) => applyPatch(previousState, event.payload))
+            setState((previousState) => applyPatch(previousState, payload))
         }).then(unlisten => {
             if (!isMounted) {
                 unlisten();
@@ -304,8 +322,8 @@ export function useRpcClient<TState, TPatch = never>(
             unsubscribePatch = unlisten;
         }).catch(e => debugLog(`[RPC Client] Patch Listen Error: ${e}`));
 
-        listen<{ activeTabId: string | null; modelPath: string; hasModelData: boolean }>('active-model-changed', (event) => {
-            const payload = event.payload;
+        windowGateway.listen('active-model-changed', (event) => {
+            const payload = getEventPayload<ActiveModelChangedPayload>(event);
             if (!payload?.hasModelData) {
                 hasReceivedData = false;
                 clearBootstrapTimeouts();
@@ -336,10 +354,9 @@ export function useRpcClient<TState, TPatch = never>(
         }
     }, [windowId]);
 
-    const emitCommand = useCallback((command: string, payload?: any) => {
-        emit(`rpc-cmd-${windowId}`, { command, payload }).catch(console.error);
+    const emitCommand = useCallback((command: string, payload?: unknown) => {
+        windowGateway.emit(`rpc-cmd-${windowId}`, { command, payload }).catch(console.error);
     }, [windowId]);
 
     return { state, emitCommand };
 }
-

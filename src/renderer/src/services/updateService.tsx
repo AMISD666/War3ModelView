@@ -1,12 +1,8 @@
 
 import React from 'react';
 import { showMessage, showConfirm, useMessageStore } from '../store/messageStore';
-import { getVersion } from '@tauri-apps/api/app';
-import { fetch } from '@tauri-apps/plugin-http';
-import { tempDir } from '@tauri-apps/api/path';
-import { open } from '@tauri-apps/plugin-shell';
-import { exit } from '@tauri-apps/plugin-process';
 import { UpdateLogContent } from '../components/UpdateLogContent';
+import { updateGateway } from '../infrastructure/update';
 
 const GITEE_REPO = 'AMISD666/gg-war3-model-edit';
 const API_URL = `https://gitee.com/api/v5/repos/${GITEE_REPO}/releases/latest`;
@@ -33,14 +29,14 @@ function isGiteeRateLimitError(error: unknown): boolean {
 }
 
 async function fetchLatestRelease(): Promise<GiteeRelease> {
-    const response = await fetch(API_URL, { headers: REQUEST_HEADERS });
+    const response = await updateGateway.fetchJson<GiteeRelease>(API_URL, { headers: REQUEST_HEADERS });
     if (response.ok) {
-        return await response.json() as GiteeRelease;
+        return response.body;
     }
 
-    const listResponse = await fetch(API_LIST_URL, { headers: REQUEST_HEADERS });
+    const listResponse = await updateGateway.fetchJson<GiteeRelease[]>(API_LIST_URL, { headers: REQUEST_HEADERS });
     if (listResponse.ok) {
-        const list = await listResponse.json() as GiteeRelease[];
+        const list = listResponse.body;
         const latest = list[0] ?? null;
         if (latest) {
             return latest;
@@ -93,13 +89,15 @@ async function downloadAndInstall(assets: GiteeRelease['assets'], version: strin
     try {
         const downloadUrl = exeAsset.browser_download_url;
         const fileName = exeAsset.name;
-        const tempDirPath = await tempDir();
+        const tempDirPath = await updateGateway.getTempDir();
         const absolutePath = `${tempDirPath}${fileName}`;       // Use Rust backend command to download - bypasses all JS HTTP/shell issues
-        const { invoke } = await import('@tauri-apps/api/core');        await invoke('download_file', { url: downloadUrl, targetPath: absolutePath });        useMessageStore.getState().removeMessage(loadingId);
-        showMessage('success', '下载完成', '即将启动安装程序...', 2000);        await invoke('launch_installer', { path: absolutePath });
+        await updateGateway.downloadFile(downloadUrl, absolutePath);
+        useMessageStore.getState().removeMessage(loadingId);
+        showMessage('success', '下载完成', '即将启动安装程序...', 2000);
+        await updateGateway.launchInstaller(absolutePath);
 
         setTimeout(async () => {
-            await exit(0);
+            await updateGateway.exit(0);
         }, 1000);
 
     } catch (e) {
@@ -112,7 +110,7 @@ async function downloadAndInstall(assets: GiteeRelease['assets'], version: strin
 export async function checkGiteeUpdate() {
     const loadingId = showMessage('loading', '正在检查更新...', '请稍候...', 0);
     try {
-        const currentVersion = await getVersion();
+        const currentVersion = await updateGateway.getAppVersion();
         const data = await fetchLatestRelease();
         const latestVersion = data.tag_name || (data as any).name || '';
 
@@ -154,7 +152,7 @@ export async function checkGiteeUpdate() {
                 520
             );
             if (shouldOpenReleasePage) {
-                await open(RELEASES_PAGE_URL);
+                await updateGateway.openUrl(RELEASES_PAGE_URL);
             }
             return;
         }
@@ -196,7 +194,7 @@ export async function showChangelog() {
 
 export async function checkGiteeUpdateSilent() {
     try {
-        const currentVersion = await getVersion();
+        const currentVersion = await updateGateway.getAppVersion();
         const data = await fetchLatestRelease();
         const latestVersion = data.tag_name || (data as any).name || '';
 

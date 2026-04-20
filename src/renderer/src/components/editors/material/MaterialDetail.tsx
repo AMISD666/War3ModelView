@@ -5,6 +5,8 @@ import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { showMessage } from '../../../store/messageStore'
 import { MATERIAL_FILTER_MODE_LABELS } from '../../../constants/filterModes'
 
+const DEFAULT_ADDED_LAYER_FILTER_MODE = 2
+
 interface MaterialDetailProps {
     material: any
     _index: number
@@ -31,7 +33,7 @@ const MaterialDetail: React.FC<MaterialDetailProps> = ({ material, onUpdate, onS
 
     const handleAddLayer = () => {
         const newLayer = {
-            FilterMode: 0,
+            FilterMode: DEFAULT_ADDED_LAYER_FILTER_MODE,
             TextureID: 0,  // Default to first texture (index 0) instead of -1 (invalid)
             Alpha: 1,
             // Default flags
