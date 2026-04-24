@@ -2,6 +2,7 @@ import { shortcutActions, shortcutActionMap, ShortcutAction, ShortcutContext } f
 import { getDefaultBindings, useShortcutStore } from '../store/shortcutStore'
 import { isTextInputActive, normalizeKeyComboFromEvent, normalizeKeyCombo } from './utils'
 import { tryConsumeNodeManagerDeleteKey } from '../utils/nodeManagerShortcutBridge'
+import { tryConsumeGeometryDeleteKey } from '../utils/geometryDeleteShortcutBridge'
 import { useSelectionStore } from '../store/selectionStore'
 
 type ShortcutHandler = (payload: { event: KeyboardEvent; action: ShortcutAction; combo: string }) => boolean | void
@@ -173,7 +174,12 @@ export const handleGlobalShortcutKeyDown = (event: KeyboardEvent): void => {
     if (hasMatchingShortcut(event)) {
         blurActiveElementIfSafe(event)
     }
-    dispatchShortcutEvent(event)
+    if (dispatchShortcutEvent(event)) {
+        return
+    }
+    if (tryConsumeGeometryDeleteKey(event)) {
+        event.preventDefault()
+    }
 }
 
 export const getShortcutAction = (actionId: string): ShortcutAction | undefined => {

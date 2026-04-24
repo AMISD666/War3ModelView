@@ -107,6 +107,7 @@ export class ModelInstance {
         this.initNodes();
         this.initGlobalSequences();
         this.initMaterialLayers();
+        this.syncGeosetAnims();
     }
 
     private initNodes() {
@@ -234,6 +235,18 @@ export class ModelInstance {
         this.initMaterialLayers();
     }
 
+    public syncGeosetAnims(): void {
+        this.rendererData.geosetAnims = [];
+
+        if (this.model.GeosetAnims) {
+            for (const anim of this.model.GeosetAnims) {
+                if (typeof anim.GeosetId === 'number' && anim.GeosetId >= 0) {
+                    this.rendererData.geosetAnims[anim.GeosetId] = anim;
+                }
+            }
+        }
+    }
+
     private initMaterialLayers() {
         if (this.model.Materials) {
             for (let i = 0; i < this.model.Materials.length; ++i) {
@@ -260,11 +273,6 @@ export class ModelInstance {
             }
         }
 
-        if (this.model.GeosetAnims) {
-            for (const anim of this.model.GeosetAnims) {
-                this.rendererData.geosetAnims[anim.GeosetId] = anim;
-            }
-        }
     }
 
     public update(delta: number) {
@@ -924,6 +932,5 @@ export class ModelInstance {
         return activeLights;
     }
 }
-
 
 

@@ -18,6 +18,7 @@ interface GeosetVisibilityPanelProps {
 const DEFAULT_PANEL_SIZE = { width: 220, height: 300 };
 const MINIMIZED_PANEL_SIZE = { width: 160, height: 34 };
 const FALLBACK_DEFAULT_POSITION = { x: 980, y: 96 };
+const CONTEXT_MENU_SIZE = { width: 176, height: 94 };
 
 const clampPanelPosition = (x: number, y: number, width: number, height: number) => {
     if (typeof window === 'undefined') {
@@ -50,6 +51,17 @@ const getDefaultPanelPosition = (width: number, height: number) => {
         : FALLBACK_DEFAULT_POSITION.y;
 
     return clampPanelPosition(anchorX, anchorY, width, height);
+};
+
+const clampContextMenuPosition = (x: number, y: number) => {
+    if (typeof window === 'undefined') {
+        return { x, y };
+    }
+
+    return {
+        x: Math.max(8, Math.min(x, window.innerWidth - CONTEXT_MENU_SIZE.width - 8)),
+        y: Math.max(8, Math.min(y, window.innerHeight - CONTEXT_MENU_SIZE.height - 8))
+    };
 };
 
 export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ visible, onClose, docked }) => {
@@ -168,7 +180,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
             applySelection([index]);
         }
 
-        setContextMenuPosition({ x: e.clientX, y: e.clientY });
+        setContextMenuPosition(clampContextMenuPosition(e.clientX, e.clientY));
         setContextMenuVisible(true);
     };
 
@@ -814,7 +826,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                         boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
                         zIndex: 1100,
                         padding: '4px 0',
-                        minWidth: 120
+                        width: CONTEXT_MENU_SIZE.width
                     }}
                 >
                     {/* Merge - First */}

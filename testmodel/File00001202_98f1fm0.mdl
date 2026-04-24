@@ -1,0 +1,266 @@
+Version {
+	FormatVersion 800,
+}
+Model "" {
+	NumGeosets 2,
+	NumGeosetAnims 2,
+	NumHelpers 2,
+	NumBones 2,
+	NumLights 1,
+	BlendTime 150,
+	MinimumExtent { -445, -445, 4.08698 },
+	MaximumExtent { 445, 445, 433.23938 },
+	BoundsRadius 629.32501,
+}
+Sequences 3 {
+	Anim "stand" {
+		Interval { 0, 2000 },
+		NonLooping,
+		MinimumExtent { -445, -445, 4.08698 },
+		MaximumExtent { 445, 445, 433.23901 },
+		BoundsRadius 629.32501,
+	}
+	Anim "Death AZ" {
+		Interval { 5000, 5200 },
+		NonLooping,
+		MinimumExtent { -445, -445, 4.08698 },
+		MaximumExtent { 445, 445, 433.23938 },
+		BoundsRadius 629.32501,
+	}
+	Anim "walk" {
+		Interval { 3000, 4000 },
+		NonLooping,
+		MinimumExtent { 0, 0, 0 },
+		MaximumExtent { 0, 0, 0 },
+	}
+}
+GlobalSequences 3 {
+	Duration 8000,
+	Duration 0,
+	Duration 2000,
+}
+Textures 3 {
+	Bitmap {
+		Image "effec\yuanquan2_0.blp",
+		WrapWidth,
+		WrapHeight,
+	}
+	Bitmap {
+		Image "effec\yuanquan2_1.tga",
+	}
+	Bitmap {
+		Image "effec\yuanquan2_2.tga",
+	}
+}
+Materials 2 {
+	Material {
+		Layer {
+			FilterMode Blend,
+			static Alpha 0.6,
+			static TextureID 1,
+			TwoSided,
+			Unshaded,
+			Unfogged,
+		}
+		Layer {
+			FilterMode AddAlpha,
+			static TextureID 1,
+			TwoSided,
+			Unshaded,
+		}
+	}
+	Material {
+		Layer {
+			FilterMode Additive,
+			static TextureID 2,
+			TwoSided,
+			Unshaded,
+			Unfogged,
+		}
+	}
+}
+Geoset {
+	Vertices 4 {
+		{ 898.89996, 898.89996, 5.49667 },
+		{ -898.89996, 898.89996, 5.49667 },
+		{ 898.89996, -898.89996, 5.49667 },
+		{ -898.89996, -898.89996, 5.49667 },
+	}
+	Normals 4 {
+		{ 0, 0, 1 },
+		{ 0, 0, 1 },
+		{ 0, 0, 1 },
+		{ 0, 0, 1 },
+	}
+	TVertices 4 {
+		{ 1, 1 },
+		{ 1, 0 },
+		{ 0, 1 },
+		{ 0, 0 },
+	}
+	VertexGroup {
+		0,
+		0,
+		0,
+		0,
+	}
+	Faces 1 6 {
+		Triangles {
+			{ 3, 2, 1, 0, 1, 2 },
+		}
+	}
+	Groups 1 1 {
+		Matrices { 0 },
+	}
+	MinimumExtent { -898.89996, -898.89996, 5.49667 },
+	MaximumExtent { 898.89996, 898.89996, 5.49667 },
+	BoundsRadius 2542.47314,
+	Anim {
+		MinimumExtent { -898.89996, -898.89996, 5.49667 },
+		MaximumExtent { 898.89996, 898.89996, 5.49667 },
+		BoundsRadius 2542.47314,
+	}
+	Anim {
+		MinimumExtent { -898.89996, -898.89996, 5.49667 },
+		MaximumExtent { 898.89996, 898.89996, 5.49667 },
+		BoundsRadius 2542.47314,
+	}
+	MaterialID 0,
+	SelectionGroup 0,
+}
+Geoset {
+	Vertices 4 {
+		{ 1081.91626, 1081.91614, 6.17 },
+		{ -1081.91626, 1081.91614, 6.17 },
+		{ 1081.91626, -1081.91614, 6.17 },
+		{ -1081.91626, -1081.91614, 6.17 },
+	}
+	Normals 4 {
+		{ 0, 0, 1 },
+		{ 0, 0, 1 },
+		{ 0, 0, 1 },
+		{ 0, 0, 1 },
+	}
+	TVertices 4 {
+		{ 1, 1 },
+		{ 1, 0 },
+		{ 0, 1 },
+		{ 0, 0 },
+	}
+	VertexGroup {
+		0,
+		0,
+		0,
+		0,
+	}
+	Faces 1 6 {
+		Triangles {
+			{ 3, 2, 1, 0, 1, 2 },
+		}
+	}
+	Groups 1 1 {
+		Matrices { 1 },
+	}
+	MinimumExtent { -1081.91626, -1081.91614, 6.17 },
+	MaximumExtent { 1081.91626, 1081.91614, 6.17 },
+	BoundsRadius 3060.12109,
+	Anim {
+		MinimumExtent { -1081.91626, -1081.91614, 6.17 },
+		MaximumExtent { 1081.91626, 1081.91614, 6.17 },
+		BoundsRadius 3060.12109,
+	}
+	Anim {
+		MinimumExtent { -1081.91626, -1081.91614, 6.17 },
+		MaximumExtent { 1081.91626, 1081.91614, 6.17 },
+		BoundsRadius 3060.12109,
+	}
+	MaterialID 1,
+	SelectionGroup 0,
+}
+GeosetAnim {
+	GeosetId 0,
+	Alpha 1 {
+		DontInterp,
+		5000: 0,
+	}
+	Color 5 {
+		Linear,
+		0: { 0, 0.5, 1 },
+		2000: { 0, 0.5, 1 },
+		3000: { 0, 0.5, 1 },
+		3100: { 1, 0.4, 0.4 },
+		4000: { 1, 0.4, 0.4 },
+	}
+}
+GeosetAnim {
+	GeosetId 1,
+	Alpha 1 {
+		DontInterp,
+		5000: 0,
+	}
+	Color 5 {
+		Linear,
+		0: { 0, 0.5, 1 },
+		2000: { 0, 0.5, 1 },
+		3000: { 0, 0.5, 1 },
+		3100: { 1, 0.4, 0.4 },
+		4000: { 1, 0.4, 0.4 },
+	}
+}
+Bone "az_闪电" {
+	ObjectId 0,
+	Parent 3,
+	GeosetId 1,
+	GeosetAnimId None,
+}
+Bone "az_底部旋转光晕" {
+	ObjectId 1,
+	Parent 3,
+	Rotation 1 {
+		Linear,
+		GlobalSeqId 0,
+		0: { 0, 0, 0, 1 },
+	}
+	GeosetId 1,
+	GeosetAnimId None,
+}
+Light "UNNAMED" {
+	ObjectId 2,
+	Omnidirectional,
+	static AttenuationStart 400,
+	static AttenuationEnd 1500,
+	static Color { 0.85882, 0.98431, 1 },
+	static Intensity 88,
+	static AmbColor { 0.50196, 0.90196, 1 },
+	static AmbIntensity 0,
+	Visibility 2 {
+		DontInterp,
+		0: 1,
+		5000: 0,
+	}
+}
+Helper "AZModel" {
+	ObjectId 3,
+	BillboardedLockZ,
+	Scaling 1 {
+		DontInterp,
+		GlobalSeqId 1,
+		0: { 1.2, 1.2, 1 },
+	}
+}
+Helper "az_底部旋转闪电" {
+	ObjectId 4,
+	Parent 3,
+	Rotation 1 {
+		Linear,
+		GlobalSeqId 2,
+		0: { 0, 0, 0, 1 },
+	}
+}
+PivotPoints 5 {
+	{ 0, 0, 0 },
+	{ 0, 0, 0 },
+	{ 0, 0, 0 },
+	{ 0, 0, 0 },
+	{ 0, 0, 0 },
+}

@@ -6,13 +6,14 @@ import { invoke } from '@tauri-apps/api/core'
 import { decodeBLP, getBLPImageData } from 'war3-model'
 import { Button, Tooltip } from 'antd'
 import { PositiveStepInput } from '@renderer/components/common/PositiveStepInput'
-import { useSelectionStore } from '../../store/selectionStore'
+import { useSelectionStore, type SelectionId, type UVSelectionMode } from '../../store/selectionStore'
 import { useRendererStore } from '../../store/rendererStore'
 import { registerShortcutHandler } from '../../shortcuts/manager'
 import {
     BorderOutlined,
     LineOutlined,
     AppstoreOutlined,
+    BgColorsOutlined,
     GroupOutlined,
     DragOutlined,
     SelectOutlined,
@@ -29,6 +30,13 @@ import {
 import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker'
 import type { Color } from 'antd/es/color-picker'
 import { invokeReadMpqFile } from '../../utils/mpqPerf'
+import { createSelectionRect, pointInRect, segmentIntersectsRect, triangleIntersectsRect } from './uvSelectionUtils'
+import { useUvEditorStore } from '../../store/uvEditorStore'
+import {
+    areUVSelectionsEqual,
+    buildUVSelectionsFromModelSelection,
+    type UVSelection
+} from './uvSelectionSync'
 
 interface UVEditorProps {
     modelPath: string | null
@@ -38,12 +46,7 @@ interface UVEditorProps {
     selectedTextureId: number | null
 }
 
-interface UVSelection {
-    geosetIndex: number
-    indices: number[]
-}
-
-type UVSubMode = 'vertex' | 'edge' | 'face' | 'group' | 'block'
+type UVSubMode = UVSelectionMode
 type UVTransformMode = 'select' | 'translate' | 'rotate' | 'scale'
 
 const MAX_HISTORY = 20
@@ -107,6 +110,15 @@ const UVEditor: React.FC<UVEditorProps> = ({
         snapRotateStep,
         setSnapRotateStep
     } = useRendererStore(state => state)
+    const setUvSelectionMode = useSelectionStore(state => state.setUvSelectionMode)
+    const selectVertices = useSelectionStore(state => state.selectVertices)
+    const selectFaces = useSelectionStore(state => state.selectFaces)
+    const selectedVertexIds = useSelectionStore(state => state.selectedVertexIds)
+    const selectedFaceIds = useSelectionStore(state => state.selectedFaceIds)
+    const mainMode = useSelectionStore(state => state.mainMode)
+    const showViewerSelectionHighlight = useUvEditorStore(state => state.showViewerSelectionHighlight)
+    const toggleShowViewerSelectionHighlight = useUvEditorStore(state => state.toggleShowViewerSelectionHighlight)
+    const viewerSelectionSync = useUvEditorStore(state => state.viewerSelectionSync)
 
     // -------------------------------------------------------------------------
     // HELPERS
@@ -211,6 +223,58 @@ const UVEditor: React.FC<UVEditorProps> = ({
 
         return Array.from(selectedSet)
     }, [getGeosetUVs, getUvEdgeKey])
+
+    const buildVertexSelectionIds = useCallback((uvSelections: UVSelection[]): SelectionId[] => {
+        return uvSelections.flatMap((selection) =>
+            selection.indices.map((index) => ({
+                geosetIndex: selection.geosetIndex,
+                index
+            }))
+        )
+    }, [])
+
+    const buildFaceSelectionIds = useCallback((uvSelections: UVSelection[], mode: UVSubMode): SelectionId[] => {
+        if (!modelData?.Geosets || (mode !== 'face' && mode !== 'group' && mode !== 'block')) {
+            return []
+        }
+
+        const result: SelectionId[] = []
+        const seen = new Set<string>()
+
+        uvSelections.forEach((selection) => {
+            const geoset = modelData.Geosets?.[selection.geosetIndex]
+            if (!geoset?.Faces) return
+
+            if (mode === 'group') {
+                const faceCount = Math.floor(geoset.Faces.length / 3)
+                for (let faceIndex = 0; faceIndex < faceCount; faceIndex++) {
+                    const key = `${selection.geosetIndex}:${faceIndex}`
+                    if (seen.has(key)) continue
+                    seen.add(key)
+                    result.push({ geosetIndex: selection.geosetIndex, index: faceIndex })
+                }
+                return
+            }
+
+            const selectedVertexSet = new Set(selection.indices)
+            for (let faceOffset = 0; faceOffset < geoset.Faces.length; faceOffset += 3) {
+                const i0 = Number(geoset.Faces[faceOffset])
+                const i1 = Number(geoset.Faces[faceOffset + 1])
+                const i2 = Number(geoset.Faces[faceOffset + 2])
+                if (!selectedVertexSet.has(i0) || !selectedVertexSet.has(i1) || !selectedVertexSet.has(i2)) {
+                    continue
+                }
+                const faceIndex = faceOffset / 3
+                const key = `${selection.geosetIndex}:${faceIndex}`
+                if (seen.has(key)) continue
+                seen.add(key)
+                result.push({ geosetIndex: selection.geosetIndex, index: faceIndex })
+            }
+        })
+
+        return result
+    }, [modelData])
+
     const getSelectionCenter = useCallback(() => {
         if (!modelData?.Geosets || selectedUVs.length === 0) return null
 
@@ -908,17 +972,14 @@ const UVEditor: React.FC<UVEditorProps> = ({
 
     const handleMouseUp = useCallback((e: React.MouseEvent) => {
         if (isSelecting && selectionStart && selectionEnd) {
-            const minX = Math.min(selectionStart.x, selectionEnd.x)
-            const maxX = Math.max(selectionStart.x, selectionEnd.x)
-            const minY = Math.min(selectionStart.y, selectionEnd.y)
-            const maxY = Math.max(selectionStart.y, selectionEnd.y)
+            const selectionRect = createSelectionRect(selectionStart, selectionEnd)
 
             const newSelections: UVSelection[] = []
 
             // Helper: check if a point is inside selection box
             const isInBox = (u: number, v: number) => {
                 const pos = uvToCanvas(u, v)
-                return pos.x >= minX && pos.x <= maxX && pos.y >= minY && pos.y <= maxY
+                return pointInRect(pos, selectionRect)
             }
 
             if (modelData?.Geosets) {
@@ -938,50 +999,61 @@ const UVEditor: React.FC<UVEditorProps> = ({
                             }
                         }
                     } else if (uvSubMode === 'edge' && faces) {
-                        // EDGE MODE: Select both vertices of each edge that has at least one vertex in box
+                        // EDGE MODE: Select both vertices of each edge that intersects the selection rectangle
                         for (let i = 0; i < faces.length; i += 3) {
                             const i0 = Number(faces[i])
                             const i1 = Number(faces[i + 1])
                             const i2 = Number(faces[i + 2])
+                            const p0 = uvToCanvas(Number(uvs[i0 * 2]), Number(uvs[i0 * 2 + 1]))
+                            const p1 = uvToCanvas(Number(uvs[i1 * 2]), Number(uvs[i1 * 2 + 1]))
+                            const p2 = uvToCanvas(Number(uvs[i2 * 2]), Number(uvs[i2 * 2 + 1]))
 
-                            const v0In = isInBox(Number(uvs[i0 * 2]), Number(uvs[i0 * 2 + 1]))
-                            const v1In = isInBox(Number(uvs[i1 * 2]), Number(uvs[i1 * 2 + 1]))
-                            const v2In = isInBox(Number(uvs[i2 * 2]), Number(uvs[i2 * 2 + 1]))
-
-                            // Edge 0-1
-                            if (v0In || v1In) { selectedSet.add(i0); selectedSet.add(i1) }
-                            // Edge 1-2
-                            if (v1In || v2In) { selectedSet.add(i1); selectedSet.add(i2) }
-                            // Edge 2-0
-                            if (v2In || v0In) { selectedSet.add(i2); selectedSet.add(i0) }
+                            if (segmentIntersectsRect(p0, p1, selectionRect)) { selectedSet.add(i0); selectedSet.add(i1) }
+                            if (segmentIntersectsRect(p1, p2, selectionRect)) { selectedSet.add(i1); selectedSet.add(i2) }
+                            if (segmentIntersectsRect(p2, p0, selectionRect)) { selectedSet.add(i2); selectedSet.add(i0) }
                         }
                     } else if (uvSubMode === 'face' && faces) {
-                        // FACE MODE: Select all 3 vertices of each triangle with any vertex in box
+                        // FACE MODE: Select all 3 vertices of each triangle that intersects the selection rectangle
                         for (let i = 0; i < faces.length; i += 3) {
                             const i0 = Number(faces[i])
                             const i1 = Number(faces[i + 1])
                             const i2 = Number(faces[i + 2])
+                            const p0 = uvToCanvas(Number(uvs[i0 * 2]), Number(uvs[i0 * 2 + 1]))
+                            const p1 = uvToCanvas(Number(uvs[i1 * 2]), Number(uvs[i1 * 2 + 1]))
+                            const p2 = uvToCanvas(Number(uvs[i2 * 2]), Number(uvs[i2 * 2 + 1]))
 
-                            const anyInBox = isInBox(Number(uvs[i0 * 2]), Number(uvs[i0 * 2 + 1])) ||
-                                isInBox(Number(uvs[i1 * 2]), Number(uvs[i1 * 2 + 1])) ||
-                                isInBox(Number(uvs[i2 * 2]), Number(uvs[i2 * 2 + 1]))
-
-                            if (anyInBox) {
+                            if (triangleIntersectsRect(p0, p1, p2, selectionRect)) {
                                 selectedSet.add(i0)
                                 selectedSet.add(i1)
                                 selectedSet.add(i2)
                             }
                         }
                     } else if (uvSubMode === 'group') {
-                        // GROUP MODE: Select ALL vertices of geoset if any vertex is in box
-                        let anyInBox = false
-                        for (let i = 0; i < vertexCount; i++) {
-                            if (isInBox(uvs[i * 2] as number, uvs[i * 2 + 1] as number)) {
-                                anyInBox = true
-                                break
+                        // GROUP MODE: Select ALL vertices of geoset if any face/segment intersects the selection rectangle
+                        let hasHit = false
+                        if (faces) {
+                            for (let i = 0; i < faces.length; i += 3) {
+                                const i0 = Number(faces[i])
+                                const i1 = Number(faces[i + 1])
+                                const i2 = Number(faces[i + 2])
+                                const p0 = uvToCanvas(Number(uvs[i0 * 2]), Number(uvs[i0 * 2 + 1]))
+                                const p1 = uvToCanvas(Number(uvs[i1 * 2]), Number(uvs[i1 * 2 + 1]))
+                                const p2 = uvToCanvas(Number(uvs[i2 * 2]), Number(uvs[i2 * 2 + 1]))
+                                if (triangleIntersectsRect(p0, p1, p2, selectionRect)) {
+                                    hasHit = true
+                                    break
+                                }
                             }
                         }
-                        if (anyInBox) {
+                        if (!hasHit) {
+                            for (let i = 0; i < vertexCount; i++) {
+                                if (isInBox(uvs[i * 2] as number, uvs[i * 2 + 1] as number)) {
+                                    hasHit = true
+                                    break
+                                }
+                            }
+                        }
+                        if (hasHit) {
                             for (let i = 0; i < vertexCount; i++) {
                                 selectedSet.add(i)
                             }
@@ -993,12 +1065,11 @@ const UVEditor: React.FC<UVEditorProps> = ({
                             const i0 = Number(faces[i])
                             const i1 = Number(faces[i + 1])
                             const i2 = Number(faces[i + 2])
+                            const p0 = uvToCanvas(Number(uvs[i0 * 2]), Number(uvs[i0 * 2 + 1]))
+                            const p1 = uvToCanvas(Number(uvs[i1 * 2]), Number(uvs[i1 * 2 + 1]))
+                            const p2 = uvToCanvas(Number(uvs[i2 * 2]), Number(uvs[i2 * 2 + 1]))
 
-                            const anyInBox = isInBox(Number(uvs[i0 * 2]), Number(uvs[i0 * 2 + 1])) ||
-                                isInBox(Number(uvs[i1 * 2]), Number(uvs[i1 * 2 + 1])) ||
-                                isInBox(Number(uvs[i2 * 2]), Number(uvs[i2 * 2 + 1]))
-
-                            if (anyInBox) {
+                            if (triangleIntersectsRect(p0, p1, p2, selectionRect)) {
                                 seedFaceIndices.push(faceIndex)
                             }
                         }
@@ -1066,6 +1137,26 @@ const UVEditor: React.FC<UVEditorProps> = ({
     // -------------------------------------------------------------------------
     // EFFECTS
     // -------------------------------------------------------------------------
+
+    useEffect(() => {
+        setUvSelectionMode(uvSubMode)
+    }, [uvSubMode, setUvSelectionMode])
+
+    useEffect(() => {
+        if (useSelectionStore.getState().mainMode !== 'uv') return
+        selectVertices(buildVertexSelectionIds(selectedUVs))
+        selectFaces(buildFaceSelectionIds(selectedUVs, uvSubMode))
+    }, [selectedUVs, uvSubMode, selectVertices, selectFaces, buildVertexSelectionIds, buildFaceSelectionIds])
+
+    useEffect(() => {
+        if (mainMode !== 'uv' || !viewerSelectionSync) return
+
+        const syncedSelections = buildUVSelectionsFromModelSelection(modelData, selectedVertexIds, selectedFaceIds)
+
+        setSelectedUVs((previousSelections) => (
+            areUVSelectionsEqual(previousSelections, syncedSelections) ? previousSelections : syncedSelections
+        ))
+    }, [mainMode, modelData, selectedVertexIds, selectedFaceIds, viewerSelectionSync])
 
     useEffect(() => {
         const isUvMode = () => useSelectionStore.getState().mainMode === 'uv'
@@ -1400,6 +1491,15 @@ const UVEditor: React.FC<UVEditorProps> = ({
                     <Button size="small" icon={<CompressOutlined />} style={btnStyle} onClick={fitToView} />
                 </Tooltip>
 
+                <Tooltip title={showViewerSelectionHighlight ? '关闭 3D 选区高亮' : '开启 3D 选区高亮'}>
+                    <Button
+                        size="small"
+                        icon={<BgColorsOutlined />}
+                        style={showViewerSelectionHighlight ? btnActiveStyle : btnStyle}
+                        onClick={toggleShowViewerSelectionHighlight}
+                    />
+                </Tooltip>
+
                 {/* Toggle 3D view - icon only */}
                 <Tooltip title={showModelView ? '隐藏3D视图' : '显示3D视图'}>
                     <Button size="small" icon={showModelView ? <EyeInvisibleOutlined /> : <EyeOutlined />} style={btnStyle} onClick={onToggleModelView} />
@@ -1453,10 +1553,4 @@ const UVEditor: React.FC<UVEditorProps> = ({
 }
 
 export default UVEditor
-
-
-
-
-
-
 

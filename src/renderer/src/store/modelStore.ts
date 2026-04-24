@@ -22,6 +22,24 @@ import { getPivotChainSum } from '../utils/nodeUtils';
 
 const MAX_CACHED_RENDERERS = 5;
 
+const normalizeModelIdentityPath = (path: unknown): string => {
+    if (typeof path !== 'string') return '';
+    return path.replace(/\0/g, '').trim().replace(/\//g, '\\').replace(/\\+/g, '\\').toLowerCase();
+};
+
+const getRendererIdentityPath = (renderer: unknown): string => {
+    const candidate = renderer as { __modelPath?: unknown; model?: { __modelPath?: unknown; path?: unknown } } | null;
+    return normalizeModelIdentityPath(candidate?.__modelPath)
+        || normalizeModelIdentityPath(candidate?.model?.__modelPath)
+        || normalizeModelIdentityPath(candidate?.model?.path);
+};
+
+const rendererBelongsToModelPath = (renderer: unknown, modelPath: unknown): boolean => {
+    const rendererPath = getRendererIdentityPath(renderer);
+    const expectedPath = normalizeModelIdentityPath(modelPath);
+    return !!renderer && !!rendererPath && !!expectedPath && rendererPath === expectedPath;
+};
+
 const hasGeometryBufferUpdate = (updates: any): boolean => {
     if (!updates || typeof updates !== 'object') return false;
     return (
@@ -1297,6 +1315,13 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 console.warn('[ModelStore] getModelDataForSave recovered nodes from modelData because store.nodes was empty');
                 nodesForSave = recovered;
             }
+        }
+
+        const nodePreview = state.nodeEditorPreview;
+        if (nodePreview) {
+            nodesForSave = nodesForSave.map((node) =>
+                node.ObjectId === nodePreview.objectId ? ({ ...nodePreview.node } as ModelNode) : node
+            );
         }
 
         let base = updateModelDataWithNodes(state.modelData, nodesForSave as any[], false);
@@ -2964,6 +2989,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                     target: [Number(cam.target[0]), Number(cam.target[1]), Number(cam.target[2])] as [number, number, number]
                 } : null;
 
+                const currentRenderer = useRendererStore.getState().renderer;
                 return {
                     ...tab,
                     snapshot: {
@@ -2975,7 +3001,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                         currentFrame: state.currentFrame,
                         hiddenGeosetIds: [...state.hiddenGeosetIds],
                         cameraState,
-                        renderer: useRendererStore.getState().renderer,
+                        renderer: rendererBelongsToModelPath(currentRenderer, state.modelPath) ? currentRenderer : null,
                         lastActive: Date.now()
                     }
                 };
@@ -3108,6 +3134,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
         } : null;
 
         const currentRenderer = useRendererStore.getState().renderer;
+        const currentRendererForSnapshot = rendererBelongsToModelPath(currentRenderer, state.modelPath) ? currentRenderer : null;
 
         let updatedTabs = state.tabs.map(tab => {
             if (tab.id === state.activeTabId) {
@@ -3123,7 +3150,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                         currentFrame: state.currentFrame,
                         hiddenGeosetIds: [...state.hiddenGeosetIds],
                         cameraState,
-                        renderer: currentRenderer,
+                        renderer: currentRendererForSnapshot,
                         lastActive: Date.now()
                     }
                 };

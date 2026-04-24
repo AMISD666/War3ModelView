@@ -256,6 +256,28 @@ class State {
     }
 }
 
+function reverseFloat3Color(color: Float32Array | Int32Array): void {
+    if (!color || color.length < 3) {
+        return;
+    }
+    const r = color[0];
+    color[0] = color[2];
+    color[2] = r;
+}
+
+function reverseColorAnimVector(animVector: AnimVector): AnimVector {
+    for (const key of animVector.Keys) {
+        reverseFloat3Color(key.Vector);
+        if (key.InTan) {
+            reverseFloat3Color(key.InTan);
+        }
+        if (key.OutTan) {
+            reverseFloat3Color(key.OutTan);
+        }
+    }
+    return animVector;
+}
+
 interface ObjWithExtent {
     BoundsRadius: number;
     MinimumExtent: Float32Array;
@@ -566,7 +588,7 @@ function parseGeosetAnims(model: Model, state: State, size: number): void {
             if (keyword === 'KGAO') {
                 geosetAnim.Alpha = state.animVector(AnimVectorType.FLOAT1);
             } else if (keyword === 'KGAC') {
-                geosetAnim.Color = state.animVector(AnimVectorType.FLOAT3);
+                geosetAnim.Color = reverseColorAnimVector(state.animVector(AnimVectorType.FLOAT3));
             } else {
                 throw new Error('Incorrect GeosetAnim chunk data ' + keyword);
             }

@@ -20,7 +20,7 @@ const EditorPanel = React.lazy(() => import('./EditorPanel'))
 
 import { GeosetVisibilityPanel } from './GeosetVisibilityPanel'
 import { getRecentFiles, clearRecentFiles, replaceRecentModelPath, RecentFile } from '../services/historyService'
-import { useModelStore, mergeMaterialManagerPreview, mergeNodeEditorPreview } from '../store/modelStore'
+import { useModelStore, mergeMaterialManagerPreview, mergeNodeEditorPreview, extractNodesFromModel } from '../store/modelStore'
 import { NodeType } from '../types/node'
 import { useUIStore } from '../store/uiStore'
 import { useSelectionStore } from '../store/selectionStore'
@@ -1471,11 +1471,12 @@ const MainLayout: React.FC = () => {
             isSavingRef.current = true;
             const modelState = useModelStore.getState();
             const normalizedData = modelState.getModelDataForSave?.() ?? modelData;
+            const normalizedNodes = extractNodesFromModel(normalizedData);
             const globalColorSettings = useGlobalColorAdjustStore.getState().settings;
             const rendererState = useRendererStore.getState();
             const saveResult = await saveCurrentModelWorkflow.savePreparedModel({
                 modelData: normalizedData,
-                nodes: modelState.nodes,
+                nodes: normalizedNodes,
                 sourceModelPath: modelPath,
                 targetPath: modelPath,
                 globalColorSettings,
@@ -1491,7 +1492,7 @@ const MainLayout: React.FC = () => {
                 return false;
             }
             showTextureFailureWarnings(saveResult.textureEncodeResult);
-            commitSavedModelToStore(saveResult.preparedData, saveResult.savedNodes ?? modelState.nodes);
+            commitSavedModelToStore(saveResult.preparedData, saveResult.savedNodes ?? normalizedNodes);
             useGlobalColorAdjustStore.getState().resetSettings();
             historyCommandService.markSaved();
             useModelStore.getState().markTabSaved();
@@ -1525,11 +1526,12 @@ const MainLayout: React.FC = () => {
                 isSavingRef.current = true;
                 const modelState = useModelStore.getState();
                 const normalizedData = modelState.getModelDataForSave?.() ?? modelData;
+                const normalizedNodes = extractNodesFromModel(normalizedData);
                 const globalColorSettings = useGlobalColorAdjustStore.getState().settings;
                 const rendererState = useRendererStore.getState();
                 const saveResult = await saveCurrentModelWorkflow.savePreparedModel({
                     modelData: normalizedData,
-                    nodes: modelState.nodes,
+                    nodes: normalizedNodes,
                     sourceModelPath: modelPath,
                     targetPath: selected,
                     globalColorSettings,
@@ -1546,7 +1548,7 @@ const MainLayout: React.FC = () => {
                     return false;
                 }
                 showTextureFailureWarnings(saveResult.textureEncodeResult, saveResult.textureCopyResult);
-                commitSavedModelToStore(saveResult.preparedData, saveResult.savedNodes ?? modelState.nodes);
+                commitSavedModelToStore(saveResult.preparedData, saveResult.savedNodes ?? normalizedNodes);
                 useGlobalColorAdjustStore.getState().resetSettings();
                 // Update store with new path if needed, but for now just alert
                 historyCommandService.markSaved();
@@ -1749,12 +1751,23 @@ const MainLayout: React.FC = () => {
                     filePath += '.mdl'
                 }
 
-                const normalizedData = useModelStore.getState().getModelDataForSave?.() ?? modelData;
+                const modelState = useModelStore.getState();
+                const normalizedData = modelState.getModelDataForSave?.() ?? modelData;
+                const normalizedNodes = extractNodesFromModel(normalizedData);
+                const globalColorSettings = useGlobalColorAdjustStore.getState().settings;
+                const rendererState = useRendererStore.getState();
                 const saveResult = await saveCurrentModelWorkflow.savePreparedModel({
                     modelData: normalizedData,
+                    nodes: normalizedNodes,
                     sourceModelPath: modelPath,
                     targetPath: filePath,
+                    globalColorSettings,
+                    textureOptions: {
+                        textureSaveMode: rendererState.textureSaveMode,
+                        textureSaveSuffix: rendererState.textureSaveSuffix,
+                    },
                     copyReferencedTextures: true,
+                    encodeAdjustedTextures: true,
                     format: 'mdl',
                     validationContext: 'export',
                     confirmValidation: ({ context, validationErrors }) => confirmSaveValidation(context, validationErrors),
@@ -1792,12 +1805,23 @@ const MainLayout: React.FC = () => {
                     filePath += '.mdx'
                 }
 
-                const normalizedData = useModelStore.getState().getModelDataForSave?.() ?? modelData;
+                const modelState = useModelStore.getState();
+                const normalizedData = modelState.getModelDataForSave?.() ?? modelData;
+                const normalizedNodes = extractNodesFromModel(normalizedData);
+                const globalColorSettings = useGlobalColorAdjustStore.getState().settings;
+                const rendererState = useRendererStore.getState();
                 const saveResult = await saveCurrentModelWorkflow.savePreparedModel({
                     modelData: normalizedData,
+                    nodes: normalizedNodes,
                     sourceModelPath: modelPath,
                     targetPath: filePath,
+                    globalColorSettings,
+                    textureOptions: {
+                        textureSaveMode: rendererState.textureSaveMode,
+                        textureSaveSuffix: rendererState.textureSaveSuffix,
+                    },
                     copyReferencedTextures: true,
+                    encodeAdjustedTextures: true,
                     format: 'mdx',
                     validationContext: 'export',
                     confirmValidation: ({ context, validationErrors }) => confirmSaveValidation(context, validationErrors),
@@ -1845,12 +1869,23 @@ const MainLayout: React.FC = () => {
                 }
             }
 
-            const normalizedData = useModelStore.getState().getModelDataForSave?.() ?? modelData
+            const modelState = useModelStore.getState()
+            const normalizedData = modelState.getModelDataForSave?.() ?? modelData
+            const normalizedNodes = extractNodesFromModel(normalizedData)
+            const globalColorSettings = useGlobalColorAdjustStore.getState().settings
+            const rendererState = useRendererStore.getState()
             const saveResult = await saveCurrentModelWorkflow.savePreparedModel({
                 modelData: normalizedData,
+                nodes: normalizedNodes,
                 sourceModelPath: modelPath,
                 targetPath,
+                globalColorSettings,
+                textureOptions: {
+                    textureSaveMode: rendererState.textureSaveMode,
+                    textureSaveSuffix: rendererState.textureSaveSuffix,
+                },
                 copyReferencedTextures: true,
+                encodeAdjustedTextures: true,
                 format: targetExt === '.mdl' ? 'mdl' : 'mdx',
                 validationContext: 'convert',
                 confirmValidation: ({ context, validationErrors }) => confirmSaveValidation(context, validationErrors),
@@ -2095,10 +2130,10 @@ const MainLayout: React.FC = () => {
                                         showCameras={mainMode !== 'uv' && showCameras}
                                         showLights={mainMode !== 'uv' && mainMode !== 'animation' && showLights}
                                         showAttachments={mainMode !== 'uv' && showAttachments}
-                                        showWireframe={mainMode !== 'uv' && renderMode === 'wireframe'}
+                                        showWireframe={renderMode === 'wireframe'}
                                         onToggleWireframe={() => setRenderMode(renderMode === 'textured' ? 'wireframe' : 'textured')}
                                         backgroundColor={backgroundColor}
-                                        animationIndex={currentSequence}
+                                        animationIndex={mainMode === 'uv' ? -1 : currentSequence}
                                         isPlaying={mainMode !== 'uv' && isPlaying}
                                         onTogglePlay={handleTogglePlay}
                                         onToggleLooping={handleToggleLooping}

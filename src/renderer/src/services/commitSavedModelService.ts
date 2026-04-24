@@ -34,6 +34,7 @@ export const commitSavedModelToStore = (
             nodes: savedNodes,
             tabs: updatedTabs,
             materialManagerPreview: null,
+            nodeEditorPreview: null,
             rendererReloadTrigger: state.rendererReloadTrigger + 1,
         }
     })

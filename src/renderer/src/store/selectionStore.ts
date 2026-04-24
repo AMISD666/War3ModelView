@@ -11,6 +11,7 @@ export interface SelectionId {
 
 export type AppMode = 'view' | 'geometry' | 'uv' | 'animation';
 export type GeometrySubMode = 'vertex' | 'face' | 'group';
+export type UVSelectionMode = 'vertex' | 'edge' | 'face' | 'group' | 'block';
 export type TransformMode = 'translate' | 'rotate' | 'scale' | null;
 export type KeyframeDisplayMode = 'node' | 'geosetAnim' | 'particle' | 'textureAnim' | 'material';
 export type TimelineGlobalSequenceFilter = number | null | -1;
@@ -23,6 +24,7 @@ interface SelectionState {
     // New Mode System
     mainMode: AppMode;
     geometrySubMode: GeometrySubMode;
+    uvSelectionMode: UVSelectionMode;
     animationSubMode: 'binding' | 'keyframe';
     timelineKeyframeDisplayMode: KeyframeDisplayMode;
     timelineGlobalSequenceFilter: TimelineGlobalSequenceFilter;
@@ -35,6 +37,7 @@ interface SelectionState {
 
     setMainMode: (mode: AppMode) => void;
     setGeometrySubMode: (mode: GeometrySubMode) => void;
+    setUvSelectionMode: (mode: UVSelectionMode) => void;
     setAnimationSubMode: (mode: 'binding' | 'keyframe') => void;
     setTimelineKeyframeDisplayMode: (mode: KeyframeDisplayMode) => void;
     setTimelineGlobalSequenceFilter: (filter: TimelineGlobalSequenceFilter) => void;
@@ -102,6 +105,7 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
     // New Mode System Init
     mainMode: 'view',
     geometrySubMode: 'vertex',
+    uvSelectionMode: 'vertex',
     animationSubMode: 'binding',
     timelineKeyframeDisplayMode: 'node',
     timelineGlobalSequenceFilter: null,
@@ -126,6 +130,9 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
         if (get().mainMode === 'geometry') {
             set({ selectionMode: mode });
         }
+    },
+    setUvSelectionMode: (mode) => {
+        set({ uvSelectionMode: mode });
     },
     setAnimationSubMode: (mode) => {
         set({ animationSubMode: mode });
@@ -334,6 +341,7 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
         set({
             mainMode: 'view',
             geometrySubMode: 'vertex',
+            uvSelectionMode: 'vertex',
             animationSubMode: 'binding',
             timelineKeyframeDisplayMode: 'node',
             timelineGlobalSequenceFilter: null,

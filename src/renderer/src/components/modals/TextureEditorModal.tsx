@@ -263,6 +263,18 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
     const selectedAdjustments = selectedTextureId
         ? (adjustmentsByTextureId[selectedTextureId] || DEFAULT_TEXTURE_ADJUSTMENTS)
         : DEFAULT_TEXTURE_ADJUSTMENTS
+    const isPathInputPreviewOverrideActive =
+        !!selectedTexture &&
+        pathInputEditingRef.current &&
+        pathInputSelectedIndexRef.current === selectedIndex &&
+        pathInputValue !== (selectedTexture.Image ?? '')
+    const previewTexture: LocalTexture | null = selectedTexture && isPathInputPreviewOverrideActive
+        ? {
+            ...selectedTexture,
+            Image: pathInputValue,
+            ...(pathInputValue.trim() ? { ReplaceableId: 0 } : {})
+        }
+        : selectedTexture
 
     useEffect(() => {
         lastSelectedIndexRef.current = selectedIndex
@@ -1050,7 +1062,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
         const isStale = () => previewLoadIdRef.current !== loadId
 
         const loadTexture = async () => {
-            if (!selectedTexture) {
+            if (!previewTexture) {
                 setIsLoadingPreview(false)
                 setPreviewUrl(null)
                 setPreviewError(null)
@@ -1060,7 +1072,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
                 return
             }
 
-            const texture = selectedTexture
+            const texture = previewTexture
             const cacheKey = getPreviewCacheKey(texture)
             selectedPreviewCacheKeyRef.current = cacheKey
             const allowCachedPreviewUrl = isDefaultTextureAdjustments(selectedAdjustments)
@@ -1240,9 +1252,9 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
             setIsLoadingPreview(false)
         }
         loadTexture()
-    }, [selectedIndex, selectedTexture?.__editorId, selectedTexture?.Image, selectedTexture?.ReplaceableId, selectedTexture?.Flags, modelPath])
+    }, [selectedIndex, previewTexture?.__editorId, previewTexture?.Image, previewTexture?.ReplaceableId, previewTexture?.Flags, modelPath])
 
-    const selectedImageLower = (selectedTexture?.Image || '').toLowerCase()
+    const selectedImageLower = (previewTexture?.Image || '').toLowerCase()
     const isSelectedTextureBlpOrTga = selectedImageLower.endsWith('.blp') || selectedImageLower.endsWith('.tga')
     const canAdjustSelectedTexture = isSelectedTextureBlpOrTga && !!basePreviewImageData && !isLoadingPreview
 

@@ -38,7 +38,8 @@ export function checkForStructuralChanges(
         }
     }    // OPTIMIZATION: Geoset structure changes (Split/Weld/Delete) are now handled 
     // by the commands themselves (rebuilding buffers). We can trust the live renderer.
-    if (geoChanged) {        // return { needsReload: true, reason: 'Geoset count changed' }
+    if (geoChanged) {
+        return { needsReload: true, reason: 'Geoset count changed' }
     }
 
     if (textureChanged) {    }
@@ -175,8 +176,8 @@ export function lightweightSync(renderer: any, modelData: any): void {
     // === GEOSET ANIMS ===
     if (modelData.GeosetAnims) {
         renderer.model.GeosetAnims = modelData.GeosetAnims
-        if ((renderer as any).modelInstance && typeof (renderer as any).modelInstance.syncMaterials === 'function') {
-            (renderer as any).modelInstance.syncMaterials()
+        if ((renderer as any).modelInstance && typeof (renderer as any).modelInstance.syncGeosetAnims === 'function') {
+            (renderer as any).modelInstance.syncGeosetAnims()
         }
     }
 

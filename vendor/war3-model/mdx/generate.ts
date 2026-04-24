@@ -120,8 +120,23 @@ class Stream {
         }
     }
 
-    public animVector(animVector: AnimVector, type: AnimVectorType): void {
+    public animVector(animVector: AnimVector, type: AnimVectorType, reverse = false): void {
         const isInt = type === AnimVectorType.INT1;
+        const writeArray = (array: Float32Array | Int32Array): void => {
+            if (reverse) {
+                for (let i = array.length - 1; i >= 0; --i) {
+                    if (isInt) {
+                        this.int32(array[i]);
+                    } else {
+                        this.float32(array[i]);
+                    }
+                }
+            } else if (isInt) {
+                this.int32Array(array as Int32Array);
+            } else {
+                this.float32Array(array as Float32Array);
+            }
+        };
 
         this.int32(animVector.Keys.length);
         this.int32(animVector.LineType);
@@ -129,19 +144,10 @@ class Stream {
 
         for (const keyFrame of animVector.Keys) {
             this.int32(keyFrame.Frame);
-            if (isInt) {
-                this.int32Array(keyFrame.Vector as Int32Array);
-            } else {
-                this.float32Array(keyFrame.Vector as Float32Array);
-            }
+            writeArray(keyFrame.Vector as Float32Array | Int32Array);
             if (animVector.LineType === LineType.Hermite || animVector.LineType === LineType.Bezier) {
-                if (isInt) {
-                    this.int32Array(keyFrame.InTan as Int32Array);
-                    this.int32Array(keyFrame.OutTan as Int32Array);
-                } else {
-                    this.float32Array(keyFrame.InTan as Float32Array);
-                    this.float32Array(keyFrame.OutTan as Float32Array);
-                }
+                writeArray(keyFrame.InTan as Float32Array | Int32Array);
+                writeArray(keyFrame.OutTan as Float32Array | Int32Array);
             }
         }
     }
@@ -196,6 +202,24 @@ function isAnimVectorValue(val: unknown): val is AnimVector {
         typeof val === 'object' &&
         Array.isArray((val as AnimVector).Keys)
     );
+}
+
+function scalarFloat1AnimVector(value: number): AnimVector {
+    return {
+        LineType: LineType.DontInterp,
+        GlobalSeqId: null,
+        Keys: [{ Frame: 0, Vector: new Float32Array([value]) }]
+    };
+}
+
+function particleEmitter2VisibilityAnim(emitter: ParticleEmitter2): AnimVector | null {
+    if (isAnimVectorValue(emitter.Visibility)) {
+        return emitter.Visibility;
+    }
+    if (typeof emitter.Visibility === 'number' && Number.isFinite(emitter.Visibility) && emitter.Visibility !== 1) {
+        return scalarFloat1AnimVector(emitter.Visibility);
+    }
+    return null;
 }
 
 
@@ -804,7 +828,7 @@ function generateGeosetAnims(model: Model, stream: Stream): void {
         }
         if (anim.Color && !(anim.Color instanceof Float32Array)) {
             stream.keyword('KGAC');
-            stream.animVector(anim.Color, AnimVectorType.FLOAT3);
+            stream.animVector(anim.Color, AnimVectorType.FLOAT3, true);
         }
     }
 }
@@ -1198,6 +1222,7 @@ function generateParticleEmitters(model: Model, stream: Stream): void {
 
 
 function byteLengthParticleEmitter2(emitter: ParticleEmitter2): number {
+    const visibilityAnim = particleEmitter2VisibilityAnim(emitter);
     return 4 /* size */ +
         byteLengthNode(emitter) +
         4 /* static Speed */ +
@@ -1225,10 +1250,7 @@ function byteLengthParticleEmitter2(emitter: ParticleEmitter2): number {
         4 /* Squirt */ +
         4 /* PriorityPlane */ +
         4 /* ReplaceableId */ +
-        (emitter.Visibility && typeof emitter.Visibility !== 'number' ?
-            4 /* keyword */ + byteLengthAnimVector(emitter.Visibility, AnimVectorType.FLOAT1) :
-            0
-        ) +
+        (visibilityAnim ? 4 /* keyword */ + byteLengthAnimVector(visibilityAnim, AnimVectorType.FLOAT1) : 0) +
         (emitter.EmissionRate && typeof emitter.EmissionRate !== 'number' ?
             4 /* keyword */ + byteLengthAnimVector(emitter.EmissionRate, AnimVectorType.FLOAT1) :
             0
@@ -1346,9 +1368,10 @@ function generateParticleEmitters2(model: Model, stream: Stream): void {
             stream.keyword('KP2E');
             stream.animVector(emitter.EmissionRate, AnimVectorType.FLOAT1);
         }
-        if (emitter.Visibility && typeof emitter.Visibility !== 'number') {
+        const visibilityAnim = particleEmitter2VisibilityAnim(emitter);
+        if (visibilityAnim) {
             stream.keyword('KP2V');
-            stream.animVector(emitter.Visibility, AnimVectorType.FLOAT1);
+            stream.animVector(visibilityAnim, AnimVectorType.FLOAT1);
         }
         if (emitter.Length && typeof emitter.Length !== 'number') {
             stream.keyword('KP2N');

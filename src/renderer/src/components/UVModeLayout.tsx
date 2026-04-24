@@ -2,6 +2,7 @@ import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import UVEditor from './editors/UVEditor'
 import TextureGeosetSelector from './editors/TextureGeosetSelector'
 import { useModelStore, mergeMaterialManagerPreview } from '../store/modelStore'
+import { useUvEditorStore } from '../store/uvEditorStore'
 
 interface UVModeOverlayProps {
     modelPath: string | null
@@ -39,6 +40,7 @@ const UVModeLayout: React.FC<UVModeOverlayProps & { children: React.ReactNode }>
     )
     const selectedGeosetIndex = useModelStore(state => state.selectedGeosetIndex)
     const setSelectedGeosetIndex = useModelStore(state => state.setSelectedGeosetIndex)
+    const viewerSelectionSync = useUvEditorStore(state => state.viewerSelectionSync)
 
     // Build geosetId -> textureId mapping for quick lookup
     const geosetToTextureMap = useMemo(() => {
@@ -74,6 +76,40 @@ const UVModeLayout: React.FC<UVModeOverlayProps & { children: React.ReactNode }>
         // Clear the selection after processing to allow repeated picks
         setSelectedGeosetIndex(null)
     }, [isActive, selectedGeosetIndex, geosetToTextureMap, setSelectedGeosetIndex])
+
+    useEffect(() => {
+        if (!isActive || !viewerSelectionSync) return
+
+        const { geosetIndices } = viewerSelectionSync
+        if (geosetIndices.length === 0) {
+            return
+        }
+
+        const textureHitCounts = new Map<number, number>()
+        geosetIndices.forEach((geosetIndex) => {
+            const textureId = geosetToTextureMap.get(geosetIndex)
+            if (textureId === undefined) return
+            textureHitCounts.set(textureId, (textureHitCounts.get(textureId) ?? 0) + 1)
+        })
+
+        const preferredTextureId = Array.from(textureHitCounts.entries())
+            .sort((left, right) => {
+                if (right[1] !== left[1]) {
+                    return right[1] - left[1]
+                }
+                return left[0] - right[0]
+            })
+            .at(0)?.[0] ?? null
+
+        if (preferredTextureId === null) {
+            setVisibleGeosetIds(geosetIndices)
+            return
+        }
+
+        const filteredGeosets = geosetIndices.filter((geosetIndex) => geosetToTextureMap.get(geosetIndex) === preferredTextureId)
+        setSelectedTextureId(preferredTextureId)
+        setVisibleGeosetIds(filteredGeosets.length > 0 ? filteredGeosets : geosetIndices)
+    }, [isActive, viewerSelectionSync, geosetToTextureMap])
 
     // Handlers for Selection
     const handleSelectTexture = useCallback((id: number) => {
@@ -260,5 +296,4 @@ const UVModeLayout: React.FC<UVModeOverlayProps & { children: React.ReactNode }>
 }
 
 export default UVModeLayout
-
 

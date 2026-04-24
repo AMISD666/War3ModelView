@@ -518,23 +518,16 @@ function generateGeosetAnims(model: Model): string {
 }
 
 function generateColorProp(name: string, color: AnimVector | Float32Array, isStatic: boolean | null,
-    tabSize = 1): string {
+    tabSize = 1, reverse = true): string {
     if (color) {
         if (color instanceof Float32Array) {
             if (!isStatic || isNotEmptyVec3(color, 1)) {
-                let middle = '';
-
-                for (let i = 2; i >= 0; --i) {
-                    if (i < 2) {
-                        middle += ', ';
-                    }
-                    middle += generateNumber(color[i]);
-                }
+                const middle = generateArray(color, reverse);
 
                 return `${generateTab(tabSize)}${isStatic ? 'static ' : ''}${name} { ${middle} },\n`;
             }
         } else {
-            return generateAnimVectorProp(name, color, null, tabSize, true);
+            return generateAnimVectorProp(name, color, null, tabSize, reverse);
         }
     }
 
@@ -545,7 +538,7 @@ function generateGeosetAnimChunk(geosetAnim: GeosetAnim): string {
     return generateBlockStart('GeosetAnim') +
         generateIntProp('GeosetId', geosetAnim.GeosetId) +
         generateAnimVectorProp('Alpha', geosetAnim.Alpha, 1) +
-        generateColorProp('Color', geosetAnim.Color, true) +
+        generateColorProp('Color', geosetAnim.Color, true, 1, false) +
         (geosetAnim.Flags & GeosetAnimFlags.DropShadow ? generateBooleanProp('DropShadow') : '') +
         generateBlockEnd();
 }
