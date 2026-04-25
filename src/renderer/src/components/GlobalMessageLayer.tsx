@@ -1,9 +1,12 @@
 
 import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { DraggableModal } from './DraggableModal';
 import { useMessageStore } from '../store/messageStore';
 import { Button } from 'antd';
 import { InfoCircleOutlined, CheckCircleFilled, ExclamationCircleFilled, CloseCircleFilled, QuestionCircleOutlined, LoadingOutlined } from '@ant-design/icons';
+
+const GLOBAL_MESSAGE_Z_INDEX = 2147483000;
 
 // --- Icons ---
 const MessageIcon: React.FC<{ type: string }> = ({ type }) => {
@@ -59,7 +62,7 @@ const Toast: React.FC<{ msg: any; onClose: () => void }> = ({ msg, onClose }) =>
             }}
         >
             <MessageIcon type={msg.type} />
-            <span style={{ fontWeight: 500 }}>{msg.content}</span>
+            <span style={{ fontWeight: 500, whiteSpace: 'pre-line' }}>{msg.content}</span>
         </div>
     );
 };
@@ -71,7 +74,7 @@ export const GlobalMessageLayer: React.FC = () => {
     const confirmMessages = messages.filter(m => m.type === 'confirm');
     const toastMessages = messages.filter(m => m.type !== 'confirm');
 
-    return (
+    const layer = (
         <>
             {/* Modal Layer (Confirms) */}
             {confirmMessages.map((msg) => {
@@ -83,6 +86,11 @@ export const GlobalMessageLayer: React.FC = () => {
                 const handleOk = () => {
                     removeMessage(msg.id);
                     if (msg.onOk) msg.onOk();
+                };
+
+                const handleExtra = () => {
+                    removeMessage(msg.id);
+                    if (msg.onExtra) msg.onExtra();
                 };
 
                 return (
@@ -99,8 +107,13 @@ export const GlobalMessageLayer: React.FC = () => {
                                     ? msg.footer
                                     : (
                                         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-                                            <Button onClick={handleClose}>{msg.cancelText || '取消'}</Button>
-                                            <Button type="primary" onClick={handleOk}>
+                                            {msg.extraText && (
+                                                <Button danger={msg.extraButtonProps?.danger} onClick={handleExtra}>
+                                                    {msg.extraText}
+                                                </Button>
+                                            )}
+                                            <Button danger={msg.cancelButtonProps?.danger} onClick={handleClose}>{msg.cancelText || '取消'}</Button>
+                                            <Button type="primary" danger={msg.okButtonProps?.danger} onClick={handleOk}>
                                                 {msg.okText || '确定'}
                                             </Button>
                                         </div>
@@ -109,12 +122,13 @@ export const GlobalMessageLayer: React.FC = () => {
                         wrapClassName="message-modal"
                         minWidth={300}
                         minHeight={150}
+                        zIndexBase={GLOBAL_MESSAGE_Z_INDEX}
                     >
                         <div style={{ display: 'flex', alignItems: 'flex-start', width: '100%', padding: '24px' }}>
                             <div style={{ flexShrink: 0 }}>
                                 <MessageIcon type={msg.type} />
                             </div>
-                            <div style={{ flex: 1, paddingTop: 2, color: '#e8e8e8' }}>
+                            <div style={{ flex: 1, paddingTop: 2, color: '#e8e8e8', whiteSpace: 'pre-line' }}>
                                 {msg.content}
                             </div>
                         </div>
@@ -129,7 +143,7 @@ export const GlobalMessageLayer: React.FC = () => {
                     top: '20px',
                     left: '50%',
                     transform: 'translateX(-50%)',
-                    zIndex: 9999, // Ensure on top of almost everything
+                    zIndex: GLOBAL_MESSAGE_Z_INDEX,
                     display: 'flex',
                     flexDirection: 'column',
                     alignItems: 'center',
@@ -149,4 +163,6 @@ export const GlobalMessageLayer: React.FC = () => {
             </div>
         </>
     );
+
+    return createPortal(layer, document.body);
 };

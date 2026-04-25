@@ -1,0 +1,74 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "打包",
+            "type": "shell",
+            "command": "cmd",
+            "args": [
+                "/c",
+                "npm run tauri build"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            }
+        },
+        {
+            "label": "测试",
+            "type": "shell",
+            "command": "cmd",
+            "args": [
+                "/c",
+                "npm run tauri dev"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            }
+        },
+        {
+            "label": "开启Q群验证",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "scripts\\sign_qq_policy.py",
+                "--enabled",
+                "true",
+                "--output",
+                "activation\\qq-policy.txt"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "关闭Q群验证",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "scripts\\sign_qq_policy.py",
+                "--enabled",
+                "false",
+                "--output",
+                "activation\\qq-policy.txt"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "清空Q群策略缓存",
+            "type": "shell",
+            "command": "reg",
+            "args": [
+                "delete",
+                "HKCU\\SOFTWARE\\GGWar3ModelEditor",
+                "/v",
+                "QQRemotePolicyCache",
+                "/f"
+            ],
+            "problemMatcher": []
+        }
+    ]
+}

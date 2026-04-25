@@ -1,5 +1,6 @@
+import { appMessage } from '../../store/messageStore'
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
-import { Button, List, Card, Checkbox, Select, Typography, message } from 'antd'
+import { Button, List, Card, Checkbox, Select, Typography } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { DraggableModal } from '../DraggableModal'
@@ -640,7 +641,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         } else {
             applyVisualPatch({ Textures: texturesForSave, Materials: materialsForSave })
         }
-        message.success('材质已保存')
+        appMessage.success('材质已保存')
         onClose()
     }
 
@@ -1148,7 +1149,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const ensureTextureInModelDir = async (rawPath: string): Promise<{ relativePath: string; copied: boolean } | null> => {
         const modelDir = getModelDirectory()
         if (!modelDir) {
-            message.warning('当前模型路径无效，无法导入外部贴图')
+            appMessage.warning('当前模型路径无效，无法导入外部贴图')
             return null
         }
 
@@ -1285,12 +1286,12 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 
         if (addedCount > 0) {
             if (copiedCount > 0) {
-                message.success(`已复制 ${copiedCount} 个贴图到模型目录并应用`)
+                appMessage.success(`已复制 ${copiedCount} 个贴图到模型目录并应用`)
             } else {
-                message.success(`已导入 ${addedCount} 个贴图并应用到当前图层`)
+                appMessage.success(`已导入 ${addedCount} 个贴图并应用到当前图层`)
             }
         } else {
-            message.success('已应用已存在的贴图到当前图层')
+            appMessage.success('已应用已存在的贴图到当前图层')
         }
 
         return {
@@ -1322,7 +1323,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             )
         } catch (error) {
             console.error('[MaterialEditorModal] External file drop handling failed:', error)
-            message.error('贴图导入失败')
+            appMessage.error('贴图导入失败')
         }
     }
 
@@ -1408,7 +1409,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         const draggedIndex = getDraggedTextureIndex(e.dataTransfer)
         if (draggedIndex !== null) {
             if (draggedIndex >= textureCount) {
-                message.warning(`拖放的贴图索引 ${draggedIndex} 超出范围`)
+                appMessage.warning(`拖放的贴图索引 ${draggedIndex} 超出范围`)
                 return
             }
             const nextMaterials = updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TextureID: draggedIndex }, true)
@@ -1430,7 +1431,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             )
         } catch (error) {
             console.error('[MaterialEditorModal] Texture drop import failed:', error)
-            message.error('贴图导入失败')
+            appMessage.error('贴图导入失败')
         }
     }
 

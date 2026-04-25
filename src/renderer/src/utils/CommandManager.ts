@@ -3,6 +3,7 @@ import { useHistoryStore } from '../store/historyStore'
 export interface Command {
     execute(): void
     undo(): void
+    hasChanges?: () => boolean
     // Optional name for display in history list
     name?: string
 }
@@ -14,6 +15,9 @@ export class CommandManager {
     execute(command: Command) {
         // 1. Execute the command immediately (Action)
         command.execute()
+        if (command.hasChanges && !command.hasChanges()) {
+            return
+        }
 
         // 2. Push to history store (provides Undo/Redo capability)
         // Wrapper adapts the Command interface to the HistoryItem interface

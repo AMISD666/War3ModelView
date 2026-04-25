@@ -37,6 +37,8 @@ export interface CreateManagedWindowOptions {
 export interface WindowGateway {
     getCurrentWindowLabel(): string
     setCurrentWindowTitle(title: string): Promise<void>
+    showCurrentWindow(): Promise<void>
+    focusCurrentWindow(): Promise<void>
     hideCurrentWindow(): Promise<void>
     minimizeCurrentWindow(): Promise<void>
     destroyCurrentWindow(): Promise<void>

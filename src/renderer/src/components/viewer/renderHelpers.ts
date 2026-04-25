@@ -8,6 +8,7 @@ import { GridRenderer } from '../GridRenderer'
 import { DebugRenderer } from '../DebugRenderer'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
+import { isGeosetVisible } from '../../utils/geosetVisibility'
 import { getPos } from './types'
 
 /**
@@ -174,11 +175,11 @@ export function applyGeosetVisibility(
     const { hiddenGeosetIds, forceShowAllGeosets } = useModelStore.getState()
     const originalGeosetAlphas = new Map<number, number>()
 
-    if (!forceShowAllGeosets && mdlRenderer.rendererData?.geosetAlpha) {
+    if (mdlRenderer.rendererData?.geosetAlpha) {
         const numGeosets = mdlRenderer.model.Geosets?.length || 0
         for (let i = 0; i < numGeosets; i++) {
             originalGeosetAlphas.set(i, mdlRenderer.rendererData.geosetAlpha[i] ?? 1)
-            if (hiddenGeosetIds.includes(i)) {
+            if (!isGeosetVisible(i, hiddenGeosetIds, forceShowAllGeosets)) {
                 mdlRenderer.rendererData.geosetAlpha[i] = 0
             }
         }

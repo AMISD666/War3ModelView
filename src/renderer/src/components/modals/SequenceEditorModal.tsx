@@ -1,5 +1,6 @@
+import { appMessage } from '../../store/messageStore'
 ﻿import React, { useState, useEffect, useRef } from 'react'
-import { List, Button, Input, Checkbox, Card, Typography, message } from 'antd'
+import { List, Button, Input, Checkbox, Card, Typography } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { DraggableModal } from '../DraggableModal';
 import { PlusOutlined, DeleteOutlined, CloseOutlined } from '@ant-design/icons'
@@ -143,7 +144,7 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
                 pruneKeyframes
             })
             setDeletedIntervals([])
-            message.success('序列已保存')
+            appMessage.success('序列已保存')
             onClose()
         } else {
             const { modelData } = useModelStore.getState();
@@ -153,7 +154,7 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
                 });
             }
             setStoreSequences(localSequences)
-            message.success(deletedIntervals.length > 0 ? '序列及关键帧已保存' : '序列已保存')
+            appMessage.success(deletedIntervals.length > 0 ? '序列及关键帧已保存' : '序列已保存')
             onClose()
         }
     }

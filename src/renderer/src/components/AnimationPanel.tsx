@@ -1,9 +1,10 @@
+import { appMessage } from '../store/messageStore'
 import React, { useState, useRef, useEffect } from 'react'
 import { useModelStore } from '../store/modelStore'
 import { useSelectionStore } from '../store/selectionStore'
 import { useHistoryStore } from '../store/historyStore'
 import { WarningOutlined, CopyOutlined } from '@ant-design/icons'
-import { Tooltip, Input, message } from 'antd'
+import { Tooltip, Input } from 'antd'
 
 interface AnimationPanelProps {
     onImport: () => void
@@ -94,7 +95,7 @@ const AnimationPanel: React.FC<AnimationPanelProps> = ({
 
         const trimmedName = editingName.trim()
         if (!trimmedName) {
-            message.warning('动画名称不能为空')
+            appMessage.warning('动画名称不能为空')
             setEditingIndex(null)
             return
         }
@@ -113,7 +114,7 @@ const AnimationPanel: React.FC<AnimationPanelProps> = ({
 
         setSequences(newSequences)
         setEditingIndex(null)
-        message.success('名称已修改')
+        appMessage.success('名称已修改')
     }
 
     const handleDurationDoubleClick = (index: number, e: React.MouseEvent) => {
@@ -134,7 +135,7 @@ const AnimationPanel: React.FC<AnimationPanelProps> = ({
 
         const val = parseFloat(editingDuration)
         if (isNaN(val) || val <= 0) {
-            message.warning('请输入有效的时间 (秒)')
+            appMessage.warning('请输入有效的时间 (秒)')
             setEditingDurationIndex(null)
             return
         }
@@ -149,7 +150,7 @@ const AnimationPanel: React.FC<AnimationPanelProps> = ({
             const shiftSequenceDuration = useModelStore.getState().shiftSequenceDuration
             if (shiftSequenceDuration) {
                 shiftSequenceDuration(editingDurationIndex, newDurationMs)
-                message.success('动画时间已更新')
+                appMessage.success('动画时间已更新')
             }
         }
 
@@ -226,7 +227,7 @@ const AnimationPanel: React.FC<AnimationPanelProps> = ({
                             onClick={() => {
                                 const fileName = modelPath.split(/[\\/]/).pop() || '';
                                 navigator.clipboard.writeText(fileName);
-                                message.success('模型名称已复制');
+                                appMessage.success('模型名称已复制');
                             }}
                             style={{
                                 cursor: 'pointer',

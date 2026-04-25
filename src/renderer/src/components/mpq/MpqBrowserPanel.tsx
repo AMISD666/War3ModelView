@@ -1,5 +1,6 @@
+import { appMessage } from '../../store/messageStore'
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Button, Empty, Input, Select, Spin, Tree, Typography, message } from 'antd';
+import { Button, Empty, Input, Select, Spin, Tree, Typography } from 'antd'
 import { CloseOutlined, ReloadOutlined } from '@ant-design/icons';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -322,7 +323,7 @@ export const MpqBrowserPanel: React.FC<MpqBrowserPanelProps> = ({ onClose }) => 
             });
         } catch (error) {
             console.error('[MpqBrowser] Failed to load MPQ list:', error);
-            message.error('读取 MPQ 列表失败');
+            appMessage.error('读取 MPQ 列表失败');
         } finally {
             setLoadingMpqList(false);
         }
@@ -340,7 +341,7 @@ export const MpqBrowserPanel: React.FC<MpqBrowserPanelProps> = ({ onClose }) => 
             setAllFiles(files);
         } catch (error) {
             console.error('[MpqBrowser] Failed to list MPQ files:', error);
-            message.error('读取 MPQ 文件列表失败');
+            appMessage.error('读取 MPQ 文件列表失败');
             setAllFiles([]);
         } finally {
             setLoadingFiles(false);
@@ -482,15 +483,15 @@ export const MpqBrowserPanel: React.FC<MpqBrowserPanelProps> = ({ onClose }) => 
 
     const handleApplyTextures = useCallback(async () => {
         if (selectedTexturePaths.length === 0) {
-            message.warning('请先在 MPQ 树中选择 blp/tga 贴图');
+            appMessage.warning('请先在 MPQ 树中选择 blp/tga 贴图');
             return;
         }
         if (!activeTab || !isModelFile(activeTab.path)) {
-            message.warning('当前标签页不是模型文件，无法应用贴图');
+            appMessage.warning('当前标签页不是模型文件，无法应用贴图');
             return;
         }
         if (!modelData) {
-            message.warning('当前模型尚未加载完成');
+            appMessage.warning('当前模型尚未加载完成');
             return;
         }
 
@@ -519,17 +520,17 @@ export const MpqBrowserPanel: React.FC<MpqBrowserPanelProps> = ({ onClose }) => 
         }
 
         if (added === 0) {
-            message.info('选中的贴图已存在于当前模型');
+            appMessage.info('选中的贴图已存在于当前模型');
             return;
         }
 
         setTextures(existingTextures);
-        message.success(`已添加 ${added} 张贴图到当前模型`);
+        appMessage.success(`已添加 ${added} 张贴图到当前模型`);
     }, [activeTab, modelData, selectedTexturePaths, setTextures]);
 
     const handleExportFiles = useCallback(async () => {
         if (selectedFilePaths.length === 0) {
-            message.warning('请先选择要导出的文件');
+            appMessage.warning('请先选择要导出的文件');
             return;
         }
 
@@ -604,9 +605,9 @@ export const MpqBrowserPanel: React.FC<MpqBrowserPanelProps> = ({ onClose }) => 
         }
 
         if (failedCount === 0) {
-            message.success(`导出完成，共 ${successCount} 个文件`);
+            appMessage.success(`导出完成，共 ${successCount} 个文件`);
         } else {
-            message.warning(`导出完成：成功 ${successCount}，失败 ${failedCount}`);
+            appMessage.warning(`导出完成：成功 ${successCount}，失败 ${failedCount}`);
         }
     }, [allFilesByLower, readMpqBytes, selectedFilePaths, selectedMpq]);
 

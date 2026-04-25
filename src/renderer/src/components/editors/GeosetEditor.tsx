@@ -1,5 +1,6 @@
+import { appMessage } from '../../store/messageStore'
 ﻿import React, { useState, useEffect } from 'react'
-import { Table, Button, Space, message, Select, Tooltip } from 'antd'
+import { Table, Button, Space, Select, Tooltip } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { SaveOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useModelStore } from '../../store/modelStore'
@@ -36,7 +37,7 @@ const GeosetEditor: React.FC<GeosetEditorProps> = () => {
     const handleApply = () => {
         setGeosets(JSON.parse(JSON.stringify(geosets)))
         setHasChanges(false)
-        message.success('多边形设置已更新')
+        appMessage.success('多边形设置已更新')
     }
 
     const columns = [

@@ -1,5 +1,6 @@
+import { appMessage } from '../../store/messageStore'
 import React, { useState, useEffect, useRef } from 'react'
-import { List, Button, Input, Checkbox, Card, Typography, message, Dropdown, Slider } from 'antd'
+import { List, Button, Input, Checkbox, Card, Typography, Dropdown, Slider } from 'antd'
 import { SmartInputNumber as InputNumber } from '../common/SmartInputNumber'
 import type { MenuProps } from 'antd'
 import { PlusOutlined, DeleteOutlined, FolderOpenOutlined, DatabaseOutlined, ReloadOutlined } from '@ant-design/icons'
@@ -488,7 +489,6 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
 
         return textureId
     }
-
 
     useEffect(() => {
         if (!isStandalone || !visible) return
@@ -1047,7 +1047,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
             localStore.setTextures(texturesForSave)
         }
 
-        message.success('纹理已保存')
+        appMessage.success('纹理已保存')
         hasLiveTextureOverrideRef.current = false
         if (isStandalone) {
             onClose()
@@ -1393,7 +1393,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
     const ensureTextureInModelDir = async (rawPath: string, currentModelPath?: string): Promise<{ relativePath: string; copied: boolean } | null> => {
         const modelDir = getModelDirectory(currentModelPath)
         if (!modelDir) {
-            message.warning('当前模型路径无效，无法导入外部贴图')
+            appMessage.warning('当前模型路径无效，无法导入外部贴图')
             return null
         }
 
@@ -1542,7 +1542,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
             localStore.setTextures(texturesForSave)
         }
 
-        message.success(imported.copied ? `已复制并替换贴图: ${imported.relativePath}` : `已替换贴图: ${imported.relativePath}`)
+        appMessage.success(imported.copied ? `已复制并替换贴图: ${imported.relativePath}` : `已替换贴图: ${imported.relativePath}`)
     }
 
     const importTexturesFromFiles = async (paths: string[]) => {
@@ -1580,7 +1580,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
 
         if (newTextures.length === 0) {
             if (skippedCount > 0) {
-                message.warning(`所有选择的纹理都已存在，跳过 ${skippedCount} 个重复`)
+                appMessage.warning(`所有选择的纹理都已存在，跳过 ${skippedCount} 个重复`)
             }
             return
         }
@@ -1592,23 +1592,23 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
         setTimeout(() => scrollToItem(nextSelectedIndex), 0)
 
         if (addedCount === 1 && skippedCount === 0) {
-            message.success(copiedCount > 0
+            appMessage.success(copiedCount > 0
                 ? `已复制并添加纹理: ${newTextures[0].Image}`
                 : `已添加纹理: ${newTextures[0].Image}`)
             return
         }
 
         if (copiedCount > 0) {
-            message.success(`已添加 ${addedCount} 个纹理，其中 ${copiedCount} 个已复制到模型目录${skippedCount > 0 ? `，跳过 ${skippedCount} 个重复` : ''}`)
+            appMessage.success(`已添加 ${addedCount} 个纹理，其中 ${copiedCount} 个已复制到模型目录${skippedCount > 0 ? `，跳过 ${skippedCount} 个重复` : ''}`)
             return
         }
 
         if (skippedCount > 0) {
-            message.success(`已添加 ${addedCount} 个纹理，跳过 ${skippedCount} 个重复`)
+            appMessage.success(`已添加 ${addedCount} 个纹理，跳过 ${skippedCount} 个重复`)
             return
         }
 
-        message.success(`已批量添加 ${addedCount} 个纹理`)
+        appMessage.success(`已批量添加 ${addedCount} 个纹理`)
     }
 
     useEffect(() => {
@@ -1730,7 +1730,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
                                             icon: <DatabaseOutlined />,
                                             disabled: true,  // 暂时禁用
                                             onClick: () => {
-                                                message.info('MPQ 纹理选择功能即将推出')
+                                                appMessage.info('MPQ 纹理选择功能即将推出')
                                             }
                                         },
                                         { type: 'divider' },

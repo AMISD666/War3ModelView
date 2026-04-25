@@ -87,6 +87,10 @@ export class BindVerticesCommand implements Command {
         }        this.apply(true)
     }
 
+    hasChanges(): boolean {
+        return !!this.changes && this.changes.length > 0
+    }
+
     undo() {
         this.apply(false)
     }

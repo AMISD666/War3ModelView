@@ -17,6 +17,7 @@ import {
     resolvePivotForPersist,
 } from '../utils/modelUtils';
 import { calculateModelExtent, calculateModelNormals } from '../utils/geometryUtils';
+import { normalizeGeosetIndices } from '../utils/geosetVisibility';
 import { remapTextureRefWithMap } from '../utils/materialTextureRelations';
 import { getPivotChainSum } from '../utils/nodeUtils';
 import { markStandalonePerf } from '../utils/standalonePerf';
@@ -200,6 +201,19 @@ const sanitizeGeosetUiState = (
         selectedGeosetIndex,
         hoveredGeosetId
     };
+};
+
+const getGeosetCountFromSnapshot = (snapshot: TabSnapshot): number =>
+    Array.isArray(snapshot.modelData?.Geosets) ? snapshot.modelData.Geosets.length : 0;
+
+const getSnapshotForceShowAllGeosets = (snapshot: TabSnapshot): boolean => {
+    if (typeof snapshot.forceShowAllGeosets === 'boolean') {
+        return snapshot.forceShowAllGeosets;
+    }
+
+    const geosetCount = getGeosetCountFromSnapshot(snapshot);
+    const hiddenCount = normalizeGeosetIndices(snapshot.hiddenGeosetIds ?? [], geosetCount).length;
+    return geosetCount === 0 || hiddenCount >= geosetCount;
 };
 
 function collectTextureIdsFromAnimVector(value: any, ids: Set<number>): void {
@@ -1320,6 +1334,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                         currentSequence: nextCurrentSequence,
                         currentFrame: nextCurrentFrame,
                         hiddenGeosetIds: [...nextHiddenGeosetIds],
+                        forceShowAllGeosets: true,
                         lastActive: Date.now()
                     }
                 };
@@ -1345,6 +1360,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                         currentSequence: nextCurrentSequence,
                         currentFrame: nextCurrentFrame,
                         hiddenGeosetIds: [...nextHiddenGeosetIds],
+                        forceShowAllGeosets: true,
                         lastActive: Date.now()
                     }
                 };
@@ -1560,6 +1576,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                             currentSequence: state.currentSequence,
                             currentFrame: state.currentFrame,
                             hiddenGeosetIds: [...state.hiddenGeosetIds],
+                            forceShowAllGeosets: state.forceShowAllGeosets,
                             lastActive: Date.now()
                         }
                     };
@@ -2273,6 +2290,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                         currentSequence: state.currentSequence,
                         currentFrame: state.currentFrame,
                         hiddenGeosetIds: [...state.hiddenGeosetIds],
+                        forceShowAllGeosets: state.forceShowAllGeosets,
                         lastActive: Date.now()
                     }
                 };
@@ -2311,6 +2329,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                         currentSequence: state.currentSequence,
                         currentFrame: state.currentFrame,
                         hiddenGeosetIds: [...sanitizedGeosetUiState.hiddenGeosetIds],
+                        forceShowAllGeosets: state.forceShowAllGeosets,
                         lastActive: Date.now()
                     }
                 };
@@ -2348,6 +2367,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                         currentSequence: state.currentSequence,
                         currentFrame: state.currentFrame,
                         hiddenGeosetIds: [...state.hiddenGeosetIds],
+                        forceShowAllGeosets: state.forceShowAllGeosets,
                         lastActive: Date.now()
                     }
                 };
@@ -2390,6 +2410,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                         currentSequence: state.currentSequence,
                         currentFrame: state.currentFrame,
                         hiddenGeosetIds: [...state.hiddenGeosetIds],
+                        forceShowAllGeosets: state.forceShowAllGeosets,
                         lastActive: Date.now()
                     }
                 };
@@ -2449,6 +2470,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                         currentSequence: state.currentSequence,
                         currentFrame: state.currentFrame,
                         hiddenGeosetIds: [...state.hiddenGeosetIds],
+                        forceShowAllGeosets: state.forceShowAllGeosets,
                         lastActive: Date.now(),
                     },
                 };
@@ -3132,6 +3154,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                         currentSequence: state.currentSequence,
                         currentFrame: state.currentFrame,
                         hiddenGeosetIds: [...state.hiddenGeosetIds],
+                        forceShowAllGeosets: state.forceShowAllGeosets,
                         cameraState,
                         renderer: rendererBelongsToModelPath(currentRenderer, state.modelPath) ? currentRenderer : null,
                         lastActive: Date.now()
@@ -3154,6 +3177,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 currentSequence: -1,
                 currentFrame: 0,
                 hiddenGeosetIds: [],
+                forceShowAllGeosets: true,
                 cameraState: null,
                 renderer: modelData ? null : null, // Initial tab has no renderer yet
                 lastActive: Date.now()
@@ -3225,7 +3249,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                     currentSequence: snapshot.currentSequence,
                     currentFrame: snapshot.currentFrame,
                     hiddenGeosetIds: [...snapshot.hiddenGeosetIds],
-                    forceShowAllGeosets: false,
+                    forceShowAllGeosets: getSnapshotForceShowAllGeosets(snapshot),
                     cachedRenderer: snapshot.renderer || null, // CRITICAL FIX: Restore cached renderer
                     rendererReloadTrigger: snapshot.renderer ? state.rendererReloadTrigger : state.rendererReloadTrigger + 1,
                     dirtyTabs: nextDirtyTabs
@@ -3281,6 +3305,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                         currentSequence: state.currentSequence,
                         currentFrame: state.currentFrame,
                         hiddenGeosetIds: [...state.hiddenGeosetIds],
+                        forceShowAllGeosets: state.forceShowAllGeosets,
                         cameraState,
                         renderer: currentRendererForSnapshot,
                         lastActive: Date.now()
@@ -3324,7 +3349,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             currentSequence: snapshot.currentSequence,
             currentFrame: snapshot.currentFrame,
             hiddenGeosetIds: [...snapshot.hiddenGeosetIds],
-            forceShowAllGeosets: false, // Respect hiddenGeosetIds during restoration
+            forceShowAllGeosets: getSnapshotForceShowAllGeosets(snapshot),
             cachedRenderer: snapshot.renderer || null,
             rendererReloadTrigger: hasCachedRenderer ? state.rendererReloadTrigger : state.rendererReloadTrigger + 1,
             materialReloadTrigger: hasCachedRenderer ? state.materialReloadTrigger : state.materialReloadTrigger + 1

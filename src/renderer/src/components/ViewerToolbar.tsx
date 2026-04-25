@@ -1,5 +1,6 @@
+import { appMessage } from '../store/messageStore'
 import React from 'react';
-import { Button, Tooltip, Space, message } from 'antd';
+import { Button, Tooltip, Space } from 'antd'
 import {
     GatewayOutlined, // Vertex/Point
     AppstoreOutlined, // Face
@@ -255,12 +256,13 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
     }
 
     const handleBind = () => {
-        if (!renderer || selectedNodeIds.length !== 1) {
-            message.warning('请先选择一个骨骼')
+        const activeRenderer = renderer ?? useRendererStore.getState().renderer
+        if (!activeRenderer || selectedNodeIds.length !== 1) {
+            appMessage.warning('请先选择一个骨骼')
             return
         }
         if (selectedVertexIds.length === 0) {
-            message.warning('请先选择要绑定的顶点')
+            appMessage.warning('请先选择要绑定的顶点')
             return
         }
         const boneId = selectedNodeIds[0]
@@ -274,9 +276,13 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
             geosetIndex,
             vertexIndices
         }))
-        const cmd = new BindVerticesCommand(renderer, targets, boneId, 'bind')
+        const cmd = new BindVerticesCommand(activeRenderer, targets, boneId, 'bind')
         executeCommand(cmd)
-        message.success(`已绑定 ${selectedVertexIds.length} 个顶点到骨骼 ${boneId}`)
+        if (!cmd.hasChanges()) {
+            appMessage.info('选中顶点已经绑定到该骨骼')
+            return
+        }
+        appMessage.success(`已绑定 ${selectedVertexIds.length} 个顶点到骨骼 ${boneId}`)
     }
 
     const handleCreateBone = () => {
@@ -317,7 +323,7 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
             useSelectionStore.getState().selectNode(created.ObjectId, false)
         }
 
-        message.success(selectedVertexIds.length > 0 ? '已在顶点中心创建骨骼' : '已在原点创建骨骼')
+        appMessage.success(selectedVertexIds.length > 0 ? '已在顶点中心创建骨骼' : '已在原点创建骨骼')
     }
 
     const resetTimelineToCurrentSequenceStart = () => {
@@ -340,12 +346,13 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
     }
 
     const handleUnbind = () => {
-        if (!renderer || selectedNodeIds.length !== 1) {
-            message.warning('请先选择一个骨骼')
+        const activeRenderer = renderer ?? useRendererStore.getState().renderer
+        if (!activeRenderer || selectedNodeIds.length !== 1) {
+            appMessage.warning('请先选择一个骨骼')
             return
         }
         if (selectedVertexIds.length === 0) {
-            message.warning('请先选择要解绑的顶点')
+            appMessage.warning('请先选择要解绑的顶点')
             return
         }
         const boneId = selectedNodeIds[0]
@@ -358,19 +365,23 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
             geosetIndex,
             vertexIndices
         }))
-        const cmd = new BindVerticesCommand(renderer, targets, boneId, 'unbind')
+        const cmd = new BindVerticesCommand(activeRenderer, targets, boneId, 'unbind')
         executeCommand(cmd)
-        message.success(`已解绑 ${selectedVertexIds.length} 个顶点从骨骼 ${boneId}`)
+        if (!cmd.hasChanges()) {
+            appMessage.info('选中顶点未绑定到该骨骼')
+            return
+        }
+        appMessage.success(`已解绑 ${selectedVertexIds.length} 个顶点从骨骼 ${boneId}`)
     }
 
     const handleMirrorModel = (axis: 'y' | 'z') => {
         if (!_modelData) {
-            message.warning('当前没有可镜像的模型')
+            appMessage.warning('当前没有可镜像的模型')
             return
         }
 
         executeCommand(new MirrorModelCommand(axis))
-        message.success(axis === 'y' ? '已执行左右镜像' : '已执行垂直镜像')
+        appMessage.success(axis === 'y' ? '已执行左右镜像' : '已执行垂直镜像')
     }
 
     if (mainMode === 'uv') return null;
@@ -712,5 +723,3 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         </div>
     );
 };
-
-

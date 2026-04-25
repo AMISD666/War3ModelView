@@ -1,5 +1,6 @@
+import { appMessage } from '../store/messageStore'
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Checkbox, message } from 'antd';
+import { Checkbox } from 'antd'
 import { EyeOutlined, EyeInvisibleOutlined, CloseOutlined, MinusOutlined, DeleteOutlined, MergeCellsOutlined } from '@ant-design/icons';
 import { useModelStore } from '../store/modelStore';
 import { useSelectionStore } from '../store/selectionStore';
@@ -8,6 +9,11 @@ import { SetGeosetVisibilityCommand } from '../commands/SetGeosetVisibilityComma
 import { GeosetMergeDialog } from './modals/GeosetMergeDialog';
 import { LayerConfig, layerConfigToMaterialLayer } from './modals/MaterialLayerOptions';
 import { windowManager } from '../utils/WindowManager';
+import {
+    getAllGeosetIndices,
+    getHiddenIdsForGeosetToggle,
+    isGeosetVisible as resolveGeosetVisible
+} from '../utils/geosetVisibility';
 
 interface GeosetVisibilityPanelProps {
     visible: boolean;
@@ -257,12 +263,12 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
         setGeosets(newGeosets);
         applySelection([]);
         setContextMenuVisible(false);
-        message.success(`已删除 ${sortedIndices.length} 个多边形`);
+        appMessage.success(`已删除 ${sortedIndices.length} 个多边形`);
     };
 
     // Handle merge confirmation
     const handleMergeConfirm = (materialIndex: number, newLayerConfig?: LayerConfig) => {       if (selectedIndices.length < 2) {
-            message.error('请选择至少2个多边形');
+            appMessage.error('请选择至少2个多边形');
             return;
         }
 
@@ -441,7 +447,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
         useModelStore.getState().setGeosets(newGeosets);
         applySelection([]);
         setMergeDialogVisible(false);
-        message.success(`已合并 ${sortedIndices.length} 个多边形`);
+        appMessage.success(`已合并 ${sortedIndices.length} 个多边形`);
     };
 
     // Handle dragging
@@ -518,7 +524,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
 
     if (!visible) return null;
 
-    const isGeosetVisible = (id: number) => forceShowAllGeosets || !hiddenGeosetIds.includes(id);
+    const allGeosetIndices = getAllGeosetIndices(geosets.length);
 
     return (
         <>
@@ -580,12 +586,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                                             return;
                                         }
 
-                                        const normalizedHiddenIds = hiddenGeosetIds
-                                            .filter((id) => id >= 0 && id < geosets.length);
-                                        const nextHiddenIds = normalizedHiddenIds.length > 0
-                                            ? normalizedHiddenIds
-                                            : geosets.map((_, i) => i);
-                                        commandManager.execute(new SetGeosetVisibilityCommand(nextHiddenIds, false));
+                                        commandManager.execute(new SetGeosetVisibilityCommand(allGeosetIndices, false));
                                     }}
                                 />
                                 <span style={{ color: '#ddd', fontSize: 11, fontWeight: 500 }}>
@@ -595,7 +596,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                                     <button
                                         className="panel-control-btn"
                                         onClick={() => {
-                                            const cmd = new SetGeosetVisibilityCommand([]);
+                                            const cmd = new SetGeosetVisibilityCommand([], false);
                                             commandManager.execute(cmd);
                                         }}
                                         style={{
@@ -614,7 +615,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                                     <button
                                         className="panel-control-btn"
                                         onClick={() => {
-                                            const cmd = new SetGeosetVisibilityCommand(geosets.map((_, i) => i));
+                                            const cmd = new SetGeosetVisibilityCommand(allGeosetIndices, false);
                                             commandManager.execute(cmd);
                                         }}
                                         style={{
@@ -716,22 +717,20 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                                     >
                                         {/* Visibility Checkbox - Next to text */}
                                         <Checkbox
-                                            checked={isGeosetVisible(index)}
+                                            checked={resolveGeosetVisible(index, hiddenGeosetIds, forceShowAllGeosets)}
                                             onChange={(e) => {
                                                 e.stopPropagation();
                                                 const nativeEvent = e.nativeEvent as MouseEvent;
                                                 const isAlt = nativeEvent.altKey;
 
                                                 if (isAlt) {                                                    // Hide ALL except current index
-                                                    const allOtherIndices = geosets.map((_, i) => i).filter(i => i !== index);
+                                                    const allOtherIndices = allGeosetIndices.filter(i => i !== index);
                                                     // Pass 'false' for forceShowAllGeosets (disable "Show All")
                                                     commandManager.execute(new SetGeosetVisibilityCommand(allOtherIndices, false));
                                                 } else {
                                                     // Standard Toggle Mode
                                                     // Calculate new hidden IDs for undo support
-                                                    const newHiddenIds = hiddenGeosetIds.includes(index)
-                                                        ? hiddenGeosetIds.filter(id => id !== index)
-                                                        : [...hiddenGeosetIds, index];
+                                                    const newHiddenIds = getHiddenIdsForGeosetToggle(index, geosets.length, hiddenGeosetIds, forceShowAllGeosets);
                                                     commandManager.execute(new SetGeosetVisibilityCommand(newHiddenIds, false));
                                                 }
                                             }}

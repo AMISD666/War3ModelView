@@ -43,6 +43,18 @@ export interface DeleteResult {
 }
 
 /**
+ * Result of deleting explicit face indices.
+ */
+export interface DeleteFacesResult {
+    /** Updated geoset with selected faces removed and unreferenced vertices pruned */
+    updatedGeoset: Partial<GeosetData>
+    /** Number of vertices removed because no remaining face references them */
+    verticesRemoved: number
+    /** Number of faces removed */
+    facesRemoved: number
+}
+
+/**
  * Copy buffer for vertex data
  */
 export interface VertexCopyBuffer {
@@ -74,6 +86,88 @@ export function findFacesUsingVertices(faces: Uint16Array | number[], vertexIndi
         }
     }
     return faceIndices
+}
+
+const toArrayOrEmpty = (value: ArrayLike<number> | undefined | null): number[] =>
+    value ? Array.from(value) : []
+
+const createVertexGroupArray = (source: ArrayLike<number> | undefined | null, values: number[]): Uint8Array | Uint16Array => {
+    if (source instanceof Uint16Array || values.some((value) => value > 255)) {
+        return new Uint16Array(values)
+    }
+    return new Uint8Array(values)
+}
+
+const copyStridedValues = (
+    source: ArrayLike<number> | undefined | null,
+    sortedVertexIndices: number[],
+    stride: number
+): number[] => {
+    const values = toArrayOrEmpty(source)
+    if (values.length === 0) return []
+
+    const copied: number[] = []
+    for (const oldIdx of sortedVertexIndices) {
+        const start = oldIdx * stride
+        for (let offset = 0; offset < stride; offset++) {
+            copied.push(values[start + offset] ?? 0)
+        }
+    }
+    return copied
+}
+
+const compactGeosetByRemainingFaces = (
+    geoset: GeosetData,
+    remainingFaceIndices: number[],
+    removedFaceCount: number
+): DeleteResult => {
+    const remainingFaces: number[] = []
+    const usedVertices = new Set<number>()
+    const faces = toArrayOrEmpty(geoset.Faces)
+
+    for (const faceIndex of remainingFaceIndices) {
+        const faceStart = faceIndex * 3
+        const faceVertices = [
+            Number(faces[faceStart]),
+            Number(faces[faceStart + 1]),
+            Number(faces[faceStart + 2])
+        ]
+        if (!faceVertices.every((value) => Number.isInteger(value) && value >= 0)) {
+            continue
+        }
+
+        remainingFaces.push(faceVertices[0], faceVertices[1], faceVertices[2])
+        usedVertices.add(faceVertices[0])
+        usedVertices.add(faceVertices[1])
+        usedVertices.add(faceVertices[2])
+    }
+
+    const oldToNew = new Map<number, number>()
+    const sortedUsed = Array.from(usedVertices).sort((a, b) => a - b)
+    sortedUsed.forEach((oldIdx, newIdx) => {
+        oldToNew.set(oldIdx, newIdx)
+    })
+
+    const newVertexGroups = sortedUsed.map((oldIdx) => Number(geoset.VertexGroup?.[oldIdx] ?? 0))
+    const newTVertices = Array.isArray(geoset.TVertices)
+        ? geoset.TVertices.map((tv: ArrayLike<number>) => new Float32Array(copyStridedValues(tv, sortedUsed, 2)))
+        : []
+    const newFaces = remainingFaces.map((idx) => oldToNew.get(idx)!)
+    const vertexCount = Math.floor((geoset.Vertices?.length ?? 0) / 3)
+
+    return {
+        updatedGeoset: {
+            Vertices: new Float32Array(copyStridedValues(geoset.Vertices, sortedUsed, 3)),
+            Normals: new Float32Array(copyStridedValues(geoset.Normals, sortedUsed, 3)),
+            VertexGroup: createVertexGroupArray(geoset.VertexGroup, newVertexGroups),
+            Faces: new Uint16Array(newFaces),
+            TVertices: newTVertices,
+            ...(geoset.Tangents ? { Tangents: new Float32Array(copyStridedValues(geoset.Tangents, sortedUsed, 4)) } : {}),
+            ...(geoset.SkinWeights ? { SkinWeights: new Uint8Array(copyStridedValues(geoset.SkinWeights, sortedUsed, 4)) } : {})
+        },
+        verticesRemoved: vertexCount - sortedUsed.length,
+        facesRemoved: removedFaceCount
+    }
 }
 
 /**
@@ -295,73 +389,36 @@ export function deleteVertices(geoset: GeosetData, vertexIndices: number[]): Del
     // Find faces to remove (any face using a deleted vertex)
     const facesToRemove = findFacesUsingVertices(geoset.Faces, vertexSet)
 
-    // Find vertices still used after face removal
-    const remainingFaces: number[] = []
-    const usedVertices = new Set<number>()
-
-    for (let i = 0; i < geoset.Faces.length / 3; i++) {
+    const totalFaces = Math.floor((geoset.Faces?.length ?? 0) / 3)
+    const remainingFaceIndices: number[] = []
+    for (let i = 0; i < totalFaces; i++) {
         if (!facesToRemove.has(i)) {
-            const faceStart = i * 3
-            remainingFaces.push(
-                geoset.Faces[faceStart],
-                geoset.Faces[faceStart + 1],
-                geoset.Faces[faceStart + 2]
-            )
-            usedVertices.add(geoset.Faces[faceStart])
-            usedVertices.add(geoset.Faces[faceStart + 1])
-            usedVertices.add(geoset.Faces[faceStart + 2])
+            remainingFaceIndices.push(i)
         }
     }
 
-    // Build index remap
-    const oldToNew = new Map<number, number>()
-    let newIndex = 0
-    const sortedUsed = Array.from(usedVertices).sort((a, b) => a - b)
-    for (const oldIdx of sortedUsed) {
-        oldToNew.set(oldIdx, newIndex++)
-    }
+    return compactGeosetByRemainingFaces(geoset, remainingFaceIndices, facesToRemove.size)
+}
 
-    // Build new arrays
-    const newVertices: number[] = []
-    const newNormals: number[] = []
-    const newVertexGroups: number[] = []
-    const newTVertices: number[][] = (geoset.TVertices as Float32Array[]).map(() => [])
+/**
+ * Delete exact face indices, then prune vertices no longer referenced by any remaining face.
+ *
+ * @param geoset The geoset to modify
+ * @param faceIndices Face indices to delete
+ * @returns DeleteFacesResult with updated geoset
+ */
+export function deleteFaces(geoset: GeosetData, faceIndices: number[]): DeleteFacesResult {
+    const faceSet = new Set(faceIndices.filter((index) => Number.isInteger(index) && index >= 0))
+    const totalFaces = Math.floor((geoset.Faces?.length ?? 0) / 3)
+    const remainingFaceIndices: number[] = []
 
-    for (const oldIdx of sortedUsed) {
-        newVertices.push(
-            geoset.Vertices[oldIdx * 3],
-            geoset.Vertices[oldIdx * 3 + 1],
-            geoset.Vertices[oldIdx * 3 + 2]
-        )
-        newNormals.push(
-            geoset.Normals[oldIdx * 3],
-            geoset.Normals[oldIdx * 3 + 1],
-            geoset.Normals[oldIdx * 3 + 2]
-        )
-        newVertexGroups.push(geoset.VertexGroup[oldIdx])
-
-        for (let layer = 0; layer < (geoset.TVertices as Float32Array[]).length; layer++) {
-            const tv = geoset.TVertices[layer] as Float32Array
-            newTVertices[layer].push(tv[oldIdx * 2], tv[oldIdx * 2 + 1])
+    for (let i = 0; i < totalFaces; i++) {
+        if (!faceSet.has(i)) {
+            remainingFaceIndices.push(i)
         }
     }
 
-    // Remap face indices
-    const newFaces = remainingFaces.map(idx => oldToNew.get(idx)!)
-
-    const vertexCount = geoset.Vertices.length / 3
-
-    return {
-        updatedGeoset: {
-            Vertices: new Float32Array(newVertices),
-            Normals: new Float32Array(newNormals),
-            VertexGroup: new Uint8Array(newVertexGroups),
-            Faces: new Uint16Array(newFaces),
-            TVertices: newTVertices.map(tv => new Float32Array(tv))
-        },
-        verticesRemoved: vertexCount - sortedUsed.length,
-        facesRemoved: facesToRemove.size
-    }
+    return compactGeosetByRemainingFaces(geoset, remainingFaceIndices, totalFaces - remainingFaceIndices.length)
 }
 
 /**

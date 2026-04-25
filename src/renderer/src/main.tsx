@@ -2,9 +2,9 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import 'antd/dist/reset.css'
 import './assets/index.css'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { markStandalonePerf } from './utils/standalonePerf'
 import AppErrorBoundary from './components/common/AppErrorBoundary'
+import { windowGateway } from './infrastructure/window'
 
 const App = React.lazy(() => import('./App'))
 
@@ -60,5 +60,5 @@ ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(RootC
 requestAnimationFrame(() => {
     const skeleton = document.getElementById('app-skeleton')
     if (skeleton) skeleton.remove()
-    getCurrentWindow().show().catch(() => {})
+    windowGateway.showCurrentWindow().then(() => windowGateway.focusCurrentWindow()).catch(() => {})
 })

@@ -1,10 +1,11 @@
+import { appMessage } from '../../store/messageStore'
 
 /**
  * 节点管理器窗口组件
  */
 
 import React, { useMemo, useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
-import { Tree, Input, Space, Button, Tooltip, message, Menu } from 'antd';
+import { Tree, Input, Space, Button, Tooltip, Menu } from 'antd'
 import {
     PlusOutlined,
     EditOutlined,
@@ -195,7 +196,6 @@ export const NodeManagerWindow: React.FC = () => {
         setCreateNodeDialogVisible(true);
     };
 
-
     const refreshParticleEmitterPresets = useCallback(async () => {
         try {
             const presets = await listParticleEmitter2Presets();
@@ -208,9 +208,9 @@ export const NodeManagerWindow: React.FC = () => {
     const handleCreateParticlePresetNode = useCallback(async (presetId: string, parentId: number) => {
         try {
             const { nodeName } = await createParticleEmitter2FromPreset({ presetId, parentId });
-            message.success('\u5df2\u521b\u5efa\u7c92\u5b50\u9884\u8bbe\u8282\u70b9: ' + nodeName);
+            appMessage.success('\u5df2\u521b\u5efa\u7c92\u5b50\u9884\u8bbe\u8282\u70b9: ' + nodeName);
         } catch (error: any) {
-            message.error(error?.message || '使用粒子预设失败');
+            appMessage.error(error?.message || '使用粒子预设失败');
         }
     }, []);
 
@@ -230,11 +230,11 @@ export const NodeManagerWindow: React.FC = () => {
 
     const handleEdit = () => {
         if (selectedNodeIds.length === 0) {
-            message.warning('请先选择一个节点');
+            appMessage.warning('请先选择一个节点');
             return;
         }
         if (selectedNodeIds.length > 1) {
-            message.warning('只能编辑一个节点');
+            appMessage.warning('只能编辑一个节点');
             return;
         }
         void openNodeEditor('genericNode', selectedNodeIds[0]);
@@ -244,17 +244,17 @@ export const NodeManagerWindow: React.FC = () => {
         setContextMenuVisible(false);
         const targetId = nodeId ?? (selectedNodeIds.length > 0 ? selectedNodeIds[0] : null);
         if (targetId === null) {
-            message.warning('请先选择要删除的节点');
+            appMessage.warning('请先选择要删除的节点');
             return;
         }
         const checkResult = canDeleteNode(targetId, nodes, modelData?.Geosets);
         if (!checkResult.canDelete) {
-            message.error(checkResult.reason);
+            appMessage.error(checkResult.reason);
             return;
         }
         deleteNode(targetId);
         clearNodeSelection();
-        message.success('节点已删除');
+        appMessage.success('节点已删除');
     }, [selectedNodeIds, nodes, modelData?.Geosets, deleteNode, clearNodeSelection]);
 
     // Delete：经 nodeManagerShortcutBridge 在全局快捷键之前消费，避免与时间轴/几何抢键
@@ -318,7 +318,7 @@ export const NodeManagerWindow: React.FC = () => {
                             label: nodeMenuLabel(NodeType.BONE, '骨骼 (Bone)'),
                             onClick: () => {
                                 addNode({ type: NodeType.BONE, Name: 'New Bone', Parent: -1 });
-                                message.success('已在根节点下创建骨骼');
+                                appMessage.success('已在根节点下创建骨骼');
                             }
                         },
                         {
@@ -326,7 +326,7 @@ export const NodeManagerWindow: React.FC = () => {
                             label: nodeMenuLabel(NodeType.HELPER, '辅助器 (Helper)'),
                             onClick: () => {
                                 addNode({ type: NodeType.HELPER, Name: 'New Helper', Parent: -1 });
-                                message.success('已在根节点下创建辅助器');
+                                appMessage.success('已在根节点下创建辅助器');
                             }
                         },
                         {
@@ -334,14 +334,14 @@ export const NodeManagerWindow: React.FC = () => {
                             label: nodeMenuLabel(NodeType.ATTACHMENT, '挂接点 (Attachment)'),
                             onClick: () => {
                                 addNode({ type: NodeType.ATTACHMENT, Name: 'New Attachment', Parent: -1 });
-                                message.success('已在根节点下创建挂接点');
+                                appMessage.success('已在根节点下创建挂接点');
                             }
                         },                        {
                             key: 'add_particle1',
                             label: nodeMenuLabel(NodeType.PARTICLE_EMITTER, '粒子发射器1'),
                             onClick: () => {
                                 addNode({ type: NodeType.PARTICLE_EMITTER, Name: 'New Particle', Parent: -1 });
-                                message.success('已创建粒子发射器1');
+                                appMessage.success('已创建粒子发射器1');
                             }
                         },
                         {
@@ -349,7 +349,7 @@ export const NodeManagerWindow: React.FC = () => {
                             label: nodeMenuLabel(NodeType.PARTICLE_EMITTER_2, '粒子发射器2 (ParticleEmitter2)'),
                             onClick: () => {
                                 addNode({ type: NodeType.PARTICLE_EMITTER_2, Name: 'New Particle', Parent: -1 });
-                                message.success('已在根节点下创建粒子发射器');
+                                appMessage.success('已在根节点下创建粒子发射器');
                             }
                         },
                         {
@@ -357,7 +357,7 @@ export const NodeManagerWindow: React.FC = () => {
                             label: nodeMenuLabel(NodeType.RIBBON_EMITTER, getNodeTypeName(NodeType.RIBBON_EMITTER)),
                             onClick: () => {
                                 addNode({ type: NodeType.RIBBON_EMITTER, Name: 'New Ribbon', Parent: -1 });
-                                message.success('已创建丝带发射器节点');
+                                appMessage.success('已创建丝带发射器节点');
                             }
                         },
                         {
@@ -365,7 +365,7 @@ export const NodeManagerWindow: React.FC = () => {
                             label: nodeMenuLabel(NodeType.LIGHT, '灯光 (Light)'),
                             onClick: () => {
                                 addNode({ type: NodeType.LIGHT, Name: 'New Light', Parent: -1 });
-                                message.success('已在根节点下创建灯光');
+                                appMessage.success('已在根节点下创建灯光');
                             }
                         },
                         {
@@ -373,7 +373,7 @@ export const NodeManagerWindow: React.FC = () => {
                             label: nodeMenuLabel(NodeType.EVENT_OBJECT, getNodeTypeName(NodeType.EVENT_OBJECT)),
                             onClick: () => {
                                 addNode({ type: NodeType.EVENT_OBJECT, Name: 'New Event', Parent: -1 });
-                                message.success('已创建事件对象节点');
+                                appMessage.success('已创建事件对象节点');
                             }
                         },
                         {
@@ -381,7 +381,7 @@ export const NodeManagerWindow: React.FC = () => {
                             label: nodeMenuLabel(NodeType.COLLISION_SHAPE, getNodeTypeName(NodeType.COLLISION_SHAPE)),
                             onClick: () => {
                                 addNode({ type: NodeType.COLLISION_SHAPE, Name: 'New Collision', Parent: -1 });
-                                message.success('已创建碰撞形状节点');
+                                appMessage.success('已创建碰撞形状节点');
                             }
                         },
                     ]
@@ -400,7 +400,7 @@ export const NodeManagerWindow: React.FC = () => {
                     disabled: !clipboardNode,
                     onClick: () => {
                         pasteNode(-1);
-                        message.success('节点已粘贴到根节点');
+                        appMessage.success('节点已粘贴到根节点');
                     }
                 },
                 {
@@ -410,7 +410,7 @@ export const NodeManagerWindow: React.FC = () => {
                     onClick: () => {
                         if (cutNodeId !== null) {
                             reparentNodes([cutNodeId], -1);
-                            message.success('节点已移动到根节点');
+                            appMessage.success('节点已移动到根节点');
                             setCutNodeId(null);
                         }
                     }
@@ -517,7 +517,7 @@ export const NodeManagerWindow: React.FC = () => {
                 onClick: () => {
                     setClipboardNode(node);
                     setCutNodeId(null); // Clear cut state
-                    message.success('节点已复制');
+                    appMessage.success('节点已复制');
                 }
             },
             {
@@ -526,7 +526,7 @@ export const NodeManagerWindow: React.FC = () => {
                 onClick: () => {
                     setCutNodeId(nodeId);
                     setClipboardNode(null); // Clear copy state
-                    message.success('节点已剪切，请选择目标节点后右键粘贴');
+                    appMessage.success('节点已剪切，请选择目标节点后右键粘贴');
                 }
             },
             {
@@ -535,7 +535,7 @@ export const NodeManagerWindow: React.FC = () => {
                 disabled: !clipboardNode,
                 onClick: () => {
                     pasteNode(nodeId);
-                    message.success('节点已粘贴');
+                    appMessage.success('节点已粘贴');
                     setTimeout(() => {
                         const allKeys: string[] = [];
                         const collectKeys = (data: any[]) => {
@@ -558,7 +558,7 @@ export const NodeManagerWindow: React.FC = () => {
                 onClick: () => {
                     if (cutNodeId !== null) {
                         reparentNodes([cutNodeId], nodeId);
-                        message.success('节点已移动');
+                        appMessage.success('节点已移动');
                         setCutNodeId(null);
                     }
                 }
@@ -580,7 +580,7 @@ export const NodeManagerWindow: React.FC = () => {
                         label: nodeMenuLabel(NodeType.BONE, '骨骼 (Bone)'),
                         onClick: () => {
                             addNode({ type: NodeType.BONE, Name: 'New Bone', Parent: nodeId });
-                            message.success('已创建骨骼节点');
+                            appMessage.success('已创建骨骼节点');
                         }
                     },
                     {
@@ -588,7 +588,7 @@ export const NodeManagerWindow: React.FC = () => {
                         label: nodeMenuLabel(NodeType.HELPER, '辅助体 (Helper)'),
                         onClick: () => {
                             addNode({ type: NodeType.HELPER, Name: 'New Helper', Parent: nodeId });
-                            message.success('已创建辅助体节点');
+                            appMessage.success('已创建辅助体节点');
                         }
                     },
                     {
@@ -596,7 +596,7 @@ export const NodeManagerWindow: React.FC = () => {
                         label: nodeMenuLabel(NodeType.ATTACHMENT, '附件点 (Attachment)'),
                         onClick: () => {
                             addNode({ type: NodeType.ATTACHMENT, Name: 'New Attachment', Parent: nodeId });
-                            message.success('已创建附件点节点');
+                            appMessage.success('已创建附件点节点');
                         }
                     },
                     {
@@ -604,7 +604,7 @@ export const NodeManagerWindow: React.FC = () => {
                         label: nodeMenuLabel(NodeType.PARTICLE_EMITTER, '粒子发射器1'),
                         onClick: () => {
                             addNode({ type: NodeType.PARTICLE_EMITTER, Name: 'New Particle', Parent: nodeId });
-                            message.success('已创建粒子发射器1');
+                            appMessage.success('已创建粒子发射器1');
                         }
                     },
                     {
@@ -612,7 +612,7 @@ export const NodeManagerWindow: React.FC = () => {
                         label: nodeMenuLabel(NodeType.PARTICLE_EMITTER_2, '粒子发射器2 (ParticleEmitter2)'),
                         onClick: () => {
                             addNode({ type: NodeType.PARTICLE_EMITTER_2, Name: 'New Particle', Parent: nodeId });
-                            message.success('已创建粒子发射器2节点');
+                            appMessage.success('已创建粒子发射器2节点');
                         }
                     },
                     {
@@ -620,7 +620,7 @@ export const NodeManagerWindow: React.FC = () => {
                         label: nodeMenuLabel(NodeType.RIBBON_EMITTER, '丝带发射器 (RibbonEmitter)'),
                         onClick: () => {
                             addNode({ type: NodeType.RIBBON_EMITTER, Name: 'New Ribbon', Parent: nodeId });
-                            message.success('已创建丝带发射器节点');
+                            appMessage.success('已创建丝带发射器节点');
                         }
                     },
                     {
@@ -628,7 +628,7 @@ export const NodeManagerWindow: React.FC = () => {
                         label: nodeMenuLabel(NodeType.LIGHT, '灯光 (Light)'),
                         onClick: () => {
                             addNode({ type: NodeType.LIGHT, Name: 'New Light', Parent: nodeId });
-                            message.success('已创建灯光节点');
+                            appMessage.success('已创建灯光节点');
                         }
                     },
                     {
@@ -636,7 +636,7 @@ export const NodeManagerWindow: React.FC = () => {
                         label: nodeMenuLabel(NodeType.EVENT_OBJECT, '事件对象 (EventObject)'),
                         onClick: () => {
                             addNode({ type: NodeType.EVENT_OBJECT, Name: 'New Event', Parent: nodeId });
-                            message.success('已创建事件对象节点');
+                            appMessage.success('已创建事件对象节点');
                         }
                     },
                     {
@@ -644,7 +644,7 @@ export const NodeManagerWindow: React.FC = () => {
                         label: nodeMenuLabel(NodeType.COLLISION_SHAPE, '碰撞形状 (CollisionShape)'),
                         onClick: () => {
                             addNode({ type: NodeType.COLLISION_SHAPE, Name: 'New Collision', Parent: nodeId });
-                            message.success('已创建碰撞形状节点');
+                            appMessage.success('已创建碰撞形状节点');
                         }
                     },
                 ]
@@ -925,7 +925,7 @@ export const NodeManagerWindow: React.FC = () => {
                                                         nodesToMove = [...selectedNodeIds];
                                                     }
                                                     reparentNodes(nodesToMove, targetId);
-                                                    message.success(
+                                                    appMessage.success(
                                                         targetId === -1
                                                             ? `已移动到根节点`
                                                             : (nodesToMove.length > 1 ? `已移动 ${nodesToMove.length} 个节点` : '节点已移动')

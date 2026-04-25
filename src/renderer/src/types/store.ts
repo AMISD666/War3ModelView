@@ -132,6 +132,7 @@ export interface TabSnapshot {
     currentSequence: number;
     currentFrame: number;
     hiddenGeosetIds: number[];
+    forceShowAllGeosets: boolean;
     // Camera state (captured from Viewer)
     cameraState: {
         distance: number;

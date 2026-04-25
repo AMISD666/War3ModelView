@@ -1,5 +1,7 @@
 import type { DesktopGateway, OpenFileDialogOptions } from '../../infrastructure/desktop'
 import { desktopGateway } from '../../infrastructure/desktop'
+import type { WindowGateway } from '../../infrastructure/window'
+import { windowGateway } from '../../infrastructure/window'
 import { addRecentFile, type RecentFile } from '../../services/historyService'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
@@ -62,6 +64,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 export class OpenModelWorkflow {
     constructor(
         private readonly desktop: DesktopGateway,
+        private readonly window: WindowGateway,
     ) { }
 
     isOpenableModelFile(path: string): boolean {
@@ -77,6 +80,7 @@ export class OpenModelWorkflow {
             return null
         }
 
+        void this.window.focusCurrentWindow().catch(() => {})
         this.openPath({
             path: selected,
             source: 'dialog',
@@ -137,6 +141,7 @@ export class OpenModelWorkflow {
             deferNodeHydration: true,
         })
         context.completeLoading()
+        void this.window.focusCurrentWindow().catch(() => {})
 
         const isSameModel = data.path === context.currentModelPath
         if (!isSameModel) {
@@ -162,4 +167,4 @@ export class OpenModelWorkflow {
     }
 }
 
-export const openModelWorkflow = new OpenModelWorkflow(desktopGateway)
+export const openModelWorkflow = new OpenModelWorkflow(desktopGateway, windowGateway)

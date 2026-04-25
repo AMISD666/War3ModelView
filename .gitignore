@@ -2,6 +2,9 @@
 #Template for AL projects for Dynamics 365 Business Central
 #launch.json folder
 .vscode/
+!.vscode/
+.vscode/*
+!.vscode/tasks.json
 #Cache folder
 .alcache/
 #Symbols folder
@@ -29,3 +32,5 @@ out/
 keygen/
 *.md
 *.txt
+!activation/
+!activation/qq-policy.txt

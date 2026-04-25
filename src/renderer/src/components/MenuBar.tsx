@@ -13,7 +13,7 @@ import {
     MinusOutlined,
     ToolOutlined
 } from '@ant-design/icons'
-import { useRendererStore } from '../store/rendererStore'
+import { getNextRenderMode, useRendererStore, type RenderMode } from '../store/rendererStore'
 import { useSelectionStore } from '../store/selectionStore'
 import { useUIStore } from '../store/uiStore'
 import { uiText } from '../constants/uiText'
@@ -36,8 +36,8 @@ interface MenuBarProps {
     onToggleNodes: () => void
     showSkeleton: boolean
     onToggleSkeleton: () => void
-    renderMode: 'textured' | 'wireframe'
-    onChangeRenderMode: (mode: 'textured' | 'wireframe') => void
+    renderMode: RenderMode
+    onChangeRenderMode: (mode: RenderMode) => void
     backgroundColor: string
     onChangeBackgroundColor: (color: string) => void
     showFPS: boolean
@@ -308,8 +308,8 @@ const MenuBar: React.FC<MenuBarProps> = ({
         {
             key: 'render-mode',
             label: uiText.menu.quickToggle.wireframe,
-            checked: renderMode === 'wireframe',
-            onToggle: () => onChangeRenderMode(renderMode === 'wireframe' ? 'textured' : 'wireframe'),
+            checked: renderMode !== 'textured',
+            onToggle: () => onChangeRenderMode(getNextRenderMode(renderMode)),
             icon: <BgColorsOutlined />
         }
     ]

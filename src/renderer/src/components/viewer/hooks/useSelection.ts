@@ -8,6 +8,7 @@ import { vec3, vec4, mat4 } from 'gl-matrix'
 import { useSelectionStore } from '../../../store/selectionStore'
 import { useModelStore } from '../../../store/modelStore'
 import { pickClosestGeoset } from '../../../utils/rayTriangle'
+import { isGeosetVisible } from '../../../utils/geosetVisibility'
 import type { CameraState } from '../types'
 import { SimpleOrbitCamera } from '../../../utils/SimpleOrbitCamera'
 import { markNodeManagerListScrollFromViewer } from '../../../utils/nodeManagerListScrollBridge'
@@ -127,7 +128,7 @@ export function useSelection({
 
             for (let i = 0; i < rendererRef.current.model.Geosets.length; i++) {
                 // Skip hidden geosets
-                if (!forceShowAllGeosets && hiddenGeosetIds.includes(i)) continue
+                if (!isGeosetVisible(i, hiddenGeosetIds, forceShowAllGeosets)) continue
 
                 const geoset = rendererRef.current.model.Geosets[i]
                 const vertices = geoset.Vertices
@@ -157,7 +158,7 @@ export function useSelection({
 
             for (let i = 0; i < rendererRef.current.model.Geosets.length; i++) {
                 // Skip hidden geosets
-                if (!forceShowAllGeosets && hiddenGeosetIds.includes(i)) continue
+                if (!isGeosetVisible(i, hiddenGeosetIds, forceShowAllGeosets)) continue
 
                 const geoset = rendererRef.current.model.Geosets[i]
                 const faces = geoset.Faces
@@ -417,4 +418,3 @@ export function useSelection({
         handleSelectionClick
     }
 }
-

@@ -1,5 +1,6 @@
+import { appMessage, appModal } from '../../store/messageStore'
 import React, { useEffect, useState } from 'react'
-import { Button, Form, Modal, message } from 'antd'
+import { Button, Form, Modal } from 'antd'
 import { PlusOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { DraggableModal } from '../DraggableModal'
@@ -63,7 +64,7 @@ const GlobalSequenceManager: React.FC = () => {
         const currentFilter = timelineGlobalSequenceFilter ?? -1
         const nextFilter = currentFilter === index ? -1 : (currentFilter > index ? currentFilter - 1 : currentFilter)
 
-        Modal.confirm({
+        appModal.confirm({
             title: '删除确认',
             content: `确定要删除全局序列 ${index} 吗？`,
             okText: '删除',
@@ -76,7 +77,7 @@ const GlobalSequenceManager: React.FC = () => {
                     redo: () => applyGlobalSequences(newGlobalSequences, nextFilter)
                 })
                 applyGlobalSequences(newGlobalSequences, nextFilter)
-                message.success('全局序列已删除')
+                appMessage.success('全局序列已删除')
             }
         })
     }
@@ -97,7 +98,7 @@ const GlobalSequenceManager: React.FC = () => {
                     undo: () => applyGlobalSequences(oldGlobalSequences, currentFilter),
                     redo: () => applyGlobalSequences(newGlobalSequences, nextFilter)
                 })
-                message.success('全局序列范围已更新')
+                appMessage.success('全局序列范围已更新')
             } else {
                 newGlobalSequences.push(duration)
                 nextFilter = newGlobalSequences.length - 1
@@ -106,7 +107,7 @@ const GlobalSequenceManager: React.FC = () => {
                     undo: () => applyGlobalSequences(oldGlobalSequences, currentFilter),
                     redo: () => applyGlobalSequences(newGlobalSequences, nextFilter)
                 })
-                message.success('全局序列已添加')
+                appMessage.success('全局序列已添加')
             }
 
             applyGlobalSequences(newGlobalSequences, nextFilter)

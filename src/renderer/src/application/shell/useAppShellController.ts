@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { desktopGateway } from '../../infrastructure/desktop'
+import { showMessage } from '../../store/messageStore'
 
 const AUTO_UPDATE_CHECK_DATE_KEY = 'lastAutoUpdateCheck'
 const DEBUG_CONSOLE_STORAGE_KEY = 'showDebugConsole'
@@ -112,7 +113,11 @@ export const useAppShellController = () => {
             setActivationCode('')
 
             if (result.is_activated) {
-                alert(`激活成功！\n\n版本: ${result.level_name}\n授权类型: ${result.license_type === 'PERM' ? '永久授权' : '时限授权'}`)
+                showMessage(
+                    'success',
+                    '激活成功',
+                    `版本: ${result.level_name}\n授权类型: ${result.license_type === 'PERM' ? '永久授权' : '时限授权'}`
+                )
             }
         } catch (error: any) {
             setActivationError(typeof error === 'string' ? error : (error?.message || '激活失败'))

@@ -7,6 +7,7 @@ mod copy_utils;
 mod delete_utils;
 mod mpq_manager;
 mod model_manifest;
+mod remote_activation_policy;
 mod texture_decode;
 mod texture_encode;
 
@@ -627,12 +628,24 @@ fn get_activation_status() -> activation::ActivationStatus {
 }
 
 #[tauri::command]
+fn get_qq_activation_policy() -> remote_activation_policy::QqActivationPolicy {
+    remote_activation_policy::get_qq_activation_policy()
+}
+
+#[tauri::command]
+fn clear_qq_activation_policy_cache() -> Result<(), String> {
+    remote_activation_policy::clear_qq_activation_policy_cache()
+}
+
+#[tauri::command]
 fn activate_software(license_code: String) -> Result<activation::ActivationStatus, String> {
     activation::activate_software(&license_code)
 }
 
 #[tauri::command]
 async fn open_qq_verification_window(app: tauri::AppHandle) -> Result<(), String> {
+    activation::ensure_qq_activation_allowed()?;
+
     let label = "qq_verification";
 
     // If an old window exists, destroy it (not close 鈥?destroy is synchronous and
@@ -1554,6 +1567,8 @@ fn main() {
             // Activation Commands
             get_machine_id,
             get_activation_status,
+            get_qq_activation_policy,
+            clear_qq_activation_policy_cache,
             activate_software,
             open_qq_verification_window,
             check_qq_verification_window_status,
@@ -1637,4 +1652,3 @@ fn apply_main_window_layout(window: &WebviewWindow) -> tauri::Result<()> {
 
     Ok(())
 }
-

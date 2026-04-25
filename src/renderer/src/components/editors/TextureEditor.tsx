@@ -1,5 +1,6 @@
+import { appMessage, appModal } from '../../store/messageStore'
 import React, { useState, useEffect } from 'react'
-import { Table, Button, Input, Space, Modal, message, Tooltip } from 'antd'
+import { Table, Button, Input, Space, Modal, Tooltip } from 'antd'
 import { DraggableModal } from '../DraggableModal'
 import { PlusOutlined, DeleteOutlined, SaveOutlined, ReloadOutlined } from '@ant-design/icons'
 import TextureDetail from './texture/TextureDetail'
@@ -51,7 +52,7 @@ const TextureEditor: React.FC<TextureEditorProps> = () => {
     }
 
     const handleRemoveTexture = (index: number) => {
-        Modal.confirm({
+        appModal.confirm({
             title: '确认删除',
             content: '确定要删除这个纹理吗？',
             onOk: () => {
@@ -65,7 +66,7 @@ const TextureEditor: React.FC<TextureEditorProps> = () => {
     const handleApply = () => {
         setTextures(JSON.parse(JSON.stringify(textures)))
         setHasChanges(false)
-        message.success('纹理已更新')
+        appMessage.success('纹理已更新')
     }
 
     const columns = [

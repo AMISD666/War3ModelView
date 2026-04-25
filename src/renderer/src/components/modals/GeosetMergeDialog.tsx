@@ -1,5 +1,6 @@
+import { appMessage } from '../../store/messageStore'
 import React, { useState, useEffect, useMemo } from 'react';
-import { Select, Button, message, ConfigProvider, theme } from 'antd';
+import { Select, Button, ConfigProvider, theme } from 'antd'
 import { DraggableModal } from '../DraggableModal';
 import { useModelStore } from '../../store/modelStore';
 import { decodeBLP, getBLPImageData } from 'war3-model';
@@ -199,7 +200,7 @@ export const GeosetMergeDialog: React.FC<GeosetMergeDialogProps> = ({
 
     const handleConfirm = () => {
         if (selectedGeosetIndices.length < 2) {
-            message.error('请选择至少2个多边形进行合并');
+            appMessage.error('请选择至少2个多边形进行合并');
             return;
         }
         // Pass layerConfig only when new material mode

@@ -1,0 +1,58 @@
+= QQ Remote Activation Policy
+
+QQ 群成员验证现在受一个远程策略控制。激活码授权优先级更高，不受这个策略影响。
+
+== Gitee 文件
+
+把签名后的策略文本放在 Gitee raw 地址中，并在构建时通过 `WAR3_QQ_POLICY_URL` 指向它。也可以直接修改 `src-tauri/src/remote_activation_policy.rs` 里的 `DEFAULT_QQ_POLICY_URL`。
+
+策略 payload 示例：
+
+----
+{
+  "schema": 1,
+  "policyVersion": 20260425,
+  "qqActivationEnabled": false,
+  "message": "QQ群成员验证已暂停，请使用激活码激活",
+  "iss": "War3ModelEditor"
+}
+----
+
+发布到 Gitee 的内容必须是：
+
+----
+base64(json_payload).base64(ed25519_signature)
+----
+
+签名公钥复用当前激活码系统的 Ed25519 公钥。
+
+可以用仓库里的脚本生成最终文本：
+
+----
+python scripts/sign_qq_policy.py --enabled false --version 20260425 --output qq-policy.txt
+----
+
+启用 QQ 群验证：
+
+----
+python scripts/sign_qq_policy.py --enabled true --version 20260426 --output qq-policy.txt
+----
+
+然后把生成的 `qq-policy.txt` 内容上传到 Gitee 的 `activation/qq-policy.txt`。
+
+== 缓存和行为
+
+- QQ 策略缓存到注册表 `HKCU\SOFTWARE\GGWar3ModelEditor\QQRemotePolicyCache`。
+- 开启状态缓存 24 小时，24 小时内不会重复请求 Gitee。
+- 关闭状态会在下次检查时重新请求 Gitee 确认，避免重新开启后仍被旧关闭缓存卡住 24 小时。
+- 超过 24 小时后请求 Gitee；请求成功就更新缓存。
+- 未配置 Gitee URL、请求失败、签名失败或解析失败时，默认不影响 QQ 群验证。
+- 只有成功读取并验证远程策略，并且策略中的 `qqActivationEnabled` 为 `false` 时，才会禁用 QQ 群验证。
+- 如果远程策略签名有效并且 `qqActivationEnabled` 为 `false`，已有 QQ 授权和新的 QQ 验证入口都会被禁用，用户只能输入激活码。
+
+== 验收
+
+1. 使用有效激活码激活，确认授权仍然成功。
+2. Gitee 策略为 `qqActivationEnabled: true` 时，确认 QQ 群验证仍然能激活基础版。
+3. Gitee 策略为 `qqActivationEnabled: false` 且缓存刷新后，确认已有 QQ 授权显示未激活，并提示策略 `message`。
+4. Gitee 策略为 `false` 时点击 QQ 群验证，确认不会打开 QQ 验证窗口。

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { List, Checkbox, Button, Select, Card, Typography, message } from 'antd'
+import { List, Checkbox, Button, Select, Card, Typography } from 'antd'
 import type { Color } from 'antd/es/color-picker'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker'

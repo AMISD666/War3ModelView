@@ -5,7 +5,7 @@
 import React from 'react';
 import { useModelStore } from '../store/modelStore';
 import { CloseOutlined } from '@ant-design/icons';
-import { showConfirm } from '../store/messageStore';
+import { showDiscardConfirm } from '../store/messageStore';
 
 interface TabBarProps {
     emptyText?: string;
@@ -16,7 +16,7 @@ export const TabBar: React.FC<TabBarProps> = ({ emptyText }) => {
 
     const handleCloseTab = async (tabId: string, name: string) => {
         if (isTabDirty(tabId)) {
-            const shouldClose = await showConfirm('未保存的修改', `关闭“${name}”前，是否放弃未保存的修改？`);
+            const shouldClose = await showDiscardConfirm('未保存的修改', `关闭“${name}”前，是否不保存并直接关闭？`);
             if (!shouldClose) return;
         }
         closeTab(tabId);
@@ -116,4 +116,3 @@ export const TabBar: React.FC<TabBarProps> = ({ emptyText }) => {
 };
 
 export default TabBar;
-

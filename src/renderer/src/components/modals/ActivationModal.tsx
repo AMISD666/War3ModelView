@@ -1,5 +1,6 @@
+import { appMessage } from '../../store/messageStore'
 import React, { useState, useEffect, useRef } from 'react'
-import { Modal, Input, Button, message, Spin, Alert, Divider } from 'antd'
+import { Modal, Input, Button, Spin, Alert, Divider } from 'antd'
 import { CopyOutlined, CheckCircleOutlined, ExclamationCircleOutlined, RightOutlined, DownOutlined } from '@ant-design/icons'
 import { invoke } from '@tauri-apps/api/core'
 
@@ -16,6 +17,15 @@ interface ActivationModalProps {
     onActivated: () => void
 }
 
+interface QqActivationPolicy {
+    qq_activation_enabled?: boolean
+    qqActivationEnabled?: boolean
+    message: string | null
+    policy_source?: string
+    policySource?: string
+    debug?: string
+}
+
 const QQ_GROUP_ID = '168886891'
 const QQ_POLLING_TIMEOUT_MS = 2 * 60 * 1000
 
@@ -27,6 +37,9 @@ const ActivationModal: React.FC<ActivationModalProps> = ({ open, onActivated }) 
     const [qqPolling, setQqPolling] = useState<boolean>(false)
     const [machineIdLoading, setMachineIdLoading] = useState<boolean>(true)
     const [error, setError] = useState<string | null>(null)
+    const [qqError, setQqError] = useState<string | null>(null)
+    const [qqPolicyLoading, setQqPolicyLoading] = useState<boolean>(false)
+    const [qqActivationEnabled, setQqActivationEnabled] = useState<boolean>(true)
     const [copied, setCopied] = useState<boolean>(false)
     const [showLicenseSection, setShowLicenseSection] = useState<boolean>(false)
     const pollingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -55,6 +68,7 @@ const ActivationModal: React.FC<ActivationModalProps> = ({ open, onActivated }) 
     useEffect(() => {
         if (open) {
             loadMachineId()
+            loadQqActivationPolicy()
         } else {
             stopPolling(true)
         }
@@ -75,6 +89,26 @@ const ActivationModal: React.FC<ActivationModalProps> = ({ open, onActivated }) 
         }
     }
 
+    const loadQqActivationPolicy = async () => {
+        setQqPolicyLoading(true)
+        setQqError(null)
+        try {
+            const policy = await invoke<QqActivationPolicy>('get_qq_activation_policy')
+            console.log('[ActivationModal] get_qq_activation_policy raw:', policy)
+            console.log('[ActivationModal] get_qq_activation_policy json:', JSON.stringify(policy))
+            const enabled = policy.qq_activation_enabled !== false && policy.qqActivationEnabled !== false
+            console.log('[ActivationModal] resolved QQ activation enabled:', enabled)
+            setQqActivationEnabled(enabled)
+            setQqError(enabled ? null : (policy.message || 'QQ群成员验证已暂停，请使用激活码激活'))
+        } catch (e: any) {
+            console.warn('Failed to get QQ activation policy:', e)
+            setQqActivationEnabled(true)
+            setQqError(null)
+        } finally {
+            setQqPolicyLoading(false)
+        }
+    }
+
     const startPolling = () => {
         stopPolling(false)
         setQqPolling(true)
@@ -90,25 +124,29 @@ const ActivationModal: React.FC<ActivationModalProps> = ({ open, onActivated }) 
                 const verified = await invoke<boolean>('check_qq_verification_window_status')
                 if (verified) {
                     stopPolling(false)
-                    message.success('\u9a8c\u8bc1\u6210\u529f')
+                    appMessage.success('\u9a8c\u8bc1\u6210\u529f')
                     onActivated()
                 }
             } catch (e: any) {
                 stopPolling(false)
-                setError(typeof e === 'string' ? e : (e?.message || '\u0051\u0051\u7fa4\u9a8c\u8bc1\u72b6\u6001\u68c0\u67e5\u5931\u8d25'))
+                setQqError(typeof e === 'string' ? e : (e?.message || '\u0051\u0051\u7fa4\u9a8c\u8bc1\u72b6\u6001\u68c0\u67e5\u5931\u8d25'))
             }
         }, 2000)
     }
 
     const handleOpenQqVerification = async () => {
+        if (!qqActivationEnabled) {
+            return
+        }
         setQqWindowLoading(true)
-        setError(null)
+        setQqError(null)
         try {
             await invoke('open_qq_verification_window')
             startPolling()
-            message.info('\u8bf7\u5728\u5f39\u51fa\u7684\u0051\u0051\u9875\u9762\u5b8c\u6210\u767b\u5f55\uff0c\u5e76\u786e\u8ba4\u4f60\u5728\u6307\u5b9a\u0051\u0051\u7fa4\u5185')
+            appMessage.info('\u8bf7\u5728\u5f39\u51fa\u7684\u0051\u0051\u9875\u9762\u5b8c\u6210\u767b\u5f55\uff0c\u5e76\u786e\u8ba4\u4f60\u5728\u6307\u5b9a\u0051\u0051\u7fa4\u5185')
         } catch (e: any) {
-            setError(typeof e === 'string' ? e : (e?.message || '\u6253\u5f00\u0051\u0051\u7fa4\u9a8c\u8bc1\u7a97\u53e3\u5931\u8d25'))
+            setQqActivationEnabled(false)
+            setQqError(typeof e === 'string' ? e : (e?.message || '\u6253\u5f00\u0051\u0051\u7fa4\u9a8c\u8bc1\u7a97\u53e3\u5931\u8d25'))
         } finally {
             setQqWindowLoading(false)
         }
@@ -116,13 +154,13 @@ const ActivationModal: React.FC<ActivationModalProps> = ({ open, onActivated }) 
 
     const handleCancelQqVerification = async () => {
         stopPolling(true)
-        message.info('\u5df2\u53d6\u6d88\u0051\u0051\u7fa4\u9a8c\u8bc1')
+        appMessage.info('\u5df2\u53d6\u6d88\u0051\u0051\u7fa4\u9a8c\u8bc1')
     }
 
     const handleCopyMachineId = () => {
         navigator.clipboard.writeText(machineId)
         setCopied(true)
-        message.success('\u673a\u5668\u7801\u5df2\u590d\u5236\u5230\u526a\u8d34\u677f')
+        appMessage.success('\u673a\u5668\u7801\u5df2\u590d\u5236\u5230\u526a\u8d34\u677f')
         setTimeout(() => setCopied(false), 2000)
     }
 
@@ -141,7 +179,7 @@ const ActivationModal: React.FC<ActivationModalProps> = ({ open, onActivated }) 
             })
 
             if (result.is_activated) {
-                message.success('\u8f6f\u4ef6\u6fc0\u6d3b\u6210\u529f!')
+                appMessage.success('\u8f6f\u4ef6\u6fc0\u6d3b\u6210\u529f!')
                 onActivated()
             } else {
                 setError(result.error || '\u6fc0\u6d3b\u5931\u8d25')
@@ -212,17 +250,32 @@ const ActivationModal: React.FC<ActivationModalProps> = ({ open, onActivated }) 
                 <Button
                     block
                     onClick={handleOpenQqVerification}
-                    loading={qqWindowLoading || qqPolling}
+                    disabled={!qqActivationEnabled}
+                    loading={qqWindowLoading || qqPolling || qqPolicyLoading}
                     style={{
-                        backgroundColor: '#1f3b53',
-                        borderColor: '#2f5f86',
-                        color: '#d7ebff'
+                        backgroundColor: qqActivationEnabled ? '#1f3b53' : '#333',
+                        borderColor: qqActivationEnabled ? '#2f5f86' : '#555',
+                        color: qqActivationEnabled ? '#d7ebff' : '#888'
                     }}
                 >
                     {qqPolling
                         ? '\u9a8c\u8bc1\u4e2d\uff08\u6bcf2\u79d2\u81ea\u52a8\u68c0\u67e5\uff09...'
                         : '\u6253\u5f00\u0051\u0051\u7fa4\u9a8c\u8bc1'}
                 </Button>
+                {qqError && (
+                    <Alert
+                        message={<span style={{ color: '#ff7875' }}>{qqError}</span>}
+                        type="error"
+                        showIcon
+                        icon={<ExclamationCircleOutlined style={{ color: '#ff7875' }} />}
+                        style={{
+                            marginTop: 10,
+                            marginBottom: 0,
+                            backgroundColor: 'rgba(255, 77, 79, 0.15)',
+                            border: '1px solid #ff4d4f'
+                        }}
+                    />
+                )}
                 {qqPolling && (
                     <Button
                         block

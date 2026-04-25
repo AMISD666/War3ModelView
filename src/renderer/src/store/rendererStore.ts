@@ -5,6 +5,13 @@ import type { AppMode } from './selectionStore'
 
 type AnimationSubMode = 'binding' | 'keyframe'
 type NodeRenderMode = 'hidden' | 'solid' | 'wireframe'
+export type RenderMode = 'textured' | 'wireframe' | 'texturedWireframe'
+
+export const getNextRenderMode = (mode: RenderMode): RenderMode => {
+    if (mode === 'textured') return 'wireframe'
+    if (mode === 'wireframe') return 'texturedWireframe'
+    return 'textured'
+}
 
 export interface GridSettings {
     show128: boolean
@@ -85,8 +92,8 @@ interface RendererStore {
     setEnableLighting: (enable: boolean) => void
 
     // Render Settings
-    renderMode: 'textured' | 'wireframe'
-    setRenderMode: (mode: 'textured' | 'wireframe') => void
+    renderMode: RenderMode
+    setRenderMode: (mode: RenderMode) => void
     teamColor: number
     setTeamColor: (color: number) => void
     gizmoSize: number

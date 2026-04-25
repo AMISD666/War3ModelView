@@ -1,10 +1,8 @@
 ﻿import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 import StandaloneToolWindowRouter, { isStandaloneToolWindowLabel } from './components/detached/StandaloneToolWindowRouter'
-import { windowManager } from './utils/WindowManager'
-import { useRef } from 'react'
 import AppErrorBoundary from './components/common/AppErrorBoundary'
+import { GlobalMessageLayer } from './components/GlobalMessageLayer'
 import { desktopGateway } from './infrastructure/desktop'
-import { windowGateway } from './infrastructure/window'
 
 const MainLayoutNew = lazy(() => import('./components/MainLayoutNew'))
 const ActivationModal = lazy(() => import('./components/modals/ActivationModal'))
@@ -20,7 +18,6 @@ interface ActivationStatus {
 function App(): JSX.Element {
     const [isActivated, setIsActivated] = useState<boolean | null>(null)
     const [shouldMountMainLayout, setShouldMountMainLayout] = useState(false)
-    const isClosingRef = useRef(false)
     const standaloneWindowLabel = useMemo(() => {
         if (typeof window === 'undefined') return null
         const params = new URLSearchParams(window.location.search)
@@ -37,26 +34,8 @@ function App(): JSX.Element {
             setShouldMountMainLayout(true)
         })
 
-        const unlistenPromise = windowGateway.onCurrentCloseRequested(async (event) => {
-            if (event.isPreventDefault() || isClosingRef.current) {
-                return
-            }
-
-            event.preventDefault()
-            isClosingRef.current = true
-
-            try {
-                await windowManager.destroyAllWindows().catch(console.error)
-                await windowGateway.destroyCurrentWindow()
-            } catch (error) {
-                console.error('[App] graceful exit failed:', error)
-                isClosingRef.current = false
-            }
-        })
-
         return () => {
             window.cancelAnimationFrame(mountHandle)
-            unlistenPromise.then(unlisten => unlisten()).catch(console.error)
         }
     }, [standaloneWindowLabel])
 
@@ -103,9 +82,12 @@ function App(): JSX.Element {
 
     if (standaloneWindowLabel) {
         return (
-            <AppErrorBoundary scope="独立工具窗口">
-                <StandaloneToolWindowRouter windowLabel={standaloneWindowLabel} />
-            </AppErrorBoundary>
+            <>
+                <AppErrorBoundary scope="独立工具窗口">
+                    <StandaloneToolWindowRouter windowLabel={standaloneWindowLabel} />
+                </AppErrorBoundary>
+                <GlobalMessageLayer />
+            </>
         )
     }
 
@@ -151,6 +133,8 @@ function App(): JSX.Element {
                     </Suspense>
                 </AppErrorBoundary>
             )}
+
+            <GlobalMessageLayer />
         </>
     )
 }

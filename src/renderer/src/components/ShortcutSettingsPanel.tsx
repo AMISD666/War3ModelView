@@ -1,3 +1,4 @@
+import { appModal } from '../store/messageStore'
 ﻿import React, { useEffect, useMemo, useState } from 'react'
 import { Button, Modal, Tag, Typography, Tooltip } from 'antd'
 import { shortcutActions, ShortcutAction } from '../shortcuts/actions'
@@ -250,7 +251,7 @@ export const ShortcutSettingsPanel: React.FC = () => {
 
             if (conflict) {
                 setEditingActionId(null)
-                Modal.confirm({
+                appModal.confirm({
                     title: '快捷键冲突',
                     content: `「${conflict.label}」已使用 ${formatKeyCombo(combo)}。是否覆盖？`,
                     okText: '覆盖',

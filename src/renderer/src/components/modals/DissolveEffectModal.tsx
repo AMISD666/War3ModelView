@@ -1,5 +1,6 @@
+import { appMessage } from '../../store/messageStore'
 import React, { useState, useEffect, useRef } from 'react';
-import { Modal, Radio, InputNumber, Button, Select, Divider, Typography, Input, message } from 'antd';
+import { Modal, Radio, InputNumber, Button, Select, Divider, Typography, Input } from 'antd'
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame';
 import { useModelStore } from '../../store/modelStore';
 import { useRendererStore } from '../../store/rendererStore';
@@ -276,15 +277,15 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
     };
 
     const handleExecute = async () => {
-        if (selectedGeosets.length === 0) { message.warning('请至少选择一个多边形组'); return; }
-        if (!texturePath) { message.warning('请选择消散贴图'); return; }
-        if (points.length === 0) { message.warning('请在时间轴上设置至少一个关键帧点'); return; }
+        if (selectedGeosets.length === 0) { appMessage.warning('请至少选择一个多边形组'); return; }
+        if (!texturePath) { appMessage.warning('请选择消散贴图'); return; }
+        if (points.length === 0) { appMessage.warning('请在时间轴上设置至少一个关键帧点'); return; }
 
         const sortedPoints = [...points].sort((a, b) => a.frame - b.frame);
         const startPoints = sortedPoints.filter(p => p.type === 'start');
         const endPoints = sortedPoints.filter(p => p.type === 'end');
         if (startPoints.length === 0 || endPoints.length === 0) {
-            message.warning('请确保时间轴上同时存在开始和结束关键帧'); return;
+            appMessage.warning('请确保时间轴上同时存在开始和结束关键帧'); return;
         }
 
         const dissolveParams = {
@@ -304,12 +305,12 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
 
         if (isStandalone) {
             emitCommand('EXECUTE_DISSOLVE', dissolveParams);
-            message.info('正在执行消散效果...');
+            appMessage.info('正在执行消散效果...');
             return;
         }
 
         const store = useModelStore.getState();
-        if (!store.modelData || !store.modelPath) { message.error('没有加载模型数据'); return; }
+        if (!store.modelData || !store.modelPath) { appMessage.error('没有加载模型数据'); return; }
 
         try {
             const { executeDissolveEffect, refreshDissolveTexturesInRenderer } = await import('../../utils/dissolveEffect');
@@ -321,7 +322,7 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
                 content: `已修改 ${result.textureModifiedCount} 个贴图，更新 ${result.materialModifiedCount} 个材质的透明度关键帧`,
             });
         } catch (err: any) {
-            message.error(err?.message || '执行消散效果失败');
+            appMessage.error(err?.message || '执行消散效果失败');
         }
     };
 

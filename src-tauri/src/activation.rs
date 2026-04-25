@@ -10,10 +10,12 @@ use uuid::Uuid;
 use winreg::enums::*;
 use winreg::RegKey;
 
+use crate::remote_activation_policy;
+
 // ==========================
 // Constants
 // ==========================
-const REG_PATH: &str = "SOFTWARE\\GGWar3ModelEditor";
+pub(crate) const REG_PATH: &str = "SOFTWARE\\GGWar3ModelEditor";
 const LICENSE_KEY: &str = "License";
 const MACHINE_ID_KEY: &str = "MachineId";
 const LAST_CHECK_TIME_KEY: &str = "LastCheckTime";
@@ -22,7 +24,7 @@ const QQ_REVERIFY_SECONDS: i64 = 180 * 24 * 60 * 60;
 pub const QQ_TARGET_GROUP_ID: &str = "168886891";
 
 // Ed25519 Public Key (Base64 encoded)
-const PUBLIC_KEY_B64: &str = "Z2CL61ogkw4qYkEOfz0+aOa0gyST1h3F319IbHqsixE=";
+pub(crate) const PUBLIC_KEY_B64: &str = "Z2CL61ogkw4qYkEOfz0+aOa0gyST1h3F319IbHqsixE=";
 
 // ==========================
 // Data Structures
@@ -351,6 +353,23 @@ pub fn get_activation_status() -> ActivationStatus {
 
     // 2) QQ group verification unlocks Basic level and expires every 180 days.
     if let Some(expires_at) = get_valid_qq_verification_expiration() {
+        let policy = remote_activation_policy::get_qq_activation_policy();
+        if !policy.qq_activation_enabled {
+            return ActivationStatus {
+                is_activated: false,
+                license_type: "NONE".to_string(),
+                expiration_date: None,
+                days_remaining: None,
+                error: Some(
+                    policy
+                        .message
+                        .unwrap_or_else(|| "QQ群成员验证已暂停，请输入激活码激活".to_string()),
+                ),
+                level: 0,
+                level_name: level_to_name(0),
+            };
+        }
+
         let now = Utc::now().timestamp();
         let remaining_seconds = expires_at - now;
         let remaining_days = remaining_seconds / 86400;
@@ -377,6 +396,17 @@ pub fn get_activation_status() -> ActivationStatus {
         error: license_error,
         level: 0,
         level_name: level_to_name(0),
+    }
+}
+
+pub fn ensure_qq_activation_allowed() -> Result<(), String> {
+    let policy = remote_activation_policy::get_qq_activation_policy();
+    if policy.qq_activation_enabled {
+        Ok(())
+    } else {
+        Err(policy
+            .message
+            .unwrap_or_else(|| "QQ群成员验证已暂停，请输入激活码激活".to_string()))
     }
 }
 

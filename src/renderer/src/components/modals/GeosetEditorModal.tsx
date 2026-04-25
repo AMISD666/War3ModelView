@@ -1,5 +1,6 @@
+import { appMessage } from '../../store/messageStore'
 import React, { useState, useEffect, useRef } from 'react'
-import { List, Button, Select, Card, Typography, message } from 'antd'
+import { List, Button, Select, Card, Typography } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { DraggableModal } from '../DraggableModal';
 import { useModelStore } from '../../store/modelStore'
@@ -10,7 +11,6 @@ import { useRpcClient } from '../../hooks/useRpc'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 
 const { Text } = Typography
-
 
 interface GeosetEditorModalProps {
     visible: boolean
@@ -113,12 +113,12 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
     const handleOk = () => {
         if (isStandalone) {
             emitCommand('EXECUTE_GEOSET_ACTION', { action: 'SAVE_ALL', payload: localGeosets });
-            message.success('多边形设置已保存')
+            appMessage.success('多边形设置已保存')
             setHasChanges(false)
             getCurrentWindow().hide()
         } else if (setGeosets) {
             setGeosets(localGeosets)
-            message.success('多边形设置已保存')
+            appMessage.success('多边形设置已保存')
             setHasChanges(false)
             onClose()
         }
@@ -321,8 +321,4 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
 }
 
 export default GeosetEditorModal
-
-
-
-
 

@@ -1,3 +1,4 @@
+import { appMessage } from '../../store/messageStore'
 import React,{useEffect,useRef,useState,forwardRef,useImperativeHandle,useMemo,useCallback}from"react";
 import type{ViewerProps,ViewerRef}from"./ViewerTypes";
 // @ts-ignore
@@ -5,11 +6,35 @@ import{decodeBLP,getBLPImageData,ModelRenderer}from"war3-model";
 import ModelWorker from"../../workers/model-worker.worker?worker";
 import TextureAdjustWorker from"../../workers/texture-adjust.worker?worker";import{SimpleOrbitCamera}from"../../utils/SimpleOrbitCamera";import{decodeTextureData,getTextureCandidatePaths,loadAllTextures,normalizePath,prepareModelForTextureLoad}from"./textureLoader";
 import type{WorkerLike}from"./textureLoader";import{validateAllParticleEmitters}from"./particleValidator";import{describePe2AnimOrScalar,pe2PreviewDebugEnabled}from"../../utils/pe2PreviewDebug";import{checkForStructuralChanges,syncParticleEmitters2InPlace}from"./modelSync";import{getEnvironmentManager}from"./EnvironmentManager";import{logModelInfo}from"../../utils/debugLogger";import{hexToRgb}from"./types";import{mat3,mat4,vec3,vec4,quat}from"gl-matrix";import{GridRenderer}from"../GridRenderer";import{DebugRenderer}from"../DebugRenderer";import{GizmoRenderer,GizmoAxis,GIZMO_AXIS_LENGTH}from"../GizmoRenderer";import{AxisIndicator}from"../AxisIndicator";import{readFile}from"@tauri-apps/plugin-fs";import{invoke}from"@tauri-apps/api/core";import{listen}from"@tauri-apps/api/event";import{DEFAULT_TEXTURE_ADJUSTMENTS,applyTextureAdjustments,isDefaultTextureAdjustments,normalizeTextureAdjustments}from"../../utils/textureAdjustments";
-import type{TextureAdjustments}from"../../utils/textureAdjustments";import{useUIStore}from"../../store/uiStore";import{useSelectionStore}from"../../store/selectionStore";import{useModelStore}from"../../store/modelStore";import{useRendererStore}from"../../store/rendererStore";import{useHistoryStore}from"../../store/historyStore";import{useUvEditorStore}from"../../store/uvEditorStore";import{ModelInfoPanel}from"../info/ModelInfoPanel";import{ViewerToolbar}from"../ViewerToolbar";import{ConfigProvider,message,theme}from"antd";import{CameraOutlined,CopyOutlined,SyncOutlined,PauseCircleOutlined,PlayCircleOutlined}from"@ant-design/icons";import{commandManager}from"../../utils/CommandManager";import{MoveVerticesCommand,VertexChange}from"../../commands/MoveVerticesCommand";import{MoveNodesCommand,NodeChange}from"../../commands/MoveNodesCommand";import{SetNodeParentCommand}from"../../commands/SetNodeParentCommand";import{VertexEditor}from"../VertexEditor";import{pickClosestGeoset}from"../../utils/rayTriangle";import{SplitVerticesCommand}from"../../commands/SplitVerticesCommand";import{AutoSeparateLayersCommand}from"../../commands/AutoSeparateLayersCommand";import{WeldVerticesCommand}from"../../commands/WeldVerticesCommand";import{DeleteVerticesCommand}from"../../commands/DeleteVerticesCommand";import{PasteVerticesCommand}from"../../commands/PasteVerticesCommand";import{UpdateSequenceExtentsCommand}from"../../commands/UpdateSequenceExtentsCommand";import{isTextInputActive,normalizeKeyCombo,normalizeKeyComboFromEvent}from"../../shortcuts/utils";import{registerGeometryDeleteKeyListener}from"../../utils/geometryDeleteShortcutBridge";import{WEBGL_CONTEXT_ATTRIBUTES}from"./ViewerRenderConstants";import{createViewerFramePerfAggregate,roundPerfValue}from"./ViewerPerf";
+import type{TextureAdjustments}from"../../utils/textureAdjustments";import{useUIStore}from"../../store/uiStore";import{useSelectionStore}from"../../store/selectionStore";import{useModelStore}from"../../store/modelStore";import{useRendererStore}from"../../store/rendererStore";import{useHistoryStore}from"../../store/historyStore";import{useUvEditorStore}from"../../store/uvEditorStore";import{ModelInfoPanel}from"../info/ModelInfoPanel";import{ViewerToolbar}from"../ViewerToolbar";import { ConfigProvider, theme } from "antd";import{CameraOutlined,CopyOutlined,SyncOutlined,PauseCircleOutlined,PlayCircleOutlined}from"@ant-design/icons";import{commandManager}from"../../utils/CommandManager";import{MoveVerticesCommand,VertexChange}from"../../commands/MoveVerticesCommand";import{MoveNodesCommand,NodeChange}from"../../commands/MoveNodesCommand";import{SetNodeParentCommand}from"../../commands/SetNodeParentCommand";import{VertexEditor}from"../VertexEditor";import{pickClosestGeoset}from"../../utils/rayTriangle";import{SplitVerticesCommand}from"../../commands/SplitVerticesCommand";import{AutoSeparateLayersCommand}from"../../commands/AutoSeparateLayersCommand";import{WeldVerticesCommand}from"../../commands/WeldVerticesCommand";import{DeleteVerticesCommand}from"../../commands/DeleteVerticesCommand";import{DeleteFacesCommand}from"../../commands/DeleteFacesCommand";import{PasteVerticesCommand}from"../../commands/PasteVerticesCommand";import{UpdateSequenceExtentsCommand}from"../../commands/UpdateSequenceExtentsCommand";import{isTextInputActive,normalizeKeyCombo,normalizeKeyComboFromEvent}from"../../shortcuts/utils";import{registerGeometryDeleteKeyListener}from"../../utils/geometryDeleteShortcutBridge";import{WEBGL_CONTEXT_ATTRIBUTES}from"./ViewerRenderConstants";import{createViewerFramePerfAggregate,roundPerfValue}from"./ViewerPerf";
 import type{ViewerFramePerfAggregate,ViewerFramePerfSample}from"./ViewerPerf";import{applyHealthBarOffset,resolveHealthBarState}from"./ViewerHealthBar";
 import type{HealthBarDragSnapshot,HealthBarState}from"./ViewerHealthBar";import{getLiveTextureSourceKey,getTextureAdjustmentSignature,getTextureDecodeWorkerCount,isTexturePreviewPath,toTextureUpdateUint8Array,toTightArrayBuffer,toUint8Array}from"./ViewerTextureUtils";
-import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadSchedulerState}from"./ViewerTextureUtils";import{GlobalTransformCommand}from"../../commands/GlobalTransformCommand";import{copyVertices,copyFaces,VertexCopyBuffer}from"../../utils/vertexOperations";import{UpdateKeyframeCommand,KeyframeChange}from"../../commands/UpdateKeyframeCommand";import{MissingTextureWarning}from"../MissingTextureWarning";import{GeosetSeparateDialog}from"../modals/GeosetSeparateDialog";import{LayerConfig,layerConfigToMaterialLayer}from"../modals/MaterialLayerOptions";import{NodeType}from"../../types/node";import{openNodeEditor}from"../../utils/nodeEditorOpen";import{nodeTypeToEditorKind}from"../../types/nodeEditorRpc";import{getEffectiveBindings,registerShortcutHandler}from"../../shortcuts/manager";import{markStandalonePerf}from"../../utils/standalonePerf";import{invokeReadMpqFile}from"../../utils/mpqPerf";import{markNodeManagerListScrollFromTree,markNodeManagerListScrollFromViewer}from"../../utils/nodeManagerListScrollBridge";import{collectSelectedGeosetIndices}from"../editors/uvSelectionSync";import{createSelectionRect,pointInRect,segmentIntersectsRect,triangleIntersectsRect}from"../editors/uvSelectionUtils";let globalRenderLoopId=0;const Viewer=forwardRef((props:ViewerProps,ref:React.Ref<ViewerRef>)=>{const{modelPath,animationIndex,teamColor,showGrid,showNodes,showSkeleton,showCollisionShapes,showCameras,showLights,showAttachments,showWireframe,isPlaying,onTogglePlay,onToggleLooping,onToggleWireframe,onModelLoaded,onModelFirstFrameReady,backgroundColor,showFPS,playbackSpeed,viewPreset,modelData,onSetViewPreset,onAddCameraFromView}=props;const[parseWorker]=useState(()=>new ModelWorker());const[textureWorkers]=useState<WorkerLike[]>(()=>{const count=getTextureDecodeWorkerCount();return Array.from({length:count},()=>new ModelWorker()as unknown as WorkerLike);});const[loading,setLoading]=useState(false);const[loadingStatus,setLoadingStatus]=useState("");const canvasRef=useRef<HTMLCanvasElement>(null);const[renderer,setRenderer]=useState<ModelRenderer|null>(null);const[fps,setFps]=useState<number>(0);const gridRenderer=useRef(new GridRenderer());const debugRenderer=useRef(new DebugRenderer());const gizmoRenderer=useRef(new GizmoRenderer());const axisIndicator=useRef(new AxisIndicator());const rendererRef=useRef<ModelRenderer|null>(null);const cameraRef=useRef<SimpleOrbitCamera|null>(null);const appMainMode=useSelectionStore((state)=>state.mainMode);const animationSubMode=useSelectionStore((state)=>state.animationSubMode);const rendererReloadTrigger=useModelStore((state)=>state.rendererReloadTrigger);const cachedRenderer=useModelStore((state)=>state.cachedRenderer);const mpqLoaded=useRendererStore((state)=>state.mpqLoaded);const nodeRenderMode=useRendererStore((state)=>state.nodeRenderMode);const showHealthBar=useRendererStore((state)=>state.showHealthBar);const missingTextures=useRendererStore((state)=>state.missingTextures);const glRef=useRef<WebGL2RenderingContext|WebGLRenderingContext|null>(null);const needsRendererUpdateRef=useRef(false);const textureReloadSchedulerRef=useRef<TextureReloadSchedulerState>({timer:null,running:false,queued:null,version:0,});const animationFrameId=useRef<number|null>(null);const shouldRunRenderLoop=useRef<boolean>(true);const lastRenderErrorReportTimeRef=useRef<number>(0);const framePerfRef=useRef<ViewerFramePerfAggregate>(createViewerFramePerfAggregate());const lastFpsTime=useRef<number>(performance.now());const lastFrameTime=useRef<number>(performance.now());const frameCount=useRef<number>(0);const renderRef=useRef<((time:number,scheduleNext?:boolean)=>void)|null>(null);const pMatrixRef=useRef(mat4.create());const mvMatrixRef=useRef(mat4.create());const cameraPosRef=useRef(vec3.create());const cameraUpRef=useRef(vec3.fromValues(0,0,1));const cameraQuatRef=useRef(quat.create());const{showModelInfo}=useUIStore();const{isLooping,setLooping}=useModelStore();const[texturePreview,setTexturePreview]=useState<{url:string;width:number;height:number;path:string;}|null>(null);const backgroundTextureResolveRunningRef=useRef(false);const attemptedMissingTexturePathsRef=useRef<Set<string>>(new Set());const flushFramePerfSummary=useCallback((reason:string,force=false)=>{const bucket=framePerfRef.current;if(bucket.samples===0)return;if(!force&&bucket.samples<90)return;markStandalonePerf("viewer_frame_profile",{reason,samples:bucket.samples,avgTotalMs:roundPerfValue(bucket.totalMs/bucket.samples),maxTotalMs:roundPerfValue(bucket.maxTotalMs),slowFrameCount:bucket.slowFrameCount,avgClearMs:roundPerfValue(bucket.clearMs/bucket.samples),avgCameraMs:roundPerfValue(bucket.cameraMs/bucket.samples),avgStateMs:roundPerfValue(bucket.stateMs/bucket.samples),avgUpdateMs:roundPerfValue(bucket.updateMs/bucket.samples),avgSceneMs:roundPerfValue(bucket.sceneMs/bucket.samples),avgOverlayMs:roundPerfValue(bucket.overlayMs/bucket.samples),isPlaying:isPlayingRef.current,modelPath:modelPath||"",});framePerfRef.current=createViewerFramePerfAggregate();},[modelPath],);const recordFramePerfSample=useCallback((sample:ViewerFramePerfSample,detail?:Record<string,unknown>)=>{const bucket=framePerfRef.current;bucket.samples+=1;bucket.totalMs+=sample.totalMs;bucket.maxTotalMs=Math.max(bucket.maxTotalMs,sample.totalMs);bucket.clearMs+=sample.clearMs;bucket.cameraMs+=sample.cameraMs;bucket.stateMs+=sample.stateMs;bucket.updateMs+=sample.updateMs;bucket.sceneMs+=sample.sceneMs;bucket.overlayMs+=sample.overlayMs;if(sample.totalMs>=16.7){bucket.slowFrameCount+=1;};const now=performance.now();if(sample.totalMs>=33&&now-bucket.lastSlowEmitMs>=1000){bucket.lastSlowEmitMs=now;markStandalonePerf("viewer_slow_frame",{totalMs:roundPerfValue(sample.totalMs),clearMs:roundPerfValue(sample.clearMs),cameraMs:roundPerfValue(sample.cameraMs),stateMs:roundPerfValue(sample.stateMs),updateMs:roundPerfValue(sample.updateMs),sceneMs:roundPerfValue(sample.sceneMs),overlayMs:roundPerfValue(sample.overlayMs),...detail,});};if(bucket.samples>=90){flushFramePerfSummary("periodic");}},[flushFramePerfSummary],);useEffect(()=>{return()=>{parseWorker.terminate();textureWorkers.forEach((worker)=>worker.terminate?.());};},[parseWorker,textureWorkers]);const formatCameraValue=(value:number):string=>{if(!Number.isFinite(value))return"0";const formatted=value.toFixed(2);return formatted.replace(/.?0+$/,"");};const getCameraVector=(prop:any,directProp?:any):number[]=>{const isArrayLike=(v:any)=>Array.isArray(v)||v instanceof Float32Array||ArrayBuffer.isView(v);const toArray=(v:any)=>(v instanceof Float32Array?Array.from(v):v);if(directProp&&isArrayLike(directProp))return toArray(directProp);if(isArrayLike(prop))return toArray(prop);if(prop&&prop.Keys&&prop.Keys.length>0){const v=prop.Keys[0].Vector;return v?toArray(v):[0,0,0];};return[0,0,0];};const getAvailableCameras=():any[]=>{const{modelData,nodes}=useModelStore.getState();const modelCameras=Array.isArray((modelData as any)?.Cameras)?(modelData as any).Cameras.filter((cam:any)=>cam):[];if(modelCameras.length>0)return modelCameras;return Array.isArray(nodes)?nodes.filter((n:any)=>n&&n.type==="Camera"):[];};const getSelectedCamera=(cameraIndex=selectedCameraIndex):any|null=>{const cameraList=getAvailableCameras();if(cameraIndex<0||cameraIndex>=cameraList.length)return null;return cameraList[cameraIndex]??null;};const clearActiveModelCameraView=()=>{inCameraView.current=false;setActiveModelCameraView(null);};const roundVertexCoord=(value:number):number=>Math.round(value*10000)/10000;const getVertexPositionKey=(vertices:ArrayLike<number>,vertexIndex:number):string=>{const base=vertexIndex*3;return`${roundVertexCoord(Number(vertices[base]??0))},${roundVertexCoord(Number(vertices[base+1]??0))},${roundVertexCoord(Number(vertices[base+2]??0))}`;
+import { isGeosetVisible } from "../../utils/geosetVisibility";
+import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadSchedulerState}from"./ViewerTextureUtils";import{GlobalTransformCommand}from"../../commands/GlobalTransformCommand";import{copyVertices,copyFaces,VertexCopyBuffer}from"../../utils/vertexOperations";import{UpdateKeyframeCommand,KeyframeChange}from"../../commands/UpdateKeyframeCommand";import{MissingTextureWarning}from"../MissingTextureWarning";import{GeosetSeparateDialog}from"../modals/GeosetSeparateDialog";import{LayerConfig,layerConfigToMaterialLayer}from"../modals/MaterialLayerOptions";import{NodeType}from"../../types/node";import{openNodeEditor}from"../../utils/nodeEditorOpen";import{nodeTypeToEditorKind}from"../../types/nodeEditorRpc";import{getEffectiveBindings,registerShortcutHandler}from"../../shortcuts/manager";import{markStandalonePerf}from"../../utils/standalonePerf";import{invokeReadMpqFile}from"../../utils/mpqPerf";import{markNodeManagerListScrollFromTree,markNodeManagerListScrollFromViewer}from"../../utils/nodeManagerListScrollBridge";import{collectSelectedGeosetIndices}from"../editors/uvSelectionSync";import{createSelectionRect,pointInRect,segmentIntersectsRect,triangleIntersectsRect}from"../editors/uvSelectionUtils";let globalRenderLoopId=0;const Viewer=forwardRef((props:ViewerProps,ref:React.Ref<ViewerRef>)=>{const{modelPath,animationIndex,teamColor,showGrid,showNodes,showSkeleton,showCollisionShapes,showCameras,showLights,showAttachments,showWireframe,showWireframeOverlay=false,isPlaying,onTogglePlay,onToggleLooping,onToggleWireframe,onModelLoaded,onModelFirstFrameReady,backgroundColor,showFPS,playbackSpeed,viewPreset,modelData,onSetViewPreset,onAddCameraFromView}=props;const[parseWorker]=useState(()=>new ModelWorker());const[textureWorkers]=useState<WorkerLike[]>(()=>{const count=getTextureDecodeWorkerCount();return Array.from({length:count},()=>new ModelWorker()as unknown as WorkerLike);});const[loading,setLoading]=useState(false);const[loadingStatus,setLoadingStatus]=useState("");const canvasRef=useRef<HTMLCanvasElement>(null);const[renderer,setRenderer]=useState<ModelRenderer|null>(null);const[fps,setFps]=useState<number>(0);const gridRenderer=useRef(new GridRenderer());const debugRenderer=useRef(new DebugRenderer());const gizmoRenderer=useRef(new GizmoRenderer());const axisIndicator=useRef(new AxisIndicator());const rendererRef=useRef<ModelRenderer|null>(null);const cameraRef=useRef<SimpleOrbitCamera|null>(null);const appMainMode=useSelectionStore((state)=>state.mainMode);const animationSubMode=useSelectionStore((state)=>state.animationSubMode);const rendererReloadTrigger=useModelStore((state)=>state.rendererReloadTrigger);const cachedRenderer=useModelStore((state)=>state.cachedRenderer);const mpqLoaded=useRendererStore((state)=>state.mpqLoaded);const nodeRenderMode=useRendererStore((state)=>state.nodeRenderMode);const showHealthBar=useRendererStore((state)=>state.showHealthBar);const missingTextures=useRendererStore((state)=>state.missingTextures);const glRef=useRef<WebGL2RenderingContext|WebGLRenderingContext|null>(null);const needsRendererUpdateRef=useRef(false);const textureReloadSchedulerRef=useRef<TextureReloadSchedulerState>({timer:null,running:false,queued:null,version:0,});const animationFrameId=useRef<number|null>(null);const shouldRunRenderLoop=useRef<boolean>(true);const lastRenderErrorReportTimeRef=useRef<number>(0);const framePerfRef=useRef<ViewerFramePerfAggregate>(createViewerFramePerfAggregate());const lastFpsTime=useRef<number>(performance.now());const lastFrameTime=useRef<number>(performance.now());const frameCount=useRef<number>(0);const renderRef=useRef<((time:number,scheduleNext?:boolean)=>void)|null>(null);const pMatrixRef=useRef(mat4.create());const mvMatrixRef=useRef(mat4.create());const cameraPosRef=useRef(vec3.create());const cameraUpRef=useRef(vec3.fromValues(0,0,1));const cameraQuatRef=useRef(quat.create());const{showModelInfo}=useUIStore();const{isLooping,setLooping}=useModelStore();const[texturePreview,setTexturePreview]=useState<{url:string;width:number;height:number;path:string;}|null>(null);const backgroundTextureResolveRunningRef=useRef(false);const attemptedMissingTexturePathsRef=useRef<Set<string>>(new Set());const flushFramePerfSummary=useCallback((reason:string,force=false)=>{const bucket=framePerfRef.current;if(bucket.samples===0)return;if(!force&&bucket.samples<90)return;markStandalonePerf("viewer_frame_profile",{reason,samples:bucket.samples,avgTotalMs:roundPerfValue(bucket.totalMs/bucket.samples),maxTotalMs:roundPerfValue(bucket.maxTotalMs),slowFrameCount:bucket.slowFrameCount,avgClearMs:roundPerfValue(bucket.clearMs/bucket.samples),avgCameraMs:roundPerfValue(bucket.cameraMs/bucket.samples),avgStateMs:roundPerfValue(bucket.stateMs/bucket.samples),avgUpdateMs:roundPerfValue(bucket.updateMs/bucket.samples),avgSceneMs:roundPerfValue(bucket.sceneMs/bucket.samples),avgOverlayMs:roundPerfValue(bucket.overlayMs/bucket.samples),isPlaying:isPlayingRef.current,modelPath:modelPath||"",});framePerfRef.current=createViewerFramePerfAggregate();},[modelPath],);const recordFramePerfSample=useCallback((sample:ViewerFramePerfSample,detail?:Record<string,unknown>)=>{const bucket=framePerfRef.current;bucket.samples+=1;bucket.totalMs+=sample.totalMs;bucket.maxTotalMs=Math.max(bucket.maxTotalMs,sample.totalMs);bucket.clearMs+=sample.clearMs;bucket.cameraMs+=sample.cameraMs;bucket.stateMs+=sample.stateMs;bucket.updateMs+=sample.updateMs;bucket.sceneMs+=sample.sceneMs;bucket.overlayMs+=sample.overlayMs;if(sample.totalMs>=16.7){bucket.slowFrameCount+=1;};const now=performance.now();if(sample.totalMs>=33&&now-bucket.lastSlowEmitMs>=1000){bucket.lastSlowEmitMs=now;markStandalonePerf("viewer_slow_frame",{totalMs:roundPerfValue(sample.totalMs),clearMs:roundPerfValue(sample.clearMs),cameraMs:roundPerfValue(sample.cameraMs),stateMs:roundPerfValue(sample.stateMs),updateMs:roundPerfValue(sample.updateMs),sceneMs:roundPerfValue(sample.sceneMs),overlayMs:roundPerfValue(sample.overlayMs),...detail,});};if(bucket.samples>=90){flushFramePerfSummary("periodic");}},[flushFramePerfSummary],);useEffect(()=>{return()=>{parseWorker.terminate();textureWorkers.forEach((worker)=>worker.terminate?.());};},[parseWorker,textureWorkers]);const formatCameraValue=(value:number):string=>{if(!Number.isFinite(value))return"0";const formatted=value.toFixed(2);return formatted.replace(/.?0+$/,"");};const getCameraVector=(prop:any,directProp?:any):number[]=>{const isArrayLike=(v:any)=>Array.isArray(v)||v instanceof Float32Array||ArrayBuffer.isView(v);const toArray=(v:any)=>(v instanceof Float32Array?Array.from(v):v);if(directProp&&isArrayLike(directProp))return toArray(directProp);if(isArrayLike(prop))return toArray(prop);if(prop&&prop.Keys&&prop.Keys.length>0){const v=prop.Keys[0].Vector;return v?toArray(v):[0,0,0];};return[0,0,0];};const getAvailableCameras=():any[]=>{const{modelData,nodes}=useModelStore.getState();const modelCameras=Array.isArray((modelData as any)?.Cameras)?(modelData as any).Cameras.filter((cam:any)=>cam):[];if(modelCameras.length>0)return modelCameras;return Array.isArray(nodes)?nodes.filter((n:any)=>n&&n.type==="Camera"):[];};const getSelectedCamera=(cameraIndex=selectedCameraIndex):any|null=>{const cameraList=getAvailableCameras();if(cameraIndex<0||cameraIndex>=cameraList.length)return null;return cameraList[cameraIndex]??null;};const clearActiveModelCameraView=()=>{inCameraView.current=false;setActiveModelCameraView(null);};const roundVertexCoord=(value:number):number=>Math.round(value*10000)/10000;const getVertexPositionKey=(vertices:ArrayLike<number>,vertexIndex:number):string=>{const base=vertexIndex*3;return`${roundVertexCoord(Number(vertices[base]??0))},${roundVertexCoord(Number(vertices[base+1]??0))},${roundVertexCoord(Number(vertices[base+2]??0))}`;
   };
+
+  const modeDisplayName = useSelectionStore((state) => {
+    if (state.mainMode === "view") return "查看模式";
+    if (state.mainMode === "animation") {
+      return state.animationSubMode === "keyframe" ? "关键帧模式" : "绑定模式";
+    }
+    if (state.mainMode === "uv") {
+      const uvModeNames: Record<typeof state.uvSelectionMode, string> = {
+        vertex: "UV 顶点模式",
+        edge: "UV 边模式",
+        face: "UV 面模式",
+        group: "UV 成组模式",
+        block: "UV 块模式",
+      };
+      return uvModeNames[state.uvSelectionMode];
+    }
+    const geometryModeNames: Record<typeof state.geometrySubMode, string> = {
+      vertex: "顶点模式",
+      face: "面模式",
+      group: "成组模式",
+    };
+    return geometryModeNames[state.geometrySubMode];
+  });
 
   const getExpandedFaceVertexSelection = (selectedFaceIds: Array<{ geosetIndex: number; index: number }>): Array<{ geosetIndex: number; index: number }> => {
     const result: Array<{ geosetIndex: number; index: number }> = [];
@@ -81,6 +106,11 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
     }
 
     return [];
+  };
+
+  const isCurrentGeosetVisible = (geosetIndex: number): boolean => {
+    const { hiddenGeosetIds, forceShowAllGeosets } = useModelStore.getState();
+    return isGeosetVisible(geosetIndex, hiddenGeosetIds, forceShowAllGeosets);
   };
 
   const setHealthBarSelection = useCallback((selected: boolean) => {
@@ -355,6 +385,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
   const showRibbonsRef = useRef(useRendererStore.getState().showRibbons ?? true);
   const showHealthBarRef = useRef(showHealthBar);
   const showWireframeRef = useRef(showWireframe);
+  const showWireframeOverlayRef = useRef(showWireframeOverlay);
   const isPlayingRef = useRef(isPlaying);
   const isLoopingRef = useRef(isLooping);
   const playbackSpeedRef = useRef(playbackSpeed);
@@ -405,6 +436,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
     showAttachmentsRef.current = !!showAttachments;
     showHealthBarRef.current = showHealthBar;
     showWireframeRef.current = showWireframe;
+    showWireframeOverlayRef.current = showWireframeOverlay;
     isPlayingRef.current = isPlaying;
     isLoopingRef.current = isLooping;
     playbackSpeedRef.current = playbackSpeed;
@@ -425,6 +457,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
     showAttachments,
     showHealthBar,
     showWireframe,
+    showWireframeOverlay,
     isPlaying,
     isLooping,
     playbackSpeed,
@@ -715,6 +748,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
 
   useEffect(() => {
     rendererRef.current = renderer;
+    useRendererStore.getState().setRenderer(renderer);
 
     // Fit to View when renderer changes (new model loaded)
     const keepCamera = useRendererStore.getState().keepCameraOnLoad;
@@ -2439,7 +2473,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
       };
 
       for (let geosetIndex = 0; geosetIndex < rendererRef.current.model.Geosets.length; geosetIndex++) {
-        if (!forceShowAllGeosets && hiddenGeosetIds.includes(geosetIndex)) {
+        if (!isGeosetVisible(geosetIndex, hiddenGeosetIds, forceShowAllGeosets)) {
           continue;
         }
 
@@ -2630,6 +2664,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
     } else if ((mainMode === "geometry" && (geometrySubMode === "vertex" || geometrySubMode === "group")) || (mainMode === "animation" && animationSubMode === "binding")) {
       // Vertex selection for geometry mode OR binding mode (which also selects vertices)
       const newSelection: { geosetIndex: number; index: number }[] = [];
+      const newFaceSelection: { geosetIndex: number; index: number }[] = [];
       // affectedGeosetIndices for future use: const affectedGeosetIndices = new Set<number>()
 
       if (!rendererRef.current) return;
@@ -2639,18 +2674,37 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
 
       for (let i = 0; i < rendererRef.current.model.Geosets.length; i++) {
         // Skip hidden geosets
-        if (!forceShowAllGeosets && hiddenGeosetIds.includes(i)) continue;
+        if (!isGeosetVisible(i, hiddenGeosetIds, forceShowAllGeosets)) continue;
 
         const geoset = rendererRef.current.model.Geosets[i];
         const vertices = geoset.Vertices;
+        const faces = geoset.Faces;
+        const projectVertex = (vertexIndex: number) => {
+          const vertexOffset = vertexIndex * 3;
+          return project(vec3.fromValues(vertices[vertexOffset], vertices[vertexOffset + 1], vertices[vertexOffset + 2]));
+        };
 
         for (let j = 0; j < vertices.length; j += 3) {
-          const v = vec3.fromValues(vertices[j], vertices[j + 1], vertices[j + 2]);
-          const screenPos = project(v);
+          const screenPos = projectVertex(j / 3);
 
           if (screenPos) {
             if (screenPos[0] >= boxLeft && screenPos[0] <= boxRight && screenPos[1] >= boxTop && screenPos[1] <= boxBottom) {
               newSelection.push({ geosetIndex: i, index: j / 3 });
+            }
+          }
+        }
+
+        if (geometrySubMode === "group" && faces) {
+          for (let j = 0; j < faces.length; j += 3) {
+            const s0 = projectVertex(Number(faces[j]));
+            const s1 = projectVertex(Number(faces[j + 1]));
+            const s2 = projectVertex(Number(faces[j + 2]));
+            if (!s0 || !s1 || !s2) {
+              continue;
+            }
+
+            if (triangleIntersectsRect(toCanvasPoint(s0), toCanvasPoint(s1), toCanvasPoint(s2), selectionRect)) {
+              newFaceSelection.push({ geosetIndex: i, index: j / 3 });
             }
           }
         }
@@ -2661,19 +2715,30 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
         const groupedFaces: { geosetIndex: number; index: number }[] = [];
         const vertexKeys = new Set<string>();
         const faceKeys = new Set<string>();
-        const seedsByGeoset = new Map<number, number[]>();
+        const vertexSeedsByGeoset = new Map<number, number[]>();
+        const faceSeedsByGeoset = new Map<number, number[]>();
 
         newSelection.forEach((sel) => {
-          const seeds = seedsByGeoset.get(sel.geosetIndex);
+          const seeds = vertexSeedsByGeoset.get(sel.geosetIndex);
           if (seeds) {
             seeds.push(sel.index);
           } else {
-            seedsByGeoset.set(sel.geosetIndex, [sel.index]);
+            vertexSeedsByGeoset.set(sel.geosetIndex, [sel.index]);
           }
         });
 
-        seedsByGeoset.forEach((seedVertexIndices, geosetIndex) => {
-          const groupSelection = getConnectedGeometryGroup(geosetIndex, [], seedVertexIndices);
+        newFaceSelection.forEach((sel) => {
+          const seeds = faceSeedsByGeoset.get(sel.geosetIndex);
+          if (seeds) {
+            seeds.push(sel.index);
+          } else {
+            faceSeedsByGeoset.set(sel.geosetIndex, [sel.index]);
+          }
+        });
+
+        const seedGeosetIndices = new Set<number>([...vertexSeedsByGeoset.keys(), ...faceSeedsByGeoset.keys()]);
+        seedGeosetIndices.forEach((geosetIndex) => {
+          const groupSelection = getConnectedGeometryGroup(geosetIndex, faceSeedsByGeoset.get(geosetIndex) ?? [], vertexSeedsByGeoset.get(geosetIndex) ?? []);
           groupSelection.vertices.forEach((vertexSel) => {
             const key = `${vertexSel.geosetIndex}-${vertexSel.index}`;
             if (!vertexKeys.has(key)) {
@@ -2719,11 +2784,12 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
 
       for (let i = 0; i < rendererRef.current.model.Geosets.length; i++) {
         // Skip hidden geosets
-        if (!forceShowAllGeosets && hiddenGeosetIds.includes(i)) continue;
+        if (!isGeosetVisible(i, hiddenGeosetIds, forceShowAllGeosets)) continue;
 
         const geoset = rendererRef.current.model.Geosets[i];
         const faces = geoset.Faces;
         const vertices = geoset.Vertices;
+        if (!faces || !vertices) continue;
 
         for (let j = 0; j < faces.length; j += 3) {
           const idx0 = faces[j] * 3;
@@ -2738,15 +2804,8 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
           const s1 = project(v1);
           const s2 = project(v2);
 
-          if (s0 && s1 && s2) {
-            // Check if any vertex is inside (Partial selection - select face if any part is in box)
-            const in0 = s0[0] >= boxLeft && s0[0] <= boxRight && s0[1] >= boxTop && s0[1] <= boxBottom;
-            const in1 = s1[0] >= boxLeft && s1[0] <= boxRight && s1[1] >= boxTop && s1[1] <= boxBottom;
-            const in2 = s2[0] >= boxLeft && s2[0] <= boxRight && s2[1] >= boxTop && s2[1] <= boxBottom;
-
-            if (in0 || in1 || in2) {
-              newSelection.push({ geosetIndex: i, index: j / 3 });
-            }
+          if (s0 && s1 && s2 && triangleIntersectsRect(toCanvasPoint(s0), toCanvasPoint(s1), toCanvasPoint(s2), selectionRect)) {
+            newSelection.push({ geosetIndex: i, index: j / 3 });
           }
         }
       }
@@ -4561,8 +4620,6 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
             // === Geoset Visibility Control ===
             // Get visibility state from store
             const { hiddenGeosetIds, forceShowAllGeosets, hoveredGeosetId } = useModelStore.getState();
-            const shouldForceResetGeosetsVisible = isBindPoseMode;
-            const effectiveForceShowAllGeosets = forceShowAllGeosets || shouldForceResetGeosetsVisible;
 
             // Store original geoset alphas to restore later
             const originalGeosetAlphas: Map<number, number> = new Map();
@@ -4571,18 +4628,13 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
             if (mdlRenderer.rendererData.geosetAlpha) {
               for (let i = 0; i < numGeosets; i++) {
                 originalGeosetAlphas.set(i, mdlRenderer.rendererData.geosetAlpha[i] ?? 1);
-                if (shouldForceResetGeosetsVisible) {
-                  mdlRenderer.rendererData.geosetAlpha[i] = 1;
-                }
               }
             }
 
-            // Apply visibility: hide geosets that are in hiddenGeosetIds (when forceShowAllGeosets is OFF)
-            // When forceShowAllGeosets is ON, all geosets are visible regardless of hiddenGeosetIds
-            if (!effectiveForceShowAllGeosets && mdlRenderer.rendererData.geosetAlpha) {
+            // Apply visibility consistently in every viewer mode.
+            if (mdlRenderer.rendererData.geosetAlpha) {
               for (let i = 0; i < numGeosets; i++) {
-                // If geoset is in hiddenGeosetIds, it's unchecked = hidden
-                if (hiddenGeosetIds.includes(i)) {
+                if (!isCurrentGeosetVisible(i)) {
                   mdlRenderer.rendererData.geosetAlpha[i] = 0;
                 }
               }
@@ -4627,6 +4679,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
               wireframe: showWireframeRef.current,
               enableLighting: enableLightingRef.current,
             } as any;
+            const shouldRenderWireframeOverlay = showWireframeOverlayRef.current && !showWireframeRef.current;
 
             // WebGL render
             // Runtime toggles for particles/ribbons share the same state as ViewSettings.
@@ -4658,6 +4711,21 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
 
             try {
               mdlRenderer.render(mvMatrix, pMatrix, renderOpts);
+              if (shouldRenderWireframeOverlay) {
+                if (particlesController) {
+                  particlesController.render = noopRender;
+                  particlesController.renderGPU = noopRender;
+                }
+                if (ribbonsController) {
+                  ribbonsController.render = noopRender;
+                  ribbonsController.renderGPU = noopRender;
+                }
+                mdlRenderer.render(mvMatrix, pMatrix, {
+                  ...renderOpts,
+                  wireframe: true,
+                  enableLighting: false,
+                });
+              }
             } finally {
               if (particlesController) {
                 particlesController.render = originalParticleRender;
@@ -5292,7 +5360,6 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
             const vertexColorRgb = hexToRgb(vertexColor);
             const selectionColorRgb = hexToRgb(selectionColor);
             const hoverColorRgb = hexToRgb(hoverColor);
-            const hiddenGeosetIdSet = forceShowAllGeosets ? null : new Set(hiddenGeosetIds);
             const shouldRenderSelectedVertices = shouldRenderUvSelection && selectedVertexIds.length > 0 && (showVerticesRef.current || currentMainMode === "uv");
             const shouldRenderGroupEdges = (currentMainMode === "geometry" && geometrySubMode === "group") || (currentMainMode === "uv" && shouldRenderUvSelection && uvSelectionMode === "group");
             const shouldRenderUvEdges = currentMainMode === "uv" && shouldRenderUvSelection && uvSelectionMode === "edge";
@@ -5320,7 +5387,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
                 if (!geoset.Vertices) continue;
 
                 // Skip hidden geosets (based on hiddenGeosetIds from modelStore)
-                if (hiddenGeosetIdSet?.has(geosetIndex)) continue;
+                if (!isCurrentGeosetVisible(geosetIndex)) continue;
 
                 const canUseCachedVertexBuffer = geoset.Vertices instanceof Float32Array;
 
@@ -5349,6 +5416,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
               if (shouldRenderGroupEdges) {
                 const linePositions: number[] = [];
                 for (const sel of selectedFaceIds) {
+                  if (!isCurrentGeosetVisible(sel.geosetIndex)) continue;
                   const geoset = mdlRenderer.model.Geosets[sel.geosetIndex];
                   if (geoset && geoset.Faces && geoset.Vertices) {
                     const verts = geoset.Vertices;
@@ -5371,6 +5439,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
                   const linePositions: number[] = [];
 
                   for (let geosetIndex = 0; geosetIndex < mdlRenderer.model.Geosets.length; geosetIndex++) {
+                    if (!isCurrentGeosetVisible(geosetIndex)) continue;
                     const geoset = mdlRenderer.model.Geosets[geosetIndex];
                     if (!geoset?.Faces || !geoset?.Vertices) {
                       continue;
@@ -5413,6 +5482,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
                 }
 
                 for (const sel of selectedVertexIds) {
+                  if (!isCurrentGeosetVisible(sel.geosetIndex)) continue;
                   const geoset = mdlRenderer.model.Geosets[sel.geosetIndex];
                   if (geoset) {
                     const vIndex = sel.index * 3;
@@ -5432,6 +5502,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
               const selectionColorRgb = hexToRgb(selectionColor);
               const selectedPositions: number[] = [];
               for (const sel of selectedFaceIds) {
+                if (!isCurrentGeosetVisible(sel.geosetIndex)) continue;
                 const geoset = mdlRenderer.model.Geosets[sel.geosetIndex];
                 if (geoset) {
                   const fIndex = sel.index * 3;
@@ -5473,6 +5544,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
             } else if (currentMainMode === "geometry") {
               if ((geometrySubMode === "vertex" || geometrySubMode === "group") && selectedVertexIds.length > 0) {
                 for (const sel of selectedVertexIds) {
+                  if (!isCurrentGeosetVisible(sel.geosetIndex)) continue;
                   const geoset = mdlRenderer.model.Geosets[sel.geosetIndex];
                   if (geoset) {
                     const vIndex = sel.index * 3;
@@ -5482,9 +5554,10 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
                     count++;
                   }
                 }
-                showGizmo = true;
+                showGizmo = count > 0;
               } else if (geometrySubMode === "face" && selectedFaceIds.length > 0) {
                 for (const sel of selectedFaceIds) {
+                  if (!isCurrentGeosetVisible(sel.geosetIndex)) continue;
                   const geoset = mdlRenderer.model.Geosets[sel.geosetIndex];
                   if (geoset) {
                     const fIndex = sel.index * 3;
@@ -5497,7 +5570,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
                     count += 3;
                   }
                 }
-                showGizmo = true;
+                showGizmo = count > 0;
               }
             }
             // 动画模式（binding 和 keyframe）显示 Gizmo
@@ -7230,30 +7303,30 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
 
   const handleAutoSeparateLayers = () => {
     if (!rendererRef.current) {
-      message.warning("当前渲染器未就绪");
+      appMessage.warning("当前渲染器未就绪");
       return;
     }
     const { mainMode } = useSelectionStore.getState();
     if (mainMode !== "geometry") {
-      message.warning("请先切换到顶点模式");
+      appMessage.warning("请先切换到顶点模式");
       return;
     }
 
-    message.loading({ content: "正在执行一键分层...", key: "auto-separate-layers", duration: 0 });
+    appMessage.loading({ content: "正在执行一键分层...", key: "auto-separate-layers", duration: 0 });
     const cmd = new AutoSeparateLayersCommand(rendererRef.current);
     commandManager.execute(cmd);
 
     if (!cmd.lastResult) {
-      message.warning({ content: "一键分层未返回结果", key: "auto-separate-layers" });
+      appMessage.warning({ content: "一键分层未返回结果", key: "auto-separate-layers" });
       return;
     }
 
     if (cmd.lastResult.changedGeosetCount <= 0) {
-      message.info({ content: "当前模型不需要分层", key: "auto-separate-layers" });
+      appMessage.info({ content: "当前模型不需要分层", key: "auto-separate-layers" });
       return;
     }
 
-    message.success({
+    appMessage.success({
       content: `一键分层完成：${cmd.lastResult.sourceGeosetCount}->${cmd.lastResult.resultGeosetCount}，处理${cmd.lastResult.changedGeosetCount}个多边形组`,
       key: "auto-separate-layers",
     });
@@ -7685,13 +7758,34 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
   const vertexCopyBuffer = useRef<VertexCopyBuffer | null>(null);
   const vertexCopySelectionModeRef = useRef<"vertex" | "face">("vertex");
 
-  // Handle vertex delete
+  // Handle geometry delete
   const handleDeleteVertices = () => {
-    if (!rendererRef.current) return;
-    const { selectedVertexIds, geometrySubMode, mainMode } = useSelectionStore.getState();
-    if (mainMode !== "geometry" || geometrySubMode !== "vertex" || selectedVertexIds.length < 1) return;
-    const cmd = new DeleteVerticesCommand(rendererRef.current, selectedVertexIds);
-    commandManager.execute(cmd);
+    if (!rendererRef.current) return false;
+    const { selectedVertexIds, selectedFaceIds, geometrySubMode, mainMode } = useSelectionStore.getState();
+    if (mainMode !== "geometry") return false;
+
+    if (geometrySubMode === "vertex") {
+      if (selectedVertexIds.length < 1) return false;
+      const cmd = new DeleteVerticesCommand(rendererRef.current, selectedVertexIds);
+      commandManager.execute(cmd);
+      return true;
+    }
+
+    if (geometrySubMode === "face" || geometrySubMode === "group") {
+      if (selectedFaceIds.length > 0) {
+        const cmd = new DeleteFacesCommand(rendererRef.current, selectedFaceIds);
+        commandManager.execute(cmd);
+        return true;
+      }
+
+      if (geometrySubMode === "group" && selectedVertexIds.length > 0) {
+        const cmd = new DeleteVerticesCommand(rendererRef.current, selectedVertexIds);
+        commandManager.execute(cmd);
+        return true;
+      }
+    }
+
+    return false;
   };
 
   // Handle vertex copy
@@ -7880,9 +7974,13 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
   };
 
   useEffect(() => {
-    const isGeometryVertexMode = () => {
-      const { mainMode, geometrySubMode } = useSelectionStore.getState();
-      return mainMode === "geometry" && geometrySubMode === "vertex";
+    const hasGeometryDeleteSelection = () => {
+      const { mainMode, geometrySubMode, selectedVertexIds, selectedFaceIds } = useSelectionStore.getState();
+      if (mainMode !== "geometry") return false;
+      if (geometrySubMode === "vertex") return selectedVertexIds.length > 0;
+      if (geometrySubMode === "face") return selectedFaceIds.length > 0;
+      if (geometrySubMode === "group") return selectedFaceIds.length > 0 || selectedVertexIds.length > 0;
+      return false;
     };
 
     const isGeometryCopyPasteMode = () => {
@@ -7993,9 +8091,8 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
         return true;
       }),
       registerShortcutHandler("geometry.deleteVertices", () => {
-        if (!isGeometryVertexMode()) return false;
-        handleDeleteVertices();
-        return true;
+        if (!hasGeometryDeleteSelection()) return false;
+        return handleDeleteVertices();
       }),
     ];
 
@@ -8017,12 +8114,19 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
       if (!deleteBindings.includes("Delete")) {
         return false;
       }
-      const { mainMode, geometrySubMode, selectedVertexIds } = useSelectionStore.getState();
-      if (mainMode !== "geometry" || geometrySubMode !== "vertex" || selectedVertexIds.length < 1) {
+      const { mainMode, geometrySubMode, selectedVertexIds, selectedFaceIds } = useSelectionStore.getState();
+      const hasSelection =
+        geometrySubMode === "vertex"
+          ? selectedVertexIds.length > 0
+          : geometrySubMode === "face"
+            ? selectedFaceIds.length > 0
+            : geometrySubMode === "group"
+              ? selectedFaceIds.length > 0 || selectedVertexIds.length > 0
+              : false;
+      if (mainMode !== "geometry" || !hasSelection) {
         return false;
       }
-      handleDeleteVertices();
-      return true;
+      return handleDeleteVertices();
     });
   }, [handleDeleteVertices]);
 
@@ -8032,7 +8136,8 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
     <div style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden" }}>
       <canvas
         ref={canvasRef}
-        style={{ width: "100%", height: "100%", display: isTexturePreviewMode ? "none" : "block" }}
+        tabIndex={-1}
+        style={{ width: "100%", height: "100%", display: isTexturePreviewMode ? "none" : "block", outline: "none" }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
@@ -8210,11 +8315,27 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
             pointerEvents: "none",
             zIndex: 10,
             display: "flex",
-            flexDirection: "column",
-            alignItems: "flex-end",
+            alignItems: "center",
+            gap: "8px",
             boxShadow: "0 2px 8px rgba(0, 0, 0, 0.3)",
           }}
         >
+          <div
+            style={{
+              color: "rgba(255, 255, 255, 0.82)",
+              fontWeight: 600,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {modeDisplayName}
+          </div>
+          <div
+            style={{
+              width: "1px",
+              height: "12px",
+              background: "rgba(255, 255, 255, 0.22)",
+            }}
+          />
           <div style={{ fontWeight: "bold" }}>{fps} FPS</div>
         </div>
       )}

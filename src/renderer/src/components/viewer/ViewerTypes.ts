@@ -16,6 +16,7 @@ export interface ViewerProps {
   showLights: boolean;
   showAttachments?: boolean;
   showWireframe: boolean;
+  showWireframeOverlay?: boolean;
   isPlaying: boolean;
   onTogglePlay: () => void;
   onToggleLooping?: () => void;

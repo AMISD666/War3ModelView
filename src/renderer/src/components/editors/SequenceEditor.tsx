@@ -1,5 +1,6 @@
+import { appMessage, appModal } from '../../store/messageStore'
 ﻿import React, { useState, useEffect } from 'react'
-import { Table, Button, Input, Space, Modal, message, Tooltip, Checkbox } from 'antd'
+import { Table, Button, Input, Space, Modal, Tooltip, Checkbox } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { PlusOutlined, DeleteOutlined, SaveOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useModelStore } from '../../store/modelStore'
@@ -59,7 +60,7 @@ const SequenceEditor: React.FC<SequenceEditorProps> = () => {
     }
 
     const handleRemoveSequence = (index: number) => {
-        Modal.confirm({
+        appModal.confirm({
             title: '确认删除',
             content: '确定要删除这个序列吗？',
             onOk: () => {
@@ -73,7 +74,7 @@ const SequenceEditor: React.FC<SequenceEditorProps> = () => {
     const handleApply = () => {
         setStoreSequences(JSON.parse(JSON.stringify(sequences)))
         setHasChanges(false)
-        message.success('序列已更新')
+        appMessage.success('序列已更新')
     }
 
     // Handle row click to select and play animation

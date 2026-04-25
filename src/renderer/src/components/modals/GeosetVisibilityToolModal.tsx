@@ -1,5 +1,6 @@
+import { appMessage } from '../../store/messageStore'
 import React, { useEffect, useMemo, useState } from 'react'
-import { Checkbox, Dropdown, Input, message, Typography, type MenuProps } from 'antd'
+import { Checkbox, Dropdown, Input, Typography, type MenuProps } from 'antd'
 import { DraggableModal } from '../DraggableModal'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
@@ -342,7 +343,7 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
 
     const handleToggleAction = (sequence: SequenceItem) => {
         if (selectedGeosetIds.length === 0) {
-            message.warning('请先在左侧选择至少一个多边形组')
+            appMessage.warning('请先在左侧选择至少一个多边形组')
             return
         }
 
@@ -383,7 +384,7 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
         }
 
         if (changed === 0) {
-            message.info(shouldClear ? '未找到可清理的透明度关键帧' : '没有可写入的多边形组')
+            appMessage.info(shouldClear ? '未找到可清理的透明度关键帧' : '没有可写入的多边形组')
             return
         }
         applyImmediateChange(nextAnims, shouldClear ? 'Clear Geoset Visibility Keys' : 'Set Geoset Visibility Keys')
@@ -444,7 +445,7 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
 
     const openAlphaTextEditor = (sequence: SequenceItem) => {
         if (selectedGeosetIds.length === 0) {
-            message.warning('请先在左侧选择至少一个多边形组')
+            appMessage.warning('请先在左侧选择至少一个多边形组')
             return
         }
 
@@ -455,7 +456,7 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
         setEditingGeosetId(targetGeosetId)
 
         if (selectedGeosetIds.length > 1) {
-            message.info('已打开第一个选中多边形组的透明度动态文本编辑器')
+            appMessage.info('已打开第一个选中多边形组的透明度动态文本编辑器')
         }
 
         // We must delay the IPC call slightly so that ensureEditableAlphaTrack has time to update localAnims state

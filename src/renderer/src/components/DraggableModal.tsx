@@ -8,6 +8,7 @@ interface DraggableModalProps extends Omit<ModalProps, 'visible'> {
     resizable?: boolean;
     minWidth?: number;
     minHeight?: number;
+    zIndexBase?: number;
 }
 
 /**
@@ -28,6 +29,7 @@ export const DraggableModal: React.FC<DraggableModalProps> = ({
     okText = '确定',
     cancelText = '取消',
     wrapClassName,
+    zIndexBase = 1000,
     ...restProps
 }) => {
     const panelRef = useRef<HTMLDivElement>(null);
@@ -40,12 +42,19 @@ export const DraggableModal: React.FC<DraggableModalProps> = ({
     const [isResizing, setIsResizing] = useState(false);
     const dragStartPos = useRef({ x: 0, y: 0, panelX: 0, panelY: 0 });
     const resizeStartPos = useRef({ x: 0, y: 0, width: 0, height: 0 });
-    const [zIndex, setZIndex] = useState(1000);
+    const [zIndex, setZIndex] = useState(zIndexBase);
 
     // Increment global z-index counter to bring panel to front on click
     const bringToFront = useCallback(() => {
-        setZIndex((DraggableModal as any).zCounter = ((DraggableModal as any).zCounter || 1000) + 1);
-    }, []);
+        const modalWithCounters = DraggableModal as typeof DraggableModal & {
+            zCounters?: Record<number, number>
+        };
+        const counters = modalWithCounters.zCounters || {};
+        const nextZIndex = (counters[zIndexBase] || zIndexBase) + 1;
+        counters[zIndexBase] = nextZIndex;
+        modalWithCounters.zCounters = counters;
+        setZIndex(nextZIndex);
+    }, [zIndexBase]);
 
     /** 点击浮层内控件时不提升 z-index，避免 setState 整窗重渲染导致 ColorPicker 等弹层被卸载、滑块无法拖 */
     const shouldSkipBringToFrontOnTarget = useCallback((target: EventTarget | null) => {
@@ -149,8 +158,9 @@ export const DraggableModal: React.FC<DraggableModalProps> = ({
         const handleKeyDown = (e: KeyboardEvent) => {
             if (e.key === 'Escape' && open) {
                 // Only close if we are the top-most modal
-                // We assume zCounter holds the max zIndex
-                const currentMaxZ = (DraggableModal as any).zCounter || 1000;
+                const currentMaxZ = ((DraggableModal as typeof DraggableModal & {
+                    zCounters?: Record<number, number>
+                }).zCounters?.[zIndexBase]) || zIndexBase;
                 if (zIndex >= currentMaxZ) {
                     onCancel?.(e as any);
                     e.stopPropagation(); // prevent closing multiple if they somehow share zIndex or event bubbles
@@ -162,7 +172,7 @@ export const DraggableModal: React.FC<DraggableModalProps> = ({
             window.addEventListener('keydown', handleKeyDown);
         }
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [open, zIndex, onCancel]);
+    }, [open, zIndex, onCancel, zIndexBase]);
 
     const handleClose = useCallback((e: React.MouseEvent) => {
         onCancel?.(e as any);

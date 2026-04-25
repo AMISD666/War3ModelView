@@ -2,7 +2,7 @@
 import { Select, Button, Slider, Modal, Input, Tabs } from 'antd';
 import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker';
 import { DraggableModal } from './DraggableModal';
-import { useRendererStore } from '../store/rendererStore';
+import { getNextRenderMode, useRendererStore } from '../store/rendererStore';
 import { useSelectionStore } from '../store/selectionStore';
 import { showMessage, useMessageStore } from '../store/messageStore';
 import { DatabaseOutlined, CheckCircleFilled, CloseCircleFilled, FolderOpenOutlined, SunOutlined } from '@ant-design/icons';
@@ -590,8 +590,8 @@ export const ViewSettingsWindow: React.FC = () => {
                                         <ToggleButton checked={autoRecalculateExtent} onChange={() => setAutoRecalculateExtent(!autoRecalculateExtent)} fullWidth>自动计算范围</ToggleButton>
                                         <ToggleButton checked={autoRecalculateNormals} onChange={() => setAutoRecalculateNormals(!autoRecalculateNormals)} fullWidth>自动重算法线</ToggleButton>
                                         <ToggleButton checked={keepCameraOnLoad} onChange={() => setKeepCameraOnLoad(!keepCameraOnLoad)} fullWidth>保持相机位置</ToggleButton>
-                                        <ToggleButton checked={renderMode === 'wireframe'} onChange={() => setRenderMode(renderMode === 'textured' ? 'wireframe' : 'textured')} fullWidth>
-                                            {renderMode === 'wireframe' ? '线框' : '纹理'}
+                                        <ToggleButton checked={renderMode !== 'textured'} onChange={() => setRenderMode(getNextRenderMode(renderMode))} fullWidth>
+                                            {renderMode === 'wireframe' ? '线框' : renderMode === 'texturedWireframe' ? '纹理+线框' : '纹理'}
                                         </ToggleButton>
                                         <ToggleButton checked={enableLighting} onChange={setEnableLighting} fullWidth>
                                             环境光照: {enableLighting ? '开' : '关'}

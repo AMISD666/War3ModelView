@@ -1,5 +1,6 @@
+import { appMessage, appModal } from '../../store/messageStore'
 import React, { useEffect, useState } from 'react'
-import { Button, Checkbox, Form, Input, Modal, message } from 'antd'
+import { Button, Checkbox, Form, Input, Modal } from 'antd'
 import { PlusOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { DraggableModal } from '../DraggableModal'
@@ -92,7 +93,7 @@ const SequenceManager: React.FC = () => {
 
     const handleDelete = (index: number, e: React.MouseEvent) => {
         e.stopPropagation()
-        Modal.confirm({
+        appModal.confirm({
             title: '删除确认',
             content: `确定要删除序列 "${sequences[index].Name}" 吗？${pruneKeyframes ? '（将同时删除该范围内的关键帧）' : ''}`,
             okText: '删除',
@@ -107,7 +108,7 @@ const SequenceManager: React.FC = () => {
                     redo: () => removeSequence(index, pruneKeyframes)
                 })
                 removeSequence(index, pruneKeyframes)
-                message.success(pruneKeyframes ? '序列及相关关键帧已删除' : '序列已删除')
+                appMessage.success(pruneKeyframes ? '序列及相关关键帧已删除' : '序列已删除')
             }
         })
     }
@@ -133,7 +134,7 @@ const SequenceManager: React.FC = () => {
                     undo: () => setSequences(oldSequences),
                     redo: () => setSequences(newSequences)
                 })
-                message.success('序列已更新')
+                appMessage.success('序列已更新')
             } else {
                 newSequences.push(nextSequence)
                 push({
@@ -141,7 +142,7 @@ const SequenceManager: React.FC = () => {
                     undo: () => setSequences(oldSequences),
                     redo: () => setSequences(newSequences)
                 })
-                message.success('序列已添加')
+                appMessage.success('序列已添加')
             }
 
             setSequences(newSequences)

@@ -1,4 +1,5 @@
 import { desktopGateway } from '../infrastructure/desktop';
+import { showMessage } from '../store/messageStore';
 
 /**
  * Feature Gate Utility
@@ -97,9 +98,9 @@ export async function requireProFeature(featureName: string): Promise<boolean> {
 
     const status = await getActivationStatus();
     if (status.level === 0) {
-        alert(`"${featureName}" 需要激活软件才能使用。\n\n请在 启动弹窗 或 帮助 → 关于 中输入激活码，或完成QQ群成员验证。`);
+        showMessage('warning', '功能受限', `"${featureName}" 需要激活软件才能使用。\n\n请在 启动弹窗 或 帮助 → 关于 中输入激活码，或完成QQ群成员验证。`);
     } else {
-        alert(`"${featureName}" 是高级版功能。\n\n当前版本: ${status.level_name}\n请升级到高级版以使用此功能。`);
+        showMessage('warning', '功能受限', `"${featureName}" 是高级版功能。\n\n当前版本: ${status.level_name}\n请升级到高级版以使用此功能。`);
     }
     return false;
 }
@@ -114,7 +115,7 @@ export async function requireBasicFeature(featureName: string): Promise<boolean>
         return true;
     }
 
-    alert(`"${featureName}" 需要激活软件才能使用。\n\n请在 启动弹窗 或 帮助 → 关于 中输入激活码，或完成QQ群成员验证。`);
+    showMessage('warning', '功能受限', `"${featureName}" 需要激活软件才能使用。\n\n请在 启动弹窗 或 帮助 → 关于 中输入激活码，或完成QQ群成员验证。`);
     return false;
 }
 

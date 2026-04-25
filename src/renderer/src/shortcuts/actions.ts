@@ -246,7 +246,7 @@ export const shortcutActions: ShortcutAction[] = [
     },
     {
         id: 'view.toggleWireframe',
-        label: '切换线框/纹理',
+        label: '切换纹理/线框/叠加',
         category: '视图',
         contexts: ['viewer'],
         defaultBindings: ['F'],

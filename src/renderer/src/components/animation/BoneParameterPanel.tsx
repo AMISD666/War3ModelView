@@ -1,5 +1,6 @@
+import { appMessage } from '../../store/messageStore'
 import React, { useMemo, useCallback, useRef, useEffect, useState } from 'react'
-import { Typography, Select, message, Button, ColorPicker, Input, Tooltip } from 'antd'
+import { Typography, Select, Button, ColorPicker, Input, Tooltip } from 'antd'
 import { quat, vec3 } from 'gl-matrix'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useModelStore } from '../../store/modelStore'
@@ -9,7 +10,6 @@ import { SetNodeParentCommand } from '../../commands/SetNodeParentCommand'
 import { useCommandManager } from '../../utils/CommandManager'
 import { GlobalSequenceSelect } from '../common/GlobalSequenceSelect'
 import { markNodeManagerListScrollFromTree } from '../../utils/nodeManagerListScrollBridge'
-
 
 const { Text } = Typography
 
@@ -159,7 +159,6 @@ const interpolateScaling = (keys: any[], frame: number): number[] => {
 const isAnimTrack = (value: any): value is { Keys: any[]; LineType?: number; GlobalSeqId?: number | null } => {
     return !!value && typeof value === 'object' && Array.isArray(value.Keys)
 }
-
 
 const deepClone = <T,>(value: T): T => {
     const cloneFn = (globalThis as any).structuredClone
@@ -373,7 +372,7 @@ const BoneParameterPanel: React.FC = () => {
             const rNode = renderer.model.Nodes.find((n: any) => n && n.ObjectId === nodeId) as any
             if (rNode) rNode[propName] = { ...existingProp, Keys: keys }
         }
-        message.success(`已更新 ${propName} 关键帧（帧 ${frame}）`)
+        appMessage.success(`已更新 ${propName} 关键帧（帧 ${frame}）`)
     }, [selectedNode, currentFrame, renderer])
 
     const updateTrackGlobalSeqId = useCallback((propName: 'Translation' | 'Rotation' | 'Scaling', globalSeqId: number | null) => {
@@ -434,8 +433,6 @@ const BoneParameterPanel: React.FC = () => {
         commitProp('Scaling', val)
     }
 
-
-
     // 可用的父节点列表
     const availableParents = useMemo(() => {
         if (!safeNodes) return []
@@ -447,9 +444,8 @@ const BoneParameterPanel: React.FC = () => {
     const handleParentChange = (value: number | undefined) => {
         if (!renderer || !selectedNode) return
         executeCommand(new SetNodeParentCommand(renderer, selectedNode.ObjectId, value))
-        message.success('已修改父节点')
+        appMessage.success('已修改父节点')
     }
-
 
     // 紧凑 UI 布局参数
     const isKeyframeCompact = viewportHeight < 900
@@ -813,7 +809,6 @@ const BoneParameterPanel: React.FC = () => {
                     </div>
                 </div>
 
-
                 {/* 绑定骨骼列表 - 仅在绑定模式显示 */}
                 {animationSubMode === 'binding' && (
                     <div style={{ flex: 1, overflow: 'auto', padding: '10px' }}>
@@ -841,7 +836,6 @@ const BoneParameterPanel: React.FC = () => {
                     </div>
                 )}
             </div>
-
 
         </>
     )

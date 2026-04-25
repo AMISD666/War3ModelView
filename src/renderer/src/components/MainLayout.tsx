@@ -24,9 +24,8 @@ import { useModelStore, mergeMaterialManagerPreview, mergeNodeEditorPreview, ext
 import { NodeType } from '../types/node'
 import { useUIStore } from '../store/uiStore'
 import { useSelectionStore } from '../store/selectionStore'
-import { useRendererStore } from '../store/rendererStore'
-import { GlobalMessageLayer } from './GlobalMessageLayer'
-import { showMessage, showConfirm } from '../store/messageStore'
+import { getNextRenderMode, useRendererStore } from '../store/rendererStore'
+import { showMessage, showConfirm, showDiscardConfirm, showSaveDiscardCancel } from '../store/messageStore'
 import { registerShortcutHandler } from '../shortcuts/manager'
 import { Button } from 'antd';
 import AppErrorBoundary from './common/AppErrorBoundary'
@@ -76,6 +75,7 @@ import { useGlobalColorAdjustStore } from '../store/globalColorAdjustStore'
 import { applyGlobalColorAdjustmentsToModel } from '../services/globalColorAdjustModelService'
 import { hasActiveGlobalColorAdjustSettings } from '../utils/globalColorAdjustCore'
 import { commitSavedModelToStore } from '../services/commitSavedModelService'
+import { cloneStructured } from '../utils/materialTextureRelations'
 import { getBasename, getDirname, joinPath, normalizeWindowsPath } from '../utils/windowsPath'
 import { AboutDialog } from './shell/AboutDialog'
 
@@ -244,21 +244,48 @@ const MainLayout: React.FC = () => {
         [globalColorAdjustSettings]
     )
     const [viewerModelData, setViewerModelData] = useState<any>(null)
+    const globalColorAdjustBaseRef = useRef<{
+        source: any
+        modelPath: string | null
+        modelData: any
+    } | null>(null)
     useEffect(() => {
         if (!hasActiveGlobalColorAdjust) {
+            globalColorAdjustBaseRef.current = null
             setViewerModelData((previous: any) => previous === mergedViewerModelData ? previous : mergedViewerModelData)
+            return
+        }
+
+        if (!mergedViewerModelData) {
+            globalColorAdjustBaseRef.current = null
+            setViewerModelData(null)
+            return
+        }
+
+        const baseModelPath = modelPath || null
+        const currentBase = globalColorAdjustBaseRef.current
+        if (!currentBase || currentBase.source !== mergedViewerModelData || currentBase.modelPath !== baseModelPath) {
+            globalColorAdjustBaseRef.current = {
+                source: mergedViewerModelData,
+                modelPath: baseModelPath,
+                modelData: cloneStructured(mergedViewerModelData),
+            }
+        }
+        const baseModelData = globalColorAdjustBaseRef.current?.modelData
+        if (!baseModelData) {
+            setViewerModelData(null)
             return
         }
 
         let cancelled = false
         let idleId: number | null = null
         let timerId: number | null = null
-        setViewerModelData((previous: any) => previous === mergedViewerModelData ? previous : mergedViewerModelData)
+        setViewerModelData((previous: any) => previous === baseModelData ? previous : baseModelData)
 
         const applyAdjustments = () => {
             if (cancelled) return
             const start = performance.now()
-            const adjusted = applyGlobalColorAdjustmentsToModel(mergedViewerModelData, globalColorAdjustSettings)
+            const adjusted = applyGlobalColorAdjustmentsToModel(baseModelData, globalColorAdjustSettings)
             markStandalonePerf('viewer_global_color_adjust_applied', {
                 modelPath: modelPath || '',
                 elapsedMs: Number((performance.now() - start).toFixed(2)),
@@ -690,6 +717,8 @@ const MainLayout: React.FC = () => {
     const hasCheckedCli = useRef(false);
     const processedHotOpenPaths = useRef<Set<string>>(new Set())
     const isSavingRef = useRef(false); // Track if a save operation is in progress
+    const isClosingAppRef = useRef(false);
+    const isClosePromptOpenRef = useRef(false);
     const isExternalModelDragRef = useRef(false);
     const bypassClosePromptRef = useRef(false);
     const lastGlobalColorModelPathRef = useRef<string | null | undefined>(undefined);
@@ -755,6 +784,67 @@ const MainLayout: React.FC = () => {
         useGlobalColorAdjustStore.getState().resetSettings();
     }, [modelPath])
 
+    const finishAppClose = async () => {
+        if (isClosingAppRef.current) return;
+        isClosingAppRef.current = true;
+        bypassClosePromptRef.current = true;
+
+        try {
+            await windowManager.destroyAllWindows().catch(console.error);
+            await windowGateway.destroyCurrentWindow();
+        } catch (error) {
+            console.error('[MainLayout] graceful exit failed:', error);
+            bypassClosePromptRef.current = false;
+            isClosingAppRef.current = false;
+            showMessage('error', '关闭失败', '详细信息: ' + error);
+        }
+    };
+
+    const saveCurrentModelBeforeClose = async (): Promise<boolean> => {
+        const { modelPath: currentModelPath } = useModelStore.getState();
+        return currentModelPath
+            ? handleSaveRef.current()
+            : handleSaveAsRef.current();
+    };
+
+    const requestAppClose = async () => {
+        if (isClosingAppRef.current || isClosePromptOpenRef.current) {
+            return;
+        }
+
+        if (isSavingRef.current) {
+            showMessage('warning', '提示', '正在保存模型，请稍候再关闭...');
+            return;
+        }
+
+        const { modelData: currentModelData, isAnyTabDirty } = useModelStore.getState();
+        if (currentModelData && isAnyTabDirty()) {
+            isClosePromptOpenRef.current = true;
+            try {
+                const closeChoice = await showSaveDiscardCancel('未保存的修改', '模型已修改，是否保存后再退出？');
+                if (closeChoice === 'cancel') {
+                    return;
+                }
+
+                if (closeChoice === 'save') {
+                    const saved = await saveCurrentModelBeforeClose();
+                    if (!saved) {
+                        return;
+                    }
+
+                    if (useModelStore.getState().isAnyTabDirty()) {
+                        showMessage('warning', '仍有未保存的修改', '还有模型标签未保存，请保存后再关闭。');
+                        return;
+                    }
+                }
+            } finally {
+                isClosePromptOpenRef.current = false;
+            }
+        }
+
+        await finishAppClose();
+    };
+
     // Intercept native window close during save operations and reset state on refresh
     useEffect(() => {
         if (hasResetStore.current) return;
@@ -781,20 +871,9 @@ const MainLayout: React.FC = () => {
         let unlisten: (() => void) | undefined;
         (async () => {
             unlisten = await windowGateway.onCurrentCloseRequested(async (event) => {
-                if (bypassClosePromptRef.current) return;
-                if (isSavingRef.current) {
-                    event.preventDefault();
-                    showMessage('warning', '提示', '正在保存模型，请稍候再关闭...');
-                    return;
-                }
-                const { modelData, isAnyTabDirty } = useModelStore.getState();
-                if (modelData && isAnyTabDirty()) {
-                    event.preventDefault();
-                    const shouldClose = await showConfirm('未保存的修改', '模型已修改，是否保存后再退出？');
-                    if (!shouldClose) return;
-                    bypassClosePromptRef.current = true;
-                    void windowGateway.closeCurrentWindow();
-                }
+                if (bypassClosePromptRef.current || event.isPreventDefault()) return;
+                event.preventDefault();
+                void requestAppClose();
             });
         })();
         return () => {
@@ -1391,7 +1470,6 @@ const MainLayout: React.FC = () => {
         setZustandLoading(false)
     }, [setZustandLoading])
 
-
     const handleOpen = handleImport // Alias for MenuBar
     const handleOpenRecent = useCallback((path: string) => {
         openModelWorkflow.openPath({
@@ -1575,8 +1653,8 @@ const MainLayout: React.FC = () => {
                 return false;
             }
             showTextureFailureWarnings(saveResult.textureEncodeResult);
-            commitSavedModelToStore(saveResult.preparedData, saveResult.savedNodes ?? normalizedNodes);
             useGlobalColorAdjustStore.getState().resetSettings();
+            commitSavedModelToStore(saveResult.preparedData, saveResult.savedNodes ?? normalizedNodes);
             historyCommandService.markSaved();
             useModelStore.getState().markTabSaved();
             showMessage('success', '保存成功', '模型已保存')
@@ -1631,8 +1709,8 @@ const MainLayout: React.FC = () => {
                     return false;
                 }
                 showTextureFailureWarnings(saveResult.textureEncodeResult, saveResult.textureCopyResult);
-                commitSavedModelToStore(saveResult.preparedData, saveResult.savedNodes ?? normalizedNodes);
                 useGlobalColorAdjustStore.getState().resetSettings();
+                commitSavedModelToStore(saveResult.preparedData, saveResult.savedNodes ?? normalizedNodes);
                 // Update store with new path if needed, but for now just alert
                 historyCommandService.markSaved();
                 useModelStore.getState().markTabSaved();
@@ -1652,11 +1730,7 @@ const MainLayout: React.FC = () => {
 
     useEffect(() => {
         const requestClose = () => {
-            if (isSavingRef.current) {
-                showMessage('warning', '提示', '正在保存模型，请稍候再关闭...');
-                return true;
-            }
-            void windowGateway.closeCurrentWindow();
+            void requestAppClose();
             return true;
         };
 
@@ -1710,10 +1784,16 @@ const MainLayout: React.FC = () => {
                 return true;
             }),
             registerShortcutHandler('window.closeTab', () => {
-                const { activeTabId, closeTab } = useModelStore.getState();
-                if (activeTabId) {
+                void (async () => {
+                    const { activeTabId, tabs, closeTab, isTabDirty } = useModelStore.getState();
+                    if (!activeTabId) return;
+                    const tabName = tabs.find((tab) => tab.id === activeTabId)?.name ?? '当前标签页';
+                    if (isTabDirty(activeTabId)) {
+                        const shouldClose = await showDiscardConfirm('未保存的修改', `关闭“${tabName}”前，是否不保存并直接关闭？`);
+                        if (!shouldClose) return;
+                    }
                     closeTab(activeTabId);
-                }
+                })();
                 return true;
             }),
             registerShortcutHandler('window.closeApp', () => requestClose()),
@@ -1978,6 +2058,7 @@ const MainLayout: React.FC = () => {
             }
 
             showTextureFailureWarnings(saveResult.textureEncodeResult, saveResult.textureCopyResult);
+            useGlobalColorAdjustStore.getState().resetSettings();
             openModelAsTab(targetPath)
             setRecentFiles(replaceRecentModelPath(sourcePath, targetPath))
             showMessage('success', '互转成功', `已生成并打开: ${targetPath}`)
@@ -2214,7 +2295,8 @@ const MainLayout: React.FC = () => {
                                         showLights={mainMode !== 'uv' && mainMode !== 'animation' && showLights}
                                         showAttachments={mainMode !== 'uv' && showAttachments}
                                         showWireframe={renderMode === 'wireframe'}
-                                        onToggleWireframe={() => setRenderMode(renderMode === 'textured' ? 'wireframe' : 'textured')}
+                                        showWireframeOverlay={renderMode === 'texturedWireframe'}
+                                        onToggleWireframe={() => setRenderMode(getNextRenderMode(renderMode))}
                                         backgroundColor={backgroundColor}
                                         animationIndex={mainMode === 'uv' ? -1 : currentSequence}
                                         isPlaying={mainMode !== 'uv' && isPlaying}
@@ -2290,8 +2372,6 @@ const MainLayout: React.FC = () => {
                 )}
             </div>
             {/* ModelOptimizeModal relies on native OS window now, no local render needed unless reverting to wrapper mode */}
-            {/* Global Message Layer */}
-            <GlobalMessageLayer />
         </div>
     )
 }

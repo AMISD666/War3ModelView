@@ -71,6 +71,14 @@ export class TauriWindowGateway implements WindowGateway {
         return getCurrentWindow().setTitle(title)
     }
 
+    showCurrentWindow(): Promise<void> {
+        return getCurrentWindow().show()
+    }
+
+    focusCurrentWindow(): Promise<void> {
+        return getCurrentWindow().setFocus()
+    }
+
     hideCurrentWindow(): Promise<void> {
         return getCurrentWindow().hide()
     }
