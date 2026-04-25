@@ -21,6 +21,7 @@ export interface ViewerProps {
   onToggleLooping?: () => void;
   onToggleWireframe: () => void;
   onModelLoaded: (model: any) => void;
+  onModelFirstFrameReady?: () => void;
   backgroundColor: string;
   showFPS: boolean;
   playbackSpeed: number;

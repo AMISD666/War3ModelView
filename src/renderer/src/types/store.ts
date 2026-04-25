@@ -8,6 +8,8 @@ import { ModelNode } from './node';
 export interface SetModelDataOptions {
     skipAutoRecalculate?: boolean;
     skipModelRebuild?: boolean;
+    deferTabSnapshot?: boolean;
+    deferNodeHydration?: boolean;
 }
 
 // 编辑模式

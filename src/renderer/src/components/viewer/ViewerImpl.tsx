@@ -4,11 +4,11 @@ import type{ViewerProps,ViewerRef}from"./ViewerTypes";
 import{decodeBLP,getBLPImageData,ModelRenderer}from"war3-model";
 import ModelWorker from"../../workers/model-worker.worker?worker";
 import TextureAdjustWorker from"../../workers/texture-adjust.worker?worker";import{SimpleOrbitCamera}from"../../utils/SimpleOrbitCamera";import{decodeTextureData,getTextureCandidatePaths,loadAllTextures,normalizePath,prepareModelForTextureLoad}from"./textureLoader";
-import type{WorkerLike}from"./textureLoader";import{createModelParseCacheKey,getCachedParsedModel,setCachedParsedModel}from"./modelParseCache";import{validateAllParticleEmitters}from"./particleValidator";import{describePe2AnimOrScalar,pe2PreviewDebugEnabled}from"../../utils/pe2PreviewDebug";import{checkForStructuralChanges,syncParticleEmitters2InPlace}from"./modelSync";import{getEnvironmentManager}from"./EnvironmentManager";import{logModelInfo}from"../../utils/debugLogger";import{hexToRgb}from"./types";import{mat3,mat4,vec3,vec4,quat}from"gl-matrix";import{GridRenderer}from"../GridRenderer";import{DebugRenderer}from"../DebugRenderer";import{GizmoRenderer,GizmoAxis,GIZMO_AXIS_LENGTH}from"../GizmoRenderer";import{AxisIndicator}from"../AxisIndicator";import{readFile}from"@tauri-apps/plugin-fs";import{invoke}from"@tauri-apps/api/core";import{listen}from"@tauri-apps/api/event";import{DEFAULT_TEXTURE_ADJUSTMENTS,applyTextureAdjustments,isDefaultTextureAdjustments,normalizeTextureAdjustments}from"../../utils/textureAdjustments";
+import type{WorkerLike}from"./textureLoader";import{validateAllParticleEmitters}from"./particleValidator";import{describePe2AnimOrScalar,pe2PreviewDebugEnabled}from"../../utils/pe2PreviewDebug";import{checkForStructuralChanges,syncParticleEmitters2InPlace}from"./modelSync";import{getEnvironmentManager}from"./EnvironmentManager";import{logModelInfo}from"../../utils/debugLogger";import{hexToRgb}from"./types";import{mat3,mat4,vec3,vec4,quat}from"gl-matrix";import{GridRenderer}from"../GridRenderer";import{DebugRenderer}from"../DebugRenderer";import{GizmoRenderer,GizmoAxis,GIZMO_AXIS_LENGTH}from"../GizmoRenderer";import{AxisIndicator}from"../AxisIndicator";import{readFile}from"@tauri-apps/plugin-fs";import{invoke}from"@tauri-apps/api/core";import{listen}from"@tauri-apps/api/event";import{DEFAULT_TEXTURE_ADJUSTMENTS,applyTextureAdjustments,isDefaultTextureAdjustments,normalizeTextureAdjustments}from"../../utils/textureAdjustments";
 import type{TextureAdjustments}from"../../utils/textureAdjustments";import{useUIStore}from"../../store/uiStore";import{useSelectionStore}from"../../store/selectionStore";import{useModelStore}from"../../store/modelStore";import{useRendererStore}from"../../store/rendererStore";import{useHistoryStore}from"../../store/historyStore";import{useUvEditorStore}from"../../store/uvEditorStore";import{ModelInfoPanel}from"../info/ModelInfoPanel";import{ViewerToolbar}from"../ViewerToolbar";import{ConfigProvider,message,theme}from"antd";import{CameraOutlined,CopyOutlined,SyncOutlined,PauseCircleOutlined,PlayCircleOutlined}from"@ant-design/icons";import{commandManager}from"../../utils/CommandManager";import{MoveVerticesCommand,VertexChange}from"../../commands/MoveVerticesCommand";import{MoveNodesCommand,NodeChange}from"../../commands/MoveNodesCommand";import{SetNodeParentCommand}from"../../commands/SetNodeParentCommand";import{VertexEditor}from"../VertexEditor";import{pickClosestGeoset}from"../../utils/rayTriangle";import{SplitVerticesCommand}from"../../commands/SplitVerticesCommand";import{AutoSeparateLayersCommand}from"../../commands/AutoSeparateLayersCommand";import{WeldVerticesCommand}from"../../commands/WeldVerticesCommand";import{DeleteVerticesCommand}from"../../commands/DeleteVerticesCommand";import{PasteVerticesCommand}from"../../commands/PasteVerticesCommand";import{UpdateSequenceExtentsCommand}from"../../commands/UpdateSequenceExtentsCommand";import{isTextInputActive,normalizeKeyCombo,normalizeKeyComboFromEvent}from"../../shortcuts/utils";import{registerGeometryDeleteKeyListener}from"../../utils/geometryDeleteShortcutBridge";import{WEBGL_CONTEXT_ATTRIBUTES}from"./ViewerRenderConstants";import{createViewerFramePerfAggregate,roundPerfValue}from"./ViewerPerf";
 import type{ViewerFramePerfAggregate,ViewerFramePerfSample}from"./ViewerPerf";import{applyHealthBarOffset,resolveHealthBarState}from"./ViewerHealthBar";
 import type{HealthBarDragSnapshot,HealthBarState}from"./ViewerHealthBar";import{getLiveTextureSourceKey,getTextureAdjustmentSignature,getTextureDecodeWorkerCount,isTexturePreviewPath,toTextureUpdateUint8Array,toTightArrayBuffer,toUint8Array}from"./ViewerTextureUtils";
-import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadSchedulerState}from"./ViewerTextureUtils";import{GlobalTransformCommand}from"../../commands/GlobalTransformCommand";import{copyVertices,copyFaces,VertexCopyBuffer}from"../../utils/vertexOperations";import{UpdateKeyframeCommand,KeyframeChange}from"../../commands/UpdateKeyframeCommand";import{MissingTextureWarning}from"../MissingTextureWarning";import{GeosetSeparateDialog}from"../modals/GeosetSeparateDialog";import{LayerConfig,layerConfigToMaterialLayer}from"../modals/MaterialLayerOptions";import{NodeType}from"../../types/node";import{openNodeEditor}from"../../utils/nodeEditorOpen";import{nodeTypeToEditorKind}from"../../types/nodeEditorRpc";import{getEffectiveBindings,registerShortcutHandler}from"../../shortcuts/manager";import{markStandalonePerf}from"../../utils/standalonePerf";import{invokeReadMpqFile}from"../../utils/mpqPerf";import{markNodeManagerListScrollFromTree,markNodeManagerListScrollFromViewer}from"../../utils/nodeManagerListScrollBridge";import{collectSelectedGeosetIndices}from"../editors/uvSelectionSync";import{createSelectionRect,pointInRect,segmentIntersectsRect,triangleIntersectsRect}from"../editors/uvSelectionUtils";let globalRenderLoopId=0;const Viewer=forwardRef((props:ViewerProps,ref:React.Ref<ViewerRef>)=>{const{modelPath,animationIndex,teamColor,showGrid,showNodes,showSkeleton,showCollisionShapes,showCameras,showLights,showAttachments,showWireframe,isPlaying,onTogglePlay,onToggleLooping,onToggleWireframe,onModelLoaded,backgroundColor,showFPS,playbackSpeed,viewPreset,modelData,onSetViewPreset,onAddCameraFromView}=props;const[parseWorker]=useState(()=>new ModelWorker());const[textureWorkers]=useState<WorkerLike[]>(()=>{const count=getTextureDecodeWorkerCount();return Array.from({length:count},()=>new ModelWorker()as unknown as WorkerLike);});const[loading,setLoading]=useState(false);const[loadingStatus,setLoadingStatus]=useState("");const canvasRef=useRef<HTMLCanvasElement>(null);const[renderer,setRenderer]=useState<ModelRenderer|null>(null);const[fps,setFps]=useState<number>(0);const gridRenderer=useRef(new GridRenderer());const debugRenderer=useRef(new DebugRenderer());const gizmoRenderer=useRef(new GizmoRenderer());const axisIndicator=useRef(new AxisIndicator());const rendererRef=useRef<ModelRenderer|null>(null);const cameraRef=useRef<SimpleOrbitCamera|null>(null);const appMainMode=useSelectionStore((state)=>state.mainMode);const animationSubMode=useSelectionStore((state)=>state.animationSubMode);const rendererReloadTrigger=useModelStore((state)=>state.rendererReloadTrigger);const cachedRenderer=useModelStore((state)=>state.cachedRenderer);const mpqLoaded=useRendererStore((state)=>state.mpqLoaded);const nodeRenderMode=useRendererStore((state)=>state.nodeRenderMode);const showHealthBar=useRendererStore((state)=>state.showHealthBar);const missingTextures=useRendererStore((state)=>state.missingTextures);const glRef=useRef<WebGL2RenderingContext|WebGLRenderingContext|null>(null);const needsRendererUpdateRef=useRef(false);const textureReloadSchedulerRef=useRef<TextureReloadSchedulerState>({timer:null,running:false,queued:null,version:0,});const animationFrameId=useRef<number|null>(null);const shouldRunRenderLoop=useRef<boolean>(true);const lastRenderErrorReportTimeRef=useRef<number>(0);const framePerfRef=useRef<ViewerFramePerfAggregate>(createViewerFramePerfAggregate());const lastFpsTime=useRef<number>(performance.now());const lastFrameTime=useRef<number>(performance.now());const frameCount=useRef<number>(0);const renderRef=useRef<((time:number,scheduleNext?:boolean)=>void)|null>(null);const pMatrixRef=useRef(mat4.create());const mvMatrixRef=useRef(mat4.create());const cameraPosRef=useRef(vec3.create());const cameraUpRef=useRef(vec3.fromValues(0,0,1));const cameraQuatRef=useRef(quat.create());const{showModelInfo}=useUIStore();const{isLooping,setLooping}=useModelStore();const[texturePreview,setTexturePreview]=useState<{url:string;width:number;height:number;path:string;}|null>(null);const backgroundTextureResolveRunningRef=useRef(false);const attemptedMissingTexturePathsRef=useRef<Set<string>>(new Set());const flushFramePerfSummary=useCallback((reason:string,force=false)=>{const bucket=framePerfRef.current;if(bucket.samples===0)return;if(!force&&bucket.samples<90)return;markStandalonePerf("viewer_frame_profile",{reason,samples:bucket.samples,avgTotalMs:roundPerfValue(bucket.totalMs/bucket.samples),maxTotalMs:roundPerfValue(bucket.maxTotalMs),slowFrameCount:bucket.slowFrameCount,avgClearMs:roundPerfValue(bucket.clearMs/bucket.samples),avgCameraMs:roundPerfValue(bucket.cameraMs/bucket.samples),avgStateMs:roundPerfValue(bucket.stateMs/bucket.samples),avgUpdateMs:roundPerfValue(bucket.updateMs/bucket.samples),avgSceneMs:roundPerfValue(bucket.sceneMs/bucket.samples),avgOverlayMs:roundPerfValue(bucket.overlayMs/bucket.samples),isPlaying:isPlayingRef.current,modelPath:modelPath||"",});framePerfRef.current=createViewerFramePerfAggregate();},[modelPath],);const recordFramePerfSample=useCallback((sample:ViewerFramePerfSample,detail?:Record<string,unknown>)=>{const bucket=framePerfRef.current;bucket.samples+=1;bucket.totalMs+=sample.totalMs;bucket.maxTotalMs=Math.max(bucket.maxTotalMs,sample.totalMs);bucket.clearMs+=sample.clearMs;bucket.cameraMs+=sample.cameraMs;bucket.stateMs+=sample.stateMs;bucket.updateMs+=sample.updateMs;bucket.sceneMs+=sample.sceneMs;bucket.overlayMs+=sample.overlayMs;if(sample.totalMs>=16.7){bucket.slowFrameCount+=1;};const now=performance.now();if(sample.totalMs>=33&&now-bucket.lastSlowEmitMs>=1000){bucket.lastSlowEmitMs=now;markStandalonePerf("viewer_slow_frame",{totalMs:roundPerfValue(sample.totalMs),clearMs:roundPerfValue(sample.clearMs),cameraMs:roundPerfValue(sample.cameraMs),stateMs:roundPerfValue(sample.stateMs),updateMs:roundPerfValue(sample.updateMs),sceneMs:roundPerfValue(sample.sceneMs),overlayMs:roundPerfValue(sample.overlayMs),...detail,});};if(bucket.samples>=90){flushFramePerfSummary("periodic");}},[flushFramePerfSummary],);useEffect(()=>{return()=>{parseWorker.terminate();textureWorkers.forEach((worker)=>worker.terminate?.());};},[parseWorker,textureWorkers]);const formatCameraValue=(value:number):string=>{if(!Number.isFinite(value))return"0";const formatted=value.toFixed(2);return formatted.replace(/.?0+$/,"");};const getCameraVector=(prop:any,directProp?:any):number[]=>{const isArrayLike=(v:any)=>Array.isArray(v)||v instanceof Float32Array||ArrayBuffer.isView(v);const toArray=(v:any)=>(v instanceof Float32Array?Array.from(v):v);if(directProp&&isArrayLike(directProp))return toArray(directProp);if(isArrayLike(prop))return toArray(prop);if(prop&&prop.Keys&&prop.Keys.length>0){const v=prop.Keys[0].Vector;return v?toArray(v):[0,0,0];};return[0,0,0];};const getAvailableCameras=():any[]=>{const{modelData,nodes}=useModelStore.getState();const modelCameras=Array.isArray((modelData as any)?.Cameras)?(modelData as any).Cameras.filter((cam:any)=>cam):[];if(modelCameras.length>0)return modelCameras;return Array.isArray(nodes)?nodes.filter((n:any)=>n&&n.type==="Camera"):[];};const getSelectedCamera=(cameraIndex=selectedCameraIndex):any|null=>{const cameraList=getAvailableCameras();if(cameraIndex<0||cameraIndex>=cameraList.length)return null;return cameraList[cameraIndex]??null;};const clearActiveModelCameraView=()=>{inCameraView.current=false;setActiveModelCameraView(null);};const roundVertexCoord=(value:number):number=>Math.round(value*10000)/10000;const getVertexPositionKey=(vertices:ArrayLike<number>,vertexIndex:number):string=>{const base=vertexIndex*3;return`${roundVertexCoord(Number(vertices[base]??0))},${roundVertexCoord(Number(vertices[base+1]??0))},${roundVertexCoord(Number(vertices[base+2]??0))}`;
+import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadSchedulerState}from"./ViewerTextureUtils";import{GlobalTransformCommand}from"../../commands/GlobalTransformCommand";import{copyVertices,copyFaces,VertexCopyBuffer}from"../../utils/vertexOperations";import{UpdateKeyframeCommand,KeyframeChange}from"../../commands/UpdateKeyframeCommand";import{MissingTextureWarning}from"../MissingTextureWarning";import{GeosetSeparateDialog}from"../modals/GeosetSeparateDialog";import{LayerConfig,layerConfigToMaterialLayer}from"../modals/MaterialLayerOptions";import{NodeType}from"../../types/node";import{openNodeEditor}from"../../utils/nodeEditorOpen";import{nodeTypeToEditorKind}from"../../types/nodeEditorRpc";import{getEffectiveBindings,registerShortcutHandler}from"../../shortcuts/manager";import{markStandalonePerf}from"../../utils/standalonePerf";import{invokeReadMpqFile}from"../../utils/mpqPerf";import{markNodeManagerListScrollFromTree,markNodeManagerListScrollFromViewer}from"../../utils/nodeManagerListScrollBridge";import{collectSelectedGeosetIndices}from"../editors/uvSelectionSync";import{createSelectionRect,pointInRect,segmentIntersectsRect,triangleIntersectsRect}from"../editors/uvSelectionUtils";let globalRenderLoopId=0;const Viewer=forwardRef((props:ViewerProps,ref:React.Ref<ViewerRef>)=>{const{modelPath,animationIndex,teamColor,showGrid,showNodes,showSkeleton,showCollisionShapes,showCameras,showLights,showAttachments,showWireframe,isPlaying,onTogglePlay,onToggleLooping,onToggleWireframe,onModelLoaded,onModelFirstFrameReady,backgroundColor,showFPS,playbackSpeed,viewPreset,modelData,onSetViewPreset,onAddCameraFromView}=props;const[parseWorker]=useState(()=>new ModelWorker());const[textureWorkers]=useState<WorkerLike[]>(()=>{const count=getTextureDecodeWorkerCount();return Array.from({length:count},()=>new ModelWorker()as unknown as WorkerLike);});const[loading,setLoading]=useState(false);const[loadingStatus,setLoadingStatus]=useState("");const canvasRef=useRef<HTMLCanvasElement>(null);const[renderer,setRenderer]=useState<ModelRenderer|null>(null);const[fps,setFps]=useState<number>(0);const gridRenderer=useRef(new GridRenderer());const debugRenderer=useRef(new DebugRenderer());const gizmoRenderer=useRef(new GizmoRenderer());const axisIndicator=useRef(new AxisIndicator());const rendererRef=useRef<ModelRenderer|null>(null);const cameraRef=useRef<SimpleOrbitCamera|null>(null);const appMainMode=useSelectionStore((state)=>state.mainMode);const animationSubMode=useSelectionStore((state)=>state.animationSubMode);const rendererReloadTrigger=useModelStore((state)=>state.rendererReloadTrigger);const cachedRenderer=useModelStore((state)=>state.cachedRenderer);const mpqLoaded=useRendererStore((state)=>state.mpqLoaded);const nodeRenderMode=useRendererStore((state)=>state.nodeRenderMode);const showHealthBar=useRendererStore((state)=>state.showHealthBar);const missingTextures=useRendererStore((state)=>state.missingTextures);const glRef=useRef<WebGL2RenderingContext|WebGLRenderingContext|null>(null);const needsRendererUpdateRef=useRef(false);const textureReloadSchedulerRef=useRef<TextureReloadSchedulerState>({timer:null,running:false,queued:null,version:0,});const animationFrameId=useRef<number|null>(null);const shouldRunRenderLoop=useRef<boolean>(true);const lastRenderErrorReportTimeRef=useRef<number>(0);const framePerfRef=useRef<ViewerFramePerfAggregate>(createViewerFramePerfAggregate());const lastFpsTime=useRef<number>(performance.now());const lastFrameTime=useRef<number>(performance.now());const frameCount=useRef<number>(0);const renderRef=useRef<((time:number,scheduleNext?:boolean)=>void)|null>(null);const pMatrixRef=useRef(mat4.create());const mvMatrixRef=useRef(mat4.create());const cameraPosRef=useRef(vec3.create());const cameraUpRef=useRef(vec3.fromValues(0,0,1));const cameraQuatRef=useRef(quat.create());const{showModelInfo}=useUIStore();const{isLooping,setLooping}=useModelStore();const[texturePreview,setTexturePreview]=useState<{url:string;width:number;height:number;path:string;}|null>(null);const backgroundTextureResolveRunningRef=useRef(false);const attemptedMissingTexturePathsRef=useRef<Set<string>>(new Set());const flushFramePerfSummary=useCallback((reason:string,force=false)=>{const bucket=framePerfRef.current;if(bucket.samples===0)return;if(!force&&bucket.samples<90)return;markStandalonePerf("viewer_frame_profile",{reason,samples:bucket.samples,avgTotalMs:roundPerfValue(bucket.totalMs/bucket.samples),maxTotalMs:roundPerfValue(bucket.maxTotalMs),slowFrameCount:bucket.slowFrameCount,avgClearMs:roundPerfValue(bucket.clearMs/bucket.samples),avgCameraMs:roundPerfValue(bucket.cameraMs/bucket.samples),avgStateMs:roundPerfValue(bucket.stateMs/bucket.samples),avgUpdateMs:roundPerfValue(bucket.updateMs/bucket.samples),avgSceneMs:roundPerfValue(bucket.sceneMs/bucket.samples),avgOverlayMs:roundPerfValue(bucket.overlayMs/bucket.samples),isPlaying:isPlayingRef.current,modelPath:modelPath||"",});framePerfRef.current=createViewerFramePerfAggregate();},[modelPath],);const recordFramePerfSample=useCallback((sample:ViewerFramePerfSample,detail?:Record<string,unknown>)=>{const bucket=framePerfRef.current;bucket.samples+=1;bucket.totalMs+=sample.totalMs;bucket.maxTotalMs=Math.max(bucket.maxTotalMs,sample.totalMs);bucket.clearMs+=sample.clearMs;bucket.cameraMs+=sample.cameraMs;bucket.stateMs+=sample.stateMs;bucket.updateMs+=sample.updateMs;bucket.sceneMs+=sample.sceneMs;bucket.overlayMs+=sample.overlayMs;if(sample.totalMs>=16.7){bucket.slowFrameCount+=1;};const now=performance.now();if(sample.totalMs>=33&&now-bucket.lastSlowEmitMs>=1000){bucket.lastSlowEmitMs=now;markStandalonePerf("viewer_slow_frame",{totalMs:roundPerfValue(sample.totalMs),clearMs:roundPerfValue(sample.clearMs),cameraMs:roundPerfValue(sample.cameraMs),stateMs:roundPerfValue(sample.stateMs),updateMs:roundPerfValue(sample.updateMs),sceneMs:roundPerfValue(sample.sceneMs),overlayMs:roundPerfValue(sample.overlayMs),...detail,});};if(bucket.samples>=90){flushFramePerfSummary("periodic");}},[flushFramePerfSummary],);useEffect(()=>{return()=>{parseWorker.terminate();textureWorkers.forEach((worker)=>worker.terminate?.());};},[parseWorker,textureWorkers]);const formatCameraValue=(value:number):string=>{if(!Number.isFinite(value))return"0";const formatted=value.toFixed(2);return formatted.replace(/.?0+$/,"");};const getCameraVector=(prop:any,directProp?:any):number[]=>{const isArrayLike=(v:any)=>Array.isArray(v)||v instanceof Float32Array||ArrayBuffer.isView(v);const toArray=(v:any)=>(v instanceof Float32Array?Array.from(v):v);if(directProp&&isArrayLike(directProp))return toArray(directProp);if(isArrayLike(prop))return toArray(prop);if(prop&&prop.Keys&&prop.Keys.length>0){const v=prop.Keys[0].Vector;return v?toArray(v):[0,0,0];};return[0,0,0];};const getAvailableCameras=():any[]=>{const{modelData,nodes}=useModelStore.getState();const modelCameras=Array.isArray((modelData as any)?.Cameras)?(modelData as any).Cameras.filter((cam:any)=>cam):[];if(modelCameras.length>0)return modelCameras;return Array.isArray(nodes)?nodes.filter((n:any)=>n&&n.type==="Camera"):[];};const getSelectedCamera=(cameraIndex=selectedCameraIndex):any|null=>{const cameraList=getAvailableCameras();if(cameraIndex<0||cameraIndex>=cameraList.length)return null;return cameraList[cameraIndex]??null;};const clearActiveModelCameraView=()=>{inCameraView.current=false;setActiveModelCameraView(null);};const roundVertexCoord=(value:number):number=>Math.round(value*10000)/10000;const getVertexPositionKey=(vertices:ArrayLike<number>,vertexIndex:number):string=>{const base=vertexIndex*3;return`${roundVertexCoord(Number(vertices[base]??0))},${roundVertexCoord(Number(vertices[base+1]??0))},${roundVertexCoord(Number(vertices[base+2]??0))}`;
   };
 
   const getExpandedFaceVertexSelection = (selectedFaceIds: Array<{ geosetIndex: number; index: number }>): Array<{ geosetIndex: number; index: number }> => {
@@ -1781,6 +1781,10 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
 
   useEffect(() => {
     if (rendererRef.current && rendererRef.current.model) {
+      const currentStore = useModelStore.getState();
+      if (!currentStore.modelData || currentStore.modelPath !== modelPath) {
+        return;
+      }
       // Patch the model data in the renderer with the latest from store
       // This is crucial for "Lightweight Reload" and seeing changes like PivotPoint (Position) updates instantly.
 
@@ -1895,6 +1899,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
   }, []);
 
   const lastLoadedModelPath = useRef<string | null>(null);
+  const activeModelLoadTokenRef = useRef(0);
 
   useEffect(() => {
     // Only reload on modelPath change, NOT on modelData change.
@@ -3323,9 +3328,40 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
     newRenderer.initGL(gl);
   };
 
+  const waitForNextPaint = () =>
+    new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => resolve());
+      });
+    });
+
+  const waitForIdleSlice = (timeoutMs = 150) =>
+    new Promise<void>((resolve) => {
+      const requestIdleCallback = (window as any).requestIdleCallback as
+        | ((callback: () => void, options?: { timeout?: number }) => number)
+        | undefined;
+      if (typeof requestIdleCallback === "function") {
+        requestIdleCallback(() => resolve(), { timeout: timeoutMs });
+        return;
+      }
+      window.setTimeout(resolve, 0);
+    });
+
   const loadModel = async (path: string, inMemoryData?: any) => {
     lastFrameTime.current = performance.now();
-
+    const loadToken = ++activeModelLoadTokenRef.current;
+    const loadPerfStart = performance.now();
+    const modelLoadId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const markLoadStage = (stage: string, detail: Record<string, unknown> = {}) => {
+      markStandalonePerf("model_load_stage", {
+        loadId: modelLoadId,
+        stage,
+        modelPath: path,
+        elapsedMs: roundPerfValue(performance.now() - loadPerfStart),
+        ...detail,
+      });
+    };
+    const isCurrentLoad = () => activeModelLoadTokenRef.current === loadToken && lastLoadedModelPath.current === path;
     // IMMEDIATE CLEAR: Remove old renderer reference
     if (renderer) {
       setRenderer(null);
@@ -3350,6 +3386,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
 
     try {
       console.time("[Viewer] FullModelLoad");
+      markLoadStage("start", { inMemory: !!inMemoryData });
       canvas.focus();
 
       const readPathBytes = async (assetPath: string): Promise<Uint8Array> => {
@@ -3406,9 +3443,15 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
       const parseStart = performance.now();
       if (inMemoryData) {
         model = inMemoryData;
+        markLoadStage("parse_skipped_in_memory");
       } else {
         setLoadingStatus("正在解析模型...");
+        const readStart = performance.now();
         const buffer = await readPathBytes(path);
+        markLoadStage("read_model_bytes", {
+          bytes: buffer.byteLength,
+          stageMs: roundPerfValue(performance.now() - readStart),
+        });
         const parseWithWorker = (bytes: Uint8Array) =>
           new Promise<{ model: any; parseMs?: number }>((resolve, reject) => {
             const timer = setTimeout(() => reject(new Error("Model parsing timeout")), 30000);
@@ -3438,17 +3481,18 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
             );
           });
 
-        const cacheKey = createModelParseCacheKey(path, buffer);
-        const cachedModel = getCachedParsedModel(cacheKey);
-        if (cachedModel) {
-          model = cachedModel;
-        } else {
-          const parseResult = await parseWithWorker(buffer);
-          model = parseResult.model;
-          setCachedParsedModel(cacheKey, model);
-        }
+        const workerParseStart = performance.now();
+        const parseResult = await parseWithWorker(buffer);
+        markLoadStage("worker_parse_returned", {
+          workerParseMs: typeof parseResult.parseMs === "number" ? roundPerfValue(parseResult.parseMs) : undefined,
+          stageMs: roundPerfValue(performance.now() - workerParseStart),
+        });
+        model = parseResult.model;
       }
       console.timeEnd("[Viewer] MDX Parse"); // Log to production CMD window
+      markLoadStage("parse_complete", {
+        stageMs: roundPerfValue(performance.now() - parseStart),
+      });
       logModelInfo(path, model, performance.now() - parseStart);
       // console.log('[Viewer] Parsed model:', {
       //   Sequences: model.Sequences?.length || 0,
@@ -3469,6 +3513,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
       }
 
       // 与 WebGL/ModelRenderer 初始化并行：Rust 侧批量读贴图（invoke 已发起即与后续 JS 重叠）
+      const textureContextStart = performance.now();
       const textureLoadContext = prepareModelForTextureLoad(model, {});
       const batchPayloadPromise =
         textureLoadContext.effectiveTexturePaths.length > 0
@@ -3477,13 +3522,18 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
               texturePaths: textureLoadContext.effectiveTexturePaths,
             })
           : undefined;
-
-      ignoreNextModelDataUpdate.current = true;
-      onModelLoaded(model);
+      markLoadStage("texture_paths_prepared", {
+        textureCount: textureLoadContext.effectiveTexturePaths.length,
+        stageMs: roundPerfValue(performance.now() - textureContextStart),
+      });
 
       // CRITICAL FIX: Validate and fix ParticleEmitters2 before creating renderer
       // This prevents production-only rendering issues caused by invalid/missing properties
+      const validationStart = performance.now();
       validateAllParticleEmitters(model);
+      markLoadStage("particle_validation_complete", {
+        stageMs: roundPerfValue(performance.now() - validationStart),
+      });
 
       const rendererStart = performance.now();
       const blendCompatibleModel = createRendererBlendCompatibleModel(model);
@@ -3494,33 +3544,86 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
       (newRenderer as any).__modelPath = path;
       (newRenderer.model as any).__modelPath = path;
       initializeRendererBackend(canvas, newRenderer);
-      // NOTE: setRenderer(newRenderer) is called AFTER texture loading to avoid race condition
       newRenderer.update(0);
       resetCamera();
-      setLoadingStatus("加载贴图资源...");
-      // 模型贴图与队伍色替换贴图互不依赖，并行缩短首帧前等待时间
-      const [textureResults] = await Promise.all([
-        loadAllTextures(model, newRenderer, path, textureWorkers, 512, {
-          yieldUploads: false,
-          textureLoadContext,
-          batchPayloadPromise,
-        }),
-        loadTeamColorTextures(newRenderer, teamColor),
-      ]);
-
-      // Track missing textures or unsupported formats for warning UI
-      const missingPaths = textureResults.filter((r) => !r.loaded).map((r) => r.path);
-      useRendererStore.getState().setMissingTextures(missingPaths);
-
       if (usedFallback && typeof (newRenderer as any).setSequence === "function") {
         (newRenderer as any).setSequence(0);
       }
 
       setRenderer(newRenderer);
       setLoading(false);
+      setLoadingStatus("");
+      markLoadStage("first_renderer_ready", {
+        stageMs: roundPerfValue(performance.now() - rendererStart),
+        usedFallback,
+      });
+      onModelFirstFrameReady?.();
+      const postFirstFrameWork = (async () => {
+        await waitForNextPaint();
+        await waitForIdleSlice(150);
+      })();
+      void (async () => {
+        await postFirstFrameWork;
+        if (!isCurrentLoad()) {
+          markLoadStage("store_model_commit_skipped_stale");
+          return;
+        }
+        const storeCommitStart = performance.now();
+        ignoreNextModelDataUpdate.current = true;
+        onModelLoaded(model);
+        markLoadStage("store_model_committed", {
+          stageMs: roundPerfValue(performance.now() - storeCommitStart),
+        });
+      })().catch((storeError) => {
+        markLoadStage("store_model_commit_error", {
+          message: storeError instanceof Error ? storeError.message : String(storeError),
+        });
+      });
       console.timeEnd("[Viewer] FullModelLoad");
+
+      void (async () => {
+        await postFirstFrameWork;
+        await waitForNextPaint();
+        await waitForIdleSlice(250);
+        const textureStart = performance.now();
+        markLoadStage("texture_background_start", {
+          textureCount: textureLoadContext.effectiveTexturePaths.length,
+        });
+        // 模型贴图与队伍色替换贴图互不依赖，并行缩短等待时间；renderer 先显示，贴图后台补齐。
+        const [textureResults] = await Promise.all([
+          loadAllTextures(model, newRenderer, path, textureWorkers, 512, {
+            yieldUploads: true,
+            uploadYieldBatch: 2,
+            uploadFrameBudgetMs: 6,
+            textureLoadContext,
+            batchPayloadPromise,
+          }),
+          loadTeamColorTextures(newRenderer, teamColor),
+        ]);
+
+        if (isCurrentLoad()) {
+          const missingPaths = textureResults.filter((r) => !r.loaded).map((r) => r.path);
+          useRendererStore.getState().setMissingTextures(missingPaths);
+          needsRendererUpdateRef.current = true;
+          renderRef.current?.(performance.now(), false);
+        }
+        markLoadStage("texture_background_complete", {
+          stale: !isCurrentLoad(),
+          loaded: textureResults.filter((r) => r.loaded).length,
+          missing: textureResults.filter((r) => !r.loaded).length,
+          stageMs: roundPerfValue(performance.now() - textureStart),
+        });
+      })().catch((textureError) => {
+        console.error("[Viewer] Background texture loading failed:", textureError);
+        markLoadStage("texture_background_error", {
+          message: textureError instanceof Error ? textureError.message : String(textureError),
+        });
+      });
     } catch (error) {
       console.error("[Viewer] Error loading model:", error);
+      markLoadStage("error", {
+        message: error instanceof Error ? error.message : String(error),
+      });
       setLoading(false);
     }
   };
@@ -3729,6 +3832,28 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
     const hasChanged = rendererReloadTrigger !== lastReloadTrigger.current;
     const modelDataChanged = modelData !== lastSyncedModelDataRef.current;
 
+    if (ignoreNextModelDataUpdate.current && modelDataChanged && !hasChanged && renderer && modelData) {
+      ignoreNextModelDataUpdate.current = false;
+      lastSyncedModelDataRef.current = modelData;
+      lastReloadTrigger.current = rendererReloadTrigger;
+      if (Array.isArray(modelData.Geosets) && Array.isArray(renderer.model?.Geosets)) {
+        const minLen = Math.min(modelData.Geosets.length, renderer.model.Geosets.length);
+        for (let i = 0; i < minLen; i++) {
+          const sourceGeoset = modelData.Geosets[i];
+          const rendererGeoset = renderer.model.Geosets[i] as any;
+          if (!sourceGeoset || !rendererGeoset) continue;
+          rendererGeoset.__sourceVerticesRef = sourceGeoset.Vertices;
+          rendererGeoset.__sourceNormalsRef = sourceGeoset.Normals;
+          rendererGeoset.__sourceTVerticesRef = sourceGeoset.TVertices?.[0];
+        }
+      }
+      markStandalonePerf("viewer_modeldata_sync_skipped", {
+        modelPath: modelPath || (modelData as any)?.__modelPath || "",
+        reason: "initial_store_commit",
+      });
+      return;
+    }
+
     if (((!isInitialMount && hasChanged) || modelDataChanged) && renderer && modelData) {
       if (import.meta.env.DEV) {
       }
@@ -3923,10 +4048,12 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
         for (let i = 0; i < minLen; i++) {
           const geoset = modelData.Geosets[i];
           const rendererGeoset = renderer.model.Geosets[i];
+          const rendererGeosetMeta = rendererGeoset as any;
 
-          if (geoset?.Vertices) {
+          if (geoset?.Vertices && rendererGeosetMeta.__sourceVerticesRef !== geoset.Vertices) {
             const vertexData = geoset.Vertices instanceof Float32Array ? geoset.Vertices : new Float32Array(geoset.Vertices);
             rendererGeoset.Vertices = vertexData;
+            rendererGeosetMeta.__sourceVerticesRef = geoset.Vertices;
             (renderer as any).updateGeosetVertices?.(i, vertexData);
           }
 
@@ -3954,16 +4081,18 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
           }
 
           // Sync normal buffers so menu-driven recalculate normals updates immediately
-          if (geoset?.Normals) {
+          if (geoset?.Normals && rendererGeosetMeta.__sourceNormalsRef !== geoset.Normals) {
             const normalData = geoset.Normals instanceof Float32Array ? geoset.Normals : new Float32Array(geoset.Normals);
             rendererGeoset.Normals = normalData;
+            rendererGeosetMeta.__sourceNormalsRef = geoset.Normals;
             (renderer as any).updateGeosetNormals?.(i, normalData);
           }
 
           // Sync UV texture coordinate buffers
-          if (geoset?.TVertices?.[0]) {
+          if (geoset?.TVertices?.[0] && rendererGeosetMeta.__sourceTVerticesRef !== geoset.TVertices[0]) {
             const uvData = geoset.TVertices[0];
             const float32Data = uvData instanceof Float32Array ? uvData : new Float32Array(uvData);
+            rendererGeosetMeta.__sourceTVerticesRef = geoset.TVertices[0];
             (renderer as any).updateGeosetTexCoords?.(i, float32Data);
           }
         }

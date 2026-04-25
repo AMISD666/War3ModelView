@@ -15,6 +15,7 @@ import {
 } from '../../utils/textureAdjustments'
 import { invokeReadMpqFile } from '../../utils/mpqPerf'
 import { createTextureDecodeCacheKey, getCachedDecodedTexture, setCachedDecodedTexture } from './textureDecodeCache'
+import { markStandalonePerf } from '../../utils/standalonePerf'
 
 export interface TextureLoadResult {
     path: string
@@ -53,6 +54,7 @@ interface WorkerBatchDecodeTask {
     bytes: Uint8Array
     maxDimension?: number
     preferBlpBaseMip: boolean
+    adjustments?: TextureAdjustments
 }
 
 interface WorkerBatchResultMap {
@@ -872,7 +874,8 @@ async function decodeBatchChunkWithWorker(
             path: task.path,
             buffer: tightBuffer,
             maxDimension: task.maxDimension,
-            preferBlpBaseMip: task.preferBlpBaseMip
+            preferBlpBaseMip: task.preferBlpBaseMip,
+            adjustments: task.adjustments
         }
     })
 
@@ -970,26 +973,22 @@ async function decodeBatchWithWorkerPool(
 
     const workerEligibleTasks: WorkerBatchDecodeTask[] = []
     const workerByteMap = new Map<string, Uint8Array>()
-    const mainThreadOnly = new Set<string>()
 
     for (const [path, bytes] of entries) {
-        if (textureAdjustmentsByPath.has(path)) {
-            mainThreadOnly.add(path)
-            continue
-        }
         workerByteMap.set(path, bytes)
         workerEligibleTasks.push({
             id: `task_${++decodeRequestCounter}`,
             path,
             bytes,
             maxDimension,
-            preferBlpBaseMip: alphaRequiredTexturePaths.has(path)
+            preferBlpBaseMip: alphaRequiredTexturePaths.has(path),
+            adjustments: textureAdjustmentsByPath.get(path)
         })
     }
 
     const workerChunkMaxItems = 8
     const workerChunkMaxBytes = 12 * 1024 * 1024
-    const failedPaths = new Set<string>(mainThreadOnly)
+    const failedPaths = new Set<string>()
 
     if (workerEligibleTasks.length > 0) {
         const queues = buildWorkerTaskQueues(workerEligibleTasks, workers.length)
@@ -1016,6 +1015,8 @@ async function decodeBatchWithWorkerPool(
         }))
     }
 
+    let fallbackDecodeCount = 0
+    let fallbackBatchStart = performance.now()
     for (const path of failedPaths) {
         const bytes = workerByteMap.get(path) || entries.find(([entryPath]) => entryPath === path)?.[1]
         if (!bytes) continue
@@ -1026,6 +1027,12 @@ async function decodeBatchWithWorkerPool(
         })
         if (imageData) {
             decoded.set(path, imageData)
+        }
+        fallbackDecodeCount += 1
+        if (fallbackDecodeCount >= 2 || performance.now() - fallbackBatchStart >= 8) {
+            fallbackDecodeCount = 0
+            await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+            fallbackBatchStart = performance.now()
         }
     }
 
@@ -1164,6 +1171,8 @@ export async function loadAllTextures(
     maxDimension?: number,
     options?: {
         yieldUploads?: boolean
+        uploadYieldBatch?: number
+        uploadFrameBudgetMs?: number
         workerDecodeMinTextures?: number
         workerDecodeMinBytes?: number
         targetPaths?: string[]
@@ -1174,6 +1183,7 @@ export async function loadAllTextures(
     }
 ): Promise<TextureLoadResult[]> {
     const results: TextureLoadResult[] = []
+    const perfStart = performance.now()
 
     if (!model.Textures) {
         return results
@@ -1192,8 +1202,14 @@ export async function loadAllTextures(
     const decodedTextures = new Map<string, DecodedTextureImage>()
     const decodeCacheKeys = new Map<string, string>()
     const workers = normalizeWorkers(worker)
+    let readMs = 0
+    let decodeMs = 0
+    let uploadMs = 0
+    let cacheHits = 0
+    let decodedCount = 0
 
     try {
+        const readStart = performance.now()
         const payload =
             options?.batchPayloadPromise != null
                 ? await options.batchPayloadPromise
@@ -1201,6 +1217,7 @@ export async function loadAllTextures(
                       modelPath,
                       texturePaths: effectiveTexturePaths
                   })
+        readMs = performance.now() - readStart
         const decodedBatch = parseTextureBytesPayload(payload, effectiveTexturePaths)
         const entries = Array.from(decodedBatch.entries())
         const uncachedEntries: Array<[string, Uint8Array]> = []
@@ -1216,11 +1233,13 @@ export async function loadAllTextures(
             const cachedImage = getCachedDecodedTexture(cacheKey)
             if (cachedImage) {
                 decodedTextures.set(path, cachedImage)
+                cacheHits += 1
             } else {
                 uncachedEntries.push([path, bytes])
             }
         }
 
+        const decodeStart = performance.now()
         const totalBytes = uncachedEntries.reduce((sum, [, bytes]) => sum + bytes.byteLength, 0)
         // 降低门槛：多数角色模贴图数量在 3～5 张且单张不大，走 Worker 池并行解码可明显缩短主线程阻塞
         const workerDecodeMinTextures = options?.workerDecodeMinTextures ?? 3
@@ -1240,6 +1259,7 @@ export async function loadAllTextures(
             )
             for (const [path, image] of pooled.entries()) {
                 decodedTextures.set(path, image)
+                decodedCount += 1
                 const cacheKey = decodeCacheKeys.get(path)
                 if (cacheKey) {
                     setCachedDecodedTexture(cacheKey, image)
@@ -1255,6 +1275,7 @@ export async function loadAllTextures(
                 })
                 if (imageData) {
                     decodedTextures.set(path, imageData)
+                    decodedCount += 1
                     const cacheKey = decodeCacheKeys.get(path)
                     if (cacheKey) {
                         setCachedDecodedTexture(cacheKey, imageData)
@@ -1262,13 +1283,17 @@ export async function loadAllTextures(
                 }
             }
         }
+        decodeMs = performance.now() - decodeStart
     } catch (e) {
         console.error('[Viewer] Texture batch load failed:', e)
     }
 
     const shouldYieldUploads = !!options?.yieldUploads
-    const uploadYieldBatch = 4
+    const uploadYieldBatch = Math.max(1, Math.floor(options?.uploadYieldBatch ?? 4))
+    const uploadFrameBudgetMs = Math.max(1, options?.uploadFrameBudgetMs ?? 8)
     let uploadedSinceYield = 0
+    let uploadBatchStart = performance.now()
+    const uploadStart = performance.now()
     for (const path of effectiveTexturePaths) {
         const imageData = decodedTextures.get(path)
         if (imageData && renderer.setTextureImageData) {
@@ -1277,14 +1302,34 @@ export async function loadAllTextures(
             if (shouldYieldUploads) {
                 uploadedSinceYield++
             }
-            if (shouldYieldUploads && uploadedSinceYield >= uploadYieldBatch) {
+            if (
+                shouldYieldUploads &&
+                (uploadedSinceYield >= uploadYieldBatch || performance.now() - uploadBatchStart >= uploadFrameBudgetMs)
+            ) {
                 uploadedSinceYield = 0
-                await new Promise(r => requestAnimationFrame(r))
+                await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+                uploadBatchStart = performance.now()
             }
         } else {
             results.push({ path, loaded: false, error: 'Not found in FS or MPQ' })
         }
     }
+    uploadMs = performance.now() - uploadStart
+
+    markStandalonePerf('model_texture_load', {
+        modelPath,
+        requested: effectiveTexturePaths.length,
+        found: decodedTextures.size,
+        loaded: results.filter((result) => result.loaded).length,
+        cacheHits,
+        decoded: decodedCount,
+        workerCount: workers.length,
+        readMs: Number(readMs.toFixed(2)),
+        decodeMs: Number(decodeMs.toFixed(2)),
+        uploadMs: Number(uploadMs.toFixed(2)),
+        totalMs: Number((performance.now() - perfStart).toFixed(2)),
+        yieldedUploads: shouldYieldUploads,
+    })
 
     return results
 }

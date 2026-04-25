@@ -85,6 +85,26 @@ export class ToolWindowBroadcastCoordinator {
         this.api = api
     }
 
+    private waitForBroadcastSlot(): Promise<void> {
+        return new Promise((resolve) => {
+            window.requestAnimationFrame(() => {
+                const requestIdleCallback = (window as any).requestIdleCallback as
+                    | ((callback: () => void, options?: { timeout?: number }) => number)
+                    | undefined
+                if (typeof requestIdleCallback === 'function') {
+                    requestIdleCallback(() => resolve(), { timeout: 80 })
+                    return
+                }
+                window.setTimeout(resolve, 0)
+            })
+        })
+    }
+
+    private async yieldAfterBroadcast(windowId: ToolWindowVisibilityId): Promise<void> {
+        markStandalonePerf('tool_window_broadcast_yield', { windowId })
+        await this.waitForBroadcastSlot()
+    }
+
     broadcastGlobalColorAdjust(state: GlobalColorAdjustRpcState): void {
         this.api?.broadcastGlobalColorAdjust(state)
     }
@@ -166,18 +186,22 @@ export class ToolWindowBroadcastCoordinator {
 
         if (visibilityMap.cameraManager) {
             api.broadcastCameraManager(api.getCameraManagerState())
+            await this.yieldAfterBroadcast('cameraManager')
         }
 
         if (visibilityMap.geosetEditor) {
             api.broadcastGeosetEditor(api.getGeosetManagerState())
+            await this.yieldAfterBroadcast('geosetEditor')
         }
 
         if (visibilityMap.geosetVisibilityTool) {
             api.broadcastGeosetVisibilityTool(api.getGeosetVisibilityState())
+            await this.yieldAfterBroadcast('geosetVisibilityTool')
         }
 
         if (visibilityMap.geosetAnimManager) {
             api.broadcastGeosetAnimManager(api.getGeosetAnimManagerState())
+            await this.yieldAfterBroadcast('geosetAnimManager')
         }
 
         if (visibilityMap.textureManager) {
@@ -185,6 +209,7 @@ export class ToolWindowBroadcastCoordinator {
             if (this.snapshotDispatchState.textureManager !== textureManagerState.snapshotVersion) {
                 this.snapshotDispatchState.textureManager = textureManagerState.snapshotVersion
                 api.broadcastTextureManager(textureManagerState)
+                await this.yieldAfterBroadcast('textureManager')
             } else {
                 markStandalonePerf('snapshot_broadcast_skipped', {
                     windowId: 'textureManager',
@@ -196,6 +221,7 @@ export class ToolWindowBroadcastCoordinator {
 
         if (visibilityMap.textureAnimManager) {
             api.broadcastTextureAnimManager(api.getTextureAnimManagerState())
+            await this.yieldAfterBroadcast('textureAnimManager')
         }
 
         if (visibilityMap.materialManager) {
@@ -203,6 +229,7 @@ export class ToolWindowBroadcastCoordinator {
             if (this.snapshotDispatchState.materialManager !== materialManagerState.snapshotVersion) {
                 this.snapshotDispatchState.materialManager = materialManagerState.snapshotVersion
                 api.broadcastMaterialManager(materialManagerState)
+                await this.yieldAfterBroadcast('materialManager')
             } else {
                 markStandalonePerf('snapshot_broadcast_skipped', {
                     windowId: 'materialManager',
@@ -214,10 +241,12 @@ export class ToolWindowBroadcastCoordinator {
 
         if (visibilityMap.sequenceManager) {
             api.broadcastSequenceManager(api.getSequenceManagerState())
+            await this.yieldAfterBroadcast('sequenceManager')
         }
 
         if (visibilityMap.globalSequenceManager) {
             api.broadcastGlobalSeqManager(api.getGlobalSeqManagerState())
+            await this.yieldAfterBroadcast('globalSequenceManager')
         }
 
         if (visibilityMap.nodeEditor) {
@@ -225,6 +254,7 @@ export class ToolWindowBroadcastCoordinator {
             if (this.snapshotDispatchState.nodeEditor !== nodeEditorState.snapshotVersion) {
                 this.snapshotDispatchState.nodeEditor = nodeEditorState.snapshotVersion
                 api.broadcastNodeEditor(nodeEditorState)
+                await this.yieldAfterBroadcast('nodeEditor')
             } else {
                 markStandalonePerf('snapshot_broadcast_skipped', {
                     windowId: 'nodeEditor',

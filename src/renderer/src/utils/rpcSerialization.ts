@@ -11,6 +11,8 @@ export const RPC_ENCODING_MSGPACK = 'msgpack'
 const MSGPACK_DECODE_WORKER_THRESHOLD_CHARS = 320_000
 
 let decodeWorker: Worker | null = null
+let encodeWorker: Worker | null = null
+let encodeRequestId = 0
 
 function getMsgpackDecodeWorker(): Worker {
     if (!decodeWorker) {
@@ -19,6 +21,15 @@ function getMsgpackDecodeWorker(): Worker {
         })
     }
     return decodeWorker
+}
+
+function getMsgpackEncodeWorker(): Worker {
+    if (!encodeWorker) {
+        encodeWorker = new Worker(new URL('../workers/rpcMsgpackEncode.worker.ts', import.meta.url), {
+            type: 'module'
+        })
+    }
+    return encodeWorker
 }
 
 function uint8ToBase64(bytes: Uint8Array): string {
@@ -33,24 +44,63 @@ function uint8ToBase64(bytes: Uint8Array): string {
 /**
  * 为跨 WebView 传输选择 JSON 字符串或 MessagePack+base64 包装（取更短的一种）。
  */
-export function chooseRpcEmitEncoding(payload: unknown): {
+export function chooseRpcEmitEncoding(
+    payload: unknown,
+    options?: { preferMsgpack?: boolean }
+): {
     mode: 'json' | 'msgpack'
     json?: string
     msgpackB64?: string
 } {
-    const json = JSON.stringify(payload)
     let packed: Uint8Array
     try {
         packed = encode(payload) as Uint8Array
     } catch {
-        return { mode: 'json', json }
+        return { mode: 'json', json: JSON.stringify(payload) }
     }
 
     const msgpackB64 = uint8ToBase64(packed)
+    if (options?.preferMsgpack) {
+        return { mode: 'msgpack', msgpackB64 }
+    }
+
+    const json = JSON.stringify(payload)
     if (msgpackB64.length < json.length) {
         return { mode: 'msgpack', msgpackB64 }
     }
     return { mode: 'json', json }
+}
+
+export function chooseRpcEmitEncodingInWorker(payload: unknown): Promise<{
+    mode: 'msgpack'
+    msgpackB64: string
+}> {
+    return new Promise((resolve, reject) => {
+        const worker = getMsgpackEncodeWorker()
+        const id = ++encodeRequestId
+        const timer = window.setTimeout(() => {
+            worker.removeEventListener('message', onMessage)
+            reject(new Error('Worker MessagePack encode timeout'))
+        }, 15000)
+        const onMessage = (event: MessageEvent<{ id: number; ok: boolean; msgpackB64?: string; error?: string }>) => {
+            if (event.data?.id !== id) return
+            window.clearTimeout(timer)
+            worker.removeEventListener('message', onMessage)
+            if (event.data.ok && event.data.msgpackB64) {
+                resolve({ mode: 'msgpack', msgpackB64: event.data.msgpackB64 })
+                return
+            }
+            reject(new Error(event.data.error || 'Worker MessagePack encode failed'))
+        }
+        worker.addEventListener('message', onMessage)
+        try {
+            worker.postMessage({ id, payload })
+        } catch (error) {
+            window.clearTimeout(timer)
+            worker.removeEventListener('message', onMessage)
+            reject(error)
+        }
+    })
 }
 
 function decodeMsgpackB64Sync(b64: string): unknown {

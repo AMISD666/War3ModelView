@@ -8,6 +8,7 @@
 
 // @ts-ignore
 import { parseMDX, parseMDL, decodeBLP, getBLPImageData } from 'war3-model';
+import { applyTextureAdjustments, isDefaultTextureAdjustments, type TextureAdjustments } from '../utils/textureAdjustments';
 
 interface DecodeTextureTaskPayload {
     id: string;
@@ -15,6 +16,7 @@ interface DecodeTextureTaskPayload {
     buffer: ArrayBuffer;
     maxDimension?: number;
     preferBlpBaseMip?: boolean;
+    adjustments?: TextureAdjustments;
 }
 
 /**
@@ -110,7 +112,7 @@ function chooseBlpMipLevel(blp: any, maxDimension?: number, preferBlpBaseMip?: b
 }
 
 async function decodeTextureToBitmap(task: DecodeTextureTaskPayload): Promise<ImageBitmap> {
-    const { buffer, path, maxDimension, preferBlpBaseMip } = task;
+    const { buffer, path, maxDimension, preferBlpBaseMip, adjustments } = task;
     let imageData: ImageData | null = null;
 
     if (path.toLowerCase().endsWith('.tga')) {
@@ -132,6 +134,9 @@ async function decodeTextureToBitmap(task: DecodeTextureTaskPayload): Promise<Im
 
     if (!imageData) {
         throw new Error('Failed to decode texture');
+    }
+    if (adjustments && !isDefaultTextureAdjustments(adjustments)) {
+        imageData = applyTextureAdjustments(imageData, adjustments);
     }
 
     // CRITICAL: MUST set premultiplyAlpha to 'none' otherwise WebGL loses RGB data on transparent pixels.

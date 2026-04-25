@@ -227,6 +227,8 @@ export function useRpcClient<TState, TPatch = never>(
         let unsubscribePatch: (() => void) | undefined;
         let unsubscribeActiveModelChanged: (() => void) | undefined;
         let hasReceivedData = false;
+        let pendingActiveModelRequest = false;
+        let activeModelRequestTimer: number | null = null;
         const bootstrapTimeouts: number[] = [];
         const windowLabel = windowGateway.getCurrentWindowLabel();
 
@@ -248,6 +250,32 @@ export function useRpcClient<TState, TPatch = never>(
                 const timeoutId = bootstrapTimeouts.pop();
                 if (timeoutId !== undefined) clearTimeout(timeoutId);
             }
+        };
+
+        const clearActiveModelRequestTimer = () => {
+            if (activeModelRequestTimer !== null) {
+                window.clearTimeout(activeModelRequestTimer);
+                activeModelRequestTimer = null;
+            }
+        };
+
+        const isWindowVisible = () => document.visibilityState !== 'hidden';
+
+        const scheduleActiveModelRequest = (reason: string, delayMs = 900) => {
+            clearActiveModelRequestTimer();
+            activeModelRequestTimer = window.setTimeout(() => {
+                activeModelRequestTimer = null;
+                if (!isMounted || hasReceivedData) return;
+                if (!isWindowVisible()) {
+                    pendingActiveModelRequest = true;
+                    return;
+                }
+                pendingActiveModelRequest = false;
+                markStandalonePerf('snapshot_request_after_model_change', { windowId, windowLabel, reason, delayMs });
+                emitRequest(reason);
+                bootstrapRequestedRef.current = false;
+                scheduleBootstrapRequests();
+            }, delayMs);
         };
 
         const scheduleBootstrapRequests = () => {
@@ -327,14 +355,20 @@ export function useRpcClient<TState, TPatch = never>(
             if (!payload?.hasModelData) {
                 hasReceivedData = false;
                 clearBootstrapTimeouts();
+                clearActiveModelRequestTimer();
+                pendingActiveModelRequest = false;
                 pendingSnapshotIdRef.current = null;
                 setState(initialState);
                 return;
             }
             hasReceivedData = false;
             clearBootstrapTimeouts();
-            emitRequest('active-model-changed');
-            scheduleBootstrapRequests();
+            if (!isWindowVisible()) {
+                pendingActiveModelRequest = true;
+                markStandalonePerf('snapshot_request_deferred_hidden', { windowId, windowLabel });
+                return;
+            }
+            scheduleActiveModelRequest('active-model-changed-fallback', 900);
         }).then(unlisten => {
             if (!isMounted) {
                 unlisten();
@@ -343,6 +377,12 @@ export function useRpcClient<TState, TPatch = never>(
             unsubscribeActiveModelChanged = unlisten;
         }).catch(e => debugLog(`[RPC Client] Active-model listen error: ${e}`));
 
+        const handleVisibilityChange = () => {
+            if (!pendingActiveModelRequest || !isWindowVisible()) return;
+            scheduleActiveModelRequest('active-model-visible', 120);
+        };
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+
         return () => {
             debugLog(`[RPC Client][${windowId}] Unmounting client hook.`);
             isMounted = false;
@@ -350,7 +390,9 @@ export function useRpcClient<TState, TPatch = never>(
             if (unsubscribeSync) unsubscribeSync();
             if (unsubscribePatch) unsubscribePatch();
             if (unsubscribeActiveModelChanged) unsubscribeActiveModelChanged();
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
             clearBootstrapTimeouts();
+            clearActiveModelRequestTimer();
         }
     }, [windowId]);
 

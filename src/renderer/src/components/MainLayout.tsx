@@ -74,6 +74,7 @@ import {
 import { uiText } from '../constants/uiText'
 import { useGlobalColorAdjustStore } from '../store/globalColorAdjustStore'
 import { applyGlobalColorAdjustmentsToModel } from '../services/globalColorAdjustModelService'
+import { hasActiveGlobalColorAdjustSettings } from '../utils/globalColorAdjustCore'
 import { commitSavedModelToStore } from '../services/commitSavedModelService'
 import { getBasename, getDirname, joinPath, normalizeWindowsPath } from '../utils/windowsPath'
 import { AboutDialog } from './shell/AboutDialog'
@@ -234,13 +235,59 @@ const MainLayout: React.FC = () => {
     const materialManagerPreview = useModelStore(state => state.materialManagerPreview)
     const nodeEditorPreview = useModelStore(state => state.nodeEditorPreview)
     const globalColorAdjustSettings = useGlobalColorAdjustStore(state => state.settings)
-    const viewerModelData = useMemo(
-        () => applyGlobalColorAdjustmentsToModel(
-            mergeNodeEditorPreview(mergeMaterialManagerPreview(modelData, materialManagerPreview), nodeEditorPreview),
-            globalColorAdjustSettings
-        ),
-        [modelData, materialManagerPreview, nodeEditorPreview, globalColorAdjustSettings]
+    const mergedViewerModelData = useMemo(
+        () => mergeNodeEditorPreview(mergeMaterialManagerPreview(modelData, materialManagerPreview), nodeEditorPreview),
+        [modelData, materialManagerPreview, nodeEditorPreview]
     )
+    const hasActiveGlobalColorAdjust = useMemo(
+        () => hasActiveGlobalColorAdjustSettings(globalColorAdjustSettings),
+        [globalColorAdjustSettings]
+    )
+    const [viewerModelData, setViewerModelData] = useState<any>(null)
+    useEffect(() => {
+        if (!hasActiveGlobalColorAdjust) {
+            setViewerModelData((previous: any) => previous === mergedViewerModelData ? previous : mergedViewerModelData)
+            return
+        }
+
+        let cancelled = false
+        let idleId: number | null = null
+        let timerId: number | null = null
+        setViewerModelData((previous: any) => previous === mergedViewerModelData ? previous : mergedViewerModelData)
+
+        const applyAdjustments = () => {
+            if (cancelled) return
+            const start = performance.now()
+            const adjusted = applyGlobalColorAdjustmentsToModel(mergedViewerModelData, globalColorAdjustSettings)
+            markStandalonePerf('viewer_global_color_adjust_applied', {
+                modelPath: modelPath || '',
+                elapsedMs: Number((performance.now() - start).toFixed(2)),
+                deferred: true,
+            })
+            if (!cancelled) {
+                setViewerModelData(adjusted)
+            }
+        }
+
+        const requestIdleCallback = (window as any).requestIdleCallback as
+            | ((callback: () => void, options?: { timeout?: number }) => number)
+            | undefined
+        if (typeof requestIdleCallback === 'function') {
+            idleId = requestIdleCallback(applyAdjustments, { timeout: 700 })
+        } else {
+            timerId = window.setTimeout(applyAdjustments, 120)
+        }
+
+        return () => {
+            cancelled = true
+            if (idleId !== null && typeof (window as any).cancelIdleCallback === 'function') {
+                ;(window as any).cancelIdleCallback(idleId)
+            }
+            if (timerId !== null) {
+                window.clearTimeout(timerId)
+            }
+        }
+    }, [mergedViewerModelData, globalColorAdjustSettings, hasActiveGlobalColorAdjust, modelPath])
     const standaloneWarmupStartedRef = useRef(false)
     const toolWindowSnapshotCacheRef = useRef(new ToolWindowSnapshotCache())
     const toolWindowBroadcastCoordinatorRef = useRef(new ToolWindowBroadcastCoordinator())
@@ -307,7 +354,11 @@ const MainLayout: React.FC = () => {
             sequences: md?.Sequences ?? [],
             modelPath: live.modelPath ?? '',
             renameInitialName: node?.Name ?? '',
-            allNodes: live.nodes ?? [],
+            allNodes: (live.nodes ?? []).map((item: any) => ({
+                ObjectId: item?.ObjectId,
+                Name: item?.Name,
+                Parent: item?.Parent,
+            })),
             pivotPoints: md?.PivotPoints ?? [],
         }
     }, [])
@@ -1022,7 +1073,7 @@ const MainLayout: React.FC = () => {
             globalSequences: _modelData?.GlobalSequences || [],
             sequences: _modelData?.Sequences || [],
             materials: _modelData?.Materials || [],
-            geosets: _modelData?.Geosets || [],
+            geosets: stripGeosetDataForToolWindow(_modelData?.Geosets),
             pickedGeosetIndex: _pickedGeosetIndex
         };
     }, []);
@@ -1146,16 +1197,43 @@ const MainLayout: React.FC = () => {
         toolWindowBroadcastCoordinatorRef.current.broadcastGlobalColorAdjust(getGlobalColorAdjustState())
     }, [globalColorAdjustSettings, getGlobalColorAdjustState])
 
+    const hasLoadedModelData = !!modelData
     useEffect(() => {
-        void desktopGateway.emit('active-model-changed', {
-            activeTabId,
-            modelPath: modelPath || '',
-            hasModelData: !!modelData,
-        }).catch(() => { })
-    }, [activeTabId, modelPath, modelData])
+        let cancelled = false
+        let idleId: number | null = null
+        let timerId: number | null = null
+        const emitChange = () => {
+            if (cancelled) return
+            void desktopGateway.emit('active-model-changed', {
+                activeTabId,
+                modelPath: modelPath || '',
+                hasModelData: hasLoadedModelData,
+            }).catch(() => { })
+        }
+        const requestIdleCallback = (window as any).requestIdleCallback as
+            | ((callback: () => void, options?: { timeout?: number }) => number)
+            | undefined
+        if (typeof requestIdleCallback === 'function') {
+            idleId = requestIdleCallback(emitChange, { timeout: hasLoadedModelData ? 500 : 0 })
+        } else {
+            timerId = window.setTimeout(emitChange, hasLoadedModelData ? 120 : 0)
+        }
+        return () => {
+            cancelled = true
+            if (idleId !== null && typeof (window as any).cancelIdleCallback === 'function') {
+                ;(window as any).cancelIdleCallback(idleId)
+            }
+            if (timerId !== null) {
+                window.clearTimeout(timerId)
+            }
+        }
+    }, [activeTabId, modelPath, hasLoadedModelData])
 
     useEffect(() => {
-        return toolWindowBroadcastCoordinatorRef.current.attach(windowManager)
+        return toolWindowBroadcastCoordinatorRef.current.attach(windowManager, {
+            initialLoadDelayMs: 350,
+            initialBroadcastDelayMs: 250,
+        })
     }, []); // Zero dependencies: stable throughout lifecycle
 
     const handleEditorResizeStart = (e: React.MouseEvent) => {
@@ -1307,6 +1385,11 @@ const MainLayout: React.FC = () => {
             setPlaying,
         })
     }, [setZustandModelData, setZustandLoading, modelPath, setMainMode, setPlaying])
+
+    const handleModelFirstFrameReady = useCallback(() => {
+        setIsLoading(false)
+        setZustandLoading(false)
+    }, [setZustandLoading])
 
 
     const handleOpen = handleImport // Alias for MenuBar
@@ -2138,6 +2221,7 @@ const MainLayout: React.FC = () => {
                                         onTogglePlay={handleTogglePlay}
                                         onToggleLooping={handleToggleLooping}
                                         onModelLoaded={handleModelLoaded}
+                                        onModelFirstFrameReady={handleModelFirstFrameReady}
                                         showFPS={mainMode !== 'uv' && showFPS}
                                         playbackSpeed={playbackSpeed}
                                         viewPreset={viewPreset}

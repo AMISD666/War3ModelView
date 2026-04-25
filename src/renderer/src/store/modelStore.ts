@@ -19,6 +19,7 @@ import {
 import { calculateModelExtent, calculateModelNormals } from '../utils/geometryUtils';
 import { remapTextureRefWithMap } from '../utils/materialTextureRelations';
 import { getPivotChainSum } from '../utils/nodeUtils';
+import { markStandalonePerf } from '../utils/standalonePerf';
 
 const MAX_CACHED_RENDERERS = 5;
 
@@ -64,6 +65,24 @@ type ClipboardPayload = {
 type SetModelDataOptions = {
     skipAutoRecalculate?: boolean;
     skipModelRebuild?: boolean;
+    deferTabSnapshot?: boolean;
+    deferNodeHydration?: boolean;
+};
+
+type DeferredTabSnapshotUpdate = {
+    activeTabId: string;
+    snapshot: Partial<TabSnapshot>;
+};
+
+const scheduleIdleTask = (callback: () => void, timeout = 800): void => {
+    const requestIdleCallback = (globalThis as any).requestIdleCallback as
+        | ((cb: () => void, options?: { timeout?: number }) => number)
+        | undefined;
+    if (typeof requestIdleCallback === 'function') {
+        requestIdleCallback(callback, { timeout });
+        return;
+    }
+    setTimeout(callback, 0);
 };
 
 /** 独立材质管理器编辑预览：未保存前不写入权威 modelData，仅保存/另存为时提交 */
@@ -1211,17 +1230,27 @@ export const useModelStore = create<ModelState>((set, get) => ({
     autoKeyframe: true,
 
     setModelData: (data, path, options = {}) => {
+        const perfStart = performance.now();
         if (data && path) {
             (data as any).__modelPath = path;
         }
         useRendererStore.getState().bumpVertexRenderRevision();
         const skipAutoRecalculate = !!options.skipAutoRecalculate;
         const skipModelRebuild = !!options.skipModelRebuild;
+        const deferTabSnapshot = !!options.deferTabSnapshot;
+        const deferNodeHydration = !!options.deferNodeHydration && !!data && skipModelRebuild;
 
-        let nodes = extractNodesFromModel(data);        // FORCE NO REORDERING ON LOAD to prevent invalidating saved bone references
+        const nodeExtractStart = performance.now();
+        let nodes = deferNodeHydration
+            ? []
+            : extractNodesFromModel(data);        // FORCE NO REORDERING ON LOAD to prevent invalidating saved bone references
+        const nodeExtractMs = performance.now() - nodeExtractStart;
+        const rebuildStart = performance.now();
         const correctedData = skipModelRebuild ? data : updateModelDataWithNodes(data, nodes, false);
+        const rebuildMs = performance.now() - rebuildStart;
 
         // Auto recalculate extent and normals using optimized unified utilities
+        const recalcStart = performance.now();
         const rendererState = useRendererStore.getState();
         if (!skipAutoRecalculate && rendererState.autoRecalculateExtent) {
             calculateModelExtent(correctedData);
@@ -1229,6 +1258,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
         if (!skipAutoRecalculate && rendererState.autoRecalculateNormals) {
             calculateModelNormals(correctedData);
         }
+        const recalcMs = performance.now() - recalcStart;
 
         // Reset animation state on new model load
         const geosetCount = (correctedData as any)?.Geosets?.length || 0;
@@ -1237,7 +1267,9 @@ export const useModelStore = create<ModelState>((set, get) => ({
         // IMPORTANT: Always use `nodes` from extractNodesFromModel (which correctly sets .type for each node)
         // DO NOT use correctedData.Nodes directly - raw MDX Nodes lack the `.type` field needed by the UI
         // If correctedData has updated Nodes, re-extract from it to get fresh typed nodes
-        const correctedNodes = correctedData !== data
+        const correctedNodes = deferNodeHydration
+            ? []
+            : correctedData !== data
             ? extractNodesFromModel(correctedData)
             : nodes;
 
@@ -1249,7 +1281,9 @@ export const useModelStore = create<ModelState>((set, get) => ({
         const nextCurrentSequence = hasSequences ? defaultSequenceIndex : -1;
         const nextCurrentFrame = 0;
         const nextHiddenGeosetIds = allGeosetIds;
+        let deferredTabSnapshot: DeferredTabSnapshotUpdate | null = null;
 
+        const zustandSetStart = performance.now();
         set((state) => {
             const nextState: Partial<ModelState> & { tabs?: Tab[]; dirtyTabs?: Record<string, boolean> } = {
                 modelData: correctedData,
@@ -1272,6 +1306,26 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
             const activeTabId = state.activeTabId
             if (!activeTabId) {
+                return nextState;
+            }
+
+            if (deferTabSnapshot) {
+                deferredTabSnapshot = {
+                    activeTabId,
+                    snapshot: {
+                        modelData: correctedData,
+                        modelPath: resolvedModelPath,
+                        nodes: sanitizeNodesArray(correctedNodes),
+                        sequences: [...sequences],
+                        currentSequence: nextCurrentSequence,
+                        currentFrame: nextCurrentFrame,
+                        hiddenGeosetIds: [...nextHiddenGeosetIds],
+                        lastActive: Date.now()
+                    }
+                };
+                const nextDirtyTabs = { ...state.dirtyTabs }
+                delete nextDirtyTabs[activeTabId]
+                nextState.dirtyTabs = nextDirtyTabs
                 return nextState;
             }
 
@@ -1302,6 +1356,84 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
             return nextState;
         });
+        const zustandSetMs = performance.now() - zustandSetStart;
+
+        markStandalonePerf('model_store_set_data', {
+            modelPath: resolvedModelPath || '',
+            deferNodeHydration,
+            deferTabSnapshot,
+            nodeExtractMs: Number(nodeExtractMs.toFixed(2)),
+            rebuildMs: Number(rebuildMs.toFixed(2)),
+            recalcMs: Number(recalcMs.toFixed(2)),
+            zustandSetMs: Number(zustandSetMs.toFixed(2)),
+            totalMs: Number((performance.now() - perfStart).toFixed(2)),
+            nodeCount: correctedNodes.length,
+            geosetCount,
+            sequenceCount: sequences.length,
+        });
+
+        if (deferNodeHydration && correctedData) {
+            const pendingForNodeHydration = deferredTabSnapshot as DeferredTabSnapshotUpdate | null;
+            const pendingActiveTabId = pendingForNodeHydration ? pendingForNodeHydration.activeTabId : null;
+            const pendingSnapshotBase = pendingForNodeHydration ? pendingForNodeHydration.snapshot : null;
+            scheduleIdleTask(() => {
+                const hydrateStart = performance.now();
+                const hydratedNodes = extractNodesFromModel(correctedData);
+                const sanitizedNodes = sanitizeNodesArray(hydratedNodes);
+                markStandalonePerf('model_store_nodes_hydrated', {
+                    modelPath: resolvedModelPath || '',
+                    elapsedMs: Number((performance.now() - hydrateStart).toFixed(2)),
+                    nodeCount: hydratedNodes.length,
+                });
+                set((state) => {
+                    if (state.modelData !== correctedData || state.modelPath !== resolvedModelPath) {
+                        return state;
+                    }
+                    const nextState: Partial<ModelState> & { tabs?: Tab[] } = {
+                        nodes: hydratedNodes,
+                    };
+                    if (pendingActiveTabId && state.tabs.some((tab) => tab.id === pendingActiveTabId)) {
+                        nextState.tabs = state.tabs.map((tab) => {
+                            if (tab.id !== pendingActiveTabId) return tab;
+                            return {
+                                ...tab,
+                                snapshot: {
+                                    ...tab.snapshot,
+                                    ...pendingSnapshotBase,
+                                    nodes: sanitizedNodes,
+                                    lastActive: Date.now(),
+                                },
+                            };
+                        });
+                    }
+                    return nextState;
+                });
+            });
+            return;
+        }
+
+        if (deferredTabSnapshot !== null) {
+            const pending = deferredTabSnapshot as DeferredTabSnapshotUpdate;
+            scheduleIdleTask(() => {
+                set((state) => {
+                    if (!state.tabs.some((tab) => tab.id === pending.activeTabId)) {
+                        return state;
+                    }
+                    return {
+                        tabs: state.tabs.map((tab) => {
+                            if (tab.id !== pending.activeTabId) return tab;
+                            return {
+                                ...tab,
+                                snapshot: {
+                                    ...tab.snapshot,
+                                    ...pending.snapshot,
+                                },
+                            };
+                        }),
+                    };
+                });
+            });
+        }
     },
 
     getModelDataForSave: (forceReorder = false) => {

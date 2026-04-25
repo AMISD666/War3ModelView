@@ -35,7 +35,7 @@ export interface HandleLoadedModelContext {
     commitLoadedModel: (
         data: ModelData | null,
         path: string | null,
-        options?: { skipAutoRecalculate?: boolean; skipModelRebuild?: boolean },
+        options?: { skipAutoRecalculate?: boolean; skipModelRebuild?: boolean; deferTabSnapshot?: boolean; deferNodeHydration?: boolean },
     ) => void
     completeLoading: () => void
     setMainMode: (mode: 'view' | 'geometry' | 'uv' | 'animation') => void
@@ -133,6 +133,8 @@ export class OpenModelWorkflow {
         context.commitLoadedModel(data, data.path || context.currentModelPath, {
             skipAutoRecalculate: true,
             skipModelRebuild: true,
+            deferTabSnapshot: true,
+            deferNodeHydration: true,
         })
         context.completeLoading()
 

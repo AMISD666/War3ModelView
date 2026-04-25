@@ -1,7 +1,7 @@
 import { windowGateway, type ManagedWindow, type WindowGateway } from '../../infrastructure/window'
 import { isKeyframeAnimVectorIntTrack, serializeAnimVectorForKeyframeIpc } from '../../utils/animVectorIpc'
 import { markStandalonePerf } from '../../utils/standalonePerf'
-import { chooseRpcEmitEncoding } from '../../utils/rpcSerialization'
+import { chooseRpcEmitEncoding, chooseRpcEmitEncodingInWorker } from '../../utils/rpcSerialization'
 
 const RPC_INVOKE_EMIT_THRESHOLD_CHARS = 48 * 1024
 
@@ -50,18 +50,25 @@ export class WindowRpcTransport {
     async emitToolWindowEvent(windowId: string, eventName: string, payload: unknown): Promise<void> {
         if (isLikelyLargeRpcPayload(payload)) {
             try {
-                const choice = chooseRpcEmitEncoding(payload)
+                const encodeStart = performance.now()
+                let encodedInWorker = true
+                const choice = await chooseRpcEmitEncodingInWorker(payload).catch(() => {
+                    encodedInWorker = false
+                    return chooseRpcEmitEncoding(payload, { preferMsgpack: true })
+                })
                 if (choice.mode === 'msgpack' && choice.msgpackB64) {
                     await this.gateway.emitMsgpackPayload(windowId, eventName, choice.msgpackB64)
                     markStandalonePerf('invoke_emit_msgpack', {
                         windowId,
                         eventName,
                         b64Chars: choice.msgpackB64.length,
+                        encodeMs: Number((performance.now() - encodeStart).toFixed(2)),
+                        encodedInWorker,
                     })
                     return
                 }
 
-                const json = choice.json ?? JSON.stringify(payload)
+                const json = (choice as { json?: string }).json ?? JSON.stringify(payload)
                 if (json.length >= RPC_INVOKE_EMIT_THRESHOLD_CHARS) {
                     await this.gateway.emitJsonPayload(windowId, eventName, json)
                     markStandalonePerf('invoke_emit_large_payload', {
