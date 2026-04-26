@@ -1,12 +1,20 @@
 import { Command } from '../utils/CommandManager'
-import { ModelResourceManager } from '../../../../../war3-model-4.0.0/renderer/modelResourceManager'
 import { useModelStore } from '../store/modelStore'
+import { useRendererStore } from '../store/rendererStore'
 
 interface VertexBindChange {
     geosetIndex: number
     vertexIndex: number
-    oldGroupIndex: number
-    newGroupIndex: number
+    oldGroup: number[]
+    newGroup: number[]
+}
+
+const toGroup = (group: any): number[] => {
+    if (!Array.isArray(group)) return []
+    return group
+        .map((value: any) => Number(value))
+        .filter((value: number) => Number.isFinite(value) && value >= 0)
+        .map((value: number) => Math.floor(value))
 }
 
 const toGroupsMatrix = (groups: any): number[][] => {
@@ -72,6 +80,48 @@ const normalizeGeosetSkinning = (geoset: any) => {
     geoset.TotalGroupsCount = compactedGroups.reduce((sum, group) => sum + group.length, 0)
 }
 
+const groupsEqual = (a: number[], b: number[]): boolean => {
+    return a.length === b.length && a.every((value, index) => value === b[index])
+}
+
+const findOrCreateGroup = (geoset: any, group: number[]): number => {
+    if (!Array.isArray(geoset.Groups)) {
+        geoset.Groups = []
+    }
+
+    const normalized = group.length > 0 ? [...group] : [0]
+    for (let i = 0; i < geoset.Groups.length; i++) {
+        if (groupsEqual(toGroup(geoset.Groups[i]), normalized)) {
+            return i
+        }
+    }
+
+    geoset.Groups.push(normalized)
+    return geoset.Groups.length - 1
+}
+
+const writeSkinWeightsForVertex = (geoset: any, vertexIndex: number): void => {
+    if (!geoset?.SkinWeights || !geoset?.VertexGroup || !Array.isArray(geoset.Groups)) return
+    const base = vertexIndex * 8
+    if (base < 0 || base + 7 >= geoset.SkinWeights.length) return
+
+    const groupIndex = geoset.VertexGroup[vertexIndex]
+    const group = toGroup(geoset.Groups[groupIndex]).slice(0, 4)
+    const bones = group.length > 0 ? group : [0]
+    const baseWeight = Math.floor(255 / bones.length)
+    let remainder = 255 - baseWeight * bones.length
+
+    for (let i = 0; i < 4; i++) {
+        geoset.SkinWeights[base + i] = bones[i] !== undefined ? Math.min(255, Math.max(0, bones[i])) : 0
+        if (i < bones.length) {
+            geoset.SkinWeights[base + 4 + i] = baseWeight + (remainder > 0 ? 1 : 0)
+            remainder -= 1
+        } else {
+            geoset.SkinWeights[base + 4 + i] = 0
+        }
+    }
+}
+
 export class BindVerticesCommand implements Command {
     private changes: VertexBindChange[] | null = null
 
@@ -79,7 +129,7 @@ export class BindVerticesCommand implements Command {
         private renderer: any,
         private targets: { geosetIndex: number, vertexIndices: number[] }[],
         private boneId: number,
-        private operation: 'bind' | 'unbind'
+        private operation: 'bind' | 'unbind' | 'exclusiveBind'
     ) { }
 
     execute() {        if (!this.changes) {
@@ -103,13 +153,15 @@ export class BindVerticesCommand implements Command {
             if (!geoset || !geoset.VertexGroup || !geoset.Groups) return
             target.vertexIndices.forEach(vIdx => {
                 const oldGroupIndex = geoset.VertexGroup[vIdx]
-                const oldGroup = geoset.Groups[oldGroupIndex] || [] // Should be array of bone ids
+                const oldGroup = toGroup(geoset.Groups[oldGroupIndex]) // Should be array of bone ids
 
                 let newGroup: number[] = []
 
                 // console.log(`[Debug] Vertex ${vIdx} Old Group Index: ${oldGroupIndex} Content:`, oldGroup)
 
-                if (this.operation === 'bind') {
+                if (this.operation === 'exclusiveBind') {
+                    newGroup = [this.boneId]
+                } else if (this.operation === 'bind') {
                     // Check if already bound
                     // Using loose equality or finding in array
                     const alreadyBound = oldGroup.some((id: number) => id === this.boneId)
@@ -131,29 +183,12 @@ export class BindVerticesCommand implements Command {
                 }
 
                 // Check if this new group configuration already exists
-                let existingGroupIndex = -1
-                for (let i = 0; i < geoset.Groups.length; i++) {
-                    const g = geoset.Groups[i]
-                    if (g.length === newGroup.length && g.every((val: number, index: number) => val === newGroup[index])) {
-                        existingGroupIndex = i
-                        break
-                    }
-                }
-
-                if (existingGroupIndex === -1) {
-                    // Create new group
-                    geoset.Groups.push(newGroup)
-                    existingGroupIndex = geoset.Groups.length - 1                }
-                // else {
-                //      console.log(`[Debug] Found existing group ${existingGroupIndex} for configuration:`, newGroup)
-                // }
-
-                if (oldGroupIndex !== existingGroupIndex) {
+                if (!groupsEqual(oldGroup, newGroup)) {
                     this.changes!.push({
                         geosetIndex: target.geosetIndex,
                         vertexIndex: vIdx,
-                        oldGroupIndex,
-                        newGroupIndex: existingGroupIndex
+                        oldGroup,
+                        newGroup
                     })
                 }
             })
@@ -170,7 +205,8 @@ export class BindVerticesCommand implements Command {
             const geoset = this.renderer.model.Geosets[change.geosetIndex]
             if (geoset && geoset.VertexGroup) {
                 // Check if we need to upgrade from Uint8Array to Uint16Array
-                const targetIndex = useNew ? change.newGroupIndex : change.oldGroupIndex
+                const targetGroup = useNew ? change.newGroup : change.oldGroup
+                const targetIndex = findOrCreateGroup(geoset, targetGroup)
                 if (targetIndex > 255 && geoset.VertexGroup instanceof Uint8Array) {
                     console.warn(`[BindVerticesCommand] Upgrading VertexGroup for geoset ${change.geosetIndex} to Uint16Array due to index ${targetIndex}`)
                     geoset.VertexGroup = new Uint16Array(geoset.VertexGroup)
@@ -188,6 +224,11 @@ export class BindVerticesCommand implements Command {
             }
         })
 
+        this.changes.forEach((change) => {
+            const geoset = this.renderer.model.Geosets[change.geosetIndex]
+            writeSkinWeightsForVertex(geoset, change.vertexIndex)
+        })
+
         const storeGeosets = useModelStore.getState().modelData?.Geosets
         if (Array.isArray(storeGeosets) && storeGeosets.length > 0) {
             const nextGeosets = [...storeGeosets]
@@ -197,22 +238,28 @@ export class BindVerticesCommand implements Command {
                 nextGeosets[geosetIndex] = {
                     ...nextGeosets[geosetIndex],
                     Groups: rendererGeoset.Groups.map((group: number[]) => [...group]),
+                    TotalGroupsCount: rendererGeoset.TotalGroupsCount,
                     VertexGroup: rendererGeoset.VertexGroup instanceof Uint16Array
                         ? Array.from(rendererGeoset.VertexGroup)
-                        : new Uint8Array(rendererGeoset.VertexGroup)
-                }
+                        : new Uint8Array(rendererGeoset.VertexGroup),
+                    ...(rendererGeoset.SkinWeights ? { SkinWeights: new Uint8Array(rendererGeoset.SkinWeights) } : {})
+                } as any
             })
             useModelStore.getState().setGeosets(nextGeosets as any)
         }
 
-        // Update GPU buffers using ModelResourceManager singleton
-        const resourceManager = ModelResourceManager.getInstance()
-        affectedGeosets.forEach(geosetIndex => {            if (resourceManager && typeof resourceManager.updateGeosetGroups === 'function') {
-                resourceManager.updateGeosetGroups(this.renderer.model, geosetIndex)
+        // Update GPU skinning buffers through the active renderer instance.
+        affectedGeosets.forEach(geosetIndex => {
+            if (typeof this.renderer.updateGeosetGroups === 'function') {
+                this.renderer.updateGeosetGroups(geosetIndex)
             } else {
-                console.warn('[BindVerticesCommand] ModelResourceManager.updateGeosetGroups not available')
+                console.warn('[BindVerticesCommand] renderer.updateGeosetGroups not available')
             }
         })
+
+        if (affectedGeosets.size > 0) {
+            useRendererStore.getState().bumpVertexRenderRevision()
+        }
 
         // Also force a redraw
         if (this.renderer.emit) {

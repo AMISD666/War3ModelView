@@ -125,6 +125,10 @@ export interface UIState {
 
 // Tab State Snapshot (for saving/restoring when switching tabs)
 export interface TabSnapshot {
+    documentId?: string | null;
+    documentRevision?: number;
+    assetRevision?: number;
+    previewRevision?: number;
     modelData: ModelData | null;
     modelPath: string | null;
     nodes: ModelNode[];

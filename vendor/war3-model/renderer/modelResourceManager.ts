@@ -341,6 +341,12 @@ export class ModelResourceManager {
             const gl = this.gl;
             const buffers = this.buffers.get(model)!;
 
+            if (buffers.skinWeightBuffer[geosetIndex] && geoset.SkinWeights) {
+                gl.bindBuffer(gl.ARRAY_BUFFER, buffers.skinWeightBuffer[geosetIndex]);
+                gl.bufferData(gl.ARRAY_BUFFER, geoset.SkinWeights, gl.STATIC_DRAW);
+                gl.bindBuffer(gl.ARRAY_BUFFER, null);
+            }
+
             if (buffers.groupBuffer[geosetIndex]) {
                 gl.bindBuffer(gl.ARRAY_BUFFER, buffers.groupBuffer[geosetIndex]);
                 const buffer = new Uint16Array(geoset.VertexGroup.length * 4);
@@ -364,31 +370,43 @@ export class ModelResourceManager {
             const device = this.device;
             const buffers = this.gpuBuffers.get(model)!;
 
+            if (buffers.skinWeightBuffer[geosetIndex] && geoset.SkinWeights) {
+                buffers.skinWeightBuffer[geosetIndex].destroy();
+                buffers.skinWeightBuffer[geosetIndex] = device.createBuffer({
+                    label: `SkinWeight ${geosetIndex} (updated)`,
+                    size: geoset.SkinWeights.byteLength,
+                    usage: GPUBufferUsage.VERTEX,
+                    mappedAtCreation: true
+                });
+                new Uint8Array(buffers.skinWeightBuffer[geosetIndex].getMappedRange()).set(geoset.SkinWeights);
+                buffers.skinWeightBuffer[geosetIndex].unmap();
+            }
+
             if (buffers.groupBuffer[geosetIndex]) {
                 buffers.groupBuffer[geosetIndex].destroy();
-            }
 
-            // Reusing logic from initGPUBuffers (Switched to Uint16Array to match WebGL and avoid BoneID truncation)
-            const buffer = new Uint16Array(geoset.VertexGroup.length * 4);
-            for (let j = 0; j < buffer.length; j += 4) {
-                const index = j / 4;
-                const groupIndex = geoset.VertexGroup[index];
-                const group = geoset.Groups && geoset.Groups[groupIndex] ? geoset.Groups[groupIndex] : [0];
-                // Groups contains ObjectIds directly from MDX file
-                buffer[j] = group[0] ?? 0;
-                buffer[j + 1] = group.length > 1 ? group[1] : BONE_SENTINEL;
-                buffer[j + 2] = group.length > 2 ? group[2] : BONE_SENTINEL;
-                buffer[j + 3] = group.length > 3 ? group[3] : BONE_SENTINEL;
-            }
+                // Reusing logic from initGPUBuffers (Switched to Uint16Array to match WebGL and avoid BoneID truncation)
+                const buffer = new Uint16Array(geoset.VertexGroup.length * 4);
+                for (let j = 0; j < buffer.length; j += 4) {
+                    const index = j / 4;
+                    const groupIndex = geoset.VertexGroup[index];
+                    const group = geoset.Groups && geoset.Groups[groupIndex] ? geoset.Groups[groupIndex] : [0];
+                    // Groups contains ObjectIds directly from MDX file
+                    buffer[j] = group[0] ?? 0;
+                    buffer[j + 1] = group.length > 1 ? group[1] : BONE_SENTINEL;
+                    buffer[j + 2] = group.length > 2 ? group[2] : BONE_SENTINEL;
+                    buffer[j + 3] = group.length > 3 ? group[3] : BONE_SENTINEL;
+                }
 
-            buffers.groupBuffer[geosetIndex] = device.createBuffer({
-                label: `group ${geosetIndex} (updated)`,
-                size: buffer.byteLength,
-                usage: GPUBufferUsage.VERTEX,
-                mappedAtCreation: true
-            });
-            new Uint16Array(buffers.groupBuffer[geosetIndex].getMappedRange()).set(buffer);
-            buffers.groupBuffer[geosetIndex].unmap();
+                buffers.groupBuffer[geosetIndex] = device.createBuffer({
+                    label: `group ${geosetIndex} (updated)`,
+                    size: buffer.byteLength,
+                    usage: GPUBufferUsage.VERTEX,
+                    mappedAtCreation: true
+                });
+                new Uint16Array(buffers.groupBuffer[geosetIndex].getMappedRange()).set(buffer);
+                buffers.groupBuffer[geosetIndex].unmap();
+            }
         }
     }
 

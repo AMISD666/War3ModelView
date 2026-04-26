@@ -1204,8 +1204,8 @@ function parseParticleEmitter2(state: State, model: Model): void {
             keyword === 'TailDecayUVAnim') {
             res[keyword] = new Uint32Array(3);
             parseArray(state, res[keyword], 0);
-        } else if (keyword === 'Transparent' || keyword === 'Blend' || keyword === 'Additive' ||
-            keyword === 'AlphaKey' || keyword === 'Modulate' || keyword === 'Modulate2x') {
+        } else if (keyword === 'None' || keyword === 'Transparent' || keyword === 'Blend' || keyword === 'Additive' ||
+            keyword === 'AddAlpha' || keyword === 'AlphaKey' || keyword === 'Modulate' || keyword === 'Modulate2x') {
             res.FilterMode = ParticleEmitter2FilterMode[keyword];
         } else {
             res[keyword] = parseNumber(state);

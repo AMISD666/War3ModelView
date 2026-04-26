@@ -21,7 +21,17 @@ const INT1_ANIM_FIELD_NAMES = new Set([
 /** 关键帧编辑器 payload 中的 fieldName 是否为整型轨道（Vector 为 Int32，MsgPack 后常为 Uint8Array(4n)） */
 export function isKeyframeAnimVectorIntTrack(fieldName?: string): boolean {
     if (!fieldName) return false
-    return INT1_ANIM_FIELD_NAMES.has(fieldName)
+    for (const name of INT1_ANIM_FIELD_NAMES) {
+        if (
+            fieldName === name ||
+            fieldName.startsWith(`${name}_`) ||
+            fieldName.startsWith(`${name}.`) ||
+            fieldName.startsWith(`${name}[`)
+        ) {
+            return true
+        }
+    }
+    return false
 }
 
 export type VectorPlainOptions = {

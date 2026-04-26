@@ -249,7 +249,10 @@ export enum ParticleEmitter2FilterMode {
     Additive = 1,
     Modulate = 2,
     Modulate2x = 3,
-    AlphaKey = 4
+    AlphaKey = 4,
+    Transparent = 4,
+    AddAlpha = 5,
+    None = 6
 }
 
 // Not actually mapped to mdx flags (0: Head, 1: Tail, 2: Both)

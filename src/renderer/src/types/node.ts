@@ -121,7 +121,7 @@ export interface ParticleEmitter2Node extends BaseNode {
 
     // 渲染属性
     TextureID?: number;
-    FilterMode?: 'Blend' | 'Additive' | 'Modulate' | 'Modulate2x' | 'AlphaKey' | 'None' | number;
+    FilterMode?: 'None' | 'Transparent' | 'Blend' | 'Additive' | 'AddAlpha' | 'Modulate' | 'Modulate2x' | 'AlphaKey' | number;
     Rows?: number;
     Columns?: number;
     PriorityPlane?: number;

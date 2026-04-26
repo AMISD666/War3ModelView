@@ -1379,6 +1379,10 @@ export class ModelRenderer {
         ModelResourceManager.getInstance().updateGeosetTexCoords(this.model, geosetIndex, newTVertices);
     }
 
+    public updateGeosetGroups(geosetIndex: number): void {
+        ModelResourceManager.getInstance().updateGeosetGroups(this.model, geosetIndex);
+    }
+
     public update(delta: number): void {
         this.modelInstance.update(delta);
     }
@@ -5221,5 +5225,4 @@ export class ModelRenderer {
     }
 
 }
-
 

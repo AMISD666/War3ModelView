@@ -713,16 +713,20 @@ function generateParticleEmitters2(model: Model): string {
 
 function generateParticleEmitters2FilterMode(filterMode: ParticleEmitter2FilterMode): string {
     switch (filterMode) {
+        case ParticleEmitter2FilterMode.None:
+            return 'None';
+        case ParticleEmitter2FilterMode.Transparent:
+            return 'Transparent';
         case ParticleEmitter2FilterMode.Blend:
             return 'Blend';
         case ParticleEmitter2FilterMode.Additive:
             return 'Additive';
+        case ParticleEmitter2FilterMode.AddAlpha:
+            return 'AddAlpha';
         case ParticleEmitter2FilterMode.Modulate:
             return 'Modulate';
         case ParticleEmitter2FilterMode.Modulate2x:
             return 'Modulate2x';
-        case ParticleEmitter2FilterMode.AlphaKey:
-            return 'AlphaKey';
     }
 
     return '';

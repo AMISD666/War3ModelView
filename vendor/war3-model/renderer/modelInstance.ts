@@ -309,9 +309,21 @@ export class ModelInstance {
                 const NormalTextureID: AnimVector | number = layer.NormalTextureID;
                 const ORMTextureID: AnimVector | number = layer.ORMTextureID;
                 const ReflectionsTextureID: AnimVector | number = layer.ReflectionsTextureID;
+                const normalizeTextureId = (value: unknown, fallback: number): number => {
+                    const textureCount = Array.isArray(this.model.Textures) ? this.model.Textures.length : 0;
+                    const parsed = Number(value);
+                    if (!Number.isFinite(parsed)) {
+                        return fallback;
+                    }
+                    const id = Math.max(0, Math.round(parsed));
+                    if (textureCount > 0 && id >= textureCount) {
+                        return fallback;
+                    }
+                    return id;
+                };
                 const resolveTrackTextureId = (value: AnimVector | number | undefined, fallback: number): number => {
                     if (typeof value === 'number') {
-                        return value >= 0 ? value : fallback;
+                        return normalizeTextureId(value, fallback);
                     }
                     if (!value) {
                         return fallback;
@@ -320,8 +332,7 @@ export class ModelInstance {
                     if (!Number.isFinite(interpValue as number)) {
                         return fallback;
                     }
-                    const id = Math.floor(interpValue as number);
-                    return id >= 0 ? id : fallback;
+                    return normalizeTextureId(interpValue, fallback);
                 };
                 const defaultTextureID = (typeof TextureID === 'number' && TextureID >= 0) ? TextureID : 0;
 
@@ -932,5 +943,3 @@ export class ModelInstance {
         return activeLights;
     }
 }
-
-

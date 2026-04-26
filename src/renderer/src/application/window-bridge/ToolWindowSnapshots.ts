@@ -15,6 +15,10 @@ export type TextureManagerSnapshot = {
 }
 
 export type TextureManagerRpcState = {
+    documentId: string | null
+    documentRevision: number
+    assetRevision: number
+    previewRevision: number
     snapshotVersion: number
     snapshot: TextureManagerSnapshot
     pickedGeosetIndex: number | null
@@ -37,6 +41,10 @@ export type MaterialManagerSnapshot = {
 }
 
 export type MaterialManagerRpcState = {
+    documentId: string | null
+    documentRevision: number
+    assetRevision: number
+    previewRevision: number
     snapshotVersion: number
     snapshot: MaterialManagerSnapshot
     pickedGeosetIndex: number | null
@@ -148,6 +156,10 @@ export class ToolWindowSnapshotCache {
     buildTextureManagerState(input: {
         modelData: any
         modelPath: string | null | undefined
+        documentId: string | null
+        documentRevision: number
+        assetRevision: number
+        previewRevision: number
         materialManagerPreview: any
         selection: ToolWindowSelectionState
         markPerf?: ToolWindowSnapshotPerf
@@ -181,6 +193,10 @@ export class ToolWindowSnapshotCache {
         }
 
         return {
+            documentId: input.documentId,
+            documentRevision: input.documentRevision,
+            assetRevision: input.assetRevision,
+            previewRevision: input.previewRevision,
             snapshotVersion: this.textureCache.snapshotVersion,
             snapshot: this.textureCache.snapshot,
             pickedGeosetIndex: input.selection.pickedGeosetIndex ?? null,
@@ -192,6 +208,10 @@ export class ToolWindowSnapshotCache {
     buildMaterialManagerState(input: {
         modelData: any
         modelPath: string | null | undefined
+        documentId: string | null
+        documentRevision: number
+        assetRevision: number
+        previewRevision: number
         materialManagerPreview: any
         selection: ToolWindowSelectionState
         markPerf?: ToolWindowSnapshotPerf
@@ -229,6 +249,10 @@ export class ToolWindowSnapshotCache {
         }
 
         return {
+            documentId: input.documentId,
+            documentRevision: input.documentRevision,
+            assetRevision: input.assetRevision,
+            previewRevision: input.previewRevision,
             snapshotVersion: this.materialCache.snapshotVersion,
             snapshot: this.materialCache.snapshot,
             pickedGeosetIndex: input.selection.pickedGeosetIndex ?? null,

@@ -86,6 +86,10 @@ interface RendererStore {
     setShowParticles: (show: boolean) => void
     showRibbons: boolean
     setShowRibbons: (show: boolean) => void
+    hiddenNodeIds: number[]
+    toggleNodeVisibility: (nodeId: number) => void
+    setHiddenNodeIds: (nodeIds: number[]) => void
+    resetNodeVisibility: () => void
     showHealthBar: boolean
     setShowHealthBar: (show: boolean) => void
     enableLighting: boolean
@@ -229,6 +233,22 @@ export const useRendererStore = create<RendererStore>()(
             setShowParticles: (show) => set({ showParticles: show }),
             showRibbons: true,
             setShowRibbons: (show) => set({ showRibbons: show }),
+            hiddenNodeIds: [],
+            toggleNodeVisibility: (nodeId) => set((state) => {
+                if (!Number.isInteger(nodeId) || nodeId < 0) return state;
+                const isHidden = state.hiddenNodeIds.includes(nodeId);
+                return {
+                    hiddenNodeIds: isHidden
+                        ? state.hiddenNodeIds.filter((id) => id !== nodeId)
+                        : [...state.hiddenNodeIds, nodeId]
+                };
+            }),
+            setHiddenNodeIds: (nodeIds) => set({
+                hiddenNodeIds: Array.from(new Set(
+                    nodeIds.filter((id) => Number.isInteger(id) && id >= 0)
+                ))
+            }),
+            resetNodeVisibility: () => set({ hiddenNodeIds: [] }),
             showHealthBar: false,
             setShowHealthBar: (show) => set({ showHealthBar: show }),
             enableLighting: true,
@@ -310,6 +330,7 @@ export const useRendererStore = create<RendererStore>()(
                 set({
                     renderer: null,
                     missingTextures: [],
+                    hiddenNodeIds: [],
                     vertexRenderRevision: 0
                 });
             }

@@ -55,9 +55,14 @@ function normalizeMaterialsForUI(materials: any[]): any[] {
             FullResolution: material.FullResolution !== undefined ? material.FullResolution : (renderMode & 32) !== 0,
             Layers: (material.Layers || []).map((layer: any) => {
                 const shading = layer.Shading || 0;
+                const normalizedTVertexAnimId = normalizeTVertexAnimId(layer);
+                const layerWithoutTextureAnimAliases = { ...layer };
+                delete layerWithoutTextureAnimAliases.TextureAnimationId;
+                delete layerWithoutTextureAnimAliases.TextureAnimId;
                 return {
-                    ...layer,
+                    ...layerWithoutTextureAnimAliases,
                     __editorLayerId: typeof layer?.__editorLayerId === 'string' ? layer.__editorLayerId : createEditorId('layer'),
+                    TVertexAnimId: normalizedTVertexAnimId,
                     // Set boolean properties from Shading bitmask (if not already set)
                     Unshaded: layer.Unshaded !== undefined ? layer.Unshaded : (shading & 1) !== 0,
                     SphereEnvMap: layer.SphereEnvMap !== undefined ? layer.SphereEnvMap : (shading & 2) !== 0,
@@ -69,6 +74,15 @@ function normalizeMaterialsForUI(materials: any[]): any[] {
             })
         };
     });
+}
+
+function normalizeTVertexAnimId(layer: Record<string, unknown> | null | undefined): number | null {
+    if (!layer) return null;
+    const hasCanonicalValue = Object.prototype.hasOwnProperty.call(layer, 'TVertexAnimId');
+    const rawValue = hasCanonicalValue ? layer.TVertexAnimId : (layer.TextureAnimationId ?? layer.TextureAnimId);
+    if (rawValue === null || rawValue === undefined || rawValue === '') return null;
+    const numericValue = typeof rawValue === 'number' ? rawValue : Number(rawValue);
+    return Number.isInteger(numericValue) && numericValue >= 0 ? numericValue : null;
 }
 
 /**
@@ -105,7 +119,7 @@ function denormalizeMaterialsForSave(materials: any[]): any[] {
                 if (layer.NoDepthTest !== undefined) shading = (shading & ~64) | (layer.NoDepthTest ? 64 : 0)
                 if (layer.NoDepthSet !== undefined) shading = (shading & ~128) | (layer.NoDepthSet ? 128 : 0)
 
-                const { Unshaded, SphereEnvMap, TwoSided, Unfogged, NoDepthTest, NoDepthSet, __editorLayerId, ...cleanLayer } = layer
+                const { Unshaded, SphereEnvMap, TwoSided, Unfogged, NoDepthTest, NoDepthSet, __editorLayerId, TextureAnimationId, TextureAnimId, ...cleanLayer } = layer
 
                 return {
                     ...cleanLayer,
@@ -114,7 +128,7 @@ function denormalizeMaterialsForSave(materials: any[]): any[] {
                     CoordId: layer.CoordId ?? 0,
                     Alpha: layer.Alpha ?? 1,
                     TextureID: layer.TextureID ?? 0,
-                    TVertexAnimId: layer.TVertexAnimId === undefined ? null : layer.TVertexAnimId,
+                    TVertexAnimId: normalizeTVertexAnimId(layer),
                 }
             }),
         }
@@ -138,6 +152,10 @@ interface MaterialManagerSnapshot {
 }
 
 interface MaterialManagerRpcState {
+    documentId: string | null
+    documentRevision: number
+    assetRevision: number
+    previewRevision: number
     snapshotVersion: number
     snapshot: MaterialManagerSnapshot
     pickedGeosetIndex: number | null
@@ -153,6 +171,10 @@ interface MaterialManagerPatch {
 
 const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onClose, isStandalone }) => {
     const initialRpcState: MaterialManagerRpcState = {
+        documentId: null,
+        documentRevision: 0,
+        assetRevision: 0,
+        previewRevision: 0,
         snapshotVersion: 0,
         snapshot: {
             materials: [],
@@ -693,7 +715,12 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             const material = previous[matIndex]
             const layers = Array.isArray(material?.Layers) ? [...material.Layers] : []
             if (layerIndex < 0 || layerIndex >= layers.length) return previous
-            layers[layerIndex] = { ...layers[layerIndex], ...updates }
+            const nextLayer = { ...layers[layerIndex], ...updates }
+            if (Object.prototype.hasOwnProperty.call(updates, 'TVertexAnimId')) {
+                delete nextLayer.TextureAnimationId
+                delete nextLayer.TextureAnimId
+            }
+            layers[layerIndex] = nextLayer
             previous[matIndex] = { ...material, Layers: layers }
             return previous
         })
@@ -1026,7 +1053,9 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             const currentVal = layer[field]
             // For TextureID, default to 0 (first texture); for Alpha, default to 1
             const defaultVal = field === 'TextureID' ? 0 : 1
-            const initialVal = typeof currentVal === 'number' ? currentVal : defaultVal
+            const initialVal = typeof currentVal === 'number'
+                ? (field === 'TextureID' ? Math.max(0, Math.round(currentVal)) : currentVal)
+                : defaultVal
             const animVector = {
                 Keys: [{ Frame: 0, Vector: vectorSize === 1 ? [initialVal] : new Array(vectorSize).fill(0) }],
                 LineType: 0,
@@ -1039,6 +1068,9 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             let staticVal = field === 'TextureID' ? 0 : 1
             if (currentVal && currentVal.Keys && currentVal.Keys.length > 0) {
                 staticVal = currentVal.Keys[0].Vector[0]
+            }
+            if (field === 'TextureID') {
+                staticVal = Math.max(0, Math.round(Number(staticVal) || 0))
             }
             updateLocalLayer(activeMaterialIndex, activeLayerIndex, { [field]: staticVal })
         }
@@ -1586,13 +1618,13 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                                             </div>
                                             <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                                                 <Checkbox
-                                                    checked={selectedLayer.TextureID && typeof selectedLayer.TextureID !== 'number'}
+                                                    checked={isAnimTrack(selectedLayer.TextureID)}
                                                     onChange={(e) => handleAnimToggle('TextureID', e.target.checked)}
                                                     style={{ color: '#e8e8e8', fontSize: '12px' }}
                                                 >
                                                     动态
                                                 </Checkbox>
-                                                {selectedLayer.TextureID && typeof selectedLayer.TextureID !== 'number' ? (
+                                                {isAnimTrack(selectedLayer.TextureID) ? (
                                                     <Button size="small" onClick={() => openKeyframeEditor('TextureID', 1)}>编辑动画</Button>
                                                 ) : (
                                                     <div

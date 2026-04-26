@@ -5,21 +5,17 @@
 import React from 'react';
 import { useModelStore } from '../store/modelStore';
 import { CloseOutlined } from '@ant-design/icons';
-import { showDiscardConfirm } from '../store/messageStore';
+import { requestCloseModelTab } from '../application/model-tabs/closeTabRequest';
 
 interface TabBarProps {
     emptyText?: string;
 }
 
 export const TabBar: React.FC<TabBarProps> = ({ emptyText }) => {
-    const { tabs, activeTabId, setActiveTab, closeTab, isTabDirty } = useModelStore();
+    const { tabs, activeTabId, setActiveTab } = useModelStore();
 
-    const handleCloseTab = async (tabId: string, name: string) => {
-        if (isTabDirty(tabId)) {
-            const shouldClose = await showDiscardConfirm('未保存的修改', `关闭“${name}”前，是否不保存并直接关闭？`);
-            if (!shouldClose) return;
-        }
-        closeTab(tabId);
+    const handleCloseTab = async (tabId: string) => {
+        await requestCloseModelTab(tabId);
     };
 
     // We always render the container now to keep it persistent as requested by the user.
@@ -91,7 +87,7 @@ export const TabBar: React.FC<TabBarProps> = ({ emptyText }) => {
                         <CloseOutlined
                             onClick={(e) => {
                                 e.stopPropagation();
-                                void handleCloseTab(tab.id, tab.name);
+                                void handleCloseTab(tab.id);
                             }}
                             style={{
                                 fontSize: 10,

@@ -86,6 +86,22 @@ const scheduleIdleTask = (callback: () => void, timeout = 800): void => {
     setTimeout(callback, 0);
 };
 
+const createDocumentId = (): string => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+    }
+    return `doc-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+};
+
+type DocumentRevisionPatch = Pick<ModelState, 'documentId' | 'documentRevision' | 'assetRevision' | 'previewRevision'>;
+
+const getNextDocumentRevisionPatch = (state: ModelState): DocumentRevisionPatch => ({
+    documentId: state.documentId ?? state.activeTabId ?? createDocumentId(),
+    documentRevision: state.documentRevision + 1,
+    assetRevision: state.assetRevision,
+    previewRevision: state.previewRevision,
+});
+
 /** 独立材质管理器编辑预览：未保存前不写入权威 modelData，仅保存/另存为时提交 */
 export type MaterialManagerPreview = {
     materials: any[];
@@ -261,6 +277,10 @@ function findExistingTextureIndex(textures: any[], tex: any): number {
 }
 
 interface ModelState {
+    documentId: string | null;
+    documentRevision: number;
+    assetRevision: number;
+    previewRevision: number;
     modelData: ModelData | null;
     modelPath: string | null;
     nodes: ModelNode[];
@@ -989,7 +1009,7 @@ function getDefaultNodeProperties(type: NodeType): Partial<ModelNode> {
             };
         case NodeType.PARTICLE_EMITTER_2:
             return {
-                FilterMode: 0, // 0=Blend, 1=Additive, 2=Modulate, 3=Modulate2x, 4=AlphaKey
+                FilterMode: 0, // 0=Blend, 1=Additive, 2=Modulate, 3=Modulate2x, 4=Transparent/AlphaKey, 5=AddAlpha, 6=None
                 TextureID: -1,
                 EmissionRate: 10,
                 LifeSpan: 1,
@@ -1149,6 +1169,10 @@ function normalizeAnimVector(anim: any, size: number, isInt: boolean): any {
 }
 
 export const useModelStore = create<ModelState>((set, get) => ({
+    documentId: null,
+    documentRevision: 0,
+    assetRevision: 0,
+    previewRevision: 0,
     modelData: null,
     modelPath: null,
     nodes: [],
@@ -1299,7 +1323,14 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
         const zustandSetStart = performance.now();
         set((state) => {
+            const activeTabId = state.activeTabId
+            const nextDocumentId = activeTabId ?? state.documentId ?? createDocumentId()
+            const nextDocumentRevision = data ? 1 : 0
             const nextState: Partial<ModelState> & { tabs?: Tab[]; dirtyTabs?: Record<string, boolean> } = {
+                documentId: data ? nextDocumentId : null,
+                documentRevision: nextDocumentRevision,
+                assetRevision: 0,
+                previewRevision: 0,
                 modelData: correctedData,
                 modelPath: resolvedModelPath,
                 nodes: correctedNodes,
@@ -1318,7 +1349,6 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 },
             };
 
-            const activeTabId = state.activeTabId
             if (!activeTabId) {
                 return nextState;
             }
@@ -1327,6 +1357,10 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 deferredTabSnapshot = {
                     activeTabId,
                     snapshot: {
+                        documentId: nextDocumentId,
+                        documentRevision: nextDocumentRevision,
+                        assetRevision: 0,
+                        previewRevision: 0,
                         modelData: correctedData,
                         modelPath: resolvedModelPath,
                         nodes: sanitizeNodesArray(correctedNodes),
@@ -1353,6 +1387,10 @@ export const useModelStore = create<ModelState>((set, get) => ({
                     ...tab,
                     snapshot: {
                         ...tab.snapshot,
+                        documentId: nextDocumentId,
+                        documentRevision: nextDocumentRevision,
+                        assetRevision: 0,
+                        previewRevision: 0,
                         modelData: correctedData,
                         modelPath: resolvedModelPath,
                         nodes: sanitizeNodesArray(correctedNodes),
@@ -1553,12 +1591,15 @@ export const useModelStore = create<ModelState>((set, get) => ({
     },
 
     updateGlobalSequences: (sequences) => {
-        const normalizedSequences = sequences.map((duration) => Math.max(0, Math.floor(Number(duration) || 0)));
+        const normalizedSequences = sequences.map((sequence: any) => {
+            const duration = typeof sequence === 'number' ? sequence : sequence?.Duration;
+            return Math.max(0, Math.floor(Number(duration) || 0));
+        });
         set((state) => {
             if (!state.modelData) return {};
             const updatedModelData = {
                 ...state.modelData,
-                GlobalSequences: normalizedSequences.map((duration) => ({ Duration: duration }))
+                GlobalSequences: normalizedSequences
             };
             const updatedTabs = state.activeTabId
                 ? state.tabs.map((tab) => {
@@ -2267,6 +2308,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
     },
 
     setTextures: (textures) => set((state) => {
+        const revisionPatch = getNextDocumentRevisionPatch(state);
         const updatedModelData = state.modelData ? { ...state.modelData, Textures: textures } : state.modelData;
         const updatedMaterialManagerPreview = state.materialManagerPreview
             ? {
@@ -2283,6 +2325,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                     ...tab,
                     snapshot: {
                         ...tab.snapshot,
+                        ...revisionPatch,
                         modelData: updatedModelData,
                         modelPath: state.modelPath,
                         nodes: sanitizeNodesArray(state.nodes),
@@ -2297,6 +2340,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             })
             : state.tabs;
         return {
+            ...revisionPatch,
             modelData: updatedModelData,
             materialManagerPreview: updatedMaterialManagerPreview,
             tabs: updatedTabs,
@@ -2305,6 +2349,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
         };
     }),
     setGeosets: (geosets) => set((state) => {
+        const revisionPatch = getNextDocumentRevisionPatch(state);
         const sanitizedGeosetUiState = sanitizeGeosetUiState(state, geosets.length);
         const updatedModelData = state.modelData ? { ...state.modelData, Geosets: geosets } : state.modelData;
         const updatedMaterialManagerPreview = state.materialManagerPreview
@@ -2322,6 +2367,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                     ...tab,
                     snapshot: {
                         ...tab.snapshot,
+                        ...revisionPatch,
                         modelData: updatedModelData,
                         modelPath: state.modelPath,
                         nodes: sanitizeNodesArray(state.nodes),
@@ -2336,6 +2382,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             })
             : state.tabs;
         return {
+            ...revisionPatch,
             modelData: updatedModelData,
             materialManagerPreview: updatedMaterialManagerPreview,
             tabs: updatedTabs,
@@ -2344,7 +2391,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
             ...markActiveTabDirtyState(state)
         };
     }),
-    setMaterials: (materials) => set((state) => {        const updatedModelData = state.modelData ? { ...state.modelData, Materials: materials } : state.modelData;
+    setMaterials: (materials) => set((state) => {        const revisionPatch = getNextDocumentRevisionPatch(state);
+        const updatedModelData = state.modelData ? { ...state.modelData, Materials: materials } : state.modelData;
         const updatedMaterialManagerPreview = state.materialManagerPreview
             ? {
                 ...state.materialManagerPreview,
@@ -2360,6 +2408,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                     ...tab,
                     snapshot: {
                         ...tab.snapshot,
+                        ...revisionPatch,
                         modelData: updatedModelData,
                         modelPath: state.modelPath,
                         nodes: sanitizeNodesArray(state.nodes),
@@ -2374,6 +2423,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             })
             : state.tabs;
         return {
+            ...revisionPatch,
             modelData: updatedModelData,
             materialManagerPreview: updatedMaterialManagerPreview,
             tabs: updatedTabs,
@@ -2382,6 +2432,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
         };
     }),
     setVisualDataPatch: (patch) => set((state) => {
+        const revisionPatch = getNextDocumentRevisionPatch(state);
         const sanitizedPatch = Object.fromEntries(
             Object.entries(patch || {}).filter(([, value]) => value !== undefined)
         ) as typeof patch;
@@ -2403,6 +2454,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                     ...tab,
                     snapshot: {
                         ...tab.snapshot,
+                        ...revisionPatch,
                         modelData: updatedModelData,
                         modelPath: state.modelPath,
                         nodes: sanitizeNodesArray(state.nodes),
@@ -2417,6 +2469,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             })
             : state.tabs;
         return {
+            ...revisionPatch,
             modelData: updatedModelData,
             materialManagerPreview: updatedMaterialManagerPreview,
             tabs: updatedTabs,
@@ -2431,6 +2484,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             textures: payload.textures,
             geosets: payload.geosets,
         },
+        previewRevision: state.previewRevision + 1,
         materialReloadTrigger: state.materialReloadTrigger + 1,
         ...markActiveTabDirtyState(state),
     })),
@@ -2439,6 +2493,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
         if (!state.materialManagerPreview) return {};
         return {
             materialManagerPreview: null,
+            previewRevision: state.previewRevision + 1,
             materialReloadTrigger: state.materialReloadTrigger + 1,
         };
     }),
@@ -2448,6 +2503,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
         if (!p || !state.modelData) {
             return { materialManagerPreview: null };
         }
+        const revisionPatch = getNextDocumentRevisionPatch(state);
         const updatedModelData = {
             ...state.modelData,
             Materials: p.materials,
@@ -2463,6 +2519,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                     ...tab,
                     snapshot: {
                         ...tab.snapshot,
+                        ...revisionPatch,
                         modelData: updatedModelData,
                         modelPath: state.modelPath,
                         nodes: sanitizeNodesArray(state.nodes),
@@ -2477,6 +2534,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             })
             : state.tabs;
         return {
+            ...revisionPatch,
             modelData: updatedModelData,
             tabs: updatedTabs,
             materialManagerPreview: null,
@@ -2486,6 +2544,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
     setNodeEditorPreview: (payload) => set((state) => ({
         nodeEditorPreview: payload,
+        previewRevision: state.previewRevision + 1,
         rendererReloadTrigger: state.rendererReloadTrigger + 1,
     })),
 
@@ -2493,13 +2552,15 @@ export const useModelStore = create<ModelState>((set, get) => ({
         if (!state.nodeEditorPreview) return {};
         return {
             nodeEditorPreview: null,
+            previewRevision: state.previewRevision + 1,
             rendererReloadTrigger: state.rendererReloadTrigger + 1,
         };
     }),
 
     setTextureAnims: (anims) => set((state) => {
+        const revisionPatch = getNextDocumentRevisionPatch(state);
         const updatedModelData = state.modelData ? { ...state.modelData, TextureAnims: anims } : state.modelData;
-        return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
+        return { ...revisionPatch, modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
     }),
 
     addTextureAnim: () => {
@@ -2546,6 +2607,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
     updateGeoset: (index, updates) => {
         set((state) => {
             if (!state.modelData || !state.modelData.Geosets) return {};
+            const revisionPatch = getNextDocumentRevisionPatch(state);
 
             const newGeosets = [...state.modelData.Geosets];
             if (index >= 0 && index < newGeosets.length) {
@@ -2556,7 +2618,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 if (hasGeometryBufferUpdate(updates)) {
                     useRendererStore.getState().bumpVertexRenderRevision();
                 }
-                return { modelData: updatedModelData, ...markActiveTabDirtyState(state) };
+                return { ...revisionPatch, modelData: updatedModelData, ...markActiveTabDirtyState(state) };
             }
             return {};
         });
@@ -2584,11 +2646,12 @@ export const useModelStore = create<ModelState>((set, get) => ({
     setGeosetAnims: (anims: any[]) => {
         set((state) => {
             if (!state.modelData) return {};
+            const revisionPatch = getNextDocumentRevisionPatch(state);
             const updatedModelData = {
                 ...state.modelData,
                 GeosetAnims: anims.map(normalizeGeosetAnim)
             };
-            return { modelData: updatedModelData, ...markActiveTabDirtyState(state) };
+            return { ...revisionPatch, modelData: updatedModelData, ...markActiveTabDirtyState(state) };
         });
     },
 
@@ -3081,9 +3144,11 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
             const activeTabId = state.activeTabId;
             const nextModelData = patchPathsOnData(state.modelData);
+            const nextAssetRevision = state.assetRevision + 1;
 
             if (!activeTabId) {
                 return {
+                    assetRevision: nextAssetRevision,
                     modelPath: newPath,
                     modelData: nextModelData,
                     cachedRenderer: null,
@@ -3101,6 +3166,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                     name: newName,
                     snapshot: {
                         ...tab.snapshot,
+                        assetRevision: nextAssetRevision,
                         modelPath: newPath,
                         modelData: patchPathsOnData(tab.snapshot.modelData),
                         renderer: null
@@ -3109,6 +3175,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             });
 
             return {
+                assetRevision: nextAssetRevision,
                 modelPath: newPath,
                 modelData: nextModelData,
                 tabs,
@@ -3147,6 +3214,10 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 return {
                     ...tab,
                     snapshot: {
+                        documentId: state.documentId,
+                        documentRevision: state.documentRevision,
+                        assetRevision: state.assetRevision,
+                        previewRevision: state.previewRevision,
                         modelData: state.modelData,
                         modelPath: state.modelPath,
                         nodes: sanitizeNodesArray(state.nodes),
@@ -3170,6 +3241,10 @@ export const useModelStore = create<ModelState>((set, get) => ({
             path,
             name,
             snapshot: {
+                documentId: id,
+                documentRevision: 0,
+                assetRevision: 0,
+                previewRevision: 0,
                 modelData: null,
                 modelPath: path,
                 nodes: [],
@@ -3187,6 +3262,10 @@ export const useModelStore = create<ModelState>((set, get) => ({
         set({
             tabs: [...updatedTabs, newTab],
             activeTabId: id,
+            documentId: id,
+            documentRevision: 0,
+            assetRevision: 0,
+            previewRevision: 0,
             // Reset model state - will be filled by Viewer loading
             modelData: null,
             modelPath: path,
@@ -3211,19 +3290,27 @@ export const useModelStore = create<ModelState>((set, get) => ({
         const nextDirtyTabs = { ...state.dirtyTabs }
         delete nextDirtyTabs[tabId]
 
-        // CLEANUP: Destroy renderer resources if cached
-        // Safety: Only destroy if it's not the currently active renderer in the store
-        const currentActiveRenderer = state.cachedRenderer;
-        if (tab.snapshot.renderer && tab.snapshot.renderer !== currentActiveRenderer) {            try { (tab.snapshot.renderer as any).destroy(); } catch (e) { }
+        // CLEANUP: Destroy renderer resources if cached and not currently mounted.
+        const liveRenderer = useRendererStore.getState().renderer;
+        if (tab.snapshot.renderer && tab.snapshot.renderer !== liveRenderer) {
+            try { (tab.snapshot.renderer as any).destroy(); } catch (e) { }
         }
 
         if (state.activeTabId === tabId) {
             // Need to switch to another tab
             if (newTabs.length === 0) {
+                if (liveRenderer) {
+                    try { (liveRenderer as any).destroy?.(); } catch (e) { }
+                }
+                useRendererStore.getState().setRenderer(null);
                 // No tabs left - clear everything
                 set({
                     tabs: [],
                     activeTabId: null,
+                    documentId: null,
+                    documentRevision: 0,
+                    assetRevision: 0,
+                    previewRevision: 0,
                     modelData: null,
                     modelPath: null,
                     nodes: [],
@@ -3239,9 +3326,19 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 // Switch to adjacent tab
                 const newActiveIndex = Math.min(tabIndex, newTabs.length - 1);
                 const newActiveTab = newTabs[newActiveIndex];
-                const snapshot = newActiveTab.snapshot;                set({
+                const snapshot = newActiveTab.snapshot;
+                const nextRenderer = snapshot.renderer || null;
+                if (liveRenderer && liveRenderer !== nextRenderer) {
+                    try { (liveRenderer as any).destroy?.(); } catch (e) { }
+                }
+                useRendererStore.getState().setRenderer(nextRenderer);
+                set({
                     tabs: newTabs,
                     activeTabId: newActiveTab.id,
+                    documentId: snapshot.documentId ?? newActiveTab.id,
+                    documentRevision: snapshot.documentRevision ?? 0,
+                    assetRevision: snapshot.assetRevision ?? 0,
+                    previewRevision: snapshot.previewRevision ?? 0,
                     modelData: snapshot.modelData,
                     modelPath: snapshot.modelPath,
                     nodes: sanitizeNodesArray(snapshot.nodes),
@@ -3298,6 +3395,10 @@ export const useModelStore = create<ModelState>((set, get) => ({
                     ...tab,
                     snapshot: {
                         ...tab.snapshot,
+                        documentId: state.documentId,
+                        documentRevision: state.documentRevision,
+                        assetRevision: state.assetRevision,
+                        previewRevision: state.previewRevision,
                         modelData: state.modelData,
                         modelPath: state.modelPath,
                         nodes: sanitizeNodesArray(state.nodes),
@@ -3342,6 +3443,10 @@ export const useModelStore = create<ModelState>((set, get) => ({
         set({
             tabs: updatedTabs,
             activeTabId: tabId,
+            documentId: snapshot.documentId ?? tabId,
+            documentRevision: snapshot.documentRevision ?? 0,
+            assetRevision: snapshot.assetRevision ?? 0,
+            previewRevision: snapshot.previewRevision ?? 0,
             modelData: snapshot.modelData,
             modelPath: snapshot.modelPath,
             nodes: sanitizeNodesArray(snapshot.nodes),
@@ -3377,6 +3482,10 @@ export const useModelStore = create<ModelState>((set, get) => ({
         });
 
         set({
+            documentId: null,
+            documentRevision: 0,
+            assetRevision: 0,
+            previewRevision: 0,
             modelData: null,
             modelPath: null,
             nodes: [],

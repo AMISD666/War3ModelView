@@ -11,20 +11,28 @@ export function setDraggedTextureIndex(dataTransfer: DataTransfer, textureIndex:
 }
 
 export function getDraggedTextureIndex(dataTransfer: DataTransfer): number | null {
-    const candidates = [
-        dataTransfer.getData(TEXTURE_DRAG_MIME),
-        dataTransfer.getData('text/plain'),
-    ];
-
-    for (const raw of candidates) {
-        if (!raw) continue;
-
-        const parsed = Number.parseInt(raw, 10);
-        if (Number.isInteger(parsed) && parsed >= 0) {
-            return parsed;
+    const parseTextureIndex = (raw: string): number | null => {
+        const trimmed = raw.trim();
+        if (!/^\d+$/.test(trimmed)) {
+            return null;
         }
+
+        const parsed = Number(trimmed);
+        return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+    };
+
+    const explicitPayload = dataTransfer.getData(TEXTURE_DRAG_MIME);
+    if (explicitPayload) {
+        return parseTextureIndex(explicitPayload);
     }
 
-    return null;
-}
+    const types = Array.from(dataTransfer.types || []).map((type) => type.toLowerCase());
+    if (types.includes('files')) {
+        return null;
+    }
 
+    const plainPayload = dataTransfer.getData('text/plain');
+    if (!plainPayload) return null;
+
+    return parseTextureIndex(plainPayload);
+}

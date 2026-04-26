@@ -181,18 +181,27 @@ export const shortcutActions: ShortcutAction[] = [
 
     // View / Camera
     {
+        id: 'view.toggleProjection',
+        label: '切换透视/正交视图',
+        category: '视图',
+        contexts: ['global', 'viewer'],
+        defaultBindings: ['Backquote', 'Shift+Backquote'],
+        preventDefault: true,
+        stopPropagation: true
+    },
+    {
         id: 'view.perspective',
         label: '透视视图',
         category: '视图',
         contexts: ['global', 'viewer'],
-        defaultBindings: ['Backquote', 'Shift+Backquote']
+        defaultBindings: []
     },
     {
         id: 'view.orthographic',
         label: '正交视图',
         category: '视图',
         contexts: ['global', 'viewer'],
-        defaultBindings: ['Backquote', 'Shift+Backquote']
+        defaultBindings: []
     },
     {
         id: 'view.top',
@@ -374,6 +383,16 @@ export const shortcutActions: ShortcutAction[] = [
         label: '删除顶点',
         category: '多边形组',
         contexts: ['geometry'],
+        defaultBindings: ['Delete'],
+        preventDefault: true
+    },
+
+    // Animation - Node operations
+    {
+        id: 'animation.deleteSelectedNode',
+        label: '删除选中节点',
+        category: '动画',
+        contexts: ['animation'],
         defaultBindings: ['Delete'],
         preventDefault: true
     },

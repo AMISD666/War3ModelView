@@ -455,7 +455,8 @@ export function prepareModelDataForSave(modelData: any): any {
     // Fix GlobalSequences
     if (data.GlobalSequences && Array.isArray(data.GlobalSequences)) {
         data.GlobalSequences = data.GlobalSequences.map((value: any) => {
-            const num = Number(value);
+            const rawDuration = typeof value === 'number' ? value : value?.Duration;
+            const num = Number(rawDuration);
             return Number.isFinite(num) && num >= 0 ? Math.floor(num) : 0;
         });
     }

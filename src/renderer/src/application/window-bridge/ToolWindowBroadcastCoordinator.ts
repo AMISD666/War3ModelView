@@ -76,9 +76,9 @@ export class ToolWindowBroadcastCoordinator {
     private api: ToolWindowBroadcastApi | null = null
 
     private snapshotDispatchState = {
-        textureManager: -1,
-        materialManager: -1,
-        nodeEditor: -1,
+        textureManager: '',
+        materialManager: '',
+        nodeEditor: '',
     }
 
     setApi(api: ToolWindowBroadcastApi): void {
@@ -206,8 +206,9 @@ export class ToolWindowBroadcastCoordinator {
 
         if (visibilityMap.textureManager) {
             const textureManagerState = api.getTextureManagerState()
-            if (this.snapshotDispatchState.textureManager !== textureManagerState.snapshotVersion) {
-                this.snapshotDispatchState.textureManager = textureManagerState.snapshotVersion
+            const dispatchKey = `${textureManagerState.snapshotVersion}:${textureManagerState.documentRevision}:${textureManagerState.assetRevision}:${textureManagerState.previewRevision}`
+            if (this.snapshotDispatchState.textureManager !== dispatchKey) {
+                this.snapshotDispatchState.textureManager = dispatchKey
                 api.broadcastTextureManager(textureManagerState)
                 await this.yieldAfterBroadcast('textureManager')
             } else {
@@ -226,8 +227,9 @@ export class ToolWindowBroadcastCoordinator {
 
         if (visibilityMap.materialManager) {
             const materialManagerState = api.getMaterialManagerState()
-            if (this.snapshotDispatchState.materialManager !== materialManagerState.snapshotVersion) {
-                this.snapshotDispatchState.materialManager = materialManagerState.snapshotVersion
+            const dispatchKey = `${materialManagerState.snapshotVersion}:${materialManagerState.documentRevision}:${materialManagerState.assetRevision}:${materialManagerState.previewRevision}`
+            if (this.snapshotDispatchState.materialManager !== dispatchKey) {
+                this.snapshotDispatchState.materialManager = dispatchKey
                 api.broadcastMaterialManager(materialManagerState)
                 await this.yieldAfterBroadcast('materialManager')
             } else {
@@ -251,8 +253,9 @@ export class ToolWindowBroadcastCoordinator {
 
         if (visibilityMap.nodeEditor) {
             const nodeEditorState = api.getNodeEditorState()
-            if (this.snapshotDispatchState.nodeEditor !== nodeEditorState.snapshotVersion) {
-                this.snapshotDispatchState.nodeEditor = nodeEditorState.snapshotVersion
+            const dispatchKey = String(nodeEditorState.snapshotVersion)
+            if (this.snapshotDispatchState.nodeEditor !== dispatchKey) {
+                this.snapshotDispatchState.nodeEditor = dispatchKey
                 api.broadcastNodeEditor(nodeEditorState)
                 await this.yieldAfterBroadcast('nodeEditor')
             } else {

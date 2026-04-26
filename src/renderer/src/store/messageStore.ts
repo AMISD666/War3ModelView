@@ -153,6 +153,10 @@ export const showSaveDiscardCancel = (
     });
 };
 
+export const showUnsavedModelCloseConfirm = (): Promise<SaveDiscardCancelChoice> => {
+    return showSaveDiscardCancel('未保存的修改', '模型已修改，是否保存后再退出？');
+};
+
 export const showDiscardConfirm = (
     title: string,
     content: React.ReactNode,

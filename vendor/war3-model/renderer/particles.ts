@@ -707,7 +707,23 @@ export class ParticlesController {
                 depthCompare: 'less-equal',
                 format: 'depth24plus'
             }),
-            createPipeline('alphaKey', {
+            createPipeline('transparent', {
+                color: {
+                    operation: 'add',
+                    srcFactor: 'one',
+                    dstFactor: 'zero'
+                },
+                alpha: {
+                    operation: 'add',
+                    srcFactor: 'one',
+                    dstFactor: 'zero'
+                }
+            }, {
+                depthWriteEnabled: true,
+                depthCompare: 'less-equal',
+                format: 'depth24plus'
+            }),
+            createPipeline('addAlpha', {
                 color: {
                     operation: 'add',
                     srcFactor: 'src-alpha',
@@ -720,6 +736,22 @@ export class ParticlesController {
                 }
             }, {
                 depthWriteEnabled: false,
+                depthCompare: 'less-equal',
+                format: 'depth24plus'
+            }),
+            createPipeline('none', {
+                color: {
+                    operation: 'add',
+                    srcFactor: 'one',
+                    dstFactor: 'zero'
+                },
+                alpha: {
+                    operation: 'add',
+                    srcFactor: 'one',
+                    dstFactor: 'zero'
+                }
+            }, {
+                depthWriteEnabled: true,
                 depthCompare: 'less-equal',
                 format: 'depth24plus'
             }),
@@ -1004,7 +1036,7 @@ export class ParticlesController {
 
             fsUniformsViews.replaceableColor.set(this.rendererData.teamColor);
             fsUniformsViews.replaceableType.set([texture.ReplaceableId || 0]);
-            if (emitter.props.FilterMode === ParticleEmitter2FilterMode.AlphaKey) {
+            if (emitter.props.FilterMode === ParticleEmitter2FilterMode.Transparent) {
                 fsUniformsViews.discardAlphaLevel.set([DISCARD_ALPHA_KEY_LEVEL]);
             } else if (
                 emitter.props.FilterMode === ParticleEmitter2FilterMode.Modulate ||
@@ -1522,7 +1554,7 @@ export class ParticlesController {
     }
 
     private setLayerProps(emitter: ParticleEmitterWrapper): void {
-        if (emitter.props.FilterMode === ParticleEmitter2FilterMode.AlphaKey) {
+        if (emitter.props.FilterMode === ParticleEmitter2FilterMode.Transparent) {
             this.gl.uniform1f(this.shaderProgramLocations.discardAlphaLevelUniform, DISCARD_ALPHA_KEY_LEVEL);
         } else if (emitter.props.FilterMode === ParticleEmitter2FilterMode.Modulate ||
             emitter.props.FilterMode === ParticleEmitter2FilterMode.Modulate2x) {
@@ -1531,7 +1563,15 @@ export class ParticlesController {
             this.gl.uniform1f(this.shaderProgramLocations.discardAlphaLevelUniform, 0.);
         }
 
-        if (emitter.props.FilterMode === ParticleEmitter2FilterMode.Blend) {
+        if (emitter.props.FilterMode === ParticleEmitter2FilterMode.None) {
+            this.gl.disable(this.gl.BLEND);
+            this.gl.enable(this.gl.DEPTH_TEST);
+            this.gl.depthMask(true);
+        } else if (emitter.props.FilterMode === ParticleEmitter2FilterMode.Transparent) {
+            this.gl.disable(this.gl.BLEND);
+            this.gl.enable(this.gl.DEPTH_TEST);
+            this.gl.depthMask(true);
+        } else if (emitter.props.FilterMode === ParticleEmitter2FilterMode.Blend) {
             this.gl.enable(this.gl.BLEND);
             this.gl.enable(this.gl.DEPTH_TEST);
             this.gl.blendFuncSeparate(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA, this.gl.ONE, this.gl.ONE_MINUS_SRC_ALPHA);
@@ -1541,7 +1581,7 @@ export class ParticlesController {
             this.gl.enable(this.gl.DEPTH_TEST);
             this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE);
             this.gl.depthMask(false);
-        } else if (emitter.props.FilterMode === ParticleEmitter2FilterMode.AlphaKey) {
+        } else if (emitter.props.FilterMode === ParticleEmitter2FilterMode.AddAlpha) {
             this.gl.enable(this.gl.BLEND);
             this.gl.enable(this.gl.DEPTH_TEST);
             this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE);

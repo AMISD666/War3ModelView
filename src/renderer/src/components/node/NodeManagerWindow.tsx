@@ -5,7 +5,7 @@ import { appMessage } from '../../store/messageStore'
  */
 
 import React, { useMemo, useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
-import { Tree, Input, Space, Button, Tooltip, Menu } from 'antd'
+import { Tree, Input, Tooltip, Menu } from 'antd'
 import {
     PlusOutlined,
     EditOutlined,
@@ -14,13 +14,16 @@ import {
     BulbOutlined,
     FireOutlined,
     SoundOutlined,
-    BlockOutlined
+    BlockOutlined,
+    EyeOutlined,
+    EyeInvisibleOutlined
 } from '@ant-design/icons';
 
 import type { TreeProps, MenuProps } from 'antd';
 import { useModelStore } from '../../store/modelStore';
 import { useSelectionStore } from '../../store/selectionStore';
 import { useUIStore } from '../../store/uiStore';
+import { useRendererStore } from '../../store/rendererStore';
 import { NodeType } from '../../types/node';
 import { buildTreeData, filterTreeNodes, getExpandedKeys, getAncestorKeys } from '../../utils/treeUtils';
 import { canDeleteNode, getNodeIcon, getNodeTypeName, isNodeManagerType } from '../../utils/nodeUtils';
@@ -39,6 +42,7 @@ export const NodeManagerWindow: React.FC = () => {
     const { nodes, modelData, deleteNode, reparentNodes, setClipboardNode, pasteNode, clipboardNode, addNode } = useModelStore();
     const { selectedNodeIds, selectNode, clearNodeSelection, mainMode } = useSelectionStore();
     const { setCreateNodeDialogVisible } = useUIStore();
+    const { hiddenNodeIds, toggleNodeVisibility, setHiddenNodeIds } = useRendererStore();
 
     const [searchText, setSearchText] = useState('');
     const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
@@ -108,6 +112,16 @@ export const NodeManagerWindow: React.FC = () => {
     // 构建树形数据（只显示节点管理器关心的节点类型）
     const nodeManagerNodes = useMemo(() => nodes.filter(n => isNodeManagerType(n.type)), [nodes]);
     const treeData = useMemo(() => buildTreeData(nodeManagerNodes), [nodeManagerNodes]);
+    const hiddenNodeIdSet = useMemo(() => new Set(hiddenNodeIds), [hiddenNodeIds]);
+
+    useEffect(() => {
+        if (hiddenNodeIds.length === 0) return;
+        const validNodeIds = new Set(nodeManagerNodes.map((node) => node.ObjectId));
+        const nextHiddenNodeIds = hiddenNodeIds.filter((nodeId) => validNodeIds.has(nodeId));
+        if (nextHiddenNodeIds.length !== hiddenNodeIds.length) {
+            setHiddenNodeIds(nextHiddenNodeIds);
+        }
+    }, [hiddenNodeIds, nodeManagerNodes, setHiddenNodeIds]);
 
     const collectTreeKeys = useCallback((data: any[]): string[] => {
         const keys: string[] = [];
@@ -855,11 +869,12 @@ export const NodeManagerWindow: React.FC = () => {
                             const isDropTarget = dropTargetNodeId === nodeId;
                             // isDraggingThis available for future styling: const isDraggingThis = draggedNodeId === nodeId;
                             const isCut = cutNodeId === nodeId;
+                            const isNodeVisible = isVirtualRoot || !hiddenNodeIdSet.has(nodeId);
 
                             return (
                                 <div
                                     data-node-id={nodeId}
-                                    className="node-manager-row"
+                                    className={`node-manager-row${isNodeVisible ? '' : ' node-manager-row-hidden'}`}
                                     onMouseDown={(e) => {
                                         // Only start drag on left button
                                         if (e.button !== 0) return;
@@ -961,6 +976,30 @@ export const NodeManagerWindow: React.FC = () => {
                                         userSelect: 'none'
                                     }}
                                 >
+                                    {isVirtualRoot ? (
+                                        <span className="node-manager-visibility-cell" aria-hidden="true" />
+                                    ) : (
+                                        <Tooltip title={isNodeVisible ? '隐藏节点' : '显示节点'} mouseEnterDelay={0.3}>
+                                            <button
+                                                type="button"
+                                                className={`node-manager-visibility-button${isNodeVisible ? '' : ' is-hidden'}`}
+                                                aria-label={isNodeVisible ? '隐藏节点' : '显示节点'}
+                                                aria-pressed={!isNodeVisible}
+                                                onMouseDown={(e) => {
+                                                    e.preventDefault();
+                                                    e.stopPropagation();
+                                                }}
+                                                onClick={(e) => {
+                                                    e.preventDefault();
+                                                    e.stopPropagation();
+                                                    toggleNodeVisibility(nodeId);
+                                                    focusTreeSurface();
+                                                }}
+                                            >
+                                                {isNodeVisible ? <EyeOutlined /> : <EyeInvisibleOutlined />}
+                                            </button>
+                                        </Tooltip>
+                                    )}
                                     <span style={{
                                         flex: 1,
                                         overflow: 'hidden',
@@ -968,7 +1007,8 @@ export const NodeManagerWindow: React.FC = () => {
                                         whiteSpace: 'nowrap',
                                         minWidth: 0,
                                         fontWeight: isVirtualRoot ? 'bold' : 'normal',
-                                        color: isVirtualRoot ? '#1890ff' : 'inherit'
+                                        color: isVirtualRoot ? '#1890ff' : 'inherit',
+                                        opacity: isNodeVisible ? 1 : 0.55
                                     }}>
                                         {nodeData.title}
                                     </span>

@@ -6,10 +6,11 @@ import{decodeBLP,getBLPImageData,ModelRenderer}from"war3-model";
 import ModelWorker from"../../workers/model-worker.worker?worker";
 import TextureAdjustWorker from"../../workers/texture-adjust.worker?worker";import{SimpleOrbitCamera}from"../../utils/SimpleOrbitCamera";import{decodeTextureData,getTextureCandidatePaths,loadAllTextures,normalizePath,prepareModelForTextureLoad}from"./textureLoader";
 import type{WorkerLike}from"./textureLoader";import{validateAllParticleEmitters}from"./particleValidator";import{describePe2AnimOrScalar,pe2PreviewDebugEnabled}from"../../utils/pe2PreviewDebug";import{checkForStructuralChanges,syncParticleEmitters2InPlace}from"./modelSync";import{getEnvironmentManager}from"./EnvironmentManager";import{logModelInfo}from"../../utils/debugLogger";import{hexToRgb}from"./types";import{mat3,mat4,vec3,vec4,quat}from"gl-matrix";import{GridRenderer}from"../GridRenderer";import{DebugRenderer}from"../DebugRenderer";import{GizmoRenderer,GizmoAxis,GIZMO_AXIS_LENGTH}from"../GizmoRenderer";import{AxisIndicator}from"../AxisIndicator";import{readFile}from"@tauri-apps/plugin-fs";import{invoke}from"@tauri-apps/api/core";import{listen}from"@tauri-apps/api/event";import{DEFAULT_TEXTURE_ADJUSTMENTS,applyTextureAdjustments,isDefaultTextureAdjustments,normalizeTextureAdjustments}from"../../utils/textureAdjustments";
-import type{TextureAdjustments}from"../../utils/textureAdjustments";import{useUIStore}from"../../store/uiStore";import{useSelectionStore}from"../../store/selectionStore";import{useModelStore}from"../../store/modelStore";import{useRendererStore}from"../../store/rendererStore";import{useHistoryStore}from"../../store/historyStore";import{useUvEditorStore}from"../../store/uvEditorStore";import{ModelInfoPanel}from"../info/ModelInfoPanel";import{ViewerToolbar}from"../ViewerToolbar";import { ConfigProvider, theme } from "antd";import{CameraOutlined,CopyOutlined,SyncOutlined,PauseCircleOutlined,PlayCircleOutlined}from"@ant-design/icons";import{commandManager}from"../../utils/CommandManager";import{MoveVerticesCommand,VertexChange}from"../../commands/MoveVerticesCommand";import{MoveNodesCommand,NodeChange}from"../../commands/MoveNodesCommand";import{SetNodeParentCommand}from"../../commands/SetNodeParentCommand";import{VertexEditor}from"../VertexEditor";import{pickClosestGeoset}from"../../utils/rayTriangle";import{SplitVerticesCommand}from"../../commands/SplitVerticesCommand";import{AutoSeparateLayersCommand}from"../../commands/AutoSeparateLayersCommand";import{WeldVerticesCommand}from"../../commands/WeldVerticesCommand";import{DeleteVerticesCommand}from"../../commands/DeleteVerticesCommand";import{DeleteFacesCommand}from"../../commands/DeleteFacesCommand";import{PasteVerticesCommand}from"../../commands/PasteVerticesCommand";import{UpdateSequenceExtentsCommand}from"../../commands/UpdateSequenceExtentsCommand";import{isTextInputActive,normalizeKeyCombo,normalizeKeyComboFromEvent}from"../../shortcuts/utils";import{registerGeometryDeleteKeyListener}from"../../utils/geometryDeleteShortcutBridge";import{WEBGL_CONTEXT_ATTRIBUTES}from"./ViewerRenderConstants";import{createViewerFramePerfAggregate,roundPerfValue}from"./ViewerPerf";
+import type{TextureAdjustments}from"../../utils/textureAdjustments";import{useUIStore}from"../../store/uiStore";import{useSelectionStore}from"../../store/selectionStore";import{mergeMaterialManagerPreview,useModelStore}from"../../store/modelStore";import{useRendererStore}from"../../store/rendererStore";import{useHistoryStore}from"../../store/historyStore";import{useUvEditorStore}from"../../store/uvEditorStore";import{ModelInfoPanel}from"../info/ModelInfoPanel";import{ViewerToolbar}from"../ViewerToolbar";import { ConfigProvider, theme } from "antd";import{CameraOutlined,CopyOutlined,SyncOutlined,PauseCircleOutlined,PlayCircleOutlined}from"@ant-design/icons";import{commandManager}from"../../utils/CommandManager";import{MoveVerticesCommand,VertexChange}from"../../commands/MoveVerticesCommand";import{MoveNodesCommand,NodeChange}from"../../commands/MoveNodesCommand";import{SetNodeParentCommand}from"../../commands/SetNodeParentCommand";import{VertexEditor}from"../VertexEditor";import{pickClosestGeoset}from"../../utils/rayTriangle";import{SplitVerticesCommand}from"../../commands/SplitVerticesCommand";import{AutoSeparateLayersCommand}from"../../commands/AutoSeparateLayersCommand";import{WeldVerticesCommand}from"../../commands/WeldVerticesCommand";import{DeleteVerticesCommand}from"../../commands/DeleteVerticesCommand";import{DeleteFacesCommand}from"../../commands/DeleteFacesCommand";import{PasteVerticesCommand}from"../../commands/PasteVerticesCommand";import{UpdateSequenceExtentsCommand}from"../../commands/UpdateSequenceExtentsCommand";import{isTextInputActive,normalizeKeyCombo,normalizeKeyComboFromEvent}from"../../shortcuts/utils";import{registerGeometryDeleteKeyListener}from"../../utils/geometryDeleteShortcutBridge";import{WEBGL_CONTEXT_ATTRIBUTES}from"./ViewerRenderConstants";import{createViewerFramePerfAggregate,roundPerfValue}from"./ViewerPerf";
 import type{ViewerFramePerfAggregate,ViewerFramePerfSample}from"./ViewerPerf";import{applyHealthBarOffset,resolveHealthBarState}from"./ViewerHealthBar";
 import type{HealthBarDragSnapshot,HealthBarState}from"./ViewerHealthBar";import{getLiveTextureSourceKey,getTextureAdjustmentSignature,getTextureDecodeWorkerCount,isTexturePreviewPath,toTextureUpdateUint8Array,toTightArrayBuffer,toUint8Array}from"./ViewerTextureUtils";
 import { isGeosetVisible } from "../../utils/geosetVisibility";
+import { canDeleteNode } from "../../utils/nodeUtils";
 import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadSchedulerState}from"./ViewerTextureUtils";import{GlobalTransformCommand}from"../../commands/GlobalTransformCommand";import{copyVertices,copyFaces,VertexCopyBuffer}from"../../utils/vertexOperations";import{UpdateKeyframeCommand,KeyframeChange}from"../../commands/UpdateKeyframeCommand";import{MissingTextureWarning}from"../MissingTextureWarning";import{GeosetSeparateDialog}from"../modals/GeosetSeparateDialog";import{LayerConfig,layerConfigToMaterialLayer}from"../modals/MaterialLayerOptions";import{NodeType}from"../../types/node";import{openNodeEditor}from"../../utils/nodeEditorOpen";import{nodeTypeToEditorKind}from"../../types/nodeEditorRpc";import{getEffectiveBindings,registerShortcutHandler}from"../../shortcuts/manager";import{markStandalonePerf}from"../../utils/standalonePerf";import{invokeReadMpqFile}from"../../utils/mpqPerf";import{markNodeManagerListScrollFromTree,markNodeManagerListScrollFromViewer}from"../../utils/nodeManagerListScrollBridge";import{collectSelectedGeosetIndices}from"../editors/uvSelectionSync";import{createSelectionRect,pointInRect,segmentIntersectsRect,triangleIntersectsRect}from"../editors/uvSelectionUtils";let globalRenderLoopId=0;const Viewer=forwardRef((props:ViewerProps,ref:React.Ref<ViewerRef>)=>{const{modelPath,animationIndex,teamColor,showGrid,showNodes,showSkeleton,showCollisionShapes,showCameras,showLights,showAttachments,showWireframe,showWireframeOverlay=false,isPlaying,onTogglePlay,onToggleLooping,onToggleWireframe,onModelLoaded,onModelFirstFrameReady,backgroundColor,showFPS,playbackSpeed,viewPreset,modelData,onSetViewPreset,onAddCameraFromView}=props;const[parseWorker]=useState(()=>new ModelWorker());const[textureWorkers]=useState<WorkerLike[]>(()=>{const count=getTextureDecodeWorkerCount();return Array.from({length:count},()=>new ModelWorker()as unknown as WorkerLike);});const[loading,setLoading]=useState(false);const[loadingStatus,setLoadingStatus]=useState("");const canvasRef=useRef<HTMLCanvasElement>(null);const[renderer,setRenderer]=useState<ModelRenderer|null>(null);const[fps,setFps]=useState<number>(0);const gridRenderer=useRef(new GridRenderer());const debugRenderer=useRef(new DebugRenderer());const gizmoRenderer=useRef(new GizmoRenderer());const axisIndicator=useRef(new AxisIndicator());const rendererRef=useRef<ModelRenderer|null>(null);const cameraRef=useRef<SimpleOrbitCamera|null>(null);const appMainMode=useSelectionStore((state)=>state.mainMode);const animationSubMode=useSelectionStore((state)=>state.animationSubMode);const rendererReloadTrigger=useModelStore((state)=>state.rendererReloadTrigger);const cachedRenderer=useModelStore((state)=>state.cachedRenderer);const mpqLoaded=useRendererStore((state)=>state.mpqLoaded);const nodeRenderMode=useRendererStore((state)=>state.nodeRenderMode);const showHealthBar=useRendererStore((state)=>state.showHealthBar);const missingTextures=useRendererStore((state)=>state.missingTextures);const glRef=useRef<WebGL2RenderingContext|WebGLRenderingContext|null>(null);const needsRendererUpdateRef=useRef(false);const textureReloadSchedulerRef=useRef<TextureReloadSchedulerState>({timer:null,running:false,queued:null,version:0,});const animationFrameId=useRef<number|null>(null);const shouldRunRenderLoop=useRef<boolean>(true);const lastRenderErrorReportTimeRef=useRef<number>(0);const framePerfRef=useRef<ViewerFramePerfAggregate>(createViewerFramePerfAggregate());const lastFpsTime=useRef<number>(performance.now());const lastFrameTime=useRef<number>(performance.now());const frameCount=useRef<number>(0);const renderRef=useRef<((time:number,scheduleNext?:boolean)=>void)|null>(null);const pMatrixRef=useRef(mat4.create());const mvMatrixRef=useRef(mat4.create());const cameraPosRef=useRef(vec3.create());const cameraUpRef=useRef(vec3.fromValues(0,0,1));const cameraQuatRef=useRef(quat.create());const{showModelInfo}=useUIStore();const{isLooping,setLooping}=useModelStore();const[texturePreview,setTexturePreview]=useState<{url:string;width:number;height:number;path:string;}|null>(null);const backgroundTextureResolveRunningRef=useRef(false);const attemptedMissingTexturePathsRef=useRef<Set<string>>(new Set());const flushFramePerfSummary=useCallback((reason:string,force=false)=>{const bucket=framePerfRef.current;if(bucket.samples===0)return;if(!force&&bucket.samples<90)return;markStandalonePerf("viewer_frame_profile",{reason,samples:bucket.samples,avgTotalMs:roundPerfValue(bucket.totalMs/bucket.samples),maxTotalMs:roundPerfValue(bucket.maxTotalMs),slowFrameCount:bucket.slowFrameCount,avgClearMs:roundPerfValue(bucket.clearMs/bucket.samples),avgCameraMs:roundPerfValue(bucket.cameraMs/bucket.samples),avgStateMs:roundPerfValue(bucket.stateMs/bucket.samples),avgUpdateMs:roundPerfValue(bucket.updateMs/bucket.samples),avgSceneMs:roundPerfValue(bucket.sceneMs/bucket.samples),avgOverlayMs:roundPerfValue(bucket.overlayMs/bucket.samples),isPlaying:isPlayingRef.current,modelPath:modelPath||"",});framePerfRef.current=createViewerFramePerfAggregate();},[modelPath],);const recordFramePerfSample=useCallback((sample:ViewerFramePerfSample,detail?:Record<string,unknown>)=>{const bucket=framePerfRef.current;bucket.samples+=1;bucket.totalMs+=sample.totalMs;bucket.maxTotalMs=Math.max(bucket.maxTotalMs,sample.totalMs);bucket.clearMs+=sample.clearMs;bucket.cameraMs+=sample.cameraMs;bucket.stateMs+=sample.stateMs;bucket.updateMs+=sample.updateMs;bucket.sceneMs+=sample.sceneMs;bucket.overlayMs+=sample.overlayMs;if(sample.totalMs>=16.7){bucket.slowFrameCount+=1;};const now=performance.now();if(sample.totalMs>=33&&now-bucket.lastSlowEmitMs>=1000){bucket.lastSlowEmitMs=now;markStandalonePerf("viewer_slow_frame",{totalMs:roundPerfValue(sample.totalMs),clearMs:roundPerfValue(sample.clearMs),cameraMs:roundPerfValue(sample.cameraMs),stateMs:roundPerfValue(sample.stateMs),updateMs:roundPerfValue(sample.updateMs),sceneMs:roundPerfValue(sample.sceneMs),overlayMs:roundPerfValue(sample.overlayMs),...detail,});};if(bucket.samples>=90){flushFramePerfSummary("periodic");}},[flushFramePerfSummary],);useEffect(()=>{return()=>{parseWorker.terminate();textureWorkers.forEach((worker)=>worker.terminate?.());};},[parseWorker,textureWorkers]);const formatCameraValue=(value:number):string=>{if(!Number.isFinite(value))return"0";const formatted=value.toFixed(2);return formatted.replace(/.?0+$/,"");};const getCameraVector=(prop:any,directProp?:any):number[]=>{const isArrayLike=(v:any)=>Array.isArray(v)||v instanceof Float32Array||ArrayBuffer.isView(v);const toArray=(v:any)=>(v instanceof Float32Array?Array.from(v):v);if(directProp&&isArrayLike(directProp))return toArray(directProp);if(isArrayLike(prop))return toArray(prop);if(prop&&prop.Keys&&prop.Keys.length>0){const v=prop.Keys[0].Vector;return v?toArray(v):[0,0,0];};return[0,0,0];};const getAvailableCameras=():any[]=>{const{modelData,nodes}=useModelStore.getState();const modelCameras=Array.isArray((modelData as any)?.Cameras)?(modelData as any).Cameras.filter((cam:any)=>cam):[];if(modelCameras.length>0)return modelCameras;return Array.isArray(nodes)?nodes.filter((n:any)=>n&&n.type==="Camera"):[];};const getSelectedCamera=(cameraIndex=selectedCameraIndex):any|null=>{const cameraList=getAvailableCameras();if(cameraIndex<0||cameraIndex>=cameraList.length)return null;return cameraList[cameraIndex]??null;};const clearActiveModelCameraView=()=>{inCameraView.current=false;setActiveModelCameraView(null);};const roundVertexCoord=(value:number):number=>Math.round(value*10000)/10000;const getVertexPositionKey=(vertices:ArrayLike<number>,vertexIndex:number):string=>{const base=vertexIndex*3;return`${roundVertexCoord(Number(vertices[base]??0))},${roundVertexCoord(Number(vertices[base+1]??0))},${roundVertexCoord(Number(vertices[base+2]??0))}`;
   };
 
@@ -409,7 +410,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
   const liveVertexRenderRevisionRef = useRef(0);
 
   // Cache for bound vertex highlighting (to avoid per-frame recalculation)
-  const boundVerticesCache = useRef<{ boneId: number; vertices: number[] } | null>(null);
+  const boundVerticesCache = useRef<{ boneId: number; revision: number; vertices: number[] } | null>(null);
   const healthBarDragInitialRef = useRef<HealthBarDragSnapshot | null>(null);
   const healthBarPreviewOffsetRef = useRef(vec3.create());
 
@@ -497,6 +498,10 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
     // Update when mode/sub-mode changes even if rendererStore doesn't change.
     showVerticesRef.current = getShowVerticesForCurrentContext();
   }, [appMainMode, animationSubMode]);
+
+  useEffect(() => {
+    useRendererStore.getState().resetNodeVisibility();
+  }, [modelPath]);
 
   const invalidateLiveVertexPointCache = () => {
     liveVertexRenderRevisionRef.current += 1;
@@ -955,6 +960,11 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
     [applySelectedCameraView, onSetViewPreset, syncCameraToOrbit],
   );
 
+  const toggleProjectionMode = useCallback(() => {
+    const nextPreset = cameraRef.current?.projectionMode === "orthographic" ? "perspective" : "orthographic";
+    applyViewPreset(nextPreset);
+  }, [applyViewPreset]);
+
   const fitToViewImpl = React.useCallback(() => {
     const renderer = rendererRef.current;
     if (!renderer || !renderer.model || !renderer.model.Info) return;
@@ -1172,11 +1182,19 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
         return;
       }
 
-      const perspectiveBindings = getEffectiveBindings("view.perspective").map(normalizeKeyCombo);
-      const orthographicBindings = getEffectiveBindings("view.orthographic").map(normalizeKeyCombo);
-      if (combo && (perspectiveBindings.includes(normalizeKeyCombo(combo)) || orthographicBindings.includes(normalizeKeyCombo(combo)))) {
-        const nextPreset = cameraRef.current?.projectionMode === "orthographic" ? "perspective" : "orthographic";
-        applyViewPreset(nextPreset);
+      const normalizedCombo = combo ? normalizeKeyCombo(combo) : null;
+      const projectionToggleBindings = getEffectiveBindings("view.toggleProjection").map(normalizeKeyCombo);
+      const legacyPerspectiveBindings = getEffectiveBindings("view.perspective").map(normalizeKeyCombo);
+      const legacyOrthographicBindings = getEffectiveBindings("view.orthographic").map(normalizeKeyCombo);
+      if (
+        normalizedCombo &&
+        (
+          projectionToggleBindings.includes(normalizedCombo) ||
+          legacyPerspectiveBindings.includes(normalizedCombo) ||
+          legacyOrthographicBindings.includes(normalizedCombo)
+        )
+      ) {
+        toggleProjectionMode();
         ev.preventDefault();
         ev.stopPropagation();
         return;
@@ -1197,7 +1215,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
       window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [applyViewPreset]);
+  }, [applyViewPreset, onToggleWireframe, toggleProjectionMode]);
 
   const initialVertexPositions = useRef<Map<string, [number, number, number]>>(new Map());
   const initialNodePositions = useRef<Map<number, [number, number, number]>>(new Map());
@@ -1438,6 +1456,21 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
     return hasChanges ? nextMaterials : materials;
   };
 
+  const normalizeRendererTVertexAnimId = (layer: Record<string, unknown>): number | null => {
+    const hasCanonicalValue = Object.prototype.hasOwnProperty.call(layer, "TVertexAnimId");
+    const rawValue = hasCanonicalValue ? layer.TVertexAnimId : (layer.TextureAnimationId ?? layer.TextureAnimId);
+    if (rawValue === null || rawValue === undefined || rawValue === "") return null;
+    const numericValue = typeof rawValue === "number" ? rawValue : Number(rawValue);
+    return Number.isInteger(numericValue) && numericValue >= 0 ? numericValue : null;
+  };
+
+  const omitTextureAnimAliases = (layer: Record<string, unknown>, tVertexAnimId: number | null, textureId?: number) => {
+    const { TextureAnimationId, TextureAnimId, ...cleanLayer } = layer;
+    return textureId === undefined
+      ? { ...cleanLayer, TVertexAnimId: tVertexAnimId }
+      : { ...cleanLayer, TextureID: textureId, TVertexAnimId: tVertexAnimId };
+  };
+
   const sanitizeMaterialsForRenderer = (materials: any[] | undefined, texturesLength: number) => {
     if (!Array.isArray(materials)) return materials;
 
@@ -1451,17 +1484,31 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
       const nextLayers = material.Layers.map((layer: any) => {
         if (!layer || typeof layer !== "object") return layer;
 
+        const hasTextureAnimAlias =
+          Object.prototype.hasOwnProperty.call(layer, "TextureAnimationId") ||
+          Object.prototype.hasOwnProperty.call(layer, "TextureAnimId");
+        const hasCanonicalTVertexAnim = Object.prototype.hasOwnProperty.call(layer, "TVertexAnimId");
+        const safeTVertexAnimId = normalizeRendererTVertexAnimId(layer);
+        const tVertexAnimChanged =
+          hasTextureAnimAlias ||
+          (hasCanonicalTVertexAnim && layer.TVertexAnimId !== safeTVertexAnimId);
+
         if (layer.TextureID && typeof layer.TextureID === "object" && Array.isArray(layer.TextureID.Keys)) {
+          if (tVertexAnimChanged) {
+            materialChanged = true;
+            hasChanges = true;
+            return omitTextureAnimAliases(layer, safeTVertexAnimId);
+          }
           return layer;
         }
 
         const rawTextureId = typeof layer.TextureID === "number" ? layer.TextureID : Number(layer.TextureID);
         const safeTextureId = Number.isFinite(rawTextureId) ? Math.min(Math.max(0, Math.floor(rawTextureId)), maxTextureId) : 0;
 
-        if (safeTextureId !== layer.TextureID) {
+        if (safeTextureId !== layer.TextureID || tVertexAnimChanged) {
           materialChanged = true;
           hasChanges = true;
-          return { ...layer, TextureID: safeTextureId };
+          return omitTextureAnimAliases(layer, safeTVertexAnimId, safeTextureId);
         }
 
         return layer;
@@ -1905,10 +1952,18 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
   const materialUpdateTrigger = useModelStore((state) => state.materialReloadTrigger);
   useEffect(() => {
     if (rendererRef.current && (rendererRef.current as any).modelInstance && materialUpdateTrigger > 0) {
-      const storeData = useModelStore.getState().modelData;
+      const modelState = useModelStore.getState();
+      // Standalone material edits live in materialManagerPreview until saved.
+      // The renderer must consume that overlay here, otherwise layer TVertexAnimId
+      // changes can be overwritten by the stale authoritative modelData.
+      const storeData = mergeMaterialManagerPreview(modelState.modelData as any, modelState.materialManagerPreview as any);
       if (storeData) {
-        if (storeData.Materials) (rendererRef.current.model as any).Materials = storeData.Materials;
         if (storeData.Textures) (rendererRef.current.model as any).Textures = storeData.Textures;
+        if (storeData.Materials) {
+          const textureCount = Array.isArray((rendererRef.current.model as any).Textures) ? (rendererRef.current.model as any).Textures.length : 0;
+          const sanitizedMaterials = sanitizeMaterialsForRenderer(storeData.Materials, textureCount);
+          (rendererRef.current.model as any).Materials = cloneMaterialsWithReferenceBlendCompat(sanitizedMaterials);
+        }
         if (storeData.Geosets) (rendererRef.current.model as any).Geosets = storeData.Geosets;
         if (storeData.TextureAnims) (rendererRef.current.model as any).TextureAnims = storeData.TextureAnims;
       }
@@ -1968,26 +2023,63 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
         }
       }
     } else {
-      // If modelPath is null, it means no models are loaded
-      if (lastLoadedModelPath.current !== null) {
-        lastLoadedModelPath.current = null;
-        if (rendererRef.current) {
-          try {
-            rendererRef.current.destroy();
-          } catch (e) {}
-          setRenderer(null);
-        }
-        // Force a clear on the canvas
-        if (canvasRef.current) {
-          // Clear without creating a context.
-          const canvas = canvasRef.current;
-          const w = canvas.width;
-          const h = canvas.height;
-          canvas.width = w;
-          canvas.height = h;
-        }
+      // If modelPath is null, it means no models are loaded. Always clear the
+      // local/global renderer state; cached-renderer tab switches may leave
+      // lastLoadedModelPath empty even while rendererRef still points to a model.
+      activeModelLoadTokenRef.current += 1;
+      lastLoadedModelPath.current = null;
+      const currentRenderer = rendererRef.current || renderer;
+      if (currentRenderer) {
+        try {
+          currentRenderer.destroy();
+        } catch (e) {}
       }
+      rendererRef.current = null;
+      setRenderer(null);
+      useRendererStore.getState().setRenderer(null);
+      useRendererStore.getState().setMissingTextures([]);
+      needsRendererUpdateRef.current = false;
+      mouseState.current = {
+        isDragging: false,
+        dragButton: -1,
+        lastMouseX: 0,
+        lastMouseY: 0,
+        startX: 0,
+        startY: 0,
+        isBoxSelecting: false,
+        isCtrlPressed: false,
+      };
+      gizmoState.current = {
+        activeAxis: null,
+        isDragging: false,
+        dragStartPos: null,
+        dragCenter: null,
+        isShiftDuplicate: false,
+      };
+      setSelectionBox(null);
+      setGizmoHud(null);
+      setContextMenu(null);
+      setNodeContextMenu(null);
       setTexturePreview(null);
+      setLoading(false);
+      setLoadingStatus("");
+      // Force a clear on the canvas
+      if (canvasRef.current) {
+        const canvas = canvasRef.current;
+        const gl = glRef.current;
+        if (gl) {
+          const [r, g, b] = hexToRgb(backgroundColorRef.current);
+          gl.viewport(0, 0, canvas.width, canvas.height);
+          gl.clearColor(r, g, b, 1.0);
+          gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        }
+        // Resetting width/height clears stale WebGL drawing buffers even when
+        // the next render loop exits early because there is no renderer.
+        const w = canvas.width;
+        const h = canvas.height;
+        canvas.width = w;
+        canvas.height = h;
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelPath]);
@@ -3513,25 +3605,41 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
         });
         const parseWithWorker = (bytes: Uint8Array) =>
           new Promise<{ model: any; parseMs?: number }>((resolve, reject) => {
-            const timer = setTimeout(() => reject(new Error("Model parsing timeout")), 30000);
-            const oldOnMessage = parseWorker.onmessage;
-            parseWorker.onmessage = (e: any) => {
+            const worker = new ModelWorker();
+            let settled = false;
+            const cleanup = () => {
+              worker.onmessage = null;
+              worker.onerror = null;
+              worker.terminate();
+            };
+            const settle = (callback: () => void) => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timer);
+              cleanup();
+              callback();
+            };
+            const timer = window.setTimeout(() => {
+              settle(() => reject(new Error("Model parsing timeout")));
+            }, 30000);
+            worker.onmessage = (e: any) => {
               const { type, payload } = e.data;
               if (type === "PARSE_SUCCESS") {
-                clearTimeout(timer);
-                parseWorker.onmessage = oldOnMessage;
-                resolve({
-                  model: payload.model,
-                  parseMs: payload.parseMs,
-                });
+                settle(() =>
+                  resolve({
+                    model: payload.model,
+                    parseMs: payload.parseMs,
+                  }),
+                );
               } else if (type === "ERROR") {
-                clearTimeout(timer);
-                parseWorker.onmessage = oldOnMessage;
-                reject(new Error(payload.error));
+                settle(() => reject(new Error(payload.error)));
               }
             };
+            worker.onerror = (event: ErrorEvent) => {
+              settle(() => reject(new Error(event.message || "Model parsing worker failed")));
+            };
             const tightBuffer = toTightArrayBuffer(bytes);
-            parseWorker.postMessage(
+            worker.postMessage(
               {
                 type: "PARSE_MODEL",
                 payload: { buffer: tightBuffer, path },
@@ -3904,6 +4012,9 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
           rendererGeoset.__sourceVerticesRef = sourceGeoset.Vertices;
           rendererGeoset.__sourceNormalsRef = sourceGeoset.Normals;
           rendererGeoset.__sourceTVerticesRef = sourceGeoset.TVertices?.[0];
+          rendererGeoset.__sourceGroupsRef = sourceGeoset.Groups;
+          rendererGeoset.__sourceVertexGroupRef = sourceGeoset.VertexGroup;
+          rendererGeoset.__sourceSkinWeightsRef = sourceGeoset.SkinWeights;
         }
       }
       markStandalonePerf("viewer_modeldata_sync_skipped", {
@@ -4108,6 +4219,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
           const geoset = modelData.Geosets[i];
           const rendererGeoset = renderer.model.Geosets[i];
           const rendererGeosetMeta = rendererGeoset as any;
+          let geosetSkinningChanged = false;
 
           if (geoset?.Vertices && rendererGeosetMeta.__sourceVerticesRef !== geoset.Vertices) {
             const vertexData = geoset.Vertices instanceof Float32Array ? geoset.Vertices : new Float32Array(geoset.Vertices);
@@ -4125,6 +4237,35 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
               rendererGeoset.MaterialID = safeMatId;
               geosetMaterialChanged = true;
             }
+          }
+
+          if (Array.isArray(geoset?.Groups) && rendererGeosetMeta.__sourceGroupsRef !== geoset.Groups) {
+            rendererGeoset.Groups = geoset.Groups.map((group: any) => (Array.isArray(group) ? [...group] : []));
+            rendererGeoset.TotalGroupsCount = typeof geoset.TotalGroupsCount === "number"
+              ? geoset.TotalGroupsCount
+              : rendererGeoset.Groups.reduce((sum: number, group: any[]) => sum + group.length, 0);
+            rendererGeosetMeta.__sourceGroupsRef = geoset.Groups;
+            geosetSkinningChanged = true;
+          }
+
+          if (geoset?.VertexGroup && rendererGeosetMeta.__sourceVertexGroupRef !== geoset.VertexGroup) {
+            const vertexGroupValues = Array.from(geoset.VertexGroup as ArrayLike<number>, (value) => Number(value) || 0);
+            const VertexGroupCtor = geoset.VertexGroup instanceof Uint16Array || vertexGroupValues.some((value) => value > 255) ? Uint16Array : Uint8Array;
+            rendererGeoset.VertexGroup = new VertexGroupCtor(vertexGroupValues);
+            rendererGeosetMeta.__sourceVertexGroupRef = geoset.VertexGroup;
+            geosetSkinningChanged = true;
+          }
+
+          if (geoset?.SkinWeights && rendererGeosetMeta.__sourceSkinWeightsRef !== geoset.SkinWeights) {
+            rendererGeoset.SkinWeights = geoset.SkinWeights instanceof Uint8Array
+              ? geoset.SkinWeights
+              : new Uint8Array(Array.from(geoset.SkinWeights as ArrayLike<number>, (value) => Number(value) || 0));
+            rendererGeosetMeta.__sourceSkinWeightsRef = geoset.SkinWeights;
+            geosetSkinningChanged = true;
+          }
+
+          if (geosetSkinningChanged && typeof (renderer as any).updateGeosetGroups === "function") {
+            (renderer as any).updateGeosetGroups(i);
           }
 
           // Sync SelectionGroup changes
@@ -4640,6 +4781,16 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
               }
             }
 
+            const hiddenNodeIds = useRendererStore.getState().hiddenNodeIds;
+            const hiddenNodeIdSet = hiddenNodeIds.length > 0 ? new Set(hiddenNodeIds) : null;
+            const isNodeVisibleForRender = (nodeId: unknown) => {
+              const numericNodeId = Number(nodeId);
+              return !hiddenNodeIdSet || !Number.isFinite(numericNodeId) || !hiddenNodeIdSet.has(numericNodeId);
+            };
+            const visibleRendererNodes = hiddenNodeIdSet && Array.isArray(mdlRenderer.rendererData.nodes)
+              ? mdlRenderer.rendererData.nodes.filter((nodeWrapper: unknown) => isNodeVisibleForRender((nodeWrapper as { node?: { ObjectId?: unknown } })?.node?.ObjectId))
+              : mdlRenderer.rendererData.nodes;
+
             // === DNC Environment Lighting Update ===
             const envManager = getEnvironmentManager();
             if (envManager.isEnabled()) {
@@ -4695,9 +4846,18 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
             const originalParticleRenderGPU = particlesController?.renderGPU;
             const originalRibbonRender = ribbonsController?.render;
             const originalRibbonRenderGPU = ribbonsController?.renderGPU;
+            const originalParticleEmitters = Array.isArray(particlesController?.emitters) ? particlesController.emitters : null;
+            const originalRibbonEmitters = Array.isArray(ribbonsController?.emitters) ? ribbonsController.emitters : null;
 
             if (ribbonsController && typeof ribbonsController.setPreviewVisibility === "function") {
               ribbonsController.setPreviewVisibility(forceRibbonPreviewVisibility);
+            }
+
+            if (hiddenNodeIdSet && originalParticleEmitters) {
+              particlesController.emitters = originalParticleEmitters.filter((emitter) => isNodeVisibleForRender(emitter?.props?.ObjectId));
+            }
+            if (hiddenNodeIdSet && originalRibbonEmitters) {
+              ribbonsController.emitters = originalRibbonEmitters.filter((emitter) => isNodeVisibleForRender(emitter?.props?.ObjectId));
             }
 
             if (particlesController && !showParticlesRef.current) {
@@ -4735,6 +4895,12 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
                 ribbonsController.render = originalRibbonRender;
                 ribbonsController.renderGPU = originalRibbonRenderGPU;
               }
+              if (originalParticleEmitters) {
+                particlesController.emitters = originalParticleEmitters;
+              }
+              if (originalRibbonEmitters) {
+                ribbonsController.emitters = originalRibbonEmitters;
+              }
             }
 
             // === Grid Rendering (Moved AFTER model for correct depth/overlay handling) ===
@@ -4746,7 +4912,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
             // === Attachment Point Rendering (Moved AFTER main scene to handle depth/overlay) ===
             if (gl && showAttachmentsRef.current && mdlRenderer.rendererData?.nodes) {
               // Filter nodes that are attachments
-              const attachmentNodes = (mdlRenderer.rendererData.nodes as any[]).filter((n: any) => n.node.type === NodeType.ATTACHMENT || n.node.type === "Attachment" || n.node.AttachmentID !== undefined || n.node.hasOwnProperty("AttachmentID"));
+              const attachmentNodes = (visibleRendererNodes as any[]).filter((n: any) => n.node.type === NodeType.ATTACHMENT || n.node.type === "Attachment" || n.node.AttachmentID !== undefined || n.node.hasOwnProperty("AttachmentID"));
 
               if (attachmentNodes.length > 0) {
                 const attachmentPositions: number[] = [];
@@ -4938,21 +5104,24 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
 
             if (nodeRenderModeRef.current !== "hidden" && mdlRenderer.rendererData.nodes && currentMainMode !== "geometry") {
               const { selectedNodeIds } = useSelectionStore.getState();
+              const visibleSelectedNodeIds = hiddenNodeIdSet
+                ? selectedNodeIds.filter((nodeId) => isNodeVisibleForRender(nodeId))
+                : selectedNodeIds;
               let parentOfSelected: number | null = null;
               let childrenOfSelected: number[] = [];
 
-              if (selectedNodeIds.length === 1) {
-                const selectedId = selectedNodeIds[0];
-                const selectedNode = mdlRenderer.rendererData.nodes.find((n: any) => n.node.ObjectId === selectedId);
+              if (visibleSelectedNodeIds.length === 1) {
+                const selectedId = visibleSelectedNodeIds[0];
+                const selectedNode = visibleRendererNodes.find((n: any) => n.node.ObjectId === selectedId);
                 if (selectedNode) {
                   if (typeof selectedNode.node.Parent === "number") {
                     parentOfSelected = selectedNode.node.Parent;
                   }
-                  childrenOfSelected = mdlRenderer.rendererData.nodes.filter((n: any) => n.node.Parent === selectedId).map((n: any) => n.node.ObjectId);
+                  childrenOfSelected = visibleRendererNodes.filter((n: any) => n.node.Parent === selectedId).map((n: any) => n.node.ObjectId);
 
                   // Recursively collect all descendants (children's children, etc.)
                   const collectDescendants = (parentIds: number[]): number[] => {
-                    const children = mdlRenderer.rendererData.nodes.filter((n: any) => parentIds.includes(n.node.Parent)).map((n: any) => n.node.ObjectId);
+                    const children = visibleRendererNodes.filter((n: any) => parentIds.includes(n.node.Parent)).map((n: any) => n.node.ObjectId);
                     if (children.length === 0) return [];
                     return [...children, ...collectDescendants(children)];
                   };
@@ -4960,9 +5129,10 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
 
                   // render bound vertices highlight (with caching to avoid per-frame recalculation)
                   if (currentMainMode === "animation" && currentAnimationSubMode === "binding" && debugRenderer.current) {
+                    const skinningRevision = useRendererStore.getState().vertexRenderRevision + liveVertexRenderRevisionRef.current;
                     // Check if we need to recalculate (only when bone selection changes)
                     let boundVertices: number[];
-                    if (boundVerticesCache.current && boundVerticesCache.current.boneId === selectedId) {
+                    if (boundVerticesCache.current && boundVerticesCache.current.boneId === selectedId && boundVerticesCache.current.revision === skinningRevision) {
                       // Use cached data
                       boundVertices = boundVerticesCache.current.vertices;
                     } else {
@@ -4996,7 +5166,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
                       });
 
                       // Cache for future frames
-                      boundVerticesCache.current = { boneId: selectedId, vertices: boundVertices };
+                      boundVerticesCache.current = { boneId: selectedId, revision: skinningRevision, vertices: boundVertices };
                     }
 
                     if (boundVertices.length > 0 && showVerticesRef.current) {
@@ -5033,13 +5203,13 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
               const nodeCubeEdgeWorldSize = getScreenStableWorldScale(18, cameraRef.current?.target);
               const nodeSize = (nodeCubeEdgeWorldSize / 4.8) * (useRendererStore.getState().nodeSize ?? 1.0);
 
-              debugRenderer.current.renderNodes(gl as WebGLRenderingContext, mvMatrix, pMatrix, mdlRenderer.rendererData.nodes as any, selectedNodeIds, parentOfSelected, childrenOfSelected, nodeTypeColors, currentMainMode === "animation" && currentAnimationSubMode === "keyframe", nodeSize, nodeRenderModeRef.current === "wireframe" ? "wireframe" : "solid");
+              debugRenderer.current.renderNodes(gl as WebGLRenderingContext, mvMatrix, pMatrix, visibleRendererNodes as any, visibleSelectedNodeIds, parentOfSelected, childrenOfSelected, nodeTypeColors, currentMainMode === "animation" && currentAnimationSubMode === "keyframe", nodeSize, nodeRenderModeRef.current === "wireframe" ? "wireframe" : "solid");
 
               // 粒子发射器2：在视图/动画等模式下显示宽长矩形框与发射方向（与 particles.ts 中局部 +Z 初速一致）
-              if (selectedNodeIds.length > 0) {
+              if (visibleSelectedNodeIds.length > 0) {
                 try {
                   const storeNodes = useModelStore.getState().nodes as any[];
-                  const selectedIdNums = selectedNodeIds.map((id: any) => Number(id)).filter((id: number) => Number.isFinite(id));
+                  const selectedIdNums = visibleSelectedNodeIds.map((id: any) => Number(id)).filter((id: number) => Number.isFinite(id));
                   if (selectedIdNums.length === 0) {
                     // Nothing to visualize.
                   } else {
@@ -5203,15 +5373,23 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
 
               if (showAttachmentsRef.current) {
                 // Render attachment nodes as yellow tetrahedrons
-                debugRenderer.current.renderAttachmentNodes(gl as WebGLRenderingContext, mvMatrix, pMatrix, mdlRenderer.rendererData.nodes as any, selectedNodeIds, nodeTypeColors);
+                debugRenderer.current.renderAttachmentNodes(gl as WebGLRenderingContext, mvMatrix, pMatrix, visibleRendererNodes as any, visibleSelectedNodeIds, nodeTypeColors);
               }
             }
 
             if (showSkeletonRef.current && mdlRenderer.rendererData.nodes && currentMainMode !== "uv") {
               const { selectedNodeIds } = useSelectionStore.getState();
+              const visibleSelectedNodeIds = hiddenNodeIdSet
+                ? selectedNodeIds.filter((nodeId) => isNodeVisibleForRender(nodeId))
+                : selectedNodeIds;
+              const visibleNodeNames = hiddenNodeIdSet
+                ? visibleRendererNodes
+                    .map((nodeWrapper: any) => nodeWrapper?.node?.Name)
+                    .filter((name: unknown): name is string => typeof name === "string")
+                : null;
               if (gl) {
                 gl.disable(gl.DEPTH_TEST);
-                (mdlRenderer as any).renderSkeleton(mvMatrix, pMatrix, null, selectedNodeIds);
+                (mdlRenderer as any).renderSkeleton(mvMatrix, pMatrix, visibleNodeNames, visibleSelectedNodeIds);
                 gl.enable(gl.DEPTH_TEST);
               }
             }
@@ -5219,7 +5397,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
             // === Light Object Rendering ===
             if (gl && showLightsRef.current && mdlRenderer.rendererData.nodes) {
               const { nodes } = useModelStore.getState();
-              const lightNodes = nodes.filter((n: any) => n && n.type === "Light");
+              const lightNodes = nodes.filter((n: any) => n && n.type === "Light" && isNodeVisibleForRender(n.ObjectId));
 
               if (lightNodes.length > 0) {
                 const viewMatrix = mvMatrix;
@@ -5227,7 +5405,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
                 const nodeMVMatrix = mat4.create();
 
                 lightNodes.forEach((light: any) => {
-                  const nodeWrapper = mdlRenderer.rendererData.nodes.find((n: any) => n.node.ObjectId === light.ObjectId);
+                  const nodeWrapper = visibleRendererNodes.find((n: any) => n.node.ObjectId === light.ObjectId);
                   if (!nodeWrapper) return;
 
                   let worldMatrix = (nodeWrapper as any).worldMatrix || (nodeWrapper as any).matrix;
@@ -5280,7 +5458,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
 
             // === Collision Shape Rendering ===
             if (gl && showCollisionShapesRef.current && mdlRenderer.rendererData.nodes) {
-              const collisionNodes = mdlRenderer.rendererData.nodes.filter((n: any) => n.node.hasOwnProperty("Shape") || n.node.type === "CollisionShape");
+              const collisionNodes = visibleRendererNodes.filter((n: any) => n.node.hasOwnProperty("Shape") || n.node.type === "CollisionShape");
               if (collisionNodes.length > 0) {
                 const viewMatrix = mvMatrix;
                 const projectionMatrix = pMatrix;
@@ -7912,8 +8090,15 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
     setNodeContextMenu(null);
     const node = getPrimarySelectedNode();
     if (!node) return false;
+    const { nodes, modelData } = useModelStore.getState();
+    const checkResult = canDeleteNode(node.ObjectId, nodes, modelData?.Geosets);
+    if (!checkResult.canDelete) {
+      appMessage.error(checkResult.reason || "无法删除该节点");
+      return true;
+    }
     useModelStore.getState().deleteNode(node.ObjectId);
     useSelectionStore.getState().clearNodeSelection();
+    appMessage.success("节点已删除");
     return true;
   };
 
@@ -8021,6 +8206,14 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
         return true;
       }),
       registerShortcutHandler(
+        "view.toggleProjection",
+        () => {
+          toggleProjectionMode();
+          return true;
+        },
+        { priority: 120 },
+      ),
+      registerShortcutHandler(
         "view.perspective",
         () => {
           if (cameraRef.current?.projectionMode !== "orthographic") {
@@ -8052,6 +8245,19 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
       registerShortcutHandler("animation.selectChildNode", () => {
         return selectChildNode();
       }),
+      registerShortcutHandler(
+        "animation.deleteSelectedNode",
+        () => {
+          return deleteSelectedNode();
+        },
+        {
+          isActive: () => {
+            const { mainMode, animationSubMode, selectedNodeIds } = useSelectionStore.getState();
+            return mainMode === "animation" && animationSubMode === "binding" && selectedNodeIds.length > 0;
+          },
+          priority: 150,
+        },
+      ),
       registerShortcutHandler("view.cameraViewToggle", () => {
         handleCameraViewToggle();
         return true;
@@ -8099,7 +8305,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
     return () => {
       unsubscribeHandlers.forEach((unsubscribe) => unsubscribe());
     };
-  }, [handleCameraViewToggle, handleCopyVertices, handleDeleteVertices, handleFitToView, handlePasteVertices, onTogglePlay, onToggleWireframe, selectChildNode, selectParentNode]);
+  }, [applyViewPreset, deleteSelectedNode, handleCameraViewToggle, handleCopyVertices, handleDeleteVertices, handleFitToView, handlePasteVertices, onTogglePlay, onToggleWireframe, selectChildNode, selectParentNode, toggleProjectionMode]);
 
   useEffect(() => {
     return registerGeometryDeleteKeyListener((event) => {
@@ -8320,22 +8526,6 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
             boxShadow: "0 2px 8px rgba(0, 0, 0, 0.3)",
           }}
         >
-          <div
-            style={{
-              color: "rgba(255, 255, 255, 0.82)",
-              fontWeight: 600,
-              whiteSpace: "nowrap",
-            }}
-          >
-            {modeDisplayName}
-          </div>
-          <div
-            style={{
-              width: "1px",
-              height: "12px",
-              background: "rgba(255, 255, 255, 0.22)",
-            }}
-          />
           <div style={{ fontWeight: "bold" }}>{fps} FPS</div>
         </div>
       )}
@@ -8529,6 +8719,24 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
                     ))}
                   </div>
                 )}
+              </div>
+              <div
+                style={{
+                  height: "24px",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  background: "rgba(0, 0, 0, 0.7)",
+                  color: "rgba(255, 255, 255, 0.82)",
+                  border: "1px solid #555",
+                  borderRadius: "4px",
+                  padding: "0 10px",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                  whiteSpace: "nowrap",
+                  pointerEvents: "none",
+                }}
+              >
+                {modeDisplayName}
               </div>
             </div>
           );

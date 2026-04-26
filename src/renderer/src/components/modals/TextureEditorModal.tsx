@@ -70,6 +70,10 @@ interface TextureManagerSnapshot {
 }
 
 interface TextureManagerRpcState {
+    documentId: string | null
+    documentRevision: number
+    assetRevision: number
+    previewRevision: number
     snapshotVersion: number
     snapshot: TextureManagerSnapshot
     pickedGeosetIndex: number | null
@@ -109,6 +113,10 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
     const setTextureSaveSuffix = useRendererStore(state => state.setTextureSaveSuffix)
 
     const initialRpcState: TextureManagerRpcState = {
+        documentId: null,
+        documentRevision: 0,
+        assetRevision: 0,
+        previewRevision: 0,
         snapshotVersion: 0,
         snapshot: {
             textures: [],
@@ -561,7 +569,6 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
                 JSON.stringify({
                     image: x?.Image ?? '',
                     replaceableId: x?.ReplaceableId ?? 0,
-                    flags: x?.Flags ?? 0,
                 })
             const withReplaceables = cloned.map((t: any, i: number) => {
                 const prevT = i < prevSnapshot.length ? prevSnapshot[i] : null
@@ -608,9 +615,16 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
                                     ? 0
                                     : -1
 
+            const previousPreviewCacheKey = getPreviewCacheKey(selectedTexture)
+            const nextPreviewCacheKey = getPreviewCacheKey(
+                nextSelectedIndex >= 0 ? withReplaceables[nextSelectedIndex] : null
+            )
+
             setLocalTextures(withReplaceables)
             setAdjustmentsByTextureId(nextAdjustments)
-            setBasePreviewImageData(null)
+            if (previousPreviewCacheKey !== nextPreviewCacheKey) {
+                setBasePreviewImageData(null)
+            }
             hasLiveTextureOverrideRef.current = false
             setSelectedIndex(nextSelectedIndex)
 
@@ -730,7 +744,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
     }
     const getPreviewCacheKey = (texture: LocalTexture | null | undefined): string => {
         const imagePath = typeof texture?.Image === 'string' ? normalizePath(texture.Image) : ''
-        return `${modelPath || ''}::${texture?.__editorId || ''}::${texture?.ReplaceableId ?? -1}::${imagePath}`
+        return `${modelPath || ''}::${texture?.ReplaceableId ?? -1}::${imagePath}`
     }
 
     const writePreviewCache = (cacheKey: string, entry: PreviewCacheEntry) => {

@@ -16,7 +16,7 @@ import { getDraggedTextureIndex } from '../../utils/textureDragDrop';
 import { saveParticleEmitter2Preset } from '../../services/particleEmitter2PresetService';
 import { showMessage } from '../../store/messageStore';
 import { uiText } from '../../constants/uiText';
-import { MATERIAL_FILTER_MODE_OPTIONS } from '../../constants/filterModes';
+import { PARTICLE_EMITTER2_FILTER_MODE_OPTIONS } from '../../constants/filterModes';
 import { useNodeEditorPreview } from '../../hooks/useNodeEditorPreview';
 import { useWindowEvent } from '../../hooks/useWindowEvent';
 import { NODE_EDITOR_COMMANDS, type NodeEditorCommandSender } from '../../types/nodeEditorRpc';
@@ -460,7 +460,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
             Gravity: 0,
 
             TextureID: -1,
-            FilterMode: 0, // 0=None, 1=Transparent, 2=Blend, 3=Additive, 4=AddAlpha, 5=Modulate, 6=Modulate2x
+            FilterMode: 0, // 0=Blend, 1=Additive, 2=Modulate, 3=Modulate2x, 4=Transparent/AlphaKey, 5=AddAlpha, 6=None
             Rows: 1,
             Columns: 1,
             PriorityPlane: 0,
@@ -1230,7 +1230,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
                 <div style={{ marginBottom: 4, color: '#ccc' }}>过滤模式</div>
                 <Form.Item name="FilterMode" noStyle>
                     <Select
-                        options={MATERIAL_FILTER_MODE_OPTIONS as any}
+                        options={PARTICLE_EMITTER2_FILTER_MODE_OPTIONS as any}
                         style={{ width: '100%' }}
                         size="small"
                     />

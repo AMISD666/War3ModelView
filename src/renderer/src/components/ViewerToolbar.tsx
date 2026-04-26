@@ -285,6 +285,35 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         appMessage.success(`已绑定 ${selectedVertexIds.length} 个顶点到骨骼 ${boneId}`)
     }
 
+    const handleExclusiveBind = () => {
+        const activeRenderer = renderer ?? useRendererStore.getState().renderer
+        if (!activeRenderer || selectedNodeIds.length !== 1) {
+            appMessage.warning('请先选择一个骨骼')
+            return
+        }
+        if (selectedVertexIds.length === 0) {
+            appMessage.warning('请先选择要绑定的顶点')
+            return
+        }
+        const boneId = selectedNodeIds[0]
+        const grouped = new Map<number, number[]>()
+        selectedVertexIds.forEach(v => {
+            if (!grouped.has(v.geosetIndex)) grouped.set(v.geosetIndex, [])
+            grouped.get(v.geosetIndex)!.push(v.index)
+        })
+        const targets = Array.from(grouped.entries()).map(([geosetIndex, vertexIndices]) => ({
+            geosetIndex,
+            vertexIndices
+        }))
+        const cmd = new BindVerticesCommand(activeRenderer, targets, boneId, 'exclusiveBind')
+        executeCommand(cmd)
+        if (!cmd.hasChanges()) {
+            appMessage.info('选中顶点已经只绑定到该骨骼')
+            return
+        }
+        appMessage.success(`已完全绑定 ${selectedVertexIds.length} 个顶点到骨骼 ${boneId}`)
+    }
+
     const handleCreateBone = () => {
         const { addNode } = useModelStore.getState()
         const { selectedVertexIds } = useSelectionStore.getState()
@@ -569,6 +598,9 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                                 </Tooltip>
                                 <Tooltip title="绑定选中的顶点到选中的骨骼">
                                     <Button icon={<LinkOutlined />} onClick={handleBind} />
+                                </Tooltip>
+                                <Tooltip title="完全绑定 - 清除选中顶点的其他骨骼绑定，只保留当前骨骼">
+                                    <Button icon={<AimOutlined />} onClick={handleExclusiveBind} />
                                 </Tooltip>
                                 <Tooltip title="解除选中顶点的骨骼绑定">
                                     <Button icon={<DisconnectOutlined />} onClick={handleUnbind} />

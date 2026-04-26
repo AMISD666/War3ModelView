@@ -9,7 +9,15 @@ import { useModelStore } from '../../store/modelStore'
 import { useHistoryStore } from '../../store/historyStore'
 
 const GlobalSequenceManager: React.FC = () => {
-    const globalSequences = useModelStore((state) => (((state.modelData as any)?.GlobalSequences as number[]) || []))
+    const globalSequences = useModelStore((state) => {
+        const rawSequences = ((state.modelData as any)?.GlobalSequences as any[]) || []
+        return Array.isArray(rawSequences)
+            ? rawSequences.map((sequence: any) => {
+                const duration = typeof sequence === 'number' ? sequence : sequence?.Duration
+                return Math.max(0, Math.floor(Number(duration) || 0))
+            })
+            : []
+    })
     const updateGlobalSequences = useModelStore((state) => state.updateGlobalSequences)
     const setPlaying = useModelStore((state) => state.setPlaying)
     const {

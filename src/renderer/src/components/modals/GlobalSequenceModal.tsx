@@ -25,11 +25,20 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({
         { globalSequences: [] }
     )
 
-    const storeGlobalSequences = useModelStore(state => ((state.modelData as any)?.GlobalSequences as number[]) || [])
+    const storeGlobalSequences = useModelStore(state => {
+        const rawSequences = ((state.modelData as any)?.GlobalSequences as any[]) || []
+        return Array.isArray(rawSequences)
+            ? rawSequences.map((sequence: any) => {
+                const duration = typeof sequence === 'number' ? sequence : sequence?.Duration
+                return Math.max(0, Math.floor(Number(duration) || 0))
+            })
+            : []
+    })
     const globalSequences: number[] = isStandalone ? (rpcState.globalSequences || []) : storeGlobalSequences
 
     const [localSeqs, setLocalSeqs] = useState<number[]>([])
     const lastGlobalSeqSigRef = useRef('')
+    const lastCommittedSeqSigRef = useRef('')
 
     useEffect(() => {
         const sig = JSON.stringify(globalSequences)
@@ -37,15 +46,29 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({
             return
         }
         lastGlobalSeqSigRef.current = sig
+        lastCommittedSeqSigRef.current = sig
         setLocalSeqs([...globalSequences])
     }, [globalSequences])
 
+    const normalizeSequences = (seqs: number[]): number[] => (
+        seqs.map((duration) => Math.max(0, Math.floor(Number(duration) || 0)))
+    )
+
     const saveChanges = (newSeqs: number[]) => {
+        const normalizedSeqs = normalizeSequences(newSeqs)
+        const sig = JSON.stringify(normalizedSeqs)
+        if (sig === lastCommittedSeqSigRef.current) {
+            setLocalSeqs(normalizedSeqs)
+            return
+        }
+
+        lastCommittedSeqSigRef.current = sig
+        setLocalSeqs(normalizedSeqs)
         if (isStandalone) {
-            emitCommand('EXECUTE_GLOBAL_SEQ_ACTION', { action: 'SAVE', globalSequences: newSeqs })
+            emitCommand('EXECUTE_GLOBAL_SEQ_ACTION', { action: 'SAVE', globalSequences: normalizedSeqs })
         } else {
             // Targeted patch — avoids full model reload and preserving animation state
-            updateGlobalSequences(newSeqs)
+            updateGlobalSequences(normalizedSeqs)
         }
     }
 
@@ -66,7 +89,11 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({
         const newSeqs = [...localSeqs]
         newSeqs[index] = val
         setLocalSeqs(newSeqs)
-        saveChanges(newSeqs)
+    }
+
+    const handleValueCommit = (index: number) => {
+        if (index < 0 || index >= localSeqs.length) return
+        saveChanges(localSeqs)
     }
 
     if (!visible && !isStandalone) return null
@@ -141,6 +168,13 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({
                             <InputNumber
                                 value={duration}
                                 onChange={(val) => handleValueChange(index, val)}
+                                onBlur={() => handleValueCommit(index)}
+                                onKeyDown={(event) => {
+                                    if (event.key !== 'Enter') return
+                                    event.preventDefault()
+                                    handleValueCommit(index)
+                                    event.currentTarget.blur()
+                                }}
                                 min={0}
                                 step={100}
                                 size="small"

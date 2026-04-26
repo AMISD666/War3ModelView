@@ -25,7 +25,7 @@ import { NodeType } from '../types/node'
 import { useUIStore } from '../store/uiStore'
 import { useSelectionStore } from '../store/selectionStore'
 import { getNextRenderMode, useRendererStore } from '../store/rendererStore'
-import { showMessage, showConfirm, showDiscardConfirm, showSaveDiscardCancel } from '../store/messageStore'
+import { showMessage, showConfirm, showUnsavedModelCloseConfirm } from '../store/messageStore'
 import { registerShortcutHandler } from '../shortcuts/manager'
 import { Button } from 'antd';
 import AppErrorBoundary from './common/AppErrorBoundary'
@@ -44,6 +44,7 @@ import { saveCurrentModelWorkflow, type TextureAssetOperationResult, type SaveVa
 import { DEFAULT_IMPORT_FILE_DIALOG_OPTIONS, openModelWorkflow } from '../application/model-open'
 import { useAppShellController } from '../application/shell/useAppShellController'
 import { useModelToolsController } from '../application/model-tools/useModelToolsController'
+import { registerCloseModelTabRequestHandler, requestCloseModelTab } from '../application/model-tabs/closeTabRequest'
 import {
     cameraManagerCommandHandler,
     createCameraNodeFromOrbitView,
@@ -397,6 +398,10 @@ const MainLayout: React.FC = () => {
         return toolWindowSnapshotCacheRef.current.buildTextureManagerState({
             modelData: liveModelState.modelData,
             modelPath: liveModelState.modelPath,
+            documentId: liveModelState.documentId,
+            documentRevision: liveModelState.documentRevision,
+            assetRevision: liveModelState.assetRevision,
+            previewRevision: liveModelState.previewRevision,
             materialManagerPreview: liveModelState.materialManagerPreview,
             selection: selectionState,
             markPerf: markStandalonePerf,
@@ -409,6 +414,10 @@ const MainLayout: React.FC = () => {
         return toolWindowSnapshotCacheRef.current.buildMaterialManagerState({
             modelData: liveModelState.modelData,
             modelPath: liveModelState.modelPath,
+            documentId: liveModelState.documentId,
+            documentRevision: liveModelState.documentRevision,
+            assetRevision: liveModelState.assetRevision,
+            previewRevision: liveModelState.previewRevision,
             materialManagerPreview: liveModelState.materialManagerPreview,
             selection: selectionState,
             markPerf: markStandalonePerf,
@@ -807,6 +816,64 @@ const MainLayout: React.FC = () => {
             : handleSaveAsRef.current();
     };
 
+    const requestModelTabClose = async (tabId?: string): Promise<boolean> => {
+        if (isClosePromptOpenRef.current) {
+            return false;
+        }
+
+        if (isSavingRef.current) {
+            showMessage('warning', '提示', '正在保存模型，请稍候再关闭...');
+            return false;
+        }
+
+        const store = useModelStore.getState();
+        const targetTabId = tabId ?? store.activeTabId;
+        if (!targetTabId) {
+            return false;
+        }
+
+        const targetTab = store.tabs.find((tab) => tab.id === targetTabId);
+        if (!targetTab) {
+            return false;
+        }
+
+        const previousActiveTabId = store.activeTabId;
+        if (store.isTabDirty(targetTabId)) {
+            isClosePromptOpenRef.current = true;
+            try {
+                const closeChoice = await showUnsavedModelCloseConfirm();
+                if (closeChoice === 'cancel') {
+                    return false;
+                }
+
+                if (closeChoice === 'save') {
+                    if (useModelStore.getState().activeTabId !== targetTabId) {
+                        useModelStore.getState().setActiveTab(targetTabId);
+                    }
+
+                    const saved = await saveCurrentModelBeforeClose();
+                    if (!saved || useModelStore.getState().isTabDirty(targetTabId)) {
+                        return false;
+                    }
+                }
+            } finally {
+                isClosePromptOpenRef.current = false;
+            }
+        }
+
+        useModelStore.getState().closeTab(targetTabId);
+
+        if (
+            previousActiveTabId &&
+            previousActiveTabId !== targetTabId &&
+            useModelStore.getState().tabs.some((tab) => tab.id === previousActiveTabId)
+        ) {
+            useModelStore.getState().setActiveTab(previousActiveTabId);
+        }
+
+        return true;
+    };
+
     const requestAppClose = async () => {
         if (isClosingAppRef.current || isClosePromptOpenRef.current) {
             return;
@@ -821,7 +888,7 @@ const MainLayout: React.FC = () => {
         if (currentModelData && isAnyTabDirty()) {
             isClosePromptOpenRef.current = true;
             try {
-                const closeChoice = await showSaveDiscardCancel('未保存的修改', '模型已修改，是否保存后再退出？');
+                const closeChoice = await showUnsavedModelCloseConfirm();
                 if (closeChoice === 'cancel') {
                     return;
                 }
@@ -1626,20 +1693,23 @@ const MainLayout: React.FC = () => {
             showMessage('warning', '提示', '正在保存模型，请稍候...')
             return false
         }
-        if (!modelPath || !modelData) return false
+        const currentModelState = useModelStore.getState();
+        const currentModelPath = currentModelState.modelPath;
+        const currentModelData = currentModelState.modelData;
+        if (!currentModelPath || !currentModelData) return false
 
         try {
             isSavingRef.current = true;
             const modelState = useModelStore.getState();
-            const normalizedData = modelState.getModelDataForSave?.() ?? modelData;
+            const normalizedData = modelState.getModelDataForSave?.() ?? currentModelData;
             const normalizedNodes = extractNodesFromModel(normalizedData);
             const globalColorSettings = useGlobalColorAdjustStore.getState().settings;
             const rendererState = useRendererStore.getState();
             const saveResult = await saveCurrentModelWorkflow.savePreparedModel({
                 modelData: normalizedData,
                 nodes: normalizedNodes,
-                sourceModelPath: modelPath,
-                targetPath: modelPath,
+                sourceModelPath: currentModelPath,
+                targetPath: currentModelPath,
                 globalColorSettings,
                 textureOptions: {
                     textureSaveMode: rendererState.textureSaveMode,
@@ -1674,7 +1744,10 @@ const MainLayout: React.FC = () => {
             showMessage('warning', '提示', '正在保存模型，请稍候...')
             return false
         }
-        if (!modelData) return false
+        const currentModelState = useModelStore.getState();
+        const currentModelPath = currentModelState.modelPath;
+        const currentModelData = currentModelState.modelData;
+        if (!currentModelData) return false
         try {
             const selected = await desktopGateway.saveFileDialog({
                 filters: [{
@@ -1686,14 +1759,14 @@ const MainLayout: React.FC = () => {
             if (selected) {
                 isSavingRef.current = true;
                 const modelState = useModelStore.getState();
-                const normalizedData = modelState.getModelDataForSave?.() ?? modelData;
+                const normalizedData = modelState.getModelDataForSave?.() ?? currentModelData;
                 const normalizedNodes = extractNodesFromModel(normalizedData);
                 const globalColorSettings = useGlobalColorAdjustStore.getState().settings;
                 const rendererState = useRendererStore.getState();
                 const saveResult = await saveCurrentModelWorkflow.savePreparedModel({
                     modelData: normalizedData,
                     nodes: normalizedNodes,
-                    sourceModelPath: modelPath,
+                    sourceModelPath: currentModelPath,
                     targetPath: selected,
                     globalColorSettings,
                     textureOptions: {
@@ -1727,6 +1800,10 @@ const MainLayout: React.FC = () => {
         return false;
     }
     handleSaveAsRef.current = handleSaveAs;
+
+    useEffect(() => {
+        return registerCloseModelTabRequestHandler(requestModelTabClose);
+    });
 
     useEffect(() => {
         const requestClose = () => {
@@ -1784,16 +1861,7 @@ const MainLayout: React.FC = () => {
                 return true;
             }),
             registerShortcutHandler('window.closeTab', () => {
-                void (async () => {
-                    const { activeTabId, tabs, closeTab, isTabDirty } = useModelStore.getState();
-                    if (!activeTabId) return;
-                    const tabName = tabs.find((tab) => tab.id === activeTabId)?.name ?? '当前标签页';
-                    if (isTabDirty(activeTabId)) {
-                        const shouldClose = await showDiscardConfirm('未保存的修改', `关闭“${tabName}”前，是否不保存并直接关闭？`);
-                        if (!shouldClose) return;
-                    }
-                    closeTab(activeTabId);
-                })();
+                void requestCloseModelTab();
                 return true;
             }),
             registerShortcutHandler('window.closeApp', () => requestClose()),

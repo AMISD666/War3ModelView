@@ -85,10 +85,22 @@ const syncRendererSequences = (sequences: any[], currentSequence: number): void 
     }
 }
 
-const syncRendererGlobalSequences = (globalSequences: { Duration: number }[]): void => {
+const normalizeGlobalSequenceDurations = (globalSequences: any[] | undefined | null): number[] => (
+    Array.isArray(globalSequences)
+        ? globalSequences.map((sequence: any) => {
+            const duration = typeof sequence === 'number' ? sequence : sequence?.Duration
+            return Math.max(0, Math.floor(Number(duration) || 0))
+        })
+        : []
+)
+
+const syncRendererGlobalSequences = (globalSequences: any[] | undefined | null): void => {
     const renderer = useRendererStore.getState().renderer
     if (renderer?.model) {
-        ; (renderer.model as any).GlobalSequences = globalSequences
+        ; (renderer.model as any).GlobalSequences = normalizeGlobalSequenceDurations(globalSequences)
+        if ((renderer as any).modelInstance?.syncGlobalSequences) {
+            ; (renderer as any).modelInstance.syncGlobalSequences()
+        }
     }
 }
 
@@ -166,9 +178,7 @@ const createGlobalSequenceModelData = (
         return null
     }
 
-    nextModelData.GlobalSequences = globalSequences
-        .map((duration) => Math.max(0, Math.floor(Number(duration) || 0)))
-        .map((duration) => ({ Duration: duration }))
+    ; (nextModelData as any).GlobalSequences = normalizeGlobalSequenceDurations(globalSequences)
     return nextModelData
 }
 

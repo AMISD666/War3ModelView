@@ -65,9 +65,10 @@ class WindowManager {
     }
 
     async openKeyframeToolWindow(windowId: string, title: string, width: number, height: number, payload: any): Promise<void> {
+        const hasExistingWindow = await this.lifecycleService.resolveWindow(windowId) !== null
         await this.openToolWindow(windowId, title, width, height, {
-            waitForHydration: false,
-            hydrationTimeoutMs: 0,
+            waitForHydration: !hasExistingWindow,
+            hydrationTimeoutMs: 1000,
             syncMode: 'never',
         })
         await this.rpcTransport.emitKeyframeInit(windowId, payload)

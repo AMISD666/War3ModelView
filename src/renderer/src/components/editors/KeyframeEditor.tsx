@@ -8,7 +8,6 @@ import { useModelStore } from '../../store/modelStore'
 import { useHistoryStore } from '../../store/historyStore'
 import { CloseOutlined } from '@ant-design/icons'
 import { GlobalSequenceSelect } from '../common/GlobalSequenceSelect'
-import { useWindowEvent } from '../../hooks/useWindowEvent'
 import { windowGateway } from '../../infrastructure/window'
 import {
     cloneAnimVectorForIpc,
@@ -63,6 +62,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
     const [lineType, setLineType] = useState(0)
     const [globalSeqId, setGlobalSeqId] = useState<number | null>(null)
     const [textScrollTop, setTextScrollTop] = useState(0)
+    const keyframeInitHandlerRef = useRef<(payload: any) => void>(() => {})
 
     // Batch Generation State
     const [batchValue, setBatchValue] = useState<number>(1)
@@ -80,8 +80,12 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
 
     // Check if editing TextureID
     const isTextureIDField =
-        fieldName === 'TextureID' ||
-        fieldName.startsWith('TextureID_') ||
+        ['TextureID', 'NormalTextureID', 'ORMTextureID', 'EmissiveTextureID', 'TeamColorTextureID', 'ReflectionsTextureID'].some((name) => (
+            fieldName === name ||
+            fieldName.startsWith(`${name}_`) ||
+            fieldName.startsWith(`${name}.`) ||
+            fieldName.startsWith(`${name}[`)
+        )) ||
         title.includes('TextureID') ||
         title.includes('贴图 ID') ||
         title.includes('贴图ID')
@@ -580,8 +584,8 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
         }
     }, [visible, initialData, vectorSize, fieldName, isStandalone])
 
-    useWindowEvent<any>('IPC_KEYFRAME_INIT', (event) => {
-        const payload = event.payload
+    useEffect(() => {
+        keyframeInitHandlerRef.current = (payload: any) => {
         if (!payload) return
 
         const currentWindowLabel = windowGateway.getCurrentWindowLabel()
@@ -636,14 +640,59 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
             const defVector = vSize === 4 ? [0, 0, 0, 1] : new Array(vSize).fill(titleStr.includes('Scale') ? 1 : (fName.includes('Alpha') ? 1 : 0))
             setText(generateText([{ Frame: 0, Vector: defVector, InTan: new Array(vSize).fill(0), OutTan: new Array(vSize).fill(0) }], 0, vSize))
         }
-    }, isStandalone)
+        }
+    })
+
+    useEffect(() => {
+        if (!isStandalone) return
+
+        let disposed = false
+        let unlisten: (() => void) | null = null
+
+        void windowGateway.listen('IPC_KEYFRAME_INIT', (event) => {
+            keyframeInitHandlerRef.current((event as { payload?: any }).payload)
+        }).then((nextUnlisten) => {
+            if (disposed) {
+                nextUnlisten()
+                return
+            }
+
+            unlisten = nextUnlisten
+            const currentWindowLabel = windowGateway.getCurrentWindowLabel()
+            void windowGateway.emit(`rpc-applied-${currentWindowLabel}`, { readyFor: 'IPC_KEYFRAME_INIT' }).catch(() => {})
+        })
+
+        return () => {
+            disposed = true
+            unlisten?.()
+        }
+    }, [isStandalone])
 
 
     const { push } = useHistoryStore()
 
 
+    const normalizeIntTrackKeys = (keys: any[]): any[] => (
+        keys.map((key) => {
+            const readInt = (value: unknown): number[] => {
+                const raw = Array.isArray(value) ? value[0] : value
+                const parsed = Number(raw)
+                return [Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : 0]
+            }
+
+            return {
+                ...key,
+                Vector: readInt(key.Vector),
+                InTan: readInt(key.InTan),
+                OutTan: readInt(key.OutTan)
+            }
+        })
+    )
+
     const handleOk = () => {
-        const keys = parseText(text, vectorSize)
+        const rawKeys = parseText(text, vectorSize)
+        const isIntTrack = isKeyframeAnimVectorIntTrack(fieldName) || isTextureIDField
+        const keys = isIntTrack ? normalizeIntTrackKeys(rawKeys) : rawKeys
 
         const result = {
             Keys: keys,

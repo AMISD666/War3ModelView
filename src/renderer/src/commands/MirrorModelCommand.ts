@@ -13,6 +13,13 @@ type Snapshot = {
 
 const MIRROR_ROOT_NAME = '__WMV_MIRROR_ROOT__'
 const WORLD_ORIGIN: [number, number, number] = [0, 0, 0]
+const IDENTITY_SCALE: [number, number, number] = [1, 1, 1]
+
+type Vec3Track = {
+    Keys?: Array<{
+        Vector?: ArrayLike<number> | null
+    }> | null
+}
 
 function cloneDeep<T>(value: T): T {
     const sc = (globalThis as { structuredClone?: <U>(input: U) => U }).structuredClone
@@ -57,6 +64,83 @@ function getMirrorScale(axis: MirrorAxis): [number, number, number] {
     if (axis === 'x') return [-1, 1, 1]
     if (axis === 'y') return [1, -1, 1]
     return [1, 1, -1]
+}
+
+function isIdentityScale(scale: [number, number, number], epsilon = 1e-6): boolean {
+    return scale.every((value, index) => Math.abs(value - IDENTITY_SCALE[index]) <= epsilon)
+}
+
+function combineScale(
+    left: [number, number, number],
+    right: [number, number, number]
+): [number, number, number] {
+    return [left[0] * right[0], left[1] * right[1], left[2] * right[2]]
+}
+
+function readMirrorNodeScale(node: ModelNode): [number, number, number] {
+    const scaling = node.Scaling as Vec3Track | undefined
+    const vector = scaling?.Keys?.[0]?.Vector
+    if (!vector || vector.length < 3) return [...IDENTITY_SCALE]
+
+    return [
+        Number.isFinite(Number(vector[0])) ? Number(vector[0]) : 1,
+        Number.isFinite(Number(vector[1])) ? Number(vector[1]) : 1,
+        Number.isFinite(Number(vector[2])) ? Number(vector[2]) : 1
+    ]
+}
+
+function isMirrorRootNode(node: ModelNode): boolean {
+    return typeof node?.Name === 'string' && node.Name.startsWith(MIRROR_ROOT_NAME)
+}
+
+function getMirrorRootName(scale: [number, number, number]): string {
+    const axes = [
+        scale[0] < 0 ? 'X' : '',
+        scale[1] < 0 ? 'Y' : '',
+        scale[2] < 0 ? 'Z' : ''
+    ].join('')
+    return `${MIRROR_ROOT_NAME}_${axes || 'IDENTITY'}`
+}
+
+function unwrapExistingMirrorRoots(nodes: ModelNode[]): {
+    nodes: ModelNode[]
+    scale: [number, number, number]
+} {
+    const mirrorNodes = nodes.filter(isMirrorRootNode)
+    if (mirrorNodes.length === 0) {
+        return { nodes, scale: [...IDENTITY_SCALE] }
+    }
+
+    const mirrorById = new Map<number, ModelNode>()
+    let scale: [number, number, number] = [...IDENTITY_SCALE]
+    for (const node of mirrorNodes) {
+        mirrorById.set(node.ObjectId, node)
+        scale = combineScale(scale, readMirrorNodeScale(node))
+    }
+
+    const resolveParent = (parent: number | undefined | null): number => {
+        let current = typeof parent === 'number' ? parent : -1
+        const seen = new Set<number>()
+
+        while (current >= 0 && mirrorById.has(current) && !seen.has(current)) {
+            seen.add(current)
+            const nextParent = mirrorById.get(current)?.Parent
+            current = typeof nextParent === 'number' ? nextParent : -1
+        }
+
+        return current
+    }
+
+    return {
+        nodes: nodes
+            .filter((node) => !isMirrorRootNode(node))
+            .map((node) => {
+                const parent = resolveParent(node.Parent)
+                if (parent === node.Parent) return node
+                return { ...node, Parent: parent } as ModelNode
+            }),
+        scale
+    }
 }
 
 function reverseTriangleWinding(faces: any): void {
@@ -106,30 +190,34 @@ function buildMirroredSnapshot(axis: MirrorAxis): Snapshot | null {
 
     const sourceModelData = cloneDeep(state.modelData)
     const pivot = WORLD_ORIGIN
-    const scale = getMirrorScale(axis)
+    const requestedScale = getMirrorScale(axis)
     const staticFrames = collectStaticFrames(sourceModelData)
-    const nextNodes = cloneDeep(state.nodes)
+    const unwrappedMirrorRoots = unwrapExistingMirrorRoots(cloneDeep(state.nodes))
+    const scale = combineScale(unwrappedMirrorRoots.scale, requestedScale)
+    const nextNodes = unwrappedMirrorRoots.nodes
     const nextObjectId = nextNodes.reduce((maxId, node) => (
         typeof node?.ObjectId === 'number' && node.ObjectId > maxId ? node.ObjectId : maxId
     ), -1) + 1
 
-    const mirrorRoot: ModelNode = {
-        type: NodeType.HELPER,
-        Name: `${MIRROR_ROOT_NAME}_${axis.toUpperCase()}`,
-        ObjectId: nextObjectId,
-        Parent: -1,
-        Flags: 0,
-        PivotPoint: [...pivot] as [number, number, number],
-        Scaling: makeVec3Track(scale, staticFrames)
-    } as ModelNode
+    if (!isIdentityScale(scale)) {
+        const mirrorRoot: ModelNode = {
+            type: NodeType.HELPER,
+            Name: getMirrorRootName(scale),
+            ObjectId: nextObjectId,
+            Parent: -1,
+            Flags: 0,
+            PivotPoint: [...pivot] as [number, number, number],
+            Scaling: makeVec3Track(scale, staticFrames)
+        } as ModelNode
 
-    for (const node of nextNodes) {
-        if (!node || node.type === NodeType.CAMERA) continue
-        if (node.Parent === undefined || node.Parent === null || node.Parent < 0) {
-            node.Parent = nextObjectId
+        for (const node of nextNodes) {
+            if (!node || node.type === NodeType.CAMERA) continue
+            if (node.Parent === undefined || node.Parent === null || node.Parent < 0) {
+                node.Parent = nextObjectId
+            }
         }
+        nextNodes.push(mirrorRoot)
     }
-    nextNodes.push(mirrorRoot)
 
     const nextModelData = updateModelDataWithNodes(sourceModelData, nextNodes, false)
     if (!nextModelData) {
