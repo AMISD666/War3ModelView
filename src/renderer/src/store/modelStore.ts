@@ -266,7 +266,7 @@ function collectTextureIdsFromAnimVector(value: any, ids: Set<number>): void {
     if (value && typeof value === 'object' && Array.isArray(value.Keys)) {
         for (const key of value.Keys) {
             const v = key?.Vector;
-            const id = ArrayBuffer.isView(v) ? v[0] : (Array.isArray(v) ? v[0] : undefined);
+            const id = ArrayBuffer.isView(v) ? (v as unknown as ArrayLike<number>)[0] : (Array.isArray(v) ? v[0] : undefined);
             if (typeof id === 'number' && id >= 0) ids.add(id);
         }
     }
@@ -783,9 +783,10 @@ export function updateModelDataWithNodes(
                     if (!a || length < 3) {
                         return new Float32Array([1, 1, 1]);
                     }
-                    let r = Number(a[0]);
-                    let g = Number(a[1]);
-                    let b = Number(a[2]);
+                    const color = a as ArrayLike<number>;
+                    let r = Number(color[0]);
+                    let g = Number(color[1]);
+                    let b = Number(color[2]);
                     if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) {
                         return new Float32Array([1, 1, 1]);
                     }

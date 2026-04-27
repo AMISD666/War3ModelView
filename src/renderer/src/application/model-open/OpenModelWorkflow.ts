@@ -12,7 +12,6 @@ export type OpenModelSource =
     | 'recent'
     | 'drag-drop'
     | 'cli-hot-open'
-    | 'electron-open'
 
 export interface OpenModelPathContext {
     openModelAsTab: (filePath: string) => boolean

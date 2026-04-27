@@ -13,7 +13,7 @@ function pivotAxis(p: unknown, i: 0 | 1 | 2): number {
     const c = coercePivotFloat3(p as Float32Array | Uint8Array | number[]);
     if (c) return Number(c[i]) || 0;
     if (ArrayBuffer.isView(p)) {
-        const v = p as ArrayBufferView;
+        const v = p as unknown as ArrayLike<number>;
         return Number(v[i]) || 0;
     }
     if (Array.isArray(p) && p.length > i) {

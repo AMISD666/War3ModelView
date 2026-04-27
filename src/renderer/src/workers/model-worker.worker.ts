@@ -128,7 +128,7 @@ async function decodeTextureToBitmap(task: DecodeTextureTaskPayload): Promise<Im
             mip = getBLPImageData(blp, 0);
         }
 
-        const data = mip.data instanceof Uint8ClampedArray ? mip.data : new Uint8ClampedArray(mip.data);
+        const data = Uint8ClampedArray.from(mip.data as ArrayLike<number>);
         imageData = new ImageData(data, mip.width, mip.height);
     }
 

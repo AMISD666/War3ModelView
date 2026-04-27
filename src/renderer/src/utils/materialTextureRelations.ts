@@ -27,13 +27,13 @@ export function remapTextureRefWithMap(value: any, oldToNew: Map<number, number>
         clonedValue.Keys = clonedValue.Keys.map((key: any) => {
             const nextKey = cloneStructured(key)
             const vector = nextKey?.Vector
-            const oldId = ArrayBuffer.isView(vector) ? vector[0] : (Array.isArray(vector) ? vector[0] : undefined)
+            const oldId = ArrayBuffer.isView(vector) ? (vector as unknown as ArrayLike<number>)[0] : (Array.isArray(vector) ? vector[0] : undefined)
             if (typeof oldId !== 'number' || !oldToNew.has(oldId)) {
                 return nextKey
             }
             const nextId = oldToNew.get(oldId)!
             if (ArrayBuffer.isView(vector)) {
-                vector[0] = nextId
+                (vector as unknown as { [index: number]: number })[0] = nextId
             } else if (Array.isArray(vector)) {
                 vector[0] = nextId
             }

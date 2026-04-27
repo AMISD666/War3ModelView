@@ -1,38 +1,80 @@
-### AL ###
-#Template for AL projects for Dynamics 365 Business Central
-#launch.json folder
-.vscode/
-!.vscode/
-.vscode/*
-!.vscode/tasks.json
-#Cache folder
-.alcache/
-#Symbols folder
-.alpackages/
-#Snapshots folder
-.snapshots/
-#Testing Output folder
-.output/
-#Extension App-file
-*.app
-#Rapid Application Development File
-rad.json
-#Translation Base-file
-*.g.xlf
-#License-file
-*.flf
-#Test results file
-TestResults.xml
-ai_handover.md
-project_comparison.md
-log.txt
+# Dependencies
 node_modules/
+
+# Build outputs
 dist/
 out/
+build/
+release/
+.vite/
 keygen/
-*.md
-!docs/State_Sync_Cache_Redesign_Plan.md
-!docs/State_Sync_Commit_Integrity_Repair_Plan.md
-*.txt
-!activation/
-!activation/qq-policy.txt
+
+# Tauri / Rust generated files
+src-tauri/target/
+src-tauri/gen/
+target/
+
+# Vendored package build artifacts
+vendor/**/dist/
+vendor/**/.turbo/
+!vendor/war3-model/dist/
+!vendor/war3-model/dist/war3-model.d.ts
+
+# TypeScript / tool caches
+*.tsbuildinfo
+.eslintcache
+.prettier-cache
+
+# Logs and diagnostic dumps
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+typecheck_*.txt
+tsc_errors.log
+update_log.txt
+
+# Local editor and assistant state
+.vscode/
+.idea/
+.vs/
+.agent/
+.claude/
+.codex/
+.continue/
+.cursor/
+.gemini/
+.memorix/
+.github/hooks/
+
+# OS noise
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local archives / backups
+*.bak
+*.backup
+*.tmp
+*.temp
+*.orig
+
+# Local test models and one-off root debug scripts
+testmodel/
+public/test_model.*
+/debug_*.js
+/dump_nodes.js
+/analyze_models.js
+/read_function*.js
+/patch_*.js
+/revert_*.js
+/fix_revert_error.js
+/apply_patch.js
+/create_icon.js
+/backup_project.ps1
+/war3modelview_update.ps1
+/-AllMatches
+/tsc
+/setShowChangelog*
+/showChangelog*

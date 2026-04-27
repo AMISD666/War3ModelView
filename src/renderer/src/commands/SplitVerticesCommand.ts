@@ -146,7 +146,7 @@ export class SplitVerticesCommand implements Command {
             Groups: g.Groups ? JSON.parse(JSON.stringify(g.Groups)) : [[0]]
         }))
 
-        nextGeosets.forEach((geoset) => calculateGeosetExtent(geoset))
+        nextGeosets.forEach((geoset: any) => calculateGeosetExtent(geoset))
 
         const sourceGeosetAnims = Array.isArray(modelStore.modelData?.GeosetAnims)
             ? modelStore.modelData!.GeosetAnims.map((anim: any) => cloneDeep(anim))

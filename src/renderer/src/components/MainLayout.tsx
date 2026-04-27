@@ -1157,25 +1157,6 @@ const MainLayout: React.FC = () => {
         checkCliFilePath();
     }, [addTab, mpqLoaded, setZustandLoading]); // Dependency added for addTab and mpqLoaded
 
-    // Listen for file open from Electron context menu (right-click "Open with")
-    useEffect(() => {
-        // Check if running in Electron and api is available
-        const api = (window as any).api;
-        if (api && api.onOpenFile) {            api.onOpenFile((filePath: string) => {
-                openModelWorkflow.openPath({
-                    path: filePath,
-                    source: 'electron-open',
-                    addToRecent: false,
-                    acceptPath: (path) => openModelWorkflow.isOpenableModelFile(path),
-                    processedPaths: processedHotOpenPaths.current,
-                }, {
-                    openModelAsTab,
-                    setRecentFiles,
-                })
-            });
-        }
-    }, [openModelAsTab]);
-
     const createCameraFromCurrentView = useCallback(() => {
         const camera = viewerRef.current?.getCamera()
         if (!camera) {

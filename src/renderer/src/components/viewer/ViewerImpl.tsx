@@ -4649,8 +4649,13 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
             const originalParticleRenderGPU = particlesController?.renderGPU;
             const originalRibbonRender = ribbonsController?.render;
             const originalRibbonRenderGPU = ribbonsController?.renderGPU;
-            const originalParticleEmitters = Array.isArray(particlesController?.emitters) ? particlesController.emitters : null;
-            const originalRibbonEmitters = Array.isArray(ribbonsController?.emitters) ? ribbonsController.emitters : null;
+            type VisibilityFilteredEmitter = { props?: { ObjectId?: unknown } };
+            const originalParticleEmitters = Array.isArray(particlesController?.emitters)
+              ? particlesController.emitters as VisibilityFilteredEmitter[]
+              : null;
+            const originalRibbonEmitters = Array.isArray(ribbonsController?.emitters)
+              ? ribbonsController.emitters as VisibilityFilteredEmitter[]
+              : null;
 
             if (ribbonsController && typeof ribbonsController.setPreviewVisibility === "function") {
               ribbonsController.setPreviewVisibility(forceRibbonPreviewVisibility);

@@ -196,6 +196,17 @@ interface DissolveEffectModalProps {
     isStandalone?: boolean;
 }
 
+interface DissolveSequenceOption {
+    Name: string;
+    Interval: [number, number];
+}
+
+interface DissolveGeosetOption {
+    label: string;
+    value: number;
+    materialId: number;
+}
+
 const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onClose, isStandalone = false }) => {
     const storeNodes = useModelStore(state => state.nodes);
     const storeSequences = useModelStore(state => state.sequences);
@@ -204,7 +215,7 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
     const { state: rpcState, emitCommand } = useRpcClient<any>('dissolveEffect', { geosets: [], sequences: [], geosetCount: 0 });
 
     const nodes = isStandalone ? [] : storeNodes; // Placeholder if nodes are needed later over RPC
-    const sequences = isStandalone ? (rpcState.sequences || []) : (storeSequences || []);
+    const sequences: DissolveSequenceOption[] = isStandalone ? (rpcState.sequences || []) : (storeSequences || []);
     const geosets = isStandalone ? (rpcState.geosets || []) : storeGeosets;
 
     // UI State
@@ -257,7 +268,7 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
     }, [currentMin, currentMax]);
 
     // 多边形组与材质 ID（点击时按同材质批量选中）
-    const geosetOptions = geosets.map((g: any, i: number) => ({
+    const geosetOptions: DissolveGeosetOption[] = geosets.map((g: any, i: number) => ({
         label: `${i}`,
         value: i,
         materialId: g.MaterialID !== undefined ? g.MaterialID : 0

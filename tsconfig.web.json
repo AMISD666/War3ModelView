@@ -1,22 +1,22 @@
 {
-    "extends": "@electron-toolkit/tsconfig/tsconfig.web.json",
-    "include": [
-        "src/renderer/src/**/*",
-        "src/preload/*.d.ts",
-        "src/env.d.ts",
-        "vendor/war3-model/dist/war3-model.d.ts"
-    ],
     "compilerOptions": {
-        "composite": true,
-        "ignoreDeprecations": "5.0",
+        "target": "ESNext",
+        "useDefineForClassFields": true,
+        "module": "ESNext",
+        "moduleResolution": "Bundler",
+        "strict": true,
+        "resolveJsonModule": true,
+        "isolatedModules": true,
+        "esModuleInterop": true,
+        "noEmit": true,
         "jsx": "react-jsx",
-        "moduleResolution": "bundler",
         "baseUrl": ".",
         "noUnusedLocals": false,
         "noUnusedParameters": false,
         "skipLibCheck": true,
         "types": [
-            "@webgpu/types"
+            "@webgpu/types",
+            "vite/client"
         ],
         "paths": {
             "@renderer/*": [
@@ -26,5 +26,11 @@
                 "vendor/war3-model/dist/war3-model.d.ts"
             ]
         }
-    }
+    },
+    "include": [
+        "src/renderer/src/**/*",
+        "src/env.d.ts",
+        "src/assets.d.ts",
+        "vendor/war3-model/dist/war3-model.d.ts"
+    ]
 }
