@@ -50,12 +50,15 @@ update_log.txt
 activation/
 docs/
 vendor/
+scripts/
+activation/
 
 # OS noise
 .DS_Store
 Thumbs.db
 Desktop.ini
 AGENTS.md
+
 
 # Local archives / backups
 *.bak

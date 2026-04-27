@@ -647,45 +647,73 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         };
     }, [visible, modelData, localMaterials, selectedMaterialIndex, selectedLayerIndex, isStandalone ? rpcState.pickedGeosetIndex : null])
 
-    const handleOk = () => {
+    const buildSaveSnapshot = () => {
         // Convert boolean flags back to Shading bitmask before saving
-        const materialsForSave = denormalizeMaterialsForSave(localMaterials)
-        const texturesForSave = JSON.parse(JSON.stringify(localTextures || []))
+        const materialsForSave = denormalizeMaterialsForSave(localMaterialsRef.current || [])
+        const texturesForSave = JSON.parse(JSON.stringify(localTexturesRef.current || []))
         const oldMaterials = originalMaterialsRef.current || modelData?.Materials || []
         const oldTextures = originalTexturesRef.current || modelData?.Textures || []
+
+        return { materialsForSave, texturesForSave, oldMaterials, oldTextures }
+    }
+
+    const hasMaterialSaveChanges = (snapshot: ReturnType<typeof buildSaveSnapshot>) => (
+        JSON.stringify(snapshot.materialsForSave) !== JSON.stringify(snapshot.oldMaterials)
+        || JSON.stringify(snapshot.texturesForSave) !== JSON.stringify(snapshot.oldTextures)
+    )
+
+    const commitMaterialEditorChanges = (showSuccessMessage: boolean) => {
+        const snapshot = buildSaveSnapshot()
+        const hasChanges = hasMaterialSaveChanges(snapshot)
+
+        if (!hasChanges) {
+            if (isStandalone && (didRealtimeTexturePreviewRef.current || didRealtimePreviewRef.current)) {
+                emitMaterialAction({ action: 'CLEAR_MATERIAL_PREVIEW', payload: null, stalePolicy: 'warn' })
+            }
+            if (showSuccessMessage) {
+                appMessage.success('材质已保存')
+            }
+            onClose()
+            return
+        }
 
         useHistoryStore.getState().push({
             name: 'Edit Materials',
             undo: () => {
                 if (isStandalone) {
-                    emitMaterialAction({ action: 'COMMIT_MATERIALS', payload: { materials: oldMaterials, textures: oldTextures } })
+                    emitMaterialAction({ action: 'COMMIT_MATERIALS', payload: { materials: snapshot.oldMaterials, textures: snapshot.oldTextures } })
                 } else {
-                    applyVisualPatch({ Textures: oldTextures, Materials: oldMaterials })
+                    applyVisualPatch({ Textures: snapshot.oldTextures, Materials: snapshot.oldMaterials })
                 }
             },
             redo: () => {
                 if (isStandalone) {
-                    emitMaterialAction({ action: 'COMMIT_MATERIALS', payload: { materials: materialsForSave, textures: texturesForSave } })
+                    emitMaterialAction({ action: 'COMMIT_MATERIALS', payload: { materials: snapshot.materialsForSave, textures: snapshot.texturesForSave } })
                 } else {
-                    applyVisualPatch({ Textures: texturesForSave, Materials: materialsForSave })
+                    applyVisualPatch({ Textures: snapshot.texturesForSave, Materials: snapshot.materialsForSave })
                 }
             }
         })
 
         isCommittingRef.current = true
         if (isStandalone) {
-            emitMaterialAction({ action: 'COMMIT_MATERIALS', payload: { materials: materialsForSave, textures: texturesForSave } })
+            emitMaterialAction({ action: 'COMMIT_MATERIALS', payload: { materials: snapshot.materialsForSave, textures: snapshot.texturesForSave } })
         } else {
-            applyVisualPatch({ Textures: texturesForSave, Materials: materialsForSave })
+            applyVisualPatch({ Textures: snapshot.texturesForSave, Materials: snapshot.materialsForSave })
         }
-        appMessage.success('材质已保存')
+        if (showSuccessMessage) {
+            appMessage.success('材质已保存')
+        }
         onClose()
+    }
+
+    const handleOk = () => {
+        commitMaterialEditorChanges(true)
     }
 
     const handleCancel = () => {
         if (isStandalone) {
-            emitMaterialAction({ action: 'CLEAR_MATERIAL_PREVIEW', payload: null, stalePolicy: 'warn' })
-            onClose()
+            commitMaterialEditorChanges(false)
             return
         }
         if (!isCommittingRef.current && (didRealtimeTexturePreviewRef.current || didRealtimePreviewRef.current)) {
