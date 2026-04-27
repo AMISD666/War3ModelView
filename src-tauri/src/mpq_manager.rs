@@ -2,12 +2,18 @@ use std::sync::Mutex;
 use wow_mpq::Archive;
 
 pub struct MpqManager {
-    archives: Mutex<Vec<MpqArchive>>,
+    inner: Mutex<MpqManagerInner>,
 }
 
 struct MpqArchive {
     path: String,
     archive: Archive,
+}
+
+struct MpqManagerInner {
+    archives: Vec<MpqArchive>,
+    archive_list_revision: u64,
+    archive_priority_revision: u64,
 }
 
 fn normalize_mpq_path(path: &str) -> String {
@@ -54,7 +60,11 @@ fn build_mpq_candidates(path: &str) -> Vec<String> {
 impl MpqManager {
     pub fn new() -> Self {
         Self {
-            archives: Mutex::new(Vec::new()),
+            inner: Mutex::new(MpqManagerInner {
+                archives: Vec::new(),
+                archive_list_revision: 0,
+                archive_priority_revision: 0,
+            }),
         }
     }
 
@@ -62,19 +72,20 @@ impl MpqManager {
         // wow_mpq::Archive::open takes a path
         let archive = Archive::open(path).map_err(|e| format!("Failed to open MPQ: {:?}", e))?;
 
-        let mut archives = self.archives.lock().unwrap();
-        archives.push(MpqArchive {
+        let mut inner = self.inner.lock().unwrap();
+        inner.archives.push(MpqArchive {
             path: path.to_string(),
             archive,
         });
+        inner.archive_list_revision = inner.archive_list_revision.saturating_add(1);
         Ok(format!("Loaded MPQ: {}", path))
     }
 
     pub fn read_file(&self, filename: &str) -> Option<Vec<u8>> {
-        let mut archives = self.archives.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap();
         let candidates = build_mpq_candidates(filename);
         // Search in reverse order (newest loaded first)
-        for archive in archives.iter_mut().rev() {
+        for archive in inner.archives.iter_mut().rev() {
             for candidate in &candidates {
                 if let Ok(data) = archive.archive.read_file(candidate) {
                     // Safety check: Limit to 50MB
@@ -91,14 +102,14 @@ impl MpqManager {
     /// Read multiple files in a single batch operation
     /// Returns a Vec of Option<Vec<u8>> in the same order as input paths
     pub fn read_files_batch(&self, filenames: &[String]) -> Vec<Option<Vec<u8>>> {
-        let mut archives = self.archives.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap();
         let mut results = Vec::with_capacity(filenames.len());
 
         for filename in filenames {
             let mut found = None;
             let candidates = build_mpq_candidates(filename);
             // Search in reverse order (newest loaded first)
-            for archive in archives.iter_mut().rev() {
+            for archive in inner.archives.iter_mut().rev() {
                 for candidate in &candidates {
                     if let Ok(data) = archive.archive.read_file(candidate) {
                         // Safety check: Limit to 50MB
@@ -119,20 +130,26 @@ impl MpqManager {
 
     #[allow(dead_code)]
     pub fn archive_count(&self) -> usize {
-        let archives = self.archives.lock().unwrap();
-        archives.len()
+        let inner = self.inner.lock().unwrap();
+        inner.archives.len()
     }
 
     pub fn archive_paths(&self) -> Vec<String> {
-        let archives = self.archives.lock().unwrap();
-        archives.iter().map(|a| a.path.clone()).collect()
+        let inner = self.inner.lock().unwrap();
+        inner.archives.iter().map(|a| a.path.clone()).collect()
+    }
+
+    pub fn cache_revision_snapshot(&self) -> (u64, u64) {
+        let inner = self.inner.lock().unwrap();
+        (inner.archive_list_revision, inner.archive_priority_revision)
     }
 
     pub fn list_files_for_archive(&self, archive_path: &str) -> Result<Vec<String>, String> {
         let target = normalize_archive_fs_path(archive_path);
-        let mut archives = self.archives.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap();
 
-        let archive = archives
+        let archive = inner
+            .archives
             .iter_mut()
             .find(|item| normalize_archive_fs_path(&item.path) == target)
             .ok_or_else(|| format!("MPQ not loaded: {}", archive_path))?;
@@ -152,28 +169,30 @@ impl MpqManager {
 
     pub fn prioritize_archive(&self, archive_path: &str) -> Result<(), String> {
         let target = normalize_archive_fs_path(archive_path);
-        let mut archives = self.archives.lock().unwrap();
-        let index = archives
+        let mut inner = self.inner.lock().unwrap();
+        let index = inner
+            .archives
             .iter()
             .position(|item| normalize_archive_fs_path(&item.path) == target)
             .ok_or_else(|| format!("MPQ not loaded: {}", archive_path))?;
 
-        if index + 1 == archives.len() {
+        if index + 1 == inner.archives.len() {
             return Ok(());
         }
 
-        let archive = archives.remove(index);
-        archives.push(archive);
+        let archive = inner.archives.remove(index);
+        inner.archives.push(archive);
+        inner.archive_priority_revision = inner.archive_priority_revision.saturating_add(1);
         Ok(())
     }
 
     pub fn probe_file(&self, filename: &str) -> (String, Vec<String>, Option<usize>, usize) {
-        let mut archives = self.archives.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap();
         let normalized = normalize_mpq_path(filename);
         let candidates = build_mpq_candidates(filename);
         let mut found_size: Option<usize> = None;
 
-        for archive in archives.iter_mut().rev() {
+        for archive in inner.archives.iter_mut().rev() {
             for candidate in &candidates {
                 if let Ok(data) = archive.archive.read_file(candidate) {
                     if data.len() > 50 * 1024 * 1024 {
@@ -188,6 +207,6 @@ impl MpqManager {
             }
         }
 
-        (normalized, candidates, found_size, archives.len())
+        (normalized, candidates, found_size, inner.archives.len())
     }
 }

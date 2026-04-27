@@ -13,6 +13,13 @@ export type NodeEditorKind =
 
 /** 主窗口广播给独立节点编辑器的快照。 */
 export interface NodeEditorRpcState {
+    documentId: string | null
+    documentRevision: number
+    assetRevision: number
+    previewRevision: number
+    snapshotRevision: number
+    windowId: string
+    /** @deprecated Use snapshotRevision after envelope migration completes. */
     snapshotVersion: number
     /** 每次打开节点编辑器都会递增，用于区分同一节点的连续编辑会话。 */
     sessionNonce: number
@@ -56,6 +63,12 @@ export interface RenameNodePayload {
     name: string
 }
 
+export interface RevisionedNodeEditorCommandMetadata {
+    documentId?: string | null
+    baseDocumentRevision?: number
+    stalePolicy?: 'warn' | 'reject'
+}
+
 export const NODE_EDITOR_COMMANDS = {
     applyNodeUpdate: 'APPLY_NODE_UPDATE',
     previewNodeUpdate: 'PREVIEW_NODE_UPDATE',
@@ -66,10 +79,10 @@ export const NODE_EDITOR_COMMANDS = {
 export type NodeEditorCommand = typeof NODE_EDITOR_COMMANDS[keyof typeof NODE_EDITOR_COMMANDS]
 
 export type NodeEditorCommandPayloadMap = {
-    APPLY_NODE_UPDATE: ApplyNodeUpdatePayload
-    PREVIEW_NODE_UPDATE: NodeEditorNodePayload
-    CLEAR_NODE_PREVIEW: ClearNodePreviewPayload
-    RENAME_NODE: RenameNodePayload
+    APPLY_NODE_UPDATE: ApplyNodeUpdatePayload & RevisionedNodeEditorCommandMetadata
+    PREVIEW_NODE_UPDATE: NodeEditorNodePayload & RevisionedNodeEditorCommandMetadata
+    CLEAR_NODE_PREVIEW: ClearNodePreviewPayload & RevisionedNodeEditorCommandMetadata
+    RENAME_NODE: RenameNodePayload & RevisionedNodeEditorCommandMetadata
 }
 
 export type NodeEditorCommandEnvelope<TCommand extends NodeEditorCommand = NodeEditorCommand> = {
@@ -99,29 +112,5 @@ export function nodeTypeToEditorKind(nodeType: NodeType): NodeEditorKind | null 
             return 'ribbonEmitter'
         default:
             return null
-    }
-}
-
-/** 独立窗口标题与默认逻辑像素尺寸。 */
-export function getNodeEditorWindowLayout(kind: NodeEditorKind): { title: string; w: number; h: number } {
-    switch (kind) {
-        case 'particleEmitter':
-            return { title: '粒子发射器', w: 640, h: 520 }
-        case 'particleEmitter2':
-            return { title: '粒子发射器 II', w: 960, h: 740 }
-        case 'collisionShape':
-            return { title: '碰撞形状', w: 360, h: 400 }
-        case 'light':
-            return { title: '灯光', w: 560, h: 420 }
-        case 'eventObject':
-            return { title: '事件对象', w: 520, h: 480 }
-        case 'ribbonEmitter':
-            return { title: '丝带发射器', w: 560, h: 520 }
-        case 'genericNode':
-            return { title: '编辑节点', w: 400, h: 450 }
-        case 'rename':
-            return { title: '重命名节点', w: 400, h: 200 }
-        default:
-            return { title: '节点编辑器', w: 640, h: 520 }
     }
 }

@@ -86,12 +86,9 @@ fn find_chunk(data: &[u8], chunk_id: &[u8; 4]) -> Option<usize> {
         if &data[pos..pos + 4] == chunk_id {
             return Some(pos);
         }
-        let chunk_size = u32::from_le_bytes([
-            data[pos + 4],
-            data[pos + 5],
-            data[pos + 6],
-            data[pos + 7],
-        ]) as usize;
+        let chunk_size =
+            u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
+                as usize;
         pos = pos.saturating_add(8 + chunk_size);
     }
     None

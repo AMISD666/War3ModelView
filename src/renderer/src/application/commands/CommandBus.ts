@@ -1,4 +1,5 @@
 import { useHistoryStore } from '../../store/historyStore'
+import { validateDocumentReferencesAfterCommand } from './CommandIntegrityGuard'
 
 export interface DocumentCommand {
     name: string
@@ -9,12 +10,17 @@ export interface DocumentCommand {
 
 export interface ExecuteDocumentCommandOptions {
     recordHistory?: boolean
+    validateDocumentReferences?: boolean
 }
 
 export class CommandBus {
     execute(command: DocumentCommand, options: ExecuteDocumentCommandOptions = {}): void {
         const recordHistory = options.recordHistory ?? true
+        const validateAfterCommand = options.validateDocumentReferences ?? true
         command.execute()
+        if (validateAfterCommand) {
+            validateDocumentReferencesAfterCommand(command.name, 'execute')
+        }
 
         if (!recordHistory) {
             return
@@ -22,13 +28,21 @@ export class CommandBus {
 
         useHistoryStore.getState().push({
             name: command.name,
-            undo: () => command.undo(),
+            undo: () => {
+                command.undo()
+                if (validateAfterCommand) {
+                    validateDocumentReferencesAfterCommand(command.name, 'undo')
+                }
+            },
             redo: () => {
                 if (command.redo) {
                     command.redo()
-                    return
+                } else {
+                    command.execute()
                 }
-                command.execute()
+                if (validateAfterCommand) {
+                    validateDocumentReferencesAfterCommand(command.name, 'redo')
+                }
             },
         })
     }

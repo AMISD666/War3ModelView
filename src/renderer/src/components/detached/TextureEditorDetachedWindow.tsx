@@ -1,8 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Alert, Spin } from 'antd'
-import { emitTo, listen } from '@tauri-apps/api/event'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import TextureEditorModal from '../modals/TextureEditorModal'
+import { windowGateway } from '../../infrastructure/window'
 import {
     DETACHED_TEXTURE_EDITOR_EVENTS,
     DetachedTextureDeltaOp,
@@ -46,6 +45,15 @@ const applyDeltaOps = (source: any[], ops: DetachedTextureDeltaOp[]): any[] => {
     return next
 }
 
+const emitToMainWindow = async <TPayload,>(event: string, payload?: TPayload) => {
+    const mainWindow = await windowGateway.getWindowByLabel('main')
+    if (mainWindow) {
+        await mainWindow.emit(event, payload)
+        return
+    }
+    await windowGateway.emit(event, payload)
+}
+
 const TextureEditorDetachedWindow: React.FC = () => {
     const [snapshot, setSnapshot] = useState<DetachedTextureEditorSnapshot | null>(null)
     const [isReady, setIsReady] = useState(false)
@@ -57,35 +65,37 @@ const TextureEditorDetachedWindow: React.FC = () => {
         let unlistenDelta: (() => void) | null = null
 
         const setup = async () => {
-            unlistenSnapshot = await listen<DetachedTextureEditorSnapshot>(
+            unlistenSnapshot = await windowGateway.listen(
                 DETACHED_TEXTURE_EDITOR_EVENTS.snapshot,
                 (event) => {
                     if (!mounted) return
-                    const revision = Number(event.payload?.revision || 0)
+                    const payload = (event as { payload?: DetachedTextureEditorSnapshot }).payload
+                    const revision = Number(payload?.revision || 0)
                     if (revision <= latestRevisionRef.current) return
                     latestRevisionRef.current = revision
                     setSnapshot({
-                        textures: Array.isArray(event.payload?.textures) ? event.payload.textures : [],
-                        modelPath: event.payload?.modelPath,
+                        textures: Array.isArray(payload?.textures) ? payload.textures : [],
+                        modelPath: payload?.modelPath,
                         revision
                     })
                     setIsReady(true)
                 }
             )
 
-            unlistenDelta = await listen<DetachedTextureEditorDeltaPayload>(
+            unlistenDelta = await windowGateway.listen(
                 DETACHED_TEXTURE_EDITOR_EVENTS.delta,
                 (event) => {
                     if (!mounted) return
-                    const revision = Number(event.payload?.revision || 0)
+                    const payload = (event as { payload?: DetachedTextureEditorDeltaPayload }).payload
+                    const revision = Number(payload?.revision || 0)
                     if (revision <= latestRevisionRef.current) return
                     latestRevisionRef.current = revision
-                    const ops = Array.isArray(event.payload?.ops) ? event.payload.ops : []
+                    const ops = Array.isArray(payload?.ops) ? payload.ops : []
                     setSnapshot((current) => {
                         if (!current) return current
                         return {
                             textures: applyDeltaOps(current.textures, ops),
-                            modelPath: event.payload?.modelPath ?? current.modelPath,
+                            modelPath: payload?.modelPath ?? current.modelPath,
                             revision
                         }
                     })
@@ -93,7 +103,7 @@ const TextureEditorDetachedWindow: React.FC = () => {
                 }
             )
 
-            await emitTo('main', DETACHED_TEXTURE_EDITOR_EVENTS.requestSnapshot)
+            await emitToMainWindow(DETACHED_TEXTURE_EDITOR_EVENTS.requestSnapshot)
         }
 
         setup().catch((error) => {
@@ -112,12 +122,12 @@ const TextureEditorDetachedWindow: React.FC = () => {
         const payload: DetachedTextureEditorApplyPayload = {
             textures: Array.isArray(textures) ? textures : []
         }
-        await emitTo('main', DETACHED_TEXTURE_EDITOR_EVENTS.apply, payload)
+        await emitToMainWindow(DETACHED_TEXTURE_EDITOR_EVENTS.apply, payload)
     }
 
     const handleClose = async () => {
         try {
-            await getCurrentWindow().close()
+            await windowGateway.closeCurrentWindow()
         } catch (error) {
             console.error('[DetachedTextureEditor] close failed:', error)
         }

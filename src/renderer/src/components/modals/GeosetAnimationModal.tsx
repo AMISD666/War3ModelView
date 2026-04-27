@@ -6,7 +6,6 @@ import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker'
 import { DraggableModal } from '../DraggableModal';
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
-import { useHistoryStore } from '../../store/historyStore'
 import { PlusOutlined, EditOutlined, DeleteOutlined, CloseOutlined } from '@ant-design/icons'
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
 import { useRpcClient } from '../../hooks/useRpc'
@@ -15,6 +14,7 @@ import { windowManager } from '../../utils/WindowManager'
 import { coercePivotFloat3 } from '../../utils/pivotUtils'
 import { vectorToPlainArray } from '../../utils/animVectorIpc'
 import { toFloat32Array } from '../../utils/modelUtils'
+import { modelDocumentCommandHandler } from '../../application/commands'
 
 const { Text } = Typography
 const { Option } = Select
@@ -26,8 +26,17 @@ interface GeosetAnimationModalProps {
 }
 
 const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, onClose, isStandalone }) => {
-    const { modelData, updateGeosetAnim, setGeosetAnims } = useModelStore()
+    const { modelData } = useModelStore()
     const { state: rpcState, emitCommand } = useRpcClient<any>('geosetAnimManager', { geosets: [], geosetAnims: [], globalSequences: [], pickedGeosetIndex: null })
+    const emitGeosetAnimAction = (action: string, payload: unknown, stalePolicy: 'warn' | 'reject' = 'reject') => {
+        emitCommand('EXECUTE_ANIM_ACTION', {
+            action,
+            payload,
+            documentId: rpcState.documentId,
+            baseDocumentRevision: rpcState.documentRevision,
+            stalePolicy,
+        })
+    }
 
     const [localAnims, setLocalAnims] = useState<any[]>([])
     const [selectedIndex, setSelectedIndex] = useState<number>(-1)
@@ -162,12 +171,12 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
 
     const saveToBackend = (anims: any[]) => {
         if (isStandalone) {
-            emitCommand('EXECUTE_ANIM_ACTION', { action: 'UPDATE_GEOSET_ANIMS', payload: anims });
-        } else if (setGeosetAnims) {
-            setGeosetAnims(anims)
+            emitGeosetAnimAction('UPDATE_GEOSET_ANIMS', anims);
         } else {
-            anims.forEach((anim, index) => {
-                updateGeosetAnim(index, anim)
+            modelDocumentCommandHandler.replaceGeosetAnimationList({
+                name: 'Update Geoset Animation',
+                before: structuredClone(modelData?.GeosetAnims || []),
+                after: anims,
             })
         }
     }

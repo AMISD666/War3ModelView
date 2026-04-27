@@ -1,8 +1,9 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import UVEditor from './editors/UVEditor'
 import TextureGeosetSelector from './editors/TextureGeosetSelector'
-import { useModelStore, mergeMaterialManagerPreview } from '../store/modelStore'
+import { useModelStore } from '../store/modelStore'
 import { useUvEditorStore } from '../store/uvEditorStore'
+import { useMaterialPreviewProjectedModelData } from '../application/preview'
 
 interface UVModeOverlayProps {
     modelPath: string | null
@@ -32,12 +33,7 @@ const UVModeLayout: React.FC<UVModeOverlayProps & { children: React.ReactNode }>
     const [isDraggingCanvasSplitter, setIsDraggingCanvasSplitter] = useState(false)
 
     const containerRef = useRef<HTMLDivElement>(null)
-    const modelData = useModelStore(state => state.modelData)
-    const materialManagerPreview = useModelStore(state => state.materialManagerPreview)
-    const effectiveModelData = useMemo(
-        () => mergeMaterialManagerPreview(modelData, materialManagerPreview),
-        [modelData, materialManagerPreview]
-    )
+    const effectiveModelData = useMaterialPreviewProjectedModelData()
     const selectedGeosetIndex = useModelStore(state => state.selectedGeosetIndex)
     const setSelectedGeosetIndex = useModelStore(state => state.setSelectedGeosetIndex)
     const viewerSelectionSync = useUvEditorStore(state => state.viewerSelectionSync)
@@ -296,4 +292,3 @@ const UVModeLayout: React.FC<UVModeOverlayProps & { children: React.ReactNode }>
 }
 
 export default UVModeLayout
-

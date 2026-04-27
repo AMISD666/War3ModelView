@@ -1,5 +1,7 @@
 import type { CameraDocumentEntry, ModelDocumentCommandHandler } from '../commands'
 import { modelDocumentCommandHandler } from '../commands'
+import { useModelStore } from '../../store/modelStore'
+import { markCommandReceived, markCommandRejected, markToolCommandStaleRevision } from '../diagnostics'
 import type { CameraViewportBridge } from './CameraViewportBridge'
 
 export interface CameraManagerCommandDependencies {
@@ -11,6 +13,82 @@ export interface CameraManagerCommandDependencies {
 const cloneCameras = (cameras: CameraDocumentEntry[]): CameraDocumentEntry[] =>
     structuredClone(cameras)
 
+type RevisionedCameraCommand = {
+    action?: string
+    documentId?: string | null
+    baseDocumentRevision?: number
+    stalePolicy?: 'warn' | 'reject'
+}
+
+const checkCameraCommandRevision = (payload: RevisionedCameraCommand | undefined): boolean => {
+    const state = useModelStore.getState()
+    markCommandReceived({
+        source: 'CameraManagerCommandHandler',
+        commandName: 'EXECUTE_CAMERA_ACTION',
+        action: payload?.action ?? '',
+        commandDocumentId: payload?.documentId ?? '',
+        activeDocumentId: state.documentId ?? '',
+        baseDocumentRevision: payload?.baseDocumentRevision ?? '',
+        activeDocumentRevision: state.documentRevision,
+        stalePolicy: payload?.stalePolicy ?? '',
+    })
+
+    if (typeof payload?.baseDocumentRevision !== 'number') {
+        return true
+    }
+
+    const documentMismatch =
+        payload.documentId !== undefined &&
+        payload.documentId !== null &&
+        state.documentId !== null &&
+        payload.documentId !== state.documentId
+    const revisionMismatch = payload.baseDocumentRevision !== state.documentRevision
+    if (!documentMismatch && !revisionMismatch) {
+        return true
+    }
+
+    markToolCommandStaleRevision({
+        source: 'CameraManagerCommandHandler',
+        commandName: 'EXECUTE_CAMERA_ACTION',
+        action: payload.action ?? '',
+        commandDocumentId: payload.documentId ?? '',
+        activeDocumentId: state.documentId ?? '',
+        baseDocumentRevision: payload.baseDocumentRevision,
+        activeDocumentRevision: state.documentRevision,
+        stalePolicy: payload.stalePolicy ?? 'warn',
+    })
+
+    if (documentMismatch || payload.stalePolicy === 'reject') {
+        markCommandRejected({
+            source: 'CameraManagerCommandHandler',
+            commandName: 'EXECUTE_CAMERA_ACTION',
+            action: payload.action ?? '',
+            commandDocumentId: payload.documentId ?? '',
+            activeDocumentId: state.documentId ?? '',
+            baseDocumentRevision: payload.baseDocumentRevision,
+            activeDocumentRevision: state.documentRevision,
+            reason: documentMismatch ? 'document_mismatch' : 'stale_revision',
+        })
+        console.warn('[CameraManagerCommandHandler] Rejected stale command', {
+            action: payload.action,
+            commandDocumentId: payload.documentId,
+            activeDocumentId: state.documentId,
+            baseDocumentRevision: payload.baseDocumentRevision,
+            activeDocumentRevision: state.documentRevision,
+        })
+        return false
+    }
+
+    console.warn('[CameraManagerCommandHandler] Stale command detected; applying for compatibility', {
+        action: payload.action,
+        commandDocumentId: payload.documentId,
+        activeDocumentId: state.documentId,
+        baseDocumentRevision: payload.baseDocumentRevision,
+        activeDocumentRevision: state.documentRevision,
+    })
+    return true
+}
+
 export class CameraManagerCommandHandler {
     constructor(
         private readonly documentHandler: ModelDocumentCommandHandler = modelDocumentCommandHandler,
@@ -21,7 +99,10 @@ export class CameraManagerCommandHandler {
             return
         }
 
-        const actionPayload = payload as { action?: string; payload?: any } | undefined
+        const actionPayload = payload as (RevisionedCameraCommand & { payload?: any }) | undefined
+        if (!checkCameraCommandRevision(actionPayload)) {
+            return
+        }
         const action = actionPayload?.action
         const data = actionPayload?.payload
 

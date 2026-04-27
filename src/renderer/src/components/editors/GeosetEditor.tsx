@@ -4,6 +4,7 @@ import { Table, Button, Space, Select, Tooltip } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { SaveOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useModelStore } from '../../store/modelStore'
+import { modelDocumentCommandHandler } from '../../application/commands'
 
 interface GeosetEditorProps {
     model?: any
@@ -12,7 +13,6 @@ interface GeosetEditorProps {
 
 const GeosetEditor: React.FC<GeosetEditorProps> = () => {
     const modelData = useModelStore(state => state.modelData)
-    const setGeosets = useModelStore(state => state.setGeosets)
 
     const [geosets, setLocalGeosets] = useState<any[]>([])
     const [hasChanges, setHasChanges] = useState(false)
@@ -35,7 +35,11 @@ const GeosetEditor: React.FC<GeosetEditorProps> = () => {
     }
 
     const handleApply = () => {
-        setGeosets(JSON.parse(JSON.stringify(geosets)))
+        modelDocumentCommandHandler.replaceGeosetList({
+            name: 'Update Geosets',
+            before: structuredClone(modelData?.Geosets || []),
+            after: JSON.parse(JSON.stringify(geosets)),
+        })
         setHasChanges(false)
         appMessage.success('多边形设置已更新')
     }
@@ -140,4 +144,3 @@ const GeosetEditor: React.FC<GeosetEditorProps> = () => {
 }
 
 export default GeosetEditor
-

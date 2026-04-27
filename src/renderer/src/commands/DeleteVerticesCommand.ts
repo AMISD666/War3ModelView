@@ -2,7 +2,13 @@ import { Command } from '../utils/CommandManager'
 import { deleteVertices, DeleteResult } from '../utils/vertexOperations'
 import { useModelStore } from '../store/modelStore'
 import { useSelectionStore } from '../store/selectionStore'
-import { ModelResourceManager } from 'war3-model'
+import { addWar3GeosetBuffers } from '../infrastructure/render'
+import { modelDocumentCommandHandler } from '../application/commands'
+import {
+    cloneGeosetAnims,
+    remapGeosetAnimsAfterRemovingGeosets,
+    syncRendererGeosetAnims
+} from './geosetAnimRemap'
 
 interface VertexSelection {
     geosetIndex: number
@@ -41,6 +47,7 @@ export class DeleteVerticesCommand implements Command {
     private selections: VertexSelection[]
     private geosetIndex: number
     private originalGeosetSnapshot: any = null
+    private originalGeosetAnimsSnapshot: any[] | null = null
     private deleteResult: DeleteResult | null = null
     private removedGeoset = false
 
@@ -67,6 +74,7 @@ export class DeleteVerticesCommand implements Command {
 
         // Save original geoset snapshot for undo
         this.originalGeosetSnapshot = cloneGeosetSnapshot(geoset)
+        this.originalGeosetAnimsSnapshot = cloneGeosetAnims(this.getCurrentGeosetAnims())
 
         // Get vertex indices
         const vertexIndices = this.selections.map(s => s.index)
@@ -80,10 +88,15 @@ export class DeleteVerticesCommand implements Command {
 
         if (shouldRemoveGeoset) {
             this.renderer.model.Geosets.splice(this.geosetIndex, 1)
+            const nextGeosetAnims = remapGeosetAnimsAfterRemovingGeosets(
+                this.originalGeosetAnimsSnapshot,
+                [this.geosetIndex]
+            )
+            syncRendererGeosetAnims(this.renderer, nextGeosetAnims)
             this.removedGeoset = true
         } else {
             Object.assign(geoset, this.deleteResult.updatedGeoset)
-            ModelResourceManager.getInstance().addGeosetBuffers(this.renderer.model, this.geosetIndex)
+            addWar3GeosetBuffers(this.renderer.model, this.geosetIndex)
             this.removedGeoset = false
         }
 
@@ -98,6 +111,9 @@ export class DeleteVerticesCommand implements Command {
 
         if (this.removedGeoset) {
             this.renderer.model.Geosets.splice(this.geosetIndex, 0, cloneGeosetSnapshot(this.originalGeosetSnapshot))
+            if (this.originalGeosetAnimsSnapshot) {
+                syncRendererGeosetAnims(this.renderer, this.originalGeosetAnimsSnapshot)
+            }
         } else {
             const geoset = this.renderer.model.Geosets[this.geosetIndex]
             if (geoset) {
@@ -105,9 +121,16 @@ export class DeleteVerticesCommand implements Command {
             }
         }
 
-        ModelResourceManager.getInstance().addGeosetBuffers(this.renderer.model, this.geosetIndex)
+        addWar3GeosetBuffers(this.renderer.model, this.geosetIndex)
 
         this.syncToStore()
+    }
+
+    private getCurrentGeosetAnims(): any[] {
+        if (Array.isArray(this.renderer?.model?.GeosetAnims)) {
+            return this.renderer.model.GeosetAnims
+        }
+        return useModelStore.getState().modelData?.GeosetAnims ?? []
     }
 
     private syncToStore(): void {
@@ -123,6 +146,18 @@ export class DeleteVerticesCommand implements Command {
             Groups: geoset.Groups ? JSON.parse(JSON.stringify(geoset.Groups)) : [[0]]
         }))
 
-        useModelStore.getState().setGeosets(nextGeosets)
+        const modelState = useModelStore.getState()
+        modelDocumentCommandHandler.replaceGeosetList({
+            name: 'Delete Vertices: Sync Geosets',
+            before: modelState.modelData?.Geosets ?? [],
+            after: nextGeosets,
+            options: { recordHistory: false },
+        })
+        modelDocumentCommandHandler.replaceGeosetAnimationList({
+            name: 'Delete Vertices: Sync Geoset Animations',
+            before: modelState.modelData?.GeosetAnims ?? [],
+            after: cloneGeosetAnims(this.getCurrentGeosetAnims()),
+            options: { recordHistory: false },
+        })
     }
 }

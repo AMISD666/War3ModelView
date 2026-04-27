@@ -1,8 +1,14 @@
-import { ModelResourceManager } from 'war3-model'
+import { addWar3GeosetBuffers } from '../infrastructure/render'
+import { modelDocumentCommandHandler } from '../application/commands'
 import { useModelStore } from '../store/modelStore'
 import { useSelectionStore } from '../store/selectionStore'
 import { Command } from '../utils/CommandManager'
 import { deleteFaces, DeleteFacesResult } from '../utils/vertexOperations'
+import {
+    cloneGeosetAnims,
+    remapGeosetAnimsAfterRemovingGeosets,
+    syncRendererGeosetAnims
+} from './geosetAnimRemap'
 
 interface FaceSelection {
     geosetIndex: number
@@ -47,6 +53,7 @@ export class DeleteFacesCommand implements Command {
     name = 'Delete Faces'
 
     private originalGeosetsSnapshot: any[] | null = null
+    private originalGeosetAnimsSnapshot: any[] | null = null
     private deleteResults: DeleteFacesResult[] = []
 
     constructor(
@@ -61,6 +68,7 @@ export class DeleteFacesCommand implements Command {
         }
 
         this.originalGeosetsSnapshot = this.renderer.model.Geosets.map((geoset: any) => cloneDeep(geoset))
+        this.originalGeosetAnimsSnapshot = cloneGeosetAnims(this.getCurrentGeosetAnims())
         this.deleteResults = []
 
         const selectionsByGeoset = new Map<number, number[]>()
@@ -72,6 +80,7 @@ export class DeleteFacesCommand implements Command {
         })
 
         const geosetIndices = Array.from(selectionsByGeoset.keys()).sort((a, b) => b - a)
+        const removedGeosetIndices: number[] = []
         for (const geosetIndex of geosetIndices) {
             const geoset = this.renderer.model.Geosets[geosetIndex]
             if (!geoset) continue
@@ -85,10 +94,19 @@ export class DeleteFacesCommand implements Command {
 
             if (shouldRemoveGeoset) {
                 this.renderer.model.Geosets.splice(geosetIndex, 1)
+                removedGeosetIndices.push(geosetIndex)
             } else {
                 Object.assign(geoset, result.updatedGeoset)
-                ModelResourceManager.getInstance().addGeosetBuffers(this.renderer.model, geosetIndex)
+                addWar3GeosetBuffers(this.renderer.model, geosetIndex)
             }
+        }
+
+        if (removedGeosetIndices.length > 0) {
+            const nextGeosetAnims = remapGeosetAnimsAfterRemovingGeosets(
+                this.originalGeosetAnimsSnapshot,
+                removedGeosetIndices
+            )
+            syncRendererGeosetAnims(this.renderer, nextGeosetAnims)
         }
 
         useSelectionStore.getState().selectFaces([])
@@ -101,14 +119,38 @@ export class DeleteFacesCommand implements Command {
 
         this.renderer.model.Geosets = this.originalGeosetsSnapshot.map((geoset) => cloneDeep(geoset))
         this.renderer.model.Geosets.forEach((_geoset: any, index: number) => {
-            ModelResourceManager.getInstance().addGeosetBuffers(this.renderer.model, index)
+            addWar3GeosetBuffers(this.renderer.model, index)
         })
+        if (this.originalGeosetAnimsSnapshot) {
+            syncRendererGeosetAnims(this.renderer, this.originalGeosetAnimsSnapshot)
+        }
         useSelectionStore.getState().selectFaces([])
         useSelectionStore.getState().selectVertices([])
         this.syncToStore()
     }
 
+    private getCurrentGeosetAnims(): any[] {
+        if (Array.isArray(this.renderer?.model?.GeosetAnims)) {
+            return this.renderer.model.GeosetAnims
+        }
+        return useModelStore.getState().modelData?.GeosetAnims ?? []
+    }
+
     private syncToStore(): void {
-        useModelStore.getState().setGeosets(this.renderer.model.Geosets.map(toStoreGeoset))
+        const modelState = useModelStore.getState()
+        const before = modelState.modelData?.Geosets ?? []
+        const after = this.renderer.model.Geosets.map(toStoreGeoset)
+        modelDocumentCommandHandler.replaceGeosetList({
+            name: 'Delete Faces: Sync Geosets',
+            before,
+            after,
+            options: { recordHistory: false },
+        })
+        modelDocumentCommandHandler.replaceGeosetAnimationList({
+            name: 'Delete Faces: Sync Geoset Animations',
+            before: modelState.modelData?.GeosetAnims ?? [],
+            after: cloneGeosetAnims(this.getCurrentGeosetAnims()),
+            options: { recordHistory: false },
+        })
     }
 }

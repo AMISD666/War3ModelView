@@ -8,13 +8,24 @@ import { windowManager } from '../../utils/WindowManager'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useHistoryStore } from '../../store/historyStore'
+import { textureMaterialCommandHandler } from '../../application/commands'
 import { getDraggedTextureIndex } from '../../utils/textureDragDrop'
 import { useRpcClient } from '../../hooks/useRpc'
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
 import { markStandalonePerf, markStandalonePerfOnce } from '../../utils/standalonePerf'
+import type {
+    MaterialManagerPatch,
+    MaterialManagerRpcState,
+    MaterialManagerSnapshot,
+} from '../../application/window-bridge'
 import { MATERIAL_FILTER_MODE_OPTIONS } from '../../constants/filterModes'
+import {
+    remapGeosetsAfterMaterialRemoval,
+    remapRibbonEmittersAfterMaterialRemoval,
+} from '../../utils/materialTextureRelations'
 import { getMaterialTrackEditorTitle, getMaterialTrackFieldName } from '../../utils/materialAnimShared'
 import { useMaterialEditorStandaloneEvents } from './material-editor/useMaterialEditorStandaloneEvents'
+import { desktopGateway } from '../../infrastructure/desktop'
 
 const { Text } = Typography
 
@@ -141,45 +152,31 @@ interface MaterialEditorModalProps {
     isStandalone?: boolean
 }
 
-interface MaterialManagerSnapshot {
-    materials: any[]
-    textures: any[]
-    geosets: any[]
-    globalSequences: number[]
-    sequences: any[]
-    textureAnims: any[]
-    modelPath: string
-}
-
-interface MaterialManagerRpcState {
-    documentId: string | null
-    documentRevision: number
-    assetRevision: number
-    previewRevision: number
-    snapshotVersion: number
-    snapshot: MaterialManagerSnapshot
-    pickedGeosetIndex: number | null
-    selectedMaterialIndex: number | null
-    selectedMaterialLayerIndex: number | null
-}
-
-interface MaterialManagerPatch {
-    pickedGeosetIndex?: number | null
-    selectedMaterialIndex?: number | null
-    selectedMaterialLayerIndex?: number | null
-}
-
 const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onClose, isStandalone }) => {
     const initialRpcState: MaterialManagerRpcState = {
         documentId: null,
         documentRevision: 0,
         assetRevision: 0,
         previewRevision: 0,
+        snapshotRevision: 0,
+        snapshotProjection: 'document',
+        windowId: 'materialManager',
+        payload: {
+            materials: [],
+            textures: [],
+            geosets: [],
+            ribbonEmitters: [],
+            globalSequences: [],
+            sequences: [],
+            textureAnims: [],
+            modelPath: '',
+        },
         snapshotVersion: 0,
         snapshot: {
             materials: [],
             textures: [],
             geosets: [],
+            ribbonEmitters: [],
             globalSequences: [],
             sequences: [],
             textureAnims: [],
@@ -220,12 +217,19 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     /** 独立窗：已从 RPC 快照加载本地材质列表前，禁止向主进程发 SAVE_MATERIALS，否则空数组会写入预览层并遮挡权威模型 */
     const isInitialized = React.useRef(false)
 
-    const rpcSnapshot = rpcState.snapshot
+    const emitMaterialAction = React.useCallback((message: { action: string; payload?: unknown; stalePolicy?: 'warn' | 'reject' }) => {
+        emitCommand('EXECUTE_MATERIAL_ACTION', {
+            ...message,
+            documentId: rpcState.documentId,
+            baseDocumentRevision: rpcState.documentRevision,
+            stalePolicy: message.stalePolicy ?? (message.action === 'SAVE_MATERIALS' ? 'warn' : 'reject'),
+        })
+    }, [emitCommand, rpcState.documentId, rpcState.documentRevision])
+
+    const rpcSnapshot = rpcState.payload ?? rpcState.snapshot
+    const rpcSnapshotRevision = rpcState.snapshotRevision || rpcState.snapshotVersion
     const directModelData = useModelStore((state) => state.modelData)
     const directModelPath = useModelStore((state) => state.modelPath)
-    const directSetMaterials = useModelStore((state) => state.setMaterials)
-    const directSetTextures = useModelStore((state) => state.setTextures)
-    const directSetVisualDataPatch = useModelStore((state) => state.setVisualDataPatch)
     const directSetSelectedMaterialIndex = useSelectionStore((state) => state.setSelectedMaterialIndex)
     const directSetSelectedMaterialLayerIndex = useSelectionStore((state) => state.setSelectedMaterialLayerIndex)
 
@@ -235,15 +239,17 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             Materials: rpcSnapshot.materials,
             Textures: rpcSnapshot.textures,
             Geosets: rpcSnapshot.geosets,
+            RibbonEmitters: rpcSnapshot.ribbonEmitters,
             GlobalSequences: rpcSnapshot.globalSequences,
             Sequences: rpcSnapshot.sequences,
             TextureAnims: rpcSnapshot.textureAnims,
         }),
         [
-            rpcState.snapshotVersion,
+            rpcSnapshotRevision,
             rpcSnapshot.materials,
             rpcSnapshot.textures,
             rpcSnapshot.geosets,
+            rpcSnapshot.ribbonEmitters,
             rpcSnapshot.globalSequences,
             rpcSnapshot.sequences,
             rpcSnapshot.textureAnims,
@@ -254,46 +260,52 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 
     const modelPath = isStandalone ? rpcSnapshot.modelPath : directModelPath
 
-    const setMaterials = (materials: any[]) => {
+    const applyMaterialCollection = (materials: any[]) => {
         if (isStandalone) {
             if (!isInitialized.current) return
-            emitCommand('EXECUTE_MATERIAL_ACTION', { action: 'SAVE_MATERIALS', payload: { materials, textures: modelTexturesRef.current } })
+            emitMaterialAction({ action: 'SAVE_MATERIALS', payload: { materials, textures: modelTexturesRef.current } })
         } else {
-            directSetMaterials(materials)
+            textureMaterialCommandHandler.setMaterialCollection({ materials })
         }
     }
 
-    const setTextures = (textures: any[]) => {
+    const applyTextureCollection = (textures: any[]) => {
         modelTexturesRef.current = textures
         setLocalTextures(textures)
         if (isStandalone) {
             if (!isInitialized.current) return
             const materialsForSave = denormalizeMaterialsForSave(localMaterialsRef.current)
-            emitCommand('EXECUTE_MATERIAL_ACTION', { action: 'SAVE_MATERIALS', payload: { materials: materialsForSave, textures } })
+            emitMaterialAction({ action: 'SAVE_MATERIALS', payload: { materials: materialsForSave, textures } })
         } else {
-            directSetTextures(textures)
+            textureMaterialCommandHandler.setTextureCollection({ textures })
         }
     }
 
-    const applyVisualPatch = React.useCallback((patch: { Textures?: any[]; Materials?: any[]; Geosets?: any[] }) => {
+    const applyVisualPatch = React.useCallback((patch: { Textures?: any[]; Materials?: any[]; Geosets?: any[]; RibbonEmitters?: any[] }) => {
         if (patch.Textures) {
             modelTexturesRef.current = patch.Textures
             setLocalTextures(patch.Textures)
         }
         if (isStandalone) {
             if (!isInitialized.current) return
-            emitCommand('EXECUTE_MATERIAL_ACTION', {
+            emitMaterialAction({
                 action: 'SAVE_MATERIALS',
                 payload: {
                     materials: patch.Materials ?? denormalizeMaterialsForSave(localMaterialsRef.current),
                     textures: patch.Textures ?? modelTexturesRef.current,
-                    geosets: patch.Geosets
+                    geosets: patch.Geosets,
+                    ribbonEmitters: patch.RibbonEmitters,
                 }
             })
         } else {
-            directSetVisualDataPatch(patch)
+            textureMaterialCommandHandler.setTextureMaterialCollections({
+                textures: patch.Textures,
+                materials: patch.Materials,
+                geosets: patch.Geosets,
+                ribbonEmitters: patch.RibbonEmitters,
+            })
         }
-    }, [directSetVisualDataPatch, emitCommand, isStandalone])
+    }, [emitMaterialAction, isStandalone])
     const [localMaterials, setLocalMaterials] = useState<any[]>([])
     const [localTextures, setLocalTextures] = useState<any[]>([])
     const [selectedMaterialIndex, setSelectedMaterialIndex] = useState<number>(-1)
@@ -308,8 +320,9 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 
     const syncMaterialSelection = useCallback((materialIndex: number | null, layerIndex: number | null) => {
         if (isStandalone) {
-            emitCommand('EXECUTE_MATERIAL_ACTION', {
+            emitMaterialAction({
                 action: 'SET_SELECTION',
+                stalePolicy: 'warn',
                 payload: {
                     selectedMaterialIndex: materialIndex,
                     selectedMaterialLayerIndex: layerIndex
@@ -390,19 +403,20 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const selectedMaterialIndexRef = React.useRef(-1)
     const selectedLayerIndexRef = React.useRef(-1)
 
-    const syncStandaloneMaterials = React.useCallback((nextMaterialsUi: any[], nextTextures?: any[], nextGeosets?: any[]) => {
+    const syncStandaloneMaterials = React.useCallback((nextMaterialsUi: any[], nextTextures?: any[], nextGeosets?: any[], nextRibbonEmitters?: any[]) => {
         if (!isStandalone) return
         if (!isInitialized.current) return
         const materialsForSave = denormalizeMaterialsForSave(cloneDeep(nextMaterialsUi))
-        emitCommand('EXECUTE_MATERIAL_ACTION', {
+        emitMaterialAction({
             action: 'SAVE_MATERIALS',
             payload: {
                 materials: materialsForSave,
                 textures: cloneDeep(nextTextures ?? modelTexturesRef.current),
-                geosets: nextGeosets ? cloneDeep(nextGeosets) : undefined
+                geosets: nextGeosets ? cloneDeep(nextGeosets) : undefined,
+                ribbonEmitters: nextRibbonEmitters ? cloneDeep(nextRibbonEmitters) : undefined,
             }
         })
-    }, [emitCommand, isStandalone])
+    }, [emitMaterialAction, isStandalone])
 
     useEffect(() => {
         dragOverLayerIndexRef.current = dragOverLayerIndex
@@ -438,7 +452,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         return nextMaterials
     }, [])
 
-    /** 用材质+贴图数据签名判断是否真的变化；勿仅用 snapshotVersion（会周期性递增并重置本地状态、打断输入焦点） */
+    /** 用材质+贴图数据签名判断是否真的变化；勿仅用 snapshotRevision（会周期性递增并重置本地状态、打断输入焦点） */
     const lastMaterialsSignatureRef = React.useRef<string | null>(null)
     /** 独立窗口：当前已加载的模型路径，用于区分「同模型下编辑回传」与「切换模型需整表重载」 */
     const lastStandaloneModelPathRef = React.useRef<string>('')
@@ -477,7 +491,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             const currentTextures = modelData?.Textures || []
             const texturesChanged = JSON.stringify(currentTextures) !== JSON.stringify(localTexturesRef.current)
             // In standalone mode, rpcState.materials starts empty and arrives asynchronously.
-            // 仅当材质/贴图数据相对上次快照真的变化时才全量重载，勿依赖 snapshotVersion 单独触发
+            // 仅当材质/贴图数据相对上次快照真的变化时才全量重载，勿依赖 snapshotRevision 单独触发
             const materialsSignature = hasMaterials
                 ? JSON.stringify({ m: modelData!.Materials, t: modelData!.Textures || [] })
                 : ''
@@ -500,13 +514,13 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                 if (skipStandaloneFullReload) {
                     // 仅同步签名与贴图列表（主窗口若只改贴图路径仍需反映），不整表重置材质以免打断输入
                     lastMaterialsSignatureRef.current = materialsSignature
-                    lastRpcMaterialsRef.current = rpcState.snapshotVersion
+                    lastRpcMaterialsRef.current = rpcSnapshotRevision
                     if (texturesChanged) {
                         setLocalTextures(JSON.parse(JSON.stringify(currentTextures)))
                     }
                 } else {                lastMaterialsSignatureRef.current = materialsSignature
                 lastStandaloneModelPathRef.current = pathStr
-                lastRpcMaterialsRef.current = isStandalone ? rpcState.snapshotVersion : modelData.Materials
+                lastRpcMaterialsRef.current = isStandalone ? rpcSnapshotRevision : modelData.Materials
                 originalMaterialsRef.current = JSON.parse(JSON.stringify(modelData.Materials))
                 originalTexturesRef.current = JSON.parse(JSON.stringify(modelData.Textures || []))
                 setLocalTextures(JSON.parse(JSON.stringify(modelData.Textures || [])))
@@ -555,7 +569,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                 isInitialized.current = false
                 lastMaterialsSignatureRef.current = null
                 lastStandaloneModelPathRef.current = ''
-                lastRpcMaterialsRef.current = isStandalone ? rpcState.snapshotVersion : null
+                lastRpcMaterialsRef.current = isStandalone ? rpcSnapshotRevision : null
                 if (isCommittingRef.current) {
                     isCommittingRef.current = false
                 }
@@ -583,7 +597,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             didRealtimePreviewRef.current = false
             didRealtimeTexturePreviewRef.current = false
         }
-    }, [visible, modelData, isStandalone, selectedMaterialIndex, selectedLayerIndex, rpcState.snapshotVersion])
+    }, [visible, modelData, isStandalone, selectedMaterialIndex, selectedLayerIndex, rpcSnapshotRevision])
 
     // Subscribe to Ctrl+Click geoset picking - auto-select material
     useEffect(() => {
@@ -599,8 +613,9 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             lastHandledPickedGeosetRef.current = pickedGeosetIndex;
 
             if (pickedGeosetIndex !== null && modelData.Geosets && modelData.Geosets[pickedGeosetIndex]) {
-                const materialId = modelData.Geosets[pickedGeosetIndex].MaterialID;
-                if (materialId !== undefined && materialId >= 0 && materialId < localMaterials.length) {
+                const rawMaterialId = modelData.Geosets[pickedGeosetIndex].MaterialID;
+                const materialId = typeof rawMaterialId === 'number' ? rawMaterialId : Number(rawMaterialId);
+                if (Number.isInteger(materialId) && materialId >= 0 && materialId < localMaterials.length) {
                     const pickedMaterial = localMaterials[materialId];
                     const nextLayerIndex =
                         pickedMaterial && pickedMaterial.Layers && pickedMaterial.Layers.length > 0
@@ -643,14 +658,14 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             name: 'Edit Materials',
             undo: () => {
                 if (isStandalone) {
-                    emitCommand('EXECUTE_MATERIAL_ACTION', { action: 'SAVE_MATERIALS', payload: { materials: oldMaterials, textures: oldTextures } })
+                    emitMaterialAction({ action: 'COMMIT_MATERIALS', payload: { materials: oldMaterials, textures: oldTextures } })
                 } else {
                     applyVisualPatch({ Textures: oldTextures, Materials: oldMaterials })
                 }
             },
             redo: () => {
                 if (isStandalone) {
-                    emitCommand('EXECUTE_MATERIAL_ACTION', { action: 'SAVE_MATERIALS', payload: { materials: materialsForSave, textures: texturesForSave } })
+                    emitMaterialAction({ action: 'COMMIT_MATERIALS', payload: { materials: materialsForSave, textures: texturesForSave } })
                 } else {
                     applyVisualPatch({ Textures: texturesForSave, Materials: materialsForSave })
                 }
@@ -659,7 +674,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 
         isCommittingRef.current = true
         if (isStandalone) {
-            emitCommand('EXECUTE_MATERIAL_ACTION', { action: 'SAVE_MATERIALS', payload: { materials: materialsForSave, textures: texturesForSave } })
+            emitMaterialAction({ action: 'COMMIT_MATERIALS', payload: { materials: materialsForSave, textures: texturesForSave } })
         } else {
             applyVisualPatch({ Textures: texturesForSave, Materials: materialsForSave })
         }
@@ -669,6 +684,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 
     const handleCancel = () => {
         if (isStandalone) {
+            emitMaterialAction({ action: 'CLEAR_MATERIAL_PREVIEW', payload: null, stalePolicy: 'warn' })
             onClose()
             return
         }
@@ -676,8 +692,8 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             if (didRealtimeTexturePreviewRef.current && originalTexturesRef.current && didRealtimePreviewRef.current && originalMaterialsRef.current) {
                 applyVisualPatch({ Textures: originalTexturesRef.current, Materials: originalMaterialsRef.current })
             } else {
-                if (didRealtimeTexturePreviewRef.current && originalTexturesRef.current) setTextures(originalTexturesRef.current)
-                if (didRealtimePreviewRef.current && originalMaterialsRef.current) setMaterials(originalMaterialsRef.current)
+                if (didRealtimeTexturePreviewRef.current && originalTexturesRef.current) applyTextureCollection(originalTexturesRef.current)
+                if (didRealtimePreviewRef.current && originalMaterialsRef.current) applyMaterialCollection(originalMaterialsRef.current)
             }
         }
         onClose()
@@ -695,7 +711,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             const materialsForSave = denormalizeMaterialsForSave(newMaterials)
             if (isStandalone) {
                 if (isInitialized.current) {
-                    emitCommand('EXECUTE_MATERIAL_ACTION', {
+                    emitMaterialAction({
                         action: 'SAVE_MATERIALS',
                         payload: {
                             materials: materialsForSave,
@@ -704,7 +720,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                     })
                 }
             } else {
-                setMaterials(materialsForSave)
+                applyMaterialCollection(materialsForSave)
             }
         }
     }
@@ -730,7 +746,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             const materialsForSave = denormalizeMaterialsForSave(newMaterials)
             if (isStandalone) {
                 if (isInitialized.current) {
-                    emitCommand('EXECUTE_MATERIAL_ACTION', {
+                    emitMaterialAction({
                         action: 'SAVE_MATERIALS',
                         payload: {
                             materials: materialsForSave,
@@ -739,7 +755,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                     })
                 }
             } else {
-                setMaterials(materialsForSave)
+                applyMaterialCollection(materialsForSave)
             }
         }
 
@@ -815,7 +831,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             syncStandaloneMaterials(newMaterials)
         } else {
             didRealtimePreviewRef.current = true
-            setMaterials(denormalizeMaterialsForSave(newMaterials))
+            applyMaterialCollection(denormalizeMaterialsForSave(newMaterials))
         }
 
         if (selectedLayerIndex === fromIndex) {
@@ -899,7 +915,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             syncStandaloneMaterials(nextMaterials)
         } else {
             didRealtimePreviewRef.current = true
-            setMaterials(denormalizeMaterialsForSave(nextMaterials))
+            applyMaterialCollection(denormalizeMaterialsForSave(nextMaterials))
         }
         setSelectedMaterialIndex(nextMaterials.length - 1)
         setSelectedLayerIndex(0) // Auto-select the first layer of the new material
@@ -915,34 +931,27 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const handleDeleteMaterial = (index: number) => {
         const newMaterials = applyMaterialsChange((previous) => previous.filter((_, i) => i !== index))
 
-        // Update geoset MaterialID references - only for geosets that referenced the deleted material
-        // Set them to use material 0 (the first remaining material)
-        if (modelData?.Geosets) {
-            const updatedGeosets = modelData.Geosets.map((geoset: any) => {
-                const matId = geoset.MaterialID;
-                if (matId === index) {
-                    // Geoset was referencing the deleted material, set to 0
-                    return { ...geoset, MaterialID: 0 };
-                } else if (matId > index) {
-                    // Geoset was referencing a material after the deleted one
-                    // We need to decrement to keep the reference valid
-                    return { ...geoset, MaterialID: matId - 1 };
-                }
-                return geoset;
-            });
+        const nextMaterialCount = denormalizeMaterialsForSave(newMaterials).length
+        const updatedGeosets = remapGeosetsAfterMaterialRemoval(modelData?.Geosets, index, nextMaterialCount)
+        const updatedRibbonEmitters = remapRibbonEmittersAfterMaterialRemoval(modelData?.RibbonEmitters, index, nextMaterialCount)
+        if (updatedGeosets || updatedRibbonEmitters) {
             // Sync BOTH materials and geosets to the store together to prevent mismatch
             // This ensures the renderer sees consistent data
             if (isStandalone) {
-                syncStandaloneMaterials(newMaterials, modelTexturesRef.current, updatedGeosets)
+                syncStandaloneMaterials(newMaterials, modelTexturesRef.current, updatedGeosets, updatedRibbonEmitters)
             } else {
                 didRealtimePreviewRef.current = true
-                applyVisualPatch({ Materials: denormalizeMaterialsForSave(newMaterials), Geosets: updatedGeosets });
+                applyVisualPatch({
+                    Materials: denormalizeMaterialsForSave(newMaterials),
+                    Geosets: updatedGeosets,
+                    RibbonEmitters: updatedRibbonEmitters,
+                });
             }
         } else if (isStandalone) {
             syncStandaloneMaterials(newMaterials)
         } else {
             didRealtimePreviewRef.current = true
-            setMaterials(denormalizeMaterialsForSave(newMaterials))
+            applyMaterialCollection(denormalizeMaterialsForSave(newMaterials))
         }
 
         if (selectedMaterialIndex === index) {
@@ -981,7 +990,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             syncStandaloneMaterials(newMaterials)
         } else {
             didRealtimePreviewRef.current = true
-            setMaterials(denormalizeMaterialsForSave(newMaterials))
+            applyMaterialCollection(denormalizeMaterialsForSave(newMaterials))
         }
         setSelectedLayerIndex(newMaterials[selectedMaterialIndex].Layers.length - 1)
     }
@@ -1001,7 +1010,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             syncStandaloneMaterials(newMaterials)
         } else {
             didRealtimePreviewRef.current = true
-            setMaterials(denormalizeMaterialsForSave(newMaterials))
+            applyMaterialCollection(denormalizeMaterialsForSave(newMaterials))
         }
         const remainingLayers = newMaterials[selectedMaterialIndex]?.Layers || []
         if (remainingLayers.length === 0) {
@@ -1201,16 +1210,15 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                 copied: false
             }
         }
-        const { readFile, writeFile, exists, size } = await import('@tauri-apps/plugin-fs')
         const originalFileName = getFileName(sourcePath)
         let targetFileName = originalFileName
         let targetAbsPath = `${modelDir}\\${targetFileName}`
-        const sourceSize = await size(sourcePath).catch(() => null)
+        const sourceSize = await desktopGateway.getFileSize(sourcePath).catch(() => null)
         let sourceBytesCache: Uint8Array | null | undefined
 
         const readSourceBytes = async (): Promise<Uint8Array | null> => {
             if (sourceBytesCache !== undefined) return sourceBytesCache
-            sourceBytesCache = await readFile(sourcePath).catch(() => null)
+            sourceBytesCache = await desktopGateway.readFile(sourcePath).catch(() => null)
             return sourceBytesCache
         }
 
@@ -1223,7 +1231,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             }
             const [sourceBytes, candidateBytes] = await Promise.all([
                 readSourceBytes(),
-                readFile(candidateAbsPath).catch(() => null)
+                desktopGateway.readFile(candidateAbsPath).catch(() => null)
             ])
             if (!sourceBytes || !candidateBytes) {
                 return false
@@ -1232,8 +1240,8 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         }
 
         // Same-name file exists: only reuse it when the file content is actually identical.
-        if (await exists(targetAbsPath)) {
-            const targetSize = await size(targetAbsPath).catch(() => null)
+        if (await desktopGateway.exists(targetAbsPath)) {
+            const targetSize = await desktopGateway.getFileSize(targetAbsPath).catch(() => null)
             if (await isSameFileContent(targetAbsPath, targetSize)) {
                 return {
                     relativePath: targetFileName,
@@ -1244,10 +1252,10 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             // Name collision with different size: search suffixed names.
             const { stem, ext } = splitFileName(originalFileName)
             let index = 1
-            while (await exists(`${modelDir}\\${stem}_${index}${ext}`)) {
+            while (await desktopGateway.exists(`${modelDir}\\${stem}_${index}${ext}`)) {
                 const candidateFileName = `${stem}_${index}${ext}`
                 const candidateAbsPath = `${modelDir}\\${candidateFileName}`
-                const candidateSize = await size(candidateAbsPath).catch(() => null)
+                const candidateSize = await desktopGateway.getFileSize(candidateAbsPath).catch(() => null)
                 if (await isSameFileContent(candidateAbsPath, candidateSize)) {
                     return {
                         relativePath: candidateFileName,
@@ -1259,8 +1267,8 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             targetFileName = `${stem}_${index}${ext}`
             targetAbsPath = `${modelDir}\\${targetFileName}`
         }
-        const bytes = await readFile(sourcePath)
-        await writeFile(targetAbsPath, bytes)
+        const bytes = await desktopGateway.readFile(sourcePath)
+        await desktopGateway.writeFile(targetAbsPath, bytes)
         return {
             relativePath: targetFileName,
             copied: true
@@ -1587,7 +1595,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 
                         {/* Always show Material attributes when a Material is selected */}
                         {selectedMaterial && (
-                            <Card title={<span style={{ color: '#b0b0b0', fontSize: '12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>材质设置 (Material)</span>} size="small" bordered={false} style={{ background: '#333333', border: '1px solid #4a4a4a' }} headStyle={{ borderBottom: '1px solid #4a4a4a', minHeight: 'auto', padding: '0 8px' }} bodyStyle={{ padding: '8px' }}>
+                            <Card title={<span style={{ color: '#b0b0b0', fontSize: '12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>材质设置 (Material)</span>} size="small" bordered={false} style={{ background: '#333333', border: '1px solid #4a4a4a' }} styles={{ header: { borderBottom: '1px solid #4a4a4a', minHeight: 'auto', padding: '0 8px' }, body: { padding: '8px' } }}>
                                 <div style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: '12px', alignItems: 'center' }}>
                                     <div style={{ display: 'flex', alignItems: 'center' }}>
                                         <Text style={{ marginRight: '4px', color: '#b0b0b0', fontSize: '12px' }}>优先(Plane):</Text>
@@ -1609,7 +1617,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                         {selectedLayer ? (
                             <React.Fragment key={`${selectedMaterial?.__editorMaterialId || selectedMaterialIndex}-${selectedLayer?.__editorLayerId || selectedLayerIndex}`}>
                                 <div ref={layerTextureDropSurfaceRef} style={{ border: isTextureDropActive ? '1px dashed #5a9cff' : '1px dashed transparent', borderRadius: 6, transition: 'border-color 0.15s ease, box-shadow 0.15s ease', boxShadow: isTextureDropActive ? '0 0 0 1px rgba(90,156,255,0.25) inset' : 'none' }}>
-                                    <Card title={<span style={{ color: '#b0b0b0', fontSize: '12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>图层贴图与动画 (Layer Textures & Anims)</span>} size="small" bordered={false} style={{ background: '#333333', border: '1px solid #4a4a4a', marginTop: selectedMaterial ? '0px' : '0px' }} headStyle={{ borderBottom: '1px solid #4a4a4a', minHeight: 'auto', padding: '0 8px' }} bodyStyle={{ padding: '8px' }}>
+                                    <Card title={<span style={{ color: '#b0b0b0', fontSize: '12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>图层贴图与动画 (Layer Textures & Anims)</span>} size="small" bordered={false} style={{ background: '#333333', border: '1px solid #4a4a4a', marginTop: selectedMaterial ? '0px' : '0px' }} styles={{ header: { borderBottom: '1px solid #4a4a4a', minHeight: 'auto', padding: '0 8px' }, body: { padding: '8px' } }}>
                                         {/* Row 1: Texture ID (Full Width) */}
                                         <div style={{ marginBottom: 8 }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '2px' }}>
@@ -1712,7 +1720,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                                         </div>
                                     </Card>
                                 </div>
-                                <Card title={<span style={{ color: '#b0b0b0', fontSize: '12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>图层标记 (Layer Flags)</span>} size="small" bordered={false} style={{ background: '#333333', border: '1px solid #4a4a4a' }} headStyle={{ borderBottom: '1px solid #4a4a4a', minHeight: 'auto', padding: '0 8px' }} bodyStyle={{ padding: '8px' }}>
+                                <Card title={<span style={{ color: '#b0b0b0', fontSize: '12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>图层标记 (Layer Flags)</span>} size="small" bordered={false} style={{ background: '#333333', border: '1px solid #4a4a4a' }} styles={{ header: { borderBottom: '1px solid #4a4a4a', minHeight: 'auto', padding: '0 8px' }, body: { padding: '8px' } }}>
                                     <div style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: '8px' }}>
                                         <Checkbox checked={selectedLayer.Unshaded} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { Unshaded: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '12px' }}>无阴影</Checkbox>
                                         <Checkbox checked={selectedLayer.Unfogged} onChange={(e) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { Unfogged: e.target.checked }, true)} style={{ color: '#e8e8e8', fontSize: '12px' }}>无迷雾</Checkbox>

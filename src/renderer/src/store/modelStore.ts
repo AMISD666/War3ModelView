@@ -70,6 +70,20 @@ type SetModelDataOptions = {
     deferNodeHydration?: boolean;
 };
 
+export type ReplaceDocumentSnapshotOptions = {
+    nodes?: ModelNode[];
+    sequences?: any[];
+    hiddenGeosetIds?: number[];
+    selectedGeosetIndex?: number | null;
+    selectedGeosetIndices?: number[];
+    forceShowAllGeosets?: boolean;
+    globalTransformTracker?: {
+        rotation: [number, number, number];
+    };
+    rendererReload?: boolean;
+    clearMaterialPreview?: boolean;
+};
+
 type DeferredTabSnapshotUpdate = {
     activeTabId: string;
     snapshot: Partial<TabSnapshot>;
@@ -107,52 +121,13 @@ export type MaterialManagerPreview = {
     materials: any[];
     textures: any[];
     geosets?: any[];
+    ribbonEmitters?: any[];
 };
 
 export type NodeEditorPreview = {
     objectId: number;
     node: ModelNode;
 };
-
-/** 将材质预览合并到模型数据（用于主界面 Viewer 等展示） */
-export function mergeMaterialManagerPreview(
-    modelData: ModelData | null,
-    preview: MaterialManagerPreview | null
-): ModelData | null {
-    if (!modelData) return null;
-    if (!preview) return modelData;
-    // 预览层若为 [] 会覆盖权威 Materials/Textures，Viewer 同步后无贴图 → 粒子等不可见
-    const next: ModelData = { ...modelData };
-    if (Array.isArray(preview.materials) && preview.materials.length > 0) {
-        next.Materials = preview.materials;
-    }
-    if (Array.isArray(preview.textures) && preview.textures.length > 0) {
-        next.Textures = preview.textures;
-    }
-    if (preview.geosets !== undefined) {
-        next.Geosets = preview.geosets;
-    }
-    return next;
-}
-
-export function mergeNodeEditorPreview(
-    modelData: ModelData | null,
-    preview: NodeEditorPreview | null
-): ModelData | null {
-    if (!modelData || !preview) return modelData;
-
-    const nodes = extractNodesFromModel(modelData);
-    if (!Array.isArray(nodes) || nodes.length === 0) return modelData;
-
-    const hasTarget = nodes.some((node) => node.ObjectId === preview.objectId);
-    if (!hasTarget) return modelData;
-
-    const updatedNodes = nodes.map((node) =>
-        node.ObjectId === preview.objectId ? ({ ...preview.node } as ModelNode) : node
-    );
-
-    return updateModelDataWithNodes(modelData, updatedNodes, false);
-}
 
 const pickDefaultSequenceIndex = (sequences: any[]) => {
     if (!Array.isArray(sequences) || sequences.length === 0) return -1;
@@ -184,6 +159,56 @@ function sanitizeNodesArray(nodes: any): ModelNode[] {
 const markActiveTabDirtyState = (state: { activeTabId: string | null; dirtyTabs: Record<string, boolean> }) => {
     if (!state.activeTabId) return {};
     return { dirtyTabs: { ...state.dirtyTabs, [state.activeTabId]: true } };
+};
+
+const createDocumentMutationPatch = (
+    state: ModelState,
+    updatedModelData: ModelData | null,
+    options: {
+        nodes?: ModelNode[];
+        rendererReload?: boolean;
+        sequences?: any[];
+        hiddenGeosetIds?: number[];
+        extra?: Record<string, unknown>;
+    } = {}
+) => {
+    const revisionPatch = getNextDocumentRevisionPatch(state);
+    const nextSequences = options.sequences ?? state.sequences;
+    const nextNodes = options.nodes ?? sanitizeNodesArray(state.nodes);
+    const nextHiddenGeosetIds = options.hiddenGeosetIds ?? state.hiddenGeosetIds;
+    const updatedTabs = state.activeTabId
+        ? state.tabs.map((tab) => {
+            if (tab.id !== state.activeTabId) return tab;
+            return {
+                ...tab,
+                snapshot: {
+                    ...tab.snapshot,
+                    ...revisionPatch,
+                    modelData: updatedModelData,
+                    modelPath: state.modelPath,
+                    nodes: sanitizeNodesArray(nextNodes),
+                    sequences: [...nextSequences],
+                    currentSequence: state.currentSequence,
+                    currentFrame: state.currentFrame,
+                    hiddenGeosetIds: [...nextHiddenGeosetIds],
+                    forceShowAllGeosets: state.forceShowAllGeosets,
+                    lastActive: Date.now()
+                }
+            };
+        })
+        : state.tabs;
+
+    return {
+        ...revisionPatch,
+        modelData: updatedModelData,
+        tabs: updatedTabs,
+        ...(options.nodes ? { nodes: nextNodes } : {}),
+        ...(options.sequences ? { sequences: options.sequences } : {}),
+        ...(options.hiddenGeosetIds ? { hiddenGeosetIds: options.hiddenGeosetIds } : {}),
+        ...(options.rendererReload ? { rendererReloadTrigger: state.rendererReloadTrigger + 1 } : {}),
+        ...(options.extra ?? {}),
+        ...markActiveTabDirtyState(state)
+    };
 };
 
 const removeDirtyTabState = (state: { dirtyTabs: Record<string, boolean> }, tabId: string) => {
@@ -320,7 +345,16 @@ interface ModelState {
     reset: () => void;
 
     setModelData: (data: ModelData | null, path: string | null, options?: SetModelDataOptions) => void;
+    /**
+     * @deprecated Compatibility implementation for application-layer atomic document replacement.
+     * UI and command code must call ModelDocumentCommandHandler instead.
+     */
+    replaceDocumentSnapshot: (data: ModelData, options?: ReplaceDocumentSnapshotOptions) => void;
     updateGlobalSequences: (sequences: number[]) => void;
+    /**
+     * @deprecated Compatibility implementation for application-layer camera commands.
+     * UI and tool-window code must call ModelDocumentCommandHandler instead.
+     */
     setCameras: (cameras: ModelNode[]) => void;
     setLoading: (loading: boolean) => void;
     updateNode: (objectId: number, updates: Partial<ModelNode>) => void;
@@ -368,20 +402,38 @@ interface ModelState {
     setAutoKeyframe: (enabled: boolean) => void;
     updateSequence: (index: number, updates: any) => void; // New action
     shiftSequenceDuration: (index: number, newDurationMs: number) => void;
+    /**
+     * @deprecated Compatibility implementation for application-layer texture commands.
+     * UI and tool-window code must call TextureMaterialCommandHandler instead.
+     */
     setTextures: (textures: any[]) => void;
+    /**
+     * @deprecated Compatibility implementation for application-layer geoset commands.
+     * UI and tool-window code must call ModelDocumentCommandHandler instead.
+     */
     setGeosets: (geosets: any[]) => void;
+    /**
+     * @deprecated Compatibility implementation for application-layer material commands.
+     * UI and tool-window code must call TextureMaterialCommandHandler instead.
+     */
     setMaterials: (materials: any[]) => void;
-    setVisualDataPatch: (patch: { Textures?: any[]; Materials?: any[]; Geosets?: any[]; TextureAnims?: any[] }) => void;
+    /**
+     * @deprecated Compatibility implementation for application-layer visual data commands.
+     * UI and tool-window code must call TextureMaterialCommandHandler or domain-specific command handlers instead.
+     */
+    setVisualDataPatch: (patch: { Textures?: any[]; Materials?: any[]; Geosets?: any[]; TextureAnims?: any[]; RibbonEmitters?: any[]; ParticleEmitters?: any[]; ParticleEmitters2?: any[] }) => void;
 
-    /** 独立材质窗：预览层（不落盘到 modelData，保存时由 getModelDataForSave 合并并 commit） */
+    /** 独立材质窗：预览层（不落盘到 modelData；必须显式 commit 才会进入保存数据） */
     materialManagerPreview: MaterialManagerPreview | null;
     setMaterialManagerPreview: (payload: MaterialManagerPreview) => void;
     clearMaterialManagerPreview: () => void;
-    /** 保存成功后调用：将预览写入 modelData 并清空预览 */
-    commitMaterialManagerPreviewToModel: () => void;
     nodeEditorPreview: NodeEditorPreview | null;
     setNodeEditorPreview: (payload: NodeEditorPreview) => void;
     clearNodeEditorPreview: () => void;
+    /**
+     * @deprecated Compatibility implementation for application-layer texture animation commands.
+     * UI and tool-window code must call ModelDocumentCommandHandler instead.
+     */
     setTextureAnims: (anims: any[]) => void;
     addTextureAnim: () => void;
     removeTextureAnim: (index: number) => void;
@@ -390,6 +442,10 @@ interface ModelState {
     // Geometry Actions
     updateGeoset: (index: number, updates: any) => void;
     updateGeosetAnim: (index: number, updates: any) => void;
+    /**
+     * @deprecated Compatibility implementation for application-layer geoset animation commands.
+     * UI and tool-window code must call ModelDocumentCommandHandler instead.
+     */
     setGeosetAnims: (anims: any[]) => void;
     updateNodes: (updates: { objectId: number, data: Partial<ModelNode> }[]) => void;
     replaceNodes: (nodes: ModelNode[], options?: { triggerReload?: boolean }) => void;
@@ -431,6 +487,10 @@ interface ModelState {
     setActiveTab: (tabId: string) => void;
     /** 磁盘上模型文件改名/改后缀后同步当前标签与内存中的路径（不重新解析模型） */
     replaceActiveTabDiskPath: (newPath: string) => void;
+    /** 外部资源源变化，例如 MPQ 列表/优先级或同路径资源替换。 */
+    bumpAssetRevision: (reason?: string) => void;
+    /** 临时预览层变化，不进入文档 dirty/history。 */
+    bumpPreviewRevision: (reason?: string) => void;
     getModelDataForSave: (forceReorder?: boolean) => ModelData | null;
 }
 
@@ -1490,6 +1550,47 @@ export const useModelStore = create<ModelState>((set, get) => ({
         }
     },
 
+    replaceDocumentSnapshot: (data, options = {}) => {
+        useRendererStore.getState().bumpVertexRenderRevision();
+        set((state) => {
+            if (!data) return {};
+
+            const nextModelData = deepClone(data);
+            const nextNodes = options.nodes
+                ? sanitizeNodesArray(deepClone(options.nodes))
+                : extractNodesFromModel(nextModelData);
+            const nextSequences = options.sequences
+                ? deepClone(options.sequences)
+                : ((nextModelData as any)?.Sequences || []);
+            const nextGeosetCount = (nextModelData as any)?.Geosets?.length || 0;
+            const nextHiddenGeosetIds = normalizeGeosetIndices(
+                options.hiddenGeosetIds ?? state.hiddenGeosetIds,
+                nextGeosetCount
+            );
+            const clearedMaterialPreview = (options.clearMaterialPreview ?? true) && !!state.materialManagerPreview;
+            const extra: Record<string, unknown> = {
+                ...(options.selectedGeosetIndex !== undefined ? { selectedGeosetIndex: options.selectedGeosetIndex } : {}),
+                ...(options.selectedGeosetIndices !== undefined ? { selectedGeosetIndices: [...options.selectedGeosetIndices] } : {}),
+                ...(options.forceShowAllGeosets !== undefined ? { forceShowAllGeosets: options.forceShowAllGeosets } : {}),
+                ...(options.globalTransformTracker ? { globalTransformTracker: deepClone(options.globalTransformTracker) } : {}),
+                ...(clearedMaterialPreview
+                    ? {
+                        materialManagerPreview: null,
+                        previewRevision: state.previewRevision + 1,
+                    }
+                    : {}),
+            };
+
+            return createDocumentMutationPatch(state, nextModelData, {
+                nodes: nextNodes,
+                sequences: nextSequences,
+                hiddenGeosetIds: nextHiddenGeosetIds,
+                rendererReload: options.rendererReload ?? true,
+                extra,
+            });
+        });
+    },
+
     getModelDataForSave: (forceReorder = false) => {
         const state = get();
         if (!state.modelData) return null;
@@ -1503,13 +1604,6 @@ export const useModelStore = create<ModelState>((set, get) => ({
             }
         }
 
-        const nodePreview = state.nodeEditorPreview;
-        if (nodePreview) {
-            nodesForSave = nodesForSave.map((node) =>
-                node.ObjectId === nodePreview.objectId ? ({ ...nodePreview.node } as ModelNode) : node
-            );
-        }
-
         let base = updateModelDataWithNodes(state.modelData, nodesForSave as any[], false);
         if (!base) return null;
 
@@ -1518,15 +1612,6 @@ export const useModelStore = create<ModelState>((set, get) => ({
         }
         if (!base) return null;
 
-        const p = state.materialManagerPreview;
-        if (p) {
-            return {
-                ...base,
-                Materials: p.materials,
-                Textures: p.textures,
-                ...(p.geosets !== undefined ? { Geosets: p.geosets } : {}),
-            };
-        }
         return base;
     },
 
@@ -1582,11 +1667,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             // setModelData sets 'sequences: (data as any)?.Sequences'. So we updates both.)
 
             const updatedModelData = { ...state.modelData, Sequences: newSequences };
-
-            return {
-                modelData: updatedModelData,
-                sequences: newSequences
-            };
+            return createDocumentMutationPatch(state, updatedModelData, { rendererReload: true, sequences: newSequences });
         });
     },
 
@@ -1600,35 +1681,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
             const updatedModelData = {
                 ...state.modelData,
                 GlobalSequences: normalizedSequences
-            };
-            const updatedTabs = state.activeTabId
-                ? state.tabs.map((tab) => {
-                    if (tab.id !== state.activeTabId) {
-                        return tab;
-                    }
-                    return {
-                        ...tab,
-                        snapshot: {
-                            ...tab.snapshot,
-                            modelData: updatedModelData,
-                            modelPath: state.modelPath,
-                            nodes: sanitizeNodesArray(state.nodes),
-                            sequences: [...state.sequences],
-                            currentSequence: state.currentSequence,
-                            currentFrame: state.currentFrame,
-                            hiddenGeosetIds: [...state.hiddenGeosetIds],
-                            forceShowAllGeosets: state.forceShowAllGeosets,
-                            lastActive: Date.now()
-                        }
-                    };
-                })
-                : state.tabs;
-            return {
-                modelData: updatedModelData,
-                tabs: updatedTabs,
-                rendererReloadTrigger: state.rendererReloadTrigger + 1,
-                ...markActiveTabDirtyState(state)
-            };
+            } as unknown as ModelData;
+            return createDocumentMutationPatch(state, updatedModelData, { rendererReload: true });
         });
         const renderer = useRendererStore.getState().renderer;
         if (renderer?.model) {
@@ -1646,6 +1700,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
     setCameras: (cameras) => {
         set((state) => {
             if (!state.modelData) return {};
+            const revisionPatch = getNextDocumentRevisionPatch(state);
             const updatedModelData: any = {
                 ...state.modelData,
                 Cameras: cameras
@@ -1660,12 +1715,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 };
             }
             const correctedNodes = extractNodesFromModel(updatedModelData);
-            return {
-                modelData: updatedModelData,
-                nodes: correctedNodes,
-                rendererReloadTrigger: state.rendererReloadTrigger + 1,
-                ...markActiveTabDirtyState(state)
-            };
+            return createDocumentMutationPatch(state, updatedModelData, { nodes: correctedNodes as ModelNode[], rendererReload: true });
         });
     },
 
@@ -1694,12 +1744,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
             const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[], false);
 
             // CRITICAL: Extract corrected nodes from modelData to sync ObjectIds
-            const correctedNodes = extractNodesFromModel(updatedModelData);            return {
-                nodes: correctedNodes,
-                modelData: updatedModelData,
-                rendererReloadTrigger: state.rendererReloadTrigger + 1,
-                ...markActiveTabDirtyState(state)
-            };
+            const correctedNodes = extractNodesFromModel(updatedModelData);
+            return createDocumentMutationPatch(state, updatedModelData, { nodes: correctedNodes as ModelNode[], rendererReload: true });
         });
     },
 
@@ -1776,11 +1822,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
             const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[], true);
 
             // CRITICAL: Extract corrected nodes with reassigned ObjectIds
-            const correctedNodes = extractNodesFromModel(updatedModelData);            return {
-                nodes: correctedNodes,
-                modelData: updatedModelData,
-                rendererReloadTrigger: state.rendererReloadTrigger + 1
-            };
+            const correctedNodes = extractNodesFromModel(updatedModelData);
+            return createDocumentMutationPatch(state, updatedModelData, { nodes: correctedNodes as ModelNode[], rendererReload: true });
         });
     },
 
@@ -1804,11 +1847,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             // CRITICAL: Extract corrected nodes with reassigned ObjectIds
             const correctedNodes = extractNodesFromModel(updatedModelData);
 
-            const orphanedCount = state.nodes.filter(n => n.Parent === objectId).length;            return {
-                nodes: correctedNodes,
-                modelData: updatedModelData,
-                rendererReloadTrigger: state.rendererReloadTrigger + 1
-            };
+            return createDocumentMutationPatch(state, updatedModelData, { nodes: correctedNodes as ModelNode[], rendererReload: true });
         });
     },
 
@@ -2020,7 +2059,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
             const updatedModelData = updateModelDataWithNodes(modelDataForPaste, updatedNodes as any[], true);
 
             // CRITICAL: Extract corrected nodes with reassigned ObjectIds
-            const correctedNodes = extractNodesFromModel(updatedModelData);            return { nodes: correctedNodes, modelData: updatedModelData };
+            const correctedNodes = extractNodesFromModel(updatedModelData);
+            return createDocumentMutationPatch(state, updatedModelData, { nodes: correctedNodes as ModelNode[], rendererReload: true });
         });
     },
 
@@ -2083,7 +2123,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
             // Reparenting shouldn't change IDs ideally.
             // Let's set reorder=false for stability.
             const updatedModelData = updateModelDataWithNodes(state.modelData, newNodes as any[], false);
-            const correctedNodes = extractNodesFromModel(updatedModelData);            return { nodes: correctedNodes, modelData: updatedModelData };
+            const correctedNodes = extractNodesFromModel(updatedModelData);
+            return createDocumentMutationPatch(state, updatedModelData, { nodes: correctedNodes as ModelNode[], rendererReload: true });
         });
     },
 
@@ -2147,7 +2188,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
             // 5. Update Model Data and extract corrected nodes
             const updatedModelData = updateModelDataWithNodes(state.modelData, newNodes as any[]);
-            const correctedNodes = extractNodesFromModel(updatedModelData);            return { nodes: correctedNodes, modelData: updatedModelData };
+            const correctedNodes = extractNodesFromModel(updatedModelData);
+            return createDocumentMutationPatch(state, updatedModelData, { nodes: correctedNodes as ModelNode[], rendererReload: true });
         });
     },
 
@@ -2156,7 +2198,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
             const updatedNodes = state.nodes.map(node =>
                 node.ObjectId === nodeId ? { ...node, Name: newName } : node
             );
-            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[]);            return { nodes: updatedNodes, modelData: updatedModelData };
+            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[]);
+            return createDocumentMutationPatch(state, updatedModelData, { nodes: updatedNodes as ModelNode[], rendererReload: true });
         });
     },
 
@@ -2216,7 +2259,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 };
             });
 
-            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[]);            return { nodes: updatedNodes, modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1 };
+            const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[]);
+            return createDocumentMutationPatch(state, updatedModelData, { nodes: updatedNodes as ModelNode[], rendererReload: true });
         });
     },
 
@@ -2237,7 +2281,11 @@ export const useModelStore = create<ModelState>((set, get) => ({
     setSequences: (sequences) => {
         set((state) => {
             const updatedModelData = state.modelData ? { ...state.modelData, Sequences: sequences } : state.modelData;
-            return { sequences, modelData: updatedModelData };
+            return createDocumentMutationPatch(
+                state,
+                updatedModelData,
+                { nodes: sanitizeNodesArray(state.nodes), rendererReload: true, sequences }
+            );
         });
         const renderer = useRendererStore.getState().renderer;
         if (renderer?.model) {
@@ -2284,13 +2332,11 @@ export const useModelStore = create<ModelState>((set, get) => ({
         // CRITICAL: Force the viewer to reload the GPU buffers and animation tracks
         newModelData.__forceFullReload = true
 
-        set((current) => ({
-            sequences: newSequences,
-            modelData: newModelData,
-            nodes: correctedNodes,
-            rendererReloadTrigger: current.rendererReloadTrigger + 1,
-            ...markActiveTabDirtyState(current)
-        }))
+        set((current) => createDocumentMutationPatch(
+            current,
+            newModelData,
+            { nodes: correctedNodes as ModelNode[], rendererReload: true, sequences: newSequences }
+        ))
 
         // Sync with renderer
         const renderer = useRendererStore.getState().renderer
@@ -2308,174 +2354,59 @@ export const useModelStore = create<ModelState>((set, get) => ({
     },
 
     setTextures: (textures) => set((state) => {
-        const revisionPatch = getNextDocumentRevisionPatch(state);
         const updatedModelData = state.modelData ? { ...state.modelData, Textures: textures } : state.modelData;
-        const updatedMaterialManagerPreview = state.materialManagerPreview
-            ? {
-                ...state.materialManagerPreview,
-                textures,
-            }
-            : state.materialManagerPreview;
-        const updatedTabs = state.activeTabId
-            ? state.tabs.map((tab) => {
-                if (tab.id !== state.activeTabId) {
-                    return tab;
-                }
-                return {
-                    ...tab,
-                    snapshot: {
-                        ...tab.snapshot,
-                        ...revisionPatch,
-                        modelData: updatedModelData,
-                        modelPath: state.modelPath,
-                        nodes: sanitizeNodesArray(state.nodes),
-                        sequences: [...state.sequences],
-                        currentSequence: state.currentSequence,
-                        currentFrame: state.currentFrame,
-                        hiddenGeosetIds: [...state.hiddenGeosetIds],
-                        forceShowAllGeosets: state.forceShowAllGeosets,
-                        lastActive: Date.now()
-                    }
-                };
-            })
-            : state.tabs;
-        return {
-            ...revisionPatch,
-            modelData: updatedModelData,
-            materialManagerPreview: updatedMaterialManagerPreview,
-            tabs: updatedTabs,
-            rendererReloadTrigger: state.rendererReloadTrigger + 1,
-            ...markActiveTabDirtyState(state)
-        };
+        const clearedMaterialPreview = !!state.materialManagerPreview;
+        return createDocumentMutationPatch(state, updatedModelData, {
+            rendererReload: true,
+            extra: {
+                materialManagerPreview: null,
+                previewRevision: clearedMaterialPreview ? state.previewRevision + 1 : state.previewRevision,
+            },
+        });
     }),
     setGeosets: (geosets) => set((state) => {
-        const revisionPatch = getNextDocumentRevisionPatch(state);
         const sanitizedGeosetUiState = sanitizeGeosetUiState(state, geosets.length);
         const updatedModelData = state.modelData ? { ...state.modelData, Geosets: geosets } : state.modelData;
-        const updatedMaterialManagerPreview = state.materialManagerPreview
-            ? {
-                ...state.materialManagerPreview,
-                geosets,
-            }
-            : state.materialManagerPreview;
-        const updatedTabs = state.activeTabId
-            ? state.tabs.map((tab) => {
-                if (tab.id !== state.activeTabId) {
-                    return tab;
-                }
-                return {
-                    ...tab,
-                    snapshot: {
-                        ...tab.snapshot,
-                        ...revisionPatch,
-                        modelData: updatedModelData,
-                        modelPath: state.modelPath,
-                        nodes: sanitizeNodesArray(state.nodes),
-                        sequences: [...state.sequences],
-                        currentSequence: state.currentSequence,
-                        currentFrame: state.currentFrame,
-                        hiddenGeosetIds: [...sanitizedGeosetUiState.hiddenGeosetIds],
-                        forceShowAllGeosets: state.forceShowAllGeosets,
-                        lastActive: Date.now()
-                    }
-                };
-            })
-            : state.tabs;
-        return {
-            ...revisionPatch,
-            modelData: updatedModelData,
-            materialManagerPreview: updatedMaterialManagerPreview,
-            tabs: updatedTabs,
-            ...sanitizedGeosetUiState,
-            rendererReloadTrigger: state.rendererReloadTrigger + 1,
-            ...markActiveTabDirtyState(state)
-        };
+        const clearedMaterialPreview = !!state.materialManagerPreview;
+        return createDocumentMutationPatch(state, updatedModelData, {
+            hiddenGeosetIds: sanitizedGeosetUiState.hiddenGeosetIds,
+            rendererReload: true,
+            extra: {
+                materialManagerPreview: null,
+                previewRevision: clearedMaterialPreview ? state.previewRevision + 1 : state.previewRevision,
+                ...sanitizedGeosetUiState,
+            },
+        });
     }),
-    setMaterials: (materials) => set((state) => {        const revisionPatch = getNextDocumentRevisionPatch(state);
+    setMaterials: (materials) => set((state) => {
         const updatedModelData = state.modelData ? { ...state.modelData, Materials: materials } : state.modelData;
-        const updatedMaterialManagerPreview = state.materialManagerPreview
-            ? {
-                ...state.materialManagerPreview,
-                materials,
-            }
-            : state.materialManagerPreview;
-        const updatedTabs = state.activeTabId
-            ? state.tabs.map((tab) => {
-                if (tab.id !== state.activeTabId) {
-                    return tab;
-                }
-                return {
-                    ...tab,
-                    snapshot: {
-                        ...tab.snapshot,
-                        ...revisionPatch,
-                        modelData: updatedModelData,
-                        modelPath: state.modelPath,
-                        nodes: sanitizeNodesArray(state.nodes),
-                        sequences: [...state.sequences],
-                        currentSequence: state.currentSequence,
-                        currentFrame: state.currentFrame,
-                        hiddenGeosetIds: [...state.hiddenGeosetIds],
-                        forceShowAllGeosets: state.forceShowAllGeosets,
-                        lastActive: Date.now()
-                    }
-                };
-            })
-            : state.tabs;
-        return {
-            ...revisionPatch,
-            modelData: updatedModelData,
-            materialManagerPreview: updatedMaterialManagerPreview,
-            tabs: updatedTabs,
-            rendererReloadTrigger: state.rendererReloadTrigger + 1,
-            ...markActiveTabDirtyState(state)
-        };
+        const clearedMaterialPreview = !!state.materialManagerPreview;
+        return createDocumentMutationPatch(state, updatedModelData, {
+            rendererReload: true,
+            extra: {
+                materialManagerPreview: null,
+                previewRevision: clearedMaterialPreview ? state.previewRevision + 1 : state.previewRevision,
+            },
+        });
     }),
     setVisualDataPatch: (patch) => set((state) => {
-        const revisionPatch = getNextDocumentRevisionPatch(state);
         const sanitizedPatch = Object.fromEntries(
             Object.entries(patch || {}).filter(([, value]) => value !== undefined)
         ) as typeof patch;
         const updatedModelData = state.modelData ? { ...state.modelData, ...sanitizedPatch } : state.modelData;
-        const updatedMaterialManagerPreview = state.materialManagerPreview
-            ? {
-                ...state.materialManagerPreview,
-                ...(Object.prototype.hasOwnProperty.call(sanitizedPatch, 'Materials') ? { materials: sanitizedPatch.Materials as any[] } : {}),
-                ...(Object.prototype.hasOwnProperty.call(sanitizedPatch, 'Textures') ? { textures: sanitizedPatch.Textures as any[] } : {}),
-                ...(Object.prototype.hasOwnProperty.call(sanitizedPatch, 'Geosets') ? { geosets: sanitizedPatch.Geosets as any[] } : {}),
-            }
-            : state.materialManagerPreview;
-        const updatedTabs = state.activeTabId
-            ? state.tabs.map((tab) => {
-                if (tab.id !== state.activeTabId) {
-                    return tab;
-                }
-                return {
-                    ...tab,
-                    snapshot: {
-                        ...tab.snapshot,
-                        ...revisionPatch,
-                        modelData: updatedModelData,
-                        modelPath: state.modelPath,
-                        nodes: sanitizeNodesArray(state.nodes),
-                        sequences: [...state.sequences],
-                        currentSequence: state.currentSequence,
-                        currentFrame: state.currentFrame,
-                        hiddenGeosetIds: [...state.hiddenGeosetIds],
-                        forceShowAllGeosets: state.forceShowAllGeosets,
-                        lastActive: Date.now()
-                    }
-                };
-            })
-            : state.tabs;
-        return {
-            ...revisionPatch,
-            modelData: updatedModelData,
-            materialManagerPreview: updatedMaterialManagerPreview,
-            tabs: updatedTabs,
-            materialReloadTrigger: state.materialReloadTrigger + 1,
-            ...markActiveTabDirtyState(state)
-        };
+        const touchesMaterialPreviewDomains =
+            Object.prototype.hasOwnProperty.call(sanitizedPatch, 'Materials')
+            || Object.prototype.hasOwnProperty.call(sanitizedPatch, 'Textures')
+            || Object.prototype.hasOwnProperty.call(sanitizedPatch, 'Geosets')
+            || Object.prototype.hasOwnProperty.call(sanitizedPatch, 'RibbonEmitters');
+        const clearedMaterialPreview = !!state.materialManagerPreview && touchesMaterialPreviewDomains;
+        return createDocumentMutationPatch(state, updatedModelData, {
+            extra: {
+                materialManagerPreview: clearedMaterialPreview ? null : state.materialManagerPreview,
+                previewRevision: clearedMaterialPreview ? state.previewRevision + 1 : state.previewRevision,
+                materialReloadTrigger: state.materialReloadTrigger + 1,
+            },
+        });
     }),
 
     setMaterialManagerPreview: (payload) => set((state) => ({
@@ -2483,10 +2414,10 @@ export const useModelStore = create<ModelState>((set, get) => ({
             materials: payload.materials,
             textures: payload.textures,
             geosets: payload.geosets,
+            ribbonEmitters: payload.ribbonEmitters,
         },
         previewRevision: state.previewRevision + 1,
         materialReloadTrigger: state.materialReloadTrigger + 1,
-        ...markActiveTabDirtyState(state),
     })),
 
     clearMaterialManagerPreview: () => set((state) => {
@@ -2495,50 +2426,6 @@ export const useModelStore = create<ModelState>((set, get) => ({
             materialManagerPreview: null,
             previewRevision: state.previewRevision + 1,
             materialReloadTrigger: state.materialReloadTrigger + 1,
-        };
-    }),
-
-    commitMaterialManagerPreviewToModel: () => set((state) => {
-        const p = state.materialManagerPreview;
-        if (!p || !state.modelData) {
-            return { materialManagerPreview: null };
-        }
-        const revisionPatch = getNextDocumentRevisionPatch(state);
-        const updatedModelData = {
-            ...state.modelData,
-            Materials: p.materials,
-            Textures: p.textures,
-            ...(p.geosets !== undefined ? { Geosets: p.geosets } : {}),
-        };
-        const updatedTabs = state.activeTabId
-            ? state.tabs.map((tab) => {
-                if (tab.id !== state.activeTabId) {
-                    return tab;
-                }
-                return {
-                    ...tab,
-                    snapshot: {
-                        ...tab.snapshot,
-                        ...revisionPatch,
-                        modelData: updatedModelData,
-                        modelPath: state.modelPath,
-                        nodes: sanitizeNodesArray(state.nodes),
-                        sequences: [...state.sequences],
-                        currentSequence: state.currentSequence,
-                        currentFrame: state.currentFrame,
-                        hiddenGeosetIds: [...state.hiddenGeosetIds],
-                        forceShowAllGeosets: state.forceShowAllGeosets,
-                        lastActive: Date.now(),
-                    },
-                };
-            })
-            : state.tabs;
-        return {
-            ...revisionPatch,
-            modelData: updatedModelData,
-            tabs: updatedTabs,
-            materialManagerPreview: null,
-            rendererReloadTrigger: state.rendererReloadTrigger + 1,
         };
     }),
 
@@ -2558,9 +2445,13 @@ export const useModelStore = create<ModelState>((set, get) => ({
     }),
 
     setTextureAnims: (anims) => set((state) => {
-        const revisionPatch = getNextDocumentRevisionPatch(state);
         const updatedModelData = state.modelData ? { ...state.modelData, TextureAnims: anims } : state.modelData;
-        return { ...revisionPatch, modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
+        return createDocumentMutationPatch(state, updatedModelData, {
+            rendererReload: true,
+            extra: {
+                materialReloadTrigger: state.materialReloadTrigger + 1,
+            },
+        });
     }),
 
     addTextureAnim: () => {
@@ -2573,7 +2464,13 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 Scaling: { InterpolationType: 0, GlobalSeqId: null, Keys: [] }
             };
             const updatedAnims = [...currentAnims, newAnim];
-            const updatedModelData = { ...state.modelData, TextureAnims: updatedAnims };            return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
+            const updatedModelData = { ...state.modelData, TextureAnims: updatedAnims };
+            return createDocumentMutationPatch(state, updatedModelData, {
+                rendererReload: true,
+                extra: {
+                    materialReloadTrigger: state.materialReloadTrigger + 1,
+                },
+            });
         });
     },
 
@@ -2585,7 +2482,13 @@ export const useModelStore = create<ModelState>((set, get) => ({
             const updatedAnims = [...state.modelData.TextureAnims];
             if (index >= 0 && index < updatedAnims.length) {
                 updatedAnims.splice(index, 1);
-                const updatedModelData = { ...state.modelData, TextureAnims: updatedAnims };                return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
+                const updatedModelData = { ...state.modelData, TextureAnims: updatedAnims };
+                return createDocumentMutationPatch(state, updatedModelData, {
+                    rendererReload: true,
+                    extra: {
+                        materialReloadTrigger: state.materialReloadTrigger + 1,
+                    },
+                });
             }
             return {};
         });
@@ -2598,7 +2501,12 @@ export const useModelStore = create<ModelState>((set, get) => ({
             if (index >= 0 && index < updatedAnims.length) {
                 updatedAnims[index] = { ...updatedAnims[index], ...updates };
                 const updatedModelData = { ...state.modelData, TextureAnims: updatedAnims };
-                return { modelData: updatedModelData, rendererReloadTrigger: state.rendererReloadTrigger + 1, ...markActiveTabDirtyState(state) };
+                return createDocumentMutationPatch(state, updatedModelData, {
+                    rendererReload: true,
+                    extra: {
+                        materialReloadTrigger: state.materialReloadTrigger + 1,
+                    },
+                });
             }
             return {};
         });
@@ -2607,7 +2515,6 @@ export const useModelStore = create<ModelState>((set, get) => ({
     updateGeoset: (index, updates) => {
         set((state) => {
             if (!state.modelData || !state.modelData.Geosets) return {};
-            const revisionPatch = getNextDocumentRevisionPatch(state);
 
             const newGeosets = [...state.modelData.Geosets];
             if (index >= 0 && index < newGeosets.length) {
@@ -2618,7 +2525,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 if (hasGeometryBufferUpdate(updates)) {
                     useRendererStore.getState().bumpVertexRenderRevision();
                 }
-                return { ...revisionPatch, modelData: updatedModelData, ...markActiveTabDirtyState(state) };
+                return createDocumentMutationPatch(state, updatedModelData);
             }
             return {};
         });
@@ -2637,7 +2544,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
                 // Update modelData
                 const updatedModelData = { ...state.modelData, GeosetAnims: newGeosetAnims };
-                return { modelData: updatedModelData, ...markActiveTabDirtyState(state) };
+                return createDocumentMutationPatch(state, updatedModelData);
             }
             return {};
         });
@@ -2646,12 +2553,11 @@ export const useModelStore = create<ModelState>((set, get) => ({
     setGeosetAnims: (anims: any[]) => {
         set((state) => {
             if (!state.modelData) return {};
-            const revisionPatch = getNextDocumentRevisionPatch(state);
             const updatedModelData = {
                 ...state.modelData,
                 GeosetAnims: anims.map(normalizeGeosetAnim)
             };
-            return { ...revisionPatch, modelData: updatedModelData, ...markActiveTabDirtyState(state) };
+            return createDocumentMutationPatch(state, updatedModelData);
         });
     },
 
@@ -2677,7 +2583,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
             if (!hasChanges) return {};
 
             const updatedModelData = updateModelDataWithNodes(state.modelData, updatedNodes as any[], false);
-            const correctedNodes = extractNodesFromModel(updatedModelData);            return { nodes: correctedNodes as ModelNode[], modelData: updatedModelData, ...markActiveTabDirtyState(state) };
+            const correctedNodes = extractNodesFromModel(updatedModelData);
+            return createDocumentMutationPatch(state, updatedModelData, { nodes: correctedNodes as ModelNode[], rendererReload: true });
         });
     },
 
@@ -2688,12 +2595,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             if (!updatedModelData) return {};
             const correctedNodes = extractNodesFromModel(updatedModelData);
             const triggerReload = options?.triggerReload !== false;
-            return {
-                nodes: correctedNodes as ModelNode[],
-                modelData: updatedModelData,
-                rendererReloadTrigger: state.rendererReloadTrigger + (triggerReload ? 1 : 0),
-                ...markActiveTabDirtyState(state)
-            };
+            return createDocumentMutationPatch(state, updatedModelData, { nodes: correctedNodes as ModelNode[], rendererReload: triggerReload });
         });
     },
 
@@ -2978,13 +2880,10 @@ export const useModelStore = create<ModelState>((set, get) => ({
             }
 
             return {
-                modelData: { ...modelData },
-                nodes: updatedNodes,
-                rendererReloadTrigger: state.rendererReloadTrigger + (suppressReload ? 0 : 1),
+                ...createDocumentMutationPatch(state, { ...modelData }, { nodes: updatedNodes as ModelNode[], rendererReload: !suppressReload }),
                 globalTransformTracker: {
                     rotation: nextTrackedRotation
-                },
-                ...markActiveTabDirtyState(state)
+                }
             };
         });
     },
@@ -2993,11 +2892,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
         set((state) => {
             if (!state.modelData) return {};
             calculateModelExtent(state.modelData);
-            return {
-                modelData: { ...state.modelData },
-                rendererReloadTrigger: state.rendererReloadTrigger + 1,
-                ...markActiveTabDirtyState(state)
-            };
+            return createDocumentMutationPatch(state, { ...state.modelData }, { nodes: sanitizeNodesArray(state.nodes), rendererReload: true });
         });
     },
 
@@ -3005,11 +2900,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
         set((state) => {
             if (!state.modelData) return {};
             calculateModelNormals(state.modelData);
-            return {
-                modelData: { ...state.modelData },
-                rendererReloadTrigger: state.rendererReloadTrigger + 1,
-                ...markActiveTabDirtyState(state)
-            };
+            return createDocumentMutationPatch(state, { ...state.modelData }, { nodes: sanitizeNodesArray(state.nodes), rendererReload: true });
         });
     },
 
@@ -3018,13 +2909,9 @@ export const useModelStore = create<ModelState>((set, get) => ({
             if (!state.modelData) return {};
             const { status } = processDeathAnimation(state.modelData);            // Extract nodes again as they might have been added (GeosetAnims)
             const updatedNodes = extractNodesFromModel(state.modelData);
+            const sequences = [...(state.modelData.Sequences || [])];
 
-            return {
-                modelData: { ...state.modelData },
-                nodes: updatedNodes,
-                sequences: [...(state.modelData.Sequences || [])],
-                rendererReloadTrigger: state.rendererReloadTrigger + 1
-            };
+            return createDocumentMutationPatch(state, { ...state.modelData }, { nodes: updatedNodes as ModelNode[], rendererReload: true, sequences });
         });
     },
 
@@ -3037,11 +2924,11 @@ export const useModelStore = create<ModelState>((set, get) => ({
             // and ObjectIds are reassigned if needed
             const rebuiltModelData = updateModelDataWithNodes(state.modelData, updatedNodes, true);
 
-            return {
-                modelData: rebuiltModelData ? { ...rebuiltModelData } : state.modelData,
-                nodes: updatedNodes,
-                rendererReloadTrigger: state.rendererReloadTrigger + 1
-            };
+            return createDocumentMutationPatch(
+                state,
+                rebuiltModelData ? { ...rebuiltModelData } : state.modelData,
+                { nodes: updatedNodes as ModelNode[], rendererReload: true }
+            );
         });
     },
 
@@ -3061,12 +2948,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             calculateModelExtent(updatedModelData);
 
             const correctedNodes = extractNodesFromModel(updatedModelData);
-            return {
-                nodes: correctedNodes,
-                modelData: updatedModelData,
-                rendererReloadTrigger: state.rendererReloadTrigger + 1,
-                ...markActiveTabDirtyState(state)
-            };
+            return createDocumentMutationPatch(state, updatedModelData, { nodes: correctedNodes as ModelNode[], rendererReload: true });
         });
     },
 
@@ -3182,6 +3064,59 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 cachedRenderer: null,
                 diskSyncMeta: null,
                 rendererReloadTrigger: state.rendererReloadTrigger + 1
+            };
+        });
+    },
+
+    bumpAssetRevision: (reason = 'external_asset_source_changed') => {
+        set((state) => {
+            const nextAssetRevision = state.assetRevision + 1;
+            const activeTabId = state.activeTabId;
+            const tabs = activeTabId
+                ? state.tabs.map((tab) => {
+                    if (tab.id !== activeTabId) return tab;
+                    return {
+                        ...tab,
+                        snapshot: {
+                            ...tab.snapshot,
+                            assetRevision: nextAssetRevision,
+                            renderer: null,
+                            lastActive: Date.now()
+                        }
+                    };
+                })
+                : state.tabs;
+
+            markStandalonePerf('asset.revisionChanged', {
+                reason,
+                documentId: state.documentId ?? '',
+                documentRevision: state.documentRevision,
+                previousAssetRevision: state.assetRevision,
+                nextAssetRevision,
+            });
+
+            return {
+                assetRevision: nextAssetRevision,
+                tabs,
+                cachedRenderer: null,
+                rendererReloadTrigger: state.rendererReloadTrigger + 1,
+            };
+        });
+    },
+
+    bumpPreviewRevision: (reason = 'preview_changed') => {
+        set((state) => {
+            const nextPreviewRevision = state.previewRevision + 1;
+            markStandalonePerf('preview.revisionChanged', {
+                reason,
+                documentId: state.documentId ?? '',
+                documentRevision: state.documentRevision,
+                previousPreviewRevision: state.previewRevision,
+                nextPreviewRevision,
+            });
+            return {
+                previewRevision: nextPreviewRevision,
+                rendererReloadTrigger: state.rendererReloadTrigger + 1,
             };
         });
     },
@@ -3517,3 +3452,4 @@ export const useModelStore = create<ModelState>((set, get) => ({
         });
     }
 }));
+

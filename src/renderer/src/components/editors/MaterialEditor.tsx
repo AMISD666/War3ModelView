@@ -6,6 +6,7 @@ import MaterialList from './material/MaterialList'
 import MaterialDetail from './material/MaterialDetail'
 import LayerDetail from './material/LayerDetail'
 import { useModelStore } from '../../store/modelStore'
+import { textureMaterialCommandHandler } from '../../application/commands'
 
 interface MaterialEditorProps {
     model?: any
@@ -37,7 +38,6 @@ function normalizeMaterialsForUI(materials: any[]): any[] {
 
 const MaterialEditor: React.FC<MaterialEditorProps> = () => {
     const modelData = useModelStore(state => state.modelData)
-    const setMaterials = useModelStore(state => state.setMaterials)
 
     const [materials, setLocalMaterials] = useState<any[]>([])
     const [selectedMaterialIndex, setSelectedMaterialIndex] = useState<number>(-1)
@@ -79,7 +79,7 @@ const MaterialEditor: React.FC<MaterialEditorProps> = () => {
         setLocalMaterials(newMaterials)
 
         // Auto-save
-        setMaterials(JSON.parse(JSON.stringify(newMaterials)))
+        textureMaterialCommandHandler.setMaterialCollection({ materials: JSON.parse(JSON.stringify(newMaterials)) })
     }
 
     const updateLayer = (updatedLayer: any) => {
@@ -89,7 +89,7 @@ const MaterialEditor: React.FC<MaterialEditorProps> = () => {
     }
 
     const handleLayerOk = () => {
-        setMaterials(JSON.parse(JSON.stringify(materials)))
+        textureMaterialCommandHandler.setMaterialCollection({ materials: JSON.parse(JSON.stringify(materials)) })
         setIsLayerModalOpen(false)
     }
 

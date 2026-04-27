@@ -5,8 +5,8 @@ mod app_paths;
 mod app_settings;
 mod copy_utils;
 mod delete_utils;
-mod mpq_manager;
 mod model_manifest;
+mod mpq_manager;
 mod remote_activation_policy;
 mod texture_decode;
 mod texture_encode;
@@ -17,10 +17,13 @@ use rayon::prelude::*;
 use serde::Serialize;
 use serde_json::json;
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::UNIX_EPOCH;
 use tauri::{ipc::Response, Emitter, LogicalSize, Manager, State, WebviewWindow};
-use texture_decode::{decode_texture_bytes_with_max_dimension, get_texture_candidate_paths, normalize_path};
+use texture_decode::{
+    decode_texture_bytes_with_max_dimension, get_texture_candidate_paths, normalize_path,
+};
 use texture_encode::encode_texture_image;
 
 use winreg::enums::*;
@@ -28,8 +31,10 @@ use winreg::RegKey;
 
 static DEBUG_CONSOLE_ENABLED: AtomicBool = AtomicBool::new(false);
 static CLI_ARGS_CONSUMED: AtomicBool = AtomicBool::new(false);
+static BACKEND_PERF_COUNTER: AtomicU64 = AtomicU64::new(0);
 static PENDING_FILES: once_cell::sync::Lazy<std::sync::Mutex<Vec<String>>> =
     once_cell::sync::Lazy::new(|| std::sync::Mutex::new(Vec::new()));
+const STANDALONE_PERF_EVENT: &str = "standalone-perf-event";
 
 const MAIN_WINDOW_MIN_WIDTH: f64 = 900.0;
 const MAIN_WINDOW_MIN_HEIGHT: f64 = 600.0;
@@ -51,26 +56,247 @@ struct CachedRgbaImage {
     data: Arc<Vec<u8>>,
 }
 
+#[derive(Clone)]
+struct CachedFsPathHit {
+    resolved_path: String,
+    fingerprint: String,
+}
+
 #[derive(Default)]
 struct TextureBatchCacheInner {
     // key: "{normalized_model_path_lower}|{normalized_texture_path_lower}"
-    // value: Some(resolved fs file path) or None (fs path miss)
-    path_hits: HashMap<String, Option<String>>,
+    // value: Some(resolved fs file path + fingerprint) or None (fs path miss)
+    path_hits: HashMap<String, Option<CachedFsPathHit>>,
     path_lru: VecDeque<String>,
 
-    // key: "fs:{path_lower}" / "mpq:{path_lower}"
+    // key: "fs:{path_lower}:{mtime_ns}:{size}" / "mpq:{archive_list_revision}:{archive_priority_revision}:{path_lower}"
     result_bytes: HashMap<String, Arc<Vec<u8>>>,
     result_lru: VecDeque<String>,
     result_total_bytes: usize,
 
-    // key: "{source_key}|{max_dimension}" where source_key is "fs:{path_lower}" / "mpq:{path_lower}"
+    // key: "{source_key}|{max_dimension}" where source_key is fingerprinted fs / revisioned mpq key
     rgba_images: HashMap<String, Arc<CachedRgbaImage>>,
     rgba_lru: VecDeque<String>,
     rgba_total_bytes: usize,
+
+    counters: TextureBatchCacheCounters,
 }
 
 struct TextureBatchCache {
     inner: Mutex<TextureBatchCacheInner>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct TextureBatchCacheCounters {
+    fs_path_cache_hits: u64,
+    fs_result_cache_hits: u64,
+    fs_result_cache_misses: u64,
+    mpq_result_cache_hits: u64,
+    mpq_result_cache_misses: u64,
+    fs_path_stale_invalidations: u64,
+    fs_resolved: u64,
+    mpq_resolved: u64,
+    rgba_cache_hits: u64,
+    rgba_cache_misses: u64,
+    not_found: u64,
+    path_evictions: u64,
+    result_evictions: u64,
+    rgba_evictions: u64,
+    clears: u64,
+}
+
+#[derive(Clone, Copy, Default)]
+struct TextureCacheDiagnostics {
+    fs_path_cache_hits: u32,
+    fs_result_cache_hits: u32,
+    fs_result_cache_misses: u32,
+    mpq_result_cache_hits: u32,
+    mpq_result_cache_misses: u32,
+    fs_path_stale_invalidations: u32,
+    fs_resolved: u32,
+    mpq_resolved: u32,
+    rgba_cache_hits: u32,
+    rgba_cache_misses: u32,
+    not_found: u32,
+}
+
+#[derive(Clone, Serialize)]
+struct TextureBatchCacheStats {
+    path_entries: usize,
+    path_limit: usize,
+    result_entries: usize,
+    result_limit: usize,
+    result_total_bytes: usize,
+    result_max_bytes: usize,
+    rgba_entries: usize,
+    rgba_limit: usize,
+    rgba_total_bytes: usize,
+    rgba_max_bytes: usize,
+    fs_path_cache_hits: u64,
+    fs_result_cache_hits: u64,
+    fs_result_cache_misses: u64,
+    mpq_result_cache_hits: u64,
+    mpq_result_cache_misses: u64,
+    fs_path_stale_invalidations: u64,
+    fs_resolved: u64,
+    mpq_resolved: u64,
+    rgba_cache_hits: u64,
+    rgba_cache_misses: u64,
+    not_found: u64,
+    path_evictions: u64,
+    result_evictions: u64,
+    rgba_evictions: u64,
+    clears: u64,
+}
+
+impl TextureCacheDiagnostics {
+    fn merge(&mut self, other: Self) {
+        self.fs_path_cache_hits = self
+            .fs_path_cache_hits
+            .saturating_add(other.fs_path_cache_hits);
+        self.fs_result_cache_hits = self
+            .fs_result_cache_hits
+            .saturating_add(other.fs_result_cache_hits);
+        self.fs_result_cache_misses = self
+            .fs_result_cache_misses
+            .saturating_add(other.fs_result_cache_misses);
+        self.mpq_result_cache_hits = self
+            .mpq_result_cache_hits
+            .saturating_add(other.mpq_result_cache_hits);
+        self.mpq_result_cache_misses = self
+            .mpq_result_cache_misses
+            .saturating_add(other.mpq_result_cache_misses);
+        self.fs_path_stale_invalidations = self
+            .fs_path_stale_invalidations
+            .saturating_add(other.fs_path_stale_invalidations);
+        self.fs_resolved = self.fs_resolved.saturating_add(other.fs_resolved);
+        self.mpq_resolved = self.mpq_resolved.saturating_add(other.mpq_resolved);
+        self.rgba_cache_hits = self.rgba_cache_hits.saturating_add(other.rgba_cache_hits);
+        self.rgba_cache_misses = self
+            .rgba_cache_misses
+            .saturating_add(other.rgba_cache_misses);
+        self.not_found = self.not_found.saturating_add(other.not_found);
+    }
+}
+
+struct TextureBytesLoadResult {
+    bytes: Option<Arc<Vec<u8>>>,
+    source_key: Option<String>,
+    diagnostics: TextureCacheDiagnostics,
+}
+
+#[derive(Clone, Serialize)]
+struct BackendPerfEntry {
+    #[serde(rename = "entryId")]
+    entry_id: String,
+    #[serde(rename = "windowLabel")]
+    window_label: String,
+    mark: String,
+    #[serde(rename = "epochMs")]
+    epoch_ms: u64,
+    #[serde(rename = "perfMs")]
+    perf_ms: f64,
+    detail: serde_json::Value,
+}
+
+fn emit_backend_perf(app: &tauri::AppHandle, mark: &str, detail: serde_json::Value) {
+    let epoch_ms = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let counter = BACKEND_PERF_COUNTER.fetch_add(1, Ordering::Relaxed) + 1;
+    let entry = BackendPerfEntry {
+        entry_id: format!("backend-{}-{}", epoch_ms, counter),
+        window_label: "backend".to_string(),
+        mark: mark.to_string(),
+        epoch_ms,
+        perf_ms: 0.0,
+        detail,
+    };
+
+    let _ = app.emit(STANDALONE_PERF_EVENT, entry);
+}
+
+fn emit_texture_cache_diagnostics(
+    app: &tauri::AppHandle,
+    command: &str,
+    texture_count: usize,
+    max_dimension: Option<u32>,
+    diagnostics: TextureCacheDiagnostics,
+) {
+    let base_detail = json!({
+        "source": "backend.textureBatch",
+        "command": command,
+        "textureCount": texture_count,
+        "maxDimension": max_dimension,
+    });
+
+    let hit_count = diagnostics.fs_path_cache_hits
+        + diagnostics.fs_result_cache_hits
+        + diagnostics.mpq_result_cache_hits
+        + diagnostics.rgba_cache_hits;
+    if hit_count > 0 {
+        let mut detail = base_detail.clone();
+        if let Some(object) = detail.as_object_mut() {
+            object.insert(
+                "fsPathCacheHits".to_string(),
+                json!(diagnostics.fs_path_cache_hits),
+            );
+            object.insert(
+                "fsResultCacheHits".to_string(),
+                json!(diagnostics.fs_result_cache_hits),
+            );
+            object.insert(
+                "mpqResultCacheHits".to_string(),
+                json!(diagnostics.mpq_result_cache_hits),
+            );
+            object.insert(
+                "rgbaCacheHits".to_string(),
+                json!(diagnostics.rgba_cache_hits),
+            );
+            object.insert("count".to_string(), json!(hit_count));
+        }
+        emit_backend_perf(app, "cache.hit", detail);
+    }
+
+    let miss_count = diagnostics.fs_result_cache_misses
+        + diagnostics.mpq_result_cache_misses
+        + diagnostics.rgba_cache_misses
+        + diagnostics.not_found;
+    if miss_count > 0 {
+        let mut detail = base_detail.clone();
+        if let Some(object) = detail.as_object_mut() {
+            object.insert(
+                "fsResultCacheMisses".to_string(),
+                json!(diagnostics.fs_result_cache_misses),
+            );
+            object.insert(
+                "mpqResultCacheMisses".to_string(),
+                json!(diagnostics.mpq_result_cache_misses),
+            );
+            object.insert(
+                "rgbaCacheMisses".to_string(),
+                json!(diagnostics.rgba_cache_misses),
+            );
+            object.insert("fsResolved".to_string(), json!(diagnostics.fs_resolved));
+            object.insert("mpqResolved".to_string(), json!(diagnostics.mpq_resolved));
+            object.insert("notFound".to_string(), json!(diagnostics.not_found));
+            object.insert("count".to_string(), json!(miss_count));
+        }
+        emit_backend_perf(app, "cache.miss", detail);
+    }
+
+    if diagnostics.fs_path_stale_invalidations > 0 {
+        let mut detail = base_detail;
+        if let Some(object) = detail.as_object_mut() {
+            object.insert("namespace".to_string(), json!("backend.texturePathCache"));
+            object.insert(
+                "count".to_string(),
+                json!(diagnostics.fs_path_stale_invalidations),
+            );
+        }
+        emit_backend_perf(app, "cache.staleInvalidated", detail);
+    }
 }
 
 impl TextureBatchCache {
@@ -87,7 +313,7 @@ impl TextureBatchCache {
         order.push_back(key.to_string());
     }
 
-    fn get_path_hit(&self, key: &str) -> Option<Option<String>> {
+    fn get_path_hit(&self, key: &str) -> Option<Option<CachedFsPathHit>> {
         let mut guard = self.inner.lock().unwrap();
         let value = guard.path_hits.get(key).cloned();
         if value.is_some() {
@@ -96,7 +322,7 @@ impl TextureBatchCache {
         value
     }
 
-    fn put_path_hit(&self, key: String, value: Option<String>) {
+    fn put_path_hit(&self, key: String, value: Option<CachedFsPathHit>) {
         let mut guard = self.inner.lock().unwrap();
         guard.path_hits.insert(key.clone(), value);
         Self::touch_lru(&mut guard.path_lru, &key);
@@ -106,7 +332,9 @@ impl TextureBatchCache {
                 Some(k) => k,
                 None => break,
             };
-            guard.path_hits.remove(&old_key);
+            if guard.path_hits.remove(&old_key).is_some() {
+                guard.counters.path_evictions = guard.counters.path_evictions.saturating_add(1);
+            }
         }
     }
 
@@ -150,6 +378,7 @@ impl TextureBatchCache {
             };
             if let Some(old) = guard.result_bytes.remove(&old_key) {
                 guard.result_total_bytes = guard.result_total_bytes.saturating_sub(old.len());
+                guard.counters.result_evictions = guard.counters.result_evictions.saturating_add(1);
             }
         }
     }
@@ -186,9 +415,112 @@ impl TextureBatchCache {
             };
             if let Some(old) = guard.rgba_images.remove(&old_key) {
                 guard.rgba_total_bytes = guard.rgba_total_bytes.saturating_sub(old.data.len());
+                guard.counters.rgba_evictions = guard.counters.rgba_evictions.saturating_add(1);
             }
         }
     }
+
+    fn record_diagnostics(&self, diagnostics: TextureCacheDiagnostics) {
+        let mut guard = self.inner.lock().unwrap();
+        guard.counters.fs_path_cache_hits = guard
+            .counters
+            .fs_path_cache_hits
+            .saturating_add(diagnostics.fs_path_cache_hits as u64);
+        guard.counters.fs_result_cache_hits = guard
+            .counters
+            .fs_result_cache_hits
+            .saturating_add(diagnostics.fs_result_cache_hits as u64);
+        guard.counters.fs_result_cache_misses = guard
+            .counters
+            .fs_result_cache_misses
+            .saturating_add(diagnostics.fs_result_cache_misses as u64);
+        guard.counters.mpq_result_cache_hits = guard
+            .counters
+            .mpq_result_cache_hits
+            .saturating_add(diagnostics.mpq_result_cache_hits as u64);
+        guard.counters.mpq_result_cache_misses = guard
+            .counters
+            .mpq_result_cache_misses
+            .saturating_add(diagnostics.mpq_result_cache_misses as u64);
+        guard.counters.fs_path_stale_invalidations = guard
+            .counters
+            .fs_path_stale_invalidations
+            .saturating_add(diagnostics.fs_path_stale_invalidations as u64);
+        guard.counters.fs_resolved = guard
+            .counters
+            .fs_resolved
+            .saturating_add(diagnostics.fs_resolved as u64);
+        guard.counters.mpq_resolved = guard
+            .counters
+            .mpq_resolved
+            .saturating_add(diagnostics.mpq_resolved as u64);
+        guard.counters.rgba_cache_hits = guard
+            .counters
+            .rgba_cache_hits
+            .saturating_add(diagnostics.rgba_cache_hits as u64);
+        guard.counters.rgba_cache_misses = guard
+            .counters
+            .rgba_cache_misses
+            .saturating_add(diagnostics.rgba_cache_misses as u64);
+        guard.counters.not_found = guard
+            .counters
+            .not_found
+            .saturating_add(diagnostics.not_found as u64);
+    }
+
+    fn clear_all(&self) {
+        let mut guard = self.inner.lock().unwrap();
+        guard.path_hits.clear();
+        guard.path_lru.clear();
+
+        guard.result_bytes.clear();
+        guard.result_lru.clear();
+        guard.result_total_bytes = 0;
+
+        guard.rgba_images.clear();
+        guard.rgba_lru.clear();
+        guard.rgba_total_bytes = 0;
+        guard.counters.clears = guard.counters.clears.saturating_add(1);
+    }
+
+    fn stats(&self) -> TextureBatchCacheStats {
+        let guard = self.inner.lock().unwrap();
+        TextureBatchCacheStats {
+            path_entries: guard.path_hits.len(),
+            path_limit: TEXTURE_PATH_CACHE_LIMIT,
+            result_entries: guard.result_bytes.len(),
+            result_limit: TEXTURE_RESULT_CACHE_LIMIT,
+            result_total_bytes: guard.result_total_bytes,
+            result_max_bytes: TEXTURE_RESULT_CACHE_MAX_BYTES,
+            rgba_entries: guard.rgba_images.len(),
+            rgba_limit: TEXTURE_RGBA_CACHE_LIMIT,
+            rgba_total_bytes: guard.rgba_total_bytes,
+            rgba_max_bytes: TEXTURE_RGBA_CACHE_MAX_BYTES,
+            fs_path_cache_hits: guard.counters.fs_path_cache_hits,
+            fs_result_cache_hits: guard.counters.fs_result_cache_hits,
+            fs_result_cache_misses: guard.counters.fs_result_cache_misses,
+            mpq_result_cache_hits: guard.counters.mpq_result_cache_hits,
+            mpq_result_cache_misses: guard.counters.mpq_result_cache_misses,
+            fs_path_stale_invalidations: guard.counters.fs_path_stale_invalidations,
+            fs_resolved: guard.counters.fs_resolved,
+            mpq_resolved: guard.counters.mpq_resolved,
+            rgba_cache_hits: guard.counters.rgba_cache_hits,
+            rgba_cache_misses: guard.counters.rgba_cache_misses,
+            not_found: guard.counters.not_found,
+            path_evictions: guard.counters.path_evictions,
+            result_evictions: guard.counters.result_evictions,
+            rgba_evictions: guard.counters.rgba_evictions,
+            clears: guard.counters.clears,
+        }
+    }
+}
+
+fn get_fs_fingerprint(path: &str) -> Option<(String, u64, u64)> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let modified = metadata.modified().ok()?;
+    let modified_ns = modified.duration_since(UNIX_EPOCH).ok()?.as_nanos() as u64;
+    let size = metadata.len();
+    Some((format!("{}:{}", modified_ns, size), modified_ns, size))
 }
 
 #[tauri::command]
@@ -250,7 +582,7 @@ fn emit_to_webview_msgpack_b64(
     });
     let win = app
         .get_webview_window(&label)
-        .ok_or_else(|| format!("鏈壘鍒扮獥鍙? {}", label))?;
+        .ok_or_else(|| format!("window not found: {}", label))?;
     win.emit(&event, v).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -264,11 +596,11 @@ fn emit_to_webview_json_payload(
     event: String,
     payload_json: String,
 ) -> Result<(), String> {
-    let v: serde_json::Value = serde_json::from_str(&payload_json)
-        .map_err(|e| format!("JSON 瑙ｆ瀽澶辫触: {}", e))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&payload_json).map_err(|e| format!("JSON parse failed: {}", e))?;
     let win = app
         .get_webview_window(&label)
-        .ok_or_else(|| format!("鏈壘鍒扮獥鍙? {}", label))?;
+        .ok_or_else(|| format!("window not found: {}", label))?;
     win.emit(&event, v).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -383,45 +715,92 @@ fn load_texture_bytes_with_source_key(
     skip_fs: bool,
     state: &MpqManager,
     cache: &TextureBatchCache,
-) -> Option<(Arc<Vec<u8>>, String)> {
+) -> TextureBytesLoadResult {
+    let mut diagnostics = TextureCacheDiagnostics::default();
     let path_cache_key = format!(
         "{}|{}",
-        normalized_model_path_lc,
-        normalized_texture_path_lc
+        normalized_model_path_lc, normalized_texture_path_lc
     );
 
     if !skip_fs {
         let mut cached_fs_path = cache.get_path_hit(&path_cache_key).unwrap_or(None);
 
         if let Some(fs_path) = cached_fs_path.clone() {
-            let fs_key = format!("fs:{}", fs_path.to_lowercase());
-            if let Some(bytes) = cache.get_result_bytes(&fs_key) {
-                return Some((bytes, fs_key));
-            } else if let Ok(bytes) = std::fs::read(&fs_path) {
-                if bytes.len() <= 50 * 1024 * 1024 {
-                    let bytes_arc = Arc::new(bytes);
-                    cache.put_result_bytes(fs_key.clone(), bytes_arc.clone());
-                    return Some((bytes_arc, fs_key));
+            diagnostics.fs_path_cache_hits = diagnostics.fs_path_cache_hits.saturating_add(1);
+            if let Some((fingerprint, _modified_ns, size)) =
+                get_fs_fingerprint(&fs_path.resolved_path)
+            {
+                if fingerprint == fs_path.fingerprint {
+                    let fs_key = format!(
+                        "fs:{}:{}:{}",
+                        fs_path.resolved_path.to_lowercase(),
+                        fingerprint.split(':').next().unwrap_or("0"),
+                        size
+                    );
+                    if let Some(bytes) = cache.get_result_bytes(&fs_key) {
+                        diagnostics.fs_result_cache_hits =
+                            diagnostics.fs_result_cache_hits.saturating_add(1);
+                        return TextureBytesLoadResult {
+                            bytes: Some(bytes),
+                            source_key: Some(fs_key),
+                            diagnostics,
+                        };
+                    } else if let Ok(bytes) = std::fs::read(&fs_path.resolved_path) {
+                        diagnostics.fs_result_cache_misses =
+                            diagnostics.fs_result_cache_misses.saturating_add(1);
+                        if bytes.len() <= 50 * 1024 * 1024 {
+                            let bytes_arc = Arc::new(bytes);
+                            cache.put_result_bytes(fs_key.clone(), bytes_arc.clone());
+                            diagnostics.fs_resolved = diagnostics.fs_resolved.saturating_add(1);
+                            return TextureBytesLoadResult {
+                                bytes: Some(bytes_arc),
+                                source_key: Some(fs_key),
+                                diagnostics,
+                            };
+                        }
+                    } else {
+                        diagnostics.fs_result_cache_misses =
+                            diagnostics.fs_result_cache_misses.saturating_add(1);
+                    }
+                } else {
+                    cache.invalidate_path_hit(&path_cache_key);
+                    diagnostics.fs_path_stale_invalidations =
+                        diagnostics.fs_path_stale_invalidations.saturating_add(1);
+                    cached_fs_path = None;
                 }
             } else {
                 // Cached path became stale, force re-probe.
                 cache.invalidate_path_hit(&path_cache_key);
+                diagnostics.fs_path_stale_invalidations =
+                    diagnostics.fs_path_stale_invalidations.saturating_add(1);
                 cached_fs_path = None;
             }
         }
 
         if cached_fs_path.is_none() {
-            let candidates = get_texture_candidate_paths(normalized_model_path, normalized_texture_path);
-            let mut resolved_fs_path: Option<String> = None;
+            let candidates =
+                get_texture_candidate_paths(normalized_model_path, normalized_texture_path);
+            let mut resolved_fs_path: Option<CachedFsPathHit> = None;
             for candidate in candidates {
-                if let Ok(bytes) = std::fs::read(&candidate) {
-                    if bytes.len() <= 50 * 1024 * 1024 {
-                        let fs_key = format!("fs:{}", candidate.to_lowercase());
-                        let bytes_arc = Arc::new(bytes);
-                        cache.put_result_bytes(fs_key.clone(), bytes_arc.clone());
-                        resolved_fs_path = Some(candidate);
-                        cache.put_path_hit(path_cache_key.clone(), resolved_fs_path);
-                        return Some((bytes_arc, fs_key));
+                if let Some((fingerprint, modified_ns, size)) = get_fs_fingerprint(&candidate) {
+                    if let Ok(bytes) = std::fs::read(&candidate) {
+                        if bytes.len() <= 50 * 1024 * 1024 {
+                            let fs_key =
+                                format!("fs:{}:{}:{}", candidate.to_lowercase(), modified_ns, size);
+                            let bytes_arc = Arc::new(bytes);
+                            cache.put_result_bytes(fs_key.clone(), bytes_arc.clone());
+                            resolved_fs_path = Some(CachedFsPathHit {
+                                resolved_path: candidate,
+                                fingerprint,
+                            });
+                            cache.put_path_hit(path_cache_key.clone(), resolved_fs_path);
+                            diagnostics.fs_resolved = diagnostics.fs_resolved.saturating_add(1);
+                            return TextureBytesLoadResult {
+                                bytes: Some(bytes_arc),
+                                source_key: Some(fs_key),
+                                diagnostics,
+                            };
+                        }
                     }
                 }
             }
@@ -429,21 +808,42 @@ fn load_texture_bytes_with_source_key(
         }
     }
 
-    let mpq_key = format!("mpq:{}", normalized_texture_path_lc);
+    let (archive_list_revision, archive_priority_revision) = state.cache_revision_snapshot();
+    let mpq_key = format!(
+        "mpq:{}:{}:{}",
+        archive_list_revision, archive_priority_revision, normalized_texture_path_lc
+    );
     if let Some(bytes) = cache.get_result_bytes(&mpq_key) {
-        return Some((bytes, mpq_key));
+        diagnostics.mpq_result_cache_hits = diagnostics.mpq_result_cache_hits.saturating_add(1);
+        return TextureBytesLoadResult {
+            bytes: Some(bytes),
+            source_key: Some(mpq_key),
+            diagnostics,
+        };
     }
+    diagnostics.mpq_result_cache_misses = diagnostics.mpq_result_cache_misses.saturating_add(1);
     if let Some(bytes) = state.read_file(normalized_texture_path) {
         let bytes_arc = Arc::new(bytes);
         cache.put_result_bytes(mpq_key.clone(), bytes_arc.clone());
-        return Some((bytes_arc, mpq_key));
+        diagnostics.mpq_resolved = diagnostics.mpq_resolved.saturating_add(1);
+        return TextureBytesLoadResult {
+            bytes: Some(bytes_arc),
+            source_key: Some(mpq_key),
+            diagnostics,
+        };
     }
 
-    None
+    diagnostics.not_found = diagnostics.not_found.saturating_add(1);
+    TextureBytesLoadResult {
+        bytes: None,
+        source_key: None,
+        diagnostics,
+    }
 }
 
 #[tauri::command]
 fn load_textures_batch_bin(
+    app: tauri::AppHandle,
     model_path: String,
     texture_paths: Vec<String>,
     state: State<'_, MpqManager>,
@@ -456,7 +856,7 @@ fn load_textures_batch_bin(
     let normalized_model_path_lc = normalized_model_path.to_lowercase();
     let skip_fs = normalized_model_path.starts_with("dropped:") || normalized_model_path.is_empty();
 
-    let resolved_bytes: Vec<Option<Arc<Vec<u8>>>> = texture_paths
+    let resolved_results: Vec<TextureBytesLoadResult> = texture_paths
         .par_iter()
         .map(|texture_path| {
             let normalized_texture_path = normalize_path(texture_path);
@@ -470,11 +870,16 @@ fn load_textures_batch_bin(
                 &state,
                 &cache,
             )
-            .map(|(bytes, _source_key)| bytes)
         })
         .collect();
 
-    for maybe_bytes in resolved_bytes {
+    let mut diagnostics = TextureCacheDiagnostics::default();
+    for result in &resolved_results {
+        diagnostics.merge(result.diagnostics);
+    }
+
+    for result in resolved_results {
+        let maybe_bytes = result.bytes;
         if let Some(bytes) = maybe_bytes {
             if bytes.len() <= 50 * 1024 * 1024 {
                 payload.push(1u8);
@@ -490,26 +895,30 @@ fn load_textures_batch_bin(
         }
     }
 
+    cache.record_diagnostics(diagnostics);
+    emit_texture_cache_diagnostics(
+        &app,
+        "load_textures_batch_bin",
+        texture_paths.len(),
+        None,
+        diagnostics,
+    );
     Ok(Response::new(payload))
 }
 
 #[tauri::command]
 fn clear_texture_batch_cache(cache: State<'_, TextureBatchCache>) {
-    let mut guard = cache.inner.lock().unwrap();
-    guard.path_hits.clear();
-    guard.path_lru.clear();
-    
-    guard.result_bytes.clear();
-    guard.result_lru.clear();
-    guard.result_total_bytes = 0;
-    
-    guard.rgba_images.clear();
-    guard.rgba_lru.clear();
-    guard.rgba_total_bytes = 0;
+    cache.clear_all();
+}
+
+#[tauri::command]
+fn get_texture_batch_cache_stats(cache: State<'_, TextureBatchCache>) -> TextureBatchCacheStats {
+    cache.stats()
 }
 
 #[tauri::command]
 fn load_textures_batch_thumb_rgba(
+    app: tauri::AppHandle,
     model_path: String,
     texture_paths: Vec<String>,
     max_dimension: Option<u32>,
@@ -527,11 +936,12 @@ fn load_textures_batch_thumb_rgba(
 
     let mut decoded_images: Vec<Option<Arc<CachedRgbaImage>>> = vec![None; texture_count];
     let mut decode_jobs: Vec<(usize, Arc<Vec<u8>>, String, String)> = Vec::new();
+    let mut diagnostics = TextureCacheDiagnostics::default();
 
     for (index, texture_path) in texture_paths.iter().enumerate() {
         let normalized_texture_path = normalize_path(&texture_path);
         let normalized_texture_path_lc = normalized_texture_path.to_lowercase();
-        if let Some((bytes, source_key)) = load_texture_bytes_with_source_key(
+        let load_result = load_texture_bytes_with_source_key(
             &normalized_model_path,
             &normalized_model_path_lc,
             &normalized_texture_path,
@@ -539,11 +949,15 @@ fn load_textures_batch_thumb_rgba(
             skip_fs,
             &state,
             &cache,
-        ) {
+        );
+        diagnostics.merge(load_result.diagnostics);
+        if let (Some(bytes), Some(source_key)) = (load_result.bytes, load_result.source_key) {
             let decode_key = format!("{}|{}", source_key, decode_max_dimension);
             if let Some(cached) = cache.get_rgba_image(&decode_key) {
+                diagnostics.rgba_cache_hits = diagnostics.rgba_cache_hits.saturating_add(1);
                 decoded_images[index] = Some(cached);
             } else {
+                diagnostics.rgba_cache_misses = diagnostics.rgba_cache_misses.saturating_add(1);
                 decode_jobs.push((index, bytes, normalized_texture_path, decode_key));
             }
         }
@@ -587,6 +1001,15 @@ fn load_textures_batch_thumb_rgba(
         }
     }
 
+    cache.record_diagnostics(diagnostics);
+    emit_texture_cache_diagnostics(
+        &app,
+        "load_textures_batch_thumb_rgba",
+        texture_count,
+        Some(decode_max_dimension),
+        diagnostics,
+    );
+
     for decoded_image in decoded_images {
         if let Some(image) = decoded_image {
             let data_len = image.data.len();
@@ -612,7 +1035,6 @@ fn load_textures_batch_thumb_rgba(
 
     Ok(Response::new(payload))
 }
-
 
 // ==================
 // Activation Commands
@@ -893,10 +1315,7 @@ fn register_context_menu() -> Result<bool, String> {
 
         // 2. 设置右键菜单显示名（使用 \\u 转义，避免源码编码导致注册表乱码）
         shell_key
-            .set_value(
-                "",
-                &"\u{4f7f}\u{7528} GGwar3Edit \u{6253}\u{5f00}",
-            )
+            .set_value("", &"\u{4f7f}\u{7528} GGwar3Edit \u{6253}\u{5f00}")
             .map_err(|e| format!("Failed to set display name: {}", e))?;
 
         // 3. Set icon
@@ -1463,7 +1882,8 @@ fn main() {
             if queued_paths.is_empty() {
                 Err("No model paths provided".to_string())
             } else {
-                copy_utils::copy_models_with_textures(&queued_paths, &temp_root, true).map(|(msg, _)| msg)
+                copy_utils::copy_models_with_textures(&queued_paths, &temp_root, true)
+                    .map(|(msg, _)| msg)
             }
         };
         let verify: Result<usize, String> = (|| {
@@ -1558,6 +1978,7 @@ fn main() {
             load_textures_batch_bin,
             load_textures_batch_thumb_rgba,
             clear_texture_batch_cache,
+            get_texture_batch_cache_stats,
             encode_texture_image,
             detect_warcraft_path,
             toggle_console,

@@ -2,8 +2,9 @@ import { Command } from '../utils/CommandManager'
 import { splitVertices, SplitResult } from '../utils/vertexOperations'
 import { useModelStore } from '../store/modelStore'
 import { useSelectionStore } from '../store/selectionStore'
-import { ModelResourceManager } from 'war3-model'
+import { addWar3GeosetBuffers } from '../infrastructure/render'
 import { calculateGeosetExtent, calculateModelExtent } from '../utils/geometryUtils'
+import { modelDocumentCommandHandler } from '../application/commands'
 
 interface VertexSelection {
     geosetIndex: number
@@ -87,7 +88,7 @@ export class SplitVerticesCommand implements Command {
         if (Object.keys(this.splitResult.updatedOriginalGeoset).length > 0) {
             Object.assign(geoset, this.splitResult.updatedOriginalGeoset)
             // Rebuild GPU buffers for modified original geoset
-            ModelResourceManager.getInstance().addGeosetBuffers(this.renderer.model, this.geosetIndex)        }
+            addWar3GeosetBuffers(this.renderer.model, this.geosetIndex)        }
 
         // Add new geoset to model
         // Use targetMaterialId if provided, otherwise inherit from source
@@ -105,7 +106,7 @@ export class SplitVerticesCommand implements Command {
         this.renderer.model.Geosets.push(newGeoset)
         this.newGeosetIndex = this.renderer.model.Geosets.length - 1
         // Create GPU buffers for the new geoset
-        ModelResourceManager.getInstance().addGeosetBuffers(this.renderer.model, this.newGeosetIndex)
+        addWar3GeosetBuffers(this.renderer.model, this.newGeosetIndex)
 
         // Clear selection
         useSelectionStore.getState().selectVertices([])
@@ -127,7 +128,7 @@ export class SplitVerticesCommand implements Command {
         this.renderer.model.Geosets.splice(this.newGeosetIndex, 1)
 
         // Rebuild GPU buffers for the restored original geoset
-        ModelResourceManager.getInstance().addGeosetBuffers(this.renderer.model, this.geosetIndex)        // Sync to store and trigger reload
+        addWar3GeosetBuffers(this.renderer.model, this.geosetIndex)        // Sync to store and trigger reload
         this.syncToStore()
     }
 
@@ -169,32 +170,34 @@ export class SplitVerticesCommand implements Command {
             )).sort((a, b) => a - b)
             : previousHiddenIds.filter((id) => id >= 0 && id < nextGeosets.length)
 
-        useModelStore.setState((state) => {
-            if (!state.modelData) {
-                return state
+        if (!modelStore.modelData) return
+
+        const nextModelData: any = {
+            ...modelStore.modelData,
+            Geosets: nextGeosets,
+            GeosetAnims: sourceGeosetAnims,
+            __forceFullReload: true
+        }
+
+        if (nextModelData.Model && typeof nextModelData.Model === 'object') {
+            nextModelData.Model = {
+                ...nextModelData.Model,
+                NumGeosets: nextGeosets.length,
+                NumGeosetAnims: sourceGeosetAnims.length
             }
+        }
 
-            const nextModelData: any = {
-                ...state.modelData,
-                Geosets: nextGeosets,
-                GeosetAnims: sourceGeosetAnims
-            }
+        calculateModelExtent(nextModelData)
 
-            if (nextModelData.Model && typeof nextModelData.Model === 'object') {
-                nextModelData.Model = {
-                    ...nextModelData.Model,
-                    NumGeosets: nextGeosets.length,
-                    NumGeosetAnims: sourceGeosetAnims.length
-                }
-            }
-
-            calculateModelExtent(nextModelData)
-
-            return {
+        modelDocumentCommandHandler.replaceDocumentSnapshot({
+            name: 'Split Vertices',
+            before: null,
+            after: {
                 modelData: nextModelData,
                 hiddenGeosetIds: nextHiddenIds,
-                rendererReloadTrigger: state.rendererReloadTrigger + 1
-            }
+            },
+            options: { recordHistory: false },
+            applyOptions: { rendererReload: true },
         })
 
         // Force renderer reload to rebuild GPU buffers

@@ -144,11 +144,14 @@ fn decode_blp(bytes: &[u8], max_dimension: Option<u32>) -> Result<DecodedImage, 
                 .into_dynamic()
                 .map_err(|e| format!("BLP JPEG decode failed: {e:?}"))?;
             let rgba = img.to_rgba8();
-            downscale_decoded_if_needed(DecodedImage {
-                width: rgba.width(),
-                height: rgba.height(),
-                data: rgba.into_raw(),
-            }, max_dimension)
+            downscale_decoded_if_needed(
+                DecodedImage {
+                    width: rgba.width(),
+                    height: rgba.height(),
+                    data: rgba.into_raw(),
+                },
+                max_dimension,
+            )
         }
         1 => {
             // Uncompressed palette BLP1.
@@ -171,7 +174,9 @@ fn decode_blp(bytes: &[u8], max_dimension: Option<u32>) -> Result<DecodedImage, 
                 pixel_start = default_pixel_start;
             }
             if bytes.len() < pixel_start + pixel_count {
-                if pixel_start != default_pixel_start && bytes.len() >= default_pixel_start + pixel_count {
+                if pixel_start != default_pixel_start
+                    && bytes.len() >= default_pixel_start + pixel_count
+                {
                     pixel_start = default_pixel_start;
                 } else {
                     return Err(format!("BLP mip{mip_level} pixel data out of range"));
@@ -213,11 +218,14 @@ fn decode_blp(bytes: &[u8], max_dimension: Option<u32>) -> Result<DecodedImage, 
                 }
             }
 
-            downscale_decoded_if_needed(DecodedImage {
-                width: mip_width,
-                height: mip_height,
-                data: rgba,
-            }, max_dimension)
+            downscale_decoded_if_needed(
+                DecodedImage {
+                    width: mip_width,
+                    height: mip_height,
+                    data: rgba,
+                },
+                max_dimension,
+            )
         }
         _ => Err("Unsupported BLP compression".to_string()),
     }
@@ -227,11 +235,14 @@ fn decode_tga(bytes: &[u8], max_dimension: Option<u32>) -> Result<DecodedImage, 
     let img = image::load_from_memory_with_format(bytes, ImageFormat::Tga)
         .map_err(|e| format!("TGA decode failed: {e:?}"))?;
     let rgba = img.to_rgba8();
-    downscale_decoded_if_needed(DecodedImage {
-        width: rgba.width(),
-        height: rgba.height(),
-        data: rgba.into_raw(),
-    }, max_dimension)
+    downscale_decoded_if_needed(
+        DecodedImage {
+            width: rgba.width(),
+            height: rgba.height(),
+            data: rgba.into_raw(),
+        },
+        max_dimension,
+    )
 }
 
 #[allow(dead_code)]
@@ -252,14 +263,16 @@ pub fn decode_texture_bytes_with_max_dimension(
         return decode_blp(bytes, max_dimension);
     }
 
-    let img = image::load_from_memory(bytes)
-        .map_err(|e| format!("Image decode failed: {e:?}"))?;
+    let img = image::load_from_memory(bytes).map_err(|e| format!("Image decode failed: {e:?}"))?;
     let rgba = img.to_rgba8();
-    downscale_decoded_if_needed(DecodedImage {
-        width: rgba.width(),
-        height: rgba.height(),
-        data: rgba.into_raw(),
-    }, max_dimension)
+    downscale_decoded_if_needed(
+        DecodedImage {
+            width: rgba.width(),
+            height: rgba.height(),
+            data: rgba.into_raw(),
+        },
+        max_dimension,
+    )
 }
 
 pub fn normalize_path(path: &str) -> String {

@@ -1,9 +1,5 @@
 ﻿import React, { useRef, useEffect, useState, useCallback } from 'react'
 import { useModelStore } from '../../store/modelStore'
-import { readFile } from '@tauri-apps/plugin-fs'
-import { invoke } from '@tauri-apps/api/core'
-// @ts-ignore
-import { decodeBLP, getBLPImageData } from 'war3-model'
 import { Button, Tooltip } from 'antd'
 import { PositiveStepInput } from '@renderer/components/common/PositiveStepInput'
 import { useSelectionStore, type SelectionId, type UVSelectionMode } from '../../store/selectionStore'
@@ -30,6 +26,9 @@ import {
 import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker'
 import type { Color } from 'antd/es/color-picker'
 import { invokeReadMpqFile } from '../../utils/mpqPerf'
+import { desktopGateway } from '../../infrastructure/desktop'
+import { createImageDataUrlFromBytes } from '../../infrastructure/texture'
+import { decodeTextureData } from '../viewer/textureLoader'
 import { createSelectionRect, pointInRect, segmentIntersectsRect, triangleIntersectsRect } from './uvSelectionUtils'
 import { useUvEditorStore } from '../../store/uvEditorStore'
 import {
@@ -37,6 +36,9 @@ import {
     buildUVSelectionsFromModelSelection,
     type UVSelection
 } from './uvSelectionSync'
+
+const toArrayBuffer = (bytes: Uint8Array): ArrayBuffer =>
+    bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
 
 interface UVEditorProps {
     modelPath: string | null
@@ -1238,13 +1240,13 @@ const UVEditor: React.FC<UVEditorProps> = ({
                 if (isBlp) {
                     let buffer: ArrayBuffer | null = null
                     try {
-                        const data = await readFile(fullPath)
-                        buffer = data.buffer
+                        const data = await desktopGateway.readFile(fullPath)
+                        buffer = toArrayBuffer(data)
                     } catch {
                         try {
                             const mpqData = await invokeReadMpqFile<number[]>(texture.Image, 'UVEditor.texturePreview')
                             if (mpqData) {
-                                buffer = new Uint8Array(mpqData).buffer
+                                buffer = toArrayBuffer(new Uint8Array(mpqData))
                             }
                         } catch {
                             console.warn('[UVEditor] Failed to load texture from MPQ:', texture.Image)
@@ -1252,20 +1254,14 @@ const UVEditor: React.FC<UVEditorProps> = ({
                     }
 
                     if (buffer) {
-                        const blp = decodeBLP(buffer)
-                        const imageData = getBLPImageData(blp, 0)
+                        const imageData = decodeTextureData(buffer, texture.Image)
                         if (imageData) {
                             const canvas = document.createElement('canvas')
                             canvas.width = imageData.width
                             canvas.height = imageData.height
                             const ctx = canvas.getContext('2d')
                             if (ctx) {
-                                const realImageData = new ImageData(
-                                    new Uint8ClampedArray(imageData.data),
-                                    imageData.width,
-                                    imageData.height
-                                )
-                                ctx.putImageData(realImageData, 0, 0)
+                                ctx.putImageData(imageData, 0, 0)
                                 const dataUrl = canvas.toDataURL()
                                 const img = new Image()
                                 img.onload = () => {
@@ -1282,7 +1278,8 @@ const UVEditor: React.FC<UVEditorProps> = ({
                         setTextureImage(img)
                         setIsLoadingTexture(false)
                     }
-                    img.src = `file://${fullPath}`
+                    const bytes = await desktopGateway.readFile(fullPath)
+                    img.src = await createImageDataUrlFromBytes(bytes, fullPath)
                 }
             } catch (e) {
                 console.error('[UVEditor] Failed to load texture:', e)
@@ -1553,4 +1550,3 @@ const UVEditor: React.FC<UVEditorProps> = ({
 }
 
 export default UVEditor
-

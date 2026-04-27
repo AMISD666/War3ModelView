@@ -5,11 +5,11 @@ import { EyeOutlined, CameraOutlined } from '@ant-design/icons';
 import { MasterDetailLayout } from '../MasterDetailLayout';
 import { useModelStore } from '../../store/modelStore';
 import { DraggableModal } from '../DraggableModal';
-import { useHistoryStore } from '../../store/historyStore';
 import { CameraNode, NodeType } from '../../types/node';
 import { windowManager } from '../../utils/WindowManager';
 import { useRpcClient } from '../../hooks/useRpc';
 import { useWindowEvent } from '../../hooks/useWindowEvent';
+import { modelDocumentCommandHandler, type CameraDocumentEntry } from '../../application/commands';
 
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame';
 interface CameraManagerModalProps {
@@ -20,15 +20,36 @@ interface CameraManagerModalProps {
     isStandalone?: boolean;
 }
 
+interface CameraManagerRpcState {
+    documentId: string | null
+    documentRevision: number
+    cameras: CameraNode[]
+    globalSequences: number[]
+}
+
 const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClose, onAddFromView, onViewCamera, isStandalone }) => {
-    const { modelData, nodes, setCameras } = useModelStore();
+    const { modelData, nodes } = useModelStore();
     const [selectedIndex, setSelectedIndex] = useState<number>(-1);
 
     // Editor State
     const [editingBlock, setEditingBlock] = useState<{ index: number, field: string } | null>(null);
 
     // RPC Sync for standalone mode
-    const { state: rpcState, emitCommand } = useRpcClient<{ cameras: CameraNode[], globalSequences: number[] }>('cameraManager', { cameras: [], globalSequences: [] });
+    const { state: rpcState, emitCommand } = useRpcClient<CameraManagerRpcState>('cameraManager', {
+        documentId: null,
+        documentRevision: 0,
+        cameras: [],
+        globalSequences: [],
+    });
+    const emitCameraAction = (action: string, payload?: unknown, stalePolicy: 'warn' | 'reject' = 'reject') => {
+        emitCommand('EXECUTE_CAMERA_ACTION', {
+            action,
+            payload,
+            documentId: rpcState.documentId,
+            baseDocumentRevision: rpcState.documentRevision,
+            stalePolicy,
+        })
+    }
 
     // Filter cameras from nodes (or rpcState)
     const storeCameras = (
@@ -41,28 +62,29 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
     const cameras = isStandalone ? rpcState.cameras : storeCameras;
     const globalSequences = isStandalone ? rpcState.globalSequences : storeGlobalSequences;
 
-    const replaceLocalCameraByIndex = (index: number, updates: Partial<CameraNode>) => {
-        const currentCameras = (
+    const getLocalCameras = (): CameraNode[] => (
+        structuredClone(
             Array.isArray((useModelStore.getState().modelData as any)?.Cameras)
-                ? (useModelStore.getState().modelData as any).Cameras
+                ? (useModelStore.getState().modelData as any).Cameras as CameraNode[]
                 : []
-        ) as CameraNode[];
+        )
+    );
+
+    const replaceLocalCameras = (name: string, before: CameraNode[], after: CameraNode[]) => {
+        modelDocumentCommandHandler.replaceCameraList({
+            name,
+            before: before as unknown as CameraDocumentEntry[],
+            after: after as unknown as CameraDocumentEntry[],
+        });
+    };
+
+    const replaceLocalCameraByIndex = (name: string, index: number, updates: Partial<CameraNode>) => {
+        const currentCameras = getLocalCameras();
         if (index < 0 || index >= currentCameras.length) return;
         const nextCameras = currentCameras.map((camera, cameraIndex) =>
             cameraIndex === index ? ({ ...camera, ...updates } as CameraNode) : camera
         );
-        setCameras(nextCameras);
-    };
-
-    const removeLocalCameraByIndex = (index: number) => {
-        const currentCameras = (
-            Array.isArray((useModelStore.getState().modelData as any)?.Cameras)
-                ? (useModelStore.getState().modelData as any).Cameras
-                : []
-        ) as CameraNode[];
-        if (index < 0 || index >= currentCameras.length) return;
-        const nextCameras = currentCameras.filter((_, cameraIndex) => cameraIndex !== index);
-        setCameras(nextCameras);
+        replaceLocalCameras(name, currentCameras, nextCameras);
     };
 
     const handleAdd = () => {
@@ -85,48 +107,29 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
         };
 
         if (isStandalone) {
-            emitCommand('EXECUTE_CAMERA_ACTION', { action: 'ADD', payload: newCamera });
+            emitCameraAction('ADD', newCamera);
             return;
         }
 
-        const previousCameras = JSON.parse(JSON.stringify(
-            Array.isArray((useModelStore.getState().modelData as any)?.Cameras)
-                ? (useModelStore.getState().modelData as any).Cameras
-                : []
-        ));
-        const nextCameras = [...previousCameras, newCamera];
+        const previousCameras = getLocalCameras();
+        const nextCameras = [...previousCameras, newCamera as CameraNode];
 
-        useHistoryStore.getState().push({
-            name: 'Add Camera',
-            undo: () => setCameras(previousCameras),
-            redo: () => setCameras(nextCameras)
-        });
-
-        setCameras(nextCameras);
+        replaceLocalCameras('Add Camera', previousCameras, nextCameras);
     };
 
     const handleDelete = (index: number) => {
         if (index >= 0 && index < cameras.length) {
             const node = cameras[index];
             if (isStandalone) {
-                emitCommand('EXECUTE_CAMERA_ACTION', { action: 'DELETE', payload: { cameraIndex: index, objectId: node.ObjectId } });
+                emitCameraAction('DELETE', { cameraIndex: index, objectId: node.ObjectId });
                 if (selectedIndex >= index) setSelectedIndex(Math.max(-1, selectedIndex - 1));
                 return;
             }
 
-            const previousCameras = JSON.parse(JSON.stringify(
-                Array.isArray((useModelStore.getState().modelData as any)?.Cameras)
-                    ? (useModelStore.getState().modelData as any).Cameras
-                    : []
-            ));
+            const previousCameras = getLocalCameras();
             const nextCameras = previousCameras.filter((_: CameraNode, cameraIndex: number) => cameraIndex !== index);
-            useHistoryStore.getState().push({
-                name: 'Delete Camera',
-                undo: () => setCameras(previousCameras),
-                redo: () => setCameras(nextCameras)
-            });
 
-            setCameras(nextCameras);
+            replaceLocalCameras('Delete Camera', previousCameras, nextCameras);
             if (selectedIndex >= index) setSelectedIndex(Math.max(-1, selectedIndex - 1));
         }
     };
@@ -136,23 +139,11 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
         if (camera) {
             const objectId = camera.ObjectId;
             if (isStandalone) {
-                emitCommand('EXECUTE_CAMERA_ACTION', { action: 'UPDATE', payload: { cameraIndex: index, objectId, data: updates } });
+                emitCameraAction('UPDATE', { cameraIndex: index, objectId, data: updates });
                 return;
             }
 
-            const oldData: Partial<CameraNode> = {};
-            Object.keys(updates).forEach(key => {
-                const k = key as keyof CameraNode;
-                oldData[k] = (camera as any)[k];
-            });
-
-            useHistoryStore.getState().push({
-                name: 'Update Camera',
-                undo: () => replaceLocalCameraByIndex(index, oldData),
-                redo: () => replaceLocalCameraByIndex(index, updates)
-            });
-
-            replaceLocalCameraByIndex(index, updates);
+            replaceLocalCameraByIndex('Update Camera', index, updates);
         }
     };
 
@@ -355,7 +346,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
                     size="small"
                     icon={<CameraOutlined />}
                     onClick={() => {
-                        if (isStandalone) emitCommand('EXECUTE_CAMERA_ACTION', { action: 'ADD_FROM_VIEW' });
+                        if (isStandalone) emitCameraAction('ADD_FROM_VIEW');
                         else if (onAddFromView) onAddFromView();
                     }}
                     style={{ color: '#1677ff' }}
@@ -369,7 +360,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
                     disabled={selectedIndex < 0}
                     onClick={() => {
                         if (selectedIndex >= 0) {
-                            if (isStandalone) emitCommand('EXECUTE_CAMERA_ACTION', { action: 'VIEW_CAMERA', payload: { cameraIndex: selectedIndex, objectId: cameras[selectedIndex].ObjectId } });
+                            if (isStandalone) emitCameraAction('VIEW_CAMERA', { cameraIndex: selectedIndex, objectId: cameras[selectedIndex].ObjectId }, 'warn');
                             else if (onViewCamera) onViewCamera(cameras[selectedIndex]);
                         }
                     }}

@@ -9,6 +9,7 @@ import {
     readFile as tauriReadFile,
     readTextFile as tauriReadTextFile,
     remove as tauriRemove,
+    size as tauriSize,
     writeFile as tauriWriteFile,
     writeTextFile as tauriWriteTextFile,
 } from '@tauri-apps/plugin-fs'
@@ -64,6 +65,10 @@ export class TauriDesktopGateway implements DesktopGateway {
 
     exists(path: string): Promise<boolean> {
         return tauriExists(path)
+    }
+
+    getFileSize(path: string): Promise<number> {
+        return tauriSize(path)
     }
 
     readDir(path: string): Promise<DesktopDirEntry[]> {

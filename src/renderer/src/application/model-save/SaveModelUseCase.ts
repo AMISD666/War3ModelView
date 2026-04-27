@@ -7,6 +7,11 @@ import type { ModelData } from '../../types/model'
 import type { ModelNode } from '../../types/node'
 import type { GlobalColorAdjustSettings } from '../../utils/globalColorAdjustCore'
 import { hasActiveGlobalColorAdjustSettings } from '../../utils/globalColorAdjustCore'
+import {
+    formatDocumentReferenceIssues,
+    repairDocumentReferences,
+    validateDocumentReferences,
+} from '../model-validation'
 import { cleanupInvalidGeosets, validateModelData } from './ModelSavePreparationService'
 import { prepareModelDataForSave } from './prepareModelDataForSave'
 
@@ -39,29 +44,36 @@ export class SaveModelUseCase {
     ) { }
 
     prepareModelForSave(input: PrepareModelForSaveInput): PrepareModelForSaveResult {
-        const preparedBase = prepareModelDataForSave(input.modelData) as ModelData
+        const repairedInput = repairDocumentReferences(input.modelData)
+        const preparedBase = prepareModelDataForSave(repairedInput.modelData) as ModelData
         const adjustedData = input.globalColorSettings
             ? applyGlobalColorAdjustmentsToModel(preparedBase, input.globalColorSettings) ?? preparedBase
             : preparedBase
-        const preparedData = prepareModelDataForSave(adjustedData) as ModelData
+        const preparedAndRepaired = repairDocumentReferences(prepareModelDataForSave(adjustedData) as ModelData)
+        let preparedData = preparedAndRepaired.modelData
         const hasGlobalColorAdjustments = !!input.globalColorSettings && hasActiveGlobalColorAdjustSettings(input.globalColorSettings)
         const savedNodes = input.nodes && input.globalColorSettings && hasGlobalColorAdjustments
             ? applyGlobalColorAdjustmentsToNodes(input.nodes, input.globalColorSettings)
             : input.nodes
 
         cleanupInvalidGeosets(preparedData)
+        preparedData = repairDocumentReferences(preparedData).modelData
 
         return {
             preparedData,
             savedNodes,
-            validationErrors: validateModelData(preparedData),
+            validationErrors: [
+                ...validateModelData(preparedData),
+                ...formatDocumentReferenceIssues(validateDocumentReferences(preparedData)),
+            ],
         }
     }
 
     async writePreparedModelFile(input: WritePreparedModelFileInput): Promise<WritePreparedModelFileResult> {
         const format = input.format ?? inferModelSerializationFormat(input.targetPath)
         cleanupInvalidGeosets(input.preparedData)
-        await this.desktop.writeFile(input.targetPath, this.serialization.serialize(input.preparedData, format))
+        const repairedData = repairDocumentReferences(input.preparedData).modelData
+        await this.desktop.writeFile(input.targetPath, this.serialization.serialize(repairedData, format))
         return { format }
     }
 }

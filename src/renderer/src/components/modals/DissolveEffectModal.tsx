@@ -5,6 +5,8 @@ import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame';
 import { useModelStore } from '../../store/modelStore';
 import { useRendererStore } from '../../store/rendererStore';
 import { useRpcClient } from '../../hooks/useRpc';
+import { textureMaterialCommandHandler } from '../../application/commands';
+import { desktopGateway } from '../../infrastructure/desktop';
 
 const { Text, Title } = Typography;
 
@@ -263,8 +265,7 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
 
     const handleSelectTexture = async () => {
         try {
-            const { open } = await import('@tauri-apps/plugin-dialog');
-            const selected = await open({
+            const selected = await desktopGateway.openFileDialog({
                 title: '选择消散贴图',
                 filters: [{ name: 'Textures', extensions: ['blp', 'tga', 'png'] }]
             });
@@ -304,7 +305,12 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
         };
 
         if (isStandalone) {
-            emitCommand('EXECUTE_DISSOLVE', dissolveParams);
+            emitCommand('EXECUTE_DISSOLVE', {
+                ...dissolveParams,
+                documentId: rpcState.documentId,
+                baseDocumentRevision: rpcState.documentRevision,
+                stalePolicy: 'reject',
+            });
             appMessage.info('正在执行消散效果...');
             return;
         }
@@ -315,7 +321,7 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
         try {
             const { executeDissolveEffect, refreshDissolveTexturesInRenderer } = await import('../../utils/dissolveEffect');
             const result = await executeDissolveEffect(store.modelData, store.modelPath, dissolveParams);
-            store.setVisualDataPatch({ Materials: result.materials, Textures: result.textures });
+            textureMaterialCommandHandler.setTextureMaterialCollections({ materials: result.materials, textures: result.textures });
             await refreshDissolveTexturesInRenderer(useRendererStore.getState().renderer, store.modelPath, result);
             Modal.success({
                 title: '消散动画制作完成',

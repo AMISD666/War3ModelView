@@ -2,10 +2,11 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { ConfigProvider, theme, type ThemeConfig } from 'antd'
 import { windowGateway } from '../../infrastructure/window'
 import { useRpcClient } from '../../hooks/useRpc'
+import { getNodeEditorWindowTitle } from '../../application/window-bridge/ToolWindowLayouts'
 import {
     NODE_EDITOR_COMMANDS,
-    getNodeEditorWindowLayout,
     type NodeEditorKind,
+    type NodeEditorCommandSender,
     type NodeEditorRpcState,
 } from '../../types/nodeEditorRpc'
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
@@ -34,6 +35,12 @@ const nodeEditorStandaloneTheme: ThemeConfig = {
 }
 
 const initialRpcState: NodeEditorRpcState = {
+    documentId: null,
+    documentRevision: 0,
+    assetRevision: 0,
+    previewRevision: 0,
+    snapshotRevision: 0,
+    windowId: 'nodeEditor',
     snapshotVersion: 0,
     sessionNonce: 0,
     kind: '',
@@ -55,6 +62,18 @@ const initialRpcState: NodeEditorRpcState = {
  */
 const NodeEditorStandalone: React.FC = () => {
     const { state, emitCommand } = useRpcClient<NodeEditorRpcState>('nodeEditor', initialRpcState)
+    const snapshotRevision = state.snapshotRevision || state.snapshotVersion
+    const emitRevisionedCommand: NodeEditorCommandSender = (command, payload) => {
+        emitCommand(command, {
+            ...payload,
+            documentId: state.documentId,
+            baseDocumentRevision: state.documentRevision,
+            stalePolicy:
+                command === NODE_EDITOR_COMMANDS.previewNodeUpdate || command === NODE_EDITOR_COMMANDS.clearNodePreview
+                    ? 'warn'
+                    : 'reject',
+        })
+    }
     const sessionKeyRef = useRef('')
     const [frozenNode, setFrozenNode] = useState<any>(null)
     const [frozenSessionKey, setFrozenSessionKey] = useState('')
@@ -112,7 +131,7 @@ const NodeEditorStandalone: React.FC = () => {
             PivotPoints: state.pivotPoints ?? [],
         }),
         [
-            state.snapshotVersion,
+            snapshotRevision,
             state.textures,
             state.materials,
             state.globalSequences,
@@ -123,7 +142,7 @@ const NodeEditorStandalone: React.FC = () => {
 
     const frameTitle =
         state.kind && state.objectId >= 0
-            ? getNodeEditorWindowLayout(state.kind as NodeEditorKind).title
+            ? getNodeEditorWindowTitle(state.kind as NodeEditorKind)
             : '节点编辑器'
 
     const editorKey = `${state.kind}:${state.objectId}:${state.sessionNonce}:${editorSessionRev}`
@@ -172,7 +191,7 @@ const NodeEditorStandalone: React.FC = () => {
                             onClose={handleClose}
                             isStandalone={true}
                             standaloneNode={frozenNode}
-                            standaloneEmit={emitCommand}
+                            standaloneEmit={emitRevisionedCommand}
                             standaloneModelData={standaloneModelData}
                         />
                     )}
@@ -184,7 +203,7 @@ const NodeEditorStandalone: React.FC = () => {
                             onClose={handleClose}
                             isStandalone={true}
                             standaloneNode={frozenNode}
-                            standaloneEmit={emitCommand}
+                            standaloneEmit={emitRevisionedCommand}
                             standaloneModelData={standaloneModelData}
                             standaloneModelPath={state.modelPath}
                         />
@@ -197,7 +216,7 @@ const NodeEditorStandalone: React.FC = () => {
                             onClose={handleClose}
                             isStandalone={true}
                             standaloneNode={frozenNode}
-                            standaloneEmit={emitCommand}
+                            standaloneEmit={emitRevisionedCommand}
                         />
                     )}
                     {state.kind === 'light' && (
@@ -208,7 +227,7 @@ const NodeEditorStandalone: React.FC = () => {
                             onClose={handleClose}
                             isStandalone={true}
                             standaloneNode={frozenNode}
-                            standaloneEmit={emitCommand}
+                            standaloneEmit={emitRevisionedCommand}
                             standaloneModelData={standaloneModelData}
                         />
                     )}
@@ -220,7 +239,7 @@ const NodeEditorStandalone: React.FC = () => {
                             onClose={handleClose}
                             isStandalone={true}
                             standaloneNode={frozenNode}
-                            standaloneEmit={emitCommand}
+                            standaloneEmit={emitRevisionedCommand}
                             standaloneModelData={standaloneModelData}
                         />
                     )}
@@ -232,7 +251,7 @@ const NodeEditorStandalone: React.FC = () => {
                             onClose={handleClose}
                             isStandalone={true}
                             standaloneNode={frozenNode}
-                            standaloneEmit={emitCommand}
+                            standaloneEmit={emitRevisionedCommand}
                             standaloneModelData={standaloneModelData}
                         />
                     )}
@@ -244,7 +263,7 @@ const NodeEditorStandalone: React.FC = () => {
                             onClose={handleClose}
                             isStandalone={true}
                             standaloneNode={frozenNode}
-                            standaloneEmit={emitCommand}
+                            standaloneEmit={emitRevisionedCommand}
                             standaloneModelData={standaloneModelData}
                             standaloneAllNodes={state.allNodes}
                         />
@@ -256,7 +275,7 @@ const NodeEditorStandalone: React.FC = () => {
                             nodeId={state.objectId}
                             currentName={state.renameInitialName}
                             onRename={(newName) => {
-                                emitCommand(NODE_EDITOR_COMMANDS.renameNode, {
+                                emitRevisionedCommand(NODE_EDITOR_COMMANDS.renameNode, {
                                     objectId: state.objectId,
                                     name: newName,
                                 })

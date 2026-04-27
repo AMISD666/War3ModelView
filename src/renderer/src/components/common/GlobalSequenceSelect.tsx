@@ -29,9 +29,13 @@ export const GlobalSequenceSelect: React.FC<GlobalSequenceSelectProps> = ({
     const modelData = useModelStore(state => state.modelData);
 
     // Access RPC for standalone windows
-    const { state: rpcState, emitCommand } = useRpcClient<{ globalSequences: number[] }>(
+    const { state: rpcState, emitCommand } = useRpcClient<{
+        documentId: string | null
+        documentRevision: number
+        globalSequences: number[]
+    }>(
         'globalSequenceManager',
-        { globalSequences: [] }
+        { documentId: null, documentRevision: 0, globalSequences: [] }
     );
 
     // Resolve sequences based on current environment
@@ -51,7 +55,13 @@ export const GlobalSequenceSelect: React.FC<GlobalSequenceSelectProps> = ({
 
     const saveSequences = (newSeqs: number[]) => {
         if (isStandalone) {
-            emitCommand('EXECUTE_GLOBAL_SEQ_ACTION', { action: 'SAVE', globalSequences: newSeqs });
+            emitCommand('EXECUTE_GLOBAL_SEQ_ACTION', {
+                action: 'SAVE',
+                documentId: rpcState.documentId,
+                baseDocumentRevision: rpcState.documentRevision,
+                stalePolicy: 'reject',
+                globalSequences: newSeqs,
+            });
         } else {
             // Use targeted update — no full model reload, no side-effects
             updateGlobalSequences(newSeqs);

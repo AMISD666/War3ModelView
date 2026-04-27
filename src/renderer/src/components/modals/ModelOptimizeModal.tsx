@@ -13,6 +13,14 @@ interface ModelOptimizeModalProps {
     isStandalone?: boolean; // Set to true when loaded via router as native window
 }
 
+interface ModelOptimizeRpcState {
+    documentId: string | null
+    documentRevision: number
+    originalFaces: number
+    isOptimizing?: boolean
+    lastResult?: string
+}
+
 const ModelOptimizeModal: React.FC<ModelOptimizeModalProps> = ({ visible, onClose, modelData, isStandalone = false }) => {
     // Polygon Optimization State
     const [removeRedundantVertices, setRemoveRedundantVertices] = useState(true);
@@ -28,10 +36,20 @@ const ModelOptimizeModal: React.FC<ModelOptimizeModalProps> = ({ visible, onClos
     const [estimatedFaces, setEstimatedFaces] = useState(0);
 
     // RPC Sync for standalone mode
-    const { state: rpcState, emitCommand } = useRpcClient<{ originalFaces: number; isOptimizing?: boolean; lastResult?: string }>(
+    const { state: rpcState, emitCommand } = useRpcClient<ModelOptimizeRpcState>(
         'modelOptimize',
-        { originalFaces: 0, isOptimizing: false, lastResult: '' }
+        { documentId: null, documentRevision: 0, originalFaces: 0, isOptimizing: false, lastResult: '' }
     );
+    const withRevision = <T extends Record<string, unknown>>(payload: T): T & {
+        documentId: string | null
+        baseDocumentRevision: number
+        stalePolicy: 'reject'
+    } => ({
+        ...payload,
+        documentId: rpcState.documentId,
+        baseDocumentRevision: rpcState.documentRevision,
+        stalePolicy: 'reject',
+    })
 
     // Draggable state (only relevant if not standalone window since desktop window has its own OS drag)
     const [disabled, setDisabled] = useState(false);
@@ -83,7 +101,7 @@ const ModelOptimizeModal: React.FC<ModelOptimizeModalProps> = ({ visible, onClos
         if (isStandalone && rpcState.isOptimizing) return;
         const payload = { removeRedundantVertices, decimateModel, decimateRatio };
         if (isStandalone) {
-            emitCommand('EXECUTE_POLYGON_OPT', payload);
+            emitCommand('EXECUTE_POLYGON_OPT', withRevision(payload));
         } else {        }
     };
 
@@ -91,7 +109,7 @@ const ModelOptimizeModal: React.FC<ModelOptimizeModalProps> = ({ visible, onClos
         if (isStandalone && rpcState.isOptimizing) return;
         const payload = { removeRedundantFrames, optimizeKeyframes };
         if (isStandalone) {
-            emitCommand('EXECUTE_KEYFRAME_OPT', payload);
+            emitCommand('EXECUTE_KEYFRAME_OPT', withRevision(payload));
         } else {        }
     };
 

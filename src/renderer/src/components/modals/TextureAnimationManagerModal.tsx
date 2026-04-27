@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Button } from 'antd';
 import { MasterDetailLayout } from '../MasterDetailLayout';
 import { useModelStore } from '../../store/modelStore';
-import { useHistoryStore } from '../../store/historyStore';
 import { useSelectionStore } from '../../store/selectionStore';
 import { DraggableModal } from '../DraggableModal';
 import DynamicField from '../node/DynamicField';
@@ -11,6 +10,8 @@ import { useRpcClient } from '../../hooks/useRpc';
 import { CloseOutlined } from '@ant-design/icons';
 import { useWindowEvent } from '../../hooks/useWindowEvent';
 import { windowGateway } from '../../infrastructure/window';
+import { modelDocumentCommandHandler } from '../../application/commands';
+import { remapMaterialsAfterTextureAnimRemoval } from '../../utils/materialTextureRelations';
 
 interface TextureAnimationManagerModalProps {
     visible: boolean;
@@ -19,7 +20,7 @@ interface TextureAnimationManagerModalProps {
 }
 
 const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> = ({ visible, onClose, isStandalone }) => {
-    const { modelData, setTextureAnims } = useModelStore();
+    const { modelData } = useModelStore();
     const rpcClient = useRpcClient<any>('textureAnimManager', {
         textureAnims: [],
         globalSequences: [],
@@ -76,32 +77,37 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
     const saveToBackend = (action: string, payload: any, newAnims: any[]) => {
         setLocalAnims(newAnims);
         if (isStandalone) {
-            rpcClient.emitCommand('EXECUTE_TEXTURE_ANIM_ACTION', { action, payload });
+            rpcClient.emitCommand('EXECUTE_TEXTURE_ANIM_ACTION', {
+                action,
+                payload,
+                documentId: rpcState.documentId,
+                baseDocumentRevision: rpcState.documentRevision,
+                stalePolicy: 'reject',
+            });
         } else {
-            // Apply history and state locally
-            if (action === 'ADD') {
-                const oldAnims = [...(modelData?.TextureAnims || [])];
-                useHistoryStore.getState().push({
-                    name: 'Add Texture Animation',
-                    undo: () => setTextureAnims(oldAnims),
-                    redo: () => setTextureAnims(newAnims)
+            const oldAnims = structuredClone(modelData?.TextureAnims || []);
+            const commandName = action === 'ADD'
+                ? 'Add Texture Animation'
+                : action === 'DELETE'
+                    ? 'Delete Texture Animation'
+                    : 'Update Texture Animation';
+            if (action === 'DELETE' && typeof payload?.deleteIndex === 'number') {
+                const oldMaterials = structuredClone(modelData?.Materials || []);
+                const newMaterials = remapMaterialsAfterTextureAnimRemoval(oldMaterials, payload.deleteIndex);
+                modelDocumentCommandHandler.replaceTextureAnimationListAndMaterials({
+                    name: commandName,
+                    beforeTextureAnims: oldAnims,
+                    afterTextureAnims: newAnims,
+                    beforeMaterials: oldMaterials,
+                    afterMaterials: newMaterials,
                 });
-            } else if (action === 'DELETE') {
-                const oldAnims = [...(modelData?.TextureAnims || [])];
-                useHistoryStore.getState().push({
-                    name: `Delete Texture Animation`,
-                    undo: () => setTextureAnims(oldAnims),
-                    redo: () => setTextureAnims(newAnims)
-                });
-            } else if (action === 'UPDATE' || action === 'TOGGLE_BLOCK') {
-                const oldAnims = [...(modelData?.TextureAnims || [])];
-                useHistoryStore.getState().push({
-                    name: `Update Texture Animation`,
-                    undo: () => setTextureAnims(oldAnims),
-                    redo: () => setTextureAnims(newAnims)
+            } else {
+                modelDocumentCommandHandler.replaceTextureAnimationList({
+                    name: commandName,
+                    before: oldAnims,
+                    after: newAnims,
                 });
             }
-            setTextureAnims(newAnims);
         }
     };
 
@@ -159,7 +165,7 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
 
     const handleDelete = (index: number) => {
         const newAnims = localAnims.filter((_, i) => i !== index);
-        saveToBackend('DELETE', newAnims, newAnims);
+        saveToBackend('DELETE', { newAnims, deleteIndex: index }, newAnims);
         if (selectedIndex >= newAnims.length) {
             setSelectedIndex(newAnims.length - 1);
         }

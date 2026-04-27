@@ -104,9 +104,7 @@ pub fn get_qq_activation_policy() -> QqActivationPolicy {
     }
 
     if cached.as_ref().is_some_and(|policy| policy.is_fresh(now)) {
-        eprintln!(
-            "[QQPolicy] registry cache is disabled; refreshing remote before using it"
-        );
+        eprintln!("[QQPolicy] registry cache is disabled; refreshing remote before using it");
     }
 
     let Some(url) = configured_policy_url() else {
@@ -138,10 +136,7 @@ pub fn get_qq_activation_policy() -> QqActivationPolicy {
             payload.into()
         }
         Err(error) => {
-            eprintln!(
-                "[QQPolicy] remote policy fetch/verify failed: {}",
-                error
-            );
+            eprintln!("[QQPolicy] remote policy fetch/verify failed: {}", error);
             if let Some(policy) = cached.filter(|policy| policy.is_fresh(now)) {
                 eprintln!(
                     "[QQPolicy] remote failed; falling back to fresh registry cache enabled={}",

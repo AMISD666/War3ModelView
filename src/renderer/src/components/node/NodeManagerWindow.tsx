@@ -784,7 +784,7 @@ export const NodeManagerWindow: React.FC = () => {
     }, [selectedNodeIds, nodes]);
 
     useEffect(() => {
-        if (mainMode !== 'animation') return;
+        if (mainMode !== 'animation' && mainMode !== 'view') return;
         if (selectedNodeIds.length === 0) return;
         if (!shouldScrollNodeManagerToSelection) return;
         const targetId = selectedNodeIds[0];

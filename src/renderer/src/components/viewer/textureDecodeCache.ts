@@ -1,17 +1,16 @@
 import { createBinarySignature } from './cacheKey'
+import { RevisionedMemoryCache, type CacheDependencyToken } from '../../application/cache'
 
 type DecodedTextureImage = ImageData | ImageBitmap
 
-type TextureDecodeCacheEntry = {
-  cachedAt: number
-  estimatedBytes: number
-  image: DecodedTextureImage
-}
-
 const MAX_DECODE_CACHE_ENTRIES = 512
 const MAX_DECODE_CACHE_BYTES = 192 * 1024 * 1024
-const textureDecodeCache = new Map<string, TextureDecodeCacheEntry>()
-let textureDecodeCacheBytes = 0
+const TEXTURE_DECODE_CACHE_DECODER_VERSION = 'v2'
+const textureDecodeCache = new RevisionedMemoryCache<DecodedTextureImage>({
+  namespace: 'textureDecode',
+  maxEntries: MAX_DECODE_CACHE_ENTRIES,
+  maxBytes: MAX_DECODE_CACHE_BYTES,
+})
 
 const normalizeAdjustmentsKey = (adjustments: unknown): string => {
   if (!adjustments) {
@@ -32,28 +31,6 @@ const estimateImageBytes = (image: DecodedTextureImage): number => {
   return image.width * image.height * 4
 }
 
-const touchEntry = (key: string, entry: TextureDecodeCacheEntry) => {
-  textureDecodeCache.delete(key)
-  textureDecodeCache.set(key, entry)
-}
-
-const evictOverflow = () => {
-  while (
-    textureDecodeCache.size > MAX_DECODE_CACHE_ENTRIES ||
-    textureDecodeCacheBytes > MAX_DECODE_CACHE_BYTES
-  ) {
-    const oldestKey = textureDecodeCache.keys().next().value
-    if (!oldestKey) {
-      break
-    }
-    const oldEntry = textureDecodeCache.get(oldestKey)
-    if (oldEntry) {
-      textureDecodeCacheBytes = Math.max(0, textureDecodeCacheBytes - oldEntry.estimatedBytes)
-    }
-    textureDecodeCache.delete(oldestKey)
-  }
-}
-
 export const createTextureDecodeCacheKey = (
   path: string,
   bytes: Uint8Array,
@@ -61,42 +38,55 @@ export const createTextureDecodeCacheKey = (
     adjustments?: unknown
     maxDimension?: number
     preferBlpBaseMip?: boolean
+    forceOpaqueAlpha?: boolean
   }
 ): string => {
   return [
+    TEXTURE_DECODE_CACHE_DECODER_VERSION,
     (path || '').toLowerCase(),
     createBinarySignature(bytes),
     options?.maxDimension ?? '',
     options?.preferBlpBaseMip ? 'base' : 'mip',
+    options?.forceOpaqueAlpha ? 'opaque' : 'source-alpha',
     normalizeAdjustmentsKey(options?.adjustments)
   ].join('|')
 }
 
+export const createTextureDecodeCacheDependencies = (
+  path: string,
+  bytes: Uint8Array,
+  options?: {
+    adjustments?: unknown
+    maxDimension?: number
+    preferBlpBaseMip?: boolean
+    forceOpaqueAlpha?: boolean
+  }
+): CacheDependencyToken[] => [
+  { kind: 'decoderVersion', value: TEXTURE_DECODE_CACHE_DECODER_VERSION },
+  { kind: 'fileFingerprint', value: createBinarySignature(bytes), label: (path || '').toLowerCase() },
+  { kind: 'previewOptions', value: options?.maxDimension ?? null, label: 'maxDimension' },
+  { kind: 'previewOptions', value: options?.preferBlpBaseMip ? 'base' : 'mip', label: 'mipSelection' },
+  { kind: 'previewOptions', value: options?.forceOpaqueAlpha ? 'opaque' : 'source-alpha', label: 'alphaMode' },
+  { kind: 'previewOptions', value: normalizeAdjustmentsKey(options?.adjustments), label: 'adjustments' },
+]
+
 export const getCachedDecodedTexture = (key: string): DecodedTextureImage | null => {
-  const entry = textureDecodeCache.get(key)
-  if (!entry) {
+  const entry = textureDecodeCache.getEntry(key)
+  if (!entry.found) {
     return null
   }
 
-  touchEntry(key, entry)
-  return entry.image
+  return entry.value
 }
 
-export const setCachedDecodedTexture = (key: string, image: DecodedTextureImage): void => {
+export const setCachedDecodedTexture = (
+  key: string,
+  image: DecodedTextureImage,
+  dependsOn: CacheDependencyToken[] = []
+): void => {
   const estimatedBytes = estimateImageBytes(image)
-  const existing = textureDecodeCache.get(key)
-  if (existing) {
-    textureDecodeCacheBytes = Math.max(0, textureDecodeCacheBytes - existing.estimatedBytes)
-  }
-
-  const entry: TextureDecodeCacheEntry = {
-    cachedAt: Date.now(),
+  textureDecodeCache.set(key, image, {
     estimatedBytes,
-    image
-  }
-
-  textureDecodeCache.set(key, entry)
-  textureDecodeCacheBytes += estimatedBytes
-  touchEntry(key, entry)
-  evictOverflow()
+    dependsOn,
+  })
 }

@@ -101,6 +101,85 @@ export function remapMaterialsAfterTextureRemoval(materials: any[], removedIndex
     })
 }
 
+export function remapParticleEmittersAfterTextureRemoval(
+    emitters: any[] | undefined | null,
+    removedIndex: number,
+    nextTextureCount: number,
+): any[] | undefined {
+    if (!Array.isArray(emitters)) return undefined
+    const fallbackIndex = nextTextureCount > 0
+        ? Math.min(removedIndex, nextTextureCount - 1)
+        : -1
+
+    return emitters.map((emitter: any) => {
+        const nextEmitter = cloneStructured(emitter)
+        const key = nextEmitter.TextureID !== undefined ? 'TextureID' : 'TextureId'
+        if (nextEmitter[key] !== undefined) {
+            nextEmitter[key] = remapTextureRefAfterRemoval(nextEmitter[key], removedIndex, fallbackIndex)
+        }
+        return nextEmitter
+    })
+}
+
+export function remapTVertexAnimIdAfterRemoval(value: unknown, removedIndex: number): number | null | unknown {
+    if (value === undefined || value === null) return value
+    if (typeof value !== 'number' || !Number.isInteger(value)) return value
+    if (value < 0) return null
+    if (value === removedIndex) return null
+    if (value > removedIndex) return value - 1
+    return value
+}
+
+export function remapMaterialsAfterTextureAnimRemoval(materials: any[], removedIndex: number): any[] {
+    return (Array.isArray(materials) ? materials : []).map((material: any) => {
+        const nextMaterial = cloneStructured(material)
+        if (!Array.isArray(nextMaterial?.Layers)) {
+            return nextMaterial
+        }
+
+        nextMaterial.Layers = nextMaterial.Layers.map((layer: any) => {
+            const nextLayer = cloneStructured(layer)
+            const rawValue = Object.prototype.hasOwnProperty.call(nextLayer, 'TVertexAnimId')
+                ? nextLayer.TVertexAnimId
+                : (nextLayer.TextureAnimationId ?? nextLayer.TextureAnimId)
+            const remapped = remapTVertexAnimIdAfterRemoval(rawValue, removedIndex)
+            nextLayer.TVertexAnimId = remapped === undefined ? null : remapped
+            delete nextLayer.TextureAnimationId
+            delete nextLayer.TextureAnimId
+            return nextLayer
+        })
+
+        return nextMaterial
+    })
+}
+
+const remapMaterialIdAfterRemoval = (value: unknown, removedIndex: number, nextMaterialCount: number): unknown => {
+    if (typeof value !== 'number' || !Number.isInteger(value)) return value
+    if (value < 0) return value
+    if (value === removedIndex) return nextMaterialCount > 0 ? Math.min(removedIndex, nextMaterialCount - 1) : null
+    if (value > removedIndex) return value - 1
+    if (value >= nextMaterialCount) return nextMaterialCount > 0 ? nextMaterialCount - 1 : null
+    return value
+}
+
+export function remapGeosetsAfterMaterialRemoval(geosets: any[] | undefined | null, removedIndex: number, nextMaterialCount: number): any[] | undefined {
+    if (!Array.isArray(geosets)) return undefined
+    return geosets.map((geoset: any) => {
+        const nextGeoset = cloneStructured(geoset)
+        nextGeoset.MaterialID = remapMaterialIdAfterRemoval(nextGeoset.MaterialID, removedIndex, nextMaterialCount)
+        return nextGeoset
+    })
+}
+
+export function remapRibbonEmittersAfterMaterialRemoval(ribbonEmitters: any[] | undefined | null, removedIndex: number, nextMaterialCount: number): any[] | undefined {
+    if (!Array.isArray(ribbonEmitters)) return undefined
+    return ribbonEmitters.map((emitter: any) => {
+        const nextEmitter = cloneStructured(emitter)
+        nextEmitter.MaterialID = remapMaterialIdAfterRemoval(nextEmitter.MaterialID, removedIndex, nextMaterialCount)
+        return nextEmitter
+    })
+}
+
 export function buildTextureDefinitionSignature(textures: any[] | undefined | null): string {
     if (!Array.isArray(textures)) return '[]'
     return JSON.stringify(textures.map((texture) => ({

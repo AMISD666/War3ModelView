@@ -6,26 +6,141 @@ import { useRendererStore } from '../../store/rendererStore'
 import { pruneModelKeyframes } from '../../utils/modelUtils'
 import type { GlobalColorAdjustSettings } from '../../utils/globalColorAdjustCore'
 import { commandBus, type CommandBus } from '../commands'
+import { markCommandReceived, markCommandRejected, markToolCommandStaleRevision } from '../diagnostics'
 
 export interface SequenceManagerRpcState {
+    documentId: string | null
+    documentRevision: number
+    assetRevision: number
+    previewRevision: number
+    snapshotRevision: number
+    windowId: string
     sequences: any[]
 }
 
 export interface GlobalSequenceManagerRpcState {
+    documentId: string | null
+    documentRevision: number
+    assetRevision: number
+    previewRevision: number
+    snapshotRevision: number
+    windowId: string
     globalSequences: number[]
 }
 
 export interface GlobalColorAdjustRpcState {
+    documentId: string | null
+    documentRevision: number
+    assetRevision: number
+    previewRevision: number
+    snapshotRevision: number
+    windowId: string
     settings: GlobalColorAdjustSettings
 }
 
 const cloneModelData = (data: ModelData | null): ModelData | null =>
     data === null ? null : structuredClone(data)
 
+type RevisionedTimelineCommand = {
+    action?: string
+    documentId?: string | null
+    baseDocumentRevision?: number
+    stalePolicy?: 'warn' | 'reject'
+}
+
+const asRevisionedTimelineCommand = (payload: unknown): RevisionedTimelineCommand | undefined =>
+    payload !== null && typeof payload === 'object' && !Array.isArray(payload)
+        ? payload as RevisionedTimelineCommand
+        : undefined
+
+const checkTimelineCommandRevision = (
+    source: string,
+    command: string,
+    payload: unknown,
+): boolean => {
+    const revision = asRevisionedTimelineCommand(payload)
+    const state = useModelStore.getState()
+    markCommandReceived({
+        source,
+        commandName: command,
+        action: revision?.action ?? '',
+        commandDocumentId: revision?.documentId ?? '',
+        activeDocumentId: state.documentId ?? '',
+        baseDocumentRevision: revision?.baseDocumentRevision ?? '',
+        activeDocumentRevision: state.documentRevision,
+        stalePolicy: revision?.stalePolicy ?? '',
+    })
+
+    if (typeof revision?.baseDocumentRevision !== 'number') {
+        return true
+    }
+
+    const documentMismatch =
+        revision.documentId !== undefined &&
+        revision.documentId !== null &&
+        state.documentId !== null &&
+        revision.documentId !== state.documentId
+    const revisionMismatch = revision.baseDocumentRevision !== state.documentRevision
+
+    if (!documentMismatch && !revisionMismatch) {
+        return true
+    }
+
+    markToolCommandStaleRevision({
+        source,
+        commandName: command,
+        action: revision.action ?? '',
+        commandDocumentId: revision.documentId ?? '',
+        activeDocumentId: state.documentId ?? '',
+        baseDocumentRevision: revision.baseDocumentRevision,
+        activeDocumentRevision: state.documentRevision,
+        stalePolicy: revision.stalePolicy ?? 'warn',
+    })
+
+    if (documentMismatch || revision.stalePolicy === 'reject') {
+        markCommandRejected({
+            source,
+            commandName: command,
+            action: revision.action ?? '',
+            commandDocumentId: revision.documentId ?? '',
+            activeDocumentId: state.documentId ?? '',
+            baseDocumentRevision: revision.baseDocumentRevision,
+            activeDocumentRevision: state.documentRevision,
+            reason: documentMismatch ? 'document_mismatch' : 'stale_revision',
+        })
+        console.warn(`[${source}] Rejected stale command`, {
+            command,
+            action: revision.action,
+            commandDocumentId: revision.documentId,
+            activeDocumentId: state.documentId,
+            baseDocumentRevision: revision.baseDocumentRevision,
+            activeDocumentRevision: state.documentRevision,
+        })
+        return false
+    }
+
+    console.warn(`[${source}] Stale command detected; applying for compatibility`, {
+        command,
+        action: revision.action,
+        commandDocumentId: revision.documentId,
+        activeDocumentId: state.documentId,
+        baseDocumentRevision: revision.baseDocumentRevision,
+        activeDocumentRevision: state.documentRevision,
+    })
+    return true
+}
+
 const markActiveTabDirtyState = (state: { activeTabId: string | null; dirtyTabs: Record<string, boolean> }) => {
     if (!state.activeTabId) return {}
     return { dirtyTabs: { ...state.dirtyTabs, [state.activeTabId]: true } }
 }
+
+const getNextDocumentRevisionPatch = (state: ReturnType<typeof useModelStore.getState>) => ({
+    documentId: state.documentId ?? state.activeTabId,
+    documentRevision: state.documentRevision + 1,
+    assetRevision: state.assetRevision,
+    previewRevision: state.previewRevision,
+})
 
 const sanitizeNodesForSnapshot = (nodes: any[]) =>
     nodes.filter((node) => node && (node.type === NodeType.CAMERA || typeof node.ObjectId === 'number'))
@@ -46,6 +161,7 @@ const buildTabsWithModelSnapshot = (
     sequences: any[],
     currentSequence: number,
     currentFrame: number,
+    revisionPatch?: ReturnType<typeof getNextDocumentRevisionPatch>,
 ) => {
     if (!state.activeTabId) {
         return state.tabs
@@ -60,6 +176,7 @@ const buildTabsWithModelSnapshot = (
             ...tab,
             snapshot: {
                 ...tab.snapshot,
+                ...revisionPatch,
                 modelData,
                 modelPath: state.modelPath,
                 nodes: sanitizeNodesForSnapshot(state.nodes),
@@ -114,18 +231,20 @@ const applySequenceModelPatch = (modelData: ModelData | null): void => {
     let nextCurrentFrame = 0
 
     useModelStore.setState((state) => {
+        const revisionPatch = getNextDocumentRevisionPatch(state)
         nextCurrentSequence = nextSequences.length === 0
             ? -1
             : Math.max(0, Math.min(state.currentSequence >= 0 ? state.currentSequence : 0, nextSequences.length - 1))
         nextCurrentFrame = nextCurrentSequence >= 0 ? getSequenceStartFrame(nextSequences[nextCurrentSequence]) : 0
 
         return {
+            ...revisionPatch,
             modelData,
             sequences: nextSequences,
             currentSequence: nextCurrentSequence,
             currentFrame: nextCurrentFrame,
             isPlaying: nextSequences.length > 0 ? state.isPlaying : false,
-            tabs: buildTabsWithModelSnapshot(state, modelData, nextSequences, nextCurrentSequence, nextCurrentFrame),
+            tabs: buildTabsWithModelSnapshot(state, modelData, nextSequences, nextCurrentSequence, nextCurrentFrame, revisionPatch),
             rendererReloadTrigger: state.rendererReloadTrigger + 1,
             ...markActiveTabDirtyState(state),
         }
@@ -139,12 +258,23 @@ const applyGlobalSequenceModelPatch = (modelData: ModelData | null): void => {
         return
     }
 
-    useModelStore.setState((state) => ({
-        modelData,
-        tabs: buildTabsWithModelSnapshot(state, modelData, state.sequences, state.currentSequence, state.currentFrame),
-        rendererReloadTrigger: state.rendererReloadTrigger + 1,
-        ...markActiveTabDirtyState(state),
-    }))
+    useModelStore.setState((state) => {
+        const revisionPatch = getNextDocumentRevisionPatch(state)
+        return {
+            ...revisionPatch,
+            modelData,
+            tabs: buildTabsWithModelSnapshot(
+                state,
+                modelData,
+                state.sequences,
+                state.currentSequence,
+                state.currentFrame,
+                revisionPatch,
+            ),
+            rendererReloadTrigger: state.rendererReloadTrigger + 1,
+            ...markActiveTabDirtyState(state),
+        }
+    })
 
     syncRendererGlobalSequences(modelData.GlobalSequences || [])
 }
@@ -186,6 +316,10 @@ export class SequenceManagerCommandHandler {
     constructor(private readonly bus: CommandBus = commandBus) { }
 
     handle(command: string, payload: unknown): void {
+        if (!checkTimelineCommandRevision('SequenceManagerCommandHandler', command, payload)) {
+            return
+        }
+
         const state = useModelStore.getState()
         const before = cloneModelData(state.modelData)
         if (!before) {
@@ -237,6 +371,10 @@ export class GlobalSequenceManagerCommandHandler {
     constructor(private readonly bus: CommandBus = commandBus) { }
 
     handle(command: string, payload: unknown): void {
+        if (!checkTimelineCommandRevision('GlobalSequenceManagerCommandHandler', command, payload)) {
+            return
+        }
+
         if (command !== 'EXECUTE_GLOBAL_SEQ_ACTION' || (payload as any)?.action !== 'SAVE') {
             return
         }

@@ -1,9 +1,10 @@
 ﻿import React, { useState, useEffect } from 'react'
 import { Input, Checkbox, Button } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
-import { readFile } from '@tauri-apps/plugin-fs'
 import { decodeTextureData, normalizePath } from '../../viewer/textureLoader'
 import { invokeReadMpqFile } from '../../../utils/mpqPerf'
+import { desktopGateway } from '../../../infrastructure/desktop'
+import { createImageDataUrlFromBytes } from '../../../infrastructure/texture'
 
 interface TextureDetailProps {
     texture: any
@@ -82,9 +83,10 @@ const TextureDetail: React.FC<TextureDetailProps> = ({ texture, modelPath, onUpd
                         fullPath = `${modelDir}\\${fullPath}`
                     }
 
-                    const buffer = await readFile(fullPath)
+                    const buffer = await desktopGateway.readFile(fullPath)
                     if (buffer) {
-                        const imageData = decodeTextureData(buffer.buffer, imagePath)
+                        const localBuffer = toArrayBuffer(buffer)
+                        const imageData = localBuffer ? decodeTextureData(localBuffer, imagePath) : null
                         const dataUrl = imageData ? imageDataToDataUrl(imageData) : null
                         if (dataUrl) {
                             setPreviewUrl(dataUrl)
@@ -111,7 +113,17 @@ const TextureDetail: React.FC<TextureDetailProps> = ({ texture, modelPath, onUpd
                 setPreviewUrl(null)
             } else {
                 // Try standard image loading
-                setPreviewUrl(`file://${imagePath}`)
+                try {
+                    let fullPath = imagePath
+                    if (modelPath && !fullPath.match(/^[a-zA-Z]:/) && !fullPath.startsWith('/')) {
+                        const modelDir = modelPath.substring(0, modelPath.lastIndexOf('\\'))
+                        fullPath = `${modelDir}\\${fullPath}`
+                    }
+                    const buffer = await desktopGateway.readFile(fullPath)
+                    setPreviewUrl(await createImageDataUrlFromBytes(buffer, fullPath))
+                } catch {
+                    setPreviewUrl(null)
+                }
             }
         }
 

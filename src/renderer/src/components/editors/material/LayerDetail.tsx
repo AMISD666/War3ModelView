@@ -2,9 +2,9 @@ import React, { useState } from 'react'
 import { Checkbox, Button, Select, Space } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { EditOutlined } from '@ant-design/icons'
-import { listen } from '@tauri-apps/api/event'
 import { windowManager } from '../../../utils/WindowManager'
 import { useModelStore } from '../../../store/modelStore'
+import { useWindowEvent } from '../../../hooks/useWindowEvent'
 import TextureAnimationManagerModal from '../../modals/TextureAnimationManagerModal'
 import { MATERIAL_FILTER_MODE_OPTIONS } from '../../../constants/filterModes'
 
@@ -57,20 +57,12 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
         }
     }
 
-    React.useEffect(() => {
-        const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
-            const payload = event.payload as any;
-            if (payload && payload.callerId === 'LayerDetail') {
-                if (editingField) {
-                    handleChange(editingField, payload.data)
-                }
-            }
-        });
-
-        return () => {
-            unlisten.then(f => f());
-        };
-    }, [editingField, layer]);
+    useWindowEvent<any>('IPC_KEYFRAME_SAVE', (event) => {
+        const payload = event.payload;
+        if (payload && payload.callerId === 'LayerDetail' && editingField) {
+            handleChange(editingField, payload.data)
+        }
+    });
 
     const openKeyframeEditor = (field: string, vectorSize: number) => {
         setEditingField(field)

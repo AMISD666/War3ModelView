@@ -1,5 +1,5 @@
 import { windowManager } from './WindowManager'
-import { getToolWindowSize, type ToolWindowId } from '../constants/windowLayouts'
+import { getToolWindowSize, type ToolWindowId } from '../application/window-bridge/ToolWindowLayouts'
 
 type WarmWindowSpec = {
     id: ToolWindowId | 'keyframeEditor_0' | 'keyframeEditor_1' | 'nodeEditor'

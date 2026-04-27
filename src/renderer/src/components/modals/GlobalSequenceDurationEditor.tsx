@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 import { Button, InputNumber } from 'antd'
 import { CheckOutlined } from '@ant-design/icons'
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
-import { getCurrentWindow } from '@tauri-apps/api/window'
-import { listen, emit } from '@tauri-apps/api/event'
+import { useWindowEvent } from '../../hooks/useWindowEvent'
+import { windowGateway } from '../../infrastructure/window'
 
 const GlobalSequenceDurationEditor: React.FC = () => {
     const [index, setIndex] = useState<number>(0)
@@ -12,35 +12,29 @@ const GlobalSequenceDurationEditor: React.FC = () => {
     const [sourceTabId, setSourceTabId] = useState<string | null>(null)
     const [sourceModelPath, setSourceModelPath] = useState<string | null>(null)
 
-    useEffect(() => {
-        const unlisten = listen('IPC_GLOBAL_SEQ_DURATION_INIT', (event) => {
-            const payload = event.payload as any
-            if (payload) {
-                setIndex(payload.index ?? 0)
-                setDuration(payload.duration ?? 1000)
-                setCallerId(payload.callerId ?? '')
-                setSourceTabId(payload.sourceTabId ?? null)
-                setSourceModelPath(payload.sourceModelPath ?? null)
-            }
-        })
-
-        return () => {
-            unlisten.then(f => f())
+    useWindowEvent<any>('IPC_GLOBAL_SEQ_DURATION_INIT', (event) => {
+        const payload = event.payload
+        if (payload) {
+            setIndex(payload.index ?? 0)
+            setDuration(payload.duration ?? 1000)
+            setCallerId(payload.callerId ?? '')
+            setSourceTabId(payload.sourceTabId ?? null)
+            setSourceModelPath(payload.sourceModelPath ?? null)
         }
-    }, [])
+    })
 
-    const handleConfirm = () => {        emit('IPC_GLOBAL_SEQUENCE_UPDATE', {
+    const handleConfirm = () => {        void windowGateway.emit('IPC_GLOBAL_SEQUENCE_UPDATE', {
             index,
             duration,
             callerId,
             sourceTabId,
             sourceModelPath
         })
-        getCurrentWindow().hide()
+        void windowGateway.hideCurrentWindow()
     }
 
     const handleCancel = () => {
-        getCurrentWindow().hide()
+        void windowGateway.hideCurrentWindow()
     }
 
     return (

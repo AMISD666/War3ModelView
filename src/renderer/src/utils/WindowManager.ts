@@ -1,5 +1,5 @@
 import type { NodeEditorKind } from '../types/nodeEditorRpc'
-import { getToolWindowSize, type ToolWindowId } from '../constants/windowLayouts'
+import { getToolWindowSize, type ToolWindowId } from '../application/window-bridge/ToolWindowLayouts'
 import {
     ToolWindowHydrationTracker,
     ToolWindowLifecycleService,

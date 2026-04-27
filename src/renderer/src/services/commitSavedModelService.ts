@@ -7,6 +7,8 @@ export const commitSavedModelToStore = (
     savedNodes: ModelNode[]
 ): void => {
     useModelStore.setState((state) => {
+        const clearsPreview = !!state.materialManagerPreview || !!state.nodeEditorPreview
+        const nextPreviewRevision = clearsPreview ? state.previewRevision + 1 : state.previewRevision
         const updatedTabs = state.activeTabId
             ? state.tabs.map((tab) => {
                 if (tab.id !== state.activeTabId) {
@@ -16,6 +18,10 @@ export const commitSavedModelToStore = (
                     ...tab,
                     snapshot: {
                         ...tab.snapshot,
+                        documentId: state.documentId,
+                        documentRevision: state.documentRevision,
+                        assetRevision: state.assetRevision,
+                        previewRevision: nextPreviewRevision,
                         modelData: savedModelData,
                         modelPath: state.modelPath,
                         nodes: savedNodes,
@@ -33,6 +39,7 @@ export const commitSavedModelToStore = (
             modelData: savedModelData,
             nodes: savedNodes,
             tabs: updatedTabs,
+            previewRevision: nextPreviewRevision,
             materialManagerPreview: null,
             nodeEditorPreview: null,
             rendererReloadTrigger: state.rendererReloadTrigger + 1,

@@ -6,11 +6,11 @@ import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker'
 import { GlobalSequenceSelect } from '../common/GlobalSequenceSelect'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useModelStore } from '../../store/modelStore'
-import { useHistoryStore } from '../../store/historyStore'
-import { listen } from '@tauri-apps/api/event'
 import { windowManager } from '../../utils/WindowManager'
 import RightFloatingPanelShell from './RightFloatingPanelShell'
 import { coercePivotFloat3 } from '../../utils/pivotUtils'
+import { modelDocumentCommandHandler } from '../../application/commands'
+import { useWindowEvent } from '../../hooks/useWindowEvent'
 
 const { Text } = Typography
 
@@ -204,7 +204,6 @@ const GeosetAnimPanel: React.FC = () => {
     const selectedGeosetIndices = useModelStore(state => state.selectedGeosetIndices)
     const setSelectedGeosetIndex = useModelStore(state => state.setSelectedGeosetIndex)
     const setSelectedGeosetIndices = useModelStore(state => state.setSelectedGeosetIndices)
-    const setGeosetAnims = useModelStore(state => state.setGeosetAnims)
 
     const [geosetAlphaInput, setGeosetAlphaInput] = useState<number>(1)
     const [geosetColorInput, setGeosetColorInput] = useState<[number, number, number]>([1, 1, 1])
@@ -332,13 +331,12 @@ const GeosetAnimPanel: React.FC = () => {
         const oldAnims = deepClone((modelData as any).GeosetAnims || [])
         const nextAnims = deepClone(oldAnims)
         updater(nextAnims)
-        useHistoryStore.getState().push({
+        modelDocumentCommandHandler.replaceGeosetAnimationList({
             name: historyName,
-            undo: () => setGeosetAnims(deepClone(oldAnims)),
-            redo: () => setGeosetAnims(deepClone(nextAnims))
+            before: oldAnims,
+            after: nextAnims,
         })
-        setGeosetAnims(nextAnims)
-    }, [modelData, setGeosetAnims])
+    }, [modelData])
 
     const handleInsertGeosetAlphaKey = useCallback(() => {
         if (selectedGeosetIds.length === 0) return
@@ -519,18 +517,12 @@ const GeosetAnimPanel: React.FC = () => {
         void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload);
     }, [activeGeosetAnim, currentGeosetAlpha, currentGeosetColor, modelData]);
 
-    useEffect(() => {
-        const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
-            const payload = event.payload as any;
-            if (payload && payload.callerId === 'GeosetAnimPanel') {
-                handleSaveKeyframeEditor(payload.data);
-            }
-        });
-
-        return () => {
-            unlisten.then(f => f());
-        };
-    }, [handleSaveKeyframeEditor]);
+    useWindowEvent<any>('IPC_KEYFRAME_SAVE', (event) => {
+        const payload = event.payload;
+        if (payload && payload.callerId === 'GeosetAnimPanel') {
+            handleSaveKeyframeEditor(payload.data);
+        }
+    });
 
     return (
         <RightFloatingPanelShell

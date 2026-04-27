@@ -2,13 +2,12 @@ import { appMessage } from '../../store/messageStore'
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Button, Empty, Input, Select, Spin, Tree, Typography } from 'antd'
 import { CloseOutlined, ReloadOutlined } from '@ant-design/icons';
-import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
-import { mkdir, writeFile } from '@tauri-apps/plugin-fs';
-import { parseMDL, parseMDX } from 'war3-model';
 import { useModelStore } from '../../store/modelStore';
 import { useSelectionStore } from '../../store/selectionStore';
+import { textureMaterialCommandHandler } from '../../application/commands';
 import { invokeReadMpqFile } from '../../utils/mpqPerf';
+import { desktopGateway } from '../../infrastructure/desktop';
+import { modelSerializationGateway } from '../../infrastructure/serialization/war3ModelSerializationGateway';
 
 const { Text } = Typography;
 
@@ -282,7 +281,8 @@ export const MpqBrowserPanel: React.FC<MpqBrowserPanelProps> = ({ onClose }) => 
     const tabs = useModelStore(state => state.tabs);
     const activeTabId = useModelStore(state => state.activeTabId);
     const modelData = useModelStore(state => state.modelData);
-    const setTextures = useModelStore(state => state.setTextures);
+    const assetRevision = useModelStore(state => state.assetRevision);
+    const bumpAssetRevision = useModelStore(state => state.bumpAssetRevision);
     const setMainMode = useSelectionStore(state => state.setMainMode);
     const compactTreeCss = `
         .mpq-browser-panel .ant-tree .ant-tree-treenode {
@@ -307,7 +307,7 @@ export const MpqBrowserPanel: React.FC<MpqBrowserPanelProps> = ({ onClose }) => 
     const loadMpqPaths = useCallback(async () => {
         setLoadingMpqList(true);
         try {
-            const paths = await invoke<string[]>('get_loaded_mpq_paths');
+            const paths = await desktopGateway.invoke<string[]>('get_loaded_mpq_paths');
             setMpqPaths(paths);
             if (paths.length === 0) {
                 setSelectedMpq('');
@@ -337,7 +337,7 @@ export const MpqBrowserPanel: React.FC<MpqBrowserPanelProps> = ({ onClose }) => 
 
         setLoadingFiles(true);
         try {
-            const files = await invoke<string[]>('list_mpq_files', { mpqPath });
+            const files = await desktopGateway.invoke<string[]>('list_mpq_files', { mpqPath });
             setAllFiles(files);
         } catch (error) {
             console.error('[MpqBrowser] Failed to list MPQ files:', error);
@@ -350,7 +350,7 @@ export const MpqBrowserPanel: React.FC<MpqBrowserPanelProps> = ({ onClose }) => 
 
     useEffect(() => {
         void loadMpqPaths();
-    }, [loadMpqPaths]);
+    }, [loadMpqPaths, assetRevision]);
 
     useEffect(() => {
         if (selectedMpq) {
@@ -524,9 +524,9 @@ export const MpqBrowserPanel: React.FC<MpqBrowserPanelProps> = ({ onClose }) => 
             return;
         }
 
-        setTextures(existingTextures);
+        textureMaterialCommandHandler.setTextureCollection({ textures: existingTextures });
         appMessage.success(`已添加 ${added} 张贴图到当前模型`);
-    }, [activeTab, modelData, selectedTexturePaths, setTextures]);
+    }, [activeTab, modelData, selectedTexturePaths]);
 
     const handleExportFiles = useCallback(async () => {
         if (selectedFilePaths.length === 0) {
@@ -534,7 +534,7 @@ export const MpqBrowserPanel: React.FC<MpqBrowserPanelProps> = ({ onClose }) => 
             return;
         }
 
-        const selected = await open({
+        const selected = await desktopGateway.openFileDialog({
             directory: true,
             multiple: false,
             title: '选择导出目录'
@@ -545,7 +545,9 @@ export const MpqBrowserPanel: React.FC<MpqBrowserPanelProps> = ({ onClose }) => 
         if (!exportRoot) return;
 
         if (selectedMpq) {
-            await invoke('set_mpq_priority', { mpqPath: selectedMpq }).catch(() => null);
+            await desktopGateway.invoke('set_mpq_priority', { mpqPath: selectedMpq })
+                .then(() => bumpAssetRevision('mpq_priority_changed'))
+                .catch(() => null);
         }
 
         const exportSet = new Set<string>(selectedFilePaths.map((path) => normalizeMpqPath(path)));
@@ -557,12 +559,7 @@ export const MpqBrowserPanel: React.FC<MpqBrowserPanelProps> = ({ onClose }) => 
                 const bytes = await readMpqBytes(filePath);
                 if (!bytes) continue;
 
-                let model: any;
-                if (getExtension(filePath) === 'mdx') {
-                    model = parseMDX(toTightArrayBuffer(bytes));
-                } else {
-                    model = parseMDL(new TextDecoder().decode(bytes));
-                }
+                const model = modelSerializationGateway.parse(toTightArrayBuffer(bytes), filePath) as any;
 
                 const textureRefs = getTextureRefs(model);
                 for (const textureRef of textureRefs) {
@@ -595,8 +592,8 @@ export const MpqBrowserPanel: React.FC<MpqBrowserPanelProps> = ({ onClose }) => 
 
                 const outputPath = `${exportRoot.replace(/[\\/]+$/, '')}\\${relativePath}`;
                 const outputDir = outputPath.includes('\\') ? outputPath.slice(0, outputPath.lastIndexOf('\\')) : exportRoot;
-                await mkdir(outputDir, { recursive: true });
-                await writeFile(outputPath, bytes);
+                await desktopGateway.createDir(outputDir, { recursive: true });
+                await desktopGateway.writeFile(outputPath, bytes);
                 successCount += 1;
             } catch (error) {
                 console.error('[MpqBrowser] Failed to export file:', mpqPath, error);
@@ -746,7 +743,9 @@ export const MpqBrowserPanel: React.FC<MpqBrowserPanelProps> = ({ onClose }) => 
                                 if (!canOpenInView) return;
                                 void (async () => {
                                     if (selectedMpq) {
-                                        await invoke('set_mpq_priority', { mpqPath: selectedMpq }).catch(() => null);
+                                        await desktopGateway.invoke('set_mpq_priority', { mpqPath: selectedMpq })
+                                            .then(() => bumpAssetRevision('mpq_priority_changed'))
+                                            .catch(() => null);
                                     }
                                     setMainMode('view');
                                     addTab(fullPath);

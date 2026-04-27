@@ -8,6 +8,7 @@ import type { SaveModelUseCase } from './SaveModelUseCase'
 import { saveModelUseCase } from './SaveModelUseCase'
 import type { EncodeAdjustedTexturesOptions, TextureAssetOperationResult, TextureSaveAssetService } from './TextureSaveAssetService'
 import { textureSaveAssetService } from './TextureSaveAssetService'
+import { clearTextureBatchCache } from '../cache'
 
 export type SaveValidationContext = 'save' | 'saveAs' | 'export' | 'convert'
 
@@ -106,7 +107,7 @@ export class SaveCurrentModelWorkflow {
 
     private async clearTextureBatchCache(): Promise<void> {
         try {
-            await this.desktop.invoke('clear_texture_batch_cache')
+            await clearTextureBatchCache(this.desktop)
         } catch (error) {
             console.error('Failed to clear texture cache:', error)
         }

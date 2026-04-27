@@ -1,5 +1,5 @@
 import { windowGateway, type WindowGateway, type WindowUnlisten } from '../../infrastructure/window'
-import { markStandalonePerf } from '../../utils/standalonePerf'
+import { markStandalonePerf } from '../diagnostics/StandalonePerf'
 
 type HydrationWaiter = (hydrated: boolean) => void
 

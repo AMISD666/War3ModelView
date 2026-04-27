@@ -2,7 +2,7 @@ import { appMessage } from '../../store/messageStore'
 import React, { useState, useEffect, useRef } from 'react'
 import { Modal, Input, Button, Spin, Alert, Divider } from 'antd'
 import { CopyOutlined, CheckCircleOutlined, ExclamationCircleOutlined, RightOutlined, DownOutlined } from '@ant-design/icons'
-import { invoke } from '@tauri-apps/api/core'
+import { desktopGateway } from '../../infrastructure/desktop'
 
 interface ActivationStatus {
     is_activated: boolean
@@ -47,7 +47,7 @@ const ActivationModal: React.FC<ActivationModalProps> = ({ open, onActivated }) 
 
     const closeQqWindow = async () => {
         try {
-            await invoke('close_qq_verification_window')
+            await desktopGateway.invoke('close_qq_verification_window')
         } catch {
             // Ignore close errors from already-closed window.
         }
@@ -80,7 +80,7 @@ const ActivationModal: React.FC<ActivationModalProps> = ({ open, onActivated }) 
     const loadMachineId = async () => {
         setMachineIdLoading(true)
         try {
-            const mid = await invoke<string>('get_machine_id')
+            const mid = await desktopGateway.invoke<string>('get_machine_id')
             setMachineId(mid)
         } catch (e: any) {
             setError('\u65e0\u6cd5\u83b7\u53d6\u673a\u5668\u7801: ' + (e?.message || e))
@@ -93,7 +93,7 @@ const ActivationModal: React.FC<ActivationModalProps> = ({ open, onActivated }) 
         setQqPolicyLoading(true)
         setQqError(null)
         try {
-            const policy = await invoke<QqActivationPolicy>('get_qq_activation_policy')
+            const policy = await desktopGateway.invoke<QqActivationPolicy>('get_qq_activation_policy')
             console.log('[ActivationModal] get_qq_activation_policy raw:', policy)
             console.log('[ActivationModal] get_qq_activation_policy json:', JSON.stringify(policy))
             const enabled = policy.qq_activation_enabled !== false && policy.qqActivationEnabled !== false
@@ -121,7 +121,7 @@ const ActivationModal: React.FC<ActivationModalProps> = ({ open, onActivated }) 
                     setError('\u9a8c\u8bc1\u7b49\u5f85\u8d85\u65f6\uff0c\u8bf7\u70b9\u51fb\u300c\u91cd\u65b0\u6253\u5f00QQ\u9a8c\u8bc1\u300d\u91cd\u8bd5')
                     return
                 }
-                const verified = await invoke<boolean>('check_qq_verification_window_status')
+                const verified = await desktopGateway.invoke<boolean>('check_qq_verification_window_status')
                 if (verified) {
                     stopPolling(false)
                     appMessage.success('\u9a8c\u8bc1\u6210\u529f')
@@ -141,7 +141,7 @@ const ActivationModal: React.FC<ActivationModalProps> = ({ open, onActivated }) 
         setQqWindowLoading(true)
         setQqError(null)
         try {
-            await invoke('open_qq_verification_window')
+            await desktopGateway.invoke('open_qq_verification_window')
             startPolling()
             appMessage.info('\u8bf7\u5728\u5f39\u51fa\u7684\u0051\u0051\u9875\u9762\u5b8c\u6210\u767b\u5f55\uff0c\u5e76\u786e\u8ba4\u4f60\u5728\u6307\u5b9a\u0051\u0051\u7fa4\u5185')
         } catch (e: any) {
@@ -174,7 +174,7 @@ const ActivationModal: React.FC<ActivationModalProps> = ({ open, onActivated }) 
         setError(null)
 
         try {
-            const result = await invoke<ActivationStatus>('activate_software', {
+            const result = await desktopGateway.invoke<ActivationStatus>('activate_software', {
                 licenseCode: licenseCode.trim()
             })
 

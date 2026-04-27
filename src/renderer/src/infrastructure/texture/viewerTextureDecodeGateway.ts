@@ -1,11 +1,28 @@
 import type { TextureDecodeGateway, TextureDecodeResult } from './TextureDecodeGateway'
+import {
+    getTextureCandidatePaths,
+    loadTexturePreviewFromFile,
+    loadTexturePreviewFromMpq,
+    normalizeTexturePath,
+} from './TexturePreviewSource'
 
 export class ViewerTextureDecodeGateway implements TextureDecodeGateway {
     async decodeTexture(imagePath: string, modelPath: string): Promise<TextureDecodeResult> {
-        const { decodeTexture } = await import('../../components/viewer/textureLoader')
-        const result = await decodeTexture(imagePath, modelPath)
+        const normalizedImagePath = normalizeTexturePath(imagePath)
+
+        if (modelPath && !modelPath.startsWith('dropped:')) {
+            const candidates = getTextureCandidatePaths(modelPath, normalizedImagePath)
+            for (const candidate of candidates) {
+                const imageData = await loadTexturePreviewFromFile(candidate)
+                if (imageData) {
+                    return { imageData }
+                }
+            }
+        }
+
+        const imageData = await loadTexturePreviewFromMpq(normalizedImagePath)
         return {
-            imageData: result.imageData ?? null,
+            imageData: imageData ?? null,
         }
     }
 }

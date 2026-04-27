@@ -139,6 +139,9 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
     const handleOk = () => {
         if (isStandalone) {
             emitCommand('APPLY_SEQUENCE_CHANGES', {
+                documentId: rpcState.documentId,
+                baseDocumentRevision: rpcState.documentRevision,
+                stalePolicy: 'reject',
                 sequences: localSequences,
                 deletedIntervals,
                 pruneKeyframes

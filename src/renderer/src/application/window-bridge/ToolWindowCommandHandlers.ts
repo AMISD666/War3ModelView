@@ -1,10 +1,105 @@
 import { useModelStore } from '../../store/modelStore'
 import { useRendererStore } from '../../store/rendererStore'
 import { useSelectionStore } from '../../store/selectionStore'
+import { remapMaterialsAfterTextureAnimRemoval } from '../../utils/materialTextureRelations'
+import { modelDocumentCommandHandler, textureMaterialCommandHandler } from '../commands'
+import { markCommandReceived as markCommandReceivedDiagnostic, markCommandRejected, markToolCommandStaleRevision } from '../diagnostics'
+import { previewOverlayService } from '../preview'
 import { mergeGeosetMetadata } from './ToolWindowSnapshots'
 
 export interface TextureManagerCommandOptions {
     onTexturesSaved?: () => void
+}
+
+type RevisionedToolCommand = {
+    action?: string
+    payload?: unknown
+    documentId?: string | null
+    baseDocumentRevision?: number
+    stalePolicy?: 'warn' | 'reject'
+}
+
+const asRecord = (value: unknown): Record<string, unknown> | null =>
+    value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+
+const markCommandReceived = (
+    source: string,
+    commandName: string,
+    command: RevisionedToolCommand | undefined,
+): void => {
+    const state = useModelStore.getState()
+    markCommandReceivedDiagnostic({
+        source,
+        commandName,
+        action: command?.action ?? '',
+        commandDocumentId: command?.documentId ?? '',
+        activeDocumentId: state.documentId ?? '',
+        baseDocumentRevision: command?.baseDocumentRevision ?? '',
+        activeDocumentRevision: state.documentRevision,
+        stalePolicy: command?.stalePolicy ?? '',
+    })
+}
+
+const checkCommandRevision = (
+    source: string,
+    command: RevisionedToolCommand | undefined,
+): boolean => {
+    const baseDocumentRevision = command?.baseDocumentRevision
+    if (typeof baseDocumentRevision !== 'number') {
+        return true
+    }
+
+    const state = useModelStore.getState()
+    const commandDocumentId = command?.documentId
+    const documentMismatch =
+        commandDocumentId !== undefined &&
+        commandDocumentId !== null &&
+        state.documentId !== null &&
+        commandDocumentId !== state.documentId
+    const revisionMismatch = baseDocumentRevision !== state.documentRevision
+
+    if (!documentMismatch && !revisionMismatch) {
+        return true
+    }
+
+    markToolCommandStaleRevision({
+        source,
+        action: command?.action ?? '',
+        commandDocumentId: command?.documentId ?? '',
+        activeDocumentId: state.documentId ?? '',
+        baseDocumentRevision,
+        activeDocumentRevision: state.documentRevision,
+        stalePolicy: command?.stalePolicy ?? 'warn',
+    })
+
+    if (documentMismatch || command?.stalePolicy === 'reject') {
+        markCommandRejected({
+            source,
+            action: command?.action ?? '',
+            commandDocumentId: command?.documentId ?? '',
+            activeDocumentId: state.documentId ?? '',
+            baseDocumentRevision,
+            activeDocumentRevision: state.documentRevision,
+            reason: documentMismatch ? 'document_mismatch' : 'stale_revision',
+        })
+        console.warn(`[${source}] Rejected stale command`, {
+            action: command?.action,
+            commandDocumentId: command?.documentId,
+            activeDocumentId: state.documentId,
+            baseDocumentRevision,
+            activeDocumentRevision: state.documentRevision,
+        })
+        return false
+    }
+
+    console.warn(`[${source}] Stale command detected; applying for compatibility`, {
+        action: command?.action,
+        commandDocumentId: command?.documentId,
+        activeDocumentId: state.documentId,
+        baseDocumentRevision,
+        activeDocumentRevision: state.documentRevision,
+    })
+    return true
 }
 
 export class TextureManagerCommandHandler {
@@ -12,7 +107,7 @@ export class TextureManagerCommandHandler {
         if (command === 'SAVE_TEXTURES') {
             const textures = (payload as { textures?: unknown } | undefined)?.textures
             if (Array.isArray(textures)) {
-                useModelStore.getState().setTextures(textures)
+                textureMaterialCommandHandler.setTextureCollection({ textures })
                 options.onTexturesSaved?.()
             }
             return
@@ -22,33 +117,44 @@ export class TextureManagerCommandHandler {
             return
         }
 
-        const actionPayload = payload as { action?: string; payload?: any } | undefined
+        const actionPayload = payload as RevisionedToolCommand | undefined
+        markCommandReceived('TextureManagerCommandHandler', command, actionPayload)
+        if (!checkCommandRevision('TextureManagerCommandHandler', actionPayload)) {
+            return
+        }
         const action = actionPayload?.action
         const data = actionPayload?.payload
 
         if (action === 'SAVE_TEXTURES') {
-            useModelStore.getState().setTextures(data)
+            if (Array.isArray(data)) {
+                textureMaterialCommandHandler.setTextureCollection({ textures: data })
+            }
             return
         }
 
         if (action === 'SAVE_TEXTURES_WITH_MATERIALS') {
+            const record = asRecord(data)
             const currentGeosets = useModelStore.getState().modelData?.Geosets
-            const mergedGeosets = mergeGeosetMetadata(currentGeosets, data?.geosets)
-            useModelStore.getState().setVisualDataPatch({
-                Textures: data?.textures || [],
-                Materials: Array.isArray(data?.materials) ? data.materials : undefined,
-                Geosets: mergedGeosets,
+            const mergedGeosets = mergeGeosetMetadata(currentGeosets, record?.geosets as unknown[] | undefined)
+            textureMaterialCommandHandler.setTextureMaterialCollections({
+                textures: Array.isArray(record?.textures) ? record.textures : [],
+                materials: Array.isArray(record?.materials) ? record.materials : undefined,
+                geosets: mergedGeosets,
+                particleEmitters: Array.isArray(record?.particleEmitters) ? record.particleEmitters : undefined,
+                particleEmitters2: Array.isArray(record?.particleEmitters2) ? record.particleEmitters2 : undefined,
             })
             return
         }
 
         if (action === 'SET_TEXTURE_SAVE_MODE') {
-            useRendererStore.getState().setTextureSaveMode(data?.mode === 'save_as' ? 'save_as' : 'overwrite')
+            const record = asRecord(data)
+            useRendererStore.getState().setTextureSaveMode(record?.mode === 'save_as' ? 'save_as' : 'overwrite')
             return
         }
 
         if (action === 'SET_TEXTURE_SAVE_SUFFIX') {
-            const nextSuffix = typeof data?.suffix === 'string' ? data.suffix : ''
+            const record = asRecord(data)
+            const nextSuffix = typeof record?.suffix === 'string' ? record.suffix : ''
             useRendererStore.getState().setTextureSaveSuffix(nextSuffix)
             return
         }
@@ -65,18 +171,45 @@ export class MaterialManagerCommandHandler {
             return
         }
 
-        const actionPayload = payload as { action?: string; payload?: any } | undefined
+        const actionPayload = payload as RevisionedToolCommand | undefined
+        markCommandReceived('MaterialManagerCommandHandler', command, actionPayload)
+        if (!checkCommandRevision('MaterialManagerCommandHandler', actionPayload)) {
+            previewOverlayService.clearMaterialManagerPreview()
+            return
+        }
         const action = actionPayload?.action
         const data = actionPayload?.payload
 
         if (action === 'SAVE_MATERIALS') {
+            const record = asRecord(data)
             const currentGeosets = useModelStore.getState().modelData?.Geosets
-            const mergedGeosets = mergeGeosetMetadata(currentGeosets, data?.geosets)
-            useModelStore.getState().setMaterialManagerPreview({
-                textures: data?.textures,
-                materials: data?.materials,
-                geosets: mergedGeosets,
+            const mergedGeosets = mergeGeosetMetadata(currentGeosets, record?.geosets as unknown[] | undefined)
+            textureMaterialCommandHandler.setMaterialManagerPreview({
+                preview: {
+                    textures: Array.isArray(record?.textures) ? record.textures : [],
+                    materials: Array.isArray(record?.materials) ? record.materials : [],
+                    geosets: mergedGeosets,
+                    ribbonEmitters: Array.isArray(record?.ribbonEmitters) ? record.ribbonEmitters : undefined,
+                },
             })
+            return
+        }
+
+        if (action === 'COMMIT_MATERIALS') {
+            const record = asRecord(data)
+            const currentGeosets = useModelStore.getState().modelData?.Geosets
+            const mergedGeosets = mergeGeosetMetadata(currentGeosets, record?.geosets as unknown[] | undefined)
+            textureMaterialCommandHandler.commitMaterialManagerPreview({
+                textures: Array.isArray(record?.textures) ? record.textures : [],
+                materials: Array.isArray(record?.materials) ? record.materials : [],
+                geosets: mergedGeosets,
+                ribbonEmitters: Array.isArray(record?.ribbonEmitters) ? record.ribbonEmitters : undefined,
+            })
+            return
+        }
+
+        if (action === 'CLEAR_MATERIAL_PREVIEW') {
+            textureMaterialCommandHandler.clearMaterialManagerPreview()
             return
         }
 
@@ -86,11 +219,16 @@ export class MaterialManagerCommandHandler {
         }
 
         if (action === 'SET_SELECTION') {
-            if (data && Object.prototype.hasOwnProperty.call(data, 'selectedMaterialIndex')) {
-                useSelectionStore.getState().setSelectedMaterialIndex(data.selectedMaterialIndex ?? null)
+            const record = asRecord(data)
+            if (record && Object.prototype.hasOwnProperty.call(record, 'selectedMaterialIndex')) {
+                useSelectionStore.getState().setSelectedMaterialIndex(
+                    typeof record.selectedMaterialIndex === 'number' ? record.selectedMaterialIndex : null
+                )
             }
-            if (data && Object.prototype.hasOwnProperty.call(data, 'selectedMaterialLayerIndex')) {
-                useSelectionStore.getState().setSelectedMaterialLayerIndex(data.selectedMaterialLayerIndex ?? null)
+            if (record && Object.prototype.hasOwnProperty.call(record, 'selectedMaterialLayerIndex')) {
+                useSelectionStore.getState().setSelectedMaterialLayerIndex(
+                    typeof record.selectedMaterialLayerIndex === 'number' ? record.selectedMaterialLayerIndex : null
+                )
             }
         }
     }
@@ -102,15 +240,26 @@ export class GeosetEditorCommandHandler {
             return
         }
 
-        const actionPayload = payload as { action?: string; payload?: any } | undefined
+        const actionPayload = payload as RevisionedToolCommand | undefined
+        markCommandReceived('GeosetEditorCommandHandler', command, actionPayload)
+        if (!checkCommandRevision('GeosetEditorCommandHandler', actionPayload)) {
+            return
+        }
         if (actionPayload?.action !== 'SAVE_ALL') {
             return
         }
 
         const currentGeosets = useModelStore.getState().modelData?.Geosets
-        const mergedGeosets = mergeGeosetMetadata(currentGeosets, actionPayload.payload)
+        const mergedGeosets = mergeGeosetMetadata(
+            currentGeosets,
+            Array.isArray(actionPayload.payload) ? actionPayload.payload : undefined,
+        )
         if (mergedGeosets) {
-            useModelStore.getState().setGeosets(mergedGeosets)
+            modelDocumentCommandHandler.replaceGeosetList({
+                name: 'Update Geosets',
+                before: structuredClone(currentGeosets || []),
+                after: mergedGeosets,
+            })
         }
     }
 }
@@ -121,22 +270,34 @@ export class GeosetVisibilityCommandHandler {
             return
         }
 
-        const actionPayload = payload as { action?: string; payload?: any } | undefined
+        const actionPayload = payload as RevisionedToolCommand | undefined
+        markCommandReceived('GeosetVisibilityCommandHandler', command, actionPayload)
+        if (!checkCommandRevision('GeosetVisibilityCommandHandler', actionPayload)) {
+            return
+        }
         const action = actionPayload?.action
         const data = actionPayload?.payload
 
         if (action === 'SAVE_ANIMS') {
-            useModelStore.getState().setGeosetAnims(data)
+            if (Array.isArray(data)) {
+                modelDocumentCommandHandler.replaceGeosetAnimationList({
+                    name: 'Update Geoset Visibility',
+                    before: structuredClone(useModelStore.getState().modelData?.GeosetAnims || []),
+                    after: data,
+                })
+            }
             return
         }
 
         if (action === 'SET_SEQUENCE') {
-            useModelStore.getState().setSequence(data)
+            useModelStore.getState().setSequence(typeof data === 'number' ? data : -1)
             return
         }
 
         if (action === 'SET_FRAME') {
-            useModelStore.getState().setFrame(data)
+            if (typeof data === 'number') {
+                useModelStore.getState().setFrame(data)
+            }
         }
     }
 }
@@ -147,9 +308,17 @@ export class GeosetAnimationCommandHandler {
             return
         }
 
-        const actionPayload = payload as { action?: string; payload?: any } | undefined
-        if (actionPayload?.action === 'UPDATE_GEOSET_ANIMS') {
-            useModelStore.getState().setGeosetAnims(actionPayload.payload)
+        const actionPayload = payload as RevisionedToolCommand | undefined
+        markCommandReceived('GeosetAnimationCommandHandler', command, actionPayload)
+        if (!checkCommandRevision('GeosetAnimationCommandHandler', actionPayload)) {
+            return
+        }
+        if (actionPayload?.action === 'UPDATE_GEOSET_ANIMS' && Array.isArray(actionPayload.payload)) {
+            modelDocumentCommandHandler.replaceGeosetAnimationList({
+                name: 'Update Geoset Animation',
+                before: structuredClone(useModelStore.getState().modelData?.GeosetAnims || []),
+                after: actionPayload.payload,
+            })
         }
     }
 }
@@ -160,19 +329,41 @@ export class TextureAnimationCommandHandler {
             return
         }
 
-        const actionPayload = payload as { action?: string; payload?: any } | undefined
+        const actionPayload = payload as RevisionedToolCommand | undefined
+        markCommandReceived('TextureAnimationCommandHandler', command, actionPayload)
+        if (!checkCommandRevision('TextureAnimationCommandHandler', actionPayload)) {
+            return
+        }
         const action = actionPayload?.action
         if (action !== 'ADD' && action !== 'DELETE' && action !== 'UPDATE' && action !== 'TOGGLE_BLOCK' && action !== 'SAVE_ALL') {
             return
         }
 
         const data = actionPayload?.payload
-        const anims = data && typeof data === 'object' && !Array.isArray(data) && data.newAnims
-            ? data.newAnims
+        const record = asRecord(data)
+        const anims = record && Array.isArray(record.newAnims)
+            ? record.newAnims
             : data
 
         if (Array.isArray(anims)) {
-            useModelStore.getState().setTextureAnims(anims)
+            const currentModelData = useModelStore.getState().modelData
+            if (action === 'DELETE' && typeof record?.deleteIndex === 'number') {
+                const oldMaterials = structuredClone(currentModelData?.Materials || [])
+                const newMaterials = remapMaterialsAfterTextureAnimRemoval(oldMaterials, record.deleteIndex)
+                modelDocumentCommandHandler.replaceTextureAnimationListAndMaterials({
+                    name: 'Delete Texture Animation',
+                    beforeTextureAnims: structuredClone(currentModelData?.TextureAnims || []),
+                    afterTextureAnims: anims,
+                    beforeMaterials: oldMaterials,
+                    afterMaterials: newMaterials,
+                })
+            } else {
+                modelDocumentCommandHandler.replaceTextureAnimationList({
+                    name: 'Update Texture Animation',
+                    before: structuredClone(currentModelData?.TextureAnims || []),
+                    after: anims,
+                })
+            }
         } else {
             console.error('[ToolWindowCommandHandlers] Received invalid TextureAnims payload:', data)
         }

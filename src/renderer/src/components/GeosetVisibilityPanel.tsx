@@ -4,11 +4,13 @@ import { Checkbox } from 'antd'
 import { EyeOutlined, EyeInvisibleOutlined, CloseOutlined, MinusOutlined, DeleteOutlined, MergeCellsOutlined } from '@ant-design/icons';
 import { useModelStore } from '../store/modelStore';
 import { useSelectionStore } from '../store/selectionStore';
+import { modelDocumentCommandHandler, textureMaterialCommandHandler } from '../application/commands';
 import { commandManager } from '../utils/CommandManager';
 import { SetGeosetVisibilityCommand } from '../commands/SetGeosetVisibilityCommand';
 import { GeosetMergeDialog } from './modals/GeosetMergeDialog';
 import { LayerConfig, layerConfigToMaterialLayer } from './modals/MaterialLayerOptions';
 import { windowManager } from '../utils/WindowManager';
+import { remapGeosetAnimsAfterRemovingGeosets } from '../commands/geosetAnimRemap';
 import {
     getAllGeosetIndices,
     getHiddenIdsForGeosetToggle,
@@ -78,13 +80,27 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
         forceShowAllGeosets,
         hoveredGeosetId,
         setHoveredGeosetId,
-        setGeosets,
-        setMaterials,
         selectedGeosetIndex,
         selectedGeosetIndices,
         setSelectedGeosetIndices
     } = useModelStore();
     const geosets = modelData?.Geosets || [];
+    const replaceGeosetsAndRemapAnimations = (
+        name: string,
+        nextGeosets: any[],
+        removedGeosetIndices: number[]
+    ) => {
+        modelDocumentCommandHandler.replaceGeosetListAndAnimations({
+            name,
+            beforeGeosets: structuredClone(modelData?.Geosets || []),
+            afterGeosets: nextGeosets,
+            beforeGeosetAnims: structuredClone(modelData?.GeosetAnims || []),
+            afterGeosetAnims: remapGeosetAnimsAfterRemovingGeosets(
+                modelData?.GeosetAnims || [],
+                removedGeosetIndices
+            ),
+        });
+    };
 
     const [position, setPosition] = useState(() => getDefaultPanelPosition(DEFAULT_PANEL_SIZE.width, DEFAULT_PANEL_SIZE.height));
     const [size, setSize] = useState(DEFAULT_PANEL_SIZE);
@@ -260,7 +276,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
             newGeosets.splice(idx, 1);
         });
 
-        setGeosets(newGeosets);
+        replaceGeosetsAndRemapAnimations('Delete Geosets', newGeosets, sortedIndices);
         applySelection([]);
         setContextMenuVisible(false);
         appMessage.success(`已删除 ${sortedIndices.length} 个多边形`);
@@ -395,7 +411,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
             });
 
             targetGeoset.MaterialID = newMaterialIndex;
-            setMaterials(materials);
+            textureMaterialCommandHandler.setMaterialCollection({ materials });
         } else if (materialIndex === -1) {
             // Fallback: create basic white material (shouldn't happen with new UI)
             const materials: any[] = [...(modelData?.Materials || [])];
@@ -422,8 +438,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
             });
 
             targetGeoset.MaterialID = newMaterialIndex;
-            useModelStore.getState().setTextures(textures);
-            setMaterials(materials);
+            textureMaterialCommandHandler.setTextureMaterialCollections({ textures, materials });
         } else {            targetGeoset.MaterialID = materialIndex;
         }
 
@@ -443,8 +458,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                 newGeosets.push(geosets[i]);
             }
         }      // Update state and modelStore (lightweight update)
-        setGeosets(newGeosets);
-        useModelStore.getState().setGeosets(newGeosets);
+        replaceGeosetsAndRemapAnimations('Merge Geosets', newGeosets, Array.from(indicesToRemove));
         applySelection([]);
         setMergeDialogVisible(false);
         appMessage.success(`已合并 ${sortedIndices.length} 个多边形`);

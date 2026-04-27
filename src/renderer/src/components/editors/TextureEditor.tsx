@@ -5,6 +5,7 @@ import { DraggableModal } from '../DraggableModal'
 import { PlusOutlined, DeleteOutlined, SaveOutlined, ReloadOutlined } from '@ant-design/icons'
 import TextureDetail from './texture/TextureDetail'
 import { useModelStore } from '../../store/modelStore'
+import { textureMaterialCommandHandler } from '../../application/commands'
 
 interface TextureEditorProps {
     model?: any
@@ -15,7 +16,6 @@ interface TextureEditorProps {
 const TextureEditor: React.FC<TextureEditorProps> = () => {
     const modelData = useModelStore(state => state.modelData)
     const modelPath = useModelStore(state => state.modelPath)
-    const setTextures = useModelStore(state => state.setTextures)
 
     const [textures, setLocalTextures] = useState<any[]>([])
     const [hasChanges, setHasChanges] = useState(false)
@@ -64,7 +64,7 @@ const TextureEditor: React.FC<TextureEditorProps> = () => {
     }
 
     const handleApply = () => {
-        setTextures(JSON.parse(JSON.stringify(textures)))
+        textureMaterialCommandHandler.setTextureCollection({ textures: JSON.parse(JSON.stringify(textures)) })
         setHasChanges(false)
         appMessage.success('纹理已更新')
     }

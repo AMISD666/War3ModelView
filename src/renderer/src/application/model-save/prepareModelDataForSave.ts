@@ -642,14 +642,23 @@ export function prepareModelDataForSave(modelData: any): any {
     // Fix GeosetAnims
     if (data.GeosetAnims && Array.isArray(data.GeosetAnims)) {
         const geosetCount = data.Geosets?.length || 0;
+        const usedGeosetAnimIds = new Set<number>();
+        data.GeosetAnims = data.GeosetAnims.filter((anim: any) => {
+            const geosetId = anim?.GeosetId;
+            if (geosetId === undefined || geosetId === null) return true;
+            if (typeof geosetId !== 'number' || geosetId < 0 || geosetId >= geosetCount) return false;
+            if (usedGeosetAnimIds.has(geosetId)) return false;
+            usedGeosetAnimIds.add(geosetId);
+            return true;
+        });
         data.GeosetAnims.forEach((anim: any) => {
             if (typeof anim.Flags !== 'number') {
                 anim.Flags = 0;
             }
             if (anim.GeosetId === undefined || anim.GeosetId === null) {
                 anim.GeosetId = null;
-            } else if (typeof anim.GeosetId !== 'number' || anim.GeosetId < 0 || anim.GeosetId >= geosetCount) {
-                anim.GeosetId = geosetCount > 0 ? 0 : null;
+            } else if (typeof anim.GeosetId !== 'number' || anim.GeosetId < 0) {
+                anim.GeosetId = null;
             }
             if (anim.Color instanceof Float32Array) {
                 // Keep static color

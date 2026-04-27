@@ -5,9 +5,13 @@ import { DraggableModal } from './DraggableModal';
 import { getNextRenderMode, useRendererStore } from '../store/rendererStore';
 import { useSelectionStore } from '../store/selectionStore';
 import { showMessage, useMessageStore } from '../store/messageStore';
+import { useModelStore } from '../store/modelStore';
 import { DatabaseOutlined, CheckCircleFilled, CloseCircleFilled, FolderOpenOutlined, SunOutlined } from '@ant-design/icons';
 import { DNC_PRESETS, getEnvironmentManager } from './viewer/EnvironmentManager';
 import { ShortcutSettingsPanel } from './ShortcutSettingsPanel';
+import { desktopGateway } from '../infrastructure/desktop';
+import { getTextureBatchCacheStats, type TextureBatchCacheStats } from '../application/cache';
+import { expandManualMpqSelection, mergeMpqPathLists } from '../application/mpqLoadPaths';
 
 // Custom Toggle Button Component
 // Modified to support full width and center text
@@ -101,8 +105,11 @@ export const ViewSettingsWindow: React.FC = () => {
         autoRecalculateNormals, setAutoRecalculateNormals,
         keepCameraOnLoad, setKeepCameraOnLoad
     } = useRendererStore();
+    const [textureCacheStats, setTextureCacheStats] = useState<TextureBatchCacheStats | null>(null);
+    const [textureCacheStatsLoading, setTextureCacheStatsLoading] = useState(false);
     const mainMode = useSelectionStore(state => state.mainMode);
     const animationSubMode = useSelectionStore(state => state.animationSubMode);
+    const bumpAssetRevision = useModelStore(state => state.bumpAssetRevision);
     const showVertices =
         mainMode === 'animation'
             ? (animationSubMode === 'binding' ? showVerticesInAnimationBinding : showVerticesInAnimationKeyframe)
@@ -239,11 +246,10 @@ export const ViewSettingsWindow: React.FC = () => {
     useEffect(() => {
         const checkStatus = async () => {
             try {
-                const { invoke } = await import('@tauri-apps/api/core');
-                const isRegistered = await invoke<boolean>('check_context_menu_status');
-                const isCopyRegistered = await invoke<boolean>('check_copy_context_menu_status');
-                const isDeleteRegistered = await invoke<boolean>('check_delete_context_menu_status');
-                const copyMpqStatus = await invoke<boolean>('get_copy_mpq_textures_status');
+                const isRegistered = await desktopGateway.invoke<boolean>('check_context_menu_status');
+                const isCopyRegistered = await desktopGateway.invoke<boolean>('check_copy_context_menu_status');
+                const isDeleteRegistered = await desktopGateway.invoke<boolean>('check_delete_context_menu_status');
+                const copyMpqStatus = await desktopGateway.invoke<boolean>('get_copy_mpq_textures_status');
                 setContextMenuEnabled(isRegistered);
                 setCopyContextMenuEnabled(isCopyRegistered);
                 setDeleteContextMenuEnabled(isDeleteRegistered);
@@ -260,13 +266,12 @@ export const ViewSettingsWindow: React.FC = () => {
     const handleCopyContextMenuToggle = async (enable: boolean) => {
         setCopyContextMenuLoading(true);
         try {
-            const { invoke } = await import('@tauri-apps/api/core');
             if (enable) {
-                await invoke('register_copy_context_menu');
+                await desktopGateway.invoke('register_copy_context_menu');
                 setCopyContextMenuEnabled(true);
                 showMessage('success', '操作成功', '已添加复制模型右键菜单');
             } else {
-                await invoke('unregister_copy_context_menu');
+                await desktopGateway.invoke('unregister_copy_context_menu');
                 setCopyContextMenuEnabled(false);
                 showMessage('success', '操作成功', '已移除复制模型右键菜单');
             }
@@ -280,13 +285,12 @@ export const ViewSettingsWindow: React.FC = () => {
     const handleDeleteContextMenuToggle = async (enable: boolean) => {
         setDeleteContextMenuLoading(true);
         try {
-            const { invoke } = await import('@tauri-apps/api/core');
             if (enable) {
-                await invoke('register_delete_context_menu');
+                await desktopGateway.invoke('register_delete_context_menu');
                 setDeleteContextMenuEnabled(true);
                 showMessage('success', '操作成功', '已添加删除模型右键菜单');
             } else {
-                await invoke('unregister_delete_context_menu');
+                await desktopGateway.invoke('unregister_delete_context_menu');
                 setDeleteContextMenuEnabled(false);
                 showMessage('success', '操作成功', '已移除删除模型右键菜单');
             }
@@ -300,8 +304,7 @@ export const ViewSettingsWindow: React.FC = () => {
     const handleCopyMpqToggle = async (enable: boolean) => {
         setCopyMpqLoading(true);
         try {
-            const { invoke } = await import('@tauri-apps/api/core');
-            await invoke('set_copy_mpq_textures', { enabled: enable });
+            await desktopGateway.invoke('set_copy_mpq_textures', { enabled: enable });
             setCopyMpqEnabled(enable);
             showMessage(
                 'success',
@@ -320,14 +323,12 @@ export const ViewSettingsWindow: React.FC = () => {
     const handleContextMenuToggle = async (enable: boolean) => {
         setContextMenuLoading(true);
         try {
-            const { invoke } = await import('@tauri-apps/api/core');
-
             if (enable) {
-                await invoke('register_context_menu');
+                await desktopGateway.invoke('register_context_menu');
                 setContextMenuEnabled(true);
                 showMessage('success', '操作成功', '已添加右键菜单');
             } else {
-                await invoke('unregister_context_menu');
+                await desktopGateway.invoke('unregister_context_menu');
                 setContextMenuEnabled(false);
                 showMessage('success', '操作成功', '已移除右键菜单');
             }
@@ -357,10 +358,7 @@ export const ViewSettingsWindow: React.FC = () => {
 
     const handleLoadMPQ = async () => {
         try {
-            const { open } = await import('@tauri-apps/plugin-dialog');
-            const { invoke } = await import('@tauri-apps/api/core');
-
-            const selected = await open({
+            const selected = await desktopGateway.openFileDialog({
                 multiple: true,
                 filters: [{
                     name: 'Warcraft 3 Archives',
@@ -369,10 +367,16 @@ export const ViewSettingsWindow: React.FC = () => {
             });
 
             if (selected) {
-                const paths = Array.isArray(selected) ? selected : [selected];
-                localStorage.setItem('mpq_paths', JSON.stringify(paths));
+                const selectedPaths = Array.isArray(selected) ? selected : [selected];
+                const paths = await expandManualMpqSelection(selectedPaths, desktopGateway);
+                const loadedPaths = await desktopGateway
+                    .invoke<string[]>('get_loaded_mpq_paths')
+                    .catch(() => []);
+                const persistedPaths = mergeMpqPathLists(loadedPaths, paths);
+
+                localStorage.setItem('mpq_paths', JSON.stringify(persistedPaths));
                 try {
-                    await invoke('set_mpq_paths', { paths });
+                    await desktopGateway.invoke('set_mpq_paths', { paths: persistedPaths });
                 } catch (e) {
                     console.warn('Failed to persist MPQ paths to backend:', e);
                 }
@@ -387,7 +391,7 @@ export const ViewSettingsWindow: React.FC = () => {
                 for (const path of paths) {
                     if (path) {
                         try {
-                            await invoke('load_mpq', { path });
+                            await desktopGateway.invoke('load_mpq', { path });
                             count++;
                         } catch (e) {
                             console.error('Failed to load specific MPQ:', path, e);
@@ -398,6 +402,7 @@ export const ViewSettingsWindow: React.FC = () => {
                 useMessageStore.getState().removeMessage(msgId);
                 if (count > 0) {
                     setMpqLoaded(true);
+                    bumpAssetRevision('manual_mpq_load');
                     showMessage('success', '操作成功', `成功加载 ${count} 个 MPQ 文件`);
                 }
             }
@@ -414,8 +419,7 @@ export const ViewSettingsWindow: React.FC = () => {
         }
         const target = missingTextures[0];
         try {
-            const { invoke } = await import('@tauri-apps/api/core');
-            const result = await invoke<{
+            const result = await desktopGateway.invoke<{
                 input: string;
                 normalized: string;
                 candidates: string[];
@@ -433,6 +437,29 @@ export const ViewSettingsWindow: React.FC = () => {
         } catch (e: any) {
             console.error('[MPQ Debug] Probe failed:', e);
             showMessage('error', 'MPQ 调试失败', e.toString());
+        }
+    };
+
+    const formatCacheBytes = (bytes: number): string => {
+        if (!Number.isFinite(bytes) || bytes <= 0) return '0 MB';
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    };
+
+    const handleLoadTextureCacheStats = async () => {
+        setTextureCacheStatsLoading(true);
+        try {
+            const stats = await getTextureBatchCacheStats();
+            setTextureCacheStats(stats);
+            showMessage(
+                'info',
+                '贴图缓存统计',
+                `Bytes ${stats.result_entries}/${stats.result_limit}, RGBA ${stats.rgba_entries}/${stats.rgba_limit}, stale ${stats.fs_path_stale_invalidations}`
+            );
+        } catch (e: any) {
+            console.error('[Texture Cache] Failed to load stats:', e);
+            showMessage('error', '贴图缓存统计失败', e.toString());
+        } finally {
+            setTextureCacheStatsLoading(false);
         }
     };
 
@@ -658,10 +685,19 @@ export const ViewSettingsWindow: React.FC = () => {
                                                 <span>MPQ: {mpqLoaded ? '已准备' : '未加载'}</span>
                                             </div>
                                             <div style={{ display: 'flex', gap: '4px' }}>
+                                                <Button size="small" onClick={handleLoadTextureCacheStats} loading={textureCacheStatsLoading}>缓存</Button>
                                                 <Button size="small" onClick={handleDebugMissingTexture} disabled={!missingTextures?.length}>测试</Button>
                                                 <Button size="small" type="primary" onClick={handleLoadMPQ}>加载</Button>
                                             </div>
                                         </div>
+                                        {textureCacheStats && (
+                                            <div style={{ fontSize: '11px', color: '#999', lineHeight: 1.5 }}>
+                                                <div>Bytes: {textureCacheStats.result_entries}/{textureCacheStats.result_limit} ({formatCacheBytes(textureCacheStats.result_total_bytes)})</div>
+                                                <div>RGBA: {textureCacheStats.rgba_entries}/{textureCacheStats.rgba_limit} ({formatCacheBytes(textureCacheStats.rgba_total_bytes)})</div>
+                                                <div>Hits: {textureCacheStats.fs_result_cache_hits + textureCacheStats.mpq_result_cache_hits + textureCacheStats.rgba_cache_hits} / Miss: {textureCacheStats.fs_result_cache_misses + textureCacheStats.mpq_result_cache_misses + textureCacheStats.rgba_cache_misses + textureCacheStats.not_found}</div>
+                                                <div>Stale: {textureCacheStats.fs_path_stale_invalidations} / Evict: {textureCacheStats.path_evictions + textureCacheStats.result_evictions + textureCacheStats.rgba_evictions}</div>
+                                            </div>
+                                        )}
                                         <div style={{ borderTop: '1px solid rgba(255,255,255,0.05)', margin: '4px 0' }} />
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
                                             <ToggleButton checked={contextMenuEnabled} onChange={() => handleContextMenuToggle(!contextMenuEnabled)} disabled={contextMenuLoading} fullWidth>主右键菜单</ToggleButton>

@@ -1,8 +1,9 @@
 import { Command } from '../utils/CommandManager'
-import { extractNodesFromModel, useModelStore } from '../store/modelStore'
+import { useModelStore } from '../store/modelStore'
 import { useSelectionStore } from '../store/selectionStore'
 import { ModelData } from '../types/model'
 import { calculateGeosetExtent, calculateModelExtent } from '../utils/geometryUtils'
+import { modelDocumentCommandHandler } from '../application/commands'
 
 const MAX_SAFE_GEOSET_VERTICES = 4000
 
@@ -337,39 +338,38 @@ export class AutoSeparateLayersCommand implements Command {
     }
 
     private syncToStore(geosetsSnapshot: any[], geosetAnimsSnapshot: any[]): void {
-        useModelStore.setState((state) => {
-            if (!state.modelData) {
-                return state
-            }
+        const state = useModelStore.getState()
+        if (!state.modelData) return
 
-            const nextModelData = {
-                ...state.modelData,
-                Geosets: cloneGeosets(geosetsSnapshot) as any,
-                GeosetAnims: cloneGeosetAnims(geosetAnimsSnapshot) as any,
-                __forceFullReload: true
-            } as ModelData & { __forceFullReload?: boolean }
+        const nextModelData = {
+            ...state.modelData,
+            Geosets: cloneGeosets(geosetsSnapshot) as any,
+            GeosetAnims: cloneGeosetAnims(geosetAnimsSnapshot) as any,
+            __forceFullReload: true
+        } as ModelData & { __forceFullReload?: boolean }
 
-            ;(nextModelData.Geosets || []).forEach((geoset: any) => calculateGeosetExtent(geoset))
-            updateHeaderCounts(nextModelData, nextModelData.Geosets?.length || 0, nextModelData.GeosetAnims?.length || 0)
-            calculateModelExtent(nextModelData)
+        ;(nextModelData.Geosets || []).forEach((geoset: any) => calculateGeosetExtent(geoset))
+        updateHeaderCounts(nextModelData, nextModelData.Geosets?.length || 0, nextModelData.GeosetAnims?.length || 0)
+        calculateModelExtent(nextModelData)
 
-            const nextNodes = extractNodesFromModel(nextModelData as ModelData)
-            const nextGeosetCount = nextModelData.Geosets?.length || 0
-            const validHiddenGeosetIds = (state.hiddenGeosetIds || []).filter(
-                (index) => index >= 0 && index < nextGeosetCount
-            )
+        const nextGeosetCount = nextModelData.Geosets?.length || 0
+        const validHiddenGeosetIds = (state.hiddenGeosetIds || []).filter(
+            (index) => index >= 0 && index < nextGeosetCount
+        )
 
-            return {
+        modelDocumentCommandHandler.replaceDocumentSnapshot({
+            name: this.name,
+            before: null,
+            after: {
                 modelData: nextModelData,
-                nodes: nextNodes,
                 hiddenGeosetIds: validHiddenGeosetIds,
                 selectedGeosetIndex: null,
                 selectedGeosetIndices: [],
-                rendererReloadTrigger: state.rendererReloadTrigger + 1
-            }
+            },
+            options: { recordHistory: false },
+            applyOptions: { rendererReload: true },
         })
     }
 }
-
 
 

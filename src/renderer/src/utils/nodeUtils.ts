@@ -256,18 +256,9 @@ export function validateNodeName(name: string): { valid: boolean; error?: string
  */
 export function canDeleteNode(
     nodeId: number,
-    allNodes: any[],
+    _allNodes: any[],
     geosets?: any[]
 ): { canDelete: boolean; reason?: string } {
-    // 检查是否有子节点
-    const hasChildren = allNodes.some(node => node.Parent === nodeId);
-    if (hasChildren) {
-        return {
-            canDelete: false,
-            reason: '该节点有子节点，请先删除子节点'
-        };
-    }
-
     // 检查是否被 Geoset 引用
     if (geosets) {
         const isReferenced = geosets.some(geoset => geoset.GeosetId === nodeId);

@@ -9,17 +9,17 @@ import {
     PlusOutlined,
     RotateRightOutlined
 } from '@ant-design/icons'
-import { readFile } from '@tauri-apps/plugin-fs'
-import { invoke } from '@tauri-apps/api/core'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
-import { useHistoryStore } from '../../store/historyStore'
-import { listen } from '@tauri-apps/api/event'
 import { windowManager } from '../../utils/WindowManager'
 import { GlobalSequenceSelect } from '../common/GlobalSequenceSelect'
 import RightFloatingPanelShell from './RightFloatingPanelShell'
 import { invokeReadMpqFile } from '../../utils/mpqPerf'
 import { decodeTextureData, getTextureCandidatePaths, normalizePath } from '../viewer/textureLoader'
+import { modelDocumentCommandHandler } from '../../application/commands'
+import { useWindowEvent } from '../../hooks/useWindowEvent'
+import { desktopGateway } from '../../infrastructure/desktop'
+import { remapMaterialsAfterTextureAnimRemoval } from '../../utils/materialTextureRelations'
 
 const { Text } = Typography
 
@@ -183,10 +183,29 @@ type DragHud = {
 }
 
 const TextureAnimGizmoPanel: React.FC = () => {
-    const { modelData, modelPath, currentFrame, setTextureAnims } = useModelStore()
+    const { modelData, modelPath, currentFrame } = useModelStore()
     const { selectedTextureAnimIndex, setSelectedTextureAnimIndex, timelineKeyframeDisplayMode } = useSelectionStore()
     const textureAnims = Array.isArray((modelData as any)?.TextureAnims) ? ((modelData as any).TextureAnims as any[]) : []
     const frame = Math.round(currentFrame)
+    const replaceTextureAnims = useCallback((name: string, before: any[], after: any[]) => {
+        modelDocumentCommandHandler.replaceTextureAnimationList({
+            name,
+            before,
+            after,
+        })
+    }, [])
+
+    const deleteTextureAnimWithMaterialRemap = useCallback((deleteIndex: number, oldAnims: any[], newAnims: any[]) => {
+        const oldMaterials = deepClone((modelData as any)?.Materials || [])
+        const newMaterials = remapMaterialsAfterTextureAnimRemoval(oldMaterials, deleteIndex)
+        modelDocumentCommandHandler.replaceTextureAnimationListAndMaterials({
+            name: '删除贴图动画',
+            beforeTextureAnims: oldAnims,
+            afterTextureAnims: newAnims,
+            beforeMaterials: oldMaterials,
+            afterMaterials: newMaterials,
+        })
+    }, [modelData])
 
     const [gizmoMode, setGizmoMode] = useState<GizmoMode>('translate')
     const [form, setForm] = useState<FormState>({ tx: 0, ty: 0, rot: 0, sx: 1, sy: 1 })
@@ -283,8 +302,9 @@ const TextureAnimGizmoPanel: React.FC = () => {
 
             for (const candidate of candidates) {
                 try {
-                    const bytes = await readFile(candidate)
-                    const imageData = decodeTextureData(bytes.buffer, previewTexturePath)
+                    const bytes = await desktopGateway.readFile(candidate)
+                    const buffer = toArrayBuffer(bytes)
+                    const imageData = buffer ? decodeTextureData(buffer, previewTexturePath) : null
                     const url = imageData ? imageDataToDataUrl(imageData) : null
                     if (url) {
                         if (!canceled) setPreviewUrl(url)
@@ -366,13 +386,8 @@ const TextureAnimGizmoPanel: React.FC = () => {
 
         if (!changed) return
 
-        useHistoryStore.getState().push({
-            name: historyName,
-            undo: () => setTextureAnims(deepClone(oldAnims)),
-            redo: () => setTextureAnims(deepClone(newAnims))
-        })
-        setTextureAnims(newAnims)
-    }, [selectedTextureAnimIndex, textureAnims, sampled, upsertTrackKey, setTextureAnims])
+        replaceTextureAnims(historyName, oldAnims, newAnims)
+    }, [selectedTextureAnimIndex, textureAnims, sampled, upsertTrackKey, replaceTextureAnims])
 
     const unitScale = BASE_UNIT_SCALE * zoom
 
@@ -779,14 +794,9 @@ const TextureAnimGizmoPanel: React.FC = () => {
     const addTextureAnim = useCallback(() => {
         const oldAnims = deepClone(textureAnims)
         const newAnims = [...deepClone(textureAnims), {}]
-        useHistoryStore.getState().push({
-            name: '新建贴图动画',
-            undo: () => setTextureAnims(deepClone(oldAnims)),
-            redo: () => setTextureAnims(deepClone(newAnims))
-        })
-        setTextureAnims(newAnims)
+        replaceTextureAnims('新建贴图动画', oldAnims, newAnims)
         setSelectedTextureAnimIndex(newAnims.length - 1)
-    }, [textureAnims, setTextureAnims, setSelectedTextureAnimIndex])
+    }, [textureAnims, replaceTextureAnims, setSelectedTextureAnimIndex])
 
     const deleteTextureAnim = useCallback(() => {
         if (selectedTextureAnimIndex === null || selectedTextureAnimIndex < 0 || selectedTextureAnimIndex >= textureAnims.length) return
@@ -795,20 +805,9 @@ const TextureAnimGizmoPanel: React.FC = () => {
         const newAnims = deepClone(textureAnims)
         newAnims.splice(deleteIndex, 1)
         const nextSelection = newAnims.length === 0 ? null : Math.min(deleteIndex, newAnims.length - 1)
-        useHistoryStore.getState().push({
-            name: '删除贴图动画',
-            undo: () => {
-                setTextureAnims(deepClone(oldAnims))
-                setSelectedTextureAnimIndex(deleteIndex)
-            },
-            redo: () => {
-                setTextureAnims(deepClone(newAnims))
-                setSelectedTextureAnimIndex(nextSelection)
-            }
-        })
-        setTextureAnims(newAnims)
+        deleteTextureAnimWithMaterialRemap(deleteIndex, oldAnims, newAnims)
         setSelectedTextureAnimIndex(nextSelection)
-    }, [selectedTextureAnimIndex, textureAnims, setTextureAnims, setSelectedTextureAnimIndex])
+    }, [selectedTextureAnimIndex, textureAnims, deleteTextureAnimWithMaterialRemap, setSelectedTextureAnimIndex])
 
     const activeTrackMeta = useMemo(() => {
         const modeLabel = gizmoMode === 'translate'
@@ -859,13 +858,8 @@ const TextureAnimGizmoPanel: React.FC = () => {
         track.InterpolationType = nextInterpolationType
         anim[activeTrackMeta.trackName] = track
 
-        useHistoryStore.getState().push({
-            name: `修改贴图动画${activeTrackMeta.modeLabel}轨道属性`,
-            undo: () => setTextureAnims(deepClone(oldAnims)),
-            redo: () => setTextureAnims(deepClone(newAnims))
-        })
-        setTextureAnims(newAnims)
-    }, [selectedTextureAnimIndex, textureAnims, activeTrackMeta.trackName, activeTrackMeta.modeLabel, setTextureAnims])
+        replaceTextureAnims(`修改贴图动画${activeTrackMeta.modeLabel}轨道属性`, oldAnims, newAnims)
+    }, [selectedTextureAnimIndex, textureAnims, activeTrackMeta.trackName, activeTrackMeta.modeLabel, replaceTextureAnims])
 
     const currentTrackEditorData = useMemo(() => {
         const track = currentAnim?.[activeTrackMeta.trackName]
@@ -934,26 +928,15 @@ const TextureAnimGizmoPanel: React.FC = () => {
             GlobalSeqId: nextGlobalSeqId
         }
 
-        useHistoryStore.getState().push({
-            name: `编辑贴图动画${activeTrackMeta.modeLabel}TXT关键帧`,
-            undo: () => setTextureAnims(deepClone(oldAnims)),
-            redo: () => setTextureAnims(deepClone(newAnims))
-        })
-        setTextureAnims(newAnims)
-    }, [selectedTextureAnimIndex, textureAnims, activeTrackMeta.trackName, activeTrackMeta.modeLabel, setTextureAnims])
+        replaceTextureAnims(`编辑贴图动画${activeTrackMeta.modeLabel}TXT关键帧`, oldAnims, newAnims)
+    }, [selectedTextureAnimIndex, textureAnims, activeTrackMeta.trackName, activeTrackMeta.modeLabel, replaceTextureAnims])
 
-    useEffect(() => {
-        const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
-            const payload = event.payload as any;
-            if (payload && payload.callerId === 'TextureAnimGizmoPanel') {
-                handleSaveTrackEditor(payload.data);
-            }
-        });
-
-        return () => {
-            unlisten.then(f => f());
-        };
-    }, [handleSaveTrackEditor]);
+    useWindowEvent<any>('IPC_KEYFRAME_SAVE', (event) => {
+        const payload = event.payload;
+        if (payload && payload.callerId === 'TextureAnimGizmoPanel') {
+            handleSaveTrackEditor(payload.data);
+        }
+    });
 
     const inputX = useMemo(() => {
         if (gizmoMode === 'translate') return form.tx

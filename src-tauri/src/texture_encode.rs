@@ -8,7 +8,8 @@ fn encode_blp_from_rgba(
     height: u32,
     quality: u8,
 ) -> Result<Vec<u8>, String> {
-    let image = AnyImage::from_rgba(rgba, width, height).map_err(|e| format!("BLP source error: {e}"))?;
+    let image =
+        AnyImage::from_rgba(rgba, width, height).map_err(|e| format!("BLP source error: {e}"))?;
     image
         .encode(&AnyImageEncodeOptions::Blp {
             quality,

@@ -2,6 +2,7 @@ export type { ResolveManagedWindow } from './WindowRpcTransport'
 export type { NodeEditorWindowSession } from './ToolWindowSessionRegistry'
 export type { OpenToolWindowOptions } from './ToolWindowLifecycleService'
 export type { KeyframeSavePayload } from './KeyframeEvents'
+export type { ToolWindowId, WindowSize } from './ToolWindowLayouts'
 export type {
     EditorShortcutId,
     EditorToggleId,
@@ -69,5 +70,14 @@ export {
 } from './ToolWindowSnapshots'
 export { ToolWindowHydrationTracker } from './ToolWindowHydrationTracker'
 export { ToolWindowLifecycleService } from './ToolWindowLifecycleService'
+export {
+    getNodeEditorWindowSize,
+    getNodeEditorWindowLayout,
+    getNodeEditorWindowTitle,
+    getToolWindowSize,
+    NODE_EDITOR_WINDOW_SIZES,
+    NODE_EDITOR_WINDOW_TITLES,
+    TOOL_WINDOW_SIZES,
+} from './ToolWindowLayouts'
 export { ToolWindowSessionRegistry } from './ToolWindowSessionRegistry'
 export { WindowRpcTransport } from './WindowRpcTransport'

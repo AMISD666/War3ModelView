@@ -4,13 +4,13 @@ import { Checkbox, Dropdown, Input, Typography, type MenuProps } from 'antd'
 import { DraggableModal } from '../DraggableModal'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
-import { useHistoryStore } from '../../store/historyStore'
 import { windowManager } from '../../utils/WindowManager'
 import { useRpcClient } from '../../hooks/useRpc'
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
 import { useWindowEvent } from '../../hooks/useWindowEvent'
 import { vectorToPlainArray } from '../../utils/animVectorIpc'
 import { coercePivotFloat3 } from '../../utils/pivotUtils'
+import { modelDocumentCommandHandler } from '../../application/commands'
 
 const { Text } = Typography
 
@@ -141,7 +141,6 @@ const parseSequenceInterval = (interval: any): [number, number] => {
 const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ visible, onClose, isStandalone }) => {
     // Non-standalone direct store access
     const directModelData = useModelStore((state) => state.modelData) as any
-    const directSetGeosetAnims = useModelStore((state) => state.setGeosetAnims)
     const directSetSequence = useModelStore((state) => state.setSequence)
     const directSetFrame = useModelStore((state) => state.setFrame)
 
@@ -151,6 +150,15 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
         geosetAnims: [],
         globalSequences: [],
     })
+    const emitVisibilityAction = (action: string, payload: unknown, stalePolicy: 'warn' | 'reject' = 'reject') => {
+        emitCommand('EXECUTE_VISIBILITY_ACTION', {
+            action,
+            payload,
+            documentId: rpcState.documentId,
+            baseDocumentRevision: rpcState.documentRevision,
+            stalePolicy,
+        })
+    }
 
     const standaloneModelData = useMemo(() => ({
         Geosets: rpcState.geosets,
@@ -164,17 +172,9 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
     const modelData = isStandalone ? standaloneModelData : directModelData
     const geosetAnimSource = Array.isArray(modelData?.GeosetAnims) ? modelData.GeosetAnims : []
 
-    const setGeosetAnims = (anims: any[]) => {
-        if (isStandalone) {
-            emitCommand('EXECUTE_VISIBILITY_ACTION', { action: 'SAVE_ANIMS', payload: anims })
-        } else {
-            directSetGeosetAnims(anims)
-        }
-    }
-
     const setSequence = (seqId: number | null) => {
         if (isStandalone) {
-            emitCommand('EXECUTE_VISIBILITY_ACTION', { action: 'SET_SEQUENCE', payload: seqId })
+            emitVisibilityAction('SET_SEQUENCE', seqId, 'warn')
         } else {
             directSetSequence(seqId ?? -1)
         }
@@ -182,7 +182,7 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
 
     const setFrame = (frame: number) => {
         if (isStandalone) {
-            emitCommand('EXECUTE_VISIBILITY_ACTION', { action: 'SET_FRAME', payload: frame })
+            emitVisibilityAction('SET_FRAME', frame, 'warn')
         } else {
             directSetFrame(frame)
         }
@@ -271,13 +271,16 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
     const applyImmediateChange = (nextAnims: any[], historyName = 'Edit Geoset Sequence Visibility') => {
         const oldAnims = deepClone(geosetAnimSource)
         const appliedAnims = deepClone(nextAnims)
-        useHistoryStore.getState().push({
-            name: historyName,
-            undo: () => setGeosetAnims(oldAnims),
-            redo: () => setGeosetAnims(appliedAnims)
-        })
         setLocalAnims(appliedAnims)
-        setGeosetAnims(appliedAnims)
+        if (isStandalone) {
+            emitVisibilityAction('SAVE_ANIMS', appliedAnims)
+            return
+        }
+        modelDocumentCommandHandler.replaceGeosetAnimationList({
+            name: historyName,
+            before: oldAnims,
+            after: appliedAnims,
+        })
     }
 
     useEffect(() => {

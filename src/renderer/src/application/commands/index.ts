@@ -4,7 +4,27 @@ export { HistoryCommandService, historyCommandService } from './HistoryCommandSe
 export { NodeEditorCommandHandler, nodeEditorCommandHandler } from './NodeEditorCommandHandler'
 export type {
     CameraDocumentEntry,
+    DocumentSnapshotReplacement,
     ReplaceCameraListCommandInput,
+    ReplaceDocumentSnapshotCommandInput,
+    ReplaceGeosetAnimationListCommandInput,
+    ReplaceGeosetListAndAnimationsCommandInput,
+    ReplaceGeosetListCommandInput,
     ReplaceModelDataCommandInput,
+    ReplaceTextureAnimationListCommandInput,
+    ReplaceTextureAnimationListAndMaterialsCommandInput,
 } from './ModelDocumentCommandHandler'
 export { ModelDocumentCommandHandler, modelDocumentCommandHandler } from './ModelDocumentCommandHandler'
+export type {
+    SetMaterialCollectionInput,
+    SetMaterialManagerPreviewInput,
+    SetTextureCollectionInput,
+    SetTextureMaterialCollectionsInput,
+    TextureMaterialCommandResult,
+    TextureMaterialDocumentDomain,
+    TextureMaterialRendererPlan,
+} from './TextureMaterialCommandHandler'
+export {
+    TextureMaterialCommandHandler,
+    textureMaterialCommandHandler,
+} from './TextureMaterialCommandHandler'

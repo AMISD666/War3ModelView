@@ -1,7 +1,8 @@
-import { getToolWindowSize, TOOL_WINDOW_SIZES, type ToolWindowId } from '../../constants/windowLayouts'
 import { windowGateway, type ManagedWindow, type WindowGateway } from '../../infrastructure/window'
-import { markStandalonePerf } from '../../utils/standalonePerf'
+import { markStandalonePerf } from '../diagnostics/StandalonePerf'
+import { previewOverlayService } from '../preview'
 import { ToolWindowHydrationTracker } from './ToolWindowHydrationTracker'
+import { getToolWindowSize, TOOL_WINDOW_SIZES, type ToolWindowId } from './ToolWindowLayouts'
 
 export type OpenToolWindowOptions = {
     waitForHydration?: boolean
@@ -56,6 +57,7 @@ export class ToolWindowLifecycleService {
                 await existingWin.onCloseRequested(async (event) => {
                     event.preventDefault()
                     this.visibilityCache.set(windowId, false)
+                    this.clearPreviewForWindow(windowId)
                     await existingWin.hide()
                 })
                 return
@@ -88,6 +90,7 @@ export class ToolWindowLifecycleService {
             await win.onCloseRequested(async (event) => {
                 event.preventDefault()
                 this.visibilityCache.set(windowId, false)
+                this.clearPreviewForWindow(windowId)
                 await win.hide()
             })
 
@@ -154,13 +157,14 @@ export class ToolWindowLifecycleService {
         const win = this.activeWindows.get(windowId)
         if (win) {
             this.visibilityCache.set(windowId, false)
+            this.clearPreviewForWindow(windowId)
             await win.hide()
         }
     }
 
     async isToolWindowVisible(windowId: string): Promise<boolean> {
-        if (this.visibilityCache.has(windowId)) {
-            return this.visibilityCache.get(windowId) === true
+        if (this.visibilityCache.has(windowId) && this.visibilityCache.get(windowId) !== true) {
+            return false
         }
 
         const win = await this.resolveWindow(windowId)
@@ -169,7 +173,13 @@ export class ToolWindowLifecycleService {
             return false
         }
 
-        const visible = await win.isVisible().catch(() => false)
+        let visible = false
+        try {
+            visible = await win.isVisible()
+        } catch {
+            this.clearToolWindowState(windowId)
+            return false
+        }
         this.visibilityCache.set(windowId, visible)
         return visible
     }
@@ -179,6 +189,7 @@ export class ToolWindowLifecycleService {
         this.activeWindows.clear()
         this.visibilityCache.clear()
         this.hydrationTracker.clearAll()
+        trackedWindows.forEach(([windowId]) => this.clearPreviewForWindow(windowId))
 
         const windows = new Map<string, ManagedWindow>(trackedWindows)
         try {
@@ -219,9 +230,20 @@ export class ToolWindowLifecycleService {
     }
 
     private clearToolWindowState(windowId: string): void {
+        this.clearPreviewForWindow(windowId)
         this.hydrationTracker.clearWindow(windowId)
         this.visibilityCache.delete(windowId)
         this.activeWindows.delete(windowId)
+    }
+
+    private clearPreviewForWindow(windowId: string): void {
+        if (windowId === 'materialManager') {
+            previewOverlayService.clearMaterialManagerPreview()
+            return
+        }
+        if (windowId === 'nodeEditor') {
+            previewOverlayService.clearNodeEditorPreview()
+        }
     }
 
     private async destroyWebviewWindow(windowId: string, win?: ManagedWindow | null): Promise<void> {

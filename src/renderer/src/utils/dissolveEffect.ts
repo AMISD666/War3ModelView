@@ -5,6 +5,11 @@
  */
 
 import { desktopGateway } from '../infrastructure/desktop';
+import {
+    decodeTexturePreviewImageData,
+    loadTexturePreviewIntoRenderer,
+    textureDecodeGateway,
+} from '../infrastructure/texture';
 
 export interface DissolveEffectParams {
     selectedGeosets: number[];
@@ -54,8 +59,6 @@ export async function executeDissolveEffect(
     modelPath: string,
     params: DissolveEffectParams
 ): Promise<DissolveEffectResult> {
-    const { decodeTexture, decodeTextureData, getTextureCandidatePaths } = await import('../components/viewer/textureLoader');
-
     const geosets = modelData.Geosets || [];
     const materials = (modelData.Materials || []).map((m: any) => ({ ...m, Layers: m.Layers ? m.Layers.map((l: any) => ({ ...l })) : [] }));
     const textures = (modelData.Textures || []).map((t: any) => ({ ...t }));
@@ -87,20 +90,7 @@ export async function executeDissolveEffect(
 
     // 3. Decode dissolve texture
     const dissolveBuffer = await desktopGateway.readFile(params.dissolveTexturePath);
-    let dissolveImageData: ImageData | null = null;
-    if (params.dissolveTexturePath.toLowerCase().endsWith('.png')) {
-        const arrayBuffer = new ArrayBuffer(dissolveBuffer.byteLength);
-        new Uint8Array(arrayBuffer).set(dissolveBuffer);
-        const blob = new Blob([arrayBuffer], { type: 'image/png' });
-        const bitmap = await createImageBitmap(blob);
-        const c = document.createElement('canvas');
-        c.width = bitmap.width; c.height = bitmap.height;
-        const ctx = c.getContext('2d', { alpha: true, willReadFrequently: true })!;
-        ctx.drawImage(bitmap, 0, 0);
-        dissolveImageData = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
-    } else {
-        dissolveImageData = decodeTextureData(dissolveBuffer.buffer as ArrayBuffer, params.dissolveTexturePath);
-    }
+    const dissolveImageData = await decodeTexturePreviewImageData(dissolveBuffer, params.dissolveTexturePath);
     if (!dissolveImageData) throw new Error('消散贴图解码失败');
 
     // 4. Process each affected texture: composite dissolve luminance → alpha channel
@@ -114,7 +104,7 @@ export async function executeDissolveEffect(
         if (!imagePath) continue;
 
         try {
-            const origResult = await decodeTexture(imagePath, modelPath);
+            const origResult = await textureDecodeGateway.decodeTexture(imagePath, modelPath);
             if (!origResult.imageData) continue;
 
             const origData = origResult.imageData;
@@ -257,8 +247,6 @@ export async function refreshDissolveTexturesInRenderer(
 ): Promise<void> {
     if (!renderer || !modelPath || result.modifiedTexturePaths.length === 0) return;
 
-    const { loadTextureForRenderer } = await import('../components/viewer/textureLoader');
-
     if (result.textures) {
         renderer.model.Textures = result.textures;
     }
@@ -267,7 +255,7 @@ export async function refreshDissolveTexturesInRenderer(
     }
 
     await Promise.all(
-        result.modifiedTexturePaths.map((texturePath) => loadTextureForRenderer(renderer, texturePath, modelPath))
+        result.modifiedTexturePaths.map((texturePath) => loadTexturePreviewIntoRenderer(renderer, texturePath, modelPath))
     );
 
     if (renderer.modelInstance?.syncMaterials) {

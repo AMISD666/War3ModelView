@@ -3,11 +3,8 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Select, Button, ConfigProvider, theme } from 'antd'
 import { DraggableModal } from '../DraggableModal';
 import { useModelStore } from '../../store/modelStore';
-import { decodeBLP, getBLPImageData } from 'war3-model';
-import { readFile } from '@tauri-apps/plugin-fs';
-import { invoke } from '@tauri-apps/api/core';
 import { MaterialLayerOptions, LayerConfig, DEFAULT_LAYER_CONFIG } from './MaterialLayerOptions';
-import { invokeReadMpqFile } from '../../utils/mpqPerf';
+import { loadTexturePreviewUrl } from '../../application/preview';
 
 interface GeosetMergeDialogProps {
     visible: boolean;
@@ -22,7 +19,7 @@ export const GeosetMergeDialog: React.FC<GeosetMergeDialogProps> = ({
     onCancel,
     onConfirm
 }) => {
-    const { modelData, modelPath } = useModelStore();
+    const { modelData, modelPath, documentId, assetRevision } = useModelStore();
     const [selectedMaterialIndex, setSelectedMaterialIndex] = useState<number>(-1);
     const [layerConfig, setLayerConfig] = useState<LayerConfig>(DEFAULT_LAYER_CONFIG);
     const [texturePreviewUrl, setTexturePreviewUrl] = useState<string | null>(null);
@@ -114,6 +111,8 @@ export const GeosetMergeDialog: React.FC<GeosetMergeDialogProps> = ({
 
     // Load texture preview when material changes (or layerConfig for new mode)
     useEffect(() => {
+        let disposed = false
+
         const loadTexturePreview = async () => {
             let textureId: number = -1;
 
@@ -129,74 +128,45 @@ export const GeosetMergeDialog: React.FC<GeosetMergeDialogProps> = ({
 
             if (textureId < 0) {
                 setTexturePreviewUrl(null);
+                setLoadingTexture(false);
                 return;
             }
 
             const texture: any = modelData?.Textures?.[textureId];
             if (!texture?.Image) {
                 setTexturePreviewUrl(null);
+                setLoadingTexture(false);
                 return;
             }
 
-            const texturePath = texture.Image as string;
-            const isBlp = texturePath.toLowerCase().endsWith('.blp');
-
-            if (isBlp) {
-                setLoadingTexture(true);
-                try {
-                    let fullPath = texturePath;
-                    if (modelPath && !fullPath.match(/^[a-zA-Z]:/) && !fullPath.startsWith('/')) {
-                        const modelDir = modelPath.substring(0, modelPath.lastIndexOf('\\'));
-                        fullPath = `${modelDir}\\${fullPath}`;
-                    }
-
-                    let buffer: ArrayBuffer | null = null;
-                    try {
-                        const fileData = await readFile(fullPath);
-                        buffer = fileData.buffer;
-                    } catch {
-                        try {
-                            const mpqResult: number[] = await invokeReadMpqFile<number[]>(texturePath.replace(/\//g, '\\'), 'GeosetMergeDialog.preview');
-                            buffer = new Uint8Array(mpqResult).buffer;
-                        } catch {
-                            buffer = null;
-                        }
-                    }
-
-                    if (buffer) {
-                        const blp = decodeBLP(buffer);
-                        const imageData = getBLPImageData(blp, 0);
-                        if (imageData) {
-                            const canvas = document.createElement('canvas');
-                            canvas.width = imageData.width;
-                            canvas.height = imageData.height;
-                            const ctx = canvas.getContext('2d');
-                            if (ctx) {
-                                const realImageData = new ImageData(
-                                    new Uint8ClampedArray(imageData.data),
-                                    imageData.width,
-                                    imageData.height
-                                );
-                                ctx.putImageData(realImageData, 0, 0);
-                                setTexturePreviewUrl(canvas.toDataURL());
-                            }
-                        }
-                    } else {
-                        setTexturePreviewUrl(null);
-                    }
-                } catch (e) {
-                    console.error('Failed to load texture preview:', e);
+            setLoadingTexture(true);
+            try {
+                const previewUrl = await loadTexturePreviewUrl({
+                    documentId,
+                    assetRevision,
+                    modelPath,
+                    texturePath: texture.Image as string,
+                })
+                if (!disposed) {
+                    setTexturePreviewUrl(previewUrl)
+                }
+            } catch (e) {
+                console.error('Failed to load texture preview:', e);
+                if (!disposed) {
                     setTexturePreviewUrl(null);
-                } finally {
+                }
+            } finally {
+                if (!disposed) {
                     setLoadingTexture(false);
                 }
-            } else {
-                setTexturePreviewUrl(`file://${texturePath}`);
             }
         };
 
         loadTexturePreview();
-    }, [selectedMaterialIndex, layerConfig.textureId, allMaterials, modelData?.Textures, modelPath]);
+        return () => {
+            disposed = true
+        }
+    }, [selectedMaterialIndex, layerConfig.textureId, allMaterials, modelData?.Textures, modelPath, documentId, assetRevision]);
 
     const handleConfirm = () => {
         if (selectedGeosetIndices.length < 2) {

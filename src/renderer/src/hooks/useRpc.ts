@@ -4,6 +4,7 @@ import { normalizeRpcSyncPayload } from '../utils/rpcSerialization';
 import { markStandalonePerf } from '../utils/standalonePerf';
 import { windowManager } from '../utils/WindowManager';
 import { windowGateway } from '../infrastructure/window';
+import { markSnapshotIgnoredStale, markSnapshotReceived, markSnapshotSent } from '../application/diagnostics';
 
 const getPayloadKeyCount = (payload: unknown): number => {
     if (!payload || typeof payload !== 'object') return 0
@@ -25,8 +26,63 @@ type ActiveModelChangedPayload = {
     hasModelData: boolean
 }
 
+type RevisionedRpcState = {
+    documentId?: string | null
+    documentRevision?: number
+    snapshotRevision?: number
+    snapshotVersion?: number
+}
+
 const getEventPayload = <TPayload,>(event: unknown): TPayload =>
     (event as WindowEventPayload<TPayload>).payload
+
+const asRevisionedRpcState = (value: unknown): RevisionedRpcState | null => {
+    if (!value || typeof value !== 'object') {
+        return null
+    }
+    const candidate = value as RevisionedRpcState
+    return typeof candidate.documentRevision === 'number' ? candidate : null
+}
+
+const shouldIgnoreStaleSnapshot = (previous: unknown, next: unknown): boolean => {
+    const previousRevision = asRevisionedRpcState(previous)
+    const nextRevision = asRevisionedRpcState(next)
+    if (!previousRevision || !nextRevision) {
+        return false
+    }
+
+    const previousDocumentId = previousRevision.documentId
+    const nextDocumentId = nextRevision.documentId
+    if (!previousDocumentId || !nextDocumentId || previousDocumentId !== nextDocumentId) {
+        return false
+    }
+
+    if (nextRevision.documentRevision! < previousRevision.documentRevision!) {
+        return true
+    }
+
+    const previousSnapshotRevision = previousRevision.snapshotRevision ?? previousRevision.snapshotVersion
+    const nextSnapshotRevision = nextRevision.snapshotRevision ?? nextRevision.snapshotVersion
+    return (
+        nextRevision.documentRevision === previousRevision.documentRevision &&
+        typeof previousSnapshotRevision === 'number' &&
+        typeof nextSnapshotRevision === 'number' &&
+        nextSnapshotRevision < previousSnapshotRevision
+    )
+}
+
+const getRevisionPerfDetail = (value: unknown): Record<string, unknown> => {
+    const revision = asRevisionedRpcState(value)
+    if (!revision) {
+        return {}
+    }
+    return {
+        documentId: revision.documentId ?? '',
+        documentRevision: revision.documentRevision ?? 0,
+        snapshotRevision: revision.snapshotRevision ?? revision.snapshotVersion ?? 0,
+        snapshotVersion: revision.snapshotVersion ?? 0,
+    }
+}
 
 interface RpcClientOptions<TState, TPatch> {
     applyPatch?: (previousState: TState, patch: TPatch) => TState
@@ -80,10 +136,11 @@ export function useRpcServer<TState, TPatch = never>(
         windowGateway.listen(`rpc-req-${windowId}`, async () => {
             debugLog(`[RPC Server][${windowId}] Received request for sync from client.`);
             const state = getLatestStateRef.current();
-            markStandalonePerf('snapshot_sent', {
+            markSnapshotSent({
                 windowId,
                 source: 'request_response',
                 keyCount: getPayloadKeyCount(state),
+                ...getRevisionPerfDetail(state),
             });
             await windowManager.emitToolWindowSync(windowId, state);
         }).then(unlisten => {
@@ -94,10 +151,11 @@ export function useRpcServer<TState, TPatch = never>(
         windowGateway.listen(`rpc-ready-${windowId}`, async () => {
             debugLog(`[RPC Server][${windowId}] Child reported READY.`);
             const state = getLatestStateRef.current();
-            markStandalonePerf('snapshot_sent', {
+            markSnapshotSent({
                 windowId,
                 source: 'ready_signal',
                 keyCount: getPayloadKeyCount(state),
+                ...getRevisionPerfDetail(state),
             });
             await windowManager.emitToolWindowSync(windowId, state);
         }).then(unlisten => {
@@ -131,11 +189,12 @@ export function useRpcServer<TState, TPatch = never>(
         if (pending === null) return
         pendingBroadcastRef.current = null
         debugLog(`[RPC Server][${windowId}] Flushing debounced broadcast. Object keys: ${Object.keys(pending as any).join(',')}`)
-        markStandalonePerf('snapshot_sent', {
+        markSnapshotSent({
             windowId,
             source: 'broadcast',
             keyCount: getPayloadKeyCount(pending),
             debounced: true,
+            ...getRevisionPerfDetail(pending),
         })
         void windowManager.emitToolWindowSync(windowId, pending)
     }, [windowId])
@@ -216,6 +275,7 @@ export function useRpcClient<TState, TPatch = never>(
         markStandalonePerf('snapshot_applied', {
             windowId,
             snapshotId,
+            ...getRevisionPerfDetail(state),
         });
         windowGateway.emit(`rpc-applied-${windowId}`, { snapshotId }).catch(() => { });
         pendingSnapshotIdRef.current = null;
@@ -309,15 +369,34 @@ export function useRpcClient<TState, TPatch = never>(
                 clearBootstrapTimeouts();
 
                 pendingSnapshotIdRef.current = snapshotId;
-                markStandalonePerf('snapshot_received', {
+                markSnapshotReceived({
                     windowId,
                     snapshotId,
                     keyCount: getPayloadKeyCount(decoded),
+                    ...getRevisionPerfDetail(decoded),
                 });
 
                 startTransition(() => {
                     if (!isMounted) return;
-                    setState(decoded);
+                    setState((previousState) => {
+                        if (shouldIgnoreStaleSnapshot(previousState, decoded)) {
+                            const previousRevision = asRevisionedRpcState(previousState)
+                            const nextRevision = asRevisionedRpcState(decoded)
+                            markSnapshotIgnoredStale({
+                                windowId,
+                                snapshotId,
+                                previousDocumentId: previousRevision?.documentId ?? '',
+                                nextDocumentId: nextRevision?.documentId ?? '',
+                                previousDocumentRevision: previousRevision?.documentRevision ?? 0,
+                                nextDocumentRevision: nextRevision?.documentRevision ?? 0,
+                                previousSnapshotVersion: previousRevision?.snapshotVersion ?? 0,
+                                nextSnapshotVersion: nextRevision?.snapshotVersion ?? 0,
+                            })
+                            pendingSnapshotIdRef.current = null
+                            return previousState
+                        }
+                        return decoded
+                    });
                 });
             })();
         }).then(unlisten => {

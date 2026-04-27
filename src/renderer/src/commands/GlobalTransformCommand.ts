@@ -2,6 +2,7 @@ import { quat } from 'gl-matrix'
 import { useModelStore, extractNodesFromModel, updateModelDataWithNodes } from '../store/modelStore'
 import { ModelNode, NodeType } from '../types/node'
 import { Command } from '../utils/CommandManager'
+import { modelDocumentCommandHandler } from '../application/commands'
 
 type TransformOps = {
     translation: [number, number, number]
@@ -106,13 +107,6 @@ function composeTrackerRotation(
     ]
 }
 
-function markActiveTabDirty(
-    state: ReturnType<typeof useModelStore.getState>
-): Record<string, boolean> {
-    if (!state.activeTabId) return state.dirtyTabs
-    return { ...state.dirtyTabs, [state.activeTabId]: true }
-}
-
 export class GlobalTransformCommand implements Command {
     name = 'Global Transform'
 
@@ -187,14 +181,18 @@ export class GlobalTransformCommand implements Command {
     private apply(snapshot: Snapshot | null) {
         if (!snapshot) return
 
-        useModelStore.setState((state) => ({
-            modelData: cloneDeep(snapshot.modelData),
-            nodes: cloneDeep(snapshot.nodes),
-            rendererReloadTrigger: state.rendererReloadTrigger + 1,
-            globalTransformTracker: {
-                rotation: [...snapshot.trackerRotation] as [number, number, number]
+        modelDocumentCommandHandler.replaceDocumentSnapshot({
+            name: this.name,
+            before: null,
+            after: {
+                modelData: cloneDeep(snapshot.modelData),
+                nodes: cloneDeep(snapshot.nodes),
+                globalTransformTracker: {
+                    rotation: [...snapshot.trackerRotation] as [number, number, number]
+                },
             },
-            dirtyTabs: markActiveTabDirty(state)
-        }))
+            options: { recordHistory: false },
+            applyOptions: { rendererReload: true },
+        })
     }
 }

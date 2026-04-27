@@ -1,4 +1,5 @@
 import { extractNodesFromModel, updateModelDataWithNodes, useModelStore } from '../store/modelStore'
+import { modelDocumentCommandHandler } from '../application/commands'
 import type { ModelNode } from '../types/node'
 import { NodeType } from '../types/node'
 import type { Command } from '../utils/CommandManager'
@@ -27,13 +28,6 @@ function cloneDeep<T>(value: T): T {
         return sc(value)
     }
     return JSON.parse(JSON.stringify(value))
-}
-
-function markActiveTabDirty(
-    state: ReturnType<typeof useModelStore.getState>
-): Record<string, boolean> {
-    if (!state.activeTabId) return state.dirtyTabs
-    return { ...state.dirtyTabs, [state.activeTabId]: true }
 }
 
 function collectStaticFrames(modelData: any): number[] {
@@ -274,14 +268,18 @@ export class MirrorModelCommand implements Command {
     private apply(snapshot: Snapshot | null): void {
         if (!snapshot) return
 
-        useModelStore.setState((state) => ({
-            modelData: cloneDeep(snapshot.modelData),
-            nodes: cloneDeep(snapshot.nodes),
-            rendererReloadTrigger: state.rendererReloadTrigger + 1,
-            globalTransformTracker: {
-                rotation: [...snapshot.trackerRotation] as [number, number, number]
+        modelDocumentCommandHandler.replaceDocumentSnapshot({
+            name: this.name,
+            before: null,
+            after: {
+                modelData: cloneDeep(snapshot.modelData),
+                nodes: cloneDeep(snapshot.nodes),
+                globalTransformTracker: {
+                    rotation: [...snapshot.trackerRotation] as [number, number, number]
+                },
             },
-            dirtyTabs: markActiveTabDirty(state)
-        }))
+            options: { recordHistory: false },
+            applyOptions: { rendererReload: true },
+        })
     }
 }

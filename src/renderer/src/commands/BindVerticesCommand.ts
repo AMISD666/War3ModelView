@@ -1,6 +1,7 @@
 import { Command } from '../utils/CommandManager'
 import { useModelStore } from '../store/modelStore'
 import { useRendererStore } from '../store/rendererStore'
+import { modelDocumentCommandHandler } from '../application/commands'
 
 interface VertexBindChange {
     geosetIndex: number
@@ -245,7 +246,12 @@ export class BindVerticesCommand implements Command {
                     ...(rendererGeoset.SkinWeights ? { SkinWeights: new Uint8Array(rendererGeoset.SkinWeights) } : {})
                 } as any
             })
-            useModelStore.getState().setGeosets(nextGeosets as any)
+            modelDocumentCommandHandler.replaceGeosetList({
+                name: 'Bind Vertices: Sync Geosets',
+                before: storeGeosets,
+                after: nextGeosets as any,
+                options: { recordHistory: false },
+            })
         }
 
         // Update GPU skinning buffers through the active renderer instance.

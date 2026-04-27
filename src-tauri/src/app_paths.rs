@@ -42,14 +42,19 @@ fn migrate_settings_from_exe_dir(target_root: &PathBuf) {
             copied_any = true;
         }
     }
-    if copied_any || source_settings.read_dir().map(|mut it| it.next().is_none()).unwrap_or(false) {
+    if copied_any
+        || source_settings
+            .read_dir()
+            .map(|mut it| it.next().is_none())
+            .unwrap_or(false)
+    {
         let _ = fs::remove_dir_all(&source_settings);
     }
 }
 
 pub fn get_app_storage_root() -> Result<PathBuf, String> {
-    let local_app_data = std::env::var("LOCALAPPDATA")
-        .map_err(|_| "Failed to create app data dir".to_string())?;
+    let local_app_data =
+        std::env::var("LOCALAPPDATA").map_err(|_| "Failed to create app data dir".to_string())?;
     let fallback_root = PathBuf::from(local_app_data)
         .join("War3ModelView")
         .join("war3modelview_data");

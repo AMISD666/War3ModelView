@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { listen } from '@tauri-apps/api/event'
 import { Button, Select, Typography } from 'antd'
 import { EditOutlined } from '@ant-design/icons'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 
 import { useHistoryStore } from '../../store/historyStore'
-import { mergeMaterialManagerPreview, useModelStore } from '../../store/modelStore'
+import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
+import { textureMaterialCommandHandler } from '../../application/commands'
+import { useMaterialPreviewProjectedModelData } from '../../application/preview'
+import { useWindowEvent } from '../../hooks/useWindowEvent'
 import { getMaterialTrackEditorTitle, getMaterialTrackFieldName } from '../../utils/materialAnimShared'
 import { windowManager } from '../../utils/WindowManager'
 import { GlobalSequenceSelect } from '../common/GlobalSequenceSelect'
@@ -97,7 +99,7 @@ const getTextureName = (image: any) => {
 }
 
 const MaterialAnimPanel: React.FC = () => {
-    const { modelData, materialManagerPreview, currentFrame, setMaterials } = useModelStore()
+    const currentFrame = useModelStore((state) => state.currentFrame)
     const {
         pickedGeosetIndex,
         selectedMaterialIndex,
@@ -117,10 +119,7 @@ const MaterialAnimPanel: React.FC = () => {
         setCollapsed(timelineKeyframeDisplayMode !== 'material')
     }, [timelineKeyframeDisplayMode])
 
-    const effectiveModelData = useMemo(
-        () => mergeMaterialManagerPreview(modelData, materialManagerPreview),
-        [modelData, materialManagerPreview]
-    )
+    const effectiveModelData = useMaterialPreviewProjectedModelData()
     const materials = useMemo(() => Array.isArray((effectiveModelData as any)?.Materials) ? ((effectiveModelData as any).Materials as any[]) : [], [effectiveModelData])
     const textures = useMemo(() => Array.isArray((effectiveModelData as any)?.Textures) ? ((effectiveModelData as any).Textures as any[]) : [], [effectiveModelData])
     const roundedFrame = Math.round(currentFrame)
@@ -207,11 +206,11 @@ const MaterialAnimPanel: React.FC = () => {
         updater(nextMaterials)
         useHistoryStore.getState().push({
             name: historyName,
-            undo: () => setMaterials(deepClone(oldMaterials)),
-            redo: () => setMaterials(deepClone(nextMaterials))
+            undo: () => textureMaterialCommandHandler.setMaterialCollection({ materials: deepClone(oldMaterials) }),
+            redo: () => textureMaterialCommandHandler.setMaterialCollection({ materials: deepClone(nextMaterials) })
         })
-        setMaterials(nextMaterials)
-    }, [materials, setMaterials])
+        textureMaterialCommandHandler.setMaterialCollection({ materials: nextMaterials })
+    }, [materials])
 
     const ensureTrackLayer = useCallback((material: any) => {
         const layers = Array.isArray(material?.Layers) ? [...material.Layers] : []
@@ -367,15 +366,12 @@ const MaterialAnimPanel: React.FC = () => {
         })
     }, [applyToSelectedMaterials, currentAlpha, currentTextureId, editingField])
 
-    useEffect(() => {
-        const unlisten = listen('IPC_KEYFRAME_SAVE', (event) => {
-            const payload = event.payload as any
-            if (payload?.callerId === 'MaterialAnimPanel') {
-                handleSaveEditor(payload.data)
-            }
-        })
-        return () => { unlisten.then((fn) => fn()) }
-    }, [handleSaveEditor])
+    useWindowEvent<any>('IPC_KEYFRAME_SAVE', (event) => {
+        const payload = event.payload
+        if (payload?.callerId === 'MaterialAnimPanel') {
+            handleSaveEditor(payload.data)
+        }
+    })
 
     const textureTrackMeta = getTrackMeta('TextureID')
     const alphaTrackMeta = getTrackMeta('Alpha')

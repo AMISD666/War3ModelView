@@ -5,6 +5,7 @@ import { normalizePath } from "./textureLoader";
 export type LiveTextureAdjustPayload = {
   modelPath: string;
   imagePath: string;
+  assetRevision?: number;
   adjustments: TextureAdjustments;
 };
 
@@ -34,7 +35,8 @@ export const toTextureUpdateUint8Array = (payload: any): Uint8ClampedArray | nul
   return null;
 };
 
-export const getLiveTextureSourceKey = (modelPath: string, imagePath: string): string => `${modelPath || ""}::${normalizePath(imagePath || "")}`;
+export const getLiveTextureSourceKey = (modelPath: string, imagePath: string, assetRevision?: number): string =>
+  `${modelPath || ""}::${assetRevision ?? 0}::${normalizePath(imagePath || "")}`;
 
 export const getTextureAdjustmentSignature = (texture: any): string => {
   const raw = texture?.[TEXTURE_ADJUSTMENTS_KEY];

@@ -1,5 +1,5 @@
 ﻿import React, { useRef, useEffect, useState, useCallback, useMemo, useLayoutEffect } from 'react'
-import { mergeMaterialManagerPreview, useModelStore } from '../../../store/modelStore'
+import { useModelStore } from '../../../store/modelStore'
 import { useSelectionStore, type KeyframeDisplayMode } from '../../../store/selectionStore'
 import { useRendererStore } from '../../../store/rendererStore'
 import {
@@ -17,6 +17,11 @@ import {
     NodeIndexOutlined
 } from '@ant-design/icons'
 import { useHistoryStore } from '../../../store/historyStore'
+import { modelDocumentCommandHandler, textureMaterialCommandHandler } from '../../../application/commands'
+import {
+    getCurrentMaterialPreviewProjectedModelData,
+    useMaterialPreviewProjectedModelData,
+} from '../../../application/preview'
 import { Button, Slider, Input, Radio, Tooltip, Modal, Dropdown } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { registerShortcutHandler } from '../../../shortcuts/manager'
@@ -474,16 +479,12 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         isPlaying,
         playbackSpeed,
         modelData,
-        materialManagerPreview,
         nodes: modelNodes,
         selectedGeosetIndex,
         selectedGeosetIndices,
         setPlaying,
         setPlaybackSpeed,
         setFrame,
-        setGeosetAnims,
-        setTextureAnims,
-        setMaterials,
     } = useModelStore()
 
     const {
@@ -502,10 +503,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         timelineGlobalSequenceFilter
     } = useSelectionStore()
 
-    const effectiveModelData = useMemo(
-        () => mergeMaterialManagerPreview(modelData, materialManagerPreview),
-        [modelData, materialManagerPreview]
-    )
+    const effectiveModelData = useMaterialPreviewProjectedModelData()
 
     // Derived Global Info
     const globalSequences = useMemo<number[]>(() => {
@@ -1647,12 +1645,25 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
         const geosetChanged = options?.geosetChanged ?? true
         const textureChanged = options?.textureChanged ?? true
         const materialChanged = options?.materialChanged ?? true
+        const currentModelData = useModelStore.getState().modelData
+        const replaceGeosetAnims = () => modelDocumentCommandHandler.replaceGeosetAnimationList({
+            name: 'Apply Timeline Geoset Animation Snapshot',
+            before: structuredClone(currentModelData?.GeosetAnims || []),
+            after: geosetAnimsSnapshot,
+            options: { recordHistory: false },
+        })
+        const replaceTextureAnims = () => modelDocumentCommandHandler.replaceTextureAnimationList({
+            name: 'Apply Timeline Texture Animation Snapshot',
+            before: structuredClone(currentModelData?.TextureAnims || []),
+            after: textureAnimsSnapshot,
+            options: { recordHistory: false },
+        })
 
         if (nodeChanged && geosetChanged && textureChanged && materialChanged) {
             replaceNodes(nodesSnapshot, { triggerReload: false })
-            setGeosetAnims(geosetAnimsSnapshot)
-            setTextureAnims(textureAnimsSnapshot)
-            setMaterials(materialsSnapshot)
+            replaceGeosetAnims()
+            replaceTextureAnims()
+            textureMaterialCommandHandler.setMaterialCollection({ materials: materialsSnapshot })
             return
         }
         if (nodeChanged && !geosetChanged && !textureChanged && !materialChanged) {
@@ -1660,36 +1671,36 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             return
         }
         if (!nodeChanged && geosetChanged && !textureChanged && !materialChanged) {
-            setGeosetAnims(geosetAnimsSnapshot)
+            replaceGeosetAnims()
             return
         }
         if (!nodeChanged && !geosetChanged && textureChanged && !materialChanged) {
-            setTextureAnims(textureAnimsSnapshot)
+            replaceTextureAnims()
             return
         }
         if (!nodeChanged && !geosetChanged && !textureChanged && materialChanged) {
-            setMaterials(materialsSnapshot)
+            textureMaterialCommandHandler.setMaterialCollection({ materials: materialsSnapshot })
             return
         }
         if (nodeChanged) {
             replaceNodes(nodesSnapshot, { triggerReload: false })
         }
         if (geosetChanged) {
-            setGeosetAnims(geosetAnimsSnapshot)
+            replaceGeosetAnims()
         }
         if (textureChanged) {
-            setTextureAnims(textureAnimsSnapshot)
+            replaceTextureAnims()
         }
         if (materialChanged) {
-            setMaterials(materialsSnapshot)
+            textureMaterialCommandHandler.setMaterialCollection({ materials: materialsSnapshot })
         }
-    }, [setGeosetAnims, setMaterials, setTextureAnims])
+    }, [])
 
     // Helper: Get keyframe data for selected UIDs
     const getSelectedKeyframeData = useCallback(() => {
         const result: TimelineKeyframeData[] = []
         const state = useModelStore.getState()
-        const mergedModelData = mergeMaterialManagerPreview(state.modelData as any, state.materialManagerPreview as any)
+        const mergedModelData = getCurrentMaterialPreviewProjectedModelData()
         const nodes = state.nodes as any[]
         const geosetAnims = Array.isArray((mergedModelData as any)?.GeosetAnims)
             ? ((mergedModelData as any).GeosetAnims as any[])
@@ -1804,7 +1815,7 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
 
     const getEditableTimelineSnapshots = useCallback(() => {
         const state = useModelStore.getState()
-        const mergedModelData = mergeMaterialManagerPreview(state.modelData as any, state.materialManagerPreview as any)
+        const mergedModelData = getCurrentMaterialPreviewProjectedModelData()
         return {
             nodes: state.nodes as any[],
             geosetAnims: Array.isArray((mergedModelData as any)?.GeosetAnims)
@@ -3431,31 +3442,33 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'nowrap', whiteSpace: 'nowrap', minWidth: 'max-content', justifySelf: 'center' }}>
                     <div style={{ marginTop: 2 }}>
                         <Tooltip title={currentKeyframeModeConfig.tooltip}>
-                            <Dropdown
-                                menu={{
-                                    items: keyframeModeMenuItems,
-                                    selectedKeys: [keyframeDisplayMode],
-                                    onClick: ({ key }) => setTimelineKeyframeDisplayMode(key as KeyframeDisplayMode)
-                                }}
-                                trigger={['click']}
-                            >
-                                <Button
-                                    size="small"
-                                    style={{
-                                        minWidth: 112,
-                                        height: 24,
-                                        backgroundColor: currentKeyframeModeConfig.buttonColor,
-                                        border: '1px solid #555',
-                                        color: '#eee',
-                                        display: 'inline-flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'space-between'
+                            <span style={{ display: 'inline-flex' }}>
+                                <Dropdown
+                                    menu={{
+                                        items: keyframeModeMenuItems,
+                                        selectedKeys: [keyframeDisplayMode],
+                                        onClick: ({ key }) => setTimelineKeyframeDisplayMode(key as KeyframeDisplayMode)
                                     }}
+                                    trigger={['click']}
                                 >
-                                    {currentKeyframeModeConfig.label}
-                                    <DownOutlined style={{ fontSize: 10, marginLeft: 6 }} />
-                                </Button>
-                            </Dropdown>
+                                    <Button
+                                        size="small"
+                                        style={{
+                                            minWidth: 112,
+                                            height: 24,
+                                            backgroundColor: currentKeyframeModeConfig.buttonColor,
+                                            border: '1px solid #555',
+                                            color: '#eee',
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'space-between'
+                                        }}
+                                    >
+                                        {currentKeyframeModeConfig.label}
+                                        <DownOutlined style={{ fontSize: 10, marginLeft: 6 }} />
+                                    </Button>
+                                </Dropdown>
+                            </span>
                         </Tooltip>
                     </div>
                     <Button type="text" icon={<StepBackwardOutlined />} onClick={handleGoToStart} style={{ color: '#eee' }} />

@@ -3,10 +3,12 @@
  * Consolidates texture loading logic from Viewer.tsx
  */
 
-// @ts-ignore
-import { decodeBLP, getBLPImageData } from 'war3-model'
-import { readFile } from '@tauri-apps/plugin-fs'
-import { invoke } from '@tauri-apps/api/core'
+import { desktopGateway } from '../../infrastructure/desktop'
+import {
+    decodeWar3Blp,
+    decodeWar3BlpMipToImageData,
+    getWar3BlpImageData,
+} from '../../infrastructure/texture'
 import {
     applyTextureAdjustments,
     normalizeTextureAdjustments,
@@ -14,8 +16,14 @@ import {
     TextureAdjustments
 } from '../../utils/textureAdjustments'
 import { invokeReadMpqFile } from '../../utils/mpqPerf'
-import { createTextureDecodeCacheKey, getCachedDecodedTexture, setCachedDecodedTexture } from './textureDecodeCache'
+import {
+    createTextureDecodeCacheDependencies,
+    createTextureDecodeCacheKey,
+    getCachedDecodedTexture,
+    setCachedDecodedTexture,
+} from './textureDecodeCache'
 import { markStandalonePerf } from '../../utils/standalonePerf'
+import { markCacheHit, markCacheMiss } from '../../application/cache'
 
 export interface TextureLoadResult {
     path: string
@@ -139,13 +147,7 @@ export async function loadTextureFromMPQ(texturePath: string): Promise<ImageData
         const mpqData = await invokeReadMpqFile<Uint8Array>(normalizePath(texturePath), 'textureLoader.loadTextureFromMPQ')
 
         if (mpqData && mpqData.length > 0) {
-            const blp = decodeBLP(mpqData.buffer as ArrayBuffer)
-            const mipLevel0 = getBLPImageData(blp, 0)
-            return new ImageData(
-                new Uint8ClampedArray(mipLevel0.data),
-                mipLevel0.width,
-                mipLevel0.height
-            )
+            return decodeWar3BlpMipToImageData(toTightArrayBuffer(mpqData), 0)
         }
     } catch (e) {
         // MPQ loading failed
@@ -158,11 +160,11 @@ export async function loadTextureFromMPQ(texturePath: string): Promise<ImageData
  */
 export async function loadTextureFromFile(filePath: string): Promise<ImageData | null> {
     try {
-        const texBuffer = await readFile(filePath)
+        const texBuffer = await desktopGateway.readFile(filePath)
         if (filePath.toLowerCase().endsWith('.png')) {
             return await decodePngImageData(texBuffer)
         }
-        return decodeTextureData(texBuffer.buffer, filePath)
+        return decodeTextureData(toTightArrayBuffer(texBuffer), filePath)
     } catch (e) {
         // File loading failed
     }
@@ -383,14 +385,14 @@ export function decodeTextureData(buffer: ArrayBuffer, path: string, options?: D
             const adjusted = applyAdjustmentsIfNeeded(resized)
             return forceOpaqueAlphaIfNeeded(adjusted, options?.forceOpaqueAlpha);
         } else {
-            const blp = decodeBLP(buffer);
+            const blp = decodeWar3Blp(buffer);
             const preferredMip = options?.preferBlpBaseMip ? 0 : chooseBlpMipLevel(blp, options?.maxDimension);
 
             let mip: any;
             try {
-                mip = getBLPImageData(blp, preferredMip);
+                mip = getWar3BlpImageData(blp, preferredMip);
             } catch {
-                mip = getBLPImageData(blp, 0);
+                mip = getWar3BlpImageData(blp, 0);
             }
 
             let decoded = new ImageData(
@@ -405,7 +407,7 @@ export function decodeTextureData(buffer: ArrayBuffer, path: string, options?: D
                 shouldTryBlpBaseMipFallback(decoded)
             ) {
                 try {
-                    const baseMip = getBLPImageData(blp, 0);
+                    const baseMip = getWar3BlpImageData(blp, 0);
                     const baseDecoded = new ImageData(
                         (baseMip.data instanceof Uint8ClampedArray ? baseMip.data : new Uint8ClampedArray(baseMip.data)) as any,
                         baseMip.width,
@@ -659,10 +661,10 @@ export async function decodeTexture(
     if (modelPath && !modelPath.startsWith('dropped:')) {
         const candidates = getTextureCandidatePaths(modelPath, texturePath)
         for (const candidate of candidates) {
-            const texBuffer = await readFile(candidate).catch(() => null)
+            const texBuffer = await desktopGateway.readFile(candidate).catch(() => null)
             if (texBuffer) {
                 try {
-                    const imageData = await decodeBuffer(texBuffer.buffer)
+                    const imageData = await decodeBuffer(toTightArrayBuffer(texBuffer))
                     if (!imageData) continue
                     return { path: texturePath, imageData }
                 } catch (e) {
@@ -1201,6 +1203,7 @@ export async function loadAllTextures(
 
     const decodedTextures = new Map<string, DecodedTextureImage>()
     const decodeCacheKeys = new Map<string, string>()
+    const decodeCacheDependencies = new Map<string, ReturnType<typeof createTextureDecodeCacheDependencies>>()
     const workers = normalizeWorkers(worker)
     let readMs = 0
     let decodeMs = 0
@@ -1213,7 +1216,7 @@ export async function loadAllTextures(
         const payload =
             options?.batchPayloadPromise != null
                 ? await options.batchPayloadPromise
-                : await invoke<Uint8Array>('load_textures_batch_bin', {
+                : await desktopGateway.invoke<Uint8Array>('load_textures_batch_bin', {
                       modelPath,
                       texturePaths: effectiveTexturePaths
                   })
@@ -1226,9 +1229,17 @@ export async function loadAllTextures(
             const cacheKey = createTextureDecodeCacheKey(path, bytes, {
                 adjustments: textureAdjustmentsByPath.get(path),
                 maxDimension,
-                preferBlpBaseMip: alphaRequiredTexturePaths.has(path)
+                preferBlpBaseMip: alphaRequiredTexturePaths.has(path),
+                forceOpaqueAlpha: false,
+            })
+            const dependencies = createTextureDecodeCacheDependencies(path, bytes, {
+                adjustments: textureAdjustmentsByPath.get(path),
+                maxDimension,
+                preferBlpBaseMip: alphaRequiredTexturePaths.has(path),
+                forceOpaqueAlpha: false,
             })
             decodeCacheKeys.set(path, cacheKey)
+            decodeCacheDependencies.set(path, dependencies)
 
             const cachedImage = getCachedDecodedTexture(cacheKey)
             if (cachedImage) {
@@ -1237,6 +1248,28 @@ export async function loadAllTextures(
             } else {
                 uncachedEntries.push([path, bytes])
             }
+        }
+
+        if (cacheHits > 0) {
+            markCacheHit({
+                source: 'frontend.textureDecode',
+                namespace: 'textureDecode',
+                modelPath,
+                count: cacheHits,
+                requested: entries.length,
+                maxDimension: maxDimension ?? null,
+            })
+        }
+
+        if (uncachedEntries.length > 0) {
+            markCacheMiss({
+                source: 'frontend.textureDecode',
+                namespace: 'textureDecode',
+                modelPath,
+                count: uncachedEntries.length,
+                requested: entries.length,
+                maxDimension: maxDimension ?? null,
+            })
         }
 
         const decodeStart = performance.now()
@@ -1262,7 +1295,7 @@ export async function loadAllTextures(
                 decodedCount += 1
                 const cacheKey = decodeCacheKeys.get(path)
                 if (cacheKey) {
-                    setCachedDecodedTexture(cacheKey, image)
+                    setCachedDecodedTexture(cacheKey, image, decodeCacheDependencies.get(path))
                 }
             }
         } else {
@@ -1278,7 +1311,7 @@ export async function loadAllTextures(
                     decodedCount += 1
                     const cacheKey = decodeCacheKeys.get(path)
                     if (cacheKey) {
-                        setCachedDecodedTexture(cacheKey, imageData)
+                        setCachedDecodedTexture(cacheKey, imageData, decodeCacheDependencies.get(path))
                     }
                 }
             }

@@ -32,6 +32,7 @@ out/
 keygen/
 *.md
 !docs/State_Sync_Cache_Redesign_Plan.md
+!docs/State_Sync_Commit_Integrity_Repair_Plan.md
 *.txt
 !activation/
 !activation/qq-policy.txt

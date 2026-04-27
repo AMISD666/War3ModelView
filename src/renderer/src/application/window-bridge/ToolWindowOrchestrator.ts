@@ -1,5 +1,5 @@
 import { registerShortcutHandler } from '../../shortcuts/manager'
-import type { ToolWindowId } from '../../constants/windowLayouts'
+import type { ToolWindowId } from './ToolWindowLayouts'
 
 export type EditorShortcutId =
     | 'editor.nodeManager'

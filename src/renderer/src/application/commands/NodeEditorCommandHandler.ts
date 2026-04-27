@@ -5,14 +5,92 @@ import {
     type ClearNodePreviewPayload,
     type NodeEditorNodePayload,
     type RenameNodePayload,
+    type RevisionedNodeEditorCommandMetadata,
 } from '../../types/nodeEditorRpc'
 import type { ModelNode } from '../../types/node'
+import { markCommandReceived, markCommandRejected, markToolCommandStaleRevision } from '../diagnostics'
+import { previewOverlayService } from '../preview'
 import { commandBus, type CommandBus } from './CommandBus'
+
+const checkNodeCommandRevision = (
+    command: string,
+    payload: RevisionedNodeEditorCommandMetadata | undefined,
+): boolean => {
+    const state = useModelStore.getState()
+    markCommandReceived({
+        source: 'NodeEditorCommandHandler',
+        commandName: command,
+        commandDocumentId: payload?.documentId ?? '',
+        activeDocumentId: state.documentId ?? '',
+        baseDocumentRevision: payload?.baseDocumentRevision ?? '',
+        activeDocumentRevision: state.documentRevision,
+        stalePolicy: payload?.stalePolicy ?? '',
+    })
+
+    if (typeof payload?.baseDocumentRevision !== 'number') {
+        return true
+    }
+
+    const documentMismatch =
+        payload.documentId !== undefined &&
+        payload.documentId !== null &&
+        state.documentId !== null &&
+        payload.documentId !== state.documentId
+    const revisionMismatch = payload.baseDocumentRevision !== state.documentRevision
+
+    if (!documentMismatch && !revisionMismatch) {
+        return true
+    }
+
+    markToolCommandStaleRevision({
+        source: 'NodeEditorCommandHandler',
+        commandName: command,
+        commandDocumentId: payload.documentId ?? '',
+        activeDocumentId: state.documentId ?? '',
+        baseDocumentRevision: payload.baseDocumentRevision,
+        activeDocumentRevision: state.documentRevision,
+        stalePolicy: payload.stalePolicy ?? 'warn',
+    })
+
+    if (documentMismatch || payload.stalePolicy === 'reject') {
+        markCommandRejected({
+            source: 'NodeEditorCommandHandler',
+            commandName: command,
+            commandDocumentId: payload.documentId ?? '',
+            activeDocumentId: state.documentId ?? '',
+            baseDocumentRevision: payload.baseDocumentRevision,
+            activeDocumentRevision: state.documentRevision,
+            reason: documentMismatch ? 'document_mismatch' : 'stale_revision',
+        })
+        console.warn('[NodeEditorCommandHandler] Rejected stale command', {
+            command,
+            commandDocumentId: payload.documentId,
+            activeDocumentId: state.documentId,
+            baseDocumentRevision: payload.baseDocumentRevision,
+            activeDocumentRevision: state.documentRevision,
+        })
+        return false
+    }
+
+    console.warn('[NodeEditorCommandHandler] Stale command detected; applying for compatibility', {
+        command,
+        commandDocumentId: payload.documentId,
+        activeDocumentId: state.documentId,
+        baseDocumentRevision: payload.baseDocumentRevision,
+        activeDocumentRevision: state.documentRevision,
+    })
+    return true
+}
 
 export class NodeEditorCommandHandler {
     constructor(private readonly bus: CommandBus = commandBus) {}
 
     handle(command: string, payload: unknown): void {
+        if (!checkNodeCommandRevision(command, payload as RevisionedNodeEditorCommandMetadata | undefined)) {
+            previewOverlayService.clearNodeEditorPreview()
+            return
+        }
+
         if (command === NODE_EDITOR_COMMANDS.previewNodeUpdate) {
             this.previewNodeUpdate(payload)
             return
@@ -38,7 +116,7 @@ export class NodeEditorCommandHandler {
         const objectId = previewPayload?.objectId
         const node = previewPayload?.node
         if (typeof objectId === 'number' && node != null) {
-            useModelStore.getState().setNodeEditorPreview({ objectId, node })
+            previewOverlayService.setNodeEditorPreview({ objectId, node })
         }
     }
 
@@ -47,7 +125,7 @@ export class NodeEditorCommandHandler {
         if (clearPayload && clearPayload.objectId !== null && typeof clearPayload.objectId !== 'number') {
             return
         }
-        useModelStore.getState().clearNodeEditorPreview()
+        previewOverlayService.clearNodeEditorPreview()
     }
 
     applyNodeUpdate<TNode extends Partial<ModelNode>>(payload: ApplyNodeUpdatePayload<TNode> | unknown): void {
@@ -59,7 +137,7 @@ export class NodeEditorCommandHandler {
             return
         }
 
-        useModelStore.getState().clearNodeEditorPreview()
+        previewOverlayService.clearNodeEditorPreview()
 
         if (history && typeof history.name === 'string') {
             const undoNode = history.undoNode as Partial<ModelNode>

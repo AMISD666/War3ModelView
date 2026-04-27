@@ -1,5 +1,5 @@
 import type { NodeEditorRpcState } from '../../types/nodeEditorRpc'
-import { markStandalonePerf } from '../../utils/standalonePerf'
+import { markStandalonePerf } from '../diagnostics/StandalonePerf'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
 import type {
@@ -206,7 +206,7 @@ export class ToolWindowBroadcastCoordinator {
 
         if (visibilityMap.textureManager) {
             const textureManagerState = api.getTextureManagerState()
-            const dispatchKey = `${textureManagerState.snapshotVersion}:${textureManagerState.documentRevision}:${textureManagerState.assetRevision}:${textureManagerState.previewRevision}`
+            const dispatchKey = `${textureManagerState.snapshotRevision}:${textureManagerState.documentRevision}:${textureManagerState.assetRevision}:${textureManagerState.previewRevision}:${textureManagerState.snapshotProjection}`
             if (this.snapshotDispatchState.textureManager !== dispatchKey) {
                 this.snapshotDispatchState.textureManager = dispatchKey
                 api.broadcastTextureManager(textureManagerState)
@@ -227,7 +227,7 @@ export class ToolWindowBroadcastCoordinator {
 
         if (visibilityMap.materialManager) {
             const materialManagerState = api.getMaterialManagerState()
-            const dispatchKey = `${materialManagerState.snapshotVersion}:${materialManagerState.documentRevision}:${materialManagerState.assetRevision}:${materialManagerState.previewRevision}`
+            const dispatchKey = `${materialManagerState.snapshotRevision}:${materialManagerState.documentRevision}:${materialManagerState.assetRevision}:${materialManagerState.previewRevision}:${materialManagerState.snapshotProjection}`
             if (this.snapshotDispatchState.materialManager !== dispatchKey) {
                 this.snapshotDispatchState.materialManager = dispatchKey
                 api.broadcastMaterialManager(materialManagerState)
@@ -253,7 +253,7 @@ export class ToolWindowBroadcastCoordinator {
 
         if (visibilityMap.nodeEditor) {
             const nodeEditorState = api.getNodeEditorState()
-            const dispatchKey = String(nodeEditorState.snapshotVersion)
+            const dispatchKey = `${nodeEditorState.snapshotRevision || nodeEditorState.snapshotVersion}:${nodeEditorState.documentRevision}:${nodeEditorState.assetRevision}:${nodeEditorState.previewRevision}`
             if (this.snapshotDispatchState.nodeEditor !== dispatchKey) {
                 this.snapshotDispatchState.nodeEditor = dispatchKey
                 api.broadcastNodeEditor(nodeEditorState)
@@ -261,6 +261,7 @@ export class ToolWindowBroadcastCoordinator {
             } else {
                 markStandalonePerf('snapshot_broadcast_skipped', {
                     windowId: 'nodeEditor',
+                    snapshotRevision: nodeEditorState.snapshotRevision || nodeEditorState.snapshotVersion,
                     snapshotVersion: nodeEditorState.snapshotVersion,
                     reason: 'snapshot_version_unchanged',
                 })

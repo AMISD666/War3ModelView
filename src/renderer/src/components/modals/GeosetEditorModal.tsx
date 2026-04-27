@@ -8,7 +8,8 @@ import { useSelectionStore } from '../../store/selectionStore'
 import { ReloadOutlined } from '@ant-design/icons'
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
 import { useRpcClient } from '../../hooks/useRpc'
-import { getCurrentWindow } from '@tauri-apps/api/window'
+import { modelDocumentCommandHandler } from '../../application/commands'
+import { windowGateway } from '../../infrastructure/window'
 
 const { Text } = Typography
 
@@ -19,7 +20,7 @@ interface GeosetEditorModalProps {
 }
 
 const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose, isStandalone }) => {
-    const { modelData, setGeosets } = useModelStore()
+    const { modelData } = useModelStore()
     const [localGeosets, setLocalGeosets] = useState<any[]>([])
     const [selectedIndex, setSelectedIndex] = useState<number>(-1)
     const [_hasChanges, setHasChanges] = useState(false)
@@ -30,8 +31,29 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
 
     // RPC Sync for standalone mode
     const { state: rpcState, emitCommand } = useRpcClient<any>('geosetEditor', { geosets: [], materialsCount: 0, selectedIndex: -1, pickedGeosetIndex: null });
+    const emitGeosetAction = (action: string, payload: unknown, stalePolicy: 'warn' | 'reject' = 'reject') => {
+        emitCommand('EXECUTE_GEOSET_ACTION', {
+            action,
+            payload,
+            documentId: rpcState.documentId,
+            baseDocumentRevision: rpcState.documentRevision,
+            stalePolicy,
+        })
+    }
 
     const sourceGeosets = isStandalone ? rpcState.geosets : modelData?.Geosets || [];
+
+    const saveGeosets = (geosets: any[], name = 'Update Geosets') => {
+        if (isStandalone) {
+            emitGeosetAction('SAVE_ALL', geosets)
+            return
+        }
+        modelDocumentCommandHandler.replaceGeosetList({
+            name,
+            before: structuredClone(modelData?.Geosets || []),
+            after: geosets,
+        })
+    }
 
     const standalonePickedIndex =
         typeof rpcState.pickedGeosetIndex === 'number'
@@ -112,12 +134,12 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
 
     const handleOk = () => {
         if (isStandalone) {
-            emitCommand('EXECUTE_GEOSET_ACTION', { action: 'SAVE_ALL', payload: localGeosets });
+            emitGeosetAction('SAVE_ALL', localGeosets);
             appMessage.success('多边形设置已保存')
             setHasChanges(false)
-            getCurrentWindow().hide()
-        } else if (setGeosets) {
-            setGeosets(localGeosets)
+            void windowGateway.hideCurrentWindow()
+        } else {
+            saveGeosets(localGeosets, 'Update Geosets')
             appMessage.success('多边形设置已保存')
             setHasChanges(false)
             onClose()
@@ -126,7 +148,7 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
 
     const handleCancel = () => {
         if (isStandalone) {
-            getCurrentWindow().hide()
+            void windowGateway.hideCurrentWindow()
         } else {
             onClose()
         }
@@ -140,9 +162,9 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
 
         // Save immediately
         if (isStandalone) {
-            emitCommand('EXECUTE_GEOSET_ACTION', { action: 'SAVE_ALL', payload: newGeosets });
-        } else if (setGeosets) {
-            setGeosets(newGeosets)
+            emitGeosetAction('SAVE_ALL', newGeosets);
+        } else {
+            saveGeosets(newGeosets, 'Update Geoset')
         }
     }
 
@@ -281,7 +303,7 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
     );
     if (isStandalone) {
         return (
-            <StandaloneWindowFrame title="多边形管理器" onClose={() => getCurrentWindow().hide()}>
+            <StandaloneWindowFrame title="多边形管理器" onClose={() => void windowGateway.hideCurrentWindow()}>
                 <div
                     style={{
                         flex: 1,
@@ -321,4 +343,3 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
 }
 
 export default GeosetEditorModal
-

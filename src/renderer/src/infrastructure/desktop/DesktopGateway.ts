@@ -28,6 +28,7 @@ export interface DesktopDialogFilter {
 
 export interface OpenFileDialogOptions {
     title?: string
+    directory?: boolean
     multiple?: boolean
     filters?: DesktopDialogFilter[]
 }
@@ -50,6 +51,7 @@ export interface DesktopGateway {
     createDir(path: string, options?: CreateDirOptions): Promise<void>
     removePath(path: string, options?: RemovePathOptions): Promise<void>
     exists(path: string): Promise<boolean>
+    getFileSize(path: string): Promise<number>
     readDir(path: string): Promise<DesktopDirEntry[]>
     emit<TPayload>(event: string, payload?: TPayload): Promise<void>
     listen<TPayload>(

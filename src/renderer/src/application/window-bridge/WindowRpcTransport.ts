@@ -1,6 +1,6 @@
 import { windowGateway, type ManagedWindow, type WindowGateway } from '../../infrastructure/window'
 import { isKeyframeAnimVectorIntTrack, serializeAnimVectorForKeyframeIpc } from '../../utils/animVectorIpc'
-import { markStandalonePerf } from '../../utils/standalonePerf'
+import { markStandalonePerf } from '../diagnostics/StandalonePerf'
 import { chooseRpcEmitEncoding, chooseRpcEmitEncodingInWorker } from '../../utils/rpcSerialization'
 
 const RPC_INVOKE_EMIT_THRESHOLD_CHARS = 48 * 1024
@@ -22,7 +22,9 @@ const isLikelyLargeRpcPayload = (payload: unknown): boolean => {
     if (Array.isArray(payload.Textures) && payload.Textures.length > 3) return true
     if (Array.isArray(payload.geosets) && payload.geosets.length > 0) return true
     if (Array.isArray(payload.Geosets) && payload.Geosets.length > 0) return true
+    if (typeof payload.snapshotRevision === 'number') return true
     if (typeof payload.snapshotVersion === 'number') return true
+    if (isRecord(payload.payload)) return true
     return Object.keys(payload).length > 12
 }
 
@@ -48,6 +50,13 @@ export class WindowRpcTransport {
     ) {}
 
     async emitToolWindowEvent(windowId: string, eventName: string, payload: unknown): Promise<void> {
+        const win = await this.resolveWindow(windowId)
+        if (!win) {
+            markStandalonePerf('global_emit_fallback', { windowId, eventName, reason: 'window_not_found' })
+            await this.gateway.emit(eventName, payload).catch(() => {})
+            return
+        }
+
         if (isLikelyLargeRpcPayload(payload)) {
             try {
                 const encodeStart = performance.now()
@@ -81,13 +90,6 @@ export class WindowRpcTransport {
             } catch (error) {
                 console.warn('[WindowRpcTransport] Large payload gateway emit failed, falling back to window emit:', error)
             }
-        }
-
-        const win = await this.resolveWindow(windowId)
-        if (!win) {
-            markStandalonePerf('global_emit_fallback', { windowId, eventName, reason: 'window_not_found' })
-            await this.gateway.emit(eventName, payload).catch(() => {})
-            return
         }
 
         try {

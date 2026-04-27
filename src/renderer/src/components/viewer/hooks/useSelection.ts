@@ -292,8 +292,8 @@ export function useSelection({
             }
         }
 
-        // === Animation Mode: Node Selection ===
-        if (mainMode === 'animation') {
+        // === Animation/View Mode: Node Selection ===
+        if (mainMode === 'animation' || mainMode === 'view') {
             const cameraPos = getCameraPosition(targetCamera.current)
 
             const pMatrix = mat4.create()
@@ -333,11 +333,11 @@ export function useSelection({
                 markNodeManagerListScrollFromViewer()
                 selectNode(closestNodeId, isCtrl)
                 return
-            } else if (!isCtrl && animationSubMode !== 'binding') {
+            } else if (mainMode === 'animation' && !isCtrl && animationSubMode !== 'binding') {
                 selectNode(-1)
             }
 
-            if (animationSubMode !== 'binding') return
+            if (mainMode === 'view' || animationSubMode !== 'binding') return
         }
 
         // === Geometry Mode: Vertex/Face Selection ===

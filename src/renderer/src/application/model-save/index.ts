@@ -1,4 +1,5 @@
 export { cleanupInvalidGeosets, validateModelData } from './ModelSavePreparationService'
+export { mergeLiveRendererGeometryForSave } from './mergeLiveRendererGeometry'
 export { prepareModelDataForSave } from './prepareModelDataForSave'
 export type {
     PrepareModelForSaveInput,

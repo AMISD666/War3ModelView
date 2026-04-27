@@ -20,7 +20,7 @@ const EditorPanel = React.lazy(() => import('./EditorPanel'))
 
 import { GeosetVisibilityPanel } from './GeosetVisibilityPanel'
 import { getRecentFiles, clearRecentFiles, replaceRecentModelPath, RecentFile } from '../services/historyService'
-import { useModelStore, mergeMaterialManagerPreview, mergeNodeEditorPreview, extractNodesFromModel } from '../store/modelStore'
+import { useModelStore, extractNodesFromModel } from '../store/modelStore'
 import { NodeType } from '../types/node'
 import { useUIStore } from '../store/uiStore'
 import { useSelectionStore } from '../store/selectionStore'
@@ -34,13 +34,19 @@ import { windowManager } from '../utils/WindowManager'
 import {
     type NodeEditorRpcState,
 } from '../types/nodeEditorRpc'
-import { historyCommandService, modelDocumentCommandHandler, nodeEditorCommandHandler } from '../application/commands'
+import { historyCommandService, modelDocumentCommandHandler, nodeEditorCommandHandler, textureMaterialCommandHandler } from '../application/commands'
+import { markCommandReceived, markCommandRejected, markToolCommandStaleRevision } from '../application/diagnostics'
+import {
+    getCurrentMaterialPreviewProjection,
+    previewOverlayService,
+    useEffectivePreviewProjectedModelData,
+} from '../application/preview'
 import { useRpcServer } from '../hooks/useRpc'
 import { markStandalonePerf } from '../utils/standalonePerf'
 import { parseModelBuffer, mergeGeosets, mergeAnimations } from '../utils/modelMerge'
 import { desktopGateway } from '../infrastructure/desktop'
 import { windowGateway } from '../infrastructure/window'
-import { saveCurrentModelWorkflow, type TextureAssetOperationResult, type SaveValidationContext } from '../application/model-save'
+import { mergeLiveRendererGeometryForSave, saveCurrentModelWorkflow, type TextureAssetOperationResult, type SaveValidationContext } from '../application/model-save'
 import { DEFAULT_IMPORT_FILE_DIALOG_OPTIONS, openModelWorkflow } from '../application/model-open'
 import { useAppShellController } from '../application/shell/useAppShellController'
 import { useModelToolsController } from '../application/model-tools/useModelToolsController'
@@ -89,6 +95,82 @@ const toArrayBuffer = (value: ArrayBuffer | Uint8Array): ArrayBuffer => {
     return value.slice().buffer
 }
 
+const getSaveModelDataSnapshot = (fallbackModelData: any, modelPath: string | null): any => {
+    const modelState = useModelStore.getState()
+    const baseData = modelState.getModelDataForSave?.() ?? fallbackModelData
+    const renderer = useRendererStore.getState().renderer
+    return mergeLiveRendererGeometryForSave(baseData, renderer, modelPath)
+}
+
+type RevisionedMainToolCommand = {
+    documentId?: string | null
+    baseDocumentRevision?: number
+    stalePolicy?: 'warn' | 'reject'
+}
+
+const checkMainToolCommandRevision = (
+    source: string,
+    commandName: string,
+    payload: RevisionedMainToolCommand | undefined,
+): boolean => {
+    const state = useModelStore.getState()
+    markCommandReceived({
+        source,
+        commandName,
+        commandDocumentId: payload?.documentId ?? '',
+        activeDocumentId: state.documentId ?? '',
+        baseDocumentRevision: payload?.baseDocumentRevision ?? '',
+        activeDocumentRevision: state.documentRevision,
+        stalePolicy: payload?.stalePolicy ?? '',
+    })
+
+    if (typeof payload?.baseDocumentRevision !== 'number') {
+        return true
+    }
+
+    const documentMismatch =
+        payload.documentId !== undefined &&
+        payload.documentId !== null &&
+        state.documentId !== null &&
+        payload.documentId !== state.documentId
+    const revisionMismatch = payload.baseDocumentRevision !== state.documentRevision
+    if (!documentMismatch && !revisionMismatch) {
+        return true
+    }
+
+    markToolCommandStaleRevision({
+        source,
+        commandName,
+        commandDocumentId: payload.documentId ?? '',
+        activeDocumentId: state.documentId ?? '',
+        baseDocumentRevision: payload.baseDocumentRevision,
+        activeDocumentRevision: state.documentRevision,
+        stalePolicy: payload.stalePolicy ?? 'warn',
+    })
+
+    if (documentMismatch || payload.stalePolicy === 'reject') {
+        markCommandRejected({
+            source,
+            commandName,
+            commandDocumentId: payload.documentId ?? '',
+            activeDocumentId: state.documentId ?? '',
+            baseDocumentRevision: payload.baseDocumentRevision,
+            activeDocumentRevision: state.documentRevision,
+            reason: documentMismatch ? 'document_mismatch' : 'stale_revision',
+        })
+        console.warn(`[${source}] Rejected stale command`, {
+            commandName,
+            commandDocumentId: payload.documentId,
+            activeDocumentId: state.documentId,
+            baseDocumentRevision: payload.baseDocumentRevision,
+            activeDocumentRevision: state.documentRevision,
+        })
+        return false
+    }
+
+    return true
+}
+
 const MainLayout: React.FC = () => {
     // Zustand stores
     const modelPath = useModelStore(state => state.modelPath)
@@ -96,6 +178,7 @@ const MainLayout: React.FC = () => {
     const setZustandModelData = useModelStore(state => state.setModelData)
     const addTab = useModelStore(state => state.addTab)
     const setZustandLoading = useModelStore(state => state.setLoading)
+    const bumpAssetRevision = useModelStore(state => state.bumpAssetRevision)
     const {
         showAbout,
         setShowAbout,
@@ -231,15 +314,10 @@ const MainLayout: React.FC = () => {
     const modelOptimizeRunningRef = useRef(false)
 
 
-    // Use modelData directly from store to ensure updates from NodeManager are reflected
+    // Use preview-projected model data so live overlays affect the viewer without entering document state.
     const modelData = useModelStore(state => state.modelData)
-    const materialManagerPreview = useModelStore(state => state.materialManagerPreview)
-    const nodeEditorPreview = useModelStore(state => state.nodeEditorPreview)
     const globalColorAdjustSettings = useGlobalColorAdjustStore(state => state.settings)
-    const mergedViewerModelData = useMemo(
-        () => mergeNodeEditorPreview(mergeMaterialManagerPreview(modelData, materialManagerPreview), nodeEditorPreview),
-        [modelData, materialManagerPreview, nodeEditorPreview]
-    )
+    const mergedViewerModelData = useEffectivePreviewProjectedModelData()
     const hasActiveGlobalColorAdjust = useMemo(
         () => hasActiveGlobalColorAdjustSettings(globalColorAdjustSettings),
         [globalColorAdjustSettings]
@@ -250,6 +328,21 @@ const MainLayout: React.FC = () => {
         modelPath: string | null
         modelData: any
     } | null>(null)
+    const globalColorAdjustRevisionSigRef = useRef<string | null>(null)
+
+    useEffect(() => {
+        const sig = JSON.stringify(globalColorAdjustSettings)
+        if (globalColorAdjustRevisionSigRef.current === null) {
+            globalColorAdjustRevisionSigRef.current = sig
+            return
+        }
+        if (globalColorAdjustRevisionSigRef.current === sig) {
+            return
+        }
+        globalColorAdjustRevisionSigRef.current = sig
+        previewOverlayService.markPreviewChanged('globalColorAdjust', 'global_color_adjust_settings_changed')
+    }, [globalColorAdjustSettings])
+
     useEffect(() => {
         if (!hasActiveGlobalColorAdjust) {
             globalColorAdjustBaseRef.current = null
@@ -319,7 +412,16 @@ const MainLayout: React.FC = () => {
     const standaloneWarmupStartedRef = useRef(false)
     const toolWindowSnapshotCacheRef = useRef(new ToolWindowSnapshotCache())
     const toolWindowBroadcastCoordinatorRef = useRef(new ToolWindowBroadcastCoordinator())
-    const cameraManagerBroadcasterRef = useRef<(state: { cameras: unknown[]; globalSequences: number[] }) => void>(() => { })
+    const cameraManagerBroadcasterRef = useRef<(state: {
+        documentId: string | null
+        documentRevision: number
+        assetRevision: number
+        previewRevision: number
+        snapshotRevision: number
+        windowId: string
+        cameras: unknown[]
+        globalSequences: number[]
+    }) => void>(() => { })
 
     const nodeEditorSnapshotCacheRef = useRef({
         snapshotVersion: 0,
@@ -330,8 +432,15 @@ const MainLayout: React.FC = () => {
     const ensureNodeEditorSnapshotState = useCallback((): NodeEditorRpcState => {
         const session = windowManager.getPendingNodeEditorSession()
         const cache = nodeEditorSnapshotCacheRef.current
+        const live = useModelStore.getState()
         if (!session) {
             return {
+                documentId: live.documentId,
+                documentRevision: live.documentRevision,
+                assetRevision: live.assetRevision,
+                previewRevision: live.previewRevision,
+                snapshotRevision: 0,
+                windowId: 'nodeEditor',
                 snapshotVersion: 0,
                 sessionNonce: 0,
                 kind: '',
@@ -347,7 +456,6 @@ const MainLayout: React.FC = () => {
                 pivotPoints: [],
             }
         }
-        const live = useModelStore.getState()
         const node = live.getNodeById(session.objectId)
         let nodeJson = ''
         try {
@@ -371,6 +479,12 @@ const MainLayout: React.FC = () => {
             }
         }
         return {
+            documentId: live.documentId,
+            documentRevision: live.documentRevision,
+            assetRevision: live.assetRevision,
+            previewRevision: live.previewRevision,
+            snapshotRevision: cache.snapshotVersion,
+            windowId: 'nodeEditor',
             snapshotVersion: cache.snapshotVersion,
             sessionNonce: session.sessionNonce,
             kind: session.kind,
@@ -395,14 +509,15 @@ const MainLayout: React.FC = () => {
     const ensureTextureManagerSnapshotState = useCallback((): TextureManagerRpcState => {
         const liveModelState = useModelStore.getState()
         const selectionState = useSelectionStore.getState()
+        const projected = getCurrentMaterialPreviewProjection()
         return toolWindowSnapshotCacheRef.current.buildTextureManagerState({
-            modelData: liveModelState.modelData,
+            modelData: projected.modelData,
             modelPath: liveModelState.modelPath,
             documentId: liveModelState.documentId,
             documentRevision: liveModelState.documentRevision,
             assetRevision: liveModelState.assetRevision,
             previewRevision: liveModelState.previewRevision,
-            materialManagerPreview: liveModelState.materialManagerPreview,
+            snapshotProjection: projected.projection,
             selection: selectionState,
             markPerf: markStandalonePerf,
         })
@@ -411,20 +526,22 @@ const MainLayout: React.FC = () => {
     const ensureMaterialManagerSnapshotState = useCallback((): MaterialManagerRpcState => {
         const liveModelState = useModelStore.getState()
         const selectionState = useSelectionStore.getState()
+        const projected = getCurrentMaterialPreviewProjection()
         return toolWindowSnapshotCacheRef.current.buildMaterialManagerState({
-            modelData: liveModelState.modelData,
+            modelData: projected.modelData,
             modelPath: liveModelState.modelPath,
             documentId: liveModelState.documentId,
             documentRevision: liveModelState.documentRevision,
             assetRevision: liveModelState.assetRevision,
             previewRevision: liveModelState.previewRevision,
-            materialManagerPreview: liveModelState.materialManagerPreview,
+            snapshotProjection: projected.projection,
             selection: selectionState,
             markPerf: markStandalonePerf,
         })
     }, [])
     // RPC Server for modelOptimize standalone window
     const getModelOptimizeState = useCallback(() => {
+        const store = useModelStore.getState()
         let total = 0;
         if (modelData?.Geosets && Array.isArray(modelData.Geosets)) {
             modelData.Geosets.forEach((g: any) => {
@@ -434,6 +551,12 @@ const MainLayout: React.FC = () => {
             });
         }
         return {
+            documentId: store.documentId,
+            documentRevision: store.documentRevision,
+            assetRevision: store.assetRevision,
+            previewRevision: store.previewRevision,
+            snapshotRevision: store.documentRevision,
+            windowId: 'modelOptimize',
             originalFaces: Math.floor(total),
             isOptimizing: modelOptimizeRunning,
             lastResult: modelOptimizeLastResult
@@ -441,6 +564,10 @@ const MainLayout: React.FC = () => {
     }, [modelData, modelOptimizeRunning, modelOptimizeLastResult]);
 
     const handleModelOptimizeCommand = useCallback((command: string, payload: any) => {
+        if (!checkMainToolCommandRevision('ModelOptimizeCommandHandler', command, payload)) {
+            return
+        }
+
         if (modelOptimizeRunningRef.current) {
             showMessage('warning', '模型优化', '已有优化任务正在执行，请等待完成。');
             return;
@@ -642,6 +769,12 @@ const MainLayout: React.FC = () => {
             }));
         };
         return {
+            documentId: store.documentId,
+            documentRevision: store.documentRevision,
+            assetRevision: store.assetRevision,
+            previewRevision: store.previewRevision,
+            snapshotRevision: store.documentRevision,
+            windowId: 'dissolveEffect',
             geosets: stripGeosets(store.modelData?.Geosets),
             sequences: stripSequences(store.modelData?.Sequences),
             geosetCount: store.modelData?.Geosets?.length || 0,
@@ -650,13 +783,16 @@ const MainLayout: React.FC = () => {
 
     const handleDissolveCommand = useCallback((command: string, payload: any) => {
         if (command === 'EXECUTE_DISSOLVE') {
+            if (!checkMainToolCommandRevision('DissolveEffectCommandHandler', command, payload)) {
+                return
+            }
             (async () => {
                 const store = useModelStore.getState();
                 if (!store.modelData || !store.modelPath) return;
                 try {
                     const { executeDissolveEffect, refreshDissolveTexturesInRenderer } = await import('../utils/dissolveEffect');
                     const result = await executeDissolveEffect(store.modelData, store.modelPath, payload);
-                    store.setVisualDataPatch({ Materials: result.materials, Textures: result.textures });
+                    textureMaterialCommandHandler.setTextureMaterialCollections({ materials: result.materials, textures: result.textures });
                     await refreshDissolveTexturesInRenderer(useRendererStore.getState().renderer, store.modelPath, result);
                 } catch (e: any) {
                     console.error('[Dissolve] Failed:', e);
@@ -993,7 +1129,9 @@ const MainLayout: React.FC = () => {
                             );
                             const successCount = results.filter(r => r.status === 'fulfilled').length;
                             if (successCount > 0) {
-                                setMpqLoaded(true);                            }
+                                setMpqLoaded(true);
+                                bumpAssetRevision('cli_mpq_preload');
+                            }
                         } catch (e) {
                             console.error('[MainLayout] MPQ pre-load failed:', e);
                         }
@@ -1057,8 +1195,15 @@ const MainLayout: React.FC = () => {
     // RPC Server for Camera Manager
     const nodes = useModelStore(state => state.nodes);
     const getCameraManagerState = useCallback(() => {
+        const store = useModelStore.getState()
         const rawCameras = Array.isArray((modelData as any)?.Cameras) ? (modelData as any).Cameras : [];
         return {
+            documentId: store.documentId,
+            documentRevision: store.documentRevision,
+            assetRevision: store.assetRevision,
+            previewRevision: store.previewRevision,
+            snapshotRevision: store.documentRevision,
+            windowId: 'cameraManager',
             cameras: rawCameras.length > 0 ? rawCameras : nodes.filter(n => n.type === NodeType.CAMERA),
             globalSequences: toGlobalSequenceDurations(modelData?.GlobalSequences)
         };
@@ -1078,6 +1223,12 @@ const MainLayout: React.FC = () => {
                 ? (latestModelData as any).Cameras
                 : latestStore.nodes.filter((node) => node.type === NodeType.CAMERA);
             cameraManagerBroadcasterRef.current({
+                documentId: latestStore.documentId,
+                documentRevision: latestStore.documentRevision,
+                assetRevision: latestStore.assetRevision,
+                previewRevision: latestStore.previewRevision,
+                snapshotRevision: latestStore.documentRevision,
+                windowId: 'cameraManager',
                 cameras: latestCameras,
                 globalSequences: toGlobalSequenceDurations(latestModelData?.GlobalSequences)
             });
@@ -1106,7 +1257,8 @@ const MainLayout: React.FC = () => {
 
     // RPC Server for Geoset Editor
     const getGeosetManagerState = useCallback(() => {
-        const _modelData = useModelStore.getState().modelData;
+        const storeState = useModelStore.getState();
+        const _modelData = storeState.modelData;
         const _pickedGeosetIndex = useSelectionStore.getState().pickedGeosetIndex;
         const geosets = (_modelData?.Geosets || []).map((g: any, index: number) => ({
             index,
@@ -1117,9 +1269,15 @@ const MainLayout: React.FC = () => {
         }));
 
         return {
+            documentId: storeState.documentId,
+            documentRevision: storeState.documentRevision,
+            assetRevision: storeState.assetRevision,
+            previewRevision: storeState.previewRevision,
+            snapshotRevision: storeState.documentRevision,
+            windowId: 'geosetEditor',
             geosets,
             materialsCount: _modelData?.Materials?.length || 0,
-            selectedIndex: _pickedGeosetIndex ?? useModelStore.getState().selectedGeosetIndex ?? 0,
+            selectedIndex: _pickedGeosetIndex ?? storeState.selectedGeosetIndex ?? 0,
             pickedGeosetIndex: _pickedGeosetIndex,
         };
     }, []);
@@ -1153,7 +1311,8 @@ const MainLayout: React.FC = () => {
 
     // RPC Server for Geoset Visibility Tool
     const getGeosetVisibilityState = useCallback(() => {
-        const _modelData = useModelStore.getState().modelData;
+        const storeState = useModelStore.getState();
+        const _modelData = storeState.modelData;
         const geosets = (_modelData?.Geosets || []).map((g: any, index: number) => ({
             index,
             MaterialID: g.MaterialID,
@@ -1163,6 +1322,12 @@ const MainLayout: React.FC = () => {
         }));
 
         return {
+            documentId: storeState.documentId,
+            documentRevision: storeState.documentRevision,
+            assetRevision: storeState.assetRevision,
+            previewRevision: storeState.previewRevision,
+            snapshotRevision: storeState.documentRevision,
+            windowId: 'geosetVisibilityTool',
             geosets,
             sequences: _modelData?.Sequences || [],
             geosetAnims: _modelData?.GeosetAnims || [],
@@ -1183,13 +1348,20 @@ const MainLayout: React.FC = () => {
 
     // RPC Server for Geoset Anim Manager
     const getGeosetAnimManagerState = useCallback(() => {
-        const _modelData = useModelStore.getState().modelData;
+        const storeState = useModelStore.getState();
+        const _modelData = storeState.modelData;
         const _pickedGeosetIndex = useSelectionStore.getState().pickedGeosetIndex;
         const geosets = (_modelData?.Geosets || []).map((_, index: number) => ({
             index
         }));
 
         return {
+            documentId: storeState.documentId,
+            documentRevision: storeState.documentRevision,
+            assetRevision: storeState.assetRevision,
+            previewRevision: storeState.previewRevision,
+            snapshotRevision: storeState.documentRevision,
+            windowId: 'geosetAnimManager',
             geosets,
             geosetAnims: _modelData?.GeosetAnims || [],
             globalSequences: _modelData?.GlobalSequences || [],
@@ -1211,10 +1383,17 @@ const MainLayout: React.FC = () => {
 
     // RPC Server for Texture Anim Manager
     const getTextureAnimManagerState = useCallback(() => {
-        const _modelData = useModelStore.getState().modelData;
+        const storeState = useModelStore.getState();
+        const _modelData = storeState.modelData;
         const _pickedGeosetIndex = useSelectionStore.getState().pickedGeosetIndex;
 
         return {
+            documentId: storeState.documentId,
+            documentRevision: storeState.documentRevision,
+            assetRevision: storeState.assetRevision,
+            previewRevision: storeState.previewRevision,
+            snapshotRevision: storeState.documentRevision,
+            windowId: 'textureAnimManager',
             textureAnims: _modelData?.TextureAnims || [],
             globalSequences: _modelData?.GlobalSequences || [],
             sequences: _modelData?.Sequences || [],
@@ -1265,6 +1444,12 @@ const MainLayout: React.FC = () => {
     const getSequenceManagerState = useCallback((): SequenceManagerRpcState => {
         const state = useModelStore.getState();
         return {
+            documentId: state.documentId,
+            documentRevision: state.documentRevision,
+            assetRevision: state.assetRevision,
+            previewRevision: state.previewRevision,
+            snapshotRevision: state.documentRevision,
+            windowId: 'sequenceManager',
             sequences: state.modelData?.Sequences || []
         };
     }, []);
@@ -1282,6 +1467,12 @@ const MainLayout: React.FC = () => {
     const getGlobalSeqManagerState = useCallback((): GlobalSequenceManagerRpcState => {
         const state = useModelStore.getState();
         return {
+            documentId: state.documentId,
+            documentRevision: state.documentRevision,
+            assetRevision: state.assetRevision,
+            previewRevision: state.previewRevision,
+            snapshotRevision: state.documentRevision,
+            windowId: 'globalSequenceManager',
             globalSequences: toGlobalSequenceDurations(state.modelData?.GlobalSequences)
         };
     }, []);
@@ -1296,9 +1487,18 @@ const MainLayout: React.FC = () => {
         handleGlobalSeqCommand
     );
 
-    const getGlobalColorAdjustState = useCallback((): GlobalColorAdjustRpcState => ({
-        settings: useGlobalColorAdjustStore.getState().settings
-    }), [])
+    const getGlobalColorAdjustState = useCallback((): GlobalColorAdjustRpcState => {
+        const state = useModelStore.getState()
+        return {
+            documentId: state.documentId,
+            documentRevision: state.documentRevision,
+            assetRevision: state.assetRevision,
+            previewRevision: state.previewRevision,
+            snapshotRevision: state.previewRevision,
+            windowId: 'globalColorAdjust',
+            settings: useGlobalColorAdjustStore.getState().settings,
+        }
+    }, [])
 
     const handleGlobalColorAdjustCommand = useCallback((command: string, payload: any) => {
         globalColorAdjustCommandHandler.handle(command, payload)
@@ -1448,6 +1648,7 @@ const MainLayout: React.FC = () => {
                     const successCount = results.filter(r => r.status === 'fulfilled').length
                     if (successCount > 0) {
                         setMpqLoaded(true)
+                        bumpAssetRevision('saved_mpq_autoload')
                     }
                 } catch (e) {
                     console.error('[MainLayout] Failed to auto-load saved MPQs:', e)
@@ -1475,6 +1676,7 @@ const MainLayout: React.FC = () => {
                                 console.warn('[MainLayout] Failed to sync MPQ paths:', e)
                             }
                             setMpqLoaded(true)
+                            bumpAssetRevision('detected_mpq_autoload')
                         }
                     }
                 } catch (e) {                    setMpqLoaded(false)
@@ -1700,8 +1902,7 @@ const MainLayout: React.FC = () => {
 
         try {
             isSavingRef.current = true;
-            const modelState = useModelStore.getState();
-            const normalizedData = modelState.getModelDataForSave?.() ?? currentModelData;
+            const normalizedData = getSaveModelDataSnapshot(currentModelData, currentModelPath);
             const normalizedNodes = extractNodesFromModel(normalizedData);
             const globalColorSettings = useGlobalColorAdjustStore.getState().settings;
             const rendererState = useRendererStore.getState();
@@ -1758,8 +1959,7 @@ const MainLayout: React.FC = () => {
 
             if (selected) {
                 isSavingRef.current = true;
-                const modelState = useModelStore.getState();
-                const normalizedData = modelState.getModelDataForSave?.() ?? currentModelData;
+                const normalizedData = getSaveModelDataSnapshot(currentModelData, currentModelPath);
                 const normalizedNodes = extractNodesFromModel(normalizedData);
                 const globalColorSettings = useGlobalColorAdjustStore.getState().settings;
                 const rendererState = useRendererStore.getState();
@@ -1982,8 +2182,7 @@ const MainLayout: React.FC = () => {
                     filePath += '.mdl'
                 }
 
-                const modelState = useModelStore.getState();
-                const normalizedData = modelState.getModelDataForSave?.() ?? modelData;
+                const normalizedData = getSaveModelDataSnapshot(modelData, modelPath);
                 const normalizedNodes = extractNodesFromModel(normalizedData);
                 const globalColorSettings = useGlobalColorAdjustStore.getState().settings;
                 const rendererState = useRendererStore.getState();
@@ -2036,8 +2235,7 @@ const MainLayout: React.FC = () => {
                     filePath += '.mdx'
                 }
 
-                const modelState = useModelStore.getState();
-                const normalizedData = modelState.getModelDataForSave?.() ?? modelData;
+                const normalizedData = getSaveModelDataSnapshot(modelData, modelPath);
                 const normalizedNodes = extractNodesFromModel(normalizedData);
                 const globalColorSettings = useGlobalColorAdjustStore.getState().settings;
                 const rendererState = useRendererStore.getState();
@@ -2100,8 +2298,7 @@ const MainLayout: React.FC = () => {
                 }
             }
 
-            const modelState = useModelStore.getState()
-            const normalizedData = modelState.getModelDataForSave?.() ?? modelData
+            const normalizedData = getSaveModelDataSnapshot(modelData, modelPath)
             const normalizedNodes = extractNodesFromModel(normalizedData)
             const globalColorSettings = useGlobalColorAdjustStore.getState().settings
             const rendererState = useRendererStore.getState()

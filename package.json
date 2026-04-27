@@ -10,6 +10,8 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "check:architecture": "node scripts/check-architecture-guardrails.mjs",
+    "check:state-sync-fixtures": "node scripts/check-state-sync-fixtures.mjs",
     "start": "electron-vite preview",
     "dev:electron": "electron-vite dev",
     "dev:vite": "vite",

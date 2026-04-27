@@ -1,5 +1,6 @@
-import { decodeTexture, getTextureCandidatePaths, normalizePath, REPLACEABLE_TEXTURES } from '../components/viewer/textureLoader'
+import { textureMaterialCommandHandler } from '../application/commands'
 import { desktopGateway } from '../infrastructure/desktop'
+import { getTextureCandidatePaths, normalizeTexturePath, REPLACEABLE_TEXTURES, textureDecodeGateway } from '../infrastructure/texture'
 import { useModelStore } from '../store/modelStore'
 import { NodeType, ParticleEmitter2Node } from '../types/node'
 
@@ -92,13 +93,13 @@ const getPresetDir = async (presetId: string): Promise<string> => {
 const resolveTextureImagePath = (texture: any): string | null => {
     const directImage = typeof texture?.Image === 'string' ? texture.Image.trim() : ''
     if (directImage) {
-        return normalizePath(directImage)
+        return normalizeTexturePath(directImage)
     }
 
     const replaceableId = Number(texture?.ReplaceableId ?? 0)
     const replaceablePath = REPLACEABLE_TEXTURES[replaceableId]
     if (replaceablePath) {
-        return normalizePath(`ReplaceableTextures\\${replaceablePath}.blp`)
+        return normalizeTexturePath(`ReplaceableTextures\\${replaceablePath}.blp`)
     }
 
     return null
@@ -133,7 +134,7 @@ const encodeImageDataToBytes = async (imagePath: string, imageData: ImageData): 
 }
 
 const findLocalTextureSourcePath = async (imagePath: string, modelPath: string | null): Promise<string | null> => {
-    const normalizedImagePath = normalizePath(imagePath)
+    const normalizedImagePath = normalizeTexturePath(imagePath)
 
     if (/^[a-zA-Z]:\\/.test(normalizedImagePath) || normalizedImagePath.startsWith('\\\\')) {
         return (await desktopGateway.exists(normalizedImagePath)) ? normalizedImagePath : null
@@ -184,7 +185,7 @@ const exportTextureToPresetDir = async (
         }
     }
 
-    const decodeResult = await decodeTexture(sourceImagePath, modelPath || '')
+    const decodeResult = await textureDecodeGateway.decodeTexture(sourceImagePath, modelPath || '')
     if (!decodeResult.imageData) {
         throw new Error(`无法导出贴图: ${sourceImagePath}`)
     }
@@ -213,74 +214,6 @@ const readPresetManifest = async (presetId: string): Promise<ParticleEmitter2Pre
         return null
     }
 }
-
-const updateCurrentModelTextures = (nextTextures: any[]): void => {
-    useModelStore.setState((state: any) => {
-        if (!state.modelData) {
-            return state
-        }
-
-        const nextModelData = {
-            ...state.modelData,
-            Textures: nextTextures,
-        }
-
-        const nextState: Record<string, any> = {
-            modelData: nextModelData,
-        }
-
-        if (state.activeTabId) {
-            nextState.tabs = state.tabs.map((tab: any) => {
-                if (tab.id !== state.activeTabId) {
-                    return tab
-                }
-                return {
-                    ...tab,
-                    snapshot: {
-                        ...tab.snapshot,
-                        modelData: nextModelData,
-                        modelPath: state.modelPath,
-                        lastActive: Date.now(),
-                    },
-                }
-            })
-        }
-
-        return nextState
-    })
-}
-
-const syncActiveTabSnapshot = (): void => {
-    useModelStore.setState((state: any) => {
-        if (!state.activeTabId || !state.modelData) {
-            return state
-        }
-
-        return {
-            tabs: state.tabs.map((tab: any) => {
-                if (tab.id !== state.activeTabId) {
-                    return tab
-                }
-
-                return {
-                    ...tab,
-                    snapshot: {
-                        ...tab.snapshot,
-                        modelData: state.modelData,
-                        modelPath: state.modelPath,
-                        nodes: Array.isArray(state.nodes) ? cloneValue(state.nodes) : [],
-                        sequences: Array.isArray(state.sequences) ? cloneValue(state.sequences) : [],
-                        currentSequence: state.currentSequence,
-                        currentFrame: state.currentFrame,
-                        hiddenGeosetIds: Array.isArray(state.hiddenGeosetIds) ? [...state.hiddenGeosetIds] : [],
-                        lastActive: Date.now(),
-                    },
-                }
-            }),
-        }
-    })
-}
-
 
 export const listParticleEmitter2Presets = async (): Promise<ParticleEmitter2PresetSummary[]> => {
     const root = await getPresetRoot()
@@ -363,13 +296,13 @@ export const createParticleEmitter2FromPreset = async ({
         const targetDirAbs = `${getDirname(store.modelPath)}\\${targetDirRel}`
         const targetFileName = getFileName(preset.texture.fileName)
         const targetTexturePath = `${targetDirAbs}\\${targetFileName}`
-        const targetTextureRelPath = normalizePath(`${targetDirRel}\\${targetFileName}`)
+        const targetTextureRelPath = normalizeTexturePath(`${targetDirRel}\\${targetFileName}`)
 
         await desktopGateway.createDir(targetDirAbs, { recursive: true })
         await copyFileByReadWrite(presetTexturePath, targetTexturePath)
 
         const existingIndex = currentTextures.findIndex((texture: any) =>
-            normalizePath(String(texture?.Image || '')) === targetTextureRelPath && Number(texture?.ReplaceableId ?? 0) === 0
+            normalizeTexturePath(String(texture?.Image || '')) === targetTextureRelPath && Number(texture?.ReplaceableId ?? 0) === 0
         )
 
         if (existingIndex >= 0) {
@@ -383,7 +316,7 @@ export const createParticleEmitter2FromPreset = async ({
             nextTextureId = currentTextures.length - 1
         }
 
-        updateCurrentModelTextures(currentTextures)
+        textureMaterialCommandHandler.setTextureCollection({ textures: currentTextures })
     }
 
     const nodeName = preset.name.trim() || preset.emitter.Name || 'Preset Particle'
@@ -398,8 +331,5 @@ export const createParticleEmitter2FromPreset = async ({
         Parent: parentId,
         TextureID: nextTextureId,
     } as any)
-
-    syncActiveTabSnapshot()
-
     return { nodeName }
 }

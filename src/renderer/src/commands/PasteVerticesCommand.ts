@@ -2,7 +2,7 @@ import { Command } from '../utils/CommandManager'
 import { pasteVertices, VertexCopyBuffer } from '../utils/vertexOperations'
 import { useModelStore } from '../store/modelStore'
 import { useSelectionStore } from '../store/selectionStore'
-import { ModelResourceManager } from 'war3-model'
+import { addWar3GeosetBuffers } from '../infrastructure/render'
 
 /**
  * Command to paste copied vertices/polygons as a new geoset
@@ -83,7 +83,7 @@ export class PasteVerticesCommand implements Command {
         this.newGeosetIndex = this.renderer.model.Geosets.length - 1
 
         // Create GPU buffers for the new geoset
-        ModelResourceManager.getInstance().addGeosetBuffers(this.renderer.model, this.newGeosetIndex)
+        addWar3GeosetBuffers(this.renderer.model, this.newGeosetIndex)
 
         // NOTE: We intentionally do NOT add to modelStore here to avoid sync conflicts.
         // The renderer.model.Geosets is the source of truth for geometry operations.

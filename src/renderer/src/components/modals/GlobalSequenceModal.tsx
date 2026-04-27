@@ -4,13 +4,19 @@ import { PlusOutlined, DeleteOutlined, CheckOutlined } from '@ant-design/icons'
 import { useModelStore } from '../../store/modelStore'
 import { useRpcClient } from '../../hooks/useRpc'
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
-import { getCurrentWindow } from '@tauri-apps/api/window'
+import { windowGateway } from '../../infrastructure/window'
 
 interface GlobalSequenceModalProps {
     visible: boolean
     onClose: () => void
     isStandalone?: boolean
     asWindow?: boolean
+}
+
+interface RevisionedGlobalSequenceRpcState {
+    documentId: string | null
+    documentRevision: number
+    globalSequences: number[]
 }
 
 const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({
@@ -20,9 +26,9 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({
 }) => {
     const updateGlobalSequences = useModelStore(state => state.updateGlobalSequences)
 
-    const { state: rpcState, emitCommand } = useRpcClient<{ globalSequences: number[] }>(
+    const { state: rpcState, emitCommand } = useRpcClient<RevisionedGlobalSequenceRpcState>(
         'globalSequenceManager',
-        { globalSequences: [] }
+        { documentId: null, documentRevision: 0, globalSequences: [] }
     )
 
     const storeGlobalSequences = useModelStore(state => {
@@ -65,7 +71,13 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({
         lastCommittedSeqSigRef.current = sig
         setLocalSeqs(normalizedSeqs)
         if (isStandalone) {
-            emitCommand('EXECUTE_GLOBAL_SEQ_ACTION', { action: 'SAVE', globalSequences: normalizedSeqs })
+            emitCommand('EXECUTE_GLOBAL_SEQ_ACTION', {
+                action: 'SAVE',
+                documentId: rpcState.documentId,
+                baseDocumentRevision: rpcState.documentRevision,
+                stalePolicy: 'reject',
+                globalSequences: normalizedSeqs,
+            })
         } else {
             // Targeted patch — avoids full model reload and preserving animation state
             updateGlobalSequences(normalizedSeqs)
@@ -223,7 +235,7 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({
 
     if (isStandalone) {
         return (
-            <StandaloneWindowFrame title="全局动作管理器" onClose={() => getCurrentWindow().hide()}>
+            <StandaloneWindowFrame title="全局动作管理器" onClose={() => void windowGateway.hideCurrentWindow()}>
                 {innerContent}
             </StandaloneWindowFrame>
         );

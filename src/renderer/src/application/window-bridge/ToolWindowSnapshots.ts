@@ -1,3 +1,5 @@
+import type { PreviewProjectionMode } from '../preview'
+
 export type ToolWindowGeosetSummary = {
     index: number
     MaterialID: unknown
@@ -10,16 +12,27 @@ export type TextureManagerSnapshot = {
     textures: any[]
     materials: any[]
     geosets: ToolWindowGeosetSummary[]
+    particleEmitters: any[]
+    particleEmitters2: any[]
     globalSequences: number[]
     modelPath: string | null | undefined
 }
 
-export type TextureManagerRpcState = {
+export type ToolWindowSnapshotEnvelope<TPayload> = {
     documentId: string | null
     documentRevision: number
     assetRevision: number
     previewRevision: number
+    snapshotRevision: number
+    snapshotProjection: PreviewProjectionMode
+    windowId: string
+    payload: TPayload
+}
+
+export type TextureManagerRpcState = ToolWindowSnapshotEnvelope<TextureManagerSnapshot> & {
+    /** @deprecated Use snapshotRevision after envelope migration completes. */
     snapshotVersion: number
+    /** @deprecated Use payload after envelope migration completes. */
     snapshot: TextureManagerSnapshot
     pickedGeosetIndex: number | null
     selectedMaterialIndex: number | null
@@ -34,18 +47,17 @@ export type MaterialManagerSnapshot = {
     materials: any[]
     textures: any[]
     geosets: ToolWindowGeosetSummary[]
+    ribbonEmitters: any[]
     globalSequences: number[]
     sequences: any[]
     textureAnims: any[]
     modelPath: string | null | undefined
 }
 
-export type MaterialManagerRpcState = {
-    documentId: string | null
-    documentRevision: number
-    assetRevision: number
-    previewRevision: number
+export type MaterialManagerRpcState = ToolWindowSnapshotEnvelope<MaterialManagerSnapshot> & {
+    /** @deprecated Use snapshotRevision after envelope migration completes. */
     snapshotVersion: number
+    /** @deprecated Use payload after envelope migration completes. */
     snapshot: MaterialManagerSnapshot
     pickedGeosetIndex: number | null
     selectedMaterialIndex: number | null
@@ -76,6 +88,8 @@ const EMPTY_TEXTURE_SNAPSHOT: TextureManagerSnapshot = {
     textures: [],
     materials: [],
     geosets: [],
+    particleEmitters: [],
+    particleEmitters2: [],
     globalSequences: [],
     modelPath: undefined,
 }
@@ -84,6 +98,7 @@ const EMPTY_MATERIAL_SNAPSHOT: MaterialManagerSnapshot = {
     materials: [],
     textures: [],
     geosets: [],
+    ribbonEmitters: [],
     globalSequences: [],
     sequences: [],
     textureAnims: [],
@@ -160,35 +175,42 @@ export class ToolWindowSnapshotCache {
         documentRevision: number
         assetRevision: number
         previewRevision: number
-        materialManagerPreview: any
+        snapshotProjection: PreviewProjectionMode
         selection: ToolWindowSelectionState
         markPerf?: ToolWindowSnapshotPerf
     }): TextureManagerRpcState {
-        const preview = input.materialManagerPreview
         const modelData = input.modelData
         const nextSourceRefs = {
-            textures: preview?.textures ?? modelData?.Textures ?? null,
-            materials: preview?.materials ?? modelData?.Materials ?? null,
-            geosets: preview?.geosets ?? modelData?.Geosets ?? null,
+            textures: modelData?.Textures ?? null,
+            materials: modelData?.Materials ?? null,
+            geosets: modelData?.Geosets ?? null,
+            particleEmitters: modelData?.ParticleEmitters ?? null,
+            particleEmitters2: modelData?.ParticleEmitters2 ?? null,
             globalSequences: modelData?.GlobalSequences ?? null,
             modelPath: input.modelPath,
+            snapshotProjection: input.snapshotProjection,
         }
 
         if (this.hasSourceChanged(this.textureCache.sourceRefs, nextSourceRefs)) {
             this.textureCache.snapshotVersion += 1
             this.textureCache.sourceRefs = nextSourceRefs
             this.textureCache.snapshot = {
-                textures: preview?.textures ?? modelData?.Textures ?? [],
-                materials: preview?.materials ?? modelData?.Materials ?? [],
-                geosets: stripGeosetDataForToolWindow(preview?.geosets ?? modelData?.Geosets),
+                textures: modelData?.Textures ?? [],
+                materials: modelData?.Materials ?? [],
+                geosets: stripGeosetDataForToolWindow(modelData?.Geosets),
+                particleEmitters: modelData?.ParticleEmitters ?? [],
+                particleEmitters2: modelData?.ParticleEmitters2 ?? [],
                 globalSequences: toGlobalSequenceDurations(modelData?.GlobalSequences),
                 modelPath: input.modelPath,
             }
             input.markPerf?.('texture_snapshot_cached', {
                 snapshotVersion: this.textureCache.snapshotVersion,
+                snapshotProjection: input.snapshotProjection,
                 textureCount: this.textureCache.snapshot.textures.length,
                 materialCount: this.textureCache.snapshot.materials.length,
                 geosetCount: this.textureCache.snapshot.geosets.length,
+                particleEmitterCount: this.textureCache.snapshot.particleEmitters.length,
+                particleEmitter2Count: this.textureCache.snapshot.particleEmitters2.length,
             })
         }
 
@@ -197,6 +219,10 @@ export class ToolWindowSnapshotCache {
             documentRevision: input.documentRevision,
             assetRevision: input.assetRevision,
             previewRevision: input.previewRevision,
+            snapshotRevision: this.textureCache.snapshotVersion,
+            snapshotProjection: input.snapshotProjection,
+            windowId: 'textureManager',
+            payload: this.textureCache.snapshot,
             snapshotVersion: this.textureCache.snapshotVersion,
             snapshot: this.textureCache.snapshot,
             pickedGeosetIndex: input.selection.pickedGeosetIndex ?? null,
@@ -212,29 +238,31 @@ export class ToolWindowSnapshotCache {
         documentRevision: number
         assetRevision: number
         previewRevision: number
-        materialManagerPreview: any
+        snapshotProjection: PreviewProjectionMode
         selection: ToolWindowSelectionState
         markPerf?: ToolWindowSnapshotPerf
     }): MaterialManagerRpcState {
-        const preview = input.materialManagerPreview
         const modelData = input.modelData
         const nextSourceRefs = {
-            materials: preview?.materials ?? modelData?.Materials ?? null,
-            textures: preview?.textures ?? modelData?.Textures ?? null,
-            geosets: preview?.geosets ?? modelData?.Geosets ?? null,
+            materials: modelData?.Materials ?? null,
+            textures: modelData?.Textures ?? null,
+            geosets: modelData?.Geosets ?? null,
+            ribbonEmitters: modelData?.RibbonEmitters ?? null,
             globalSequences: modelData?.GlobalSequences ?? null,
             sequences: modelData?.Sequences || null,
             textureAnims: modelData?.TextureAnims || null,
             modelPath: input.modelPath,
+            snapshotProjection: input.snapshotProjection,
         }
 
         if (this.hasSourceChanged(this.materialCache.sourceRefs, nextSourceRefs)) {
             this.materialCache.snapshotVersion += 1
             this.materialCache.sourceRefs = nextSourceRefs
             this.materialCache.snapshot = {
-                materials: preview?.materials ?? modelData?.Materials ?? [],
-                textures: preview?.textures ?? modelData?.Textures ?? [],
-                geosets: stripGeosetDataForToolWindow(preview?.geosets ?? modelData?.Geosets),
+                materials: modelData?.Materials ?? [],
+                textures: modelData?.Textures ?? [],
+                geosets: stripGeosetDataForToolWindow(modelData?.Geosets),
+                ribbonEmitters: modelData?.RibbonEmitters ?? [],
                 globalSequences: toGlobalSequenceDurations(modelData?.GlobalSequences),
                 sequences: modelData?.Sequences || [],
                 textureAnims: modelData?.TextureAnims || [],
@@ -242,9 +270,11 @@ export class ToolWindowSnapshotCache {
             }
             input.markPerf?.('material_snapshot_cached', {
                 snapshotVersion: this.materialCache.snapshotVersion,
+                snapshotProjection: input.snapshotProjection,
                 materialCount: this.materialCache.snapshot.materials.length,
                 textureCount: this.materialCache.snapshot.textures.length,
                 geosetCount: this.materialCache.snapshot.geosets.length,
+                ribbonEmitterCount: this.materialCache.snapshot.ribbonEmitters.length,
             })
         }
 
@@ -253,6 +283,10 @@ export class ToolWindowSnapshotCache {
             documentRevision: input.documentRevision,
             assetRevision: input.assetRevision,
             previewRevision: input.previewRevision,
+            snapshotRevision: this.materialCache.snapshotVersion,
+            snapshotProjection: input.snapshotProjection,
+            windowId: 'materialManager',
+            payload: this.materialCache.snapshot,
             snapshotVersion: this.materialCache.snapshotVersion,
             snapshot: this.materialCache.snapshot,
             pickedGeosetIndex: input.selection.pickedGeosetIndex ?? null,

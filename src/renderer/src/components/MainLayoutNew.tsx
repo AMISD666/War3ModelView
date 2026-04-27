@@ -7,7 +7,6 @@
 import React, { Suspense, lazy, useState, useCallback, useRef, useEffect } from 'react'
 import { Layout, ConfigProvider, theme, Button } from 'antd'
 import { CloseOutlined } from '@ant-design/icons'
-import { listen } from '@tauri-apps/api/event'
 import { useUIStore } from '../store/uiStore'
 import { useSelectionStore } from '../store/selectionStore'
 import { useModelStore } from '../store/modelStore'
@@ -16,6 +15,7 @@ import { TabBar } from './TabBar'
 import { handleGlobalShortcutKeyDown } from '../shortcuts/manager'
 import AppErrorBoundary from './common/AppErrorBoundary'
 import { uiText } from '../constants/uiText'
+import { useWindowEvent } from '../hooks/useWindowEvent'
 
 const MainLayoutOld = lazy(() => import('./MainLayout'))
 const NodeManagerWindow = lazy(() => import('./node/NodeManagerWindow').then((m) => ({ default: m.NodeManagerWindow })))
@@ -110,21 +110,17 @@ export const MainLayoutNew: React.FC = () => {
         return () => window.removeEventListener('resize', clampPanelSizes)
     }, [getNodeManagerBounds, getMpqPanelBounds])
 
-    useEffect(() => {
-        const unlisten = listen<string[]>('open-files', async (event) => {
-            const paths = event.payload
-            if (!paths || paths.length === 0) return
+    useWindowEvent<string[]>('open-files', (event) => {
+        const paths = event.payload
+        if (!paths || paths.length === 0) return
 
+        void (async () => {
             for (const path of paths) {
                 addTab(path)
                 await new Promise((resolve) => setTimeout(resolve, 100))
             }
-        })
-
-        return () => {
-            unlisten.then((fn) => fn())
-        }
-    }, [addTab])
+        })()
+    })
 
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
