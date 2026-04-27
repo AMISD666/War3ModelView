@@ -74,16 +74,14 @@ const clampContextMenuPosition = (x: number, y: number) => {
 
 export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ visible, onClose, docked }) => {
     const pickedGeosetIndex = useSelectionStore((state) => state.pickedGeosetIndex);
-    const {
-        modelData,
-        hiddenGeosetIds,
-        forceShowAllGeosets,
-        hoveredGeosetId,
-        setHoveredGeosetId,
-        selectedGeosetIndex,
-        selectedGeosetIndices,
-        setSelectedGeosetIndices
-    } = useModelStore();
+    const modelData = useModelStore(state => state.modelData);
+    const hiddenGeosetIds = useModelStore(state => state.hiddenGeosetIds);
+    const forceShowAllGeosets = useModelStore(state => state.forceShowAllGeosets);
+    const hoveredGeosetId = useModelStore(state => state.hoveredGeosetId);
+    const setHoveredGeosetId = useModelStore(state => state.setHoveredGeosetId);
+    const selectedGeosetIndex = useModelStore(state => state.selectedGeosetIndex);
+    const selectedGeosetIndices = useModelStore(state => state.selectedGeosetIndices);
+    const setSelectedGeosetIndices = useModelStore(state => state.setSelectedGeosetIndices);
     const geosets = modelData?.Geosets || [];
     const replaceGeosetsAndRemapAnimations = (
         name: string,

@@ -18,6 +18,7 @@ export type {
     SavePreparedModelInput,
     SavePreparedModelResult,
     SaveValidationContext,
+    SaveWorkflowProgress,
     SaveWorkflowTextureOptions,
 } from './SaveCurrentModelWorkflow'
 export { SaveCurrentModelWorkflow, saveCurrentModelWorkflow } from './SaveCurrentModelWorkflow'

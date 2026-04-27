@@ -36,6 +36,8 @@ export interface GlobalColorAdjustRpcState {
     snapshotRevision: number
     windowId: string
     settings: GlobalColorAdjustSettings
+    textureSaveMode: 'overwrite' | 'save_as'
+    textureSaveSuffix: string
 }
 
 const cloneModelData = (data: ModelData | null): ModelData | null =>
@@ -410,6 +412,18 @@ export class GlobalColorAdjustCommandHandler {
 
         if (command === 'RESET_GLOBAL_COLOR_ADJUST_SETTINGS') {
             useGlobalColorAdjustStore.getState().resetSettings()
+            return
+        }
+
+        if (command === 'SET_GLOBAL_COLOR_TEXTURE_SAVE_MODE') {
+            const mode = (payload as { mode?: unknown } | null)?.mode
+            useRendererStore.getState().setTextureSaveMode(mode === 'save_as' ? 'save_as' : 'overwrite')
+            return
+        }
+
+        if (command === 'SET_GLOBAL_COLOR_TEXTURE_SAVE_SUFFIX') {
+            const suffix = (payload as { suffix?: unknown } | null)?.suffix
+            useRendererStore.getState().setTextureSaveSuffix(typeof suffix === 'string' ? suffix : '')
         }
     }
 }

@@ -47,11 +47,15 @@ update_log.txt
 .gemini/
 .memorix/
 .github/hooks/
+activation/
+docs/
+vendor/
 
 # OS noise
 .DS_Store
 Thumbs.db
 Desktop.ini
+AGENTS.md
 
 # Local archives / backups
 *.bak

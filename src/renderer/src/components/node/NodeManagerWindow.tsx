@@ -24,13 +24,14 @@ import { useModelStore } from '../../store/modelStore';
 import { useSelectionStore } from '../../store/selectionStore';
 import { useUIStore } from '../../store/uiStore';
 import { useRendererStore } from '../../store/rendererStore';
-import { NodeType } from '../../types/node';
+import { NodeType, type TreeNode } from '../../types/node';
 import { buildTreeData, filterTreeNodes, getExpandedKeys, getAncestorKeys } from '../../utils/treeUtils';
 import { canDeleteNode, getNodeIcon, getNodeTypeName, isNodeManagerType } from '../../utils/nodeUtils';
 import { createParticleEmitter2FromPreset, listParticleEmitter2Presets, ParticleEmitter2PresetSummary } from '../../services/particleEmitter2PresetService';
 import { openNodeEditor } from '../../utils/nodeEditorOpen';
 import { registerNodeManagerDeleteKeyListener } from '../../utils/nodeManagerShortcutBridge';
 import {
+    consumeNodeManagerListScrollRequest,
     markNodeManagerListScrollFromTree,
     shouldScrollNodeManagerToSelection,
 } from '../../utils/nodeManagerListScrollBridge';
@@ -39,15 +40,31 @@ import { isTextInputActive } from '../../shortcuts/utils';
 const { Search } = Input;
 
 export const NodeManagerWindow: React.FC = () => {
-    const { nodes, modelData, deleteNode, reparentNodes, setClipboardNode, pasteNode, clipboardNode, addNode } = useModelStore();
-    const { selectedNodeIds, selectNode, clearNodeSelection, mainMode } = useSelectionStore();
-    const { setCreateNodeDialogVisible } = useUIStore();
-    const { hiddenNodeIds, toggleNodeVisibility, setHiddenNodeIds } = useRendererStore();
+    const nodes = useModelStore(state => state.nodes);
+    const modelData = useModelStore(state => state.modelData);
+    const deleteNode = useModelStore(state => state.deleteNode);
+    const reparentNodes = useModelStore(state => state.reparentNodes);
+    const setClipboardNode = useModelStore(state => state.setClipboardNode);
+    const pasteNode = useModelStore(state => state.pasteNode);
+    const clipboardNode = useModelStore(state => state.clipboardNode);
+    const addNode = useModelStore(state => state.addNode);
+    const updateNode = useModelStore(state => state.updateNode);
+    const selectedNodeIds = useSelectionStore(state => state.selectedNodeIds);
+    const selectNode = useSelectionStore(state => state.selectNode);
+    const clearNodeSelection = useSelectionStore(state => state.clearNodeSelection);
+    const mainMode = useSelectionStore(state => state.mainMode);
+    const setCreateNodeDialogVisible = useUIStore(state => state.setCreateNodeDialogVisible);
+    const hiddenNodeIds = useRendererStore(state => state.hiddenNodeIds);
+    const toggleNodeVisibility = useRendererStore(state => state.toggleNodeVisibility);
+    const setHiddenNodeIds = useRendererStore(state => state.setHiddenNodeIds);
 
     const [searchText, setSearchText] = useState('');
     const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
     const [autoExpandParent, setAutoExpandParent] = useState(true);
+    const [treeViewportHeight, setTreeViewportHeight] = useState(0);
     const hasInitializedExpansionRef = useRef(false);
+    const autoScrollTimerRef = useRef<number | null>(null);
+    const autoScrollFrameRef = useRef<number | null>(null);
 
     // Track Ctrl key state for drag operations
     const ctrlKeyPressedRef = React.useRef(false);
@@ -78,6 +95,7 @@ export const NodeManagerWindow: React.FC = () => {
     const [draggedNodeId, setDraggedNodeId] = useState<number | null>(null);
     const [dropTargetNodeId, setDropTargetNodeId] = useState<number | null>(null);
     const [cutNodeId, setCutNodeId] = useState<number | null>(null); // For Cut/Paste functionality
+    const [copiedPivotPoint, setCopiedPivotPoint] = useState<[number, number, number] | null>(null);
     const [isDragging, setIsDragging] = useState(false);
     const [_dragPosition, setDragPosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
 
@@ -88,6 +106,7 @@ export const NodeManagerWindow: React.FC = () => {
 
     // Ref for tree wrapper
     const treeWrapperRef = React.useRef<HTMLDivElement>(null);
+    const treeRef = React.useRef<React.ElementRef<typeof Tree>>(null);
     /** 节点管理器根容器：用于 Del 快捷键仅在面板内生效 */
     const nodeManagerRootRef = React.useRef<HTMLDivElement>(null);
 
@@ -123,9 +142,9 @@ export const NodeManagerWindow: React.FC = () => {
         }
     }, [hiddenNodeIds, nodeManagerNodes, setHiddenNodeIds]);
 
-    const collectTreeKeys = useCallback((data: any[]): string[] => {
+    const collectTreeKeys = useCallback((data: TreeNode[]): string[] => {
         const keys: string[] = [];
-        const walk = (items: any[]) => {
+        const walk = (items: TreeNode[]) => {
             items.forEach((item) => {
                 keys.push(String(item.key));
                 if (item.children && item.children.length > 0) {
@@ -134,6 +153,18 @@ export const NodeManagerWindow: React.FC = () => {
             });
         };
         walk(data);
+        return keys;
+    }, []);
+
+    const collectDescendantKeys = useCallback((node: TreeNode): string[] => {
+        const keys: string[] = [];
+        const walk = (items?: TreeNode[]) => {
+            items?.forEach((item) => {
+                keys.push(String(item.key));
+                walk(item.children);
+            });
+        };
+        walk(node.children);
         return keys;
     }, []);
 
@@ -178,6 +209,31 @@ export const NodeManagerWindow: React.FC = () => {
     }, [searchText, treeData]);
 
     /** 选中后让树区域获得焦点，便于 activeElement 落在管理器内、Delete 可被识别 */
+    useLayoutEffect(() => {
+        const wrapper = treeWrapperRef.current;
+        if (!wrapper) return;
+
+        const updateTreeViewportHeight = () => {
+            const styles = window.getComputedStyle(wrapper);
+            const verticalPadding = parseFloat(styles.paddingTop) + parseFloat(styles.paddingBottom);
+            const nextHeight = Math.max(0, Math.floor(wrapper.clientHeight - verticalPadding));
+            setTreeViewportHeight((prevHeight) => (prevHeight === nextHeight ? prevHeight : nextHeight));
+        };
+
+        updateTreeViewportHeight();
+
+        const resizeObserver = typeof ResizeObserver !== 'undefined'
+            ? new ResizeObserver(updateTreeViewportHeight)
+            : null;
+        resizeObserver?.observe(wrapper);
+        window.addEventListener('resize', updateTreeViewportHeight);
+
+        return () => {
+            resizeObserver?.disconnect();
+            window.removeEventListener('resize', updateTreeViewportHeight);
+        };
+    }, []);
+
     const focusTreeSurface = useCallback(() => {
         requestAnimationFrame(() => {
             treeWrapperRef.current?.focus({ preventScroll: true });
@@ -201,8 +257,14 @@ export const NodeManagerWindow: React.FC = () => {
         focusTreeSurface();
     };
 
-    const handleExpand: TreeProps['onExpand'] = (expandedKeysValue) => {
-        setExpandedKeys(expandedKeysValue as string[]);
+    const handleExpand: TreeProps['onExpand'] = (expandedKeysValue, info) => {
+        const nextExpandedKeys = expandedKeysValue.map(String);
+        if (!info.expanded && nextExpandedKeys.length > 300) {
+            const descendantKeys = new Set(collectDescendantKeys(info.node as unknown as TreeNode));
+            setExpandedKeys(nextExpandedKeys.filter((key) => !descendantKeys.has(key)));
+        } else {
+            setExpandedKeys(nextExpandedKeys);
+        }
         setAutoExpandParent(false);
     };
 
@@ -316,6 +378,20 @@ export const NodeManagerWindow: React.FC = () => {
             <span className="node-manager-menuitem-text">{text}</span>
         </span>
     );
+
+    const getNodePivotPoint = (nodeId: number): [number, number, number] | null => {
+        const sourceNode = nodes.find((candidate) => candidate.ObjectId === nodeId);
+        const pivot = sourceNode?.PivotPoint ?? (modelData as any)?.PivotPoints?.[nodeId];
+        if (!pivot || typeof pivot.length !== 'number' || pivot.length < 3) return null;
+
+        const nextPivot: [number, number, number] = [
+            Number(pivot[0] ?? 0),
+            Number(pivot[1] ?? 0),
+            Number(pivot[2] ?? 0)
+        ];
+
+        return nextPivot.every(Number.isFinite) ? nextPivot : null;
+    };
 
     const getContextMenuItems = (nodeId: number): MenuProps['items'] => {
         // Special handling for virtual root node (-1)
@@ -437,6 +513,7 @@ export const NodeManagerWindow: React.FC = () => {
         if (!node) return [];
 
         const deleteCheck = canDeleteNode(nodeId, nodes, modelData?.Geosets);
+        const nodePivotPoint = getNodePivotPoint(nodeId);
 
         const items: MenuProps['items'] = [
             {
@@ -532,6 +609,32 @@ export const NodeManagerWindow: React.FC = () => {
                     setClipboardNode(node);
                     setCutNodeId(null); // Clear cut state
                     appMessage.success('节点已复制');
+                }
+            },
+            {
+                key: 'copyPivotPoint',
+                label: '复制质心点位置',
+                disabled: !nodePivotPoint,
+                onClick: () => {
+                    if (!nodePivotPoint) {
+                        appMessage.warning('当前节点没有可复制的质心点位置');
+                        return;
+                    }
+                    setCopiedPivotPoint([...nodePivotPoint]);
+                    appMessage.success('已复制质心点位置');
+                }
+            },
+            {
+                key: 'pastePivotPoint',
+                label: '粘贴质心点位置',
+                disabled: !copiedPivotPoint,
+                onClick: () => {
+                    if (!copiedPivotPoint) {
+                        appMessage.warning('请先复制一个质心点位置');
+                        return;
+                    }
+                    updateNode(nodeId, { PivotPoint: [...copiedPivotPoint] });
+                    appMessage.success('已粘贴质心点位置');
                 }
             },
             {
@@ -779,7 +882,10 @@ export const NodeManagerWindow: React.FC = () => {
         const targetId = selectedNodeIds[0];
         const ancestorKeys = getAncestorKeys(nodes, targetId);
         if (ancestorKeys.length > 0) {
-            setExpandedKeys(prev => Array.from(new Set([...prev, ...ancestorKeys])));
+            setExpandedKeys(prev => {
+                const missingKeys = ancestorKeys.filter((key) => !prev.includes(key));
+                return missingKeys.length > 0 ? [...prev, ...missingKeys] : prev;
+            });
         }
     }, [selectedNodeIds, nodes]);
 
@@ -790,14 +896,49 @@ export const NodeManagerWindow: React.FC = () => {
         const targetId = selectedNodeIds[0];
         const wrapper = treeWrapperRef.current;
         if (!wrapper) return;
-        const timer = window.setTimeout(() => {
-            const el = wrapper.querySelector(`[data-node-id="${targetId}"]`) as HTMLElement | null;
-            if (el) {
-                el.scrollIntoView({ block: 'center', inline: 'nearest' });
+        const ancestorKeys = getAncestorKeys(nodes, targetId);
+        if (ancestorKeys.some((key) => !expandedKeys.includes(key))) return;
+
+        if (autoScrollTimerRef.current !== null) {
+            window.clearTimeout(autoScrollTimerRef.current);
+        }
+        if (autoScrollFrameRef.current !== null) {
+            window.cancelAnimationFrame(autoScrollFrameRef.current);
+        }
+
+        autoScrollTimerRef.current = window.setTimeout(() => {
+            autoScrollTimerRef.current = null;
+            if (treeViewportHeight > 0) {
+                treeRef.current?.scrollTo({ key: String(targetId), align: 'auto' });
+                consumeNodeManagerListScrollRequest();
+                return;
             }
-        }, 0);
-        return () => window.clearTimeout(timer);
-    }, [selectedNodeIds, mainMode, filteredTreeData, expandedKeys]);
+
+            const el = wrapper.querySelector(`[data-node-id="${targetId}"]`) as HTMLElement | null;
+            if (!el) return;
+
+            autoScrollFrameRef.current = window.requestAnimationFrame(() => {
+                autoScrollFrameRef.current = null;
+                const wrapperRect = wrapper.getBoundingClientRect();
+                const elRect = el.getBoundingClientRect();
+                const isVisible = elRect.top >= wrapperRect.top && elRect.bottom <= wrapperRect.bottom;
+                if (!isVisible) {
+                    el.scrollIntoView({ block: 'center', inline: 'nearest' });
+                }
+                consumeNodeManagerListScrollRequest();
+            });
+        }, 80);
+        return () => {
+            if (autoScrollTimerRef.current !== null) {
+                window.clearTimeout(autoScrollTimerRef.current);
+                autoScrollTimerRef.current = null;
+            }
+            if (autoScrollFrameRef.current !== null) {
+                window.cancelAnimationFrame(autoScrollFrameRef.current);
+                autoScrollFrameRef.current = null;
+            }
+        };
+    }, [selectedNodeIds, mainMode, nodes, expandedKeys, treeViewportHeight]);
 
     return (
         <div
@@ -832,7 +973,7 @@ export const NodeManagerWindow: React.FC = () => {
                 className="node-manager-tree-wrapper"
                 style={{
                     flex: 1,
-                    overflow: 'auto',
+                    overflow: treeViewportHeight > 0 ? 'hidden' : 'auto',
                     border: '1px solid #303030',
                     borderRadius: '2px',
                     backgroundColor: '#1e1e1e',
@@ -850,12 +991,17 @@ export const NodeManagerWindow: React.FC = () => {
             >
                 {treeData.length > 0 ? (
                     <Tree
+                        ref={treeRef}
                         className="node-manager-tree"
                         multiple
                         treeData={filteredTreeData}
                         selectedKeys={selectedNodeIds.map(String)}
                         expandedKeys={expandedKeys}
                         autoExpandParent={autoExpandParent}
+                        motion={null}
+                        height={treeViewportHeight || undefined}
+                        itemHeight={16}
+                        virtual={treeViewportHeight > 0}
                         onSelect={handleSelect}
                         onExpand={handleExpand}
                         onRightClick={handleRightClick}

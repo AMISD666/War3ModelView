@@ -150,6 +150,21 @@ const NodeEditorStandalone: React.FC = () => {
     const isFrozenNodeReady =
         !isClosedSession && (state.kind === 'rename' || (frozenNode !== null && frozenSessionKey === activeSessionKey))
 
+    useEffect(() => {
+        if (!activeSessionKey || isFrozenNodeReady) return
+
+        const requestSnapshot = () => {
+            windowGateway.emit('rpc-req-nodeEditor').catch(() => {})
+        }
+        const firstTimer = window.setTimeout(requestSnapshot, 160)
+        const secondTimer = window.setTimeout(requestSnapshot, 650)
+
+        return () => {
+            window.clearTimeout(firstTimer)
+            window.clearTimeout(secondTimer)
+        }
+    }, [activeSessionKey, isFrozenNodeReady])
+
     if (!state.kind || state.objectId < 0) {
         return (
             <ConfigProvider theme={nodeEditorStandaloneTheme}>

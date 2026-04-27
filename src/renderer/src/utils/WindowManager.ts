@@ -31,7 +31,11 @@ class WindowManager {
     }
 
     async openNodeEditorWindow(title: string, width: number, height: number): Promise<void> {
-        await this.openToolWindow('nodeEditor', title, width, height)
+        await this.openToolWindow('nodeEditor', title, width, height, {
+            syncMode: 'always',
+            waitForHydration: false,
+            hydrationTimeoutMs: 0,
+        })
     }
 
     async openToolWindow(

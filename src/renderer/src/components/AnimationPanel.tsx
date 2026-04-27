@@ -23,14 +23,12 @@ const isValidSequence = (anim: any): boolean => {
 const AnimationPanel: React.FC<AnimationPanelProps> = ({
     onImport
 }) => {
-    const {
-        modelPath,
-        sequences,
-        currentSequence,
-        setSequence,
-        setPlaying,
-        setSequences
-    } = useModelStore()
+    const modelPath = useModelStore(state => state.modelPath)
+    const sequences = useModelStore(state => state.sequences)
+    const currentSequence = useModelStore(state => state.currentSequence)
+    const setSequence = useModelStore(state => state.setSequence)
+    const setPlaying = useModelStore(state => state.setPlaying)
+    const setSequences = useModelStore(state => state.setSequences)
 
     const { push } = useHistoryStore()
 

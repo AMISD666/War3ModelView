@@ -31,6 +31,16 @@ export interface EncodeAdjustedTexturesOptions {
     textureSaveSuffix?: string
 }
 
+export interface TextureAssetProgress {
+    current: number
+    total: number
+    texturePath?: string
+}
+
+export interface TextureAssetOperationOptions {
+    onProgress?: (progress: TextureAssetProgress) => void | Promise<void>
+}
+
 const getModelTextures = (modelData: unknown): TextureRecord[] => {
     if (!modelData || typeof modelData !== 'object') return []
     const textures = (modelData as { Textures?: unknown }).Textures
@@ -75,6 +85,7 @@ export class TextureSaveAssetService {
         modelData: unknown,
         sourceModelPath: string | null,
         targetModelPath: string,
+        options: TextureAssetOperationOptions = {},
     ): Promise<TextureAssetOperationResult> {
         const textures = getModelTextures(modelData)
         if (textures.length === 0 || !sourceModelPath) {
@@ -97,15 +108,25 @@ export class TextureSaveAssetService {
         const failed: string[] = []
         let copiedCount = 0
 
-        for (const texture of textures) {
+        for (let index = 0; index < textures.length; index += 1) {
+            const texture = textures[index]
             const imagePathRaw = texture.Image
             const replaceableId = Number(texture.ReplaceableId ?? 0)
+            const report = async () => {
+                await options.onProgress?.({
+                    current: index + 1,
+                    total: textures.length,
+                    texturePath: typeof imagePathRaw === 'string' ? imagePathRaw : undefined,
+                })
+            }
             if (typeof imagePathRaw !== 'string' || !imagePathRaw || replaceableId > 0) {
+                await report()
                 continue
             }
 
             const normalizedImagePath = normalizeWindowsPath(imagePathRaw)
             if (isAbsoluteWindowsPath(normalizedImagePath)) {
+                await report()
                 continue
             }
 
@@ -113,6 +134,7 @@ export class TextureSaveAssetService {
             const targetTexturePath = buildTargetAssetPath(targetModelDir, normalizedImagePath)
             const dedupeKey = targetTexturePath.toLowerCase()
             if (copied.has(dedupeKey)) {
+                await report()
                 continue
             }
 
@@ -133,6 +155,7 @@ export class TextureSaveAssetService {
             } catch (error) {
                 failed.push(`${normalizedImagePath} (${error instanceof Error ? error.message : String(error)})`)
             }
+            await report()
         }
 
         return { copiedCount, encodedCount: 0, failed }
@@ -143,6 +166,7 @@ export class TextureSaveAssetService {
         sourceModelPath: string | null,
         targetModelPath: string,
         options: EncodeAdjustedTexturesOptions,
+        operationOptions: TextureAssetOperationOptions = {},
     ): Promise<TextureAssetOperationResult> {
         const textures = getModelTextures(modelData)
         if (textures.length === 0) {
@@ -195,14 +219,23 @@ export class TextureSaveAssetService {
         let encodedCount = 0
         const failed: string[] = []
 
-        for (const texture of textures) {
+        for (let index = 0; index < textures.length; index += 1) {
+            const texture = textures[index]
             const imagePathRaw = texture.Image
             const adjustmentsRaw = texture[TEXTURE_ADJUSTMENTS_KEY]
+            const report = async () => {
+                await operationOptions.onProgress?.({
+                    current: index + 1,
+                    total: textures.length,
+                    texturePath: typeof imagePathRaw === 'string' ? imagePathRaw : undefined,
+                })
+            }
 
             if (typeof imagePathRaw !== 'string' || !imagePathRaw || !adjustmentsRaw) {
                 if (Object.prototype.hasOwnProperty.call(texture, TEXTURE_ADJUSTMENTS_KEY)) {
                     delete texture[TEXTURE_ADJUSTMENTS_KEY]
                 }
+                await report()
                 continue
             }
 
@@ -210,12 +243,14 @@ export class TextureSaveAssetService {
             const ext = imagePathRaw.toLowerCase().split('.').pop()
             if (isDefaultTextureAdjustments(normalizedAdjustments) || (ext !== 'blp' && ext !== 'tga')) {
                 delete texture[TEXTURE_ADJUSTMENTS_KEY]
+                await report()
                 continue
             }
 
             const decodeResult = await this.textureDecoder.decodeTexture(imagePathRaw, decodeModelPath)
             if (!decodeResult.imageData) {
                 failed.push(`${imagePathRaw} (解码失败)`)
+                await report()
                 continue
             }
 
@@ -259,6 +294,7 @@ export class TextureSaveAssetService {
             } catch (error) {
                 failed.push(`${imagePathRaw} (${error instanceof Error ? error.message : String(error)})`)
             }
+            await report()
         }
 
         return { copiedCount: 0, encodedCount, failed }

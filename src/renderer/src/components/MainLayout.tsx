@@ -46,7 +46,7 @@ import { markStandalonePerf } from '../utils/standalonePerf'
 import { parseModelBuffer, mergeGeosets, mergeAnimations } from '../utils/modelMerge'
 import { desktopGateway } from '../infrastructure/desktop'
 import { windowGateway } from '../infrastructure/window'
-import { mergeLiveRendererGeometryForSave, saveCurrentModelWorkflow, type TextureAssetOperationResult, type SaveValidationContext } from '../application/model-save'
+import { mergeLiveRendererGeometryForSave, saveCurrentModelWorkflow, type TextureAssetOperationResult, type SaveValidationContext, type SaveWorkflowProgress } from '../application/model-save'
 import { DEFAULT_IMPORT_FILE_DIALOG_OPTIONS, openModelWorkflow } from '../application/model-open'
 import { useAppShellController } from '../application/shell/useAppShellController'
 import { useModelToolsController } from '../application/model-tools/useModelToolsController'
@@ -79,6 +79,7 @@ import {
 } from '../application/window-bridge'
 import { uiText } from '../constants/uiText'
 import { useGlobalColorAdjustStore } from '../store/globalColorAdjustStore'
+import { useSaveOperationStore } from '../store/saveOperationStore'
 import { applyGlobalColorAdjustmentsToModel } from '../services/globalColorAdjustModelService'
 import { hasActiveGlobalColorAdjustSettings } from '../utils/globalColorAdjustCore'
 import { commitSavedModelToStore } from '../services/commitSavedModelService'
@@ -101,6 +102,10 @@ const getSaveModelDataSnapshot = (fallbackModelData: any, modelPath: string | nu
     const renderer = useRendererStore.getState().renderer
     return mergeLiveRendererGeometryForSave(baseData, renderer, modelPath)
 }
+
+const waitForNextPaint = (): Promise<void> => new Promise((resolve) => {
+    window.requestAnimationFrame(() => resolve())
+})
 
 type RevisionedMainToolCommand = {
     documentId?: string | null
@@ -209,7 +214,6 @@ const MainLayout: React.FC = () => {
     const setTransformModelDialogVisible = useUIStore(state => state.setTransformModelDialogVisible);
     const currentSequence = useModelStore(state => state.currentSequence)
     const sequences = useModelStore(state => state.sequences)
-    const currentFrame = useModelStore(state => state.currentFrame)
     const isPlaying = useModelStore(state => state.isPlaying)
     const playbackSpeed = useModelStore(state => state.playbackSpeed)
     const isLooping = useModelStore(state => state.isLooping)
@@ -217,8 +221,10 @@ const MainLayout: React.FC = () => {
     const setFrame = useModelStore(state => state.setFrame)
     const setLooping = useModelStore(state => state.setLooping)
     const renderer = useRendererStore(state => state.renderer)
-    const { toggleNodeManager, toggleModelInfo } = useUIStore()
-    const { mainMode, setMainMode } = useSelectionStore()
+    const toggleNodeManager = useUIStore(state => state.toggleNodeManager)
+    const toggleModelInfo = useUIStore(state => state.toggleModelInfo)
+    const mainMode = useSelectionStore(state => state.mainMode)
+    const setMainMode = useSelectionStore(state => state.setMainMode)
 
 
 
@@ -256,6 +262,7 @@ const MainLayout: React.FC = () => {
         }
 
         const [start, end] = getPlaybackInterval()
+        const currentFrame = useModelStore.getState().currentFrame
         const ended = Number.isFinite(currentFrame) && currentFrame >= end - 0.1
         const nextFrame = ended ? start : Math.max(start, Math.min(currentFrame, end))
 
@@ -267,7 +274,7 @@ const MainLayout: React.FC = () => {
         }
 
         setPlaying(true)
-    }, [isPlaying, getPlaybackInterval, currentFrame, setFrame, renderer, setPlaying])
+    }, [isPlaying, getPlaybackInterval, setFrame, renderer, setPlaying])
 
     const handleToggleLooping = useCallback(() => {
         const nextLooping = !isLooping
@@ -278,6 +285,7 @@ const MainLayout: React.FC = () => {
         }
 
         const [start, end] = getPlaybackInterval()
+        const currentFrame = useModelStore.getState().currentFrame
         const ended = Number.isFinite(currentFrame) && currentFrame >= end - 0.1
         if (!ended) {
             return
@@ -288,7 +296,7 @@ const MainLayout: React.FC = () => {
             renderer.rendererData.frame = start
         }
         setPlaying(true)
-    }, [isLooping, setLooping, isPlaying, getPlaybackInterval, currentFrame, setFrame, renderer, setPlaying])
+    }, [isLooping, setLooping, isPlaying, getPlaybackInterval, setFrame, renderer, setPlaying])
     const toRpcSafeNodeSnapshot = (value: any): any => {
         if (value == null) return value
         if (ArrayBuffer.isView(value)) {
@@ -317,6 +325,8 @@ const MainLayout: React.FC = () => {
     // Use preview-projected model data so live overlays affect the viewer without entering document state.
     const modelData = useModelStore(state => state.modelData)
     const globalColorAdjustSettings = useGlobalColorAdjustStore(state => state.settings)
+    const globalColorTextureSaveMode = useRendererStore(state => state.textureSaveMode)
+    const globalColorTextureSaveSuffix = useRendererStore(state => state.textureSaveSuffix)
     const mergedViewerModelData = useEffectivePreviewProjectedModelData()
     const hasActiveGlobalColorAdjust = useMemo(
         () => hasActiveGlobalColorAdjustSettings(globalColorAdjustSettings),
@@ -821,21 +831,31 @@ const MainLayout: React.FC = () => {
     }, [modelData]);
     // Persistent settings
     // Persistent settings replaced by store
-    const {
-        showGridXY,
-        showNodes, setShowNodes,
-        showSkeleton, setShowSkeleton,
-        showFPS, setShowFPS,
-        showGeosetVisibility, setShowGeosetVisibility,
-        showCollisionShapes, setShowCollisionShapes,
-        showCameras, setShowCameras,
-        showLights, setShowLights,
-        showAttachments, setShowAttachments,
-        renderMode, setRenderMode,
-        backgroundColor, setBackgroundColor,
-        teamColor, setTeamColor,
-        mpqLoaded, setMpqLoaded
-    } = useRendererStore();
+    const showGridXY = useRendererStore(state => state.showGridXY)
+    const showNodes = useRendererStore(state => state.showNodes)
+    const setShowNodes = useRendererStore(state => state.setShowNodes)
+    const showSkeleton = useRendererStore(state => state.showSkeleton)
+    const setShowSkeleton = useRendererStore(state => state.setShowSkeleton)
+    const showFPS = useRendererStore(state => state.showFPS)
+    const setShowFPS = useRendererStore(state => state.setShowFPS)
+    const showGeosetVisibility = useRendererStore(state => state.showGeosetVisibility)
+    const setShowGeosetVisibility = useRendererStore(state => state.setShowGeosetVisibility)
+    const showCollisionShapes = useRendererStore(state => state.showCollisionShapes)
+    const setShowCollisionShapes = useRendererStore(state => state.setShowCollisionShapes)
+    const showCameras = useRendererStore(state => state.showCameras)
+    const setShowCameras = useRendererStore(state => state.setShowCameras)
+    const showLights = useRendererStore(state => state.showLights)
+    const setShowLights = useRendererStore(state => state.setShowLights)
+    const showAttachments = useRendererStore(state => state.showAttachments)
+    const setShowAttachments = useRendererStore(state => state.setShowAttachments)
+    const renderMode = useRendererStore(state => state.renderMode)
+    const setRenderMode = useRendererStore(state => state.setRenderMode)
+    const backgroundColor = useRendererStore(state => state.backgroundColor)
+    const setBackgroundColor = useRendererStore(state => state.setBackgroundColor)
+    const teamColor = useRendererStore(state => state.teamColor)
+    const setTeamColor = useRendererStore(state => state.setTeamColor)
+    const mpqLoaded = useRendererStore(state => state.mpqLoaded)
+    const setMpqLoaded = useRendererStore(state => state.setMpqLoaded)
 
     // Load initial settings into store (optional, or rely on store defaults)
     // Settings are now handled by rendererStore persistence
@@ -865,6 +885,34 @@ const MainLayout: React.FC = () => {
     const isClosingAppRef = useRef(false);
     const isClosePromptOpenRef = useRef(false);
     const isExternalModelDragRef = useRef(false);
+
+    const runSaveOperation = useCallback(async <T,>(
+        title: string,
+        initialDetail: string,
+        task: (onProgress: (progress: SaveWorkflowProgress) => Promise<void>) => Promise<T>,
+    ): Promise<T> => {
+        const saveOperationStore = useSaveOperationStore.getState()
+        const operationId = saveOperationStore.startSaveOperation({
+            title,
+            detail: initialDetail,
+            progress: 2,
+        })
+        await waitForNextPaint()
+
+        const onProgress = async (progress: SaveWorkflowProgress) => {
+            useSaveOperationStore.getState().updateSaveOperation(operationId, progress)
+            await waitForNextPaint()
+        }
+
+        try {
+            return await task(onProgress)
+        } finally {
+            const store = useSaveOperationStore.getState()
+            store.updateSaveOperation(operationId, { progress: 100, detail: '保存操作完成' })
+            await waitForNextPaint()
+            store.finishSaveOperation(operationId)
+        }
+    }, [])
     const bypassClosePromptRef = useRef(false);
     const lastGlobalColorModelPathRef = useRef<string | null | undefined>(undefined);
     const panelStateRef = useRef({
@@ -1478,6 +1526,8 @@ const MainLayout: React.FC = () => {
             snapshotRevision: state.previewRevision,
             windowId: 'globalColorAdjust',
             settings: useGlobalColorAdjustStore.getState().settings,
+            textureSaveMode: useRendererStore.getState().textureSaveMode,
+            textureSaveSuffix: useRendererStore.getState().textureSaveSuffix,
         }
     }, [])
 
@@ -1522,7 +1572,7 @@ const MainLayout: React.FC = () => {
 
     useEffect(() => {
         toolWindowBroadcastCoordinatorRef.current.broadcastGlobalColorAdjust(getGlobalColorAdjustState())
-    }, [globalColorAdjustSettings, getGlobalColorAdjustState])
+    }, [globalColorAdjustSettings, globalColorTextureSaveMode, globalColorTextureSaveSuffix, getGlobalColorAdjustState])
 
     const hasLoadedModelData = !!modelData
     useEffect(() => {
@@ -1883,32 +1933,40 @@ const MainLayout: React.FC = () => {
 
         try {
             isSavingRef.current = true;
-            const normalizedData = getSaveModelDataSnapshot(currentModelData, currentModelPath);
-            const normalizedNodes = extractNodesFromModel(normalizedData);
-            const globalColorSettings = useGlobalColorAdjustStore.getState().settings;
-            const rendererState = useRendererStore.getState();
-            const saveResult = await saveCurrentModelWorkflow.savePreparedModel({
-                modelData: normalizedData,
-                nodes: normalizedNodes,
-                sourceModelPath: currentModelPath,
-                targetPath: currentModelPath,
-                globalColorSettings,
-                textureOptions: {
-                    textureSaveMode: rendererState.textureSaveMode,
-                    textureSaveSuffix: rendererState.textureSaveSuffix,
-                },
-                encodeAdjustedTextures: true,
-                validationContext: 'save',
-                confirmValidation: ({ context, validationErrors }) => confirmSaveValidation(context, validationErrors),
+            let normalizedNodes = extractNodesFromModel(currentModelData);
+            const saveResult = await runSaveOperation('保存模型', '正在准备保存模型...', async (onProgress) => {
+                const normalizedData = getSaveModelDataSnapshot(currentModelData, currentModelPath);
+                normalizedNodes = extractNodesFromModel(normalizedData);
+                const globalColorSettings = useGlobalColorAdjustStore.getState().settings;
+                const rendererState = useRendererStore.getState();
+                const result = await saveCurrentModelWorkflow.savePreparedModel({
+                    modelData: normalizedData,
+                    nodes: normalizedNodes,
+                    sourceModelPath: currentModelPath,
+                    targetPath: currentModelPath,
+                    globalColorSettings,
+                    textureOptions: {
+                        textureSaveMode: rendererState.textureSaveMode,
+                        textureSaveSuffix: rendererState.textureSaveSuffix,
+                    },
+                    encodeAdjustedTextures: true,
+                    validationContext: 'save',
+                    confirmValidation: ({ context, validationErrors }) => confirmSaveValidation(context, validationErrors),
+                    onProgress,
+                });
+                if (result) {
+                    await onProgress({ progress: 99, detail: '正在更新应用状态...' })
+                    useGlobalColorAdjustStore.getState().resetSettings();
+                    commitSavedModelToStore(result.preparedData, result.savedNodes ?? normalizedNodes);
+                    historyCommandService.markSaved();
+                    useModelStore.getState().markTabSaved();
+                }
+                return result
             });
             if (!saveResult) {
                 return false;
             }
             showTextureFailureWarnings(saveResult.textureEncodeResult);
-            useGlobalColorAdjustStore.getState().resetSettings();
-            commitSavedModelToStore(saveResult.preparedData, saveResult.savedNodes ?? normalizedNodes);
-            historyCommandService.markSaved();
-            useModelStore.getState().markTabSaved();
             showMessage('success', '保存成功', '模型已保存')
             return true;
         } catch (err) {
@@ -1940,34 +1998,41 @@ const MainLayout: React.FC = () => {
 
             if (selected) {
                 isSavingRef.current = true;
-                const normalizedData = getSaveModelDataSnapshot(currentModelData, currentModelPath);
-                const normalizedNodes = extractNodesFromModel(normalizedData);
-                const globalColorSettings = useGlobalColorAdjustStore.getState().settings;
-                const rendererState = useRendererStore.getState();
-                const saveResult = await saveCurrentModelWorkflow.savePreparedModel({
-                    modelData: normalizedData,
-                    nodes: normalizedNodes,
-                    sourceModelPath: currentModelPath,
-                    targetPath: selected,
-                    globalColorSettings,
-                    textureOptions: {
-                        textureSaveMode: rendererState.textureSaveMode,
-                        textureSaveSuffix: rendererState.textureSaveSuffix,
-                    },
-                    copyReferencedTextures: true,
-                    encodeAdjustedTextures: true,
-                    validationContext: 'saveAs',
-                    confirmValidation: ({ context, validationErrors }) => confirmSaveValidation(context, validationErrors),
+                let normalizedNodes = extractNodesFromModel(currentModelData);
+                const saveResult = await runSaveOperation('另存为模型', '正在准备另存模型...', async (onProgress) => {
+                    const normalizedData = getSaveModelDataSnapshot(currentModelData, currentModelPath);
+                    normalizedNodes = extractNodesFromModel(normalizedData);
+                    const globalColorSettings = useGlobalColorAdjustStore.getState().settings;
+                    const rendererState = useRendererStore.getState();
+                    const result = await saveCurrentModelWorkflow.savePreparedModel({
+                        modelData: normalizedData,
+                        nodes: normalizedNodes,
+                        sourceModelPath: currentModelPath,
+                        targetPath: selected,
+                        globalColorSettings,
+                        textureOptions: {
+                            textureSaveMode: rendererState.textureSaveMode,
+                            textureSaveSuffix: rendererState.textureSaveSuffix,
+                        },
+                        copyReferencedTextures: true,
+                        encodeAdjustedTextures: true,
+                        validationContext: 'saveAs',
+                        confirmValidation: ({ context, validationErrors }) => confirmSaveValidation(context, validationErrors),
+                        onProgress,
+                    });
+                    if (result) {
+                        await onProgress({ progress: 99, detail: '正在更新应用状态...' })
+                        useGlobalColorAdjustStore.getState().resetSettings();
+                        commitSavedModelToStore(result.preparedData, result.savedNodes ?? normalizedNodes);
+                        historyCommandService.markSaved();
+                        useModelStore.getState().markTabSaved();
+                    }
+                    return result
                 });
                 if (!saveResult) {
                     return false;
                 }
                 showTextureFailureWarnings(saveResult.textureEncodeResult, saveResult.textureCopyResult);
-                useGlobalColorAdjustStore.getState().resetSettings();
-                commitSavedModelToStore(saveResult.preparedData, saveResult.savedNodes ?? normalizedNodes);
-                // Update store with new path if needed, but for now just alert
-                historyCommandService.markSaved();
-                useModelStore.getState().markTabSaved();
                 showMessage('success', '另存为成功', '模型已另存为: ' + selected)
                 return true;
             }
@@ -2144,6 +2209,10 @@ const MainLayout: React.FC = () => {
     }
 
     const handleExportMDL = async () => {
+        if (isSavingRef.current) {
+            showMessage('warning', '提示', '正在保存模型，请稍候...')
+            return
+        }
         if (!modelData) return
         try {
             const defaultName = getModelBaseName() + '.mdl'
@@ -2163,40 +2232,51 @@ const MainLayout: React.FC = () => {
                     filePath += '.mdl'
                 }
 
-                const normalizedData = getSaveModelDataSnapshot(modelData, modelPath);
-                const normalizedNodes = extractNodesFromModel(normalizedData);
-                const globalColorSettings = useGlobalColorAdjustStore.getState().settings;
-                const rendererState = useRendererStore.getState();
-                const saveResult = await saveCurrentModelWorkflow.savePreparedModel({
-                    modelData: normalizedData,
-                    nodes: normalizedNodes,
-                    sourceModelPath: modelPath,
-                    targetPath: filePath,
-                    globalColorSettings,
-                    textureOptions: {
-                        textureSaveMode: rendererState.textureSaveMode,
-                        textureSaveSuffix: rendererState.textureSaveSuffix,
-                    },
-                    copyReferencedTextures: true,
-                    encodeAdjustedTextures: true,
-                    format: 'mdl',
-                    validationContext: 'export',
-                    confirmValidation: ({ context, validationErrors }) => confirmSaveValidation(context, validationErrors),
+                isSavingRef.current = true
+                const saveResult = await runSaveOperation('导出 MDL', '正在准备导出 MDL...', async (onProgress) => {
+                    const normalizedData = getSaveModelDataSnapshot(modelData, modelPath);
+                    const normalizedNodes = extractNodesFromModel(normalizedData);
+                    const globalColorSettings = useGlobalColorAdjustStore.getState().settings;
+                    const rendererState = useRendererStore.getState();
+                    return saveCurrentModelWorkflow.savePreparedModel({
+                        modelData: normalizedData,
+                        nodes: normalizedNodes,
+                        sourceModelPath: modelPath,
+                        targetPath: filePath,
+                        globalColorSettings,
+                        textureOptions: {
+                            textureSaveMode: rendererState.textureSaveMode,
+                            textureSaveSuffix: rendererState.textureSaveSuffix,
+                        },
+                        copyReferencedTextures: true,
+                        encodeAdjustedTextures: true,
+                        format: 'mdl',
+                        validationContext: 'export',
+                        confirmValidation: ({ context, validationErrors }) => confirmSaveValidation(context, validationErrors),
+                        onProgress,
+                    })
                 })
                 if (!saveResult) {
+                    isSavingRef.current = false
                     return;
                 }
 
                 showTextureFailureWarnings(saveResult.textureEncodeResult, saveResult.textureCopyResult);
                 showMessage('success', '导出成功', '已导出为 MDL: ' + filePath)
+                isSavingRef.current = false
             }
         } catch (err) {
             console.error('Failed to export MDL:', err)
+            isSavingRef.current = false
             showMessage('error', '导出 MDL 失败', '详细信息: ' + err)
         }
     }
 
     const handleExportMDX = async () => {
+        if (isSavingRef.current) {
+            showMessage('warning', '提示', '正在保存模型，请稍候...')
+            return
+        }
         if (!modelData) return
         try {
             const defaultName = getModelBaseName() + '.mdx'
@@ -2216,40 +2296,51 @@ const MainLayout: React.FC = () => {
                     filePath += '.mdx'
                 }
 
-                const normalizedData = getSaveModelDataSnapshot(modelData, modelPath);
-                const normalizedNodes = extractNodesFromModel(normalizedData);
-                const globalColorSettings = useGlobalColorAdjustStore.getState().settings;
-                const rendererState = useRendererStore.getState();
-                const saveResult = await saveCurrentModelWorkflow.savePreparedModel({
-                    modelData: normalizedData,
-                    nodes: normalizedNodes,
-                    sourceModelPath: modelPath,
-                    targetPath: filePath,
-                    globalColorSettings,
-                    textureOptions: {
-                        textureSaveMode: rendererState.textureSaveMode,
-                        textureSaveSuffix: rendererState.textureSaveSuffix,
-                    },
-                    copyReferencedTextures: true,
-                    encodeAdjustedTextures: true,
-                    format: 'mdx',
-                    validationContext: 'export',
-                    confirmValidation: ({ context, validationErrors }) => confirmSaveValidation(context, validationErrors),
+                isSavingRef.current = true
+                const saveResult = await runSaveOperation('导出 MDX', '正在准备导出 MDX...', async (onProgress) => {
+                    const normalizedData = getSaveModelDataSnapshot(modelData, modelPath);
+                    const normalizedNodes = extractNodesFromModel(normalizedData);
+                    const globalColorSettings = useGlobalColorAdjustStore.getState().settings;
+                    const rendererState = useRendererStore.getState();
+                    return saveCurrentModelWorkflow.savePreparedModel({
+                        modelData: normalizedData,
+                        nodes: normalizedNodes,
+                        sourceModelPath: modelPath,
+                        targetPath: filePath,
+                        globalColorSettings,
+                        textureOptions: {
+                            textureSaveMode: rendererState.textureSaveMode,
+                            textureSaveSuffix: rendererState.textureSaveSuffix,
+                        },
+                        copyReferencedTextures: true,
+                        encodeAdjustedTextures: true,
+                        format: 'mdx',
+                        validationContext: 'export',
+                        confirmValidation: ({ context, validationErrors }) => confirmSaveValidation(context, validationErrors),
+                        onProgress,
+                    })
                 })
                 if (!saveResult) {
+                    isSavingRef.current = false
                     return;
                 }
 
                 showTextureFailureWarnings(saveResult.textureEncodeResult, saveResult.textureCopyResult);
                 showMessage('success', '导出成功', '已导出为 MDX: ' + filePath)
+                isSavingRef.current = false
             }
         } catch (err) {
             console.error('Failed to export MDX:', err)
+            isSavingRef.current = false
             showMessage('error', '导出 MDX 失败', '详细信息: ' + err)
         }
     }
 
     const handleSwapMdlMdx = async (): Promise<boolean> => {
+        if (isSavingRef.current) {
+            showMessage('warning', '提示', '正在保存模型，请稍候...')
+            return false
+        }
         if (!modelData || !modelPath) {
             showMessage('warning', '提示', '请先打开一个 MDL 或 MDX 模型')
             return false
@@ -2279,27 +2370,32 @@ const MainLayout: React.FC = () => {
                 }
             }
 
-            const normalizedData = getSaveModelDataSnapshot(modelData, modelPath)
-            const normalizedNodes = extractNodesFromModel(normalizedData)
-            const globalColorSettings = useGlobalColorAdjustStore.getState().settings
-            const rendererState = useRendererStore.getState()
-            const saveResult = await saveCurrentModelWorkflow.savePreparedModel({
-                modelData: normalizedData,
-                nodes: normalizedNodes,
-                sourceModelPath: modelPath,
-                targetPath,
-                globalColorSettings,
-                textureOptions: {
-                    textureSaveMode: rendererState.textureSaveMode,
-                    textureSaveSuffix: rendererState.textureSaveSuffix,
-                },
-                copyReferencedTextures: true,
-                encodeAdjustedTextures: true,
-                format: targetExt === '.mdl' ? 'mdl' : 'mdx',
-                validationContext: 'convert',
-                confirmValidation: ({ context, validationErrors }) => confirmSaveValidation(context, validationErrors),
+            isSavingRef.current = true
+            const saveResult = await runSaveOperation('转换模型', '正在准备转换 MDL/MDX...', async (onProgress) => {
+                const normalizedData = getSaveModelDataSnapshot(modelData, modelPath)
+                const normalizedNodes = extractNodesFromModel(normalizedData)
+                const globalColorSettings = useGlobalColorAdjustStore.getState().settings
+                const rendererState = useRendererStore.getState()
+                return saveCurrentModelWorkflow.savePreparedModel({
+                    modelData: normalizedData,
+                    nodes: normalizedNodes,
+                    sourceModelPath: modelPath,
+                    targetPath,
+                    globalColorSettings,
+                    textureOptions: {
+                        textureSaveMode: rendererState.textureSaveMode,
+                        textureSaveSuffix: rendererState.textureSaveSuffix,
+                    },
+                    copyReferencedTextures: true,
+                    encodeAdjustedTextures: true,
+                    format: targetExt === '.mdl' ? 'mdl' : 'mdx',
+                    validationContext: 'convert',
+                    confirmValidation: ({ context, validationErrors }) => confirmSaveValidation(context, validationErrors),
+                    onProgress,
+                })
             })
             if (!saveResult) {
+                isSavingRef.current = false
                 return false
             }
 
@@ -2307,10 +2403,12 @@ const MainLayout: React.FC = () => {
             useGlobalColorAdjustStore.getState().resetSettings();
             openModelAsTab(targetPath)
             setRecentFiles(replaceRecentModelPath(sourcePath, targetPath))
+            isSavingRef.current = false
             showMessage('success', '互转成功', `已生成并打开: ${targetPath}`)
             return true
         } catch (err) {
             console.error('Failed to swap MDL/MDX:', err)
+            isSavingRef.current = false
             showMessage('error', 'MDL/MDX 互转失败', '详细信息: ' + err)
             return false
         }

@@ -53,41 +53,40 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
     onWeldVertices,
     onFitToView
 }) => {
-    const {
-        mainMode,
-        geometrySubMode,
-        setGeometrySubMode,
-        animationSubMode,
-        setAnimationSubMode,
-        transformMode,
-        setTransformMode,
-        selectedVertexIds,
-        selectedFaceIds,
-        selectedNodeIds,
-        isPickingParent,
-        setIsPickingParent,
-        isGlobalTransformMode,
-        setIsGlobalTransformMode,
-        globalTransformPivot,
-        setGlobalTransformPivot
-    } = useSelectionStore();
-    const { modelData: _modelData, sequences, currentSequence, setFrame } = useModelStore();
-    const {
-        renderer,
-        setShowSettingsPanel,
-        snapTranslateEnabled,
-        setSnapTranslateEnabled,
-        snapTranslateStep,
-        setSnapTranslateStep,
-        snapRotateEnabled,
-        setSnapRotateEnabled,
-        snapRotateStep,
-        setSnapRotateStep,
-        gizmoOrientation,
-        setGizmoOrientation,
-        pasteCreatesNewGeoset,
-        setPasteCreatesNewGeoset
-    } = useRendererStore(state => state);
+    const mainMode = useSelectionStore(state => state.mainMode);
+    const geometrySubMode = useSelectionStore(state => state.geometrySubMode);
+    const setGeometrySubMode = useSelectionStore(state => state.setGeometrySubMode);
+    const animationSubMode = useSelectionStore(state => state.animationSubMode);
+    const setAnimationSubMode = useSelectionStore(state => state.setAnimationSubMode);
+    const transformMode = useSelectionStore(state => state.transformMode);
+    const setTransformMode = useSelectionStore(state => state.setTransformMode);
+    const selectedVertexIds = useSelectionStore(state => state.selectedVertexIds);
+    const selectedFaceIds = useSelectionStore(state => state.selectedFaceIds);
+    const selectedNodeIds = useSelectionStore(state => state.selectedNodeIds);
+    const isPickingParent = useSelectionStore(state => state.isPickingParent);
+    const setIsPickingParent = useSelectionStore(state => state.setIsPickingParent);
+    const isGlobalTransformMode = useSelectionStore(state => state.isGlobalTransformMode);
+    const setIsGlobalTransformMode = useSelectionStore(state => state.setIsGlobalTransformMode);
+    const globalTransformPivot = useSelectionStore(state => state.globalTransformPivot);
+    const setGlobalTransformPivot = useSelectionStore(state => state.setGlobalTransformPivot);
+    const _modelData = useModelStore(state => state.modelData);
+    const sequences = useModelStore(state => state.sequences);
+    const currentSequence = useModelStore(state => state.currentSequence);
+    const setFrame = useModelStore(state => state.setFrame);
+    const renderer = useRendererStore(state => state.renderer);
+    const setShowSettingsPanel = useRendererStore(state => state.setShowSettingsPanel);
+    const snapTranslateEnabled = useRendererStore(state => state.snapTranslateEnabled);
+    const setSnapTranslateEnabled = useRendererStore(state => state.setSnapTranslateEnabled);
+    const snapTranslateStep = useRendererStore(state => state.snapTranslateStep);
+    const setSnapTranslateStep = useRendererStore(state => state.setSnapTranslateStep);
+    const snapRotateEnabled = useRendererStore(state => state.snapRotateEnabled);
+    const setSnapRotateEnabled = useRendererStore(state => state.setSnapRotateEnabled);
+    const snapRotateStep = useRendererStore(state => state.snapRotateStep);
+    const setSnapRotateStep = useRendererStore(state => state.setSnapRotateStep);
+    const gizmoOrientation = useRendererStore(state => state.gizmoOrientation);
+    const setGizmoOrientation = useRendererStore(state => state.setGizmoOrientation);
+    const pasteCreatesNewGeoset = useRendererStore(state => state.pasteCreatesNewGeoset);
+    const setPasteCreatesNewGeoset = useRendererStore(state => state.setPasteCreatesNewGeoset);
     const { executeCommand } = useCommandManager();
     const snapButtonSize = 28
     const snapButtonStyle: React.CSSProperties = {

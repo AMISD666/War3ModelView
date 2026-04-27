@@ -50,10 +50,16 @@ body,
     color: #e0e0e0;
     /* If icons look slightly high/low, tweak this value. */
     --node-manager-icon-nudge-y: 5px;
+    --node-manager-row-height: 16px;
+    --node-manager-icon-width: 14px;
+    --node-manager-indent-width: 9px;
+    --node-manager-switcher-width: 14px;
+    --node-manager-switcher-nudge-y: 3px;
 }
 
 .node-manager-tree .ant-tree-treenode {
-    padding: 1px 0;
+    align-items: center;
+    padding: 0;
     -webkit-user-drag: element;
     user-select: none;
 }
@@ -63,25 +69,27 @@ body,
     align-items: center;
     width: 100%;
     min-width: 0;
-    padding: 1px 2px;
+    padding: 0 1px;
     border-radius: 2px;
+    box-sizing: border-box;
     transition: background-color 0.2s;
-    min-height: 18px;
-    line-height: 18px;
+    min-height: var(--node-manager-row-height);
+    line-height: var(--node-manager-row-height);
 }
 
 .node-manager-tree .ant-tree-title > .node-manager-row {
     /* Align custom titleRender content with Ant's icon column */
-    height: 18px;
+    height: var(--node-manager-row-height) !important;
+    box-sizing: border-box;
     align-items: center;
 }
 
 .node-manager-tree .node-manager-visibility-cell,
 .node-manager-tree .node-manager-visibility-button {
-    width: 18px;
-    height: 18px;
-    flex: 0 0 18px;
-    margin-right: 4px;
+    width: var(--node-manager-row-height);
+    height: var(--node-manager-row-height);
+    flex: 0 0 var(--node-manager-row-height);
+    margin-right: 2px;
 }
 
 .node-manager-tree .node-manager-visibility-button {
@@ -123,13 +131,13 @@ body,
 .node-manager-tree .ant-tree-iconEle {
     display: inline-flex;
     align-items: center;
-    margin-right: 2px;
-    width: 16px;
+    margin-right: 1px;
+    width: var(--node-manager-icon-width);
     justify-content: center;
-    height: 18px;
-    line-height: 18px;
+    height: var(--node-manager-row-height);
+    line-height: var(--node-manager-row-height);
     vertical-align: middle;
-    flex: 0 0 16px;
+    flex: 0 0 var(--node-manager-icon-width);
 }
 
 .node-manager-tree .ant-tree-iconEle .ant-tree-icon__customize,
@@ -138,8 +146,8 @@ body,
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 16px;
-    height: 18px;
+    width: var(--node-manager-icon-width);
+    height: var(--node-manager-row-height);
     line-height: 0;
 }
 
@@ -155,17 +163,38 @@ body,
     width: 100%;
     min-width: 0;
     font-size: 12px;
-    line-height: 18px;
+    line-height: var(--node-manager-row-height);
 }
 
 .node-manager-tree .ant-tree-switcher {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
+    width: var(--node-manager-switcher-width);
+    min-width: var(--node-manager-switcher-width);
+    height: var(--node-manager-row-height);
+    line-height: var(--node-manager-row-height);
     color: #888;
 }
 
+.node-manager-tree .ant-tree-switcher .ant-tree-switcher-icon,
+.node-manager-tree .ant-tree-switcher .ant-tree-switcher-line-icon,
+.node-manager-tree .ant-tree-switcher .anticon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: var(--node-manager-row-height);
+    line-height: 1;
+    vertical-align: top;
+    transform: translateY(var(--node-manager-switcher-nudge-y));
+}
+
+.node-manager-tree .ant-tree-switcher .ant-tree-switcher-line-icon svg {
+    display: block;
+}
+
 .node-manager-tree .ant-tree-indent-unit {
-    width: 12px;
+    width: var(--node-manager-indent-width);
 }
 
 /* Node Manager Context Menu - compact spacing */

@@ -11,11 +11,13 @@ import { useUIStore } from '../store/uiStore'
 import { useSelectionStore } from '../store/selectionStore'
 import { useModelStore } from '../store/modelStore'
 import { useRendererStore } from '../store/rendererStore'
+import { useSaveOperationStore } from '../store/saveOperationStore'
 import { TabBar } from './TabBar'
 import { handleGlobalShortcutKeyDown } from '../shortcuts/manager'
 import AppErrorBoundary from './common/AppErrorBoundary'
 import { uiText } from '../constants/uiText'
 import { useWindowEvent } from '../hooks/useWindowEvent'
+import { SaveProgressOverlay } from './SaveProgressOverlay'
 
 const MainLayoutOld = lazy(() => import('./MainLayout'))
 const NodeManagerWindow = lazy(() => import('./node/NodeManagerWindow').then((m) => ({ default: m.NodeManagerWindow })))
@@ -28,9 +30,14 @@ const { Content } = Layout
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value))
 
 export const MainLayoutNew: React.FC = () => {
-    const { showNodeManager, showMpqBrowser, showCreateNodeDialog, setShowNodeManager, setShowMpqBrowser } = useUIStore()
+    const showNodeManager = useUIStore((state) => state.showNodeManager)
+    const showMpqBrowser = useUIStore((state) => state.showMpqBrowser)
+    const showCreateNodeDialog = useUIStore((state) => state.showCreateNodeDialog)
+    const setShowNodeManager = useUIStore((state) => state.setShowNodeManager)
+    const setShowMpqBrowser = useUIStore((state) => state.setShowMpqBrowser)
     const mainMode = useSelectionStore((state) => state.mainMode)
     const showSettingsPanel = useRendererStore((state) => state.showSettingsPanel)
+    const saveOperation = useSaveOperationStore((state) => state.current)
 
     const [nodeManagerWidth, setNodeManagerWidth] = useState(300)
     const [isResizingNodeMgr, setIsResizingNodeMgr] = useState(false)
@@ -124,6 +131,11 @@ export const MainLayoutNew: React.FC = () => {
 
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
+            if (useSaveOperationStore.getState().current) {
+                event.preventDefault()
+                event.stopPropagation()
+                return
+            }
             handleGlobalShortcutKeyDown(event)
         }
         window.addEventListener('keydown', onKeyDown, true)
@@ -285,6 +297,8 @@ export const MainLayoutNew: React.FC = () => {
                             </div>
                         </div>
                     )}
+
+                    {saveOperation && <SaveProgressOverlay operation={saveOperation} />}
                 </div>
             </div>
 

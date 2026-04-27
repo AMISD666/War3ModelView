@@ -13,3 +13,7 @@ export function markNodeManagerListScrollFromViewer(): void {
 export function markNodeManagerListScrollFromTree(): void {
   shouldScrollNodeManagerToSelection = false
 }
+
+export function consumeNodeManagerListScrollRequest(): void {
+  shouldScrollNodeManagerToSelection = false
+}

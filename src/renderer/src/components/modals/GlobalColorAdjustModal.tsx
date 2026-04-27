@@ -2,8 +2,10 @@ import React, { useEffect, useState } from 'react'
 import { Button, Checkbox, Col, InputNumber, Modal, Row, Slider, Space, Switch, Tooltip } from 'antd'
 import { BgColorsOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useGlobalColorAdjustStore } from '../../store/globalColorAdjustStore'
+import { useRendererStore } from '../../store/rendererStore'
 import { useRpcClient } from '../../hooks/useRpc'
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
+import { GlobalColorTextureSaveModeControls, type GlobalColorTextureSaveMode } from './GlobalColorTextureSaveModeControls'
 import {
     DEFAULT_GLOBAL_COLOR_ADJUST_SETTINGS,
     DEFAULT_GLOBAL_COLOR_ADJUST_TARGETS,
@@ -16,6 +18,12 @@ interface GlobalColorAdjustModalProps {
     visible: boolean
     onClose: () => void
     isStandalone?: boolean
+}
+
+interface GlobalColorAdjustRpcState {
+    settings: GlobalColorAdjustSettings
+    textureSaveMode?: GlobalColorTextureSaveMode
+    textureSaveSuffix?: string
 }
 
 const TARGET_ITEMS: Array<{ key: GlobalColorAdjustTarget; label: string }> = [
@@ -100,20 +108,34 @@ export const GlobalColorAdjustModal: React.FC<GlobalColorAdjustModalProps> = ({
     const storeSettings = useGlobalColorAdjustStore((state) => state.settings)
     const replaceStoreSettings = useGlobalColorAdjustStore((state) => state.replaceSettings)
     const resetStoreSettings = useGlobalColorAdjustStore((state) => state.resetSettings)
-    const { state: rpcState, emitCommand } = useRpcClient<{ settings: GlobalColorAdjustSettings }>(
+    const storeTextureSaveMode = useRendererStore((state) => state.textureSaveMode)
+    const setStoreTextureSaveMode = useRendererStore((state) => state.setTextureSaveMode)
+    const storeTextureSaveSuffix = useRendererStore((state) => state.textureSaveSuffix)
+    const setStoreTextureSaveSuffix = useRendererStore((state) => state.setTextureSaveSuffix)
+    const { state: rpcState, emitCommand } = useRpcClient<GlobalColorAdjustRpcState>(
         'globalColorAdjust',
-        { settings: DEFAULT_GLOBAL_COLOR_ADJUST_SETTINGS }
+        { settings: DEFAULT_GLOBAL_COLOR_ADJUST_SETTINGS, textureSaveMode: 'overwrite', textureSaveSuffix: '_1' }
     )
 
     const appliedSettings = isStandalone ? rpcState.settings : storeSettings
+    const appliedTextureSaveMode = isStandalone
+        ? rpcState.textureSaveMode ?? storeTextureSaveMode
+        : storeTextureSaveMode
+    const appliedTextureSaveSuffix = isStandalone
+        ? rpcState.textureSaveSuffix ?? storeTextureSaveSuffix
+        : storeTextureSaveSuffix
 
     const [draftSettings, setDraftSettings] = useState<GlobalColorAdjustSettings>(appliedSettings)
+    const [draftTextureSaveMode, setDraftTextureSaveMode] = useState<GlobalColorTextureSaveMode>(appliedTextureSaveMode)
+    const [draftTextureSaveSuffix, setDraftTextureSaveSuffix] = useState(appliedTextureSaveSuffix)
 
     useEffect(() => {
         if (visible) {
             setDraftSettings(appliedSettings)
+            setDraftTextureSaveMode(appliedTextureSaveMode)
+            setDraftTextureSaveSuffix(appliedTextureSaveSuffix)
         }
-    }, [appliedSettings, visible])
+    }, [appliedSettings, appliedTextureSaveMode, appliedTextureSaveSuffix, visible])
 
     const commitSettings = (nextSettings: GlobalColorAdjustSettings) => {
         const normalized = normalizeGlobalColorAdjustSettings(nextSettings)
@@ -123,6 +145,22 @@ export const GlobalColorAdjustModal: React.FC<GlobalColorAdjustModalProps> = ({
             return
         }
         replaceStoreSettings(normalized)
+    }
+
+    const commitTextureSaveMode = (mode: GlobalColorTextureSaveMode) => {
+        setDraftTextureSaveMode(mode)
+        setStoreTextureSaveMode(mode)
+        if (isStandalone) {
+            emitCommand('SET_GLOBAL_COLOR_TEXTURE_SAVE_MODE', { mode })
+        }
+    }
+
+    const commitTextureSaveSuffix = (suffix: string) => {
+        setDraftTextureSaveSuffix(suffix)
+        setStoreTextureSaveSuffix(suffix)
+        if (isStandalone) {
+            emitCommand('SET_GLOBAL_COLOR_TEXTURE_SAVE_SUFFIX', { suffix })
+        }
     }
 
     const updateDraftValue = (key: 'hue' | 'brightness' | 'saturation' | 'opacity', value: number) => {
@@ -219,6 +257,18 @@ export const GlobalColorAdjustModal: React.FC<GlobalColorAdjustModalProps> = ({
                     </Row>
                 </div>
             </div>
+
+            {draftSettings.targets.textures && (
+                <GlobalColorTextureSaveModeControls
+                    mode={draftTextureSaveMode}
+                    suffix={draftTextureSaveSuffix}
+                    onModeChange={commitTextureSaveMode}
+                    onSuffixChange={commitTextureSaveSuffix}
+                    sectionHeaderStyle={sectionHeaderStyle}
+                    sectionTitleStyle={sectionTitleStyle}
+                    itemContainerStyle={itemContainerStyle}
+                />
+            )}
 
             {/* Adjustments Section */}
             <div>

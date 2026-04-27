@@ -12,7 +12,9 @@ interface TabBarProps {
 }
 
 export const TabBar: React.FC<TabBarProps> = ({ emptyText }) => {
-    const { tabs, activeTabId, setActiveTab } = useModelStore();
+    const tabs = useModelStore(state => state.tabs);
+    const activeTabId = useModelStore(state => state.activeTabId);
+    const setActiveTab = useModelStore(state => state.setActiveTab);
 
     const handleCloseTab = async (tabId: string) => {
         await requestCloseModelTab(tabId);
