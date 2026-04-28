@@ -25,7 +25,7 @@ import { NodeType } from '../types/node'
 import { useUIStore } from '../store/uiStore'
 import { useSelectionStore } from '../store/selectionStore'
 import { getNextRenderMode, useRendererStore } from '../store/rendererStore'
-import { showMessage, showConfirm, showUnsavedModelCloseConfirm } from '../store/messageStore'
+import { showMessage, showConfirm, showUnsavedModelCloseConfirm, useMessageStore } from '../store/messageStore'
 import { registerShortcutHandler } from '../shortcuts/manager'
 import { Button } from 'antd';
 import AppErrorBoundary from './common/AppErrorBoundary'
@@ -47,7 +47,13 @@ import { parseModelBuffer, mergeGeosets, mergeAnimations } from '../utils/modelM
 import { desktopGateway } from '../infrastructure/desktop'
 import { windowGateway } from '../infrastructure/window'
 import { mergeLiveRendererGeometryForSave, saveCurrentModelWorkflow, type TextureAssetOperationResult, type SaveValidationContext, type SaveWorkflowProgress } from '../application/model-save'
-import { DEFAULT_IMPORT_FILE_DIALOG_OPTIONS, openModelWorkflow } from '../application/model-open'
+import {
+    DEFAULT_IMPORT_FILE_DIALOG_OPTIONS,
+    MODEL_OPEN_FILES_REQUEST_EVENT,
+    consumePendingOpenModelFileRequests,
+    openModelWorkflow,
+    type ModelOpenFilesRequest,
+} from '../application/model-open'
 import { useAppShellController } from '../application/shell/useAppShellController'
 import { useModelToolsController } from '../application/model-tools/useModelToolsController'
 import { registerCloseModelTabRequestHandler, requestCloseModelTab } from '../application/model-tabs/closeTabRequest'
@@ -931,6 +937,8 @@ const MainLayout: React.FC = () => {
     const handleSaveRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false))
     const handleSaveAsRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false))
     const handleCopyModelRef = useRef<() => void>(() => { })
+    const [recentFiles, setRecentFiles] = useState<RecentFile[]>(() => getRecentFiles())
+
     const openModelAsTab = useCallback((filePath: string) => {        setIsLoading(true)
         setZustandLoading(true)
         const added = addTab(filePath)
@@ -940,6 +948,50 @@ const MainLayout: React.FC = () => {
         }
         return added
     }, [addTab])
+
+    const preloadSavedMpqPaths = useCallback(async () => {
+        const savedPaths = localStorage.getItem('mpq_paths')
+        if (!savedPaths || useRendererStore.getState().mpqLoaded) {
+            return
+        }
+
+        try {
+            const paths = JSON.parse(savedPaths)
+            try {
+                await desktopGateway.invoke('set_mpq_paths', { paths })
+            } catch (error) {
+                console.warn('[MainLayout] Failed to sync MPQ paths:', error)
+            }
+            const results = await Promise.allSettled(
+                paths.map((path: string) => desktopGateway.invoke('load_mpq', { path }))
+            )
+            const successCount = results.filter(result => result.status === 'fulfilled').length
+            if (successCount > 0) {
+                setMpqLoaded(true)
+                bumpAssetRevision('model_open_mpq_preload')
+            }
+        } catch (error) {
+            console.error('[MainLayout] MPQ pre-load failed:', error)
+        }
+    }, [bumpAssetRevision, setMpqLoaded])
+
+    const openModelPaths = useCallback(async (request: ModelOpenFilesRequest) => {
+        const paths = Array.isArray(request.paths) ? request.paths : []
+        if (paths.length === 0) return []
+
+        await preloadSavedMpqPaths()
+        return openModelWorkflow.openPathsSequentially({
+            paths,
+            source: request.source ?? 'external-open',
+            addToRecent: request.addToRecent ?? true,
+            acceptPath: (path) => openModelWorkflow.isOpenableModelFile(path),
+            processedPaths: request.source === 'cli-hot-open' ? processedHotOpenPaths.current : undefined,
+            delayMs: request.delayMs ?? 40,
+        }, {
+            openModelAsTab,
+            setRecentFiles,
+        })
+    }, [openModelAsTab, preloadSavedMpqPaths])
 
     const hasResetStore = useRef(false);
 
@@ -1101,23 +1153,14 @@ const MainLayout: React.FC = () => {
         if (hasResetStore.current) return;
         hasResetStore.current = true;
 
-        // Full state reset on initialization (handles refresh/F5)
-        // We do this BEFORE potentially loading CLI files
-        const doReset = async () => {
-            const { useModelStore } = await import('../store/modelStore');
-            const { useSelectionStore } = await import('../store/selectionStore');
-            const { useUIStore } = await import('../store/uiStore');
-            const { useRendererStore } = await import('../store/rendererStore');
-            const { useMessageStore } = await import('../store/messageStore');
-
-            useModelStore.getState().reset();
-            useSelectionStore.getState().reset();
-            useUIStore.getState().reset();
-            useRendererStore.getState().reset();
-            historyCommandService.clear();
-            useMessageStore.getState().clearAll();        };
-
-        doReset();
+        // Full state reset on initialization (handles refresh/F5). Keep this synchronous so
+        // startup CLI/open-with requests cannot race with a late store reset.
+        useModelStore.getState().reset();
+        useSelectionStore.getState().reset();
+        useUIStore.getState().reset();
+        useRendererStore.getState().reset();
+        historyCommandService.clear();
+        useMessageStore.getState().clearAll();
 
         let unlisten: (() => void) | undefined;
         (async () => {
@@ -1163,39 +1206,12 @@ const MainLayout: React.FC = () => {
                 // Combine and unique
                 const allPaths = Array.from(new Set([...cliPaths, ...pendingPaths]));
 
-                if (allPaths.length > 0) {                    // ... (MPQ loading logic) ...
-                    const savedPaths = localStorage.getItem('mpq_paths');
-                    if (savedPaths && !mpqLoaded) {                        try {
-                            const paths = JSON.parse(savedPaths);
-                            try {
-                                await desktopGateway.invoke('set_mpq_paths', { paths });
-                            } catch (e) {
-                                console.warn('[MainLayout] Failed to sync MPQ paths:', e);
-                            }
-                            const results = await Promise.allSettled(
-                                paths.map((path: string) => desktopGateway.invoke('load_mpq', { path }))
-                            );
-                            const successCount = results.filter(r => r.status === 'fulfilled').length;
-                            if (successCount > 0) {
-                                setMpqLoaded(true);
-                                bumpAssetRevision('cli_mpq_preload');
-                            }
-                        } catch (e) {
-                            console.error('[MainLayout] MPQ pre-load failed:', e);
-                        }
-                    }
-
-                    // Now load all models via tab system sequentially
-                    await openModelWorkflow.openPathsSequentially({
+                if (allPaths.length > 0) {
+                    await openModelPaths({
                         paths: allPaths,
                         source: 'cli-hot-open',
                         addToRecent: false,
-                        acceptPath: (path) => openModelWorkflow.isOpenableModelFile(path),
-                        processedPaths: processedHotOpenPaths.current,
                         delayMs: 40,
-                    }, {
-                        openModelAsTab,
-                        setRecentFiles,
                     })
                 }
             } catch (e) {
@@ -1203,7 +1219,27 @@ const MainLayout: React.FC = () => {
             }
         };
         checkCliFilePath();
-    }, [addTab, mpqLoaded, setZustandLoading]); // Dependency added for addTab and mpqLoaded
+    }, [openModelPaths]);
+
+    useEffect(() => {
+        const flushPendingOpenRequests = () => {
+            const requests = consumePendingOpenModelFileRequests()
+            requests.forEach((request) => {
+                void openModelPaths(request)
+            })
+        }
+
+        const handleOpenModelFilesRequest = () => {
+            flushPendingOpenRequests()
+        }
+
+        window.addEventListener(MODEL_OPEN_FILES_REQUEST_EVENT, handleOpenModelFilesRequest)
+        flushPendingOpenRequests()
+
+        return () => {
+            window.removeEventListener(MODEL_OPEN_FILES_REQUEST_EVENT, handleOpenModelFilesRequest)
+        }
+    }, [openModelPaths]);
 
     const createCameraFromCurrentView = useCallback(() => {
         const camera = viewerRef.current?.getCamera()
@@ -1736,8 +1772,6 @@ const MainLayout: React.FC = () => {
     }, [modelPath]);
     handleCopyModelRef.current = handleCopyModel;
 
-    const [recentFiles, setRecentFiles] = useState<RecentFile[]>(() => getRecentFiles())
-
     const handleImport = useCallback(async () => {
         try {
             await openModelWorkflow.openFromDialog({
@@ -1772,15 +1806,12 @@ const MainLayout: React.FC = () => {
 
     const handleOpen = handleImport // Alias for MenuBar
     const handleOpenRecent = useCallback((path: string) => {
-        openModelWorkflow.openPath({
-            path,
+        void openModelPaths({
+            paths: [path],
             source: 'recent',
             addToRecent: true,
-        }, {
-            openModelAsTab,
-            setRecentFiles,
         })
-    }, [openModelAsTab])
+    }, [openModelPaths])
 
     const handleClearRecentFiles = useCallback(() => {
         clearRecentFiles()
@@ -1816,13 +1847,10 @@ const MainLayout: React.FC = () => {
                         }))
                         return
                     }
-                    openModelWorkflow.openPath({
-                        path: filePath,
+                    void openModelPaths({
+                        paths: [filePath],
                         source: 'drag-drop',
                         addToRecent: true,
-                    }, {
-                        openModelAsTab,
-                        setRecentFiles,
                     })
                 })
 
@@ -2401,7 +2429,11 @@ const MainLayout: React.FC = () => {
 
             showTextureFailureWarnings(saveResult.textureEncodeResult, saveResult.textureCopyResult);
             useGlobalColorAdjustStore.getState().resetSettings();
-            openModelAsTab(targetPath)
+            await openModelPaths({
+                paths: [targetPath],
+                source: 'external-open',
+                addToRecent: true,
+            })
             setRecentFiles(replaceRecentModelPath(sourcePath, targetPath))
             isSavingRef.current = false
             showMessage('success', '互转成功', `已生成并打开: ${targetPath}`)

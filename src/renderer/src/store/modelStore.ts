@@ -21,6 +21,9 @@ import { normalizeGeosetIndices } from '../utils/geosetVisibility';
 import { remapTextureRefWithMap } from '../utils/materialTextureRelations';
 import { getPivotChainSum } from '../utils/nodeUtils';
 import { markStandalonePerf } from '../utils/standalonePerf';
+import { desktopGateway } from '../infrastructure/desktop';
+import { getTextureCandidatePaths, normalizeTexturePath } from '../infrastructure/texture';
+import { buildTargetAssetPath, getDirname, isAbsoluteWindowsPath, normalizeWindowsPath } from '../utils/windowsPath';
 
 const MAX_CACHED_RENDERERS = 5;
 
@@ -61,6 +64,13 @@ type ClipboardPayload = {
     textures?: Record<number, any>;
     materials?: Record<number, any>;
     textureAnims?: Record<number, any>;
+    resourcePaths?: string[];
+};
+
+type ClipboardAssetCopyResult = {
+    pasted: boolean;
+    copiedCount: number;
+    failed: string[];
 };
 
 type SetModelDataOptions = {
@@ -301,6 +311,103 @@ function findExistingTextureIndex(textures: any[], tex: any): number {
     return -1;
 }
 
+function getClipboardTexturePath(texture: any): string | null {
+    if (!texture || typeof texture !== 'object') return null;
+    const replaceableId = Number(texture?.ReplaceableId ?? texture?.replaceableId ?? 0);
+    if (replaceableId > 0) return null;
+    const image = texture?.Image ?? texture?.Path ?? texture?.image ?? texture?.path;
+    if (typeof image !== 'string') return null;
+    const normalized = normalizeTexturePath(image);
+    return normalized ? normalized : null;
+}
+
+function collectClipboardResourcePaths(payload: ClipboardPayload | null | undefined): string[] {
+    if (!payload) return [];
+    const paths = new Map<string, string>();
+    const addPath = (value: unknown) => {
+        if (typeof value !== 'string') return;
+        const normalized = normalizeTexturePath(value);
+        if (!normalized) return;
+        paths.set(normalized.toLowerCase(), normalized);
+    };
+
+    Object.values(payload.textures ?? {}).forEach((texture) => addPath(getClipboardTexturePath(texture)));
+    (payload.resourcePaths ?? []).forEach(addPath);
+
+    return Array.from(paths.values());
+}
+
+async function copyClipboardAssetsForPaste(
+    payload: ClipboardPayload | null | undefined,
+    targetModelPath: string | null | undefined,
+): Promise<Omit<ClipboardAssetCopyResult, 'pasted'>> {
+    const sourceModelPath = payload?.sourceModelPath ?? null;
+    if (!sourceModelPath || !targetModelPath || sourceModelPath.startsWith('dropped:') || targetModelPath.startsWith('dropped:')) {
+        return { copiedCount: 0, failed: [] };
+    }
+
+    const sourceModelDir = getDirname(sourceModelPath);
+    const targetModelDir = getDirname(targetModelPath);
+    if (!sourceModelDir || !targetModelDir) {
+        return { copiedCount: 0, failed: [] };
+    }
+
+    const normalizedSourceDir = normalizeWindowsPath(sourceModelDir).replace(/[\\/]+$/, '').toLowerCase();
+    const normalizedTargetDir = normalizeWindowsPath(targetModelDir).replace(/[\\/]+$/, '').toLowerCase();
+    if (normalizedSourceDir === normalizedTargetDir) {
+        return { copiedCount: 0, failed: [] };
+    }
+
+    let copiedCount = 0;
+    const failed: string[] = [];
+    const copiedTargets = new Set<string>();
+
+    for (const resourcePath of collectClipboardResourcePaths(payload)) {
+        const normalizedResourcePath = normalizeTexturePath(resourcePath);
+        if (!normalizedResourcePath || isAbsoluteWindowsPath(normalizedResourcePath)) {
+            continue;
+        }
+
+        let sourceAssetPath: string | null = null;
+        for (const candidate of getTextureCandidatePaths(sourceModelPath, normalizedResourcePath)) {
+            if (await desktopGateway.exists(candidate).catch(() => false)) {
+                sourceAssetPath = candidate;
+                break;
+            }
+        }
+
+        if (!sourceAssetPath) {
+            continue;
+        }
+
+        const targetAssetPath = buildTargetAssetPath(targetModelDir, normalizedResourcePath);
+        const targetKey = normalizeWindowsPath(targetAssetPath).toLowerCase();
+        if (copiedTargets.has(targetKey)) {
+            continue;
+        }
+        copiedTargets.add(targetKey);
+
+        try {
+            if (await desktopGateway.exists(targetAssetPath).catch(() => false)) {
+                continue;
+            }
+
+            const targetAssetDir = getDirname(targetAssetPath);
+            if (targetAssetDir) {
+                await desktopGateway.createDir(targetAssetDir, { recursive: true });
+            }
+
+            const bytes = await desktopGateway.readFile(sourceAssetPath);
+            await desktopGateway.writeFile(targetAssetPath, bytes);
+            copiedCount += 1;
+        } catch (error) {
+            failed.push(`${normalizedResourcePath} (${error instanceof Error ? error.message : String(error)})`);
+        }
+    }
+
+    return { copiedCount, failed };
+}
+
 interface ModelState {
     documentId: string | null;
     documentRevision: number;
@@ -372,7 +479,7 @@ interface ModelState {
 
     // New Actions
     setClipboardNode: (node: ModelNode | null) => void;
-    pasteNode: (parentId: number) => void;
+    pasteNode: (parentId: number) => Promise<ClipboardAssetCopyResult>;
     moveNode: (nodeId: number, newParentId: number) => void;
     moveNodeTo: (nodeId: number, targetId: number, position: 'before' | 'after' | 'inside') => void;
     moveNodeWithChildren: (nodeId: number, targetId: number, position: 'before' | 'after' | 'inside') => void;
@@ -1871,12 +1978,22 @@ export const useModelStore = create<ModelState>((set, get) => ({
             const textures: Record<number, any> = {};
             const materials: Record<number, any> = {};
             const textureAnims: Record<number, any> = {};
+            const resourcePaths: string[] = [];
 
             const addTexture = (texId: any) => {
                 if (typeof texId !== 'number' || texId < 0) return;
                 if (textures[texId] !== undefined) return;
                 const tex = md.Textures?.[texId];
                 if (tex) textures[texId] = tex;
+            };
+
+            const addResourcePath = (path: any) => {
+                if (typeof path !== 'string') return;
+                const normalized = normalizeTexturePath(path);
+                if (!normalized) return;
+                if (!resourcePaths.some((item) => item.toLowerCase() === normalized.toLowerCase())) {
+                    resourcePaths.push(normalized);
+                }
             };
 
             const addTextureAnim = (animId: any) => {
@@ -1889,6 +2006,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
             if (node.type === NodeType.PARTICLE_EMITTER_2) {
                 const texId = (node as any).TextureID;
                 addTexture(texId);
+            } else if (node.type === NodeType.PARTICLE_EMITTER) {
+                addResourcePath((node as any).Path ?? (node as any).FileName);
             } else if (node.type === NodeType.RIBBON_EMITTER) {
                 const matId = (node as any).MaterialID;
                 if (typeof matId === 'number' && matId >= 0 && md.Materials?.[matId]) {
@@ -1923,12 +2042,23 @@ export const useModelStore = create<ModelState>((set, get) => ({
             if (Object.keys(textures).length > 0) payload.textures = textures;
             if (Object.keys(materials).length > 0) payload.materials = materials;
             if (Object.keys(textureAnims).length > 0) payload.textureAnims = textureAnims;
+            if (resourcePaths.length > 0) payload.resourcePaths = resourcePaths;
 
             return { clipboardNode: node, clipboardPayload: payload };
         });
     },
 
-    pasteNode: (parentId) => {
+    pasteNode: async (parentId) => {
+        const currentState = get();
+        if (!currentState.clipboardNode || !currentState.modelData) {
+            return { pasted: false, copiedCount: 0, failed: [] };
+        }
+
+        const assetCopyResult = await copyClipboardAssetsForPaste(
+            currentState.clipboardPayload,
+            currentState.modelPath,
+        );
+
         set((state) => {
             if (!state.clipboardNode) return {};
             if (!state.modelData) return {};
@@ -2063,6 +2193,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             const correctedNodes = extractNodesFromModel(updatedModelData);
             return createDocumentMutationPatch(state, updatedModelData, { nodes: correctedNodes as ModelNode[], rendererReload: true });
         });
+        return { pasted: true, ...assetCopyResult };
     },
 
     moveNode: (nodeId, newParentId) => {

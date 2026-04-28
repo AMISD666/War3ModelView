@@ -5500,7 +5500,8 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
                 }
               }
               gl.disable(gl.DEPTH_TEST);
-              debugRenderer.current.renderTriangles(gl as WebGLRenderingContext, mvMatrix, pMatrix, selectedPositions, [...selectionColorRgb, 0.32], false);
+              const faceHighlightAlpha = currentMainMode === "uv" ? 0.7 : 0.32;
+              debugRenderer.current.renderTriangles(gl as WebGLRenderingContext, mvMatrix, pMatrix, selectedPositions, [...selectionColorRgb, faceHighlightAlpha], false);
 
               const linePositions: number[] = [];
               for (let i = 0; i < selectedPositions.length; i += 9) {
@@ -9025,4 +9026,3 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
 });
 
 export default Viewer;
-

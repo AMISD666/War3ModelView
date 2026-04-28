@@ -393,6 +393,25 @@ export const NodeManagerWindow: React.FC = () => {
         return nextPivot.every(Number.isFinite) ? nextPivot : null;
     };
 
+    const handlePasteNode = useCallback(async (parentId: number, successMessage: string) => {
+        try {
+            const result = await pasteNode(parentId);
+            if (!result.pasted) return;
+
+            if (result.failed.length > 0) {
+                appMessage.warning(`${successMessage}，但有 ${result.failed.length} 个贴图复制失败`);
+                console.warn('[NodeManagerWindow] Failed to copy pasted node assets:', result.failed);
+                return;
+            }
+
+            appMessage.success(result.copiedCount > 0
+                ? `${successMessage}，已复制 ${result.copiedCount} 个贴图`
+                : successMessage);
+        } catch (error: any) {
+            appMessage.error(error?.message || '粘贴节点失败');
+        }
+    }, [pasteNode]);
+
     const getContextMenuItems = (nodeId: number): MenuProps['items'] => {
         // Special handling for virtual root node (-1)
         if (nodeId === -1) {
@@ -489,8 +508,7 @@ export const NodeManagerWindow: React.FC = () => {
                     label: '粘贴节点',
                     disabled: !clipboardNode,
                     onClick: () => {
-                        pasteNode(-1);
-                        appMessage.success('节点已粘贴到根节点');
+                        void handlePasteNode(-1, '节点已粘贴到根节点');
                     }
                 },
                 {
@@ -651,9 +669,7 @@ export const NodeManagerWindow: React.FC = () => {
                 label: '粘贴节点',
                 disabled: !clipboardNode,
                 onClick: () => {
-                    pasteNode(nodeId);
-                    appMessage.success('节点已粘贴');
-                    setTimeout(() => {
+                    void handlePasteNode(nodeId, '节点已粘贴').then(() => {
                         const allKeys: string[] = [];
                         const collectKeys = (data: any[]) => {
                             data.forEach(node => {
@@ -665,7 +681,7 @@ export const NodeManagerWindow: React.FC = () => {
                         };
                         collectKeys(treeData);
                         setExpandedKeys(allKeys);
-                    }, 50);
+                    });
                 }
             },
             {

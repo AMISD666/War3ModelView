@@ -12,6 +12,7 @@ export type OpenModelSource =
     | 'recent'
     | 'drag-drop'
     | 'cli-hot-open'
+    | 'external-open'
 
 export interface OpenModelPathContext {
     openModelAsTab: (filePath: string) => boolean

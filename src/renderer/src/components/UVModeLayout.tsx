@@ -5,6 +5,14 @@ import { useModelStore } from '../store/modelStore'
 import { useUvEditorStore } from '../store/uvEditorStore'
 import { useMaterialPreviewProjectedModelData } from '../application/preview'
 
+const uniqueIds = (ids: number[]) => (
+    Array.from(new Set(ids.filter((id) => Number.isInteger(id) && id >= 0)))
+)
+
+const uniqueSortedIds = (ids: number[]) => (
+    uniqueIds(ids).sort((left, right) => left - right)
+)
+
 interface UVModeOverlayProps {
     modelPath: string | null
     isActive: boolean
@@ -33,93 +41,139 @@ const UVModeLayout: React.FC<UVModeOverlayProps & { children: React.ReactNode }>
     const [isDraggingCanvasSplitter, setIsDraggingCanvasSplitter] = useState(false)
 
     const containerRef = useRef<HTMLDivElement>(null)
+    const lastHandledViewerSelectionRevisionRef = useRef<number | null>(null)
     const effectiveModelData = useMaterialPreviewProjectedModelData()
     const selectedGeosetIndex = useModelStore(state => state.selectedGeosetIndex)
     const setSelectedGeosetIndex = useModelStore(state => state.setSelectedGeosetIndex)
     const viewerSelectionSync = useUvEditorStore(state => state.viewerSelectionSync)
 
-    // Build geosetId -> textureId mapping for quick lookup
-    const geosetToTextureMap = useMemo(() => {
-        const map = new Map<number, number>()
-        if (!effectiveModelData || !effectiveModelData.Geosets || !effectiveModelData.Materials) return map
+    // Build bidirectional texture/geoset relations across every material layer.
+    const textureRelations = useMemo(() => {
+        const geosetToTextureIds = new Map<number, number[]>()
+        const textureToGeosetIds = new Map<number, number[]>()
+        if (!effectiveModelData || !effectiveModelData.Geosets || !effectiveModelData.Materials || !effectiveModelData.Textures) {
+            return { geosetToTextureIds, textureToGeosetIds }
+        }
 
         effectiveModelData.Geosets.forEach((geoset: any, geosetIndex: number) => {
             if (geoset.MaterialID === -1 || !effectiveModelData.Materials || geoset.MaterialID >= effectiveModelData.Materials.length) return
             const material = effectiveModelData.Materials[geoset.MaterialID]
-            // Use first valid texture from material layers
+            const textureIds = new Set<number>()
+
             material?.Layers?.forEach((layer: any) => {
-                if (!map.has(geosetIndex) && typeof layer.TextureID === 'number' && layer.TextureID >= 0) {
-                    map.set(geosetIndex, layer.TextureID)
+                const textureId = Number(layer?.TextureID)
+                if (Number.isInteger(textureId) && textureId >= 0 && textureId < effectiveModelData.Textures!.length) {
+                    textureIds.add(textureId)
                 }
             })
+
+            const orderedTextureIds = uniqueIds(Array.from(textureIds))
+            if (orderedTextureIds.length === 0) return
+
+            geosetToTextureIds.set(geosetIndex, orderedTextureIds)
+            orderedTextureIds.forEach((textureId) => {
+                const existing = textureToGeosetIds.get(textureId) || []
+                textureToGeosetIds.set(textureId, uniqueSortedIds([...existing, geosetIndex]))
+            })
         })
-        return map
+
+        return { geosetToTextureIds, textureToGeosetIds }
     }, [effectiveModelData])
+
+    const getGeosetsForTexture = useCallback((textureId: number) => (
+        textureRelations.textureToGeosetIds.get(textureId) || []
+    ), [textureRelations])
+
+    const getSelectedGeosetsForTexture = useCallback((geosetIds: number[], textureId: number) => (
+        uniqueSortedIds(geosetIds.filter((geosetId) => (
+            textureRelations.geosetToTextureIds.get(geosetId)?.includes(textureId) ?? false
+        )))
+    ), [textureRelations])
+
+    const chooseTextureForGeosets = useCallback((geosetIds: number[]) => {
+        const textureHitCounts = new Map<number, number>()
+
+        geosetIds.forEach((geosetIndex) => {
+            const textureIds = textureRelations.geosetToTextureIds.get(geosetIndex) || []
+            textureIds.forEach((textureId) => {
+                textureHitCounts.set(textureId, (textureHitCounts.get(textureId) ?? 0) + 1)
+            })
+        })
+
+        let preferredTextureId: number | null = null
+        let preferredHitCount = 0
+
+        textureHitCounts.forEach((hitCount, textureId) => {
+            if (hitCount > preferredHitCount) {
+                preferredTextureId = textureId
+                preferredHitCount = hitCount
+            }
+        })
+
+        return preferredTextureId
+    }, [textureRelations])
 
     // Sync Ctrl+click geoset picking from 3D view to UV texture/geoset selection
     useEffect(() => {
         if (!isActive || selectedGeosetIndex === null) return
 
-        // Find texture for this geoset
-        const textureId = geosetToTextureMap.get(selectedGeosetIndex)
-        if (textureId !== undefined) {
-            // Auto-select the texture
-            setSelectedTextureId(textureId)
-            // Replace visible list with just this geoset (different geosets may use different textures)
-            setVisibleGeosetIds([selectedGeosetIndex])
+        const relatedTextureIds = textureRelations.geosetToTextureIds.get(selectedGeosetIndex) || []
+        if (relatedTextureIds.length > 0) {
+            const currentTextureStillApplies = selectedTextureId !== null && relatedTextureIds.includes(selectedTextureId)
+            const nextTextureId = currentTextureStillApplies ? selectedTextureId : relatedTextureIds[0]
+
+            if (!currentTextureStillApplies) {
+                setSelectedTextureId(nextTextureId)
+                setVisibleGeosetIds([selectedGeosetIndex])
+            } else {
+                setVisibleGeosetIds((previous) => uniqueSortedIds([...previous, selectedGeosetIndex]))
+            }
         }
 
         // Clear the selection after processing to allow repeated picks
         setSelectedGeosetIndex(null)
-    }, [isActive, selectedGeosetIndex, geosetToTextureMap, setSelectedGeosetIndex])
+    }, [isActive, selectedGeosetIndex, selectedTextureId, textureRelations, setSelectedGeosetIndex])
 
     useEffect(() => {
         if (!isActive || !viewerSelectionSync) return
+        if (lastHandledViewerSelectionRevisionRef.current === viewerSelectionSync.revision) return
+        lastHandledViewerSelectionRevisionRef.current = viewerSelectionSync.revision
 
         const { geosetIndices } = viewerSelectionSync
         if (geosetIndices.length === 0) {
             return
         }
 
-        const textureHitCounts = new Map<number, number>()
-        geosetIndices.forEach((geosetIndex) => {
-            const textureId = geosetToTextureMap.get(geosetIndex)
-            if (textureId === undefined) return
-            textureHitCounts.set(textureId, (textureHitCounts.get(textureId) ?? 0) + 1)
-        })
+        if (selectedTextureId !== null) {
+            const currentTextureGeosets = getSelectedGeosetsForTexture(geosetIndices, selectedTextureId)
+            if (currentTextureGeosets.length > 0) {
+                setVisibleGeosetIds(currentTextureGeosets)
+                return
+            }
+        }
 
-        const preferredTextureId = Array.from(textureHitCounts.entries())
-            .sort((left, right) => {
-                if (right[1] !== left[1]) {
-                    return right[1] - left[1]
-                }
-                return left[0] - right[0]
-            })
-            .at(0)?.[0] ?? null
+        const preferredTextureId = chooseTextureForGeosets(geosetIndices)
 
         if (preferredTextureId === null) {
-            setVisibleGeosetIds(geosetIndices)
+            setVisibleGeosetIds(uniqueSortedIds(geosetIndices))
             return
         }
 
-        const filteredGeosets = geosetIndices.filter((geosetIndex) => geosetToTextureMap.get(geosetIndex) === preferredTextureId)
+        const filteredGeosets = getSelectedGeosetsForTexture(geosetIndices, preferredTextureId)
         setSelectedTextureId(preferredTextureId)
         setVisibleGeosetIds(filteredGeosets.length > 0 ? filteredGeosets : geosetIndices)
-    }, [isActive, viewerSelectionSync, geosetToTextureMap])
+    }, [isActive, viewerSelectionSync, selectedTextureId, chooseTextureForGeosets, getSelectedGeosetsForTexture])
 
     // Handlers for Selection
     const handleSelectTexture = useCallback((id: number) => {
         setSelectedTextureId(id)
-        const matchedGeosets = Array.from(geosetToTextureMap.entries())
-            .filter(([, textureId]) => textureId === id)
-            .map(([geosetId]) => geosetId)
-        setVisibleGeosetIds(matchedGeosets)
-    }, [geosetToTextureMap])
+        setVisibleGeosetIds(getGeosetsForTexture(id))
+    }, [getGeosetsForTexture])
 
     const handleToggleGeoset = useCallback((id: number, visible: boolean) => {
         setVisibleGeosetIds(prev => {
             if (visible) {
-                return [...prev, id]
+                return uniqueSortedIds([...prev, id])
             } else {
                 return prev.filter(gid => gid !== id)
             }

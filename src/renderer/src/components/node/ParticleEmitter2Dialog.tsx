@@ -63,12 +63,13 @@ const DeferredCommitContext = React.createContext<(() => void) | null>(null);
 
 const InputNumber = React.forwardRef<any, React.ComponentProps<typeof BaseInputNumber>>((props, ref) => {
     const commitDeferredChanges = React.useContext(DeferredCommitContext);
-    const { onBlur, onPressEnter, ...rest } = props as any;
+    const { onBlur, onChange, onPressEnter, ...rest } = props as any;
 
     return (
         <BaseInputNumber
             ref={ref}
             {...rest}
+            onChange={onChange}
             onBlur={(event: any) => {
                 onBlur?.(event);
                 commitDeferredChanges?.();
@@ -850,9 +851,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
 
     const handleCancel = () => {
         setPresetModalOpen(false);
-        if (!isStandalone) {
-            commitCurrentValues();
-        }
+        commitCurrentValues();
         onClose();
     };
 
@@ -1318,7 +1317,8 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
                         return;
                     }
                     const changedKeys = Object.keys(changedValues);
-                    if (changedKeys.some((key) => DEFERRED_PREVIEW_FIELD_NAMES.has(key))) {
+                    const hasDeferredChange = changedKeys.some((key) => DEFERRED_PREVIEW_FIELD_NAMES.has(key));
+                    if (hasDeferredChange) {
                         return;
                     }
                     if (isStandalone) {

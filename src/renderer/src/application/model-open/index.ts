@@ -10,3 +10,9 @@ export {
     OpenModelWorkflow,
     openModelWorkflow,
 } from './OpenModelWorkflow'
+export {
+    MODEL_OPEN_FILES_REQUEST_EVENT,
+    consumePendingOpenModelFileRequests,
+    requestOpenModelFiles,
+    type ModelOpenFilesRequest,
+} from './modelOpenRequestQueue'

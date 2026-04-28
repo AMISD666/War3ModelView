@@ -65,7 +65,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
 
     // State
     const [uvSubMode, setUvSubMode] = useState<UVSubMode>('vertex')
-    const [transformMode, setTransformMode] = useState<UVTransformMode>('select')
+    const [transformMode, setTransformMode] = useState<UVTransformMode>('translate')
     const [zoom, setZoom] = useState(1)
     const [panX, setPanX] = useState(0)
     const [panY, setPanY] = useState(0)
@@ -80,7 +80,11 @@ const UVEditor: React.FC<UVEditorProps> = ({
 
     // Dragging state for transforms
     const [isDragging, setIsDragging] = useState(false)
-    const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null)
+    const lastPointerRef = useRef<{ x: number; y: number } | null>(null)
+    const selectionStartRef = useRef<{ x: number; y: number } | null>(null)
+    const selectionEndRef = useRef<{ x: number; y: number } | null>(null)
+    const canvasRenderFrameRef = useRef<number | null>(null)
+    const renderCanvasRef = useRef<(() => void) | null>(null)
     const snapDragRef = useRef({
         translationDelta: [0, 0] as [number, number],
         translationApplied: [0, 0] as [number, number],
@@ -95,9 +99,6 @@ const UVEditor: React.FC<UVEditorProps> = ({
     // Gizmo State: 'x', 'y', 'xy' (dual axis), null
     const [hoveredAxis, setHoveredAxis] = useState<'x' | 'y' | 'xy' | null>(null)
     const [activeAxis, setActiveAxis] = useState<'x' | 'y' | 'xy' | null>(null)
-
-    // Render tick - increment to force canvas redraw
-    const [renderTick, setRenderTick] = useState(0)
 
     // Model store
     const modelData = useModelStore(state => state.modelData)
@@ -121,6 +122,14 @@ const UVEditor: React.FC<UVEditorProps> = ({
     const showViewerSelectionHighlight = useUvEditorStore(state => state.showViewerSelectionHighlight)
     const toggleShowViewerSelectionHighlight = useUvEditorStore(state => state.toggleShowViewerSelectionHighlight)
     const viewerSelectionSync = useUvEditorStore(state => state.viewerSelectionSync)
+
+    const requestCanvasRender = useCallback(() => {
+        if (canvasRenderFrameRef.current !== null) return
+        canvasRenderFrameRef.current = window.requestAnimationFrame(() => {
+            canvasRenderFrameRef.current = null
+            renderCanvasRef.current?.()
+        })
+    }, [])
 
     // -------------------------------------------------------------------------
     // HELPERS
@@ -345,6 +354,18 @@ const UVEditor: React.FC<UVEditorProps> = ({
     // Get triggerRendererReload from store
     const triggerRendererReload = useModelStore(state => state.triggerRendererReload)
 
+    const updateLiveRendererTexCoords = useCallback((geosetIndex: number, uvs: Float32Array) => {
+        const renderer = useRendererStore.getState().renderer
+        const rendererGeoset = renderer?.model?.Geosets?.[geosetIndex] as any
+
+        if (rendererGeoset) {
+            rendererGeoset.TVertices = [uvs]
+            rendererGeoset.__sourceTVerticesRef = uvs
+        }
+
+        renderer?.updateGeosetTexCoords?.(geosetIndex, uvs)
+    }, [])
+
     const syncToStore = useCallback(() => {
         if (!modelData?.Geosets) return
 
@@ -352,45 +373,53 @@ const UVEditor: React.FC<UVEditorProps> = ({
             const geoset = modelData.Geosets![sel.geosetIndex]
             const uvs = getGeosetUVs(geoset)
             if (uvs) {
+                const committedUvs = uvs instanceof Float32Array
+                    ? new Float32Array(uvs)
+                    : new Float32Array(uvs as ArrayLike<number>)
+                updateLiveRendererTexCoords(sel.geosetIndex, committedUvs)
                 updateGeoset(sel.geosetIndex, {
-                    TVertices: [Array.from(uvs)]
+                    TVertices: [committedUvs]
                 })
             }
         })
 
         // Trigger Viewer to refresh and re-render with updated UV data
         triggerRendererReload()
-    }, [modelData, selectedUVs, updateGeoset, triggerRendererReload, getGeosetUVs])
+    }, [modelData, selectedUVs, updateGeoset, triggerRendererReload, getGeosetUVs, updateLiveRendererTexCoords])
 
     const undo = useCallback(() => {
         if (historyIndex < 0 || !modelData?.Geosets) return
 
         const snapshot = history[historyIndex]
         snapshot.forEach(item => {
+            const restoredUvs = new Float32Array(item.tVertices)
+            updateLiveRendererTexCoords(item.geosetIndex, restoredUvs)
             updateGeoset(item.geosetIndex, {
-                TVertices: [item.tVertices]
+                TVertices: [restoredUvs]
             })
         })
 
         setHistoryIndex(prev => prev - 1)
         // Update 3D view immediately
         triggerRendererReload()
-    }, [history, historyIndex, modelData, updateGeoset, triggerRendererReload])
+    }, [history, historyIndex, modelData, updateGeoset, triggerRendererReload, updateLiveRendererTexCoords])
 
     const redo = useCallback(() => {
         if (historyIndex >= history.length - 1 || !modelData?.Geosets) return
 
         const snapshot = history[historyIndex + 1]
         snapshot.forEach(item => {
+            const restoredUvs = new Float32Array(item.tVertices)
+            updateLiveRendererTexCoords(item.geosetIndex, restoredUvs)
             updateGeoset(item.geosetIndex, {
-                TVertices: [item.tVertices]
+                TVertices: [restoredUvs]
             })
         })
 
         setHistoryIndex(prev => prev + 1)
         // Update 3D view immediately
         triggerRendererReload()
-    }, [history, historyIndex, modelData, updateGeoset, triggerRendererReload])
+    }, [history, historyIndex, modelData, updateGeoset, triggerRendererReload, updateLiveRendererTexCoords])
 
     // -------------------------------------------------------------------------
     // LOGIC: Transformation
@@ -432,8 +461,8 @@ const UVEditor: React.FC<UVEditorProps> = ({
             })
         })
 
-        setRenderTick(t => t + 1)
-    }, [modelData, selectedUVs, zoom, getGeosetUVs, snapTranslateEnabled, snapTranslateStep])
+        requestCanvasRender()
+    }, [modelData, selectedUVs, zoom, getGeosetUVs, snapTranslateEnabled, snapTranslateStep, requestCanvasRender])
 
     const applyScale = useCallback((dx: number, dy: number) => {
         if (!modelData?.Geosets) return
@@ -470,8 +499,8 @@ const UVEditor: React.FC<UVEditorProps> = ({
             })
         })
 
-        setRenderTick(t => t + 1)
-    }, [modelData, selectedUVs, zoom, getSelectionCenter, activeAxis, getGeosetUVs])
+        requestCanvasRender()
+    }, [modelData, selectedUVs, zoom, getSelectionCenter, activeAxis, getGeosetUVs, requestCanvasRender])
 
     const applyRotation = useCallback((dx: number, dy: number) => {
         if (!modelData?.Geosets) return
@@ -510,8 +539,8 @@ const UVEditor: React.FC<UVEditorProps> = ({
             })
         })
 
-        setRenderTick(t => t + 1)
-    }, [modelData, selectedUVs, getSelectionCenter, getGeosetUVs, snapRotateEnabled, snapRotateStep])
+        requestCanvasRender()
+    }, [modelData, selectedUVs, getSelectionCenter, getGeosetUVs, snapRotateEnabled, snapRotateStep, requestCanvasRender])
 
     const mirrorHorizontal = useCallback(() => {
         if (!modelData?.Geosets) return
@@ -779,19 +808,39 @@ const UVEditor: React.FC<UVEditorProps> = ({
         }
 
         // Selection rectangle
-        if (isSelecting && selectionStart && selectionEnd) {
+        const currentSelectionStart = selectionStartRef.current ?? selectionStart
+        const currentSelectionEnd = selectionEndRef.current ?? selectionEnd
+        if (isSelecting && currentSelectionStart && currentSelectionEnd) {
             ctx.strokeStyle = '#fff'
             ctx.lineWidth = 1
             ctx.setLineDash([5, 5])
             ctx.strokeRect(
-                Math.min(selectionStart.x, selectionEnd.x),
-                Math.min(selectionStart.y, selectionEnd.y),
-                Math.abs(selectionEnd.x - selectionStart.x),
-                Math.abs(selectionEnd.y - selectionStart.y)
+                Math.min(currentSelectionStart.x, currentSelectionEnd.x),
+                Math.min(currentSelectionStart.y, currentSelectionEnd.y),
+                Math.abs(currentSelectionEnd.x - currentSelectionStart.x),
+                Math.abs(currentSelectionEnd.y - currentSelectionStart.y)
             )
             ctx.setLineDash([])
         }
     }, [modelData, visibleGeosetIds, textureImage, panX, panY, zoom, uvToCanvas, selectedUVs, isSelecting, selectionStart, selectionEnd, hoveredAxis, activeAxis, getSelectionCenter, transformMode, canvasBackgroundColor])
+
+    useEffect(() => {
+        renderCanvasRef.current = renderCanvas
+        return () => {
+            if (renderCanvasRef.current === renderCanvas) {
+                renderCanvasRef.current = null
+            }
+        }
+    }, [renderCanvas])
+
+    useEffect(() => {
+        return () => {
+            if (canvasRenderFrameRef.current !== null) {
+                window.cancelAnimationFrame(canvasRenderFrameRef.current)
+                canvasRenderFrameRef.current = null
+            }
+        }
+    }, [])
 
     // -------------------------------------------------------------------------
     // EVENT HANDLERS
@@ -830,7 +879,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
 
         if (e.button === 2) {
             setIsPanning(true)
-            setDragStart({ x: e.clientX, y: e.clientY })
+            lastPointerRef.current = { x: e.clientX, y: e.clientY }
         } else if (e.button === 0) {
             // Check Gizmo Hit first (only when in transform mode with selection)
             if (transformMode !== 'select' && selectedUVs.length > 0) {
@@ -853,7 +902,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
                                 rotationApplied: 0
                             }
                             setIsDragging(true)
-                            setDragStart({ x: e.clientX, y: e.clientY })
+                            lastPointerRef.current = { x: e.clientX, y: e.clientY }
                             return
                         }
                     } else {
@@ -868,7 +917,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
                                 rotationApplied: 0
                             }
                             setIsDragging(true)
-                            setDragStart({ x: e.clientX, y: e.clientY })
+                            lastPointerRef.current = { x: e.clientX, y: e.clientY }
                             return
                         }
                         // X-axis hit
@@ -882,7 +931,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
                                 rotationApplied: 0
                             }
                             setIsDragging(true)
-                            setDragStart({ x: e.clientX, y: e.clientY })
+                            lastPointerRef.current = { x: e.clientX, y: e.clientY }
                             return
                         }
                         // Y-axis hit
@@ -896,7 +945,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
                                 rotationApplied: 0
                             }
                             setIsDragging(true)
-                            setDragStart({ x: e.clientX, y: e.clientY })
+                            lastPointerRef.current = { x: e.clientX, y: e.clientY }
                             return
                         }
                     }
@@ -905,6 +954,8 @@ const UVEditor: React.FC<UVEditorProps> = ({
 
             // If not hitting gizmo, start box selection (LMB directly)
             setIsSelecting(true)
+            selectionStartRef.current = { x, y }
+            selectionEndRef.current = { x, y }
             setSelectionStart({ x, y })
             setSelectionEnd({ x, y })
         }
@@ -942,17 +993,20 @@ const UVEditor: React.FC<UVEditorProps> = ({
             setHoveredAxis(null)
         }
 
-        if (isPanning && dragStart) {
-            const dx = e.clientX - dragStart.x
-            const dy = e.clientY - dragStart.y
+        const lastPointer = lastPointerRef.current
+
+        if (isPanning && lastPointer) {
+            const dx = e.clientX - lastPointer.x
+            const dy = e.clientY - lastPointer.y
             setPanX(prev => prev + dx)
             setPanY(prev => prev + dy)
-            setDragStart({ x: e.clientX, y: e.clientY })
+            lastPointerRef.current = { x: e.clientX, y: e.clientY }
         } else if (isSelecting) {
-            setSelectionEnd({ x, y })
-        } else if (isDragging && dragStart && selectedUVs.length > 0) {
-            const clientDx = e.clientX - dragStart.x
-            const clientDy = e.clientY - dragStart.y
+            selectionEndRef.current = { x, y }
+            requestCanvasRender()
+        } else if (isDragging && lastPointer && selectedUVs.length > 0) {
+            const clientDx = e.clientX - lastPointer.x
+            const clientDy = e.clientY - lastPointer.y
 
             if (transformMode === 'translate') {
                 let constraintX = clientDx
@@ -968,13 +1022,16 @@ const UVEditor: React.FC<UVEditorProps> = ({
                 applyRotation(clientDx, clientDy)
             }
 
-            setDragStart({ x: e.clientX, y: e.clientY })
+            lastPointerRef.current = { x: e.clientX, y: e.clientY }
         }
-    }, [isPanning, isSelecting, isDragging, dragStart, transformMode, selectedUVs, uvToCanvas, getSelectionCenter, hoveredAxis, activeAxis, applyTranslation, applyScale, applyRotation])
+    }, [isPanning, isSelecting, isDragging, transformMode, selectedUVs, uvToCanvas, getSelectionCenter, hoveredAxis, activeAxis, applyTranslation, applyScale, applyRotation, requestCanvasRender])
 
     const handleMouseUp = useCallback((e: React.MouseEvent) => {
-        if (isSelecting && selectionStart && selectionEnd) {
-            const selectionRect = createSelectionRect(selectionStart, selectionEnd)
+        const activeSelectionStart = selectionStartRef.current ?? selectionStart
+        const activeSelectionEnd = selectionEndRef.current ?? selectionEnd
+
+        if (isSelecting && activeSelectionStart && activeSelectionEnd) {
+            const selectionRect = createSelectionRect(activeSelectionStart, activeSelectionEnd)
 
             const newSelections: UVSelection[] = []
 
@@ -1133,7 +1190,9 @@ const UVEditor: React.FC<UVEditorProps> = ({
         setActiveAxis(null)
         setSelectionStart(null)
         setSelectionEnd(null)
-        setDragStart(null)
+        lastPointerRef.current = null
+        selectionStartRef.current = null
+        selectionEndRef.current = null
     }, [isSelecting, selectionStart, selectionEnd, modelData, visibleGeosetIds, uvToCanvas, isDragging, selectedUVs, syncToStore, uvSubMode, getConnectedUvBlockIndices])
 
     // -------------------------------------------------------------------------
@@ -1310,7 +1369,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
 
     useEffect(() => {
         renderCanvas()
-    }, [renderCanvas, renderTick])
+    }, [renderCanvas])
 
     // -------------------------------------------------------------------------
     // DOM

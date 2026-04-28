@@ -222,7 +222,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             ...message,
             documentId: rpcState.documentId,
             baseDocumentRevision: rpcState.documentRevision,
-            stalePolicy: message.stalePolicy ?? (message.action === 'SAVE_MATERIALS' ? 'warn' : 'reject'),
+            stalePolicy: message.stalePolicy ?? (message.action === 'SAVE_MATERIALS' || message.action === 'COMMIT_MATERIALS' ? 'warn' : 'reject'),
         })
     }, [emitCommand, rpcState.documentId, rpcState.documentRevision])
 
@@ -508,7 +508,8 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                 isInitialized.current &&
                 lastStandaloneModelPathRef.current !== '' &&
                 lastStandaloneModelPathRef.current === pathStr &&
-                materialsSignature === localMaterialsSignature
+                (materialsSignature === localMaterialsSignature ||
+                    (rpcState.snapshotProjection === 'materialPreview' && didRealtimePreviewRef.current))
 
             if (hasMaterials && (!isInitialized.current || materialsDataChanged)) {
                 if (skipStandaloneFullReload) {
@@ -665,10 +666,17 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const commitMaterialEditorChanges = (showSuccessMessage: boolean) => {
         const snapshot = buildSaveSnapshot()
         const hasChanges = hasMaterialSaveChanges(snapshot)
+        const hasStandalonePreviewChanges =
+            isStandalone && (didRealtimeTexturePreviewRef.current || didRealtimePreviewRef.current)
 
         if (!hasChanges) {
-            if (isStandalone && (didRealtimeTexturePreviewRef.current || didRealtimePreviewRef.current)) {
-                emitMaterialAction({ action: 'CLEAR_MATERIAL_PREVIEW', payload: null, stalePolicy: 'warn' })
+            if (hasStandalonePreviewChanges) {
+                isCommittingRef.current = true
+                emitMaterialAction({
+                    action: 'COMMIT_MATERIALS',
+                    payload: { materials: snapshot.materialsForSave, textures: snapshot.texturesForSave },
+                    stalePolicy: 'warn',
+                })
             }
             if (showSuccessMessage) {
                 appMessage.success('材质已保存')
@@ -697,7 +705,11 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 
         isCommittingRef.current = true
         if (isStandalone) {
-            emitMaterialAction({ action: 'COMMIT_MATERIALS', payload: { materials: snapshot.materialsForSave, textures: snapshot.texturesForSave } })
+            emitMaterialAction({
+                action: 'COMMIT_MATERIALS',
+                payload: { materials: snapshot.materialsForSave, textures: snapshot.texturesForSave },
+                stalePolicy: 'warn',
+            })
         } else {
             applyVisualPatch({ Textures: snapshot.texturesForSave, Materials: snapshot.materialsForSave })
         }

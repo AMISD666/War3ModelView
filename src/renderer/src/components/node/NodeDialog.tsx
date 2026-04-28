@@ -81,6 +81,11 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
     const [scalingAnim, setScalingAnim] = useState<any>(null)
     const [currentEditingProp, setCurrentEditingProp] = useState<string>('')
     const currentEditingPropRef = React.useRef<string>('')
+    const animationDraftRef = React.useRef({
+        translationAnim: null as any,
+        rotationAnim: null as any,
+        scalingAnim: null as any,
+    })
 
     const formHydratedForNodeIdRef = React.useRef<number | null>(null)
     useEffect(() => {
@@ -114,10 +119,31 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
             cameraAnchored: node.CameraAnchored || false,
         })
 
-        setTranslationAnim(node.Translation || null)
-        setRotationAnim(node.Rotation || null)
-        setScalingAnim(node.Scaling || null)
+        const nextTranslationAnim = node.Translation || null
+        const nextRotationAnim = node.Rotation || null
+        const nextScalingAnim = node.Scaling || null
+        animationDraftRef.current = {
+            translationAnim: nextTranslationAnim,
+            rotationAnim: nextRotationAnim,
+            scalingAnim: nextScalingAnim,
+        }
+        setTranslationAnim(nextTranslationAnim)
+        setRotationAnim(nextRotationAnim)
+        setScalingAnim(nextScalingAnim)
     }, [clearPreviewNode, visible, nodeId, isStandalone, standaloneNode, form])
+
+    const setAnimationDraft = useCallback((propName: 'Translation' | 'Rotation' | 'Scaling', value: any) => {
+        if (propName === 'Translation') {
+            animationDraftRef.current.translationAnim = value
+            setTranslationAnim(value)
+        } else if (propName === 'Rotation') {
+            animationDraftRef.current.rotationAnim = value
+            setRotationAnim(value)
+        } else {
+            animationDraftRef.current.scalingAnim = value
+            setScalingAnim(value)
+        }
+    }, [])
 
     const buildUpdatedNodeFromValues = useCallback((values: any, overrides?: {
         translationAnim?: any
@@ -142,11 +168,11 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
             BillboardedLockY: values.billboardedLockY,
             BillboardedLockZ: values.billboardedLockZ,
             CameraAnchored: values.cameraAnchored,
-            Translation: overrides?.translationAnim !== undefined ? (overrides.translationAnim || undefined) : (translationAnim || undefined),
-            Rotation: overrides?.rotationAnim !== undefined ? (overrides.rotationAnim || undefined) : (rotationAnim || undefined),
-            Scaling: overrides?.scalingAnim !== undefined ? (overrides.scalingAnim || undefined) : (scalingAnim || undefined),
+            Translation: overrides?.translationAnim !== undefined ? (overrides.translationAnim || undefined) : (animationDraftRef.current.translationAnim || undefined),
+            Rotation: overrides?.rotationAnim !== undefined ? (overrides.rotationAnim || undefined) : (animationDraftRef.current.rotationAnim || undefined),
+            Scaling: overrides?.scalingAnim !== undefined ? (overrides.scalingAnim || undefined) : (animationDraftRef.current.scalingAnim || undefined),
         }
-    }, [getCurrentSourceNode, rotationAnim, scalingAnim, translationAnim])
+    }, [getCurrentSourceNode])
 
     const { schedulePreview } = useNodeEditorPreview<ModelNode>({
         visible,
@@ -162,8 +188,17 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
         onClose()
     }, [clearPreviewNode, onClose])
 
+    const commitFocusedField = useCallback(async () => {
+        const activeElement = document.activeElement
+        if (activeElement instanceof HTMLElement && activeElement !== document.body) {
+            activeElement.blur()
+            await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
+        }
+    }, [])
+
     const handleSave = async () => {
         try {
+            await commitFocusedField()
             const values = await form.validateFields()
             const sourceNode = getCurrentSourceNode()
             if (nodeId === null || !sourceNode) return
@@ -193,9 +228,9 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
         if (!payload || payload.callerId !== 'NodeDialog') return
 
         const targetProp = payload.fieldName || currentEditingPropRef.current
-        if (targetProp === 'Translation') setTranslationAnim(payload.data)
-        else if (targetProp === 'Rotation') setRotationAnim(payload.data)
-        else if (targetProp === 'Scaling') setScalingAnim(payload.data)
+        if (targetProp === 'Translation' || targetProp === 'Rotation' || targetProp === 'Scaling') {
+            setAnimationDraft(targetProp, payload.data)
+        }
 
         if (isStandalone && nodeId !== null) {
             const values = form.getFieldsValue()
@@ -214,14 +249,14 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
         schedulePreview()
     })
 
-    const handleOpenKeyframeEditor = (propName: string, title: string, vectorSize: number) => {
+    const handleOpenKeyframeEditor = (propName: 'Translation' | 'Rotation' | 'Scaling', title: string, vectorSize: number) => {
         currentEditingPropRef.current = propName
         setCurrentEditingProp(propName)
 
         let data = null
-        if (propName === 'Translation') data = translationAnim
-        else if (propName === 'Rotation') data = rotationAnim
-        else if (propName === 'Scaling') data = scalingAnim
+        if (propName === 'Translation') data = animationDraftRef.current.translationAnim
+        else if (propName === 'Rotation') data = animationDraftRef.current.rotationAnim
+        else if (propName === 'Scaling') data = animationDraftRef.current.scalingAnim
 
         const payload = {
             callerId: 'NodeDialog',
@@ -238,7 +273,7 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
         void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload)
     }
 
-    const handleDynamicToggle = (propName: string, checked: boolean) => {
+    const handleDynamicToggle = (propName: 'Translation' | 'Rotation' | 'Scaling', checked: boolean) => {
         if (checked) {
             const defaultAnim = {
                 Keys: [{ Frame: 0, Vector: propName === 'Rotation' ? [0, 0, 0, 1] : [0, 0, 0] }],
@@ -246,15 +281,14 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
                 GlobalSeqId: null,
             }
 
-            if (propName === 'Translation') setTranslationAnim(defaultAnim)
-            else if (propName === 'Rotation') setRotationAnim(defaultAnim)
-            else if (propName === 'Scaling') {
-                setScalingAnim({ ...defaultAnim, Keys: [{ Frame: 0, Vector: [1, 1, 1] }] })
-            }
+            setAnimationDraft(
+                propName,
+                propName === 'Scaling'
+                    ? { ...defaultAnim, Keys: [{ Frame: 0, Vector: [1, 1, 1] }] }
+                    : defaultAnim
+            )
         } else {
-            if (propName === 'Translation') setTranslationAnim(null)
-            else if (propName === 'Rotation') setRotationAnim(null)
-            else if (propName === 'Scaling') setScalingAnim(null)
+            setAnimationDraft(propName, null)
         }
         schedulePreview()
     }

@@ -69,7 +69,9 @@ const NodeEditorStandalone: React.FC = () => {
             documentId: state.documentId,
             baseDocumentRevision: state.documentRevision,
             stalePolicy:
-                command === NODE_EDITOR_COMMANDS.previewNodeUpdate || command === NODE_EDITOR_COMMANDS.clearNodePreview
+                command === NODE_EDITOR_COMMANDS.previewNodeUpdate ||
+                command === NODE_EDITOR_COMMANDS.clearNodePreview ||
+                command === NODE_EDITOR_COMMANDS.applyNodeUpdate
                     ? 'warn'
                     : 'reject',
         })

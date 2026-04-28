@@ -9,7 +9,6 @@ import { Layout, ConfigProvider, theme, Button } from 'antd'
 import { CloseOutlined } from '@ant-design/icons'
 import { useUIStore } from '../store/uiStore'
 import { useSelectionStore } from '../store/selectionStore'
-import { useModelStore } from '../store/modelStore'
 import { useRendererStore } from '../store/rendererStore'
 import { useSaveOperationStore } from '../store/saveOperationStore'
 import { TabBar } from './TabBar'
@@ -18,6 +17,7 @@ import AppErrorBoundary from './common/AppErrorBoundary'
 import { uiText } from '../constants/uiText'
 import { useWindowEvent } from '../hooks/useWindowEvent'
 import { SaveProgressOverlay } from './SaveProgressOverlay'
+import { requestOpenModelFiles } from '../application/model-open'
 
 const MainLayoutOld = lazy(() => import('./MainLayout'))
 const NodeManagerWindow = lazy(() => import('./node/NodeManagerWindow').then((m) => ({ default: m.NodeManagerWindow })))
@@ -45,7 +45,6 @@ export const MainLayoutNew: React.FC = () => {
     const [isResizingMpqPanel, setIsResizingMpqPanel] = useState(false)
 
     const containerRef = useRef<HTMLDivElement>(null)
-    const addTab = useModelStore((state) => state.addTab)
 
     const getNodeManagerBounds = useCallback(() => {
         const containerWidth = containerRef.current?.clientWidth ?? window.innerWidth
@@ -121,12 +120,12 @@ export const MainLayoutNew: React.FC = () => {
         const paths = event.payload
         if (!paths || paths.length === 0) return
 
-        void (async () => {
-            for (const path of paths) {
-                addTab(path)
-                await new Promise((resolve) => setTimeout(resolve, 100))
-            }
-        })()
+        requestOpenModelFiles({
+            paths,
+            source: 'external-open',
+            addToRecent: true,
+            delayMs: 40,
+        })
     })
 
     useEffect(() => {
