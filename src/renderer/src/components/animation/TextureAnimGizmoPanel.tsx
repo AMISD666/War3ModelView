@@ -11,12 +11,14 @@ import {
 } from '@ant-design/icons'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
+import { useRendererStore } from '../../store/rendererStore'
 import { windowManager } from '../../utils/WindowManager'
 import { GlobalSequenceSelect } from '../common/GlobalSequenceSelect'
 import RightFloatingPanelShell from './RightFloatingPanelShell'
 import { invokeReadMpqFile } from '../../utils/mpqPerf'
 import { decodeTextureData, getTextureCandidatePaths, normalizePath } from '../viewer/textureLoader'
 import { modelDocumentCommandHandler } from '../../application/commands'
+import { useMaterialPreviewProjectedModelData } from '../../application/preview'
 import { useWindowEvent } from '../../hooks/useWindowEvent'
 import { desktopGateway } from '../../infrastructure/desktop'
 import { remapMaterialsAfterTextureAnimRemoval } from '../../utils/materialTextureRelations'
@@ -55,18 +57,50 @@ const toVec = (input: any, size: number, fallback: number[]) => {
 const isTrack = (value: any): value is { Keys: any[]; GlobalSeqId?: number; InterpolationType?: number } =>
     !!value && typeof value === 'object' && Array.isArray(value.Keys)
 
-const sampleTrack = (track: any, frame: number, fallback: number[]) => {
+const getGlobalSequenceDuration = (modelData: any, globalSeqId: number): number | null => {
+    const raw = Array.isArray(modelData?.GlobalSequences) ? modelData.GlobalSequences[globalSeqId] : undefined
+    const duration = typeof raw === 'number' ? raw : Number(raw?.Duration)
+    return Number.isFinite(duration) && duration > 0 ? duration : null
+}
+
+const normalizeGlobalSeqId = (value: any): number | null => {
+    const id = typeof value === 'number' ? value : Number(value)
+    return Number.isInteger(id) && id >= 0 ? id : null
+}
+
+const resolveTrackFrame = (track: any, frame: number, modelData: any, renderer: any, preferRendererFrame = false): number => {
+    const globalSeqId = normalizeGlobalSeqId(track?.GlobalSeqId)
+    if (globalSeqId === null) return frame
+
+    if (preferRendererFrame) {
+        const rendererFrame = renderer?.rendererData?.globalSequencesFrames?.[globalSeqId]
+        if (typeof rendererFrame === 'number' && Number.isFinite(rendererFrame)) {
+            return rendererFrame
+        }
+    }
+
+    const duration = getGlobalSequenceDuration(modelData, globalSeqId)
+    if (!duration) return frame
+
+    let nextFrame = frame % duration
+    if (nextFrame < 0) nextFrame += duration
+    if (nextFrame === 0 && frame > 0) nextFrame = duration
+    return nextFrame
+}
+
+const sampleTrack = (track: any, frame: number, fallback: number[], modelData?: any, renderer?: any, preferRendererFrame = false) => {
     if (!isTrack(track) || track.Keys.length === 0) return [...fallback]
+    const sampleFrame = resolveTrackFrame(track, frame, modelData, renderer, preferRendererFrame)
     const keys = [...track.Keys].sort((a: any, b: any) => Number(a.Frame) - Number(b.Frame))
-    if (frame <= keys[0].Frame) return toVec(keys[0].Vector, fallback.length, fallback)
-    if (frame >= keys[keys.length - 1].Frame) return toVec(keys[keys.length - 1].Vector, fallback.length, fallback)
+    if (sampleFrame <= keys[0].Frame) return toVec(keys[0].Vector, fallback.length, fallback)
+    if (sampleFrame >= keys[keys.length - 1].Frame) return toVec(keys[keys.length - 1].Vector, fallback.length, fallback)
     for (let i = 0; i < keys.length - 1; i++) {
         const a = keys[i]
         const b = keys[i + 1]
-        if (frame >= a.Frame && frame <= b.Frame) {
+        if (sampleFrame >= a.Frame && sampleFrame <= b.Frame) {
             const span = Number(b.Frame) - Number(a.Frame)
             if (span <= 0) return toVec(a.Vector, fallback.length, fallback)
-            const t = (frame - Number(a.Frame)) / span
+            const t = (sampleFrame - Number(a.Frame)) / span
             const av = toVec(a.Vector, fallback.length, fallback)
             const bv = toVec(b.Vector, fallback.length, fallback)
             return av.map((v, idx) => v + (bv[idx] - v) * t)
@@ -121,28 +155,34 @@ const imageDataToDataUrl = (imageData: ImageData): string | null => {
     return canvas.toDataURL()
 }
 
-const sampleTextureIdFromLayer = (layer: any, frame: number): number | null => {
+const sampleTextureIdFromLayer = (layer: any, frame: number, modelData: any, renderer: any, preferRendererFrame = false): number | null => {
     const textureId = layer?.TextureID ?? layer?.TextureId
     if (typeof textureId === 'number' && Number.isFinite(textureId)) {
         return Math.round(textureId)
     }
     if (isTrack(textureId)) {
-        const sampled = sampleTrack(textureId, frame, [0])
+        const sampled = sampleTrack(textureId, frame, [0], modelData, renderer, preferRendererFrame)
         const id = Number(sampled[0] ?? 0)
         return Number.isFinite(id) ? Math.round(id) : null
     }
     return null
 }
 
-const findTexturePathForTextureAnim = (modelData: any, textureAnimIndex: number, frame: number): string | null => {
+const getLayerTextureAnimId = (layer: any): number | null => {
+    const value = layer?.TVertexAnimId ?? layer?.TextureAnimationId ?? layer?.TextureAnimId
+    const id = typeof value === 'number' ? value : Number(value)
+    return Number.isInteger(id) && id >= 0 ? id : null
+}
+
+const findTexturePathForTextureAnim = (modelData: any, textureAnimIndex: number, frame: number, renderer: any, preferRendererFrame = false): string | null => {
     const materials = Array.isArray(modelData?.Materials) ? modelData.Materials : []
     const textures = Array.isArray(modelData?.Textures) ? modelData.Textures : []
     for (const material of materials) {
         const layers = Array.isArray(material?.Layers) ? material.Layers : []
         for (const layer of layers) {
-            const tvId = layer?.TVertexAnimId ?? layer?.TextureAnimationId ?? layer?.TextureAnimId
+            const tvId = getLayerTextureAnimId(layer)
             if (Number(tvId) !== textureAnimIndex) continue
-            const textureId = sampleTextureIdFromLayer(layer, frame)
+            const textureId = sampleTextureIdFromLayer(layer, frame, modelData, renderer, preferRendererFrame)
             if (textureId === null || textureId < 0 || textureId >= textures.length) continue
             const imagePath = textures[textureId]?.Image
             if (typeof imagePath === 'string' && imagePath.length > 0) {
@@ -183,9 +223,22 @@ type DragHud = {
 }
 
 const TextureAnimGizmoPanel: React.FC = () => {
-    const { modelData, modelPath, currentFrame } = useModelStore()
-    const { selectedTextureAnimIndex, setSelectedTextureAnimIndex, timelineKeyframeDisplayMode } = useSelectionStore()
+    const { modelData, modelPath, currentFrame, isPlaying } = useModelStore()
+    const projectedModelData = useMaterialPreviewProjectedModelData()
+    const renderer = useRendererStore((state) => state.renderer)
+    const {
+        selectedTextureAnimIndex,
+        setSelectedTextureAnimIndex,
+        timelineKeyframeDisplayMode,
+        pickedGeosetIndex,
+        selectedMaterialIndex,
+        selectedMaterialIndices,
+        selectedMaterialLayerIndex
+    } = useSelectionStore()
+    const effectiveModelData = projectedModelData ?? modelData
     const textureAnims = Array.isArray((modelData as any)?.TextureAnims) ? ((modelData as any).TextureAnims as any[]) : []
+    const materials = Array.isArray((effectiveModelData as any)?.Materials) ? ((effectiveModelData as any).Materials as any[]) : []
+    const geosets = Array.isArray((effectiveModelData as any)?.Geosets) ? ((effectiveModelData as any).Geosets as any[]) : []
     const frame = Math.round(currentFrame)
     const replaceTextureAnims = useCallback((name: string, before: any[], after: any[]) => {
         modelDocumentCommandHandler.replaceTextureAnimationList({
@@ -243,9 +296,61 @@ const TextureAnimGizmoPanel: React.FC = () => {
         ? textureAnims[selectedTextureAnimIndex]
         : null
 
+    const linkedTextureAnimIndex = useMemo(() => {
+        const layerIndex = typeof selectedMaterialLayerIndex === 'number' && selectedMaterialLayerIndex >= 0
+            ? selectedMaterialLayerIndex
+            : 0
+        const selectedMaterialIds = selectedMaterialIndices.filter((index) => index >= 0 && index < materials.length)
+        if (
+            selectedMaterialIds.length === 0 &&
+            typeof selectedMaterialIndex === 'number' &&
+            selectedMaterialIndex >= 0 &&
+            selectedMaterialIndex < materials.length
+        ) {
+            selectedMaterialIds.push(selectedMaterialIndex)
+        }
+
+        for (const materialIndex of selectedMaterialIds) {
+            const layer = materials[materialIndex]?.Layers?.[layerIndex]
+            const textureAnimId = getLayerTextureAnimId(layer)
+            if (textureAnimId !== null && textureAnimId < textureAnims.length) {
+                return textureAnimId
+            }
+        }
+
+        if (pickedGeosetIndex !== null && pickedGeosetIndex >= 0 && pickedGeosetIndex < geosets.length) {
+            const materialIndex = Number(geosets[pickedGeosetIndex]?.MaterialID)
+            if (Number.isInteger(materialIndex) && materialIndex >= 0 && materialIndex < materials.length) {
+                const materialLayers = Array.isArray(materials[materialIndex]?.Layers) ? materials[materialIndex].Layers : []
+                const layer = materialLayers[layerIndex] ?? materialLayers[0]
+                const textureAnimId = getLayerTextureAnimId(layer)
+                if (textureAnimId !== null && textureAnimId < textureAnims.length) {
+                    return textureAnimId
+                }
+            }
+        }
+
+        return null
+    }, [
+        geosets,
+        materials,
+        pickedGeosetIndex,
+        selectedMaterialIndex,
+        selectedMaterialIndices,
+        selectedMaterialLayerIndex,
+        textureAnims.length
+    ])
+
     useEffect(() => {
         if (textureAnims.length === 0) {
             if (selectedTextureAnimIndex !== null) setSelectedTextureAnimIndex(null)
+            return
+        }
+        if (
+            linkedTextureAnimIndex !== null &&
+            linkedTextureAnimIndex !== selectedTextureAnimIndex
+        ) {
+            setSelectedTextureAnimIndex(linkedTextureAnimIndex)
             return
         }
         if (
@@ -255,16 +360,16 @@ const TextureAnimGizmoPanel: React.FC = () => {
         ) {
             setSelectedTextureAnimIndex(0)
         }
-    }, [textureAnims.length, selectedTextureAnimIndex, setSelectedTextureAnimIndex])
+    }, [textureAnims.length, linkedTextureAnimIndex, selectedTextureAnimIndex, setSelectedTextureAnimIndex])
 
     const sampled = useMemo(() => {
         if (!currentAnim) return { t: [0, 0, 0], r: [0, 0, 0, 1], s: [1, 1, 1], useQuat: true }
-        const t = sampleTrack(currentAnim.Translation, frame, [0, 0, 0])
-        const r = sampleTrack(currentAnim.Rotation, frame, [0, 0, 0, 1])
-        const s = sampleTrack(currentAnim.Scaling, frame, [1, 1, 1])
+        const t = sampleTrack(currentAnim.Translation, frame, [0, 0, 0], effectiveModelData, renderer, isPlaying)
+        const r = sampleTrack(currentAnim.Rotation, frame, [0, 0, 0, 1], effectiveModelData, renderer, isPlaying)
+        const s = sampleTrack(currentAnim.Scaling, frame, [1, 1, 1], effectiveModelData, renderer, isPlaying)
         const useQuat = Array.isArray(r) && r.length >= 4
         return { t, r, s, useQuat }
-    }, [currentAnim, frame])
+    }, [currentAnim, effectiveModelData, frame, isPlaying, renderer])
 
     useEffect(() => {
         setForm({
@@ -283,9 +388,9 @@ const TextureAnimGizmoPanel: React.FC = () => {
     }, [gizmoMode])
 
     const previewTexturePath = useMemo(() => {
-        if (!modelData || selectedTextureAnimIndex === null || selectedTextureAnimIndex < 0) return null
-        return findTexturePathForTextureAnim(modelData as any, selectedTextureAnimIndex, frame)
-    }, [modelData, selectedTextureAnimIndex, frame])
+        if (!effectiveModelData || selectedTextureAnimIndex === null || selectedTextureAnimIndex < 0) return null
+        return findTexturePathForTextureAnim(effectiveModelData as any, selectedTextureAnimIndex, frame, renderer, isPlaying)
+    }, [effectiveModelData, selectedTextureAnimIndex, frame, isPlaying, renderer])
 
     useEffect(() => {
         let canceled = false

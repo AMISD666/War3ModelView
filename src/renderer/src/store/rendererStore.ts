@@ -173,7 +173,7 @@ export const useRendererStore = create<RendererStore>()(
                 gridSize: 2048
             },
             vertexSettings: {
-                enableDepth: false, // Default to penetrate (visible through model)
+                enableDepth: true,
                 size: 3
             },
             setGridSettings: (settings) => set((state) => ({
