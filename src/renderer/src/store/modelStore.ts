@@ -719,6 +719,16 @@ export function extractNodesFromModel(data: ModelData | null): ModelNode[] {
 
             // Map Flags
             if (item.Flags !== undefined) {
+                node.Billboarded = (item.Flags & 8) !== 0;
+                node.BillboardedLockX = (item.Flags & 16) !== 0;
+                node.BillboardedLockY = (item.Flags & 32) !== 0;
+                node.BillboardedLockZ = (item.Flags & 64) !== 0;
+                node.CameraAnchored = (item.Flags & 128) !== 0;
+                node.DontInherit = {
+                    Translation: (item.Flags & 1) !== 0,
+                    Rotation: (item.Flags & 2) !== 0,
+                    Scaling: (item.Flags & 4) !== 0,
+                };
                 node.Unshaded = (item.Flags & 32768) !== 0;
                 node.SortPrimsFarZ = (item.Flags & 65536) !== 0;
                 node.LineEmitter = (item.Flags & 131072) !== 0;
@@ -817,6 +827,15 @@ export function updateModelDataWithNodes(
 
     // Reconstruct Flags from boolean properties before processing
     const modelPivotPoints = (modelData as any).PivotPoints;
+    const modelGeosetCount = Array.isArray((modelData as any).Geosets) ? (modelData as any).Geosets.length : 0;
+    const modelGeosetAnimCount = Array.isArray((modelData as any).GeosetAnims) ? (modelData as any).GeosetAnims.length : 0;
+    const getValidIndexOrNull = (value: any, count: number): number | null => {
+        if (value === undefined || value === null) return null;
+        const num = Number(value);
+        if (!Number.isInteger(num) || num < 0) return null;
+        if (count <= 0 || num >= count) return null;
+        return num;
+    };
     const nodesWithFlags = uniqueNodes.map(node => {
         const n = node as any;
         const pivotPoint = resolvePivotForPersist(
@@ -842,6 +861,16 @@ export function updateModelDataWithNodes(
         if (n.DontInherit?.Translation) flags |= 1;
         if (n.DontInherit?.Rotation) flags |= 2;
         if (n.DontInherit?.Scaling) flags |= 4;
+
+        if (node.type === NodeType.BONE) {
+            return {
+                ...node,
+                PivotPoint: pivotPoint,
+                Flags: flags,
+                GeosetId: getValidIndexOrNull(n.GeosetId, modelGeosetCount),
+                GeosetAnimId: getValidIndexOrNull(n.GeosetAnimId, modelGeosetAnimCount)
+            } as any;
+        }
 
         // ParticleEmitter2 specific flags reconstruction
         if (node.type === NodeType.PARTICLE_EMITTER_2) {
@@ -883,7 +912,10 @@ export function updateModelDataWithNodes(
             if (n.SegmentColor) {
                 // 规范为 [0,1]³ 再写入 Float32Array，避免错误倍乘或非有限值导致渲染/保存异常
                 formattedNode.SegmentColor = n.SegmentColor.map((c: any) => {
-                    const a = Array.isArray(c) || ArrayBuffer.isView(c) ? c : null;
+                    const source = Array.isArray(c) && c.length === 1 && (Array.isArray(c[0]) || ArrayBuffer.isView(c[0]))
+                        ? c[0]
+                        : c;
+                    const a = Array.isArray(source) || ArrayBuffer.isView(source) ? source : null;
                     const length = a
                         ? (Array.isArray(a) ? a.length : Number((a as unknown as ArrayLike<number>).length ?? 0))
                         : 0;

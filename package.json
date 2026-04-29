@@ -10,6 +10,7 @@
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "check:architecture": "node scripts/check-architecture-guardrails.mjs",
+    "check:mdx-strict-export": "node scripts/check-mdx-strict-export.mjs",
     "check:state-sync-fixtures": "node scripts/check-state-sync-fixtures.mjs",
     "dev:vite": "vite",
     "dev": "npm run dev:vite",

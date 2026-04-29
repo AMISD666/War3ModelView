@@ -88,9 +88,12 @@ export function validateParticleEmitter2(emitter: any, idx: number, textureCount
         emitter.Alpha = new Uint8Array(emitter.Alpha)
     }
     if (emitter.SegmentColor && Array.isArray(emitter.SegmentColor)) {
-        emitter.SegmentColor = emitter.SegmentColor.map((c: any) =>
-            c instanceof Float32Array ? c : new Float32Array(c)
-        )
+        emitter.SegmentColor = emitter.SegmentColor.map((c: any) => {
+            const source = Array.isArray(c) && c.length === 1 && (Array.isArray(c[0]) || ArrayBuffer.isView(c[0]))
+                ? c[0]
+                : c
+            return source instanceof Float32Array ? source : new Float32Array(source)
+        })
     }
 
     // Convert UV anim arrays if needed

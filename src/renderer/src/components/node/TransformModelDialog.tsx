@@ -1,7 +1,7 @@
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import React, { useEffect, useState } from 'react'
 import { Checkbox, Col, ConfigProvider, Form, Row, Segmented, theme } from 'antd'
-import { mat4, quat, vec3 } from 'gl-matrix'
+import { quat } from 'gl-matrix'
 import { DraggableModal } from '../DraggableModal'
 import { useModelStore } from '../../store/modelStore'
 import { useUIStore } from '../../store/uiStore'
@@ -55,25 +55,6 @@ function quatToEulerDegrees(q: quat): [number, number, number] {
     const yaw = Math.atan2(sinyCosp, cosyCosp)
 
     return [roll * 180 / Math.PI, pitch * 180 / Math.PI, yaw * 180 / Math.PI]
-}
-
-function decomposeMatrix(matrix: mat4): {
-    translation: [number, number, number]
-    rotation: [number, number, number]
-    scale: [number, number, number]
-} {
-    const translation = vec3.create()
-    const scaling = vec3.create()
-    const rotationQuat = quat.create()
-    mat4.getTranslation(translation, matrix)
-    mat4.getScaling(scaling, matrix)
-    mat4.getRotation(rotationQuat, matrix)
-
-    return {
-        translation: [translation[0], translation[1], translation[2]],
-        rotation: quatToEulerDegrees(rotationQuat),
-        scale: [scaling[0], scaling[1], scaling[2]],
-    }
 }
 
 export const TransformModelDialog: React.FC = () => {
@@ -163,20 +144,9 @@ export const TransformModelDialog: React.FC = () => {
                     safeScaleFactor(values.sz, currentModelSize[2]),
                 ]
 
-                const transformMatrix = mat4.create()
-                mat4.translate(transformMatrix, transformMatrix, translationDelta)
-                mat4.translate(transformMatrix, transformMatrix, currentModelCenter)
-                const deltaRotationMatrix = mat4.create()
-                const deltaRotationQuatMatrix = quat.create()
-                quat.fromEuler(deltaRotationQuatMatrix, deltaRotationEuler[0], deltaRotationEuler[1], deltaRotationEuler[2])
-                mat4.fromRotationTranslationScale(deltaRotationMatrix, deltaRotationQuatMatrix, [0, 0, 0], scaleFactors)
-                mat4.multiply(transformMatrix, transformMatrix, deltaRotationMatrix)
-                mat4.translate(transformMatrix, transformMatrix, [-currentModelCenter[0], -currentModelCenter[1], -currentModelCenter[2]])
-
-                const worldOps = decomposeMatrix(transformMatrix)
-                translationOps = worldOps.translation
-                rotationOps = worldOps.rotation
-                scaleOps = worldOps.scale
+                translationOps = translationDelta
+                rotationOps = deltaRotationEuler
+                scaleOps = scaleFactors
             } else {
                 translationOps = [values.tx, values.ty, values.tz]
                 rotationOps = [values.rx, values.ry, values.rz]
@@ -188,11 +158,14 @@ export const TransformModelDialog: React.FC = () => {
             const hasScale = !!scaleOps && (scaleOps[0] !== 1 || scaleOps[1] !== 1 || scaleOps[2] !== 1)
 
             if (hasTranslation || hasRotation || hasScale) {
+                const transformPivot: [number, number, number] = coordinateMode === 'world'
+                    ? currentModelCenter
+                    : [0, 0, 0]
                 const cmd = new GlobalTransformCommand({
                     translation: hasTranslation ? translationOps! : [0, 0, 0],
                     rotation: hasRotation ? rotationOps! : [0, 0, 0],
                     scale: hasScale ? scaleOps! : [1, 1, 1],
-                }, null, currentModelCenter)
+                }, null, transformPivot)
                 commandManager.execute(cmd)
             }
 

@@ -37,7 +37,7 @@ const createEditorId = (prefix: string): string => {
 }
 
 const DEFAULT_BASE_LAYER_FILTER_MODE = 0
-const DEFAULT_ADDED_LAYER_FILTER_MODE = 2
+const DEFAULT_ADDED_LAYER_FILTER_MODE = 0
 
 function cloneDeep<T>(value: T): T {
     try {
@@ -876,10 +876,15 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 
         if (selectedLayerIndex === fromIndex) {
             setSelectedLayerIndex(toIndex)
+            syncMaterialSelection(selectedMaterialIndex, toIndex)
         } else if (selectedLayerIndex > fromIndex && selectedLayerIndex <= toIndex) {
-            setSelectedLayerIndex(selectedLayerIndex - 1)
+            const nextLayerIndex = selectedLayerIndex - 1
+            setSelectedLayerIndex(nextLayerIndex)
+            syncMaterialSelection(selectedMaterialIndex, nextLayerIndex)
         } else if (selectedLayerIndex < fromIndex && selectedLayerIndex >= toIndex) {
-            setSelectedLayerIndex(selectedLayerIndex + 1)
+            const nextLayerIndex = selectedLayerIndex + 1
+            setSelectedLayerIndex(nextLayerIndex)
+            syncMaterialSelection(selectedMaterialIndex, nextLayerIndex)
         }
     }
 
@@ -942,7 +947,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             FilterMode: DEFAULT_BASE_LAYER_FILTER_MODE,
             TextureID: 0,
             Alpha: 1,
-            Unshaded: true, // Prevent lighting issues hiding the model
+            Unshaded: false,
             Unfogged: false,
             TwoSided: true, // Prevent backface culling hiding the model
             SphereEnvMap: false,
@@ -959,6 +964,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         }
         setSelectedMaterialIndex(nextMaterials.length - 1)
         setSelectedLayerIndex(0) // Auto-select the first layer of the new material
+        syncMaterialSelection(nextMaterials.length - 1, 0)
 
         // Auto-scroll to the new material after state update
         setTimeout(() => {
@@ -1010,7 +1016,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             FilterMode: DEFAULT_ADDED_LAYER_FILTER_MODE,
             TextureID: 0,  // Default to first texture (index 0) instead of -1 (invalid)
             Alpha: 1,
-            Unshaded: true,
+            Unshaded: false,
             Unfogged: false,
             TwoSided: true,
             SphereEnvMap: false,
@@ -1032,7 +1038,9 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             didRealtimePreviewRef.current = true
             applyMaterialCollection(denormalizeMaterialsForSave(newMaterials))
         }
-        setSelectedLayerIndex(newMaterials[selectedMaterialIndex].Layers.length - 1)
+        const nextLayerIndex = newMaterials[selectedMaterialIndex].Layers.length - 1
+        setSelectedLayerIndex(nextLayerIndex)
+        syncMaterialSelection(selectedMaterialIndex, nextLayerIndex)
     }
 
     const handleDeleteLayer = (index: number) => {
@@ -1055,12 +1063,17 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         const remainingLayers = newMaterials[selectedMaterialIndex]?.Layers || []
         if (remainingLayers.length === 0) {
             setSelectedLayerIndex(-1)
+            syncMaterialSelection(selectedMaterialIndex, null)
             return
         }
         if (selectedLayerIndex === index) {
-            setSelectedLayerIndex(Math.min(index, remainingLayers.length - 1))
+            const nextLayerIndex = Math.min(index, remainingLayers.length - 1)
+            setSelectedLayerIndex(nextLayerIndex)
+            syncMaterialSelection(selectedMaterialIndex, nextLayerIndex)
         } else if (selectedLayerIndex > index) {
-            setSelectedLayerIndex(selectedLayerIndex - 1)
+            const nextLayerIndex = selectedLayerIndex - 1
+            setSelectedLayerIndex(nextLayerIndex)
+            syncMaterialSelection(selectedMaterialIndex, nextLayerIndex)
         }
     }
 

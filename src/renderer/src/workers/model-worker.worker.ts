@@ -8,6 +8,7 @@
 
 // @ts-ignore
 import { parseMDX, parseMDL, decodeBLP, getBLPImageData } from 'war3-model';
+import { parseMdlWithNumericRecovery } from '../infrastructure/serialization/mdlNumericSanitizer';
 import { applyTextureAdjustments, isDefaultTextureAdjustments, type TextureAdjustments } from '../utils/textureAdjustments';
 
 interface DecodeTextureTaskPayload {
@@ -153,7 +154,7 @@ self.onmessage = async (e) => {
             let model: any;
             if (path.toLowerCase().endsWith('.mdl')) {
                 const text = new TextDecoder().decode(buffer);
-                model = parseMDL(text);
+                model = parseMdlWithNumericRecovery(text, parseMDL);
             } else {
                 model = parseMDX(buffer);
             }

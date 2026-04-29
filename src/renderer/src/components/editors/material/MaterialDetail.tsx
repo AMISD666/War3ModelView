@@ -5,7 +5,7 @@ import { PlusOutlined, DeleteOutlined } from '@ant-design/icons'
 import { showMessage } from '../../../store/messageStore'
 import { MATERIAL_FILTER_MODE_LABELS } from '../../../constants/filterModes'
 
-const DEFAULT_ADDED_LAYER_FILTER_MODE = 2
+const DEFAULT_ADDED_LAYER_FILTER_MODE = 0
 
 interface MaterialDetailProps {
     material: any

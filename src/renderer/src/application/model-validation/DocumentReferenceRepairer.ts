@@ -181,6 +181,17 @@ export const repairDocumentReferences = <T,>(modelData: T): DocumentReferenceRep
         })
     }
 
+    const geosetAnims = asArray(data.GeosetAnims)
+    asArray(data.Bones).map(asRecord).forEach((bone, index) => {
+        const nodePath = `Bones[${index}]`
+        repairStaticIndex(repairs, bone, 'GeosetId', `${nodePath}.GeosetId`, 'Geosets', geosets.length, null, {
+            allowNull: true,
+        })
+        repairStaticIndex(repairs, bone, 'GeosetAnimId', `${nodePath}.GeosetAnimId`, 'GeosetAnims', geosetAnims.length, null, {
+            allowNull: true,
+        })
+    })
+
     geosets.forEach((geoset, index) => {
         repairStaticIndex(
             repairs,

@@ -50,7 +50,9 @@ update_log.txt
 activation/
 docs/
 vendor/
-scripts/
+scripts/*
+!scripts/
+!scripts/check-mdx-strict-export.mjs
 activation/
 
 # OS noise

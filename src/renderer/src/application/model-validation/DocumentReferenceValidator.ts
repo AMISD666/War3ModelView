@@ -183,6 +183,14 @@ export const validateDocumentReferences = (modelData: unknown): DocumentReferenc
                     allowNull: true,
                 })
             }
+            if (key === 'Bones') {
+                validateIndexReference(issues, `${nodePath}.GeosetId`, node.GeosetId, 'Geosets', geosets.length, {
+                    allowNull: true,
+                })
+                validateIndexReference(issues, `${nodePath}.GeosetAnimId`, node.GeosetAnimId, 'GeosetAnims', geosetAnims.length, {
+                    allowNull: true,
+                })
+            }
             if (key === 'ParticleEmitters' || key === 'ParticleEmitters2') {
                 const textureId = node.TextureID ?? node.TextureId
                 if (isNonNegativeInteger(textureId)) {

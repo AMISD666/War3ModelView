@@ -461,6 +461,13 @@ export function prepareModelDataForSave(modelData: any): any {
         });
     }
     const globalSeqCount = data.GlobalSequences?.length || 0;
+    const getValidIndexOrNull = (value: any, count: number): number | null => {
+        if (value === undefined || value === null) return null
+        const num = Number(value)
+        if (!Number.isInteger(num) || num < 0) return null
+        if (count <= 0 || num >= count) return null
+        return num
+    }
 
     // Fix Textures
     if (data.Textures && Array.isArray(data.Textures)) {
@@ -872,6 +879,12 @@ export function prepareModelDataForSave(modelData: any): any {
             ];
 
             const fixEmitterAnimProps = (emitter: any, props: typeof animProps) => {
+                const removeEmptyAnimVector = (target: any, key: string) => {
+                    if (isAnimVector(target[key]) && (!Array.isArray(target[key].Keys) || target[key].Keys.length === 0)) {
+                        delete target[key]
+                    }
+                }
+
                 const ensureScalarZeroAtFrame0 = (track: any) => {
                     if (!isAnimVector(track)) return
                     if (!Array.isArray(track.Keys)) {
@@ -901,6 +914,9 @@ export function prepareModelDataForSave(modelData: any): any {
                     if (prop === 'Width' || prop === 'Length') {
                         ensureScalarZeroAtFrame0(emitter[prop]);
                         ensureScalarZeroAtFrame0(emitter[animKey]);
+                    } else {
+                        removeEmptyAnimVector(emitter, prop);
+                        removeEmptyAnimVector(emitter, animKey);
                     }
                 });
             };
@@ -951,21 +967,36 @@ export function prepareModelDataForSave(modelData: any): any {
                 return Number.isFinite(num) ? num : fallback;
             };
 
+            const toSegmentColorVector = (color: any): Float32Array => {
+                const source = Array.isArray(color) && color.length === 1 && (Array.isArray(color[0]) || ArrayBuffer.isView(color[0]))
+                    ? color[0]
+                    : color
+
+                if (source instanceof Float32Array && source.length >= 3) {
+                    return new Float32Array([source[0], source[1], source[2]])
+                }
+                if (Array.isArray(source) || ArrayBuffer.isView(source)) {
+                    const arr = source as ArrayLike<number>
+                    return new Float32Array([
+                        numberOrDefault(arr[0], 1),
+                        numberOrDefault(arr[1], 1),
+                        numberOrDefault(arr[2], 1)
+                    ])
+                }
+                if (source && typeof source === 'object') {
+                    return new Float32Array([
+                        numberOrDefault(source[0], 1),
+                        numberOrDefault(source[1], 1),
+                        numberOrDefault(source[2], 1)
+                    ])
+                }
+                return new Float32Array([1, 1, 1])
+            }
+
             // Fix SegmentColor - must be array of 3 Float32Array(3) color vectors
             if (emitter.SegmentColor) {
                 if (Array.isArray(emitter.SegmentColor)) {
-                    emitter.SegmentColor = emitter.SegmentColor.map((color: any) => {
-                        if (color instanceof Float32Array) return color;
-                        if (Array.isArray(color)) return new Float32Array(color);
-                        if (color && typeof color === 'object') {
-                            return new Float32Array([
-                                numberOrDefault(color[0], 1),
-                                numberOrDefault(color[1], 1),
-                                numberOrDefault(color[2], 1)
-                            ]);
-                        }
-                        return new Float32Array([1, 1, 1]); // Default white
-                    });
+                    emitter.SegmentColor = emitter.SegmentColor.map(toSegmentColorVector);
                     // Ensure exactly 3 colors
                     while (emitter.SegmentColor.length < 3) {
                         emitter.SegmentColor.push(new Float32Array([1, 1, 1]));
@@ -1176,6 +1207,17 @@ export function prepareModelDataForSave(modelData: any): any {
             data[arrayName].forEach((node: any) => fixNode(node, globalSeqCount));
         }
     });
+
+    // Fix Bone-specific geoset references. Warcraft III is less forgiving than the parser:
+    // a Bone.GeosetAnimId that points past GeosetAnims can make the model fail to render.
+    if (data.Bones && Array.isArray(data.Bones)) {
+        const geosetCount = data.Geosets?.length || 0
+        const geosetAnimCount = data.GeosetAnims?.length || 0
+        data.Bones.forEach((bone: any) => {
+            bone.GeosetId = getValidIndexOrNull(bone.GeosetId, geosetCount)
+            bone.GeosetAnimId = getValidIndexOrNull(bone.GeosetAnimId, geosetAnimCount)
+        })
+    }
 
     // Fix Attachment-specific properties
     if (data.Attachments && Array.isArray(data.Attachments)) {

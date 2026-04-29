@@ -1,6 +1,7 @@
 import { appMessage } from '../../store/messageStore'
 import React,{useEffect,useRef,useState,forwardRef,useImperativeHandle,useMemo,useCallback}from"react";
 import{textureMaterialCommandHandler}from"../../application/commands";
+import{previewProjectionService}from"../../application/preview";
 import{rendererSyncService}from"../../application/render";
 import type{ViewerProps,ViewerRef}from"./ViewerTypes";
 import{createWar3ModelRenderer,type War3ModelRenderer}from"../../infrastructure/render";
@@ -15,7 +16,7 @@ import type{ViewerFramePerfAggregate,ViewerFramePerfSample}from"./ViewerPerf";im
 import type{HealthBarDragSnapshot,HealthBarState}from"./ViewerHealthBar";import{getLiveTextureSourceKey,getTextureAdjustmentSignature,getTextureDecodeWorkerCount,isTexturePreviewPath,toTextureUpdateUint8Array,toTightArrayBuffer,toUint8Array}from"./ViewerTextureUtils";
 import { isGeosetVisible } from "../../utils/geosetVisibility";
 import { canDeleteNode } from "../../utils/nodeUtils";
-import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadSchedulerState}from"./ViewerTextureUtils";import{GlobalTransformCommand}from"../../commands/GlobalTransformCommand";import{copyVertices,copyFaces,VertexCopyBuffer}from"../../utils/vertexOperations";import{UpdateKeyframeCommand,KeyframeChange}from"../../commands/UpdateKeyframeCommand";import{MissingTextureWarning}from"../MissingTextureWarning";import{GeosetSeparateDialog}from"../modals/GeosetSeparateDialog";import{LayerConfig,layerConfigToMaterialLayer}from"../modals/MaterialLayerOptions";import{NodeType}from"../../types/node";import{openNodeEditor}from"../../utils/nodeEditorOpen";import{nodeTypeToEditorKind}from"../../types/nodeEditorRpc";import{getEffectiveBindings,registerShortcutHandler}from"../../shortcuts/manager";import{markStandalonePerf}from"../../utils/standalonePerf";import{invokeReadMpqFile}from"../../utils/mpqPerf";import{markNodeManagerListScrollFromTree,markNodeManagerListScrollFromViewer}from"../../utils/nodeManagerListScrollBridge";import{collectSelectedGeosetIndices}from"../editors/uvSelectionSync";import{createSelectionRect,pointInRect,segmentIntersectsRect,triangleIntersectsRect}from"../editors/uvSelectionUtils";let globalRenderLoopId=0;const Viewer=forwardRef((props:ViewerProps,ref:React.Ref<ViewerRef>)=>{const{modelPath,animationIndex,teamColor,showGrid,showNodes,showSkeleton,showCollisionShapes,showCameras,showLights,showAttachments,showWireframe,showWireframeOverlay=false,isPlaying,onTogglePlay,onToggleLooping,onToggleWireframe,onModelLoaded,onModelFirstFrameReady,backgroundColor,showFPS,playbackSpeed,viewPreset,modelData,onSetViewPreset,onAddCameraFromView}=props;const[parseWorker]=useState(()=>new ModelWorker());const[textureWorkers]=useState<WorkerLike[]>(()=>{const count=getTextureDecodeWorkerCount();return Array.from({length:count},()=>new ModelWorker()as unknown as WorkerLike);});const[loading,setLoading]=useState(false);const[loadingStatus,setLoadingStatus]=useState("");const canvasRef=useRef<HTMLCanvasElement>(null);const[renderer,setRenderer]=useState<War3ModelRenderer|null>(null);const[fps,setFps]=useState<number>(0);const gridRenderer=useRef(new GridRenderer());const debugRenderer=useRef(new DebugRenderer());const gizmoRenderer=useRef(new GizmoRenderer());const axisIndicator=useRef(new AxisIndicator());const rendererRef=useRef<War3ModelRenderer|null>(null);const cameraRef=useRef<SimpleOrbitCamera|null>(null);const appMainMode=useSelectionStore((state)=>state.mainMode);const animationSubMode=useSelectionStore((state)=>state.animationSubMode);const rendererReloadTrigger=useModelStore((state)=>state.rendererReloadTrigger);const cachedRenderer=useModelStore((state)=>state.cachedRenderer);const mpqLoaded=useRendererStore((state)=>state.mpqLoaded);const nodeRenderMode=useRendererStore((state)=>state.nodeRenderMode);const showHealthBar=useRendererStore((state)=>state.showHealthBar);const missingTextures=useRendererStore((state)=>state.missingTextures);const glRef=useRef<WebGL2RenderingContext|WebGLRenderingContext|null>(null);const needsRendererUpdateRef=useRef(false);const textureReloadSchedulerRef=useRef<TextureReloadSchedulerState>({timer:null,running:false,queued:null,version:0,});const animationFrameId=useRef<number|null>(null);const shouldRunRenderLoop=useRef<boolean>(true);const lastRenderErrorReportTimeRef=useRef<number>(0);const framePerfRef=useRef<ViewerFramePerfAggregate>(createViewerFramePerfAggregate());const lastFpsTime=useRef<number>(performance.now());const lastFrameTime=useRef<number>(performance.now());const frameCount=useRef<number>(0);const renderRef=useRef<((time:number,scheduleNext?:boolean)=>void)|null>(null);const pMatrixRef=useRef(mat4.create());const mvMatrixRef=useRef(mat4.create());const cameraPosRef=useRef(vec3.create());const cameraUpRef=useRef(vec3.fromValues(0,0,1));const cameraQuatRef=useRef(quat.create());const showModelInfo=useUIStore((state)=>state.showModelInfo);const isLooping=useModelStore((state)=>state.isLooping);const setLooping=useModelStore((state)=>state.setLooping);const[texturePreview,setTexturePreview]=useState<{url:string;width:number;height:number;path:string;}|null>(null);const backgroundTextureResolveRunningRef=useRef(false);const attemptedMissingTexturePathsRef=useRef<Set<string>>(new Set());const flushFramePerfSummary=useCallback((reason:string,force=false)=>{const bucket=framePerfRef.current;if(bucket.samples===0)return;if(!force&&bucket.samples<90)return;markStandalonePerf("viewer_frame_profile",{reason,samples:bucket.samples,avgTotalMs:roundPerfValue(bucket.totalMs/bucket.samples),maxTotalMs:roundPerfValue(bucket.maxTotalMs),slowFrameCount:bucket.slowFrameCount,avgClearMs:roundPerfValue(bucket.clearMs/bucket.samples),avgCameraMs:roundPerfValue(bucket.cameraMs/bucket.samples),avgStateMs:roundPerfValue(bucket.stateMs/bucket.samples),avgUpdateMs:roundPerfValue(bucket.updateMs/bucket.samples),avgSceneMs:roundPerfValue(bucket.sceneMs/bucket.samples),avgOverlayMs:roundPerfValue(bucket.overlayMs/bucket.samples),isPlaying:isPlayingRef.current,modelPath:modelPath||"",});framePerfRef.current=createViewerFramePerfAggregate();},[modelPath],);const recordFramePerfSample=useCallback((sample:ViewerFramePerfSample,detail?:Record<string,unknown>)=>{const bucket=framePerfRef.current;bucket.samples+=1;bucket.totalMs+=sample.totalMs;bucket.maxTotalMs=Math.max(bucket.maxTotalMs,sample.totalMs);bucket.clearMs+=sample.clearMs;bucket.cameraMs+=sample.cameraMs;bucket.stateMs+=sample.stateMs;bucket.updateMs+=sample.updateMs;bucket.sceneMs+=sample.sceneMs;bucket.overlayMs+=sample.overlayMs;if(sample.totalMs>=16.7){bucket.slowFrameCount+=1;};const now=performance.now();if(sample.totalMs>=33&&now-bucket.lastSlowEmitMs>=1000){bucket.lastSlowEmitMs=now;markStandalonePerf("viewer_slow_frame",{totalMs:roundPerfValue(sample.totalMs),clearMs:roundPerfValue(sample.clearMs),cameraMs:roundPerfValue(sample.cameraMs),stateMs:roundPerfValue(sample.stateMs),updateMs:roundPerfValue(sample.updateMs),sceneMs:roundPerfValue(sample.sceneMs),overlayMs:roundPerfValue(sample.overlayMs),...detail,});};if(bucket.samples>=90){flushFramePerfSummary("periodic");}},[flushFramePerfSummary],);useEffect(()=>{return()=>{parseWorker.terminate();textureWorkers.forEach((worker)=>worker.terminate?.());};},[parseWorker,textureWorkers]);const formatCameraValue=(value:number):string=>{if(!Number.isFinite(value))return"0";const formatted=value.toFixed(2);return formatted.replace(/.?0+$/,"");};const getCameraVector=(prop:any,directProp?:any):number[]=>{const isArrayLike=(v:any)=>Array.isArray(v)||v instanceof Float32Array||ArrayBuffer.isView(v);const toArray=(v:any)=>(v instanceof Float32Array?Array.from(v):v);if(directProp&&isArrayLike(directProp))return toArray(directProp);if(isArrayLike(prop))return toArray(prop);if(prop&&prop.Keys&&prop.Keys.length>0){const v=prop.Keys[0].Vector;return v?toArray(v):[0,0,0];};return[0,0,0];};const getAvailableCameras=():any[]=>{const{modelData,nodes}=useModelStore.getState();const modelCameras=Array.isArray((modelData as any)?.Cameras)?(modelData as any).Cameras.filter((cam:any)=>cam):[];if(modelCameras.length>0)return modelCameras;return Array.isArray(nodes)?nodes.filter((n:any)=>n&&n.type==="Camera"):[];};const getSelectedCamera=(cameraIndex=selectedCameraIndex):any|null=>{const cameraList=getAvailableCameras();if(cameraIndex<0||cameraIndex>=cameraList.length)return null;return cameraList[cameraIndex]??null;};const clearActiveModelCameraView=()=>{inCameraView.current=false;setActiveModelCameraView(null);};const roundVertexCoord=(value:number):number=>Math.round(value*10000)/10000;const getVertexPositionKey=(vertices:ArrayLike<number>,vertexIndex:number):string=>{const base=vertexIndex*3;return`${roundVertexCoord(Number(vertices[base]??0))},${roundVertexCoord(Number(vertices[base+1]??0))},${roundVertexCoord(Number(vertices[base+2]??0))}`;
+import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadSchedulerState}from"./ViewerTextureUtils";import{GlobalTransformCommand}from"../../commands/GlobalTransformCommand";import{copyVertices,copyFaces,VertexCopyBuffer}from"../../utils/vertexOperations";import{UpdateKeyframeCommand,KeyframeChange}from"../../commands/UpdateKeyframeCommand";import{MissingTextureWarning}from"../MissingTextureWarning";import{GeosetSeparateDialog}from"../modals/GeosetSeparateDialog";import{LayerConfig,layerConfigToMaterialLayer}from"../modals/MaterialLayerOptions";import{NodeType}from"../../types/node";import{openNodeEditor}from"../../utils/nodeEditorOpen";import{nodeTypeToEditorKind}from"../../types/nodeEditorRpc";import{getEffectiveBindings,registerShortcutHandler}from"../../shortcuts/manager";import{markStandalonePerf}from"../../utils/standalonePerf";import{invokeReadMpqFile}from"../../utils/mpqPerf";import{markNodeManagerListScrollFromTree,markNodeManagerListScrollFromViewer}from"../../utils/nodeManagerListScrollBridge";import{collectSelectedGeosetIndices}from"../editors/uvSelectionSync";import{createSelectionRect,pointInRect,segmentIntersectsRect,triangleIntersectsRect}from"../editors/uvSelectionUtils";let globalRenderLoopId=0;const Viewer=forwardRef((props:ViewerProps,ref:React.Ref<ViewerRef>)=>{const{modelPath,animationIndex,teamColor,showGrid,showNodes,showSkeleton,showCollisionShapes,showCameras,showLights,showAttachments,showWireframe,showWireframeOverlay=false,isPlaying,onTogglePlay,onToggleLooping,onToggleWireframe,onModelLoaded,onModelFirstFrameReady,backgroundColor,showFPS,playbackSpeed,viewPreset,modelData,onSetViewPreset,onAddCameraFromView}=props;const[parseWorker]=useState(()=>new ModelWorker());const[textureWorkers]=useState<WorkerLike[]>(()=>{const count=getTextureDecodeWorkerCount();return Array.from({length:count},()=>new ModelWorker()as unknown as WorkerLike);});const[loading,setLoading]=useState(false);const[loadingStatus,setLoadingStatus]=useState("");const canvasRef=useRef<HTMLCanvasElement>(null);const[renderer,setRenderer]=useState<War3ModelRenderer|null>(null);const[fps,setFps]=useState<number>(0);const gridRenderer=useRef(new GridRenderer());const debugRenderer=useRef(new DebugRenderer());const gizmoRenderer=useRef(new GizmoRenderer());const axisIndicator=useRef(new AxisIndicator());const rendererRef=useRef<War3ModelRenderer|null>(null);const cameraRef=useRef<SimpleOrbitCamera|null>(null);const appMainMode=useSelectionStore((state)=>state.mainMode);const animationSubMode=useSelectionStore((state)=>state.animationSubMode);const rendererReloadTrigger=useModelStore((state)=>state.rendererReloadTrigger);const cachedRenderer=useModelStore((state)=>state.cachedRenderer);const mpqLoaded=useRendererStore((state)=>state.mpqLoaded);const nodeRenderMode=useRendererStore((state)=>state.nodeRenderMode);const showHealthBar=useRendererStore((state)=>state.showHealthBar);const missingTextures=useRendererStore((state)=>state.missingTextures);const glRef=useRef<WebGL2RenderingContext|WebGLRenderingContext|null>(null);const needsRendererUpdateRef=useRef(false);const bindingParticlePoseSignatureRef=useRef("");const textureReloadSchedulerRef=useRef<TextureReloadSchedulerState>({timer:null,running:false,queued:null,version:0,});const animationFrameId=useRef<number|null>(null);const shouldRunRenderLoop=useRef<boolean>(true);const lastRenderErrorReportTimeRef=useRef<number>(0);const framePerfRef=useRef<ViewerFramePerfAggregate>(createViewerFramePerfAggregate());const lastFpsTime=useRef<number>(performance.now());const lastFrameTime=useRef<number>(performance.now());const frameCount=useRef<number>(0);const renderRef=useRef<((time:number,scheduleNext?:boolean)=>void)|null>(null);const pMatrixRef=useRef(mat4.create());const mvMatrixRef=useRef(mat4.create());const cameraPosRef=useRef(vec3.create());const cameraUpRef=useRef(vec3.fromValues(0,0,1));const cameraQuatRef=useRef(quat.create());const showModelInfo=useUIStore((state)=>state.showModelInfo);const isLooping=useModelStore((state)=>state.isLooping);const setLooping=useModelStore((state)=>state.setLooping);const[texturePreview,setTexturePreview]=useState<{url:string;width:number;height:number;path:string;}|null>(null);const backgroundTextureResolveRunningRef=useRef(false);const attemptedMissingTexturePathsRef=useRef<Set<string>>(new Set());const flushFramePerfSummary=useCallback((reason:string,force=false)=>{const bucket=framePerfRef.current;if(bucket.samples===0)return;if(!force&&bucket.samples<90)return;markStandalonePerf("viewer_frame_profile",{reason,samples:bucket.samples,avgTotalMs:roundPerfValue(bucket.totalMs/bucket.samples),maxTotalMs:roundPerfValue(bucket.maxTotalMs),slowFrameCount:bucket.slowFrameCount,avgClearMs:roundPerfValue(bucket.clearMs/bucket.samples),avgCameraMs:roundPerfValue(bucket.cameraMs/bucket.samples),avgStateMs:roundPerfValue(bucket.stateMs/bucket.samples),avgUpdateMs:roundPerfValue(bucket.updateMs/bucket.samples),avgSceneMs:roundPerfValue(bucket.sceneMs/bucket.samples),avgOverlayMs:roundPerfValue(bucket.overlayMs/bucket.samples),isPlaying:isPlayingRef.current,modelPath:modelPath||"",});framePerfRef.current=createViewerFramePerfAggregate();},[modelPath],);const recordFramePerfSample=useCallback((sample:ViewerFramePerfSample,detail?:Record<string,unknown>)=>{const bucket=framePerfRef.current;bucket.samples+=1;bucket.totalMs+=sample.totalMs;bucket.maxTotalMs=Math.max(bucket.maxTotalMs,sample.totalMs);bucket.clearMs+=sample.clearMs;bucket.cameraMs+=sample.cameraMs;bucket.stateMs+=sample.stateMs;bucket.updateMs+=sample.updateMs;bucket.sceneMs+=sample.sceneMs;bucket.overlayMs+=sample.overlayMs;if(sample.totalMs>=16.7){bucket.slowFrameCount+=1;};const now=performance.now();if(sample.totalMs>=33&&now-bucket.lastSlowEmitMs>=1000){bucket.lastSlowEmitMs=now;markStandalonePerf("viewer_slow_frame",{totalMs:roundPerfValue(sample.totalMs),clearMs:roundPerfValue(sample.clearMs),cameraMs:roundPerfValue(sample.cameraMs),stateMs:roundPerfValue(sample.stateMs),updateMs:roundPerfValue(sample.updateMs),sceneMs:roundPerfValue(sample.sceneMs),overlayMs:roundPerfValue(sample.overlayMs),...detail,});};if(bucket.samples>=90){flushFramePerfSummary("periodic");}},[flushFramePerfSummary],);useEffect(()=>{return()=>{parseWorker.terminate();textureWorkers.forEach((worker)=>worker.terminate?.());};},[parseWorker,textureWorkers]);const formatCameraValue=(value:number):string=>{if(!Number.isFinite(value))return"0";const formatted=value.toFixed(2);return formatted.replace(/.?0+$/,"");};const getCameraVector=(prop:any,directProp?:any):number[]=>{const isArrayLike=(v:any)=>Array.isArray(v)||v instanceof Float32Array||ArrayBuffer.isView(v);const toArray=(v:any)=>(v instanceof Float32Array?Array.from(v):v);if(directProp&&isArrayLike(directProp))return toArray(directProp);if(isArrayLike(prop))return toArray(prop);if(prop&&prop.Keys&&prop.Keys.length>0){const v=prop.Keys[0].Vector;return v?toArray(v):[0,0,0];};return[0,0,0];};const getAvailableCameras=():any[]=>{const{modelData,nodes}=useModelStore.getState();const modelCameras=Array.isArray((modelData as any)?.Cameras)?(modelData as any).Cameras.filter((cam:any)=>cam):[];if(modelCameras.length>0)return modelCameras;return Array.isArray(nodes)?nodes.filter((n:any)=>n&&n.type==="Camera"):[];};const getSelectedCamera=(cameraIndex=selectedCameraIndex):any|null=>{const cameraList=getAvailableCameras();if(cameraIndex<0||cameraIndex>=cameraList.length)return null;return cameraList[cameraIndex]??null;};const clearActiveModelCameraView=()=>{inCameraView.current=false;setActiveModelCameraView(null);};const roundVertexCoord=(value:number):number=>Math.round(value*10000)/10000;const getVertexPositionKey=(vertices:ArrayLike<number>,vertexIndex:number):string=>{const base=vertexIndex*3;return`${roundVertexCoord(Number(vertices[base]??0))},${roundVertexCoord(Number(vertices[base+1]??0))},${roundVertexCoord(Number(vertices[base+2]??0))}`;
   };
 
   const modeDisplayName = useSelectionStore((state) => {
@@ -1427,35 +1428,10 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
     await Promise.all([loadTexture(teamColorPath, 1), loadTexture(teamGlowPath, 2)]);
   };
 
-  // Render compatibility fix based on mdx-m3-viewer:
-  // Layer FilterMode.Additive should use SRC_ALPHA, ONE behavior.
-  // war3-model currently treats Additive as ONE, ONE, so remap Additive -> AddAlpha
-  // in renderer-side material copies to avoid over-bright/white and dark fringe artifacts.
+  // Keep this hook for older callers, but do not rewrite FilterMode values.
+  // The renderer now handles Additive and AddAlpha with the same WC3 blend state.
   const cloneMaterialsWithReferenceBlendCompat = (materials: any[] | undefined) => {
-    if (!Array.isArray(materials)) return materials;
-
-    let hasChanges = false;
-    const nextMaterials = materials.map((material: any) => {
-      if (!material || !Array.isArray(material.Layers)) return material;
-
-      let materialChanged = false;
-      const nextLayers = material.Layers.map((layer: any) => {
-        if (!layer || typeof layer !== "object") return layer;
-
-        const filterMode = typeof layer.FilterMode === "number" ? layer.FilterMode : Number(layer.FilterMode);
-        if (filterMode === 3) {
-          materialChanged = true;
-          hasChanges = true;
-          return { ...layer, FilterMode: 4 };
-        }
-        return layer;
-      });
-
-      if (!materialChanged) return material;
-      return { ...material, Layers: nextLayers };
-    });
-
-    return hasChanges ? nextMaterials : materials;
+    return materials;
   };
 
   const normalizeRendererTVertexAnimId = (layer: Record<string, unknown>): number | null => {
@@ -1912,8 +1888,56 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
   useEffect(() => {
     if (rendererRef.current && (rendererRef.current as any).modelInstance && materialUpdateTrigger > 0) {
       const modelState = useModelStore.getState();
+      const currentRenderer = rendererRef.current as any;
+      const projectedModelData = previewProjectionService.getMaterialPreviewProjection(
+        modelState.modelData as any,
+        modelState.materialManagerPreview as any,
+      ).modelData as any;
+
+      if (projectedModelData?.Textures && projectedModelData.Textures.length > 0) {
+        const oldTexturesByPath = new Map<string, any>();
+        (currentRenderer.model?.Textures || []).forEach((texture: any) => {
+          if (typeof texture?.Image === "string" && texture.Image.length > 0) {
+            oldTexturesByPath.set(texture.Image, texture);
+          }
+        });
+        const texturesToLoad = projectedModelData.Textures.filter((texture: any) => {
+          const imagePath = texture?.Image;
+          if (typeof imagePath !== "string" || imagePath.length === 0) return false;
+          const oldTexture = oldTexturesByPath.get(imagePath);
+          if (!oldTexture) return true;
+          return getTextureAdjustmentSignature(oldTexture) !== getTextureAdjustmentSignature(texture);
+        });
+
+        rendererSyncService.syncTextureState({
+          renderer: currentRenderer,
+          document: projectedModelData,
+          documentRevision: modelState.documentRevision,
+          previewRevision: modelState.previewRevision,
+          ensureTextureSamplers: (targetRenderer, textures) =>
+            ensureWebGpuTextureSamplers(targetRenderer as any, textures as any[]),
+        });
+
+        if (texturesToLoad.length > 0) {
+          const textureModelPath = currentRenderer.__modelPath || modelPath || projectedModelData.__modelPath || projectedModelData.path || "";
+          void loadAllTextures(currentRenderer.model, currentRenderer, textureModelPath, textureWorkers, undefined, {
+            yieldUploads: true,
+            targetPaths: Array.from(new Set(texturesToLoad.map((texture: any) => texture.Image).filter(Boolean))),
+            workerDecodeMinTextures: 1,
+            workerDecodeMinBytes: 1,
+          }).then(() => {
+            if (rendererRef.current === currentRenderer && currentRenderer.modelInstance?.syncMaterials) {
+              currentRenderer.modelInstance.syncMaterials();
+              needsRendererUpdateRef.current = true;
+            }
+          }).catch((error) => {
+            console.error("[Viewer] Error loading material preview textures:", error);
+          });
+        }
+      }
+
       const syncResult = rendererSyncService.syncMaterialProjection({
-        renderer: rendererRef.current as any,
+        renderer: currentRenderer,
         document: modelState.modelData as any,
         materialManagerPreview: modelState.materialManagerPreview as any,
         documentRevision: modelState.documentRevision,
@@ -1929,7 +1953,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
         useModelStore.getState().triggerRendererReload();
       }
     }
-  }, [materialUpdateTrigger, renderer]);
+  }, [materialUpdateTrigger, renderer, modelPath, textureWorkers]);
 
   useEffect(() => {
     return () => {
@@ -4303,7 +4327,12 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
           const previewTransform = previewTransformRef.current;
           const baseMvMatrix = isGlobalTransformMode ? mat4.clone(mvMatrix) : null;
           const globalPivot = getModelCenter();
-          const isBindPoseMode = animationIndex === -1 || currentMainMode === "geometry" || (currentMainMode === "animation" && currentAnimationSubMode === "binding");
+          const isResetPoseMode = animationIndex === -1;
+          const isBindPoseMode = isResetPoseMode || currentMainMode === "geometry" || (currentMainMode === "animation" && currentAnimationSubMode === "binding");
+          const resetPoseGlobalSequences = mdlRenderer.model?.GlobalSequences as ArrayLike<number> | undefined;
+          const resetPoseGlobalSequenceCount = typeof resetPoseGlobalSequences?.length === "number" ? Number(resetPoseGlobalSequences.length) : 0;
+          const shouldAdvanceGlobalSequencesInResetPose = isResetPoseMode && currentMainMode !== "geometry" && !(currentMainMode === "animation" && currentAnimationSubMode === "binding") && resetPoseGlobalSequenceCount > 0;
+          const shouldAdvanceParticlesInBindingMode = currentMainMode === "animation" && currentAnimationSubMode === "binding";
           const stateMs = performance.now() - stageStart;
           stageStart = performance.now();
 
@@ -4321,7 +4350,34 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
             mdlRenderer.setCamera(cameraPos, cameraQuat);
           }
 
-          if (isPlayingRef.current && !isBindPoseMode) {
+          if (isPlayingRef.current && shouldAdvanceGlobalSequencesInResetPose && mdlRenderer.rendererData) {
+            const advanceDelta = delta * playbackSpeedRef.current;
+            const currentGlobalFrames = mdlRenderer.rendererData.globalSequencesFrames;
+
+            if (Array.isArray(currentGlobalFrames)) {
+              const maxIndex = Math.min(resetPoseGlobalSequenceCount, currentGlobalFrames.length);
+              for (let i = 0; i < maxIndex; ++i) {
+                const duration = Number(resetPoseGlobalSequences?.[i] ?? 0);
+                if (!Number.isFinite(duration) || duration <= 0) {
+                  currentGlobalFrames[i] = 0;
+                  continue;
+                }
+
+                let nextFrame = Number(currentGlobalFrames[i] ?? 0) + advanceDelta;
+                if (nextFrame > duration) {
+                  nextFrame %= duration;
+                }
+                if (nextFrame < 0) {
+                  nextFrame = 0;
+                }
+                currentGlobalFrames[i] = nextFrame;
+              }
+            }
+
+            // Global sequences drive WC3 texture animations independently of sequence time.
+            mdlRenderer.update(0);
+            needsRendererUpdateRef.current = false;
+          } else if (isPlayingRef.current && !isBindPoseMode) {
             const activeGlobalSequenceFilter = useSelectionStore.getState().timelineGlobalSequenceFilter;
             const globalSequenceDurations = mdlRenderer.model?.GlobalSequences;
             const isSpecificGlobalSequenceView = typeof activeGlobalSequenceFilter === "number" && activeGlobalSequenceFilter >= 0 && typeof globalSequenceDurations?.[activeGlobalSequenceFilter] === "number";
@@ -4558,6 +4614,33 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
               }
               if (mdlRenderer.rendererData.rootNode) {
                 mat4.identity(mdlRenderer.rendererData.rootNode.matrix);
+              }
+
+              if (shouldAdvanceParticlesInBindingMode) {
+                const particlesController = (mdlRenderer as any)?.modelInstance?.particlesController as any;
+                const pe2List = Array.isArray((mdlRenderer.model as any)?.ParticleEmitters2) ? (mdlRenderer.model as any).ParticleEmitters2 : [];
+                const nextParticlePoseSignature = pe2List.map((emitter: any) => {
+                  const objectId = Number(emitter?.ObjectId);
+                  const node = Number.isFinite(objectId) ? (mdlRenderer.rendererData.nodes as any)?.[objectId]?.node : null;
+                  const pivot = node?.PivotPoint ?? emitter?.PivotPoint ?? [0, 0, 0];
+                  const x = Number(pivot?.[0] ?? 0).toFixed(3);
+                  const y = Number(pivot?.[1] ?? 0).toFixed(3);
+                  const z = Number(pivot?.[2] ?? 0).toFixed(3);
+                  return `${objectId}:${x},${y},${z}`;
+                }).join("|");
+
+                if (nextParticlePoseSignature !== bindingParticlePoseSignatureRef.current) {
+                  bindingParticlePoseSignatureRef.current = nextParticlePoseSignature;
+                  if (particlesController?.emitters && Array.isArray(particlesController.emitters)) {
+                    particlesController.emitters.forEach((emitter: any) => {
+                      emitter.emission = 0;
+                      emitter.squirtFrame = 0;
+                      emitter.particles = [];
+                    });
+                  }
+                }
+
+                particlesController?.update?.(delta * playbackSpeedRef.current);
               }
             }
 
@@ -5727,6 +5810,22 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
       }
     }
   }, [renderer, animationIndex]);
+
+  useEffect(() => {
+    if (!renderer || appMainMode !== "animation" || animationSubMode !== "binding") {
+      bindingParticlePoseSignatureRef.current = "";
+      return;
+    }
+
+    const particlesController = (renderer as any)?.modelInstance?.particlesController as any;
+    if (particlesController?.emitters && Array.isArray(particlesController.emitters)) {
+      particlesController.emitters.forEach((emitter: any) => {
+        emitter.emission = 0;
+        emitter.squirtFrame = 0;
+        emitter.particles = [];
+      });
+    }
+  }, [renderer, appMainMode, animationSubMode]);
 
   useEffect(() => {
     if (appMainMode === "geometry" && renderer) {

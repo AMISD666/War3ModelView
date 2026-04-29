@@ -39,6 +39,7 @@ import { markCommandReceived, markCommandRejected, markToolCommandStaleRevision 
 import {
     getCurrentMaterialPreviewProjection,
     previewOverlayService,
+    previewProjectionService,
     useEffectivePreviewProjectedModelData,
 } from '../application/preview'
 import { useRpcServer } from '../hooks/useRpc'
@@ -105,8 +106,13 @@ const toArrayBuffer = (value: ArrayBuffer | Uint8Array): ArrayBuffer => {
 const getSaveModelDataSnapshot = (fallbackModelData: any, modelPath: string | null): any => {
     const modelState = useModelStore.getState()
     const baseData = modelState.getModelDataForSave?.() ?? fallbackModelData
+    const previewProjectedData = previewProjectionService.getEffectiveModelData({
+        modelData: baseData,
+        materialManagerPreview: modelState.materialManagerPreview,
+        nodeEditorPreview: modelState.nodeEditorPreview,
+    }) ?? baseData
     const renderer = useRendererStore.getState().renderer
-    return mergeLiveRendererGeometryForSave(baseData, renderer, modelPath)
+    return mergeLiveRendererGeometryForSave(previewProjectedData, renderer, modelPath)
 }
 
 const waitForNextPaint = (): Promise<void> => new Promise((resolve) => {

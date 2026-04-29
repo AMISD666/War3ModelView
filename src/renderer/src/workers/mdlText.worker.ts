@@ -1,4 +1,8 @@
 import { generateMDL, parseMDL } from 'war3-model'
+import {
+    parseMdlWithNumericRecovery,
+    sanitizeModelNumericValuesForSerialization,
+} from '../infrastructure/serialization/mdlNumericSanitizer'
 
 type GenerateRequest = {
     type: 'generate'
@@ -19,7 +23,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
 
     try {
         if (payload.type === 'generate') {
-            const text = generateMDL(payload.modelData)
+            const text = generateMDL(sanitizeModelNumericValuesForSerialization(payload.modelData))
             self.postMessage({
                 type: 'generate-success',
                 requestId: payload.requestId,
@@ -29,7 +33,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
         }
 
         if (payload.type === 'parse') {
-            const model = parseMDL(payload.text)
+            const model = parseMdlWithNumericRecovery(payload.text, parseMDL)
             self.postMessage({
                 type: 'parse-success',
                 requestId: payload.requestId,
