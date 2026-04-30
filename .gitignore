@@ -58,6 +58,7 @@ scripts/*
 !scripts/check-architecture-guardrails.mjs
 !scripts/check-state-sync-fixtures.mjs
 activation/
+AGENTS.md
 
 # OS noise
 .DS_Store
