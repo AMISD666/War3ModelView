@@ -1,9 +1,10 @@
-import { appModal } from '../store/messageStore'
-﻿import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { Button, Modal, Tag, Typography, Tooltip } from 'antd'
+import { appMessage } from '../store/messageStore'
 import { shortcutActions, ShortcutAction } from '../shortcuts/actions'
 import { getDefaultBindings, useShortcutStore } from '../store/shortcutStore'
-import { formatKeyCombo, normalizeKeyCombo, normalizeKeyComboFromEvent } from '../shortcuts/utils'
+import { assignShortcutBinding } from '../shortcuts/binding'
+import { formatKeyCombo, normalizeKeyComboFromEvent } from '../shortcuts/utils'
 import { UndoOutlined, DeleteOutlined, EditOutlined, GlobalOutlined, EyeOutlined, BuildOutlined, ScissorOutlined, PlayCircleOutlined, BlockOutlined } from '@ant-design/icons'
 
 const { Text, Title } = Typography
@@ -183,10 +184,6 @@ const getEffectiveBindings = (bindings: Record<string, string[]>, actionId: stri
     return getDefaultBindings(actionId)
 }
 
-const hasContextOverlap = (a: ShortcutAction, b: ShortcutAction): boolean => {
-    return a.contexts.some((ctx) => b.contexts.includes(ctx))
-}
-
 // --- Component ---
 
 export const ShortcutSettingsPanel: React.FC = () => {
@@ -228,51 +225,32 @@ export const ShortcutSettingsPanel: React.FC = () => {
 
             const combo = normalizeKeyComboFromEvent(e)
             if (!combo) return
-            const normalizedCombo = normalizeKeyCombo(combo)
-
             const actionId = editingActionId
-            const currentAction = shortcutActions.find((action) => action.id === actionId)
-            if (!currentAction) {
+            const result = assignShortcutBinding(actionId, combo)
+            if (result.ok) {
                 setEditingActionId(null)
+                appMessage.success(`已为「${result.action.label}」设置快捷键 ${formatKeyCombo(result.combo)}`)
                 return
             }
 
-            const conflict = shortcutActions.find((action) => {
-                if (action.id === editingActionId) return false
-                if (!hasContextOverlap(action, currentAction)) return false
-                const effective = getEffectiveBindings(bindings, action.id).map(normalizeKeyCombo)
-                return effective.some((binding) => binding === normalizedCombo)
-            })
-
-            const applyBinding = () => {
-                setBindings(actionId, [normalizedCombo])
-                setEditingActionId(null)
+            if (result.reason === 'conflict' && result.conflict && result.combo) {
+                appMessage.warning(`快捷键 ${formatKeyCombo(result.combo)} 已被「${result.conflict.label}」使用，不能重复设置`)
+                return
             }
-
-            if (conflict) {
+            if (result.reason === 'same-binding' && result.action && result.combo) {
                 setEditingActionId(null)
-                appModal.confirm({
-                    title: '快捷键冲突',
-                    content: `「${conflict.label}」已使用 ${formatKeyCombo(combo)}。是否覆盖？`,
-                    okText: '覆盖',
-                    cancelText: '取消',
-                    centered: true,
-                    className: 'dark-theme-modal',
-                    onOk: () => {
-                        const next = getEffectiveBindings(bindings, conflict.id)
-                            .filter((binding) => normalizeKeyCombo(binding) !== normalizedCombo)
-                        setBindings(conflict.id, next)
-                        applyBinding()
-                    }
-                })
-            } else {
-                applyBinding()
+                appMessage.info(`「${result.action.label}」已经使用 ${formatKeyCombo(result.combo)}`)
+                return
+            }
+            if (result.reason === 'missing-action') {
+                setEditingActionId(null)
+                appMessage.warning('未找到可绑定的快捷键功能')
             }
         }
 
         window.addEventListener('keydown', handleCapture, true)
         return () => window.removeEventListener('keydown', handleCapture, true)
-    }, [bindings, editingActionId, setBindings])
+    }, [editingActionId])
 
     return (
         <div style={containerStyle}>

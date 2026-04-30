@@ -2,9 +2,11 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { appDirStorage } from '../utils/persistStorage'
 import type { AppMode } from './selectionStore'
+import { createDefaultNodeTypeVisibility, createNodeTypeVisibility, type NodeTypeVisibilitySettings, type NodeVisibilityType } from '../types/nodeVisibility'
 
 type AnimationSubMode = 'binding' | 'keyframe'
 type NodeRenderMode = 'hidden' | 'solid' | 'wireframe'
+export type NodeNameDisplayMode = 'hidden' | 'all' | 'selected'
 export type RenderMode = 'textured' | 'wireframe' | 'texturedWireframe'
 
 export const getNextRenderMode = (mode: RenderMode): RenderMode => {
@@ -68,6 +70,11 @@ interface RendererStore {
     setShowNodes: (show: boolean) => void
     nodeRenderMode: NodeRenderMode
     setNodeRenderMode: (mode: NodeRenderMode) => void
+    nodeNameDisplayMode: NodeNameDisplayMode
+    setNodeNameDisplayMode: (mode: NodeNameDisplayMode) => void
+    nodeTypeVisibility: NodeTypeVisibilitySettings
+    setNodeTypeVisible: (type: NodeVisibilityType, visible: boolean) => void
+    setAllNodeTypesVisible: (visible: boolean) => void
     showSkeleton: boolean
     setShowSkeleton: (show: boolean) => void
     showFPS: boolean
@@ -198,7 +205,8 @@ export const useRendererStore = create<RendererStore>()(
                 view: false,
                 geometry: true,
                 uv: true,
-                animation: true
+                animation: true,
+                retarget: false
             },
             setShowVerticesForMode: (mode, show) => set((state) => ({
                 showVerticesByMode: { ...state.showVerticesByMode, [mode]: show }
@@ -215,6 +223,13 @@ export const useRendererStore = create<RendererStore>()(
             setShowNodes: (show) => set({ showNodes: show, nodeRenderMode: show ? 'solid' : 'hidden' }),
             nodeRenderMode: 'hidden',
             setNodeRenderMode: (mode) => set({ nodeRenderMode: mode, showNodes: mode !== 'hidden' }),
+            nodeNameDisplayMode: 'hidden',
+            setNodeNameDisplayMode: (mode) => set({ nodeNameDisplayMode: mode }),
+            nodeTypeVisibility: createDefaultNodeTypeVisibility(),
+            setNodeTypeVisible: (type, visible) => set((state) => ({
+                nodeTypeVisibility: { ...createDefaultNodeTypeVisibility(), ...state.nodeTypeVisibility, [type]: visible }
+            })),
+            setAllNodeTypesVisible: (visible) => set({ nodeTypeVisibility: createNodeTypeVisibility(visible) }),
             showSkeleton: false,
             setShowSkeleton: (show) => set({ showSkeleton: show }),
             showFPS: true,
@@ -350,6 +365,8 @@ export const useRendererStore = create<RendererStore>()(
                 showVerticesInAnimationKeyframe: state.showVerticesInAnimationKeyframe,
                 showNodes: state.showNodes,
                 nodeRenderMode: state.nodeRenderMode,
+                nodeNameDisplayMode: state.nodeNameDisplayMode,
+                nodeTypeVisibility: state.nodeTypeVisibility,
                 showSkeleton: state.showSkeleton,
                 showFPS: state.showFPS,
                 showGeosetVisibility: state.showGeosetVisibility,

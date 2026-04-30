@@ -5,7 +5,7 @@ import { appMessage } from '../../store/messageStore'
  */
 
 import React, { useMemo, useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
-import { Tree, Input, Tooltip, Menu } from 'antd'
+import { Tree, Input, Menu } from 'antd'
 import {
     PlusOutlined,
     EditOutlined,
@@ -14,9 +14,7 @@ import {
     BulbOutlined,
     FireOutlined,
     SoundOutlined,
-    BlockOutlined,
-    EyeOutlined,
-    EyeInvisibleOutlined
+    BlockOutlined
 } from '@ant-design/icons';
 
 import type { TreeProps, MenuProps } from 'antd';
@@ -36,6 +34,21 @@ import {
     shouldScrollNodeManagerToSelection,
 } from '../../utils/nodeManagerListScrollBridge';
 import { isTextInputActive } from '../../shortcuts/utils';
+import { NodeTreeTitle } from './node-manager/NodeTreeTitle';
+import {
+    collectDescendantKeys,
+    collectTreeKeys,
+    findTreeNode
+} from './node-manager/treeHelpers';
+import {
+    contextMenuPopoverStyle,
+    contextMenuStyle,
+    emptyTreeStyle,
+    getTreeWrapperStyle,
+    NODE_MANAGER_STYLE,
+    rootStyle,
+    searchStyle
+} from './node-manager/styles';
 
 const { Search } = Input;
 
@@ -65,29 +78,6 @@ export const NodeManagerWindow: React.FC = () => {
     const hasInitializedExpansionRef = useRef(false);
     const autoScrollTimerRef = useRef<number | null>(null);
     const autoScrollFrameRef = useRef<number | null>(null);
-
-    // Track Ctrl key state for drag operations
-    const ctrlKeyPressedRef = React.useRef(false);
-
-    // Listen for keyboard events to track Ctrl key
-    React.useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.key === 'Control' || e.key === 'Meta') {
-                ctrlKeyPressedRef.current = true;
-            }
-        };
-        const handleKeyUp = (e: KeyboardEvent) => {
-            if (e.key === 'Control' || e.key === 'Meta') {
-                ctrlKeyPressedRef.current = false;
-            }
-        };
-        window.addEventListener('keydown', handleKeyDown);
-        window.addEventListener('keyup', handleKeyUp);
-        return () => {
-            window.removeEventListener('keydown', handleKeyDown);
-            window.removeEventListener('keyup', handleKeyUp);
-        };
-    }, []);
 
     const [particleEmitterPresets, setParticleEmitterPresets] = useState<ParticleEmitter2PresetSummary[]>([]);
 
@@ -142,32 +132,6 @@ export const NodeManagerWindow: React.FC = () => {
         }
     }, [hiddenNodeIds, nodeManagerNodes, setHiddenNodeIds]);
 
-    const collectTreeKeys = useCallback((data: TreeNode[]): string[] => {
-        const keys: string[] = [];
-        const walk = (items: TreeNode[]) => {
-            items.forEach((item) => {
-                keys.push(String(item.key));
-                if (item.children && item.children.length > 0) {
-                    walk(item.children);
-                }
-            });
-        };
-        walk(data);
-        return keys;
-    }, []);
-
-    const collectDescendantKeys = useCallback((node: TreeNode): string[] => {
-        const keys: string[] = [];
-        const walk = (items?: TreeNode[]) => {
-            items?.forEach((item) => {
-                keys.push(String(item.key));
-                walk(item.children);
-            });
-        };
-        walk(node.children);
-        return keys;
-    }, []);
-
     // 过滤树节点
     const filteredTreeData = useMemo(() => {
         if (!searchText) return treeData;
@@ -188,7 +152,7 @@ export const NodeManagerWindow: React.FC = () => {
             setExpandedKeys(collectTreeKeys(treeData));
             hasInitializedExpansionRef.current = true;
         }
-    }, [collectTreeKeys, expandedKeys.length, nodeManagerNodes.length, treeData]);
+    }, [expandedKeys.length, nodeManagerNodes.length, treeData]);
 
     useEffect(() => {
         if (treeData.length === 0) return;
@@ -197,7 +161,7 @@ export const NodeManagerWindow: React.FC = () => {
             const next = prev.filter((key) => validKeys.has(String(key)));
             return next.length === prev.length ? prev : next;
         });
-    }, [collectTreeKeys, treeData]);
+    }, [treeData]);
 
     // 搜索时自动展开
     useEffect(() => {
@@ -593,28 +557,9 @@ export const NodeManagerWindow: React.FC = () => {
                 key: 'expandAll',
                 label: '展开所有',
                 onClick: () => {
-                    const getAllDescendantKeys = (n: any): string[] => {
-                        let keys = [String(n.key)];
-                        if (n.children) {
-                            n.children.forEach((c: any) => {
-                                keys = keys.concat(getAllDescendantKeys(c));
-                            });
-                        }
-                        return keys;
-                    };
-                    const findTreeNode = (data: any[]): any => {
-                        for (const item of data) {
-                            if (item.key === String(nodeId)) return item;
-                            if (item.children) {
-                                const found = findTreeNode(item.children);
-                                if (found) return found;
-                            }
-                        }
-                        return null;
-                    };
-                    const treeNode = findTreeNode(treeData);
+                    const treeNode = findTreeNode(treeData, nodeId);
                     if (treeNode) {
-                        const newKeys = [...expandedKeys, ...getAllDescendantKeys(treeNode)];
+                        const newKeys = [...expandedKeys, String(treeNode.key), ...collectDescendantKeys(treeNode)];
                         setExpandedKeys(Array.from(new Set(newKeys)));
                     }
                 }
@@ -670,17 +615,7 @@ export const NodeManagerWindow: React.FC = () => {
                 disabled: !clipboardNode,
                 onClick: () => {
                     void handlePasteNode(nodeId, '节点已粘贴').then(() => {
-                        const allKeys: string[] = [];
-                        const collectKeys = (data: any[]) => {
-                            data.forEach(node => {
-                                allKeys.push(node.key);
-                                if (node.children && node.children.length > 0) {
-                                    collectKeys(node.children);
-                                }
-                            });
-                        };
-                        collectKeys(treeData);
-                        setExpandedKeys(allKeys);
+                        setExpandedKeys(collectTreeKeys(treeData));
                     });
                 }
             },
@@ -893,6 +828,21 @@ export const NodeManagerWindow: React.FC = () => {
         }
     };
 
+    const handleMoveNodes = useCallback((nodeId: number, targetId: number) => {
+        const { selectedNodeIds } = useSelectionStore.getState();
+        const { reparentNodes } = useModelStore.getState();
+        let nodesToMove = [nodeId];
+        if (selectedNodeIds.includes(nodeId)) {
+            nodesToMove = [...selectedNodeIds];
+        }
+        reparentNodes(nodesToMove, targetId);
+        appMessage.success(
+            targetId === -1
+                ? `已移动到根节点`
+                : (nodesToMove.length > 1 ? `已移动 ${nodesToMove.length} 个节点` : '节点已移动')
+        );
+    }, []);
+
     useEffect(() => {
         if (selectedNodeIds.length !== 1) return;
         const targetId = selectedNodeIds[0];
@@ -959,19 +909,12 @@ export const NodeManagerWindow: React.FC = () => {
     return (
         <div
             ref={nodeManagerRootRef}
-            style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: '8px', overflow: 'hidden' }}
+            style={rootStyle}
             onContextMenu={(e) => e.preventDefault()}
         >
             <style dangerouslySetInnerHTML={{
-                __html: `
-                .node-manager-tree-wrapper, .node-manager-tree-wrapper * {
-                    -webkit-app-region: no-drag !important;
-                    user-select: none;
-                }
-                .ant-tree-treenode {
-                    -webkit-user-drag: element;
-                }
-            `}} />
+                __html: NODE_MANAGER_STYLE
+            }} />
             <Search
                 placeholder="搜索节点..."
                 value={searchText}
@@ -979,7 +922,7 @@ export const NodeManagerWindow: React.FC = () => {
                 allowClear
                 prefix={<SearchOutlined />}
                 size="small"
-                style={{ marginBottom: 8 }}
+                style={searchStyle}
             />
             {/* Diagnostic Element Removed */}
 
@@ -987,15 +930,7 @@ export const NodeManagerWindow: React.FC = () => {
                 ref={treeWrapperRef}
                 tabIndex={-1}
                 className="node-manager-tree-wrapper"
-                style={{
-                    flex: 1,
-                    overflow: treeViewportHeight > 0 ? 'hidden' : 'auto',
-                    border: '1px solid #303030',
-                    borderRadius: '2px',
-                    backgroundColor: '#1e1e1e',
-                    padding: '4px',
-                    outline: 'none',
-                }}
+                style={getTreeWrapperStyle(treeViewportHeight)}
                 onContextMenu={(e) => {
                     e.preventDefault();
                     const target = e.target as HTMLElement | null;
@@ -1025,167 +960,29 @@ export const NodeManagerWindow: React.FC = () => {
                         showIcon
                         showLine
                         blockNode
-                        titleRender={(nodeData: any) => {
-                            const nodeId = nodeData.data?.ObjectId ?? parseInt(nodeData.key);
-                            const isVirtualRoot = nodeData.isVirtualRoot === true || nodeId === -1;
-                            const isDropTarget = dropTargetNodeId === nodeId;
-                            // isDraggingThis available for future styling: const isDraggingThis = draggedNodeId === nodeId;
-                            const isCut = cutNodeId === nodeId;
-                            const isNodeVisible = isVirtualRoot || !hiddenNodeIdSet.has(nodeId);
-
-                            return (
-                                <div
-                                    data-node-id={nodeId}
-                                    className={`node-manager-row${isNodeVisible ? '' : ' node-manager-row-hidden'}`}
-                                    onMouseDown={(e) => {
-                                        // Only start drag on left button
-                                        if (e.button !== 0) return;
-
-                                        // Don't allow dragging the virtual root node
-                                        if (isVirtualRoot) return;
-
-                                        // Prevent text selection during drag
-                                        e.preventDefault();
-
-                                        // Store the starting position
-                                        const startX = e.clientX;
-                                        const startY = e.clientY;
-                                        let dragStarted = false;
-
-                                        const handleMouseMove = (moveEvent: MouseEvent) => {
-                                            const deltaX = Math.abs(moveEvent.clientX - startX);
-                                            const deltaY = Math.abs(moveEvent.clientY - startY);
-
-                                            // Start dragging after threshold
-                                            if (!dragStarted && (deltaX > 5 || deltaY > 5)) {                                                dragStarted = true;
-                                                draggedNodeIdRef.current = nodeId;
-                                                isDraggingRef.current = true;
-                                                setDraggedNodeId(nodeId);
-                                                setIsDragging(true);
-                                            }
-
-                                            // Update position and target while dragging
-                                            if (dragStarted) {
-                                                setDragPosition({ x: moveEvent.clientX, y: moveEvent.clientY });
-
-                                                // Find element under mouse to determine drop target
-                                                const elementUnderMouse = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY);
-                                                if (elementUnderMouse) {
-                                                    const nodeItem = elementUnderMouse.closest('[data-node-id]') as HTMLElement;
-                                                    if (nodeItem) {
-                                                        const targetId = parseInt(nodeItem.dataset.nodeId || '');
-                                                        // Allow dropping to virtual root (-1) or any other node except self
-                                                        if (!isNaN(targetId) && targetId !== nodeId) {
-                                                            dropTargetNodeIdRef.current = targetId;
-                                                            setDropTargetNodeId(targetId);
-                                                        }
-                                                    } else {
-                                                        dropTargetNodeIdRef.current = null;
-                                                        setDropTargetNodeId(null);
-                                                    }
-                                                }
-                                            }
-                                        };
-
-                                        const handleMouseUp = () => {
-                                            document.removeEventListener('mousemove', handleMouseMove);
-                                            document.removeEventListener('mouseup', handleMouseUp);
-
-                                            if (dragStarted) {
-                                                const targetId = dropTargetNodeIdRef.current;                                                // Allow dropping to -1 (root) or any valid node
-                                                if (targetId !== null && targetId !== nodeId) {
-                                                    // Perform reparent
-                                                    const { selectedNodeIds } = useSelectionStore.getState();
-                                                    const { reparentNodes } = useModelStore.getState();
-                                                    let nodesToMove = [nodeId];
-                                                    if (selectedNodeIds.includes(nodeId)) {
-                                                        nodesToMove = [...selectedNodeIds];
-                                                    }
-                                                    reparentNodes(nodesToMove, targetId);
-                                                    appMessage.success(
-                                                        targetId === -1
-                                                            ? `已移动到根节点`
-                                                            : (nodesToMove.length > 1 ? `已移动 ${nodesToMove.length} 个节点` : '节点已移动')
-                                                    );
-                                                }
-
-                                                // End drag
-                                                isDraggingRef.current = false;
-                                                draggedNodeIdRef.current = null;
-                                                dropTargetNodeIdRef.current = null;
-                                                setIsDragging(false);
-                                                setDraggedNodeId(null);
-                                                setDropTargetNodeId(null);
-                                            }
-                                        };
-
-                                        document.addEventListener('mousemove', handleMouseMove);
-                                        document.addEventListener('mouseup', handleMouseUp);
-                                    }}
-                                    style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        width: '100%',
-                                        minWidth: 0,
-                                        padding: 0,
-                                        height: 18,
-                                        cursor: isVirtualRoot ? 'default' : (isDragging && draggedNodeId === nodeId ? 'grabbing' : 'grab'),
-                                        borderRadius: '2px',
-                                        backgroundColor: isDropTarget ? 'rgba(24, 144, 255, 0.3)' : (isVirtualRoot ? 'rgba(80, 80, 80, 0.3)' : 'transparent'),
-                                        border: isDropTarget ? '1px dashed #1890ff' : '1px solid transparent',
-                                        opacity: isDragging && draggedNodeId === nodeId ? 0.5 : (isCut ? 0.5 : 1),
-                                        transition: 'background-color 0.15s, border 0.15s',
-                                        userSelect: 'none'
-                                    }}
-                                >
-                                    {isVirtualRoot ? (
-                                        <span className="node-manager-visibility-cell" aria-hidden="true" />
-                                    ) : (
-                                        <Tooltip title={isNodeVisible ? '隐藏节点' : '显示节点'} mouseEnterDelay={0.3}>
-                                            <button
-                                                type="button"
-                                                className={`node-manager-visibility-button${isNodeVisible ? '' : ' is-hidden'}`}
-                                                aria-label={isNodeVisible ? '隐藏节点' : '显示节点'}
-                                                aria-pressed={!isNodeVisible}
-                                                onMouseDown={(e) => {
-                                                    e.preventDefault();
-                                                    e.stopPropagation();
-                                                }}
-                                                onClick={(e) => {
-                                                    e.preventDefault();
-                                                    e.stopPropagation();
-                                                    toggleNodeVisibility(nodeId);
-                                                    focusTreeSurface();
-                                                }}
-                                            >
-                                                {isNodeVisible ? <EyeOutlined /> : <EyeInvisibleOutlined />}
-                                            </button>
-                                        </Tooltip>
-                                    )}
-                                    <span style={{
-                                        flex: 1,
-                                        overflow: 'hidden',
-                                        textOverflow: 'ellipsis',
-                                        whiteSpace: 'nowrap',
-                                        minWidth: 0,
-                                        fontWeight: isVirtualRoot ? 'bold' : 'normal',
-                                        color: isVirtualRoot ? '#1890ff' : 'inherit',
-                                        opacity: isNodeVisible ? 1 : 0.55
-                                    }}>
-                                        {nodeData.title}
-                                    </span>
-                                    {/* Don't show ObjectId for virtual root */}
-                                    {!isVirtualRoot && (
-                                        <span style={{ color: '#666', fontSize: '10px', marginLeft: '6px' }}>
-                                            {nodeData.data.ObjectId ?? ''}
-                                        </span>
-                                    )}
-                                </div>
-                            );
-                        }}
+                        titleRender={(nodeData: any) => (
+                            <NodeTreeTitle
+                                nodeData={nodeData}
+                                draggedNodeId={draggedNodeId}
+                                dropTargetNodeId={dropTargetNodeId}
+                                cutNodeId={cutNodeId}
+                                hiddenNodeIdSet={hiddenNodeIdSet}
+                                isDragging={isDragging}
+                                draggedNodeIdRef={draggedNodeIdRef}
+                                dropTargetNodeIdRef={dropTargetNodeIdRef}
+                                isDraggingRef={isDraggingRef}
+                                setDraggedNodeId={setDraggedNodeId}
+                                setDropTargetNodeId={setDropTargetNodeId}
+                                setIsDragging={setIsDragging}
+                                setDragPosition={setDragPosition}
+                                onMoveNodes={handleMoveNodes}
+                                toggleNodeVisibility={toggleNodeVisibility}
+                                focusTreeSurface={focusTreeSurface}
+                            />
+                        )}
                     />
                 ) : (
-                    <div style={{ textAlign: 'center', padding: '20px', color: '#888' }}>暂无节点数据</div>
+                    <div style={emptyTreeStyle}>暂无节点数据</div>
                 )}
             </div>
 
@@ -1195,18 +992,7 @@ export const NodeManagerWindow: React.FC = () => {
                     <div
                         ref={contextMenuRef}
                         className="node-manager-context-menu-popover"
-                        style={{
-                            position: 'fixed',
-                            left: contextMenuPosition.x,
-                            top: contextMenuPosition.y,
-                            zIndex: 1000,
-                            backgroundColor: '#1f1f1f',
-                            border: '1px solid #303030',
-                            borderRadius: '2px',
-                            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.5)',
-                            maxHeight: 'calc(100vh - 16px)',
-                            overflowY: 'auto'
-                        }}
+                        style={contextMenuPopoverStyle(contextMenuPosition.x, contextMenuPosition.y)}
                         onClick={(e) => e.stopPropagation()}
                     >
                         <Menu
@@ -1216,7 +1002,7 @@ export const NodeManagerWindow: React.FC = () => {
                             theme="dark"
                             selectable={false}
                             onClick={() => setContextMenuVisible(false)}
-                            style={{ border: 'none' }}
+                            style={contextMenuStyle}
                         />
                     </div>
                 )

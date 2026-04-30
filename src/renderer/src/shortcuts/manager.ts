@@ -4,6 +4,7 @@ import { isTextInputActive, normalizeKeyComboFromEvent, normalizeKeyCombo } from
 import { tryConsumeNodeManagerDeleteKey } from '../utils/nodeManagerShortcutBridge'
 import { tryConsumeGeometryDeleteKey } from '../utils/geometryDeleteShortcutBridge'
 import { useSelectionStore } from '../store/selectionStore'
+import { isShortcutBindingCaptureActive } from './binding'
 
 type ShortcutHandler = (payload: { event: KeyboardEvent; action: ShortcutAction; combo: string }) => boolean | void
 
@@ -159,6 +160,10 @@ const hasMatchingShortcut = (event: KeyboardEvent): boolean => {
 }
 
 export const handleGlobalShortcutKeyDown = (event: KeyboardEvent): void => {
+    if (isShortcutBindingCaptureActive()) {
+        return
+    }
+
     // 节点管理器内 Delete 必须早于 blur / 时间轴 Delete，否则会失焦或误删关键帧
     if (tryConsumeNodeManagerDeleteKey(event)) {
         event.preventDefault()

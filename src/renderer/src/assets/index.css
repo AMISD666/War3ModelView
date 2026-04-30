@@ -26,6 +26,22 @@ body,
     box-shadow: none !important;
 }
 
+.retarget-sequence-replace-button:disabled,
+.retarget-sequence-replace-button.ant-btn-disabled,
+.visible-disabled-icon-button:disabled,
+.visible-disabled-icon-button.ant-btn-disabled {
+    color: rgba(255, 255, 255, 0.5) !important;
+    border-color: rgba(255, 255, 255, 0.2) !important;
+    background: rgba(255, 255, 255, 0.04) !important;
+}
+
+.retarget-sequence-replace-button:disabled .anticon,
+.retarget-sequence-replace-button.ant-btn-disabled .anticon,
+.visible-disabled-icon-button:disabled .anticon,
+.visible-disabled-icon-button.ant-btn-disabled .anticon {
+    color: rgba(255, 255, 255, 0.55) !important;
+}
+
 /* Custom Scrollbar for WebKit (Chrome/Electron) */
 ::-webkit-scrollbar {
     width: 8px;

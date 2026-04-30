@@ -22,9 +22,11 @@ import {
     getCurrentMaterialPreviewProjectedModelData,
     useMaterialPreviewProjectedModelData,
 } from '../../../application/preview'
-import { Button, Slider, Input, Radio, Tooltip, Modal, Dropdown } from 'antd'
+import { Button, Slider, Input, Radio, Modal, Dropdown } from 'antd'
 import { SmartInputNumber as InputNumber } from '@renderer/components/common/SmartInputNumber'
 import { registerShortcutHandler } from '../../../shortcuts/manager'
+import { ShortcutBindableButton } from '../../common/ShortcutBindableButton'
+import { ShortcutTooltip as Tooltip } from '../../common/ShortcutTooltip'
 import { UpdateKeyframeCommand, KeyframeChange } from '../../../commands/UpdateKeyframeCommand'
 import { commandManager } from '../../../utils/CommandManager'
 
@@ -172,6 +174,13 @@ const NODE_KEYFRAME_TYPES = ['Translation', 'Rotation', 'Scaling'] as const
 const GEOSET_ANIM_KEYFRAME_TYPES = ['GeosetAlpha', 'GeosetColor'] as const
 const MATERIAL_KEYFRAME_TYPES = ['MaterialTextureID', 'MaterialAlpha'] as const
 const KEYFRAME_DISPLAY_MODE_ORDER: KeyframeDisplayMode[] = ['node', 'geosetAnim', 'particle', 'textureAnim', 'material']
+const KEYFRAME_DISPLAY_MODE_SHORTCUT_ACTION: Record<KeyframeDisplayMode, string> = {
+    node: 'timeline.displayNode',
+    geosetAnim: 'timeline.displayGeosetAnim',
+    particle: 'timeline.displayParticle',
+    textureAnim: 'timeline.displayTextureAnim',
+    material: 'timeline.displayMaterial'
+}
 
 const KEYFRAME_DISPLAY_MODE_CONFIG: Record<KeyframeDisplayMode, {
     label: string
@@ -3167,6 +3176,50 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
             }),
             registerShortcutHandler('timeline.nextKeyframe', () => {
                 return jumpToAdjacentKeyframe(1)
+            }),
+            registerShortcutHandler('timeline.goToStart', () => {
+                handleGoToStart()
+                return true
+            }),
+            registerShortcutHandler('timeline.prevFrame', () => {
+                handlePrevFrame()
+                return true
+            }),
+            registerShortcutHandler('timeline.nextFrame', () => {
+                handleNextFrame()
+                return true
+            }),
+            registerShortcutHandler('timeline.goToEnd', () => {
+                handleGoToEnd()
+                return true
+            }),
+            registerShortcutHandler('timeline.displayNode', () => {
+                setTimelineKeyframeDisplayMode('node')
+                return true
+            }),
+            registerShortcutHandler('timeline.displayGeosetAnim', () => {
+                setTimelineKeyframeDisplayMode('geosetAnim')
+                return true
+            }),
+            registerShortcutHandler('timeline.displayParticle', () => {
+                setTimelineKeyframeDisplayMode('particle')
+                return true
+            }),
+            registerShortcutHandler('timeline.displayTextureAnim', () => {
+                setTimelineKeyframeDisplayMode('textureAnim')
+                return true
+            }),
+            registerShortcutHandler('timeline.displayMaterial', () => {
+                setTimelineKeyframeDisplayMode('material')
+                return true
+            }),
+            registerShortcutHandler('timeline.toggleAllKeyframes', () => {
+                setShowAllKeyframes((value) => !value)
+                return true
+            }),
+            registerShortcutHandler('timeline.toggleAllOwnerKeyframes', () => {
+                setShowAllOwnerKeyframes((value) => !value)
+                return true
             })
         ]
 
@@ -3441,7 +3494,10 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                 {/* Playback Controls */}
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'nowrap', whiteSpace: 'nowrap', minWidth: 'max-content', justifySelf: 'center' }}>
                     <div style={{ marginTop: 2 }}>
-                        <Tooltip title={currentKeyframeModeConfig.tooltip}>
+                        <Tooltip
+                            shortcutActionId={KEYFRAME_DISPLAY_MODE_SHORTCUT_ACTION[keyframeDisplayMode]}
+                            title={currentKeyframeModeConfig.tooltip}
+                        >
                             <span style={{ display: 'inline-flex' }}>
                                 <Dropdown
                                     menu={{
@@ -3451,7 +3507,8 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                                     }}
                                     trigger={['click']}
                                 >
-                                    <Button
+                                    <ShortcutBindableButton
+                                        shortcutActionId={KEYFRAME_DISPLAY_MODE_SHORTCUT_ACTION[keyframeDisplayMode]}
                                         size="small"
                                         style={{
                                             minWidth: 112,
@@ -3466,33 +3523,36 @@ const TimelinePanel: React.FC<TimelinePanelProps> = ({ isActive = true }) => {
                                     >
                                         {currentKeyframeModeConfig.label}
                                         <DownOutlined style={{ fontSize: 10, marginLeft: 6 }} />
-                                    </Button>
+                                    </ShortcutBindableButton>
                                 </Dropdown>
                             </span>
                         </Tooltip>
                     </div>
-                    <Button type="text" icon={<StepBackwardOutlined />} onClick={handleGoToStart} style={{ color: '#eee' }} />
-                    <Button type="text" icon={<FastBackwardOutlined />} onClick={handlePrevFrame} style={{ color: '#eee' }} />
+                    <ShortcutBindableButton shortcutActionId="timeline.goToStart" type="text" icon={<StepBackwardOutlined />} onClick={handleGoToStart} style={{ color: '#eee' }} />
+                    <ShortcutBindableButton shortcutActionId="timeline.prevFrame" type="text" icon={<FastBackwardOutlined />} onClick={handlePrevFrame} style={{ color: '#eee' }} />
 
-                    <Button
+                    <ShortcutBindableButton
+                        shortcutActionId="animation.playPause"
                         type="text"
                         shape="circle"
                         icon={isPlaying ? <PauseCircleOutlined style={{ fontSize: '24px', color: '#1890ff' }} /> : <PlayCircleOutlined style={{ fontSize: '24px', color: '#eee' }} />}
                         onClick={() => setPlaying(!isPlaying)}
                     />
 
-                    <Button type="text" icon={<FastForwardOutlined />} onClick={handleNextFrame} style={{ color: '#eee' }} />
-                    <Button type="text" icon={<StepForwardOutlined />} onClick={handleGoToEnd} style={{ color: '#eee' }} />
+                    <ShortcutBindableButton shortcutActionId="timeline.nextFrame" type="text" icon={<FastForwardOutlined />} onClick={handleNextFrame} style={{ color: '#eee' }} />
+                    <ShortcutBindableButton shortcutActionId="timeline.goToEnd" type="text" icon={<StepForwardOutlined />} onClick={handleGoToEnd} style={{ color: '#eee' }} />
 
                     {/* Show All Keyframes Toggle (Moved to Right of Auto Key) */}
-                    <Button
+                    <ShortcutBindableButton
+                        shortcutActionId="timeline.toggleAllKeyframes"
                         type="text"
                         icon={showAllKeyframes ? <EyeOutlined style={{ color: '#1890ff' }} /> : <EyeInvisibleOutlined />}
                         title="显示所有关键帧类型"
                         onClick={() => setShowAllKeyframes(!showAllKeyframes)}
                         style={{ color: showAllKeyframes ? '#1890ff' : '#eee' }}
                     />
-                    <Button
+                    <ShortcutBindableButton
+                        shortcutActionId="timeline.toggleAllOwnerKeyframes"
                         type="text"
                         icon={<NodeIndexOutlined style={{ color: showAllOwnerKeyframes ? '#1890ff' : undefined }} />}
                         title={showAllOwnerKeyframes ? '显示所有对象的关键帧' : '只显示选中对象的关键帧'}

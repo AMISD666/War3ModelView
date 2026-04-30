@@ -1,12 +1,24 @@
 ﻿import { repairClassicModelData } from '../../utils/modelUtils'
 
-function buildFallbackNormals(vertexCount: number): Float32Array {
-    const normals = new Float32Array(vertexCount * 3)
-    for (let i = 2; i < normals.length; i += 3) {
-        normals[i] = 1
-    }
-    return normals
-}
+import {
+    buildFallbackNormals,
+    ensureAnimVector,
+    fixAnimVector,
+    fixNode,
+    isAnimVector,
+    normalizeTextureIdAnimVector,
+    toDynamicFloat32Array,
+    toFloat32Array,
+    toTypedVector,
+    toUint16Array,
+    toUint8Array,
+} from './saveDataCoercion'
+import {
+    normalizeGlobalSequences,
+    normalizeModelInfo,
+    normalizeSequences,
+    normalizeTextures,
+} from './saveDataSections'
 
 /**
  * Normalize model data before saving to ensure typed arrays are correct.
@@ -31,435 +43,9 @@ export function prepareModelDataForSave(modelData: any): any {
         data = modelData;
     }
 
-    // Helper to robustly convert object-like arrays (possibly sparse) to TypedArray
-    const objectToTypedArray = (obj: any, Constructor: any) => {
-        const keys = Object.keys(obj);
-        const numKeys = keys.filter(k => !isNaN(Number(k)) && Number(k) >= 0).map(Number);
-
-        // If we found numeric keys, use them to reconstruct array respecting indices
-        if (numKeys.length > 0) {
-            const maxKey = Math.max(...numKeys);
-            const arr = new Constructor(maxKey + 1);
-            numKeys.forEach(k => arr[k] = Number(obj[k]));
-            return arr;
-        }
-
-        // Fallback: just use values
-        return new Constructor(Object.values(obj).map(Number));
-    };
-
-    // Helper to convert array-like to typed array if needed
-    const toUint32Array = (arr: any): Uint32Array => {
-        if (arr instanceof Uint32Array) return arr;
-        if (Array.isArray(arr)) return new Uint32Array(arr);
-        if (arr && typeof arr === 'object') {
-            return objectToTypedArray(arr, Uint32Array);
-        }
-        return new Uint32Array([0, 0]);
-    };
-
-    const normalizeInterval = (interval: any): Uint32Array => {
-        let start = 0;
-        let end = 0;
-        if (interval instanceof Uint32Array || ArrayBuffer.isView(interval)) {
-            start = Number((interval as unknown as ArrayLike<number>)[0]);
-            end = Number((interval as unknown as ArrayLike<number>)[1]);
-        } else if (Array.isArray(interval)) {
-            start = Number(interval[0]);
-            end = Number(interval[1]);
-        } else if (interval && typeof interval === 'object') {
-            const values = Object.values(interval).map(Number);
-            start = Number(values[0]);
-            end = Number(values[1]);
-        }
-        if (!Number.isFinite(start)) start = 0;
-        if (!Number.isFinite(end)) end = 0;
-        start = Math.max(0, Math.floor(start));
-        end = Math.max(0, Math.floor(end));
-        if (start > end) {
-            const temp = start;
-            start = end;
-            end = temp;
-        }
-        return new Uint32Array([start, end]);
-    };
-
-    const toFloat32Array = (arr: any, size: number = 3): Float32Array => {
-        // Always ensure output array is exactly 'size' elements
-        const result = new Float32Array(size);
-
-        if (arr instanceof Float32Array) {
-            for (let i = 0; i < Math.min(size, arr.length); i++) {
-                result[i] = arr[i];
-            }
-            return result;
-        }
-        if (Array.isArray(arr)) {
-            for (let i = 0; i < Math.min(size, arr.length); i++) {
-                result[i] = Number(arr[i]) || 0;
-            }
-            return result;
-        }
-        // Handle object-like {0: x, 1: y, 2: z} from bad clones
-        if (arr && typeof arr === 'object') {
-            const values = Object.values(arr).map(Number);
-            for (let i = 0; i < Math.min(size, values.length); i++) {
-                result[i] = values[i] || 0;
-            }
-            return result;
-        }
-        return result; // Returns zero-filled array of correct size
-    };
-
-    // Helper for variable-length float arrays (Vertices, Normals, etc.)
-    const toDynamicFloat32Array = (arr: any): Float32Array => {
-        if (arr instanceof Float32Array) return arr;
-        if (Array.isArray(arr)) return new Float32Array(arr);
-        if (arr && typeof arr === 'object') {
-            return objectToTypedArray(arr, Float32Array);
-        }
-        return new Float32Array(0);
-    };
-
-    const toUint16Array = (arr: any): Uint16Array => {
-        if (arr instanceof Uint16Array) return arr;
-        if (Array.isArray(arr)) return new Uint16Array(arr);
-        if (arr && typeof arr === 'object') {
-            return objectToTypedArray(arr, Uint16Array);
-        }
-        return new Uint16Array(0);
-    };
-
-    const toUint8Array = (arr: any): Uint8Array => {
-        if (arr instanceof Uint8Array) return arr;
-        if (Array.isArray(arr)) return new Uint8Array(arr);
-        if (arr && typeof arr === 'object') {
-            return objectToTypedArray(arr, Uint8Array);
-        }
-        return new Uint8Array(0);
-    };
-
-    // Clamp numeric values to [0,255] to avoid Uint8 wraparound on save
-    const toUint8ClampedArray = (arr: any): Uint8Array => {
-        if (arr instanceof Uint8Array) return arr;
-        let values: number[] = [];
-        if (ArrayBuffer.isView(arr)) {
-            values = Array.from(arr as unknown as ArrayLike<number>);
-        } else if (Array.isArray(arr)) {
-            values = arr;
-        } else if (arr && typeof arr === 'object') {
-            values = Object.values(arr).map(Number);
-        }
-        const result = new Uint8Array(values.length);
-        for (let i = 0; i < values.length; i++) {
-            const num = Number(values[i]);
-            if (!Number.isFinite(num) || num < 0) {
-                result[i] = 0;
-            } else if (num > 255) {
-                result[i] = 255;
-            } else {
-                result[i] = num;
-            }
-        }
-        return result;
-    };
-
-    const toTypedVector = (
-        value: any,
-        vectorSize: number,
-        isInt: boolean,
-        defaultVec?: number[] | ArrayLike<number>
-    ): Int32Array | Float32Array => {
-        const Type = isInt ? Int32Array : Float32Array;
-        const result = new Type(vectorSize);
-        if (defaultVec) {
-            const defArr = ArrayBuffer.isView(defaultVec) ? Array.from(defaultVec as unknown as ArrayLike<number>) : Array.from(defaultVec as number[]);
-            for (let i = 0; i < vectorSize; i++) {
-                const num = Number(defArr[i]);
-                if (Number.isFinite(num)) {
-                    result[i] = num;
-                }
-            }
-        }
-
-        if (value === undefined || value === null) {
-            return result;
-        }
-
-        const assignValue = (index: number, val: any) => {
-            const num = Number(val);
-            if (Number.isFinite(num) && index >= 0 && index < vectorSize) {
-                result[index] = num;
-            }
-        };
-
-        if (typeof value === 'number') {
-            assignValue(0, value);
-            return result;
-        }
-
-        if (value instanceof Uint8Array && value.length > 0 && value.length % 4 === 0) {
-            const copy = new Uint8Array(value.length)
-            copy.set(value)
-            const decoded = isInt
-                ? Array.from(new Int32Array(copy.buffer, 0, copy.length / 4))
-                : Array.from(new Float32Array(copy.buffer, 0, copy.length / 4))
-            for (let i = 0; i < Math.min(vectorSize, decoded.length); i++) {
-                assignValue(i, decoded[i])
-            }
-            return result
-        }
-
-        if (value instanceof Type || ArrayBuffer.isView(value)) {
-            const arr = Array.from(value as unknown as ArrayLike<number>);
-            for (let i = 0; i < Math.min(vectorSize, arr.length); i++) {
-                assignValue(i, arr[i]);
-            }
-            return result;
-        }
-
-        if (Array.isArray(value)) {
-            for (let i = 0; i < Math.min(vectorSize, value.length); i++) {
-                assignValue(i, value[i]);
-            }
-            return result;
-        }
-
-        if (typeof value === 'object') {
-            const numericKeys = Object.keys(value)
-                .map(k => Number(k))
-                .filter(k => Number.isFinite(k));
-            if (numericKeys.length > 0) {
-                numericKeys.forEach(k => assignValue(k, value[k]));
-            } else {
-                const arr = Object.values(value) as any[];
-                for (let i = 0; i < Math.min(vectorSize, arr.length); i++) {
-                    assignValue(i, arr[i]);
-                }
-            }
-        }
-
-        return result;
-    };
-
-    // Fix AnimVector to ensure Keys is a real array and Vectors are typed arrays
-    const fixAnimVector = (
-        animVec: any,
-        vectorSize: number = 3,
-        isInt: boolean = false,
-        defaultVec?: number[] | ArrayLike<number>,
-        globalSeqCount?: number
-    ): any => {
-        if (!animVec) return null;
-        // If it's not an object, return null
-        if (typeof animVec !== 'object') return null;
-        const lineTypeMap: Record<string, number> = {
-            DontInterp: 0,
-            Linear: 1,
-            Hermite: 2,
-            Bezier: 3
-        };
-        if (typeof animVec.LineType === 'string' && animVec.LineType in lineTypeMap) {
-            animVec.LineType = lineTypeMap[animVec.LineType];
-        }
-        // If Keys is not a proper array, convert or return null
-        if (animVec.Keys) {
-            if (!Array.isArray(animVec.Keys)) {
-                // Try to convert object-like {0: k1, 1: k2} to array
-                if (typeof animVec.Keys === 'object') {
-                    animVec.Keys = Object.values(animVec.Keys);
-                } else {
-                    animVec.Keys = [];
-                }
-            }
-            // Fix each Key's Vector, InTan, OutTan to be typed arrays
-            animVec.Keys.forEach((key: any) => {
-                const frame = Number(key.Frame ?? key.Time ?? 0);
-                key.Frame = Number.isFinite(frame) && frame >= 0 ? Math.floor(frame) : 0;
-
-                key.Vector = toTypedVector(key.Vector, vectorSize, isInt, defaultVec);
-
-                const needsTangents = animVec.LineType === 2 || animVec.LineType === 3;
-                if (needsTangents) {
-                    key.InTan = toTypedVector(key.InTan, vectorSize, isInt);
-                    key.OutTan = toTypedVector(key.OutTan, vectorSize, isInt);
-                } else {
-                    if (key.InTan && !(key.InTan instanceof Float32Array) && !(key.InTan instanceof Int32Array)) {
-                        key.InTan = toTypedVector(key.InTan, vectorSize, isInt);
-                    }
-                    if (key.OutTan && !(key.OutTan instanceof Float32Array) && !(key.OutTan instanceof Int32Array)) {
-                        key.OutTan = toTypedVector(key.OutTan, vectorSize, isInt);
-                    }
-                }
-            });
-            animVec.Keys = animVec.Keys
-                .filter((key: any) => ArrayBuffer.isView(key?.Vector) && key.Vector.length === vectorSize)
-                .sort((a: any, b: any) => a.Frame - b.Frame)
-                .filter((key: any, index: number, keys: any[]) =>
-                    index === keys.length - 1 || key.Frame !== keys[index + 1].Frame
-                );
-        } else {
-            // No Keys, this AnimVector is invalid - make it empty
-            animVec.Keys = [];
-        }
-        // Ensure LineType is valid
-        if (animVec.LineType === undefined || animVec.LineType === null || ![0, 1, 2, 3].includes(animVec.LineType)) {
-            animVec.LineType = 1; // Default to Linear
-        }
-        if (animVec.GlobalSeqId === undefined) {
-            animVec.GlobalSeqId = null;
-        } else if (typeof animVec.GlobalSeqId !== 'number' || !Number.isFinite(animVec.GlobalSeqId)) {
-            animVec.GlobalSeqId = null;
-        }
-        if (typeof globalSeqCount === 'number' && globalSeqCount > 0 && typeof animVec.GlobalSeqId === 'number') {
-            if (animVec.GlobalSeqId < 0 || animVec.GlobalSeqId >= globalSeqCount) {
-                animVec.GlobalSeqId = null;
-            }
-        }
-        return animVec;
-    };
-
-    // Ensure any value becomes a valid AnimVector (or null)
-    const ensureAnimVector = (
-        value: any,
-        vectorSize: number = 3,
-        isInt: boolean = false,
-        defaultVec?: number[] | ArrayLike<number>,
-        globalSeqCount?: number
-    ): any => {
-        if (!value) return null;
-        if (value && typeof value === 'object' && Array.isArray(value.Keys)) {
-            return fixAnimVector(value, vectorSize, isInt, defaultVec, globalSeqCount);
-        }
-        const vec = toTypedVector(value, vectorSize, isInt, defaultVec);
-        return {
-            LineType: 1,
-            GlobalSeqId: null,
-            Keys: [{ Frame: 0, Vector: vec }]
-        };
-    };
-
-    const clampTextureTrackValue = (value: unknown, textureCount: number): number => {
-        const parsed = Number(value)
-        if (!Number.isFinite(parsed)) return 0
-        if (textureCount <= 0) return 0
-        const normalized = Math.floor(parsed)
-        if (normalized < 0 || normalized >= textureCount) return 0
-        return normalized
-    }
-
-    const normalizeTextureIdAnimVector = (value: any, textureCount: number, globalSeqCount?: number): any => {
-        const anim = ensureAnimVector(value, 1, true, undefined, globalSeqCount)
-        if (!anim || !Array.isArray(anim.Keys)) {
-            return anim
-        }
-
-        anim.Keys.forEach((key: any) => {
-            const nextTextureId = clampTextureTrackValue(key?.Vector?.[0], textureCount)
-            key.Vector = new Int32Array([nextTextureId])
-            if (key.InTan !== undefined) {
-                key.InTan = new Int32Array([clampTextureTrackValue(key.InTan?.[0], textureCount)])
-            }
-            if (key.OutTan !== undefined) {
-                key.OutTan = new Int32Array([clampTextureTrackValue(key.OutTan?.[0], textureCount)])
-            }
-        })
-
-        return anim
-    }
-
-    // Fix Node's animation properties (Translation, Rotation, Scaling)
-    const fixNode = (node: any, globalSeqCount?: number): void => {
-        if (!node) return;
-        if (node.Translation) {
-            node.Translation = ensureAnimVector(node.Translation, 3, false, [0, 0, 0], globalSeqCount);
-            if (!node.Translation || !node.Translation.Keys || node.Translation.Keys.length === 0) {
-                node.Translation = null;
-            }
-        }
-        if (node.Rotation) {
-            node.Rotation = ensureAnimVector(node.Rotation, 4, false, [0, 0, 0, 1], globalSeqCount);
-            if (!node.Rotation || !node.Rotation.Keys || node.Rotation.Keys.length === 0) {
-                node.Rotation = null;
-            }
-        }
-        if (node.Scaling) {
-            node.Scaling = ensureAnimVector(node.Scaling, 3, false, [1, 1, 1], globalSeqCount);
-            if (!node.Scaling || !node.Scaling.Keys || node.Scaling.Keys.length === 0) {
-                node.Scaling = null;
-            }
-        }
-        // Ensure required fields
-        if (node.Flags === undefined) node.Flags = 0;
-        if (node.ObjectId === undefined) node.ObjectId = 0;
-        if (node.Parent === undefined) node.Parent = -1;
-        if (!node.Name) node.Name = 'UnnamedNode';
-    };
-
-    // Fix Sequences - most critical for animation fix
-    if (data.Sequences && Array.isArray(data.Sequences)) {
-        // // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Sequences.length} sequences`);
-        data.Sequences.forEach((seq: any, index: number) => {
-            // Always log interval info for debugging
-            const intervalType = seq.Interval ? (seq.Interval instanceof Uint32Array ? 'Uint32Array' : Array.isArray(seq.Interval) ? 'Array' : typeof seq.Interval) : 'undefined';
-            const intervalValues = seq.Interval ? `[${seq.Interval[0]}, ${seq.Interval[1]}]` : 'N/A';
-            // console.log(`[MainLayout] Sequence ${index} "${seq.Name}" Interval (${intervalType}): ${intervalValues}`);
-
-            seq.Interval = normalizeInterval(seq.Interval);
-            if (seq.MinimumExtent && !(seq.MinimumExtent instanceof Float32Array)) {
-                seq.MinimumExtent = toFloat32Array(seq.MinimumExtent);
-            }
-            if (seq.MaximumExtent && !(seq.MaximumExtent instanceof Float32Array)) {
-                seq.MaximumExtent = toFloat32Array(seq.MaximumExtent);
-            }
-            if (!seq.MinimumExtent) seq.MinimumExtent = new Float32Array(3);
-            if (!seq.MaximumExtent) seq.MaximumExtent = new Float32Array(3);
-            if (seq.BoundsRadius === undefined || seq.BoundsRadius === null) {
-                seq.BoundsRadius = 0;
-            }
-            if (seq.MoveSpeed === undefined || seq.MoveSpeed === null) {
-                seq.MoveSpeed = 0;
-            }
-            if (seq.Rarity === undefined || seq.Rarity === null) {
-                seq.Rarity = 0;
-            }
-            if (seq.NonLooping === undefined || seq.NonLooping === null) {
-                seq.NonLooping = false;
-            } else {
-                seq.NonLooping = !!seq.NonLooping;
-            }
-        });
-    }
-
-    // Fix Model Info extents
-    if (data.Info) {
-        if (data.Info.MinimumExtent && !(data.Info.MinimumExtent instanceof Float32Array)) {
-            data.Info.MinimumExtent = toFloat32Array(data.Info.MinimumExtent);
-        }
-        if (data.Info.MaximumExtent && !(data.Info.MaximumExtent instanceof Float32Array)) {
-            data.Info.MaximumExtent = toFloat32Array(data.Info.MaximumExtent);
-        }
-        if (!data.Info.MinimumExtent) data.Info.MinimumExtent = new Float32Array(3);
-        if (!data.Info.MaximumExtent) data.Info.MaximumExtent = new Float32Array(3);
-        if (data.Info.BoundsRadius === undefined || data.Info.BoundsRadius === null) {
-            data.Info.BoundsRadius = 0;
-        }
-        if (data.Info.BlendTime === undefined || data.Info.BlendTime === null) {
-            data.Info.BlendTime = 0;
-        }
-        if (!data.Info.Name) {
-            data.Info.Name = '';
-        }
-    }
-
-    // Fix GlobalSequences
-    if (data.GlobalSequences && Array.isArray(data.GlobalSequences)) {
-        data.GlobalSequences = data.GlobalSequences.map((value: any) => {
-            const rawDuration = typeof value === 'number' ? value : value?.Duration;
-            const num = Number(rawDuration);
-            return Number.isFinite(num) && num >= 0 ? Math.floor(num) : 0;
-        });
-    }
+    normalizeSequences(data);
+    normalizeModelInfo(data);
+    normalizeGlobalSequences(data);
     const globalSeqCount = data.GlobalSequences?.length || 0;
     const getValidIndexOrNull = (value: any, count: number): number | null => {
         if (value === undefined || value === null) return null
@@ -469,67 +55,7 @@ export function prepareModelDataForSave(modelData: any): any {
         return num
     }
 
-    // Fix Textures
-    if (data.Textures && Array.isArray(data.Textures)) {
-        data.Textures.forEach((texture: any) => {
-            if (texture.ReplaceableId === undefined || texture.ReplaceableId === null) {
-                texture.ReplaceableId = 0;
-            }
-            if (typeof texture.ReplaceableId === 'number' && texture.ReplaceableId < 0) {
-                texture.ReplaceableId = 0;
-            }
-            const normalizeTexturePath = (value: any): string => {
-                if (typeof value === 'string') return value;
-                if (Array.isArray(value)) return value.join('');
-                if (value && typeof value === 'object') {
-                    return Object.values(value).join('');
-                }
-                return '';
-            };
-            const rawImage = texture.Image ?? texture.Path ?? '';
-            const normalizedImage = normalizeTexturePath(rawImage).replace(/\//g, '\\');
-            const replaceableId = typeof texture.ReplaceableId === 'number'
-                ? texture.ReplaceableId
-                : Number(texture.ReplaceableId ?? 0);
-            const replaceablePreviewPaths = new Set([
-                'ReplaceableTextures\\TeamColor\\TeamColor00.blp',
-                'ReplaceableTextures\\TeamGlow\\TeamGlow00.blp',
-            ]);
-
-            if (replaceableId > 0) {
-                // Texture editor injects preview-only team color/glow image paths so the UI can render replaceables.
-                // These placeholders must not be serialized back into the model file.
-                const shouldStripPreviewImage =
-                    normalizedImage.length === 0 ||
-                    replaceablePreviewPaths.has(normalizedImage);
-                texture.Image = shouldStripPreviewImage ? '' : normalizedImage;
-                texture.Path = texture.Image;
-            } else {
-                texture.Image = normalizedImage;
-                if (!texture.Path) {
-                    texture.Path = normalizedImage;
-                }
-            }
-            if (texture.Flags === undefined || texture.Flags === null) {
-                texture.Flags = 0;
-            }
-
-            const baseFlags = typeof texture.Flags === 'number' ? texture.Flags : 0;
-            let flags = baseFlags & ~(1 | 2);
-            const applyFlag = (prop: string, bit: number) => {
-                if (texture[prop] === true) {
-                    flags |= bit;
-                } else if (texture[prop] === false) {
-                    // Explicitly cleared
-                } else if (baseFlags & bit) {
-                    flags |= bit;
-                }
-            };
-            applyFlag('WrapWidth', 1);
-            applyFlag('WrapHeight', 2);
-            texture.Flags = flags;
-        });
-    }
+    normalizeTextures(data);
 
     // Fix Geoset data
     if (data.Geosets && Array.isArray(data.Geosets)) {
@@ -736,9 +262,6 @@ export function prepareModelDataForSave(modelData: any): any {
     if (data.Lights && Array.isArray(data.Lights)) {
         // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Lights.length} lights`);
         data.Lights.forEach((light: any) => {
-            const isAnimVector = (val: any): boolean => {
-                return val && typeof val === 'object' && Array.isArray(val.Keys);
-            };
             // FIRST: Map our naming convention to war3-model naming convention
             // This must happen BEFORE we process/default the war3-model properties!
 
@@ -864,9 +387,6 @@ export function prepareModelDataForSave(modelData: any): any {
     if (data.ParticleEmitters2 && Array.isArray(data.ParticleEmitters2)) {
         // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.ParticleEmitters2.length} particle emitters`);
         data.ParticleEmitters2.forEach((emitter: any) => {
-            const isAnimVector = (val: any): boolean => {
-                return val && typeof val === 'object' && Array.isArray(val.Keys);
-            };
             const animProps: Array<{ prop: string, animKey: string }> = [
                 { prop: 'EmissionRate', animKey: 'EmissionRateAnim' },
                 { prop: 'Speed', animKey: 'SpeedAnim' },
@@ -1069,9 +589,6 @@ export function prepareModelDataForSave(modelData: any): any {
     // Fix ParticleEmitterPopcorn
     if (data.ParticleEmitterPopcorns && Array.isArray(data.ParticleEmitterPopcorns)) {
         data.ParticleEmitterPopcorns.forEach((emitter: any) => {
-            const isAnimVector = (val: any): boolean => {
-                return val && typeof val === 'object' && Array.isArray(val.Keys);
-            };
             const animProps: Array<{ prop: string, animKey: string }> = [
                 { prop: 'LifeSpan', animKey: 'LifeSpanAnim' },
                 { prop: 'EmissionRate', animKey: 'EmissionRateAnim' },
@@ -1104,9 +621,6 @@ export function prepareModelDataForSave(modelData: any): any {
     if (data.RibbonEmitters && Array.isArray(data.RibbonEmitters)) {
         // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.RibbonEmitters.length} ribbon emitters`);
         data.RibbonEmitters.forEach((emitter: any) => {
-            const isAnimVector = (val: any): boolean => {
-                return val && typeof val === 'object' && Array.isArray(val.Keys);
-            };
             const animProps: Array<{ prop: string, animKey: string }> = [
                 { prop: 'Height', animKey: 'HeightAnim' },
                 { prop: 'Alpha', animKey: 'AlphaAnim' },

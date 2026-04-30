@@ -7,14 +7,12 @@ const TextureEditorModal = React.lazy(() => import('./modals/TextureEditorModal'
 const TextureAnimationManagerModal = React.lazy(() => import('./modals/TextureAnimationManagerModal'))
 const SequenceEditorModal = React.lazy(() => import('./modals/SequenceEditorModal'))
 const CameraManagerModal = React.lazy(() => import('./modals/CameraManagerModal'))
-const UVModeLayout = React.lazy(() => import('./UVModeLayout'))
-const AnimationModeLayout = React.lazy(() => import('./animation/AnimationModeLayout'))
+const RetargetModeHost = React.lazy(() => import('./retarget/RetargetModeHost'))
 const MaterialEditorModal = React.lazy(() => import('./modals/MaterialEditorModal'))
 const GeosetEditorModal = React.lazy(() => import('./modals/GeosetEditorModal'))
 const GlobalSequenceModal = React.lazy(() => import('./modals/GlobalSequenceModal'))
 const TransformModelDialog = React.lazy(() => import('./node/TransformModelDialog').then(m => ({ default: m.TransformModelDialog })))
 const ModelOptimizeModal = React.lazy(() => import('./modals/ModelOptimizeModal'))
-const Viewer = React.lazy(() => import('./Viewer'))
 const AnimationPanel = React.lazy(() => import('./AnimationPanel'))
 const EditorPanel = React.lazy(() => import('./EditorPanel'))
 
@@ -24,7 +22,7 @@ import { useModelStore, extractNodesFromModel } from '../store/modelStore'
 import { NodeType } from '../types/node'
 import { useUIStore } from '../store/uiStore'
 import { useSelectionStore } from '../store/selectionStore'
-import { getNextRenderMode, useRendererStore } from '../store/rendererStore'
+import { useRendererStore } from '../store/rendererStore'
 import { showMessage, showConfirm, showUnsavedModelCloseConfirm, useMessageStore } from '../store/messageStore'
 import { registerShortcutHandler } from '../shortcuts/manager'
 import { Button } from 'antd';
@@ -55,6 +53,7 @@ import {
     openModelWorkflow,
     type ModelOpenFilesRequest,
 } from '../application/model-open'
+import { openRetargetTargetFromDialog, openRetargetTargetPaths } from '../application/retarget'
 import { useAppShellController } from '../application/shell/useAppShellController'
 import { useModelToolsController } from '../application/model-tools/useModelToolsController'
 import { registerCloseModelTabRequestHandler, requestCloseModelTab } from '../application/model-tabs/closeTabRequest'
@@ -985,6 +984,17 @@ const MainLayout: React.FC = () => {
         const paths = Array.isArray(request.paths) ? request.paths : []
         if (paths.length === 0) return []
 
+        if (useSelectionStore.getState().mainMode === 'retarget') {
+            const openedPaths = await openRetargetTargetPaths({
+                paths,
+                addToRecent: request.addToRecent,
+                acceptPath: (path) => openModelWorkflow.isOpenableModelFile(path),
+                setRecentFiles,
+            })
+            setIsLoading(false); setZustandLoading(false)
+            return openedPaths
+        }
+
         await preloadSavedMpqPaths()
         return openModelWorkflow.openPathsSequentially({
             paths,
@@ -997,7 +1007,7 @@ const MainLayout: React.FC = () => {
             openModelAsTab,
             setRecentFiles,
         })
-    }, [openModelAsTab, preloadSavedMpqPaths])
+    }, [openModelAsTab, preloadSavedMpqPaths, setZustandLoading])
 
     const hasResetStore = useRef(false);
 
@@ -1780,6 +1790,11 @@ const MainLayout: React.FC = () => {
 
     const handleImport = useCallback(async () => {
         try {
+            if (useSelectionStore.getState().mainMode === 'retarget') {
+                await openRetargetTargetFromDialog({ setRecentFiles })
+                setIsLoading(false); setZustandLoading(false)
+                return
+            }
             await openModelWorkflow.openFromDialog({
                 openModelAsTab,
                 setRecentFiles,
@@ -1789,7 +1804,7 @@ const MainLayout: React.FC = () => {
             setIsLoading(false)
             setZustandLoading(false)
         }
-    }, [openModelAsTab])
+    }, [openModelAsTab, setZustandLoading])
     handleImportRef.current = handleImport;
 
     const handleModelLoaded = useCallback((data: any) => {
@@ -2160,6 +2175,10 @@ const MainLayout: React.FC = () => {
             }),
             registerShortcutHandler('mode.animation', () => {
                 useSelectionStore.getState().setMainMode('animation');
+                return true;
+            }),
+            registerShortcutHandler('mode.retarget', () => {
+                useSelectionStore.getState().setMainMode('retarget');
                 return true;
             }),
             registerShortcutHandler('view.top', () => {
@@ -2630,7 +2649,7 @@ const MainLayout: React.FC = () => {
 
             <div style={{ flex: 1, display: 'flex', overflow: 'hidden', position: 'relative', minWidth: 0 }}>
                 {/* Left Panel - Animation Panel (hidden in UV mode) */}
-                {mainMode !== 'uv' && mainMode !== 'animation' && (
+                {mainMode !== 'uv' && mainMode !== 'animation' && mainMode !== 'retarget' && (
                     <div
                         data-left-animation-panel="true"
                         style={{ width: 'clamp(160px, 18vw, 230px)', display: 'flex', flexDirection: 'column', borderRight: '1px solid #333', minWidth: 0 }}
@@ -2644,56 +2663,32 @@ const MainLayout: React.FC = () => {
                 )}
 
                 {/* Center - 3D Viewer or Animation/UV Mode Layout */}
-                <div id="main-viewer-host" style={{ flex: 1, position: 'relative', backgroundColor, minWidth: 0 }}>
+                <div id="main-viewer-host" style={{ flex: 1, position: 'relative', backgroundColor, minWidth: 0, minHeight: 0, overflow: 'hidden' }}>
                     <AppErrorBoundary scope="Main Viewer" compact>
                         <Suspense fallback={<div style={{ position: 'absolute', inset: 0, backgroundColor }} />}>
-                            <AnimationModeLayout
-                                isActive={mainMode === 'animation'}
+                            <RetargetModeHost
+                                mainMode={mainMode}
+                                modelPath={modelPath}
+                                viewerModelData={viewerModelData}
+                                teamColor={teamColor}
+                                showGridXY={showGridXY} showNodes={showNodes} showSkeleton={showSkeleton}
+                                showCollisionShapes={showCollisionShapes} showCameras={showCameras} showLights={showLights} showAttachments={showAttachments}
+                                renderMode={renderMode}
+                                setRenderMode={setRenderMode}
+                                backgroundColor={backgroundColor}
+                                currentSequence={currentSequence} isPlaying={isPlaying} showFPS={showFPS} playbackSpeed={playbackSpeed}
+                                handleTogglePlay={handleTogglePlay} handleToggleLooping={handleToggleLooping}
+                                handleModelLoaded={handleModelLoaded} handleModelFirstFrameReady={handleModelFirstFrameReady}
+                                viewPreset={viewPreset}
+                                handleSetViewPreset={handleSetViewPreset} handleAddCameraFromView={handleAddCameraFromView}
+                                handleSave={handleSave} handleExportMDL={handleExportMDL} handleExportMDX={handleExportMDX}
                                 rightPanelAddon={
                                     showGeosetVisibility ? (
-                                        <GeosetVisibilityPanel
-                                            visible={true}
-                                            onClose={() => setShowGeosetVisibility(false)}
-                                            docked
-                                        />
+                                        <GeosetVisibilityPanel visible onClose={() => setShowGeosetVisibility(false)} docked />
                                     ) : null
                                 }
-                            >
-                                <UVModeLayout
-
-                                    modelPath={modelPath}
-                                    isActive={mainMode === 'uv'}
-                                >
-                                    <Viewer
-                                        ref={viewerRef as any}
-                                        modelPath={modelPath}
-                                        modelData={viewerModelData}
-                                        teamColor={teamColor}
-                                        showGrid={showGridXY}
-                                        showNodes={mainMode !== 'uv' && showNodes}
-                                        showSkeleton={mainMode !== 'uv' && showSkeleton}
-                                        showCollisionShapes={mainMode !== 'uv' && showCollisionShapes}
-                                        showCameras={mainMode !== 'uv' && showCameras}
-                                        showLights={mainMode !== 'uv' && mainMode !== 'animation' && showLights}
-                                        showAttachments={mainMode !== 'uv' && showAttachments}
-                                        showWireframe={renderMode === 'wireframe'}
-                                        showWireframeOverlay={renderMode === 'texturedWireframe'}
-                                        onToggleWireframe={() => setRenderMode(getNextRenderMode(renderMode))}
-                                        backgroundColor={backgroundColor}
-                                        animationIndex={mainMode === 'uv' ? -1 : currentSequence}
-                                        isPlaying={mainMode !== 'uv' && isPlaying}
-                                        onTogglePlay={handleTogglePlay}
-                                        onToggleLooping={handleToggleLooping}
-                                        onModelLoaded={handleModelLoaded}
-                                        onModelFirstFrameReady={handleModelFirstFrameReady}
-                                        showFPS={mainMode !== 'uv' && showFPS}
-                                        playbackSpeed={playbackSpeed}
-                                        viewPreset={viewPreset}
-                                        onSetViewPreset={handleSetViewPreset}
-                                        onAddCameraFromView={handleAddCameraFromView}
-                                    />
-                                </UVModeLayout>
-                            </AnimationModeLayout>
+                                viewerRef={viewerRef as any}
+                            />
                         </Suspense>
                     </AppErrorBoundary>
 

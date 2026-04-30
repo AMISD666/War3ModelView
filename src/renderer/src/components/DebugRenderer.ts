@@ -1,66 +1,14 @@
 import { mat4, vec3, mat3 } from 'gl-matrix'
-
-// Simple shader for lines and points
-const vsSource = `
-  attribute vec3 aPosition;
-  uniform mat4 uMVMatrix;
-  uniform mat4 uPMatrix;
-  uniform float uPointSize;
-  uniform float uDepthBias; // Add depth bias
-  void main() {
-    gl_Position = uPMatrix * uMVMatrix * vec4(aPosition, 1.0);
-    // Apply depth bias in clip space (towards camera)
-    // Z is distorted by W, so scale bias by W to keep it consistent-ish in screen space depth
-    // Or just subtract constant? In perspective, subtract from Z before division.
-    // Standard trick: gl_Position.z -= uDepthBias * gl_Position.w;
-    if (uDepthBias != 0.0) {
-        gl_Position.z -= uDepthBias * gl_Position.w;
-    }
-    gl_PointSize = uPointSize;
-  }
-`
-
-const fsSource = `
-  precision mediump float;
-  uniform vec4 uColor;
-  void main() {
-    gl_FragColor = uColor;
-  }
-`
-
-// Lit shader for solid cubes with normals
-const vsCubeSource = `
-  attribute vec3 aPosition;
-  attribute vec3 aNormal;
-  uniform mat4 uMVMatrix;
-  uniform mat4 uPMatrix;
-  uniform mat3 uNormalMatrix;
-  varying vec3 vNormal;
-  varying vec3 vPosition;
-  void main() {
-    vec4 worldPos = uMVMatrix * vec4(aPosition, 1.0);
-    gl_Position = uPMatrix * worldPos;
-    vNormal = uNormalMatrix * aNormal;
-    vPosition = worldPos.xyz;
-  }
-`
-
-const fsCubeSource = `
-  precision mediump float;
-  uniform vec4 uColor;
-  varying vec3 vNormal;
-  varying vec3 vPosition;
-  void main() {
-    vec3 normal = normalize(vNormal);
-    vec3 lightDir = normalize(vec3(-0.2, 0.5, 1.0)); // Top-left-front
-    
-    // Base brightness 0.4 + 0.6 directional for high contrast
-    float lighting = 0.4 + 0.6 * max(dot(normal, lightDir), 0.0);
-    
-    vec3 finalColor = uColor.rgb * lighting;
-    gl_FragColor = vec4(finalColor, uColor.a);
-  }
-`
+import {
+    lineFragmentShaderSource,
+    lineVertexShaderSource,
+    litFragmentShaderSource,
+    litVertexShaderSource,
+} from './debug-renderer/DebugRendererShaders'
+import {
+    generateSphereGeometry,
+    generateTetrahedronGeometry,
+} from './debug-renderer/DebugRendererGeometry'
 
 interface NodeWrapper {
     node: {
@@ -120,8 +68,8 @@ export class DebugRenderer {
         }
 
         // Simple program
-        const vs = this.compileShader(gl, gl.VERTEX_SHADER, vsSource)
-        const fs = this.compileShader(gl, gl.FRAGMENT_SHADER, fsSource)
+        const vs = this.compileShader(gl, gl.VERTEX_SHADER, lineVertexShaderSource)
+        const fs = this.compileShader(gl, gl.FRAGMENT_SHADER, lineFragmentShaderSource)
         if (!vs || !fs) return
 
         this.program = gl.createProgram()
@@ -145,8 +93,8 @@ export class DebugRenderer {
         this.buffer = gl.createBuffer()
 
         // Cube program
-        const vsCube = this.compileShader(gl, gl.VERTEX_SHADER, vsCubeSource)
-        const fsCube = this.compileShader(gl, gl.FRAGMENT_SHADER, fsCubeSource)
+        const vsCube = this.compileShader(gl, gl.VERTEX_SHADER, litVertexShaderSource)
+        const fsCube = this.compileShader(gl, gl.FRAGMENT_SHADER, litFragmentShaderSource)
         if (!vsCube || !fsCube) return
 
         this.cubeProgram = gl.createProgram()
@@ -440,7 +388,7 @@ export class DebugRenderer {
 
         // Ensure tetrahedron geometry is generated
         if (!this.tetrahedronVerts) {
-            const geo = this.generateTetrahedronGeometry(1.0);
+            const geo = generateTetrahedronGeometry(1.0);
             this.tetrahedronVerts = geo.verts;
             this.tetrahedronNormals = geo.normals;
             this.tetrahedronBuffer = gl.createBuffer();
@@ -939,63 +887,6 @@ export class DebugRenderer {
         this.renderLines(gl, mvMatrix, pMatrix, zLines, [0, 0, 1, 1])
     }
 
-    private generateSphereGeometry(radius: number, segments: number): { verts: Float32Array, normals: Float32Array } {
-        const verts: number[] = [];
-        const normals: number[] = [];
-
-        for (let lat = 0; lat <= segments; lat++) {
-            const theta = lat * Math.PI / segments;
-            const sinTheta = Math.sin(theta);
-            const cosTheta = Math.cos(theta);
-
-            for (let lon = 0; lon <= segments; lon++) {
-                const phi = lon * 2 * Math.PI / segments;
-                const sinPhi = Math.sin(phi);
-                const cosPhi = Math.cos(phi);
-
-                const x = cosPhi * sinTheta;
-                const y = cosTheta;
-                const z = sinPhi * sinTheta;
-
-                normals.push(x, y, z);
-                verts.push(radius * x, radius * y, radius * z);
-            }
-        }
-
-        const triVerts: number[] = [];
-        const triNormals: number[] = [];
-
-        for (let lat = 0; lat < segments; lat++) {
-            for (let lon = 0; lon < segments; lon++) {
-                const first = (lat * (segments + 1)) + lon;
-                const second = first + segments + 1;
-
-                // Triangle 1
-                triVerts.push(verts[first * 3], verts[first * 3 + 1], verts[first * 3 + 2]);
-                triVerts.push(verts[second * 3], verts[second * 3 + 1], verts[second * 3 + 2]);
-                triVerts.push(verts[(first + 1) * 3], verts[(first + 1) * 3 + 1], verts[(first + 1) * 3 + 2]);
-
-                triNormals.push(normals[first * 3], normals[first * 3 + 1], normals[first * 3 + 2]);
-                triNormals.push(normals[second * 3], normals[second * 3 + 1], normals[second * 3 + 2]);
-                triNormals.push(normals[(first + 1) * 3], normals[(first + 1) * 3 + 1], normals[(first + 1) * 3 + 2]);
-
-                // Triangle 2
-                triVerts.push(verts[(first + 1) * 3], verts[(first + 1) * 3 + 1], verts[(first + 1) * 3 + 2]);
-                triVerts.push(verts[second * 3], verts[second * 3 + 1], verts[second * 3 + 2]);
-                triVerts.push(verts[(second + 1) * 3], verts[(second + 1) * 3 + 1], verts[(second + 1) * 3 + 2]);
-
-                triNormals.push(normals[(first + 1) * 3], normals[(first + 1) * 3 + 1], normals[(first + 1) * 3 + 2]);
-                triNormals.push(normals[second * 3], normals[second * 3 + 1], normals[second * 3 + 2]);
-                triNormals.push(normals[(second + 1) * 3], normals[(second + 1) * 3 + 1], normals[(second + 1) * 3 + 2]);
-            }
-        }
-
-        return {
-            verts: new Float32Array(triVerts),
-            normals: new Float32Array(triNormals)
-        };
-    }
-
     renderSolidSpheres(
         gl: WebGLRenderingContext | WebGL2RenderingContext,
         mvMatrix: mat4,
@@ -1009,7 +900,7 @@ export class DebugRenderer {
 
         // Ensure sphere geometry is generated
         if (!this.sphereVerts) {
-            const geo = this.generateSphereGeometry(1.0, 32); // High quality sphere
+            const geo = generateSphereGeometry(1.0, 32); // High quality sphere
             this.sphereVerts = geo.verts;
             this.sphereNormals = geo.normals;
             this.sphereBuffer = gl.createBuffer();
@@ -1065,51 +956,6 @@ export class DebugRenderer {
         gl.enable(gl.DEPTH_TEST);
     }
 
-    private generateTetrahedronGeometry(size: number): { verts: Float32Array, normals: Float32Array } {
-        // Standard regular tetrahedron vertices
-        const s = size;
-        const v0 = [0, s, 0];
-        const v1 = [-s * 0.94, -s * 0.33, s * 0.54];
-        const v2 = [s * 0.94, -s * 0.33, s * 0.54];
-        const v3 = [0, -s * 0.33, -s * 1.0];
-
-        const triVerts: number[] = [
-            ...v0, ...v2, ...v1, // CCW winding for outward normals
-            ...v0, ...v3, ...v2,
-            ...v0, ...v1, ...v3,
-            ...v1, ...v2, ...v3  // bottom face
-        ];
-
-        const calculateNormal = (p1: number[], p2: number[], p3: number[]) => {
-            const u = [p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]];
-            const v = [p3[0] - p1[0], p3[1] - p1[1], p3[2] - p1[2]];
-            const n = [
-                u[1] * v[2] - u[2] * v[1],
-                u[2] * v[0] - u[0] * v[2],
-                u[0] * v[1] - u[1] * v[0]
-            ];
-            const len = Math.sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
-            return [n[0] / len, n[1] / len, n[2] / len];
-        };
-
-        const n1 = calculateNormal(v0, v2, v1);
-        const n2 = calculateNormal(v0, v3, v2);
-        const n3 = calculateNormal(v0, v1, v3);
-        const n4 = calculateNormal(v1, v2, v3);
-
-        const triNormals: number[] = [
-            ...n1, ...n1, ...n1,
-            ...n2, ...n2, ...n2,
-            ...n3, ...n3, ...n3,
-            ...n4, ...n4, ...n4
-        ];
-
-        return {
-            verts: new Float32Array(triVerts),
-            normals: new Float32Array(triNormals)
-        };
-    }
-
     renderSolidTetrahedrons(
         gl: WebGLRenderingContext | WebGL2RenderingContext,
         mvMatrix: mat4,
@@ -1122,7 +968,7 @@ export class DebugRenderer {
         if (!this.cubeProgram) return;
 
         if (!this.tetrahedronVerts) {
-            const geo = this.generateTetrahedronGeometry(1.0);
+            const geo = generateTetrahedronGeometry(1.0);
             this.tetrahedronVerts = geo.verts;
             this.tetrahedronNormals = geo.normals;
             this.tetrahedronBuffer = gl.createBuffer();

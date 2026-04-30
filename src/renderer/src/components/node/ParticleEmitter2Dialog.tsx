@@ -1,271 +1,26 @@
-import { SmartInputNumber as BaseInputNumber } from '@renderer/components/common/SmartInputNumber'
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Form, Checkbox, Select, Button, Input, Slider } from 'antd';
-import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker';
-import { UndoOutlined } from '@ant-design/icons';
+import { Form, Button, Input } from 'antd';
 
 import { DraggableModal } from '../DraggableModal';
 import { NodeEditorStandaloneShell } from '../common/NodeEditorStandaloneShell';
 import AppErrorBoundary from '../common/AppErrorBoundary';
 import { windowManager } from '../../utils/WindowManager';
-import type { Color } from 'antd/es/color-picker';
 import type { ParticleEmitter2Node } from '../../types/node';
 import { useModelStore } from '../../store/modelStore';
-import { getDraggedTextureIndex } from '../../utils/textureDragDrop';
 import { saveParticleEmitter2Preset } from '../../services/particleEmitter2PresetService';
 import { showMessage } from '../../store/messageStore';
 import { uiText } from '../../constants/uiText';
-import { PARTICLE_EMITTER2_FILTER_MODE_OPTIONS } from '../../constants/filterModes';
 import { useNodeEditorPreview } from '../../hooks/useNodeEditorPreview';
 import { useWindowEvent } from '../../hooks/useWindowEvent';
-import { NODE_EDITOR_COMMANDS, type NodeEditorCommandSender } from '../../types/nodeEditorRpc';
+import { NODE_EDITOR_COMMANDS } from '../../types/nodeEditorRpc';
 import { nodeEditorCommandHandler } from '../../application/commands';
 import { KEYFRAME_SAVE_EVENT, type KeyframeSavePayload } from '../../application/window-bridge';
-
-const DEFERRED_PREVIEW_FIELD_NAMES = new Set([
-    'Visibility',
-    'EmissionRate',
-    'Speed',
-    'Variation',
-    'Latitude',
-    'Width',
-    'Length',
-    'Gravity',
-    'Seg1Alpha',
-    'Seg1Scaling',
-    'Seg2Alpha',
-    'Seg2Scaling',
-    'Seg3Alpha',
-    'Seg3Scaling',
-    'HeadLifeSpanStart',
-    'HeadLifeSpanEnd',
-    'HeadLifeSpanRepeat',
-    'HeadDecayStart',
-    'HeadDecayEnd',
-    'HeadDecayRepeat',
-    'TailLifeSpanStart',
-    'TailLifeSpanEnd',
-    'TailLifeSpanRepeat',
-    'TailDecayStart',
-    'TailDecayEnd',
-    'TailDecayRepeat',
-    'Rows',
-    'LifeSpan',
-    'PriorityPlane',
-    'Time',
-    'Columns',
-    'TailLength',
-    'ReplaceableId',
-]);
-
-const DeferredCommitContext = React.createContext<(() => void) | null>(null);
-
-const InputNumber = React.forwardRef<any, React.ComponentProps<typeof BaseInputNumber>>((props, ref) => {
-    const commitDeferredChanges = React.useContext(DeferredCommitContext);
-    const { onBlur, onChange, onPressEnter, ...rest } = props as any;
-
-    return (
-        <BaseInputNumber
-            ref={ref}
-            {...rest}
-            onChange={onChange}
-            onBlur={(event: any) => {
-                onBlur?.(event);
-                commitDeferredChanges?.();
-            }}
-            onPressEnter={(event: any) => {
-                onPressEnter?.(event);
-                commitDeferredChanges?.();
-            }}
-        />
-    );
-});
-
-InputNumber.displayName = 'ParticleEmitter2DeferredInputNumber';
-
-type SegmentColorTuple = [[number, number, number], [number, number, number], [number, number, number]];
-
-interface ParticleEmitter2ColorFieldControlProps {
-    name: string;
-    committedValue: string;
-    form: any;
-    getCurrentSegmentColors: () => SegmentColorTuple;
-    flushPreviewNowWithOverrides: (overrides?: Partial<ParticleEmitter2Node>) => void;
-    resetOverallHueState: () => void;
-    fromAntdColor: (color: Color | string) => [number, number, number];
-}
-
-const ParticleEmitter2ColorFieldControl: React.FC<ParticleEmitter2ColorFieldControlProps> = ({
-    name,
-    committedValue,
-    form,
-    getCurrentSegmentColors,
-    flushPreviewNowWithOverrides,
-    resetOverallHueState,
-    fromAntdColor,
-}) => {
-    const [draftValue, setDraftValue] = useState(committedValue);
-    const [pickerOpen, setPickerOpen] = useState(false);
-
-    useEffect(() => {
-        if (!pickerOpen) {
-            setDraftValue(committedValue);
-        }
-    }, [committedValue, pickerOpen]);
-
-    const commitColorValue = useCallback((rawValue: string) => {
-        const nextValue = rawValue.trim() || 'rgb(255, 255, 255)';
-        resetOverallHueState();
-        if (nextValue !== committedValue) {
-            const nextSegmentColors = getCurrentSegmentColors();
-            const nextRgb = fromAntdColor(nextValue);
-            if (name === 'Seg1Color') nextSegmentColors[0] = nextRgb;
-            if (name === 'Seg2Color') nextSegmentColors[1] = nextRgb;
-            if (name === 'Seg3Color') nextSegmentColors[2] = nextRgb;
-            form.setFieldsValue({ [name]: nextValue });
-            flushPreviewNowWithOverrides({ SegmentColor: nextSegmentColors });
-        }
-        setDraftValue(nextValue);
-    }, [committedValue, flushPreviewNowWithOverrides, form, fromAntdColor, getCurrentSegmentColors, name, resetOverallHueState]);
-
-    const commitDraftValue = useCallback(() => {
-        commitColorValue(draftValue);
-    }, [commitColorValue, draftValue]);
-
-    return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1 }}>
-            <ColorPicker
-                size="small"
-                showText={false}
-                format="rgb"
-                value={draftValue}
-                open={pickerOpen}
-                onOpenChange={setPickerOpen}
-                onChange={(color: Color) => {
-                    setDraftValue(
-                        color && typeof color.toRgbString === 'function'
-                            ? color.toRgbString()
-                            : committedValue
-                    );
-                }}
-                onChangeComplete={(color: Color) => {
-                    const nextValue =
-                        color && typeof color.toRgbString === 'function'
-                            ? color.toRgbString()
-                            : committedValue;
-                    commitColorValue(nextValue);
-                }}
-            />
-            <Input
-                size="small"
-                value={draftValue}
-                onChange={(e) => setDraftValue(e.target.value)}
-                onBlur={commitDraftValue}
-                onPressEnter={commitDraftValue}
-                placeholder="rgb(255, 255, 255)"
-                style={{ flex: 1, minWidth: 0 }}
-            />
-        </div>
-    );
-};
-
-interface ParticleEmitter2DialogProps {
-    visible: boolean;
-    nodeId: number | null;
-    onClose: () => void;
-    /** 独立 WebView：无 Zustand，经 RPC 同步 */
-    isStandalone?: boolean;
-    standaloneNode?: ParticleEmitter2Node | null;
-    standaloneEmit?: NodeEditorCommandSender;
-    standaloneModelData?: { Textures?: any[]; GlobalSequences?: any[]; Sequences?: any[] } | null;
-    standaloneModelPath?: string;
-}
-
-// Property mapping for animations
-const PROP_TO_ANIM_KEY: Record<string, string> = {
-    EmissionRate: 'EmissionRateAnim',
-    Speed: 'SpeedAnim',
-    Variation: 'VariationAnim',
-    Latitude: 'LatitudeAnim',
-    Width: 'WidthAnim',
-    Length: 'LengthAnim',
-    Gravity: 'GravityAnim',
-    Visibility: 'VisibilityAnim'
-};
-
-const isAnimVector = (val: any): boolean => {
-    return val && typeof val === 'object' && Array.isArray(val.Keys);
-};
-
-const getStaticValue = (val: any, defaultVal: number = 0): number => {
-    if (isAnimVector(val)) {
-        const keys = val.Keys;
-        if (!Array.isArray(keys) || keys.length === 0) return defaultVal;
-        const firstKey = keys[0];
-        const vec = firstKey?.Vector ?? firstKey?.Value;
-        if (Array.isArray(vec)) {
-            const n = Number(vec[0]);
-            return Number.isFinite(n) ? n : defaultVal;
-        }
-        if (vec !== undefined && vec !== null) {
-            const n = Number(vec);
-            return Number.isFinite(n) ? n : defaultVal;
-        }
-        return defaultVal;
-    }
-    if (typeof val === 'number' && Number.isFinite(val)) return val;
-    const n = Number(val);
-    return Number.isFinite(n) ? n : defaultVal;
-};
-
-const getFiniteNumber = (value: unknown, fallback: number): number => {
-    const n = Number(value);
-    return Number.isFinite(n) ? n : fallback;
-};
-
-const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
-
-const normalizeHue = (value: number): number => {
-    const wrapped = value % 360;
-    return wrapped < 0 ? wrapped + 360 : wrapped;
-};
-
-const rgbToHsv = (r: number, g: number, b: number): [number, number, number] => {
-    const max = Math.max(r, g, b);
-    const min = Math.min(r, g, b);
-    const delta = max - min;
-    let h = 0;
-
-    if (delta > 1e-8) {
-        if (max === r) h = ((g - b) / delta) % 6;
-        else if (max === g) h = (b - r) / delta + 2;
-        else h = (r - g) / delta + 4;
-        h *= 60;
-        if (h < 0) h += 360;
-    }
-
-    const s = max <= 1e-8 ? 0 : delta / max;
-    const v = max;
-    return [h, s, v];
-};
-
-const hsvToRgb = (h: number, s: number, v: number): [number, number, number] => {
-    const hh = normalizeHue(h);
-    const c = v * s;
-    const x = c * (1 - Math.abs(((hh / 60) % 2) - 1));
-    const m = v - c;
-    let r = 0, g = 0, b = 0;
-
-    if (hh < 60) [r, g, b] = [c, x, 0];
-    else if (hh < 120) [r, g, b] = [x, c, 0];
-    else if (hh < 180) [r, g, b] = [0, c, x];
-    else if (hh < 240) [r, g, b] = [0, x, c];
-    else if (hh < 300) [r, g, b] = [x, 0, c];
-    else[r, g, b] = [c, 0, x];
-
-    return [r + m, g + m, b + m];
-};
+import { DEFERRED_PREVIEW_FIELD_NAMES, PROP_TO_ANIM_KEY } from './particle-emitter2/constants';
+import { DeferredCommitContext } from './particle-emitter2/DeferredInputNumber';
+import { BoxedNumericField, FlagsPanel, LifecycleSection, OtherParamsSection, OverallAdjustments, RenderingSection, SegmentBox } from './particle-emitter2/ParticleEmitter2DialogSections';
+import { clamp, fromAntdColor, getFiniteNumber, getStaticValue, hsvToRgb, isAnimVector, parseInterval, rgbToHsv, toAntdColor } from './particle-emitter2/helpers';
+import type { ParticleEmitter2DialogProps, SegmentColorTuple } from './particle-emitter2/types';
 
 const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
     visible,
@@ -342,37 +97,6 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
     const [presetModalOpen, setPresetModalOpen] = useState(false);
     const [presetName, setPresetName] = useState('');
     const [isSavingPreset, setIsSavingPreset] = useState(false);
-
-    // Helper to convert array [r, g, b] (0-1) to Antd Color
-    const toAntdColor = (rgb?: [number, number, number]) => {
-        if (!rgb) return 'rgb(255, 255, 255)';
-        return `rgb(${Math.round(rgb[0] * 255)}, ${Math.round(rgb[1] * 255)}, ${Math.round(rgb[2] * 255)})`;
-    };
-
-    // Helper to convert Antd Color to array [r, g, b] (0-1)
-    const fromAntdColor = (color: Color | string): [number, number, number] => {
-        let r = 1, g = 1, b = 1;
-        if (typeof color === 'string') {
-            console.log('[ParticleDialog] Parsing color string:', color);
-            // Parse "rgb(255, 255, 255)"
-            const match = color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
-            if (match) {
-                r = parseInt(match[1]) / 255;
-                g = parseInt(match[2]) / 255;
-                b = parseInt(match[3]) / 255;
-            } else {
-                // Fallback or other formats
-                console.warn('[ParticleDialog] Could not parse color string, defaulting to white:', color);
-            }
-        } else if (color && typeof color === 'object') {
-            // Antd Color object
-            const rgb = color.toRgb();
-            r = rgb.r / 255;
-            g = rgb.g / 255;
-            b = rgb.b / 255;
-        }
-        return [r, g, b];
-    };
 
     const getCurrentSegmentColors = useCallback((): [[number, number, number], [number, number, number], [number, number, number]] => {
         const values = form.getFieldsValue(['Seg1Color', 'Seg2Color', 'Seg3Color']);
@@ -494,16 +218,6 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
         };
 
         const newAnimDataMap: Record<string, any> = {};
-
-        const parseInterval = (value: any): [number, number, number] => {
-            if (Array.isArray(value)) {
-                return [value[0] ?? 0, value[1] ?? 0, value[2] ?? 1];
-            }
-            if (value && typeof value === 'object' && '0' in value) {
-                return [value['0'] ?? 0, value['1'] ?? 0, value['2'] ?? 1];
-            }
-            return [typeof value === 'number' ? value : 0, 0, 1];
-        };
 
         const headLifeSpan = parseInterval(currentNode.LifeSpanUVAnim);
         const headDecay = parseInterval(currentNode.DecayUVAnim);
@@ -1086,206 +800,36 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
         }
     }, [captureOverallAdjustmentBases, flushPreviewNowWithOverrides, form]);
 
-    // --- New Components ---
+    const resetOverallHueState = useCallback(() => {
+        hueBaseColorsRef.current = null;
+        setOverallHueShift(0);
+    }, []);
 
-    // Boxed Numeric Field (Mimics Magos)
-    const BoxedNumericField = ({ label, name, min = undefined, max = undefined, precision = undefined, width = undefined }:
-        { label: string, name: string, min?: number, max?: number, precision?: number, width?: number | string }) => {
-        const isDynamic = !!animDataMap[name];
-
-        return (
-            <div style={{
-                border: '1px solid #484848',
-                padding: '12px 6px 6px 6px',
-                position: 'relative',
-                marginTop: 8,
-                backgroundColor: '#2b2b2b',
-                borderRadius: 2,
-                width: width
-            }}>
-                <span style={{
-                    position: 'absolute',
-                    top: -9,
-                    left: 8,
-                    backgroundColor: '#1f1f1f', // Match modal bg
-                    padding: '0 4px',
-                    fontSize: 12,
-                    color: '#ccc'
-                }}>
-                    {label}
-                </span>
-
-                <div style={{ marginBottom: 6 }}>
-                    <Checkbox
-                        checked={isDynamic}
-                        onChange={(e) => handleDynamicChange(name, e.target.checked)}
-                        style={{ color: '#ccc', fontSize: 12 }}
-                    >
-                        动态化
-                    </Checkbox>
-                </div>
-
-                <Button
-                    block
-                    size="small"
-                    onClick={() => handleOpenKeyframeEditor(name, label)}
-                    disabled={!isDynamic}
-                    style={{
-                        marginBottom: 6,
-                        backgroundColor: '#444',
-                        color: isDynamic ? '#fff' : '#888',
-                        borderColor: '#555',
-                        height: 28
-                    }}
-                >
-                    {label}
-                </Button>
-
-                <Form.Item name={name} noStyle>
-                    <InputNumber
-                        style={{ width: '100%', backgroundColor: '#333', borderColor: '#444', color: '#fff' }}
-                        min={min}
-                        max={max}
-                        precision={precision}
-                        disabled={isDynamic}
-                        size="small"
-                        placeholder="0"
-                    />
-                </Form.Item>
-            </div>
-        );
-    };
-
-    // Rendering Section Box (Right Side of Top)
-    const RenderingSection = () => (
-        <div style={{
-            border: '1px solid #484848',
-            padding: '12px 8px',
-            position: 'relative',
-            marginTop: 8,
-            backgroundColor: '#2b2b2b',
-            borderRadius: 2,
-            height: 'calc(100% - 8px)' // Fill height to match neighbor rows if possible
-        }}>
-            <span style={{
-                position: 'absolute',
-                top: -9,
-                left: 8,
-                backgroundColor: '#1f1f1f',
-                padding: '0 4px',
-                fontSize: 12,
-                color: '#ccc'
-            }}>
-                {uiText.particleEmitter2Dialog.rendering}
-            </span>
-
-            <div style={{ marginBottom: 12 }}>
-                <div style={{ marginBottom: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                    <span style={{ color: '#ccc' }}>{uiText.particleEmitter2Dialog.textureId}:</span>
-                    <span style={{ color: '#7f7f7f', fontSize: 12 }}>{uiText.particleEmitter2Dialog.replaceTextureHint}</span>
-                </div>
-                <div
-                    style={{
-                        border: isTextureDropActive ? '1px dashed #5a9cff' : '1px dashed transparent',
-                        borderRadius: 4,
-                        padding: 2,
-                        transition: 'border-color 0.15s ease'
-                    }}
-                    onDragOver={(e) => {
-                        const draggedIndex = getDraggedTextureIndex(e.dataTransfer);
-                        if (draggedIndex === null) return;
-                        e.preventDefault();
-                        e.dataTransfer.dropEffect = 'copy';
-                        setIsTextureDropActive(true);
-                    }}
-                    onDragEnter={(e) => {
-                        const draggedIndex = getDraggedTextureIndex(e.dataTransfer);
-                        if (draggedIndex === null) return;
-                        e.preventDefault();
-                        setIsTextureDropActive(true);
-                    }}
-                    onDragLeave={() => setIsTextureDropActive(false)}
-                    onDrop={(e) => {
-                        setIsTextureDropActive(false);
-                        const draggedIndex = getDraggedTextureIndex(e.dataTransfer);
-                        if (draggedIndex === null) return;
-                        e.preventDefault();
-                        applyRealtimeTexture(draggedIndex);
-                    }}
-                >
-                    <Form.Item name="TextureID" noStyle>
-                        <Select
-                            options={textureOptions}
-                            style={{ width: '100%' }}
-                            size="small"
-                            popupMatchSelectWidth={false}
-                            onChange={(v) => applyRealtimeTexture(Number(v))}
-                        />
-                    </Form.Item>
-                </div>
-            </div>
-
-            <div>
-                <div style={{ marginBottom: 4, color: '#ccc' }}>过滤模式</div>
-                <Form.Item name="FilterMode" noStyle>
-                    <Select
-                        options={PARTICLE_EMITTER2_FILTER_MODE_OPTIONS as any}
-                        style={{ width: '100%' }}
-                        size="small"
-                    />
-                </Form.Item>
-            </div>
-        </div>
+    const renderBoxedNumericField = (
+        label: string,
+        name: string,
+        options: { min?: number; max?: number; precision?: number; width?: number | string } = {}
+    ) => (
+        <BoxedNumericField
+            label={label}
+            name={name}
+            isDynamic={!!animDataMap[name]}
+            onDynamicChange={handleDynamicChange}
+            onOpenKeyframeEditor={handleOpenKeyframeEditor}
+            {...options}
+        />
     );
 
-    const renderColorField = (name: string) => (
-        <Form.Item shouldUpdate={(prevValues, nextValues) => prevValues?.[name] !== nextValues?.[name]} noStyle>
-            {() => {
-                const rawValue = form.getFieldValue(name)
-                const committedValue = typeof rawValue === 'string'
-                    ? rawValue
-                    : rawValue && typeof rawValue.toRgbString === 'function'
-                        ? rawValue.toRgbString()
-                        : 'rgb(255, 255, 255)'
-                return (
-                    <ParticleEmitter2ColorFieldControl
-                        name={name}
-                        committedValue={committedValue}
-                        form={form}
-                        getCurrentSegmentColors={getCurrentSegmentColors}
-                        flushPreviewNowWithOverrides={flushPreviewNowWithOverrides}
-                        resetOverallHueState={() => {
-                            hueBaseColorsRef.current = null;
-                            setOverallHueShift(0);
-                        }}
-                        fromAntdColor={fromAntdColor}
-                    />
-                )
-            }}
-        </Form.Item>
-    )
-
-    // Segment Box
     const renderSegmentBox = (title: string, prefix: string) => (
-        <fieldset style={{ border: '1px solid #484848', padding: '10px 8px 6px', margin: 0, marginTop: 8, backgroundColor: '#2b2b2b' }}>
-            <legend style={{ fontSize: 12, color: '#ccc', marginLeft: 8, padding: '0 4px', width: 'auto' }}>{title}</legend>
-            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
-                <span style={{ width: 40, color: '#ccc', fontSize: 12 }}>{uiText.particleEmitter2Dialog.color}:</span>
-                {renderColorField(`${prefix}Color`)}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
-                <span style={{ width: 40, color: '#ccc', fontSize: 12 }}>{uiText.particleEmitter2Dialog.alpha}:</span>
-                <Form.Item name={`${prefix}Alpha`} noStyle>
-                    <InputNumber min={0} max={255} size="small" style={{ flex: 1 }} />
-                </Form.Item>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center' }}>
-                <span style={{ width: 40, color: '#ccc', fontSize: 12 }}>{uiText.particleEmitter2Dialog.scaling}:</span>
-                <Form.Item name={`${prefix}Scaling`} noStyle>
-                    <InputNumber step={1} precision={0} size="small" style={{ flex: 1 }} />
-                </Form.Item>
-            </div>
-        </fieldset>
+        <SegmentBox
+            title={title}
+            prefix={prefix}
+            form={form}
+            getCurrentSegmentColors={getCurrentSegmentColors}
+            flushPreviewNowWithOverrides={flushPreviewNowWithOverrides}
+            resetOverallHueState={resetOverallHueState}
+            fromAntdColor={fromAntdColor}
+        />
     );
 
     // Texture Options
@@ -1337,22 +881,27 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
                 {/* --- TOP SECTION --- */}
                 <div style={{ display: 'flex', gap: 8 }}>
                     {/* Row 1 Params (Fit 5 items) */}
-                    <BoxedNumericField label={uiText.particleEmitter2Dialog.visibility} name="Visibility" min={0} max={1} precision={1} width="20%" />
-                    <BoxedNumericField label={uiText.particleEmitter2Dialog.emissionRate} name="EmissionRate" width="20%" />
-                    <BoxedNumericField label={uiText.particleEmitter2Dialog.speed} name="Speed" width="20%" />
-                    <BoxedNumericField label={uiText.particleEmitter2Dialog.variation} name="Variation" precision={2} width="20%" />
-                    <BoxedNumericField label={uiText.particleEmitter2Dialog.latitude} name="Latitude" precision={2} width="20%" />
+                    {renderBoxedNumericField(uiText.particleEmitter2Dialog.visibility, 'Visibility', { min: 0, max: 1, precision: 1, width: '20%' })}
+                    {renderBoxedNumericField(uiText.particleEmitter2Dialog.emissionRate, 'EmissionRate', { width: '20%' })}
+                    {renderBoxedNumericField(uiText.particleEmitter2Dialog.speed, 'Speed', { width: '20%' })}
+                    {renderBoxedNumericField(uiText.particleEmitter2Dialog.variation, 'Variation', { precision: 2, width: '20%' })}
+                    {renderBoxedNumericField(uiText.particleEmitter2Dialog.latitude, 'Latitude', { precision: 2, width: '20%' })}
                 </div>
 
                 <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
                     {/* Row 2 Params */}
-                    <div style={{ width: '20%' }}><BoxedNumericField label={uiText.particleEmitter2Dialog.width} name="Width" /></div>
-                    <div style={{ width: '20%' }}><BoxedNumericField label={uiText.particleEmitter2Dialog.length} name="Length" /></div>
-                    <div style={{ width: '20%' }}><BoxedNumericField label={uiText.particleEmitter2Dialog.gravity} name="Gravity" /></div>
+                    <div style={{ width: '20%' }}>{renderBoxedNumericField(uiText.particleEmitter2Dialog.width, 'Width')}</div>
+                    <div style={{ width: '20%' }}>{renderBoxedNumericField(uiText.particleEmitter2Dialog.length, 'Length')}</div>
+                    <div style={{ width: '20%' }}>{renderBoxedNumericField(uiText.particleEmitter2Dialog.gravity, 'Gravity')}</div>
 
                     {/* Rendering Section */}
                     <div style={{ flex: 1 }}>
-                        <RenderingSection />
+                        <RenderingSection
+                            textureOptions={textureOptions}
+                            isTextureDropActive={isTextureDropActive}
+                            setIsTextureDropActive={setIsTextureDropActive}
+                            applyRealtimeTexture={applyRealtimeTexture}
+                        />
                     </div>
                 </div>
 
@@ -1362,62 +911,17 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
                     {/* LEFT COLUMN: Segments, Lifecycle, Others */}
                     <div style={{ flex: 1 }}>
                         {/* Segments */}
-                        <div style={{ border: '1px solid #484848', padding: '10px 8px', marginTop: 8, backgroundColor: '#2b2b2b' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                                    <span style={{ color: '#ccc', fontSize: 12, whiteSpace: 'nowrap' }}>整体色相</span>
-                                    <Slider
-                                        min={-180}
-                                        max={180}
-                                        step={1}
-                                        value={overallHueShift}
-                                        onChange={(value) => applyOverallHueShift(value, false)}
-                                        onChangeComplete={(value) => applyOverallHueShift(value, true)}
-                                        tooltip={{ formatter: (value) => `${value ?? 0}°` }}
-                                        style={{ width: 150, margin: 0 }}
-                                        styles={{
-                                            rail: { background: 'linear-gradient(90deg, #ff4d4f, #faad14, #95de64, #5cdbd3, #597ef7, #b37feb, #ff4d4f)' },
-                                            track: { background: 'transparent' },
-                                        }}
-                                    />
-                                    <Button size="small" icon={<UndoOutlined />} onClick={resetOverallHueShift} title="重置整体色相" aria-label="重置整体色相" />
-                                </div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                                    <span style={{ color: '#ccc', fontSize: 12, whiteSpace: 'nowrap' }}>整体透明</span>
-                                    <Slider
-                                        min={0}
-                                        max={2}
-                                        step={0.01}
-                                        value={overallAlphaScale}
-                                        onChange={(value) => applyOverallAlphaScale(value, false)}
-                                        onChangeComplete={(value) => applyOverallAlphaScale(value, true)}
-                                        tooltip={{ formatter: (value) => `${Math.round((value ?? 1) * 100)}%` }}
-                                        style={{ width: 140, margin: 0 }}
-                                        styles={{
-                                            rail: { background: 'linear-gradient(90deg, #4b4b4b, #e8e8e8)' },
-                                        }}
-                                    />
-                                    <Button size="small" icon={<UndoOutlined />} onClick={resetOverallAlphaScale} title="重置整体透明" aria-label="重置整体透明" />
-                                </div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                                    <span style={{ color: '#ccc', fontSize: 12, whiteSpace: 'nowrap' }}>整体缩放</span>
-                                    <Slider
-                                        min={0}
-                                        max={10}
-                                        step={0.01}
-                                        value={overallScaleScale}
-                                        onChange={(value) => applyOverallScaleScale(value, false)}
-                                        onChangeComplete={(value) => applyOverallScaleScale(value, true)}
-                                        tooltip={{ formatter: (value) => `${(value ?? 1).toFixed(2)}x` }}
-                                        style={{ width: 140, margin: 0 }}
-                                        styles={{
-                                            rail: { background: 'linear-gradient(90deg, #5b8c00, #d3f261)' },
-                                        }}
-                                    />
-                                    <Button size="small" icon={<UndoOutlined />} onClick={resetOverallScaleScale} title="重置整体缩放" aria-label="重置整体缩放" />
-                                </div>
-                            </div>
-                        </div>
+                        <OverallAdjustments
+                            overallHueShift={overallHueShift}
+                            overallAlphaScale={overallAlphaScale}
+                            overallScaleScale={overallScaleScale}
+                            applyOverallHueShift={applyOverallHueShift}
+                            applyOverallAlphaScale={applyOverallAlphaScale}
+                            applyOverallScaleScale={applyOverallScaleScale}
+                            resetOverallHueShift={resetOverallHueShift}
+                            resetOverallAlphaScale={resetOverallAlphaScale}
+                            resetOverallScaleScale={resetOverallScaleScale}
+                        />
                         <div style={{ display: 'flex', gap: 8 }}>
                             <div style={{ flex: 1 }}>{renderSegmentBox(uiText.particleEmitter2Dialog.segment1, 'Seg1')}</div>
                             <div style={{ flex: 1 }}>{renderSegmentBox(uiText.particleEmitter2Dialog.segment2, 'Seg2')}</div>
@@ -1425,136 +929,14 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
                         </div>
 
                         {/* Lifecycle - MDX uses HeadLifeSpan/HeadDecay/TailLifeSpan/TailDecay as interval arrays */}
-                        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                            <div style={{ flex: 1 }}>
-                                <div style={{ fontWeight: 'bold', fontSize: 12, marginBottom: 4 }}>{uiText.particleEmitter2Dialog.headerLifespan}</div>
-                                <div style={{ display: 'flex', alignItems: 'center', marginBottom: 2 }}>
-                                    <span style={{ width: 30, fontSize: 12 }}>{uiText.particleEmitter2Dialog.start}:</span>
-                                    <Form.Item name="HeadLifeSpanStart" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
-                                </div>
-                                <div style={{ display: 'flex', alignItems: 'center', marginBottom: 2 }}>
-                                    <span style={{ width: 30, fontSize: 12 }}>{uiText.particleEmitter2Dialog.end}:</span>
-                                    <Form.Item name="HeadLifeSpanEnd" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
-                                </div>
-                                <div style={{ display: 'flex', alignItems: 'center' }}>
-                                    <span style={{ width: 30, fontSize: 12 }}>{uiText.particleEmitter2Dialog.repeat}:</span>
-                                    <Form.Item name="HeadLifeSpanRepeat" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
-                                </div>
-                            </div>
-
-                            <div style={{ flex: 1 }}>
-                                <div style={{ fontWeight: 'bold', fontSize: 12, marginBottom: 4 }}>{uiText.particleEmitter2Dialog.headerDecay}</div>
-                                <div style={{ display: 'flex', alignItems: 'center', marginBottom: 2 }}>
-                                    <span style={{ width: 30, fontSize: 12 }}>{uiText.particleEmitter2Dialog.start}:</span>
-                                    <Form.Item name="HeadDecayStart" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
-                                </div>
-                                <div style={{ display: 'flex', alignItems: 'center', marginBottom: 2 }}>
-                                    <span style={{ width: 30, fontSize: 12 }}>{uiText.particleEmitter2Dialog.end}:</span>
-                                    <Form.Item name="HeadDecayEnd" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
-                                </div>
-                                <div style={{ display: 'flex', alignItems: 'center' }}>
-                                    <span style={{ width: 30, fontSize: 12 }}>{uiText.particleEmitter2Dialog.repeat}:</span>
-                                    <Form.Item name="HeadDecayRepeat" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
-                                </div>
-                            </div>
-
-                            <div style={{ flex: 1 }}>
-                                <div style={{ fontWeight: 'bold', fontSize: 12, marginBottom: 4 }}>{uiText.particleEmitter2Dialog.tailLifespan}</div>
-                                <div style={{ display: 'flex', alignItems: 'center', marginBottom: 2 }}>
-                                    <span style={{ width: 30, fontSize: 12 }}>{uiText.particleEmitter2Dialog.start}:</span>
-                                    <Form.Item name="TailLifeSpanStart" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
-                                </div>
-                                <div style={{ display: 'flex', alignItems: 'center', marginBottom: 2 }}>
-                                    <span style={{ width: 30, fontSize: 12 }}>{uiText.particleEmitter2Dialog.end}:</span>
-                                    <Form.Item name="TailLifeSpanEnd" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
-                                </div>
-                                <div style={{ display: 'flex', alignItems: 'center' }}>
-                                    <span style={{ width: 30, fontSize: 12 }}>{uiText.particleEmitter2Dialog.repeat}:</span>
-                                    <Form.Item name="TailLifeSpanRepeat" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
-                                </div>
-                            </div>
-
-                            <div style={{ flex: 1 }}>
-                                <div style={{ fontWeight: 'bold', fontSize: 12, marginBottom: 4 }}>{uiText.particleEmitter2Dialog.tailDecay}</div>
-                                <div style={{ display: 'flex', alignItems: 'center', marginBottom: 2 }}>
-                                    <span style={{ width: 30, fontSize: 12 }}>{uiText.particleEmitter2Dialog.start}:</span>
-                                    <Form.Item name="TailDecayStart" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
-                                </div>
-                                <div style={{ display: 'flex', alignItems: 'center', marginBottom: 2 }}>
-                                    <span style={{ width: 30, fontSize: 12 }}>{uiText.particleEmitter2Dialog.end}:</span>
-                                    <Form.Item name="TailDecayEnd" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
-                                </div>
-                                <div style={{ display: 'flex', alignItems: 'center' }}>
-                                    <span style={{ width: 30, fontSize: 12 }}>{uiText.particleEmitter2Dialog.repeat}:</span>
-                                    <Form.Item name="TailDecayRepeat" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
-                                </div>
-                            </div>
-                        </div>
+                        <LifecycleSection />
 
                         {/* Other Params */}
-                        <div style={{ border: '1px solid #484848', padding: '8px 12px', marginTop: 12, backgroundColor: '#2b2b2b' }}>
-                            <div style={{ position: 'relative', top: -16, backgroundColor: '#1f1f1f', padding: '0 4px', width: 'fit-content', color: '#ccc', fontSize: 12 }}>{uiText.particleEmitter2Dialog.other}</div>
-                            <div style={{ marginTop: -8 }}>
-                                <div style={{ display: 'flex', gap: 16, marginBottom: 8 }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
-                                        <span style={{ marginRight: 4, fontSize: 12, width: 30 }}>{uiText.particleEmitter2Dialog.rows}:</span>
-                                        <Form.Item name="Rows" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
-                                        <span style={{ marginRight: 4, fontSize: 12, width: 60 }}>{uiText.particleEmitter2Dialog.lifeSpan}:</span>
-                                        <Form.Item name="LifeSpan" noStyle><InputNumber size="small" style={{ flex: 1 }} precision={2} step={0.01} /></Form.Item>
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
-                                        <span style={{ marginRight: 4, fontSize: 12, width: 60 }}>{uiText.particleEmitter2Dialog.priorityPlane}:</span>
-                                        <Form.Item name="PriorityPlane" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
-                                        <span style={{ marginRight: 4, fontSize: 12, width: 30 }}>{uiText.particleEmitter2Dialog.time}:</span>
-                                        <Form.Item name="Time" noStyle><InputNumber size="small" style={{ flex: 1 }} precision={1} /></Form.Item>
-                                    </div>
-                                </div>
-                                <div style={{ display: 'flex', gap: 16 }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
-                                        <span style={{ marginRight: 4, fontSize: 12, width: 30 }}>{uiText.particleEmitter2Dialog.columns}:</span>
-                                        <Form.Item name="Columns" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
-                                        <span style={{ marginRight: 4, fontSize: 12, width: 60 }}>{uiText.particleEmitter2Dialog.tailLength}:</span>
-                                        <Form.Item name="TailLength" noStyle><InputNumber size="small" style={{ flex: 1 }} precision={1} /></Form.Item>
-                                    </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
-                                        <span style={{ marginRight: 4, fontSize: 12, width: 60 }}>{uiText.particleEmitter2Dialog.replaceableId}:</span>
-                                        <Form.Item name="ReplaceableId" noStyle><InputNumber size="small" style={{ flex: 1 }} /></Form.Item>
-                                    </div>
-                                    <div style={{ flex: 1 }}></div> {/* Spacer */}
-                                </div>
-                            </div>
-                        </div>
+                        <OtherParamsSection />
                     </div>
 
                     {/* RIGHT COLUMN: Flags + Buttons */}
-                    <div style={{ width: 140, display: 'flex', flexDirection: 'column' }}>
-                        {/* Flags */}
-                        <div style={{ border: '1px solid #484848', padding: '6px 8px', flex: 1, backgroundColor: '#2b2b2b', marginTop: 8, position: 'relative' }}>
-                            <div style={{ fontWeight: 'bold', marginBottom: 4, paddingBottom: 4, borderBottom: '1px solid #444', color: '#ccc', fontSize: 12 }}>{uiText.particleEmitter2Dialog.flags}</div>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                                <Form.Item name="Unshaded" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{uiText.particleEmitter2Dialog.unshaded}</Checkbox></Form.Item>
-                                <Form.Item name="Unfogged" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{uiText.particleEmitter2Dialog.unfogged}</Checkbox></Form.Item>
-                                <Form.Item name="LineEmitter" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{uiText.particleEmitter2Dialog.lineEmitter}</Checkbox></Form.Item>
-                                <Form.Item name="SortPrimsFarZ" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{uiText.particleEmitter2Dialog.sortPrimsFarZ}</Checkbox></Form.Item>
-                                <Form.Item name="ModelSpace" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{uiText.particleEmitter2Dialog.modelSpace}</Checkbox></Form.Item>
-                                <Form.Item name="XYQuad" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{uiText.particleEmitter2Dialog.xyQuad}</Checkbox></Form.Item>
-                                <Form.Item name="Squirt" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{uiText.particleEmitter2Dialog.squirt}</Checkbox></Form.Item>
-                                <Form.Item name="Head" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{uiText.particleEmitter2Dialog.head}</Checkbox></Form.Item>
-                                <Form.Item name="Tail" valuePropName="checked" noStyle><Checkbox style={{ fontSize: 11, color: '#ccc' }}>{uiText.particleEmitter2Dialog.tail}</Checkbox></Form.Item>
-                            </div>
-
-                            {/* Buttons inside Flags Box (Bottom) */}
-                            <div style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                <Button onClick={handleOpenPresetModal} size="small" block>{uiText.particleEmitter2Dialog.savePreset}</Button>
-                            </div>
-                        </div>
-                    </div>
+                    <FlagsPanel onOpenPresetModal={handleOpenPresetModal} />
                 </div>
             </Form>
         </DeferredCommitContext.Provider>

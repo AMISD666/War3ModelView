@@ -9,14 +9,18 @@ import {
     BulbOutlined,
     DeploymentUnitOutlined,
     FireOutlined,
+    FontSizeOutlined,
     LinkOutlined,
     MinusOutlined,
     ToolOutlined
 } from '@ant-design/icons'
 import { getNextRenderMode, useRendererStore, type RenderMode } from '../store/rendererStore'
-import { useSelectionStore } from '../store/selectionStore'
+import { useSelectionStore, type AppMode } from '../store/selectionStore'
 import { useUIStore } from '../store/uiStore'
 import { uiText } from '../constants/uiText'
+import { useShortcutStore } from '../store/shortcutStore'
+import { ShortcutHint, formatShortcutTooltipTitle } from './common/ShortcutTooltip'
+import { NODE_VISIBILITY_LABELS, NODE_VISIBILITY_TYPES, type NodeVisibilityType } from '../types/nodeVisibility'
 
 interface MenuBarProps {
     onOpen: () => void
@@ -53,8 +57,8 @@ interface MenuBarProps {
     showAttachments: boolean
     onToggleAttachments: () => void
     onToggleEditor: (editor: string) => void
-    mainMode: 'view' | 'geometry' | 'uv' | 'animation'
-    onSetMainMode: (mode: 'view' | 'geometry' | 'uv' | 'animation') => void
+    mainMode: AppMode
+    onSetMainMode: (mode: AppMode) => void
     showDebugConsole: boolean
     onToggleDebugConsole: () => void
     onShowAbout: () => void
@@ -127,7 +131,9 @@ const MenuBar: React.FC<MenuBarProps> = ({
 }) => {
     const [activeMenu, setActiveMenu] = useState<string | null>(null)
     const [showRecentMenu, setShowRecentMenu] = useState(false)
+    const [nodeTypeMenu, setNodeTypeMenu] = useState<{ x: number; y: number } | null>(null)
     const menuRef = useRef<HTMLDivElement>(null)
+    const shortcutBindings = useShortcutStore((state) => state.bindings)
     const showMpqBrowser = useUIStore(state => state.showMpqBrowser)
     const toggleMpqBrowser = useUIStore(state => state.toggleMpqBrowser)
     const showSettingsPanel = useRendererStore(state => state.showSettingsPanel)
@@ -148,6 +154,11 @@ const MenuBar: React.FC<MenuBarProps> = ({
         setShowNodes: setQuickShowNodes,
         nodeRenderMode,
         setNodeRenderMode,
+        nodeNameDisplayMode,
+        setNodeNameDisplayMode,
+        nodeTypeVisibility,
+        setNodeTypeVisible,
+        setAllNodeTypesVisible,
         showSkeleton: quickShowSkeleton,
         setShowSkeleton: setQuickShowSkeleton,
         showGeosetVisibility: quickShowGeosetVisibility,
@@ -178,6 +189,11 @@ const MenuBar: React.FC<MenuBarProps> = ({
         setShowNodes: state.setShowNodes,
         nodeRenderMode: state.nodeRenderMode,
         setNodeRenderMode: state.setNodeRenderMode,
+        nodeNameDisplayMode: state.nodeNameDisplayMode,
+        setNodeNameDisplayMode: state.setNodeNameDisplayMode,
+        nodeTypeVisibility: state.nodeTypeVisibility,
+        setNodeTypeVisible: state.setNodeTypeVisible,
+        setAllNodeTypesVisible: state.setAllNodeTypesVisible,
         showSkeleton: state.showSkeleton,
         setShowSkeleton: state.setShowSkeleton,
         showGeosetVisibility: state.showGeosetVisibility,
@@ -212,10 +228,17 @@ const MenuBar: React.FC<MenuBarProps> = ({
         setShowVerticesForMode(currentMainMode, next)
     }
 
+    const getNextNodeNameDisplayMode = () => {
+        if (nodeNameDisplayMode === 'hidden') return 'all'
+        if (nodeNameDisplayMode === 'all') return 'selected'
+        return 'hidden'
+    }
+
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
             if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
                 setActiveMenu(null)
+                setNodeTypeMenu(null)
             }
         }
 
@@ -262,12 +285,40 @@ const MenuBar: React.FC<MenuBarProps> = ({
         color: '#eee'
     }
 
+    const shortcutHintStyle: React.CSSProperties = {
+        color: '#888',
+        fontSize: '11px'
+    }
+
     const hoverStyle = (e: React.MouseEvent) => {
         ;(e.currentTarget as HTMLElement).style.backgroundColor = '#444'
     }
 
     const unhoverStyle = (e: React.MouseEvent) => {
         ;(e.currentTarget as HTMLElement).style.backgroundColor = 'transparent'
+    }
+
+    const nodeTypeMenuStyle: React.CSSProperties = {
+        position: 'fixed',
+        left: nodeTypeMenu?.x ?? 0,
+        top: nodeTypeMenu?.y ?? 0,
+        backgroundColor: '#2f2f2f',
+        border: '1px solid #555',
+        boxShadow: '0 6px 16px rgba(0,0,0,0.45)',
+        zIndex: 5000,
+        minWidth: 170,
+        padding: '5px 0',
+        color: '#eee',
+        fontSize: 12
+    }
+
+    const nodeTypeItemStyle: React.CSSProperties = {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '6px 12px',
+        cursor: 'pointer',
+        userSelect: 'none'
     }
 
     const quickToggleItems: Array<{
@@ -279,6 +330,8 @@ const MenuBar: React.FC<MenuBarProps> = ({
         badge?: string
         statusLabel?: string
         tone?: 'default' | 'warning'
+        onContextMenu?: (event: React.MouseEvent) => void
+        hasContextMenu?: boolean
     }> = [
         { key: 'grid-xy', label: uiText.menu.quickToggle.xyGrid, checked: quickShowGridXY, onToggle: () => setQuickShowGridXY(!quickShowGridXY), icon: <AppstoreOutlined />, badge: 'XY' },
         { key: 'grid-xz', label: uiText.menu.quickToggle.xzGrid, checked: quickShowGridXZ, onToggle: () => setQuickShowGridXZ(!quickShowGridXZ), icon: <AppstoreOutlined />, badge: 'XZ' },
@@ -290,6 +343,12 @@ const MenuBar: React.FC<MenuBarProps> = ({
             checked: nodeRenderMode !== 'hidden',
             onToggle: () => setNodeRenderMode(nodeRenderMode === 'hidden' ? 'solid' : nodeRenderMode === 'solid' ? 'wireframe' : 'hidden'),
             icon: <AimOutlined />,
+            onContextMenu: (event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                setNodeTypeMenu({ x: event.clientX, y: event.clientY })
+            },
+            hasContextMenu: true,
             statusLabel:
                 nodeRenderMode === 'hidden'
                     ? uiText.menu.nodeRenderHidden
@@ -311,6 +370,21 @@ const MenuBar: React.FC<MenuBarProps> = ({
             checked: renderMode !== 'textured',
             onToggle: () => onChangeRenderMode(getNextRenderMode(renderMode)),
             icon: <BgColorsOutlined />
+        },
+        {
+            key: 'node-names',
+            label: '节点名称',
+            checked: nodeNameDisplayMode !== 'hidden',
+            onToggle: () => setNodeNameDisplayMode(getNextNodeNameDisplayMode()),
+            icon: <FontSizeOutlined />,
+            badge: nodeNameDisplayMode === 'all' ? '全' : nodeNameDisplayMode === 'selected' ? '选' : undefined,
+            statusLabel:
+                nodeNameDisplayMode === 'hidden'
+                    ? uiText.menu.statusOff
+                    : nodeNameDisplayMode === 'all'
+                        ? '显示全部'
+                        : '选中/悬停',
+            tone: nodeNameDisplayMode === 'selected' ? 'warning' : 'default'
         }
     ]
 
@@ -331,6 +405,18 @@ const MenuBar: React.FC<MenuBarProps> = ({
         lineHeight: 1
     })
 
+    const contextMenuBadgeStyle: React.CSSProperties = {
+        position: 'absolute',
+        right: 2,
+        bottom: 2,
+        width: 0,
+        height: 0,
+        borderLeft: '5px solid transparent',
+        borderBottom: '5px solid currentColor',
+        opacity: 0.9,
+        pointerEvents: 'none'
+    }
+
     return (
         <div
             ref={menuRef}
@@ -349,9 +435,15 @@ const MenuBar: React.FC<MenuBarProps> = ({
                 {uiText.menu.file}
                 {activeMenu === 'file' && (
                     <div style={dropdownStyle}>
-                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onOpen(); closeMenu() }}>
+                        <div
+                            style={itemStyle}
+                            title={String(formatShortcutTooltipTitle('导入mdx模型', 'file.open', shortcutBindings))}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={() => { onOpen(); closeMenu() }}
+                        >
                             <span>{uiText.menu.importModel}</span>
-                            <span style={{ color: '#888', fontSize: '11px' }}>Ctrl+O</span>
+                            <ShortcutHint actionId="file.open" style={shortcutHintStyle} />
                         </div>
                         <div
                             style={{ ...itemStyle, position: 'relative' }}
@@ -424,11 +516,11 @@ const MenuBar: React.FC<MenuBarProps> = ({
                         </div>
                         <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onSave(); closeMenu() }}>
                             <span>{uiText.menu.saveModel}</span>
-                            <span style={{ color: '#888', fontSize: '11px' }}>Ctrl+S</span>
+                            <ShortcutHint actionId="file.save" style={shortcutHintStyle} />
                         </div>
                         <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onCopyModel(); closeMenu() }}>
                             <span>{uiText.menu.copyModel}</span>
-                            <span style={{ color: '#888', fontSize: '11px' }}>Shift+C</span>
+                            <ShortcutHint actionId="file.copyModel" style={shortcutHintStyle} />
                         </div>
                         <div style={{ borderTop: '1px solid #444', margin: '5px 0' }} />
                         <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { void onSwapMdlMdx(); closeMenu() }}>
@@ -448,15 +540,15 @@ const MenuBar: React.FC<MenuBarProps> = ({
                 {uiText.menu.edit}
                 {activeMenu === 'edit' && (
                     <div style={dropdownStyle}>
-                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('nodeManager'); closeMenu() }}><span>{uiText.menu.nodeManager}</span><span style={{ color: '#888', fontSize: '11px' }}>N</span></div>
-                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('camera'); closeMenu() }}><span>{uiText.menu.cameraManager}</span><span style={{ color: '#888', fontSize: '11px' }}>C</span></div>
-                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('geoset'); closeMenu() }}><span>{uiText.menu.geosetManager}</span><span style={{ color: '#888', fontSize: '11px' }}>G</span></div>
-                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('geosetAnim'); closeMenu() }}><span>{uiText.menu.geosetAnimationManager}</span><span style={{ color: '#888', fontSize: '11px' }}>E</span></div>
-                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('texture'); closeMenu() }}><span>{uiText.menu.textureManager}</span><span style={{ color: '#888', fontSize: '11px' }}>T</span></div>
-                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('textureAnim'); closeMenu() }}><span>{uiText.menu.textureAnimationManager}</span><span style={{ color: '#888', fontSize: '11px' }}>X</span></div>
-                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('material'); closeMenu() }}><span>{uiText.menu.materialManager}</span><span style={{ color: '#888', fontSize: '11px' }}>M</span></div>
-                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('sequence'); closeMenu() }}><span>{uiText.menu.sequenceManager}</span><span style={{ color: '#888', fontSize: '11px' }}>S</span></div>
-                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('globalSequence'); closeMenu() }}><span>{uiText.menu.globalSequenceManager}</span><span style={{ color: '#888', fontSize: '11px' }}>L</span></div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('nodeManager'); closeMenu() }}><span>{uiText.menu.nodeManager}</span><ShortcutHint actionId="editor.nodeManager" style={shortcutHintStyle} /></div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('camera'); closeMenu() }}><span>{uiText.menu.cameraManager}</span><ShortcutHint actionId="editor.cameraManager" style={shortcutHintStyle} /></div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('geoset'); closeMenu() }}><span>{uiText.menu.geosetManager}</span><ShortcutHint actionId="editor.geosetManager" style={shortcutHintStyle} /></div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('geosetAnim'); closeMenu() }}><span>{uiText.menu.geosetAnimationManager}</span><ShortcutHint actionId="editor.geosetAnimManager" style={shortcutHintStyle} /></div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('texture'); closeMenu() }}><span>{uiText.menu.textureManager}</span><ShortcutHint actionId="editor.textureManager" style={shortcutHintStyle} /></div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('textureAnim'); closeMenu() }}><span>{uiText.menu.textureAnimationManager}</span><ShortcutHint actionId="editor.textureAnimManager" style={shortcutHintStyle} /></div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('material'); closeMenu() }}><span>{uiText.menu.materialManager}</span><ShortcutHint actionId="editor.materialManager" style={shortcutHintStyle} /></div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('sequence'); closeMenu() }}><span>{uiText.menu.sequenceManager}</span><ShortcutHint actionId="editor.sequenceManager" style={shortcutHintStyle} /></div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('globalSequence'); closeMenu() }}><span>{uiText.menu.globalSequenceManager}</span><ShortcutHint actionId="editor.globalSequenceManager" style={shortcutHintStyle} /></div>
                         <div style={{ borderTop: '1px solid #444', margin: '5px 0' }} />
                         <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onToggleEditor('modelInfo'); closeMenu() }}>{uiText.menu.modelInfo}</div>
                     </div>
@@ -471,6 +563,7 @@ const MenuBar: React.FC<MenuBarProps> = ({
                         <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onSetMainMode('geometry'); closeMenu() }}><span>{uiText.menu.geometryMode}</span><div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}><span style={{ color: '#888', fontSize: '11px' }}>2</span><span style={{ width: '12px' }}>{mainMode === 'geometry' ? '✓' : ''}</span></div></div>
                         <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onSetMainMode('uv'); closeMenu() }}><span>{uiText.menu.uvMode}</span><div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}><span style={{ color: '#888', fontSize: '11px' }}>3</span><span style={{ width: '12px' }}>{mainMode === 'uv' ? '✓' : ''}</span></div></div>
                         <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onSetMainMode('animation'); closeMenu() }}><span>{uiText.menu.animationMode}</span><div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}><span style={{ color: '#888', fontSize: '11px' }}>4</span><span style={{ width: '12px' }}>{mainMode === 'animation' ? '✓' : ''}</span></div></div>
+                        <div style={itemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={() => { onSetMainMode('retarget'); closeMenu() }}><span>套动作模式</span><div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}><span style={{ color: '#888', fontSize: '11px' }}>5</span><span style={{ width: '12px' }}>{mainMode === 'retarget' ? '✓' : ''}</span></div></div>
                     </div>
                 )}
             </div>
@@ -527,14 +620,39 @@ const MenuBar: React.FC<MenuBarProps> = ({
                         <button
                             type="button"
                             onClick={item.onToggle}
-                            style={quickBtnStyle(item.checked, item.tone)}
+                            onContextMenu={item.onContextMenu}
+                            style={{ ...quickBtnStyle(item.checked, item.tone), position: 'relative' }}
                         >
                             {item.icon}
                             {item.badge && <span style={{ fontSize: 9, fontWeight: 600 }}>{item.badge}</span>}
+                            {item.hasContextMenu && <span style={contextMenuBadgeStyle} />}
                         </button>
                     </Tooltip>
                 ))}
             </div>
+
+            {nodeTypeMenu && (
+                <div style={nodeTypeMenuStyle} onContextMenu={(event) => event.preventDefault()}>
+                    {NODE_VISIBILITY_TYPES.map((type: NodeVisibilityType) => (
+                        <div
+                            key={type}
+                            style={nodeTypeItemStyle}
+                            onMouseEnter={hoverStyle}
+                            onMouseLeave={unhoverStyle}
+                            onClick={(event) => {
+                                event.stopPropagation()
+                                setNodeTypeVisible(type, nodeTypeVisibility[type] === false)
+                            }}
+                        >
+                            <input type="checkbox" checked={nodeTypeVisibility[type] !== false} readOnly style={{ margin: 0 }} />
+                            <span style={{ flex: 1 }}>{NODE_VISIBILITY_LABELS[type]}</span>
+                        </div>
+                    ))}
+                    <div style={{ borderTop: '1px solid #444', margin: '4px 0' }} />
+                    <div style={nodeTypeItemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={(event) => { event.stopPropagation(); setAllNodeTypesVisible(true) }}>全选</div>
+                    <div style={nodeTypeItemStyle} onMouseEnter={hoverStyle} onMouseLeave={unhoverStyle} onClick={(event) => { event.stopPropagation(); setAllNodeTypesVisible(false) }}>取消全选</div>
+                </div>
+            )}
 
             <div style={{ flex: 1 }} />
 

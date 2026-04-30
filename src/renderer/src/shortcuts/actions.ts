@@ -1,4 +1,4 @@
-export type ShortcutContext = 'global' | 'view' | 'geometry' | 'uv' | 'animation' | 'viewer'
+export type ShortcutContext = 'global' | 'view' | 'geometry' | 'uv' | 'animation' | 'retarget' | 'viewer'
 
 export interface ShortcutAction {
     id: string
@@ -10,6 +10,15 @@ export interface ShortcutAction {
     preventDefault?: boolean
     stopPropagation?: boolean
 }
+
+const modeAction = (id: string, label: string, key: string): ShortcutAction => ({
+    id,
+    label,
+    category: '模式',
+    contexts: ['global'],
+    defaultBindings: [key],
+    preventDefault: true
+})
 
 export const shortcutActions: ShortcutAction[] = [
     // File
@@ -80,38 +89,11 @@ export const shortcutActions: ShortcutAction[] = [
     },
 
     // Mode
-    {
-        id: 'mode.view',
-        label: '查看模式',
-        category: '模式',
-        contexts: ['global'],
-        defaultBindings: ['1'],
-        preventDefault: true
-    },
-    {
-        id: 'mode.geometry',
-        label: '顶点模式',
-        category: '模式',
-        contexts: ['global'],
-        defaultBindings: ['2'],
-        preventDefault: true
-    },
-    {
-        id: 'mode.uv',
-        label: 'UV 模式',
-        category: '模式',
-        contexts: ['global'],
-        defaultBindings: ['3'],
-        preventDefault: true
-    },
-    {
-        id: 'mode.animation',
-        label: '动画模式',
-        category: '模式',
-        contexts: ['global'],
-        defaultBindings: ['4'],
-        preventDefault: true
-    },
+    modeAction('mode.view', '查看模式', '1'),
+    modeAction('mode.geometry', '顶点模式', '2'),
+    modeAction('mode.uv', 'UV 模式', '3'),
+    modeAction('mode.animation', '动画模式', '4'),
+    modeAction('mode.retarget', '套动作模式', '5'),
 
     // Editors / Managers
     {
@@ -277,6 +259,62 @@ export const shortcutActions: ShortcutAction[] = [
         preventDefault: true,
         stopPropagation: true
     },
+    {
+        id: 'view.gizmoOrientationWorld',
+        label: '世界坐标朝向',
+        category: '视图',
+        contexts: ['view', 'geometry', 'animation'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'view.gizmoOrientationCamera',
+        label: '镜头朝向',
+        category: '视图',
+        contexts: ['view', 'geometry', 'animation'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'view.snapTranslateToggle',
+        label: '切换距离捕捉',
+        category: '视图',
+        contexts: ['view', 'geometry', 'uv', 'animation'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'view.snapRotateToggle',
+        label: '切换角度捕捉',
+        category: '视图',
+        contexts: ['view', 'geometry', 'uv', 'animation'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'view.globalTransformToggle',
+        label: '切换全局变换模式',
+        category: '视图',
+        contexts: ['view'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'view.mirrorHorizontal',
+        label: '模型左右镜像',
+        category: '视图',
+        contexts: ['view'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'view.mirrorVertical',
+        label: '模型垂直镜像',
+        category: '视图',
+        contexts: ['view'],
+        defaultBindings: [],
+        preventDefault: true
+    },
 
     // Animation
     {
@@ -317,6 +355,94 @@ export const shortcutActions: ShortcutAction[] = [
         category: '动画',
         contexts: ['animation'],
         defaultBindings: ['S'],
+        preventDefault: true
+    },
+    {
+        id: 'animation.modeBinding',
+        label: '动画绑定模式',
+        category: '动画',
+        contexts: ['animation'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'animation.modeKeyframe',
+        label: '动画关键帧模式',
+        category: '动画',
+        contexts: ['animation'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'animation.bindingVertexMode',
+        label: '绑定点模式',
+        category: '动画',
+        contexts: ['animation'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'animation.bindingGroupMode',
+        label: '绑定组模式',
+        category: '动画',
+        contexts: ['animation'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'animation.bindingExpandSelection',
+        label: '绑定扩选',
+        category: '动画',
+        contexts: ['animation'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'animation.bindingShrinkSelection',
+        label: '绑定缩选',
+        category: '动画',
+        contexts: ['animation'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'animation.createBone',
+        label: '创建骨骼',
+        category: '动画',
+        contexts: ['animation'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'animation.bindVertices',
+        label: '绑定顶点到骨骼',
+        category: '动画',
+        contexts: ['animation'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'animation.exclusiveBindVertices',
+        label: '完全绑定顶点',
+        category: '动画',
+        contexts: ['animation'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'animation.unbindVertices',
+        label: '解除顶点绑定',
+        category: '动画',
+        contexts: ['animation'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'animation.pickParent',
+        label: '修改骨骼父节点',
+        category: '动画',
+        contexts: ['animation'],
+        defaultBindings: [],
         preventDefault: true
     },
 
@@ -360,8 +486,64 @@ export const shortcutActions: ShortcutAction[] = [
         contexts: ['viewer', 'geometry', 'animation', 'view', 'uv'],
         defaultBindings: ['R']
     },
+    {
+        id: 'uv.transform.select',
+        label: 'UV 框选/选择',
+        category: 'UV',
+        contexts: ['uv'],
+        defaultBindings: [],
+        preventDefault: true
+    },
 
     // Geometry - Vertex operations
+    {
+        id: 'geometry.modeVertex',
+        label: '顶点模式',
+        category: '多边形组',
+        contexts: ['geometry'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'geometry.modeFace',
+        label: '面模式',
+        category: '多边形组',
+        contexts: ['geometry'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'geometry.modeGroup',
+        label: '组模式',
+        category: '多边形组',
+        contexts: ['geometry'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'geometry.recalculateNormals',
+        label: '重算法线',
+        category: '多边形组',
+        contexts: ['geometry'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'geometry.autoSeparateLayers',
+        label: '一键智能分层',
+        category: '多边形组',
+        contexts: ['geometry'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'geometry.togglePasteTarget',
+        label: '切换粘贴到新多边形组',
+        category: '多边形组',
+        contexts: ['geometry'],
+        defaultBindings: [],
+        preventDefault: true
+    },
     {
         id: 'geometry.copyVertices',
         label: '复制顶点',
@@ -384,6 +566,104 @@ export const shortcutActions: ShortcutAction[] = [
         category: '多边形组',
         contexts: ['geometry'],
         defaultBindings: ['Delete'],
+        preventDefault: true
+    },
+    {
+        id: 'geometry.splitVertices',
+        label: '分离选中顶点/面',
+        category: '多边形组',
+        contexts: ['geometry'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'geometry.weldVertices',
+        label: '焊接选中顶点',
+        category: '多边形组',
+        contexts: ['geometry'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+
+    // UV
+    {
+        id: 'uv.modeVertex',
+        label: 'UV 选择顶点',
+        category: 'UV',
+        contexts: ['uv'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'uv.modeEdge',
+        label: 'UV 选择边',
+        category: 'UV',
+        contexts: ['uv'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'uv.modeFace',
+        label: 'UV 选择面',
+        category: 'UV',
+        contexts: ['uv'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'uv.modeGroup',
+        label: 'UV 选择组',
+        category: 'UV',
+        contexts: ['uv'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'uv.modeBlock',
+        label: 'UV 选择块',
+        category: 'UV',
+        contexts: ['uv'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'uv.mirrorHorizontal',
+        label: 'UV 水平镜像',
+        category: 'UV',
+        contexts: ['uv'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'uv.mirrorVertical',
+        label: 'UV 垂直镜像',
+        category: 'UV',
+        contexts: ['uv'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'uv.fitToView',
+        label: 'UV 适应视图',
+        category: 'UV',
+        contexts: ['uv'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'uv.toggleViewerSelectionHighlight',
+        label: '切换 3D 选区高亮',
+        category: 'UV',
+        contexts: ['uv'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'uv.toggleModelView',
+        label: '显示/隐藏 UV 3D 视图',
+        category: 'UV',
+        contexts: ['uv'],
+        defaultBindings: [],
         preventDefault: true
     },
 
@@ -452,6 +732,94 @@ export const shortcutActions: ShortcutAction[] = [
         category: '时间轴',
         contexts: ['animation'],
         defaultBindings: ['ArrowRight'],
+        preventDefault: true
+    },
+    {
+        id: 'timeline.goToStart',
+        label: '跳到序列起点',
+        category: '时间轴',
+        contexts: ['animation'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'timeline.prevFrame',
+        label: '上一帧',
+        category: '时间轴',
+        contexts: ['animation'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'timeline.nextFrame',
+        label: '下一帧',
+        category: '时间轴',
+        contexts: ['animation'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'timeline.goToEnd',
+        label: '跳到序列终点',
+        category: '时间轴',
+        contexts: ['animation'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'timeline.displayNode',
+        label: '显示节点关键帧',
+        category: '时间轴',
+        contexts: ['animation'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'timeline.displayGeosetAnim',
+        label: '显示多边形动画关键帧',
+        category: '时间轴',
+        contexts: ['animation'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'timeline.displayParticle',
+        label: '显示粒子关键帧',
+        category: '时间轴',
+        contexts: ['animation'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'timeline.displayTextureAnim',
+        label: '显示贴图动画关键帧',
+        category: '时间轴',
+        contexts: ['animation'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'timeline.displayMaterial',
+        label: '显示材质关键帧',
+        category: '时间轴',
+        contexts: ['animation'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'timeline.toggleAllKeyframes',
+        label: '显示/隐藏所有关键帧类型',
+        category: '时间轴',
+        contexts: ['animation'],
+        defaultBindings: [],
+        preventDefault: true
+    },
+    {
+        id: 'timeline.toggleAllOwnerKeyframes',
+        label: '显示所有/选中对象关键帧',
+        category: '时间轴',
+        contexts: ['animation'],
+        defaultBindings: [],
         preventDefault: true
     },
 ]

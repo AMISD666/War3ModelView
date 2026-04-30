@@ -48,20 +48,21 @@ update_log.txt
 .memorix/
 .github/hooks/
 activation/
-docs/
+docs/*
+!docs/
+!docs/DEVELOPMENT_RULES.md
 vendor/
 scripts/*
 !scripts/
 !scripts/check-mdx-strict-export.mjs
+!scripts/check-architecture-guardrails.mjs
+!scripts/check-state-sync-fixtures.mjs
 activation/
 
 # OS noise
 .DS_Store
 Thumbs.db
 Desktop.ini
-AGENTS.md
-
-
 # Local archives / backups
 *.bak
 *.backup

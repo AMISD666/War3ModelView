@@ -6,6 +6,7 @@ import { addRecentFile, type RecentFile } from '../../services/historyService'
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
 import type { ModelData } from '../../types/model'
+import type { AppMode } from '../../store/selectionStore'
 
 export type OpenModelSource =
     | 'dialog'
@@ -40,7 +41,7 @@ export interface HandleLoadedModelContext {
         options?: { skipAutoRecalculate?: boolean; skipModelRebuild?: boolean; deferTabSnapshot?: boolean; deferNodeHydration?: boolean },
     ) => void
     completeLoading: () => void
-    setMainMode: (mode: 'view' | 'geometry' | 'uv' | 'animation') => void
+    setMainMode: (mode: AppMode) => void
     setPlaying: (playing: boolean) => void
 }
 

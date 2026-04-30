@@ -1,6 +1,5 @@
 ﻿import React, { useRef, useEffect, useState, useCallback } from 'react'
 import { useModelStore } from '../../store/modelStore'
-import { Button, Tooltip } from 'antd'
 import { PositiveStepInput } from '@renderer/components/common/PositiveStepInput'
 import { useSelectionStore, type SelectionId, type UVSelectionMode } from '../../store/selectionStore'
 import { useRendererStore } from '../../store/rendererStore'
@@ -24,6 +23,8 @@ import {
     CompressOutlined
 } from '@ant-design/icons'
 import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker'
+import { ShortcutBindableButton } from '@renderer/components/common/ShortcutBindableButton'
+import { ShortcutTooltip as Tooltip } from '@renderer/components/common/ShortcutTooltip'
 import type { Color } from 'antd/es/color-picker'
 import { invokeReadMpqFile } from '../../utils/mpqPerf'
 import { desktopGateway } from '../../infrastructure/desktop'
@@ -1262,13 +1263,121 @@ const UVEditor: React.FC<UVEditorProps> = ({
                     return true
                 },
                 { isActive: isUvMode, priority: 100 }
+            ),
+            registerShortcutHandler(
+                'uv.transform.select',
+                () => {
+                    setTransformMode('select')
+                    return true
+                },
+                { isActive: isUvMode, priority: 100 }
+            ),
+            registerShortcutHandler(
+                'uv.modeVertex',
+                () => {
+                    setUvSubMode('vertex')
+                    return true
+                },
+                { isActive: isUvMode, priority: 100 }
+            ),
+            registerShortcutHandler(
+                'uv.modeEdge',
+                () => {
+                    setUvSubMode('edge')
+                    return true
+                },
+                { isActive: isUvMode, priority: 100 }
+            ),
+            registerShortcutHandler(
+                'uv.modeFace',
+                () => {
+                    setUvSubMode('face')
+                    return true
+                },
+                { isActive: isUvMode, priority: 100 }
+            ),
+            registerShortcutHandler(
+                'uv.modeGroup',
+                () => {
+                    setUvSubMode('group')
+                    return true
+                },
+                { isActive: isUvMode, priority: 100 }
+            ),
+            registerShortcutHandler(
+                'uv.modeBlock',
+                () => {
+                    setUvSubMode('block')
+                    return true
+                },
+                { isActive: isUvMode, priority: 100 }
+            ),
+            registerShortcutHandler(
+                'uv.mirrorHorizontal',
+                () => {
+                    if (selectedUVs.length === 0) return false
+                    mirrorHorizontal()
+                    return true
+                },
+                { isActive: isUvMode, priority: 100 }
+            ),
+            registerShortcutHandler(
+                'uv.mirrorVertical',
+                () => {
+                    if (selectedUVs.length === 0) return false
+                    mirrorVertical()
+                    return true
+                },
+                { isActive: isUvMode, priority: 100 }
+            ),
+            registerShortcutHandler(
+                'uv.fitToView',
+                () => {
+                    fitToView()
+                    return true
+                },
+                { isActive: isUvMode, priority: 100 }
+            ),
+            registerShortcutHandler(
+                'uv.toggleViewerSelectionHighlight',
+                () => {
+                    toggleShowViewerSelectionHighlight()
+                    return true
+                },
+                { isActive: isUvMode, priority: 100 }
+            ),
+            registerShortcutHandler(
+                'uv.toggleModelView',
+                () => {
+                    onToggleModelView()
+                    return true
+                },
+                { isActive: isUvMode, priority: 100 }
+            ),
+            registerShortcutHandler(
+                'view.snapTranslateToggle',
+                () => {
+                    const state = useRendererStore.getState()
+                    state.setSnapTranslateEnabled(!state.snapTranslateEnabled)
+                    return true
+                },
+                { isActive: isUvMode, priority: 100 }
+            ),
+            registerShortcutHandler(
+                'view.snapRotateToggle',
+                () => {
+                    const state = useRendererStore.getState()
+                    state.setSnapRotateEnabled(!state.snapRotateEnabled)
+                    return true
+                },
+                { isActive: isUvMode, priority: 100 }
             )
         ]
 
         return () => {
             unsubscribeHandlers.forEach((unsubscribe) => unsubscribe())
         }
-    }, [undo, redo])
+    }, [undo, redo, selectedUVs, mirrorHorizontal, mirrorVertical, fitToView, toggleShowViewerSelectionHighlight, onToggleModelView])
 
     // Load texture
     useEffect(() => {
@@ -1452,46 +1561,47 @@ const UVEditor: React.FC<UVEditorProps> = ({
             <div style={toolbarStyle}>
                 {/* Sub-mode: Vertex/Edge/Face/Group/Block */}
                 <Tooltip title="选择顶点">
-                    <Button size="small" icon={<BorderOutlined />} style={uvSubMode === 'vertex' ? btnActiveStyle : btnStyle} onClick={() => setUvSubMode('vertex')} />
+                    <ShortcutBindableButton shortcutActionId="uv.modeVertex" size="small" icon={<BorderOutlined />} style={uvSubMode === 'vertex' ? btnActiveStyle : btnStyle} onClick={() => setUvSubMode('vertex')} />
                 </Tooltip>
                 <Tooltip title="选择边">
-                    <Button size="small" icon={<LineOutlined />} style={uvSubMode === 'edge' ? btnActiveStyle : btnStyle} onClick={() => setUvSubMode('edge')} />
+                    <ShortcutBindableButton shortcutActionId="uv.modeEdge" size="small" icon={<LineOutlined />} style={uvSubMode === 'edge' ? btnActiveStyle : btnStyle} onClick={() => setUvSubMode('edge')} />
                 </Tooltip>
                 <Tooltip title="选择面">
-                    <Button size="small" icon={<AppstoreOutlined />} style={uvSubMode === 'face' ? btnActiveStyle : btnStyle} onClick={() => setUvSubMode('face')} />
+                    <ShortcutBindableButton shortcutActionId="uv.modeFace" size="small" icon={<AppstoreOutlined />} style={uvSubMode === 'face' ? btnActiveStyle : btnStyle} onClick={() => setUvSubMode('face')} />
                 </Tooltip>
                 <Tooltip title="选择组">
-                    <Button size="small" icon={<GroupOutlined />} style={uvSubMode === 'group' ? btnActiveStyle : btnStyle} onClick={() => setUvSubMode('group')} />
+                    <ShortcutBindableButton shortcutActionId="uv.modeGroup" size="small" icon={<GroupOutlined />} style={uvSubMode === 'group' ? btnActiveStyle : btnStyle} onClick={() => setUvSubMode('group')} />
                 </Tooltip>
 
                 <Tooltip title="选择块">
-                    <Button size="small" style={uvSubMode === 'block' ? btnActiveStyle : btnStyle} onClick={() => setUvSubMode('block')}>块</Button>
+                    <ShortcutBindableButton shortcutActionId="uv.modeBlock" size="small" style={uvSubMode === 'block' ? btnActiveStyle : btnStyle} onClick={() => setUvSubMode('block')}>块</ShortcutBindableButton>
                 </Tooltip>
 
                 <div style={{ width: '1px', backgroundColor: '#555', margin: '0 4px' }} />
 
                 <Tooltip title="框选/选择">
-                    <Button size="small" icon={<SelectOutlined />} style={transformMode === 'select' ? btnActiveStyle : btnStyle} onClick={() => setTransformMode('select')} />
+                    <ShortcutBindableButton shortcutActionId="uv.transform.select" size="small" icon={<SelectOutlined />} style={transformMode === 'select' ? btnActiveStyle : btnStyle} onClick={() => setTransformMode('select')} />
                 </Tooltip>
                 <Tooltip title="移动 (W)">
-                    <Button size="small" icon={<DragOutlined />} style={transformMode === 'translate' ? btnActiveStyle : btnStyle} onClick={() => setTransformMode('translate')} />
+                    <ShortcutBindableButton shortcutActionId="transform.translate" size="small" icon={<DragOutlined />} style={transformMode === 'translate' ? btnActiveStyle : btnStyle} onClick={() => setTransformMode('translate')} />
                 </Tooltip>
                 <Tooltip title="旋转 (E)">
-                    <Button size="small" icon={<RotateLeftOutlined />} style={transformMode === 'rotate' ? btnActiveStyle : btnStyle} onClick={() => setTransformMode('rotate')} />
+                    <ShortcutBindableButton shortcutActionId="transform.rotate" size="small" icon={<RotateLeftOutlined />} style={transformMode === 'rotate' ? btnActiveStyle : btnStyle} onClick={() => setTransformMode('rotate')} />
                 </Tooltip>
                 <Tooltip title="缩放 (R)">
-                    <Button size="small" icon={<ColumnWidthOutlined />} style={transformMode === 'scale' ? btnActiveStyle : btnStyle} onClick={() => setTransformMode('scale')} />
+                    <ShortcutBindableButton shortcutActionId="transform.scale" size="small" icon={<ColumnWidthOutlined />} style={transformMode === 'scale' ? btnActiveStyle : btnStyle} onClick={() => setTransformMode('scale')} />
                 </Tooltip>
 
                 <div style={{ width: '1px', backgroundColor: '#555', margin: '0 4px' }} />
 
                 <div style={snapStackStyle}>
                     <Tooltip title={'\u8ddd\u79bb\u6355\u6349'}>
-                        <Button
+                        <ShortcutBindableButton
+                            shortcutActionId="view.snapTranslateToggle"
                             size="small"
                             style={{ ...(snapTranslateEnabled ? btnActiveStyle : btnStyle), ...snapButtonStyle }}
                             onClick={() => setSnapTranslateEnabled(!snapTranslateEnabled)}
-                        >{'\u8ddd'}</Button>
+                        >{'\u8ddd'}</ShortcutBindableButton>
                     </Tooltip>
                     <PositiveStepInput
                         min={0.001}
@@ -1504,11 +1614,12 @@ const UVEditor: React.FC<UVEditorProps> = ({
                 </div>
                 <div style={snapStackStyle}>
                     <Tooltip title={'\u89d2\u5ea6\u6355\u6349'}>
-                        <Button
+                        <ShortcutBindableButton
+                            shortcutActionId="view.snapRotateToggle"
                             size="small"
                             style={{ ...(snapRotateEnabled ? btnActiveStyle : btnStyle), ...snapButtonStyle }}
                             onClick={() => setSnapRotateEnabled(!snapRotateEnabled)}
-                        >{'\u89d2'}</Button>
+                        >{'\u89d2'}</ShortcutBindableButton>
                     </Tooltip>
                     <PositiveStepInput
                         min={1}
@@ -1524,31 +1635,32 @@ const UVEditor: React.FC<UVEditorProps> = ({
 
                 {/* Mirror */}
                 <Tooltip title="水平镜像">
-                    <Button size="small" icon={<SwapOutlined />} style={selectedUVs.length === 0 ? btnDisabledStyle : btnStyle} onClick={mirrorHorizontal} disabled={selectedUVs.length === 0} />
+                    <ShortcutBindableButton shortcutActionId="uv.mirrorHorizontal" size="small" icon={<SwapOutlined />} style={selectedUVs.length === 0 ? btnDisabledStyle : btnStyle} onClick={mirrorHorizontal} disabled={selectedUVs.length === 0} />
                 </Tooltip>
                 <Tooltip title="垂直镜像">
-                    <Button size="small" icon={<VerticalAlignMiddleOutlined style={{ transform: 'rotate(90deg)' }} />} style={selectedUVs.length === 0 ? btnDisabledStyle : btnStyle} onClick={mirrorVertical} disabled={selectedUVs.length === 0} />
+                    <ShortcutBindableButton shortcutActionId="uv.mirrorVertical" size="small" icon={<VerticalAlignMiddleOutlined style={{ transform: 'rotate(90deg)' }} />} style={selectedUVs.length === 0 ? btnDisabledStyle : btnStyle} onClick={mirrorVertical} disabled={selectedUVs.length === 0} />
                 </Tooltip>
 
                 <div style={{ width: '1px', backgroundColor: '#555', margin: '0 4px' }} />
 
                 {/* Undo/Redo - always visible */}
                 <Tooltip title="撤销 (Ctrl+Z)">
-                    <Button size="small" icon={<UndoOutlined />} style={historyIndex < 0 ? btnDisabledStyle : btnStyle} onClick={undo} disabled={historyIndex < 0} />
+                    <ShortcutBindableButton shortcutActionId="edit.undo" size="small" icon={<UndoOutlined />} style={historyIndex < 0 ? btnDisabledStyle : btnStyle} onClick={undo} disabled={historyIndex < 0} />
                 </Tooltip>
                 <Tooltip title="重做 (Ctrl+Y)">
-                    <Button size="small" icon={<RedoOutlined />} style={historyIndex >= history.length - 1 ? btnDisabledStyle : btnStyle} onClick={redo} disabled={historyIndex >= history.length - 1} />
+                    <ShortcutBindableButton shortcutActionId="edit.redo" size="small" icon={<RedoOutlined />} style={historyIndex >= history.length - 1 ? btnDisabledStyle : btnStyle} onClick={redo} disabled={historyIndex >= history.length - 1} />
                 </Tooltip>
 
                 <div style={{ width: '1px', backgroundColor: '#555', margin: '0 4px' }} />
 
                 {/* Fit to view */}
                 <Tooltip title="适应视图">
-                    <Button size="small" icon={<CompressOutlined />} style={btnStyle} onClick={fitToView} />
+                    <ShortcutBindableButton shortcutActionId="uv.fitToView" size="small" icon={<CompressOutlined />} style={btnStyle} onClick={fitToView} />
                 </Tooltip>
 
                 <Tooltip title={showViewerSelectionHighlight ? '关闭 3D 选区高亮' : '开启 3D 选区高亮'}>
-                    <Button
+                    <ShortcutBindableButton
+                        shortcutActionId="uv.toggleViewerSelectionHighlight"
                         size="small"
                         icon={<BgColorsOutlined />}
                         style={showViewerSelectionHighlight ? btnActiveStyle : btnStyle}
@@ -1558,7 +1670,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
 
                 {/* Toggle 3D view - icon only */}
                 <Tooltip title={showModelView ? '隐藏3D视图' : '显示3D视图'}>
-                    <Button size="small" icon={showModelView ? <EyeInvisibleOutlined /> : <EyeOutlined />} style={btnStyle} onClick={onToggleModelView} />
+                    <ShortcutBindableButton shortcutActionId="uv.toggleModelView" size="small" icon={showModelView ? <EyeInvisibleOutlined /> : <EyeOutlined />} style={btnStyle} onClick={onToggleModelView} />
                 </Tooltip>
 
                 <div style={{ width: '1px', backgroundColor: '#555', margin: '0 4px' }} />

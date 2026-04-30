@@ -156,7 +156,7 @@ export const MainLayoutNew: React.FC = () => {
                         minWidth: 0,
                     }}
                 >
-                    {showNodeManager && mainMode !== 'uv' && (
+                    {showNodeManager && mainMode !== 'uv' && mainMode !== 'retarget' && (
                         <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
                             <div
                                 style={{

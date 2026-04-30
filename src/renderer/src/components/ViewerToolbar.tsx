@@ -1,6 +1,6 @@
 import { appMessage } from '../store/messageStore'
 import React from 'react';
-import { Button, Tooltip, Space } from 'antd'
+import { Space } from 'antd'
 import {
     GatewayOutlined, // Vertex/Point
     AppstoreOutlined, // Face
@@ -37,6 +37,9 @@ import { NodeType } from '../types/node';
 import { getNodeIcon } from '../utils/nodeUtils';
 import { markNodeManagerListScrollFromTree } from '../utils/nodeManagerListScrollBridge';
 import { PositiveStepInput } from './common/PositiveStepInput';
+import { ShortcutBindableButton } from './common/ShortcutBindableButton';
+import { ShortcutTooltip as Tooltip } from './common/ShortcutTooltip';
+import { registerShortcutHandler } from '../shortcuts/manager';
 
 interface ViewerToolbarProps {
     onRecalculateNormals?: () => void
@@ -412,7 +415,38 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         appMessage.success(axis === 'y' ? '已执行左右镜像' : '已执行垂直镜像')
     }
 
-    if (mainMode === 'uv') return null;
+    const activateAnimationBindingMode = () => {
+        setAnimationSubMode('binding')
+        setGeometrySubMode('vertex')
+        useSelectionStore.getState().clearFaceSelection()
+        setGizmoOrientation('world')
+    }
+
+    const activateAnimationKeyframeMode = () => {
+        const wasKeyframe = useSelectionStore.getState().animationSubMode === 'keyframe'
+        setAnimationSubMode('keyframe')
+        if (!wasKeyframe) {
+            resetTimelineToCurrentSequenceStart()
+        }
+    }
+
+    const activateBindingVertexMode = () => {
+        setGeometrySubMode('vertex')
+        useSelectionStore.getState().clearFaceSelection()
+    }
+
+    const activateBindingGroupMode = () => {
+        const state = useSelectionStore.getState()
+        setGeometrySubMode('group')
+        if (state.selectedVertexIds.length > 0) {
+            state.selectFaces(deriveFaceSelectionFromVertices(state.selectedVertexIds))
+        }
+    }
+
+    const toggleGlobalTransformMode = () => {
+        useSelectionStore.getState().setGlobalTransformPivot('modelCenter')
+        setIsGlobalTransformMode(!useSelectionStore.getState().isGlobalTransformMode)
+    }
 
     // Check if selected vertices are all from the same geoset (required for weld)
     const canSplit = (
@@ -422,6 +456,90 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
     const canWeld = geometrySubMode === 'vertex' &&
         selectedVertexIds.length >= 2 &&
         selectedVertexIds.every(v => v.geosetIndex === selectedVertexIds[0]?.geosetIndex)
+
+    React.useEffect(() => {
+        const isGeometryMode = () => useSelectionStore.getState().mainMode === 'geometry'
+        const isViewMode = () => useSelectionStore.getState().mainMode === 'view'
+        const isNonUvMode = () => useSelectionStore.getState().mainMode !== 'uv'
+        const isAnimationMode = () => useSelectionStore.getState().mainMode === 'animation'
+        const isAnimationBinding = () => {
+            const state = useSelectionStore.getState()
+            return state.mainMode === 'animation' && state.animationSubMode === 'binding'
+        }
+
+        const unsubscribeHandlers = [
+            registerShortcutHandler('geometry.modeVertex', () => { setGeometrySubMode('vertex'); return true }, { isActive: isGeometryMode }),
+            registerShortcutHandler('geometry.modeFace', () => { setGeometrySubMode('face'); return true }, { isActive: isGeometryMode }),
+            registerShortcutHandler('geometry.modeGroup', () => { setGeometrySubMode('group'); return true }, { isActive: isGeometryMode }),
+            registerShortcutHandler('geometry.recalculateNormals', () => { onRecalculateNormals?.(); return !!onRecalculateNormals }, { isActive: isGeometryMode }),
+            registerShortcutHandler('geometry.autoSeparateLayers', () => { onAutoSeparateLayers?.(); return !!onAutoSeparateLayers }, { isActive: isGeometryMode }),
+            registerShortcutHandler('geometry.togglePasteTarget', () => {
+                const state = useRendererStore.getState()
+                state.setPasteCreatesNewGeoset(!state.pasteCreatesNewGeoset)
+                return true
+            }, { isActive: isGeometryMode }),
+            registerShortcutHandler('geometry.splitVertices', () => {
+                if (!canSplit) return false
+                onSplitVertices?.()
+                return !!onSplitVertices
+            }, { isActive: isGeometryMode }),
+            registerShortcutHandler('geometry.weldVertices', () => {
+                if (!canWeld) return false
+                onWeldVertices?.()
+                return !!onWeldVertices
+            }, { isActive: isGeometryMode }),
+            registerShortcutHandler('animation.modeBinding', () => { activateAnimationBindingMode(); return true }, { isActive: isAnimationMode }),
+            registerShortcutHandler('animation.modeKeyframe', () => { activateAnimationKeyframeMode(); return true }, { isActive: isAnimationMode }),
+            registerShortcutHandler('animation.bindingVertexMode', () => { activateBindingVertexMode(); return true }, { isActive: isAnimationBinding }),
+            registerShortcutHandler('animation.bindingGroupMode', () => { activateBindingGroupMode(); return true }, { isActive: isAnimationBinding }),
+            registerShortcutHandler('animation.bindingExpandSelection', () => {
+                if (useSelectionStore.getState().selectedVertexIds.length === 0) return false
+                handleExpandVertexSelection()
+                return true
+            }, { isActive: isAnimationBinding }),
+            registerShortcutHandler('animation.bindingShrinkSelection', () => {
+                if (useSelectionStore.getState().selectedVertexIds.length === 0) return false
+                handleShrinkVertexSelection()
+                return true
+            }, { isActive: isAnimationBinding }),
+            registerShortcutHandler('animation.createBone', () => { handleCreateBone(); return true }, { isActive: isAnimationBinding }),
+            registerShortcutHandler('animation.bindVertices', () => { handleBind(); return true }, { isActive: isAnimationBinding }),
+            registerShortcutHandler('animation.exclusiveBindVertices', () => { handleExclusiveBind(); return true }, { isActive: isAnimationBinding }),
+            registerShortcutHandler('animation.unbindVertices', () => { handleUnbind(); return true }, { isActive: isAnimationBinding }),
+            registerShortcutHandler('animation.pickParent', () => { setIsPickingParent(true); return true }, { isActive: isAnimationBinding }),
+            registerShortcutHandler('view.gizmoOrientationWorld', () => { setGizmoOrientation('world'); return true }, { isActive: isNonUvMode }),
+            registerShortcutHandler('view.gizmoOrientationCamera', () => { setGizmoOrientation('camera'); return true }, { isActive: isNonUvMode }),
+            registerShortcutHandler('view.snapTranslateToggle', () => {
+                const state = useRendererStore.getState()
+                state.setSnapTranslateEnabled(!state.snapTranslateEnabled)
+                return true
+            }, { isActive: isNonUvMode }),
+            registerShortcutHandler('view.snapRotateToggle', () => {
+                const state = useRendererStore.getState()
+                state.setSnapRotateEnabled(!state.snapRotateEnabled)
+                return true
+            }, { isActive: isNonUvMode }),
+            registerShortcutHandler('view.globalTransformToggle', () => { toggleGlobalTransformMode(); return true }, { isActive: isViewMode }),
+            registerShortcutHandler('view.mirrorHorizontal', () => { handleMirrorModel('y'); return true }, { isActive: isViewMode }),
+            registerShortcutHandler('view.mirrorVertical', () => { handleMirrorModel('z'); return true }, { isActive: isViewMode }),
+        ]
+
+        return () => {
+            unsubscribeHandlers.forEach((unsubscribe) => unsubscribe())
+        }
+    }, [
+        canSplit,
+        canWeld,
+        onAutoSeparateLayers,
+        onRecalculateNormals,
+        onSplitVertices,
+        onWeldVertices,
+        pasteCreatesNewGeoset,
+        selectedVertexIds,
+        isGlobalTransformMode,
+    ])
+
+    if (mainMode === 'uv') return null;
 
     return (
         <div style={{
@@ -443,34 +561,39 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                 <>
                     <Space>
                         <Tooltip title="顶点模式">
-                            <Button
+                            <ShortcutBindableButton
+                                shortcutActionId="geometry.modeVertex"
                                 type={geometrySubMode === 'vertex' ? 'primary' : 'default'}
                                 icon={<GatewayOutlined />}
                                 onClick={() => setGeometrySubMode('vertex')}
                             />
                         </Tooltip>
                         <Tooltip title="面模式">
-                            <Button
+                            <ShortcutBindableButton
+                                shortcutActionId="geometry.modeFace"
                                 type={geometrySubMode === 'face' ? 'primary' : 'default'}
                                 icon={<AppstoreOutlined />}
                                 onClick={() => setGeometrySubMode('face')}
                             />
                         </Tooltip>
                         <Tooltip title="组模式 (选择相连元素)">
-                            <Button
+                            <ShortcutBindableButton
+                                shortcutActionId="geometry.modeGroup"
                                 type={geometrySubMode === 'group' ? 'primary' : 'default'}
                                 icon={<GroupOutlined />}
                                 onClick={() => setGeometrySubMode('group')}
                             />
                         </Tooltip>
                         <Tooltip title="重算法线">
-                            <Button
+                            <ShortcutBindableButton
+                                shortcutActionId="geometry.recalculateNormals"
                                 icon={<ThunderboltOutlined />}
                                 onClick={onRecalculateNormals}
                             />
                         </Tooltip>
                         <Tooltip title="一键智能分层">
-                            <Button
+                            <ShortcutBindableButton
+                                shortcutActionId="geometry.autoSeparateLayers"
                                 icon={<ApartmentOutlined />}
                                 onClick={onAutoSeparateLayers}
                             />
@@ -480,32 +603,29 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                     <Space>
                         {/* Vertex Operations - always visible in geometry mode */}
                         <Tooltip title={pasteCreatesNewGeoset ? '复制后新建多边形组' : '复制后合并到原多边形组'}>
-                            <Button
+                            <ShortcutBindableButton
+                                shortcutActionId="geometry.togglePasteTarget"
                                 type={pasteCreatesNewGeoset ? 'primary' : 'default'}
                                 icon={pasteCreatesNewGeoset ? <CopyOutlined /> : <ImportOutlined />}
                                 onClick={() => setPasteCreatesNewGeoset(!pasteCreatesNewGeoset)}
                             />
                         </Tooltip>
                         <Tooltip title="分离 - 将选中顶点及其面分离为新多边形组">
-                            <Button
+                            <ShortcutBindableButton
+                                className="visible-disabled-icon-button"
+                                shortcutActionId="geometry.splitVertices"
                                 icon={<SplitCellsOutlined />}
                                 onClick={onSplitVertices}
                                 disabled={!canSplit}
-                                style={{
-                                    opacity: canSplit ? 1 : 0.5,
-                                    color: canSplit ? undefined : '#888'
-                                }}
                             />
                         </Tooltip>
                         <Tooltip title="焊接 - 将选中顶点合并到中心点">
-                            <Button
+                            <ShortcutBindableButton
+                                className="visible-disabled-icon-button"
+                                shortcutActionId="geometry.weldVertices"
                                 icon={<MergeCellsOutlined />}
                                 onClick={onWeldVertices}
                                 disabled={!canWeld}
-                                style={{
-                                    opacity: canWeld ? 1 : 0.5,
-                                    color: canWeld ? undefined : '#888'
-                                }}
                             />
                         </Tooltip>
                     </Space>
@@ -516,31 +636,26 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                 <>
                     <Space>
                         <Tooltip title="骨骼绑定模式 (静止姿态)">
-                            <Button
+                            <ShortcutBindableButton
+                                shortcutActionId="animation.modeBinding"
                                 type={animationSubMode === 'binding' ? 'primary' : 'default'}
                                  onClick={() => {
-                                    setAnimationSubMode('binding')
-                                    setGeometrySubMode('vertex')
-                                    useSelectionStore.getState().clearFaceSelection()
-                                    setGizmoOrientation('world')
+                                    activateAnimationBindingMode()
                                 }}
                             >
                                 绑定
-                            </Button>
+                            </ShortcutBindableButton>
                         </Tooltip>
                         <Tooltip title="关键帧模式 (动画播放)">
-                            <Button
+                            <ShortcutBindableButton
+                                shortcutActionId="animation.modeKeyframe"
                                 type={animationSubMode === 'keyframe' ? 'primary' : 'default'}
                                  onClick={() => {
-                                    const wasKeyframe = animationSubMode === 'keyframe'
-                                    setAnimationSubMode('keyframe')
-                                    if (!wasKeyframe) {
-                                        resetTimelineToCurrentSequenceStart()
-                                    }
+                                    activateAnimationKeyframeMode()
                                 }}
                             >
                                 关键帧
-                            </Button>
+                            </ShortcutBindableButton>
                         </Tooltip>
                     </Space>
                     <div style={dividerStyle} />
@@ -549,29 +664,28 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                         <>
                             <Space>
                                 <Tooltip title="点模式">
-                                    <Button
+                                    <ShortcutBindableButton
+                                        shortcutActionId="animation.bindingVertexMode"
                                         type={geometrySubMode === 'vertex' ? 'primary' : 'default'}
                                         icon={<GatewayOutlined />}
                                         onClick={() => {
-                                            setGeometrySubMode('vertex')
-                                            useSelectionStore.getState().clearFaceSelection()
+                                            activateBindingVertexMode()
                                         }}
                                     />
                                 </Tooltip>
                                 <Tooltip title="组模式 (选择整个闭合连通顶点组)">
-                                    <Button
+                                    <ShortcutBindableButton
+                                        shortcutActionId="animation.bindingGroupMode"
                                         type={geometrySubMode === 'group' ? 'primary' : 'default'}
                                         icon={<GroupOutlined />}
                                         onClick={() => {
-                                            setGeometrySubMode('group')
-                                            if (selectedVertexIds.length > 0) {
-                                                useSelectionStore.getState().selectFaces(deriveFaceSelectionFromVertices(selectedVertexIds))
-                                            }
+                                            activateBindingGroupMode()
                                         }}
                                     />
                                 </Tooltip>
                                 <Tooltip title="扩选 (增加当前选择周围一圈顶点)">
-                                    <Button
+                                    <ShortcutBindableButton
+                                        shortcutActionId="animation.bindingExpandSelection"
                                         icon={<PlusOutlined style={{ color: selectedVertexIds.length === 0 ? '#8c8c8c' : undefined }} />}
                                         onClick={handleExpandVertexSelection}
                                         disabled={selectedVertexIds.length === 0}
@@ -579,7 +693,8 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                                     />
                                 </Tooltip>
                                 <Tooltip title="缩选 (去掉当前选择边界一圈顶点)">
-                                    <Button
+                                    <ShortcutBindableButton
+                                        shortcutActionId="animation.bindingShrinkSelection"
                                         icon={<MinusOutlined style={{ color: selectedVertexIds.length === 0 ? '#8c8c8c' : undefined }} />}
                                         onClick={handleShrinkVertexSelection}
                                         disabled={selectedVertexIds.length === 0}
@@ -590,22 +705,24 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                             <div style={dividerStyle} />
                             <Space>
                                 <Tooltip title="创建骨骼 (无顶点: 原点 / 有顶点: 顶点中心)">
-                                    <Button
+                                    <ShortcutBindableButton
+                                        shortcutActionId="animation.createBone"
                                         icon={getNodeIcon(NodeType.BONE)}
                                         onClick={handleCreateBone}
                                     />
                                 </Tooltip>
                                 <Tooltip title="绑定选中的顶点到选中的骨骼">
-                                    <Button icon={<LinkOutlined />} onClick={handleBind} />
+                                    <ShortcutBindableButton shortcutActionId="animation.bindVertices" icon={<LinkOutlined />} onClick={handleBind} />
                                 </Tooltip>
                                 <Tooltip title="完全绑定 - 清除选中顶点的其他骨骼绑定，只保留当前骨骼">
-                                    <Button icon={<AimOutlined />} onClick={handleExclusiveBind} />
+                                    <ShortcutBindableButton shortcutActionId="animation.exclusiveBindVertices" icon={<AimOutlined />} onClick={handleExclusiveBind} />
                                 </Tooltip>
                                 <Tooltip title="解除选中顶点的骨骼绑定">
-                                    <Button icon={<DisconnectOutlined />} onClick={handleUnbind} />
+                                    <ShortcutBindableButton shortcutActionId="animation.unbindVertices" icon={<DisconnectOutlined />} onClick={handleUnbind} />
                                 </Tooltip>
                                 <Tooltip title="修改选中骨骼的父节点">
-                                    <Button
+                                    <ShortcutBindableButton
+                                        shortcutActionId="animation.pickParent"
                                         icon={<ApartmentOutlined />}
                                         onClick={() => setIsPickingParent(true)}
                                         style={isPickingParent ? {
@@ -624,7 +741,8 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
 
             <Space>
                 <Tooltip title="移动 (W)">
-                    <Button
+                    <ShortcutBindableButton
+                        shortcutActionId="transform.translate"
                         type={transformMode === 'translate' ? 'primary' : 'default'}
                         icon={<DragOutlined />}
                         onClick={() => setTransformMode('translate')}
@@ -633,14 +751,16 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                 {!(mainMode === 'animation' && animationSubMode === 'binding') && (
                     <>
                         <Tooltip title="旋转 (E)">
-                            <Button
+                            <ShortcutBindableButton
+                                shortcutActionId="transform.rotate"
                                 type={transformMode === 'rotate' ? 'primary' : 'default'}
                                 icon={<RedoOutlined />}
                                 onClick={() => setTransformMode('rotate')}
                             />
                         </Tooltip>
                         <Tooltip title="缩放 (R)">
-                            <Button
+                            <ShortcutBindableButton
+                                shortcutActionId="transform.scale"
                                 type={transformMode === 'scale' ? 'primary' : 'default'}
                                 icon={<ExpandOutlined />}
                                 onClick={() => setTransformMode('scale')}
@@ -655,14 +775,16 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                     <div style={dividerStyle} />
                     <Space size={4}>
                         <Tooltip title={'世界坐标朝向'}>
-                            <Button
+                            <ShortcutBindableButton
+                                shortcutActionId="view.gizmoOrientationWorld"
                                 type={gizmoOrientation === 'world' ? 'primary' : 'default'}
                                 icon={<GlobalOutlined />}
                                 onClick={() => setGizmoOrientation('world')}
                             />
                         </Tooltip>
                         <Tooltip title={'镜头朝向'}>
-                            <Button
+                            <ShortcutBindableButton
+                                shortcutActionId="view.gizmoOrientationCamera"
                                 type={gizmoOrientation === 'camera' ? 'primary' : 'default'}
                                 icon={<CameraOutlined />}
                                 onClick={() => setGizmoOrientation('camera')}
@@ -675,7 +797,8 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
             <Space size={10}>
                 <div style={snapStackStyle}>
                     <Tooltip title={'距离捕捉'}>
-                        <Button
+                        <ShortcutBindableButton
+                            shortcutActionId="view.snapTranslateToggle"
                             type={snapTranslateEnabled ? 'primary' : 'default'}
                             onClick={() => setSnapTranslateEnabled(!snapTranslateEnabled)}
                             style={snapButtonStyle}
@@ -692,7 +815,8 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                 </div>
                 <div style={snapStackStyle}>
                     <Tooltip title={'角度捕捉'}>
-                        <Button
+                        <ShortcutBindableButton
+                            shortcutActionId="view.snapRotateToggle"
                             type={snapRotateEnabled ? 'primary' : 'default'}
                             onClick={() => setSnapRotateEnabled(!snapRotateEnabled)}
                             style={snapButtonStyle}
@@ -714,26 +838,28 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                     <div style={dividerStyle} />
                     <Space>
                         <Tooltip title="全局变换模式 (可以直接修改模型默认位置大小和旋转)">
-                            <Button
+                            <ShortcutBindableButton
+                                shortcutActionId="view.globalTransformToggle"
                                 type={isGlobalTransformMode ? 'primary' : 'default'}
                                 icon={<GlobalOutlined />}
                                 onClick={() => {
-                                    useSelectionStore.getState().setGlobalTransformPivot('modelCenter')
-                                    setIsGlobalTransformMode(!isGlobalTransformMode)
+                                    toggleGlobalTransformMode()
                                 }}
                                 style={isGlobalTransformMode ? { backgroundColor: '#52c41a', borderColor: '#52c41a' } : undefined}
                             >
                                 全局变换
-                            </Button>
+                            </ShortcutBindableButton>
                         </Tooltip>
                         <Tooltip title="左右镜像">
-                            <Button
+                            <ShortcutBindableButton
+                                shortcutActionId="view.mirrorHorizontal"
                                 icon={<SwapOutlined />}
                                 onClick={() => handleMirrorModel('y')}
                             />
                         </Tooltip>
                         <Tooltip title="垂直镜像">
-                            <Button
+                            <ShortcutBindableButton
+                                shortcutActionId="view.mirrorVertical"
                                 icon={<VerticalAlignMiddleOutlined style={{ transform: 'rotate(90deg)' }} />}
                                 onClick={() => handleMirrorModel('z')}
                             />
@@ -745,7 +871,8 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
 
             <Space>
                 <Tooltip title="适应视图 (Z)">
-                    <Button
+                    <ShortcutBindableButton
+                        shortcutActionId="view.fitToView"
                         icon={<FullscreenOutlined />}
                         onClick={onFitToView}
                     />

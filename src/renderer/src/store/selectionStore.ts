@@ -9,7 +9,7 @@ export interface SelectionId {
     index: number; // Vertex index or Face index
 }
 
-export type AppMode = 'view' | 'geometry' | 'uv' | 'animation';
+export type AppMode = 'view' | 'geometry' | 'uv' | 'animation' | 'retarget';
 export type GeometrySubMode = 'vertex' | 'face' | 'group';
 export type UVSelectionMode = 'vertex' | 'edge' | 'face' | 'group' | 'block';
 export type TransformMode = 'translate' | 'rotate' | 'scale' | null;
