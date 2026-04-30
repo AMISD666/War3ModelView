@@ -1,25 +1,27 @@
-export async function debugLog(_message: string, _color?: 'green' | 'red'): Promise<void> {
-    return
+import { debugLog as writeDebugLog } from './debugLog'
+
+export async function debugLog(message: string, color?: 'green' | 'red'): Promise<void> {
+    await writeDebugLog(color ? `[${color}] ${message}` : message)
 }
 
 export async function logModelInfo(
-    _modelPath: string,
-    _model: any,
-    _parseTime: number
+    modelPath: string,
+    model: any,
+    parseTime: number
 ): Promise<void> {
-    return
+    await writeDebugLog(`[Model] parsed ${modelPath} in ${parseTime.toFixed(1)}ms sequences=${model?.Sequences?.length ?? 0} geosets=${model?.Geosets?.length ?? 0} nodes=${model?.Nodes?.length ?? 0}`)
 }
 
 export async function logTextureInfo(
-    _textures: { path: string; loaded: boolean; time?: number }[]
+    textures: { path: string; loaded: boolean; time?: number }[]
 ): Promise<void> {
-    return
+    await writeDebugLog(`[Textures] ${textures.map((texture) => `${texture.loaded ? 'ok' : 'fail'}:${texture.path}${texture.time ? `(${texture.time.toFixed(1)}ms)` : ''}`).join(', ')}`)
 }
 
 export async function logTextureLoadComplete(
-    _totalTextures: number,
-    _loadedCount: number,
-    _totalTime: number
+    totalTextures: number,
+    loadedCount: number,
+    totalTime: number
 ): Promise<void> {
-    return
+    await writeDebugLog(`[Textures] complete ${loadedCount}/${totalTextures} in ${totalTime.toFixed(1)}ms`)
 }

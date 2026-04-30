@@ -1,6 +1,7 @@
-﻿#![windows_subsystem = "windows"]
+#![windows_subsystem = "windows"]
 
 mod activation;
+mod activation_commands;
 mod app_paths;
 mod app_settings;
 mod copy_utils;
@@ -8,6 +9,7 @@ mod delete_utils;
 mod model_manifest;
 mod mpq_manager;
 mod remote_activation_policy;
+mod secure_fs;
 mod texture_decode;
 mod texture_encode;
 
@@ -619,12 +621,15 @@ fn read_mpq_file(path: String, state: State<'_, MpqManager>) -> Result<Response,
 }
 
 #[tauri::command]
-fn read_mpq_files_batch(paths: Vec<String>, state: State<'_, MpqManager>) -> Vec<Option<String>> {
-    state
+fn read_mpq_files_batch(
+    paths: Vec<String>,
+    state: State<'_, MpqManager>,
+) -> Result<Vec<Option<String>>, String> {
+    Ok(state
         .read_files_batch(&paths)
         .into_iter()
         .map(|opt| opt.map(|data| base64::engine::general_purpose::STANDARD.encode(data)))
-        .collect()
+        .collect())
 }
 
 #[tauri::command]
@@ -668,15 +673,15 @@ fn debug_mpq_probe(path: String, state: State<'_, MpqManager>) -> Result<MpqProb
 }
 
 #[tauri::command]
-fn read_local_files_batch(paths: Vec<String>) -> Vec<Option<String>> {
-    paths
+fn read_local_files_batch(paths: Vec<String>) -> Result<Vec<Option<String>>, String> {
+    Ok(paths
         .iter()
         .map(|path| {
             std::fs::read(path)
                 .ok()
                 .map(|data| base64::engine::general_purpose::STANDARD.encode(data))
         })
-        .collect()
+        .collect())
 }
 
 #[tauri::command]
@@ -1034,107 +1039,6 @@ fn load_textures_batch_thumb_rgba(
     }
 
     Ok(Response::new(payload))
-}
-
-// ==================
-// Activation Commands
-// ==================
-#[tauri::command]
-fn get_machine_id() -> Result<String, String> {
-    activation::get_machine_id()
-}
-
-#[tauri::command]
-fn get_activation_status() -> activation::ActivationStatus {
-    activation::get_activation_status()
-}
-
-#[tauri::command]
-fn get_qq_activation_policy() -> remote_activation_policy::QqActivationPolicy {
-    remote_activation_policy::get_qq_activation_policy()
-}
-
-#[tauri::command]
-fn clear_qq_activation_policy_cache() -> Result<(), String> {
-    remote_activation_policy::clear_qq_activation_policy_cache()
-}
-
-#[tauri::command]
-fn activate_software(license_code: String) -> Result<activation::ActivationStatus, String> {
-    activation::activate_software(&license_code)
-}
-
-#[tauri::command]
-async fn open_qq_verification_window(app: tauri::AppHandle) -> Result<(), String> {
-    activation::ensure_qq_activation_allowed()?;
-
-    let label = "qq_verification";
-
-    // If an old window exists, destroy it (not close 鈥?destroy is synchronous and
-    // immediately frees the label so we can re-create without a race condition).
-    if let Some(window) = app.get_webview_window(label) {
-        let _ = window.destroy();
-        // Small yield to let the event loop clean up.
-        std::thread::sleep(std::time::Duration::from_millis(200));
-    }
-
-    // Keep the same entry URL as the known-working implementation.
-    let url = "https://xui.ptlogin2.qq.com/cgi-bin/xlogin?pt_disable_pwd=1&appid=715030901&daid=73&hide_close_icon=1&pt_no_auth=1&s_url=https%3A%2F%2Fqun.qq.com%2Fmember.html%23";
-    let script = format!(
-        r##"
-        (function() {{
-            const targetId = "{0}";
-            const successHash = "#verified_ok_{0}";
-            setInterval(() => {{
-                try {{
-                    const html = document.documentElement ? document.documentElement.innerHTML : "";
-                    if (!html) return;
-                    if (html.includes(targetId) || html.includes('data-id="' + targetId + '"')) {{
-                        if (window.location.hash !== successHash) {{
-                            window.location.hash = successHash;
-                        }}
-                    }}
-                }} catch (_) {{}}
-            }}, 1000);
-        }})();
-        "##,
-        activation::QQ_TARGET_GROUP_ID
-    );
-
-    let external_url =
-        tauri::WebviewUrl::External(tauri::Url::parse(url).map_err(|e| e.to_string())?);
-    tauri::WebviewWindowBuilder::new(&app, label, external_url)
-        .title("QQ 群成员验证")
-        .inner_size(1024.0, 768.0)
-        .resizable(true)
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-        .initialization_script(&script)
-        .build()
-        .map_err(|e| format!("鎵撳紑QQ缇ら獙璇佺獥鍙ｅけ璐? {}", e))?;
-
-    Ok(())
-}
-
-#[tauri::command]
-fn check_qq_verification_window_status(app: tauri::AppHandle) -> Result<bool, String> {
-    let success_flag = format!("verified_ok_{}", activation::QQ_TARGET_GROUP_ID);
-    if let Some(window) = app.get_webview_window("qq_verification") {
-        let current_url = window.url().map_err(|e| e.to_string())?.to_string();
-        if current_url.contains(&success_flag) {
-            activation::save_qq_verification_now()?;
-            let _ = window.destroy();
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-#[tauri::command]
-fn close_qq_verification_window(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("qq_verification") {
-        let _ = window.destroy();
-    }
-    Ok(())
 }
 
 #[tauri::command]
@@ -1723,12 +1627,14 @@ fn get_app_storage_root_cmd() -> Result<String, String> {
 
 #[tauri::command]
 fn set_mpq_paths(paths: Vec<String>) -> Result<bool, String> {
+    activation::require_basic_activation("Saving MPQ settings")?;
     app_settings::update_mpq_paths(paths)?;
     Ok(true)
 }
 
 #[tauri::command]
 fn set_copy_mpq_textures(enabled: bool) -> Result<bool, String> {
+    activation::require_basic_activation("Saving copy settings")?;
     app_settings::set_copy_mpq_textures(enabled)?;
     Ok(true)
 }
@@ -1743,6 +1649,13 @@ fn get_copy_mpq_textures_status() -> bool {
 // ==================
 #[tauri::command]
 fn delete_files(paths: Vec<String>) -> Vec<(String, bool, String)> {
+    if let Err(error) = activation::require_basic_activation("Deleting files") {
+        return paths
+            .into_iter()
+            .map(|path| (path, false, error.clone()))
+            .collect();
+    }
+
     paths
         .into_iter()
         .map(|path| match std::fs::remove_file(&path) {
@@ -1757,6 +1670,7 @@ fn delete_files(paths: Vec<String>) -> Vec<(String, bool, String)> {
 // ==================
 #[tauri::command]
 fn copy_model_with_textures(model_path: String) -> Result<String, String> {
+    activation::require_basic_activation("Copying models with textures")?;
     let temp_root = app_paths::get_app_storage_root()?.join("temp");
     copy_utils::copy_model_with_textures(&model_path, &temp_root)
 }
@@ -1778,7 +1692,11 @@ fn main() {
             }
         };
         let log_path = log_root.join("delete_log.txt");
-        let result = if delete_paths.is_empty() {
+        let result = if let Err(error) =
+            activation::require_basic_activation("Deleting models from the shell")
+        {
+            Err(error)
+        } else if delete_paths.is_empty() {
             Err("No model paths provided".to_string())
         } else {
             delete_utils::delete_models_with_shared_textures(&delete_paths)
@@ -1821,7 +1739,11 @@ fn main() {
         let queue_path = log_root.join("copy_queue.txt");
         let lock_path = log_root.join("copy_queue.lock");
 
-        let result = if copy_paths.len() > 1 {
+        let result = if let Err(error) =
+            activation::require_basic_activation("Copying models from the shell")
+        {
+            Err(error)
+        } else if copy_paths.len() > 1 {
             copy_utils::copy_models_with_textures(&copy_paths, &temp_root, true).map(|(msg, _)| msg)
         } else {
             if !copy_paths.is_empty() {
@@ -1975,6 +1897,16 @@ fn main() {
             debug_mpq_probe,
             read_local_files_batch,
             read_local_files_batch_bin,
+            secure_fs::secure_read_text_file,
+            secure_fs::secure_write_text_file,
+            secure_fs::secure_read_file,
+            secure_fs::secure_write_file,
+            secure_fs::secure_copy_file,
+            secure_fs::secure_create_dir,
+            secure_fs::secure_remove_path,
+            secure_fs::secure_exists,
+            secure_fs::secure_file_size,
+            secure_fs::secure_read_dir,
             load_textures_batch_bin,
             load_textures_batch_thumb_rgba,
             clear_texture_batch_cache,
@@ -1986,14 +1918,14 @@ fn main() {
             emit_to_webview_msgpack_b64,
             emit_to_webview_json_payload,
             // Activation Commands
-            get_machine_id,
-            get_activation_status,
-            get_qq_activation_policy,
-            clear_qq_activation_policy_cache,
-            activate_software,
-            open_qq_verification_window,
-            check_qq_verification_window_status,
-            close_qq_verification_window,
+            activation_commands::get_machine_id,
+            activation_commands::get_activation_status,
+            activation_commands::get_qq_activation_policy,
+            activation_commands::clear_qq_activation_policy_cache,
+            activation_commands::activate_software,
+            activation_commands::open_qq_verification_window,
+            activation_commands::check_qq_verification_window_status,
+            activation_commands::close_qq_verification_window,
             // Context Menu Commands
             register_context_menu,
             unregister_context_menu,

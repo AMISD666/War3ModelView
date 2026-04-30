@@ -14,3 +14,4 @@ export type {
     TextureStateRendererSyncInput,
 } from './RendererSyncTypes'
 export { RendererSyncService, rendererSyncService } from './RendererSyncService'
+export { zoomNodeSizeFromWheel } from './nodeSizeZoom'

@@ -1,3 +1,5 @@
+import { retargetShortcutActions } from './retargetActions'
+
 export type ShortcutContext = 'global' | 'view' | 'geometry' | 'uv' | 'animation' | 'retarget' | 'viewer'
 
 export interface ShortcutAction {
@@ -445,6 +447,8 @@ export const shortcutActions: ShortcutAction[] = [
         defaultBindings: [],
         preventDefault: true
     },
+
+    ...retargetShortcutActions,
 
     // Edit
     {

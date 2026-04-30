@@ -5,6 +5,7 @@ import './assets/index.css'
 import { markStandalonePerf } from './utils/standalonePerf'
 import AppErrorBoundary from './components/common/AppErrorBoundary'
 import { windowGateway } from './infrastructure/window'
+import { initDebugLogging } from './utils/debugLog'
 
 const App = React.lazy(() => import('./App'))
 
@@ -42,6 +43,7 @@ const installBrowserGuards = () => {
 }
 
 installBrowserGuards()
+initDebugLogging()
 
 markStandalonePerf('main_entry_selected', {
     targetWindow: 'main',

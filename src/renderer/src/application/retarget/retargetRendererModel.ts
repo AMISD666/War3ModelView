@@ -113,40 +113,11 @@ const ensureGeosetGroups = (model: any, defaultNodeId: number): void => {
     }
 }
 
-const stripNodePoseAnimationTracks = (model: any): any => {
-    const nodeArrays = [
-        'Nodes',
-        'Bones',
-        'Helpers',
-        'Attachments',
-        'Lights',
-        'ParticleEmitters',
-        'ParticleEmitters2',
-        'RibbonEmitters',
-        'EventObjects',
-        'CollisionShapes',
-        'ParticleEmitterPopcorns',
-    ]
-
-    for (const key of nodeArrays) {
-        if (!Array.isArray(model?.[key])) continue
-        for (const node of model[key]) {
-            if (!node || typeof node !== 'object') continue
-            delete node.Translation
-            delete node.Rotation
-            delete node.Scaling
-        }
-    }
-
-    return model
-}
-
 export const createRetargetRendererModel = (modelData: unknown): any => {
     const cloned = deepClone(modelData)
     const withMaterials = prepareMaterials(cloned)
     const withSequences = ensureSequences(withMaterials)
     const { model, defaultNodeId } = ensureNodes(withSequences)
-    stripNodePoseAnimationTracks(model)
     ensureGeosetGroups(model, defaultNodeId)
     return model
 }

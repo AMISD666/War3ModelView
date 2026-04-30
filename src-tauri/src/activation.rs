@@ -21,6 +21,7 @@ const MACHINE_ID_KEY: &str = "MachineId";
 const LAST_CHECK_TIME_KEY: &str = "LastCheckTime";
 const QQ_VERIFICATION_TIME_KEY: &str = "QQVerif";
 const QQ_REVERIFY_SECONDS: i64 = 180 * 24 * 60 * 60;
+pub const BASIC_FEATURE_LEVEL: u8 = 1;
 pub const QQ_TARGET_GROUP_ID: &str = "168886891";
 
 // Ed25519 Public Key (Base64 encoded)
@@ -408,6 +409,29 @@ pub fn ensure_qq_activation_allowed() -> Result<(), String> {
             .message
             .unwrap_or_else(|| "QQ群成员验证已暂停，请输入激活码激活".to_string()))
     }
+}
+
+pub fn require_license_level(
+    required_level: u8,
+    feature_name: &str,
+) -> Result<ActivationStatus, String> {
+    let status = get_activation_status();
+    if status.is_activated && status.level >= required_level {
+        return Ok(status);
+    }
+
+    let reason = status
+        .error
+        .clone()
+        .unwrap_or_else(|| "not activated".to_string());
+    Err(format!(
+        "{} requires activation level {}. Current level: {}. Reason: {}",
+        feature_name, required_level, status.level, reason
+    ))
+}
+
+pub fn require_basic_activation(feature_name: &str) -> Result<ActivationStatus, String> {
+    require_license_level(BASIC_FEATURE_LEVEL, feature_name)
 }
 
 pub fn activate_software(license_code: &str) -> Result<ActivationStatus, String> {

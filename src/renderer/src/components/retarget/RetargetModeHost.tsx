@@ -28,6 +28,7 @@ interface RetargetModeHostProps {
     handleToggleLooping: () => void
     handleModelLoaded: (model: any) => void
     handleModelFirstFrameReady: () => void
+    handleModelLoadError: (error: unknown, path: string | null) => void
     showFPS: boolean
     playbackSpeed: number
     viewPreset: ViewerProps['viewPreset']
@@ -76,6 +77,7 @@ export const RetargetModeHost: React.FC<RetargetModeHostProps> = (props) => {
                     onToggleLooping={props.handleToggleLooping}
                     onModelLoaded={props.handleModelLoaded}
                     onModelFirstFrameReady={props.handleModelFirstFrameReady}
+                    onModelLoadError={props.handleModelLoadError}
                     showFPS={props.mainMode !== 'uv' && props.showFPS}
                     playbackSpeed={props.playbackSpeed}
                     viewPreset={props.viewPreset}

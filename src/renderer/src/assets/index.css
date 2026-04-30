@@ -42,6 +42,13 @@ body,
     color: rgba(255, 255, 255, 0.55) !important;
 }
 
+.retarget-target-file-button:disabled,
+.retarget-target-file-button.ant-btn-disabled {
+    background: rgba(0, 0, 0, 0.28) !important;
+    border-color: rgba(255, 255, 255, 0.22) !important;
+    color: rgba(255, 255, 255, 0.36) !important;
+}
+
 /* Custom Scrollbar for WebKit (Chrome/Electron) */
 ::-webkit-scrollbar {
     width: 8px;

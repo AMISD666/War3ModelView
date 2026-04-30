@@ -18,6 +18,7 @@ const handlers = new Map<string, ShortcutHandlerEntry[]>()
 
 const contextPriority: ShortcutContext[] = [
     'animation',
+    'retarget',
     'geometry',
     'uv',
     'view',

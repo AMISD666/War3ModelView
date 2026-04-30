@@ -9,6 +9,7 @@ import './assets/index.css'
 import { markStandalonePerf } from './utils/standalonePerf'
 import AppErrorBoundary from './components/common/AppErrorBoundary'
 import { windowGateway } from './infrastructure/window'
+import { initDebugLogging } from './utils/debugLog'
 
 const ModelOptimizeModal = React.lazy(() => import('./components/modals/ModelOptimizeModal'))
 const ModelMergeModal = React.lazy(() => import('./components/modals/ModelMergeModal'))
@@ -60,6 +61,7 @@ const installBrowserGuards = () => {
 }
 
 installBrowserGuards()
+initDebugLogging()
 
 const searchParams = new URLSearchParams(window.location.search)
 const targetWindow = searchParams.get('window')

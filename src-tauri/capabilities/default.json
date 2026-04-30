@@ -7,13 +7,6 @@
         "*"
     ],
     "permissions": [
-        "fs:default",
-        "fs:allow-read-text-file",
-        "fs:allow-read-file",
-        "fs:allow-write-file",
-        "fs:allow-write-text-file",
-        "fs:allow-remove",
-        "fs:allow-stat",
         "dialog:default",
         "shell:allow-open",
         {
@@ -51,16 +44,6 @@
         "core:window:allow-minimize",
         "core:webview:allow-create-webview-window",
         "core:path:default",
-        "process:allow-exit",
-        {
-            "identifier": "fs:scope",
-            "allow": [
-                "$HOME/**",
-                "C:/**",
-                "D:/**",
-                "E:/**",
-                "F:/**"
-            ]
-        }
+        "process:allow-exit"
     ]
 }

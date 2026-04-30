@@ -23,6 +23,7 @@ export interface ViewerProps {
   onToggleWireframe: () => void;
   onModelLoaded: (model: any) => void;
   onModelFirstFrameReady?: () => void;
+  onModelLoadError?: (error: unknown, path: string | null) => void;
   backgroundColor: string;
   showFPS: boolean;
   playbackSpeed: number;

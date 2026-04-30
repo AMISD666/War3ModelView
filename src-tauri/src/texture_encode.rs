@@ -2,6 +2,8 @@ use blp::{AnyImage, AnyImageEncodeOptions};
 use image::{DynamicImage, ImageFormat, RgbaImage};
 use tauri::ipc::Response;
 
+use crate::activation;
+
 fn encode_blp_from_rgba(
     rgba: Vec<u8>,
     width: u32,
@@ -38,6 +40,8 @@ pub fn encode_texture_image(
     format: String,
     blp_quality: Option<u8>,
 ) -> Result<Response, String> {
+    activation::require_basic_activation("Encoding textures")?;
+
     if width == 0 || height == 0 {
         return Err("Invalid texture size".to_string());
     }

@@ -8,6 +8,7 @@ import { loadAllTextures } from '../viewer/textureLoader'
 import { hexToRgb } from '../viewer/types'
 import { SimpleOrbitCamera } from '../../utils/SimpleOrbitCamera'
 import { useRendererStore } from '../../store/rendererStore'
+import { zoomNodeSizeFromWheel } from '../../application/render'
 import type { ModelData } from '../../types/model'
 import type { ModelNode } from '../../types/node'
 import {
@@ -17,6 +18,8 @@ import {
     type NodeScreenLabel,
 } from '../viewer/nodeNameOverlay'
 import { filterVisibleRendererNodes } from '../../types/nodeVisibility'
+import { clampPlaybackFrame, TPOSE_SEQUENCE_INDEX, type RetargetPlaybackState } from './retargetPlayback'
+import { drawRetargetNodeOutline } from './RetargetNodeOutlineOverlay'
 
 interface RetargetModelViewport3DProps {
     label: string
@@ -24,6 +27,10 @@ interface RetargetModelViewport3DProps {
     modelData: ModelData | null | undefined
     nodes: ModelNode[]
     selectedNodeId: number | null
+    highlightedNodeId?: number | null
+    playback: RetargetPlaybackState
+    playbackInterval: [number, number]
+    onFrameChange: (frame: number) => void
     onSelectNode: (node: ModelNode) => void
 }
 
@@ -122,6 +129,10 @@ export const RetargetModelViewport3D: React.FC<RetargetModelViewport3DProps> = (
     modelData,
     nodes,
     selectedNodeId,
+    highlightedNodeId = null,
+    playback,
+    playbackInterval,
+    onFrameChange,
     onSelectNode,
 }) => {
     const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -134,8 +145,14 @@ export const RetargetModelViewport3D: React.FC<RetargetModelViewport3DProps> = (
     const hoveredNodeIdRef = useRef<number | null>(null)
     const dragStartRef = useRef<{ x: number; y: number } | null>(null)
     const selectedNodeIdRef = useRef<number | null>(selectedNodeId)
+    const highlightedNodeIdRef = useRef<number | null>(highlightedNodeId)
     const nodesRef = useRef(nodes)
     const modelDataRef = useRef(modelData)
+    const playbackRef = useRef(playback)
+    const playbackIntervalRef = useRef(playbackInterval)
+    const onFrameChangeRef = useRef(onFrameChange)
+    const lastRenderTimeRef = useRef<number | null>(null)
+    const appliedSequenceRef = useRef<number | null>(null)
     const cameraSnapshotRef = useRef<RetargetCameraSnapshot | null>(null)
     const lastCameraModelPathRef = useRef<string | null>(null)
     const [status, setStatus] = useState(modelData ? '加载中...' : '未打开模型')
@@ -164,12 +181,28 @@ export const RetargetModelViewport3D: React.FC<RetargetModelViewport3DProps> = (
     }, [selectedNodeId])
 
     useEffect(() => {
+        highlightedNodeIdRef.current = highlightedNodeId
+    }, [highlightedNodeId])
+
+    useEffect(() => {
         nodesRef.current = nodes
     }, [nodes])
 
     useEffect(() => {
         modelDataRef.current = modelData
     }, [modelData])
+
+    useEffect(() => {
+        playbackRef.current = playback
+    }, [playback])
+
+    useEffect(() => {
+        playbackIntervalRef.current = playbackInterval
+    }, [playbackInterval])
+
+    useEffect(() => {
+        onFrameChangeRef.current = onFrameChange
+    }, [onFrameChange])
 
     useEffect(() => {
         renderModeRef.current = renderMode
@@ -242,15 +275,25 @@ export const RetargetModelViewport3D: React.FC<RetargetModelViewport3DProps> = (
             }
         }
 
+        const handleWheel = (event: WheelEvent) => {
+            if (!event.ctrlKey && !event.metaKey) return
+            event.preventDefault()
+            zoomNodeSizeFromWheel(event.deltaY)
+        }
+        canvas.addEventListener('wheel', handleWheel, { passive: false })
+
         const rendererModel = createRetargetRendererModel(modelData)
         const renderer = createWar3ModelRenderer(rendererModel)
         rendererRef.current = renderer
         renderer.initGL(gl)
-        ;(renderer as any).setSequence?.(-1)
+        ;(renderer as any).setSequence?.(playbackRef.current.sequenceIndex)
+        appliedSequenceRef.current = playbackRef.current.sequenceIndex
         if ((renderer as any).rendererData) {
-            ;(renderer as any).rendererData.animation = -1
-            ;(renderer as any).rendererData.animationInfo = null
-            ;(renderer as any).rendererData.frame = 0
+            if (playbackRef.current.sequenceIndex === TPOSE_SEQUENCE_INDEX) {
+                ;(renderer as any).rendererData.animation = -1
+                ;(renderer as any).rendererData.animationInfo = null
+            }
+            ;(renderer as any).rendererData.frame = playbackRef.current.frame
         }
         renderer.update(0)
         ;(renderer as any).setTeamColor?.([1, 0, 0])
@@ -315,13 +358,18 @@ export const RetargetModelViewport3D: React.FC<RetargetModelViewport3DProps> = (
 
         const drawNodeOverlay = () => {
             const overlay = overlayRef.current
+            const highlightedIds = [
+                ...(selectedNodeIdRef.current !== null ? [selectedNodeIdRef.current] : []),
+                ...(highlightedNodeIdRef.current !== null ? [highlightedNodeIdRef.current] : []),
+            ]
             drawNodeNameOverlay(
                 overlay,
                 hitListRef.current,
                 nodeNameDisplayModeRef.current,
-                selectedNodeIdRef.current !== null ? [selectedNodeIdRef.current] : [],
+                highlightedIds,
                 hoveredNodeIdRef.current
             )
+            drawRetargetNodeOutline(overlay, hitListRef.current, highlightedNodeIdRef.current)
         }
 
         const syncRendererNodesFromStore = () => {
@@ -342,17 +390,37 @@ export const RetargetModelViewport3D: React.FC<RetargetModelViewport3DProps> = (
             return rendererNodes
         }
 
-        const render = () => {
+        const render = (time: number) => {
             if (disposed) return
+            const lastTime = lastRenderTimeRef.current ?? time
+            const elapsedMs = Math.max(0, time - lastTime)
+            lastRenderTimeRef.current = time
             resize()
             clear()
             gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
             camera.getMatrix(mvMatrix, pMatrix)
             const rendererNodes = filterVisibleRendererNodes(syncRendererNodesFromStore(), null, nodeTypeVisibilityRef.current)
+            const currentPlayback = playbackRef.current
+            const currentInterval = playbackIntervalRef.current
+            let renderFrame = clampPlaybackFrame(currentPlayback.frame, currentInterval)
+            if (currentPlayback.isPlaying && currentPlayback.sequenceIndex !== TPOSE_SEQUENCE_INDEX && currentInterval[1] > currentInterval[0]) {
+                renderFrame += elapsedMs
+                if (renderFrame > currentInterval[1]) {
+                    renderFrame = currentInterval[0] + ((renderFrame - currentInterval[0]) % Math.max(1, currentInterval[1] - currentInterval[0]))
+                }
+                playbackRef.current = { ...currentPlayback, frame: renderFrame }
+                onFrameChangeRef.current(renderFrame)
+            }
             if ((renderer as any).rendererData) {
-                ;(renderer as any).rendererData.animation = -1
-                ;(renderer as any).rendererData.animationInfo = null
-                ;(renderer as any).rendererData.frame = 0
+                if (appliedSequenceRef.current !== currentPlayback.sequenceIndex) {
+                    ;(renderer as any).setSequence?.(currentPlayback.sequenceIndex)
+                    appliedSequenceRef.current = currentPlayback.sequenceIndex
+                }
+                if (currentPlayback.sequenceIndex === TPOSE_SEQUENCE_INDEX) {
+                    ;(renderer as any).rendererData.animation = -1
+                    ;(renderer as any).rendererData.animationInfo = null
+                }
+                ;(renderer as any).rendererData.frame = renderFrame
             }
             renderer.update(0)
             renderer.render(mvMatrix, pMatrix, {
@@ -372,6 +440,11 @@ export const RetargetModelViewport3D: React.FC<RetargetModelViewport3DProps> = (
             }
             if (nodeRenderModeRef.current !== 'hidden' && rendererNodes.length > 0 && debugRendererRef.current) {
                 const selectedNodeId = selectedNodeIdRef.current
+                const highlightedNodeId = highlightedNodeIdRef.current
+                const highlightedIds = [
+                    ...(selectedNodeId !== null ? [selectedNodeId] : []),
+                    ...(highlightedNodeId !== null ? [highlightedNodeId] : []),
+                ]
                 const selectedNode = selectedNodeId !== null
                     ? rendererNodes.find((node: any) => node?.node?.ObjectId === selectedNodeId)
                     : null
@@ -385,7 +458,7 @@ export const RetargetModelViewport3D: React.FC<RetargetModelViewport3DProps> = (
                     mvMatrix,
                     pMatrix,
                     rendererNodes,
-                    selectedNodeId !== null ? [selectedNodeId] : [],
+                    highlightedIds,
                     parentOfSelected,
                     childrenOfSelected,
                     buildNodeTypeColors(),
@@ -421,6 +494,7 @@ export const RetargetModelViewport3D: React.FC<RetargetModelViewport3DProps> = (
             if (rendererRef.current === renderer) rendererRef.current = null
             if (cameraRef.current === camera) cameraRef.current = null
             if (debugRendererRef.current === debugRenderer) debugRendererRef.current = null
+            canvas.removeEventListener('wheel', handleWheel)
         }
     }, [modelPath, modelData])
 

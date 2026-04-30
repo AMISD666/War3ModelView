@@ -1825,6 +1825,11 @@ const MainLayout: React.FC = () => {
         setZustandLoading(false)
     }, [setZustandLoading])
 
+    const handleModelLoadError = useCallback((error: unknown, path: string | null) => {
+        setIsLoading(false); setZustandLoading(false)
+        showMessage('error', '模型加载失败', `${path ? getBasename(path) : '当前模型'} 无法加载：${error instanceof Error ? error.message : String(error)}`)
+    }, [setZustandLoading])
+
     const handleOpen = handleImport // Alias for MenuBar
     const handleOpenRecent = useCallback((path: string) => {
         void openModelPaths({
@@ -2678,7 +2683,7 @@ const MainLayout: React.FC = () => {
                                 backgroundColor={backgroundColor}
                                 currentSequence={currentSequence} isPlaying={isPlaying} showFPS={showFPS} playbackSpeed={playbackSpeed}
                                 handleTogglePlay={handleTogglePlay} handleToggleLooping={handleToggleLooping}
-                                handleModelLoaded={handleModelLoaded} handleModelFirstFrameReady={handleModelFirstFrameReady}
+                                handleModelLoaded={handleModelLoaded} handleModelFirstFrameReady={handleModelFirstFrameReady} handleModelLoadError={handleModelLoadError}
                                 viewPreset={viewPreset}
                                 handleSetViewPreset={handleSetViewPreset} handleAddCameraFromView={handleAddCameraFromView}
                                 handleSave={handleSave} handleExportMDL={handleExportMDL} handleExportMDX={handleExportMDX}

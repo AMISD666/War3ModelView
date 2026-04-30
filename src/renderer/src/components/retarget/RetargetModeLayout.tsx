@@ -1,6 +1,5 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { Button, Radio, Select, Tooltip } from 'antd'
-import { CopyOutlined, InsertRowRightOutlined, SwapOutlined } from '@ant-design/icons'
 import {
     retargetAnimationService,
     type RetargetModelSnapshot,
@@ -10,7 +9,19 @@ import {
 import { useModelStore } from '../../store/modelStore'
 import { showMessage } from '../../store/messageStore'
 import type { ModelNode } from '../../types/node'
+import { registerShortcutHandler } from '../../shortcuts/manager'
+import { ShortcutBindableButton } from '../common/ShortcutBindableButton'
 import RetargetModelViewport3D from './RetargetModelViewport3D'
+import RetargetPlaybackBar from './RetargetPlaybackBar'
+import {
+    clampPlaybackFrame,
+    createRetargetPlaybackState,
+    getPlaybackInterval,
+    getRetargetSequenceOptions,
+    readSequenceInterval,
+    TPOSE_SEQUENCE_INDEX,
+    type RetargetPlaybackState,
+} from './retargetPlayback'
 
 type PanelId = 'A' | 'B'
 
@@ -28,15 +39,6 @@ const getDisplayName = (path: string | null): string => {
 const getNodeLabel = (node: ModelNode): string => {
     const name = (node as any).Name || `Object ${node.ObjectId}`
     return `${name} #${node.ObjectId}`
-}
-
-const readSequenceInterval = (sequence: unknown): [number, number] | null => {
-    const interval = (sequence as any)?.Interval
-    if (!interval || typeof interval.length !== 'number' || interval.length < 2) return null
-    const start = Number(interval[0])
-    const end = Number(interval[1])
-    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null
-    return [start, end]
 }
 
 const getModelName = (snapshot: RetargetModelSnapshot): string => {
@@ -60,12 +62,22 @@ const toolbarDividerStyle: React.CSSProperties = {
     flex: '0 0 auto',
 }
 
+const modeActionDividerStyle: React.CSSProperties = {
+    ...toolbarDividerStyle,
+    margin: '0 16px',
+}
+
 const singleSequenceGroupStyle: React.CSSProperties = {
     display: 'flex',
     alignItems: 'center',
     gap: 6,
-    marginLeft: 18,
+    marginLeft: 2,
 }
+
+const updateRetargetPlayback = (
+    setter: React.Dispatch<React.SetStateAction<RetargetPlaybackState>>,
+    updater: (state: RetargetPlaybackState) => RetargetPlaybackState
+) => setter((state) => updater(state))
 
 export const RetargetModeLayout: React.FC<RetargetModeLayoutProps> = ({
     onSaveTarget,
@@ -76,7 +88,6 @@ export const RetargetModeLayout: React.FC<RetargetModeLayoutProps> = ({
     const targetModelPath = useModelStore((state) => state.modelPath)
     const targetNodes = useModelStore((state) => state.nodes)
     const [source, setSource] = useState<RetargetModelSnapshot | null>(null)
-    const [copyEnabled, setCopyEnabled] = useState(false)
     const [selectedSourceNodeId, setSelectedSourceNodeId] = useState<number | null>(null)
     const [selectedTargetNodeId, setSelectedTargetNodeId] = useState<number | null>(null)
     const [openingSource, setOpeningSource] = useState(false)
@@ -87,6 +98,8 @@ export const RetargetModeLayout: React.FC<RetargetModeLayoutProps> = ({
     const [sequenceReplaceMode, setSequenceReplaceMode] = useState<RetargetSequenceReplaceMode>('smart')
     const [selectedSourceSequenceIndex, setSelectedSourceSequenceIndex] = useState<number | null>(null)
     const [manualSequenceRange, setManualSequenceRange] = useState<RetargetSequenceCopyRange | null>(null)
+    const [sourcePlayback, setSourcePlayback] = useState<RetargetPlaybackState>(() => createRetargetPlaybackState())
+    const [targetPlayback, setTargetPlayback] = useState<RetargetPlaybackState>(() => createRetargetPlaybackState())
 
     const selectedSourceNode = useMemo(
         () => source?.nodes.find((node) => node.ObjectId === selectedSourceNodeId) ?? null,
@@ -104,6 +117,32 @@ export const RetargetModeLayout: React.FC<RetargetModeLayoutProps> = ({
             }
         })
     }, [source])
+
+    const sourcePlaybackOptions = useMemo(() => getRetargetSequenceOptions(source?.modelData), [source])
+    const targetPlaybackOptions = useMemo(() => getRetargetSequenceOptions(targetModelData), [targetModelData])
+    const sourcePlaybackInterval = useMemo(
+        () => getPlaybackInterval(sourcePlaybackOptions, sourcePlayback.sequenceIndex),
+        [sourcePlaybackOptions, sourcePlayback.sequenceIndex]
+    )
+    const targetPlaybackInterval = useMemo(
+        () => getPlaybackInterval(targetPlaybackOptions, targetPlayback.sequenceIndex),
+        [targetPlaybackOptions, targetPlayback.sequenceIndex]
+    )
+    const selectedSourceNodeName = (selectedSourceNode as any)?.Name
+    const targetNameMatchedNodeId = useMemo(() => {
+        if (typeof selectedSourceNodeName !== 'string' || !selectedSourceNodeName.trim()) return null
+        const match = targetNodes.find((node) => (node as any)?.Name === selectedSourceNodeName)
+        return match?.ObjectId ?? null
+    }, [selectedSourceNodeName, targetNodes])
+    const canCopyNodeData = sequenceReplaceMode === 'manual'
+
+    useEffect(() => {
+        setSourcePlayback(createRetargetPlaybackState())
+    }, [source?.path])
+
+    useEffect(() => {
+        setTargetPlayback(createRetargetPlaybackState())
+    }, [targetModelPath])
 
     const handleOpenSource = async () => {
         setOpeningSource(true)
@@ -139,14 +178,14 @@ export const RetargetModeLayout: React.FC<RetargetModeLayoutProps> = ({
 
     const handleSelectSourceNode = (node: ModelNode) => {
         setSelectedSourceNodeId(node.ObjectId)
-        if (copyEnabled) {
+        if (canCopyNodeData) {
             showMessage('info', '已选择 A 区节点', getNodeLabel(node))
         }
     }
 
     const handleSelectTargetNode = (node: ModelNode) => {
         setSelectedTargetNodeId(node.ObjectId)
-        if (!copyEnabled) return
+        if (!canCopyNodeData) return
         if (!source || !selectedSourceNode || !targetModelData) {
             showMessage('warning', '套动作模式', '请先打开 A/B 模型，并在 A 区选择一个节点')
             return
@@ -219,7 +258,6 @@ export const RetargetModeLayout: React.FC<RetargetModeLayoutProps> = ({
                     sourceInterval: result.sourceInterval,
                     targetInterval: result.targetInterval,
                 })
-                setCopyEnabled(true)
                 showMessage(
                     'success',
                     '手动模式',
@@ -240,6 +278,31 @@ export const RetargetModeLayout: React.FC<RetargetModeLayoutProps> = ({
         }
     }
 
+    useEffect(() => {
+        const disposeSource = registerShortcutHandler('retarget.playPauseSource', () => {
+            setSourcePlayback((state) => ({ ...state, isPlaying: !state.isPlaying }))
+            return true
+        }, { isActive: () => true })
+        const disposeTarget = registerShortcutHandler('retarget.playPauseTarget', () => {
+            setTargetPlayback((state) => ({ ...state, isPlaying: !state.isPlaying }))
+            return true
+        }, { isActive: () => true })
+        const disposeReplace = registerShortcutHandler('retarget.replaceSequences', () => {
+            handleReplaceSequences()
+            return true
+        }, { isActive: () => true })
+        const disposeSingle = registerShortcutHandler('retarget.replaceSingleSequence', () => {
+            handleReplaceSingleSequence()
+            return true
+        }, { isActive: () => true })
+        return () => {
+            disposeSource()
+            disposeTarget()
+            disposeReplace()
+            disposeSingle()
+        }
+    }, [source, targetModelData, selectedSourceSequenceIndex, sequenceReplaceMode, manualSequenceRange, selectedSourceNode])
+
     const runTargetFileAction = async (action: () => void | boolean | Promise<void | boolean>) => {
         if (!targetModelData) {
             showMessage('warning', '套动作模式', '请先打开 B 区模型')
@@ -253,11 +316,43 @@ export const RetargetModeLayout: React.FC<RetargetModeLayoutProps> = ({
         }
     }
 
+    const handlePlaybackSequenceChange = (panel: PanelId, sequenceIndex: number) => {
+        const options = panel === 'A' ? sourcePlaybackOptions : targetPlaybackOptions
+        const interval = getPlaybackInterval(options, sequenceIndex)
+        const setter = panel === 'A' ? setSourcePlayback : setTargetPlayback
+        updateRetargetPlayback(setter, () => ({
+            sequenceIndex,
+            frame: interval[0],
+            isPlaying: false,
+        }))
+    }
+
+    const handlePlaybackFrameChange = (panel: PanelId, frame: number) => {
+        const state = panel === 'A' ? sourcePlayback : targetPlayback
+        const interval = panel === 'A' ? sourcePlaybackInterval : targetPlaybackInterval
+        const setter = panel === 'A' ? setSourcePlayback : setTargetPlayback
+        updateRetargetPlayback(setter, () => ({
+            ...state,
+            frame: clampPlaybackFrame(frame, interval),
+            isPlaying: false,
+        }))
+    }
+
+    const handleTogglePlayback = (panel: PanelId) => {
+        const interval = panel === 'A' ? sourcePlaybackInterval : targetPlaybackInterval
+        const setter = panel === 'A' ? setSourcePlayback : setTargetPlayback
+        if (interval[1] <= interval[0]) return
+        updateRetargetPlayback(setter, (state) => ({ ...state, isPlaying: !state.isPlaying }))
+    }
+
     const renderPanel = (panel: PanelId) => {
         const isSource = panel === 'A'
         const nodes = isSource ? source?.nodes ?? [] : targetNodes
         const selectedId = isSource ? selectedSourceNodeId : selectedTargetNodeId
         const canWriteTarget = !isSource && !!targetModelData
+        const playback = isSource ? sourcePlayback : targetPlayback
+        const playbackOptions = isSource ? sourcePlaybackOptions : targetPlaybackOptions
+        const playbackInterval = isSource ? sourcePlaybackInterval : targetPlaybackInterval
         return (
             <section style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', borderRight: isSource ? '1px solid #333' : 0 }}>
                 <div style={{ height: 42, borderBottom: '1px solid #333', display: 'flex', alignItems: 'center', gap: 8, padding: '0 10px', background: '#202020' }}>
@@ -270,13 +365,13 @@ export const RetargetModeLayout: React.FC<RetargetModeLayoutProps> = ({
                     </Button>
                     {!isSource && (
                         <>
-                            <Button size="small" onClick={() => void runTargetFileAction(onSaveTarget)} disabled={!canWriteTarget} loading={savingTarget}>
+                            <Button className="retarget-target-file-button" size="small" onClick={() => void runTargetFileAction(onSaveTarget)} disabled={!canWriteTarget} loading={savingTarget}>
                                 保存
                             </Button>
-                            <Button size="small" onClick={() => void runTargetFileAction(onExportTargetMDL)} disabled={!canWriteTarget || savingTarget}>
+                            <Button className="retarget-target-file-button" size="small" onClick={() => void runTargetFileAction(onExportTargetMDL)} disabled={!canWriteTarget || savingTarget}>
                                 导出 MDL
                             </Button>
-                            <Button size="small" onClick={() => void runTargetFileAction(onExportTargetMDX)} disabled={!canWriteTarget || savingTarget}>
+                            <Button className="retarget-target-file-button" size="small" onClick={() => void runTargetFileAction(onExportTargetMDX)} disabled={!canWriteTarget || savingTarget}>
                                 导出 MDX
                             </Button>
                         </>
@@ -289,7 +384,26 @@ export const RetargetModeLayout: React.FC<RetargetModeLayoutProps> = ({
                         modelData={isSource ? source?.modelData : targetModelData}
                         nodes={nodes}
                         selectedNodeId={selectedId}
+                        highlightedNodeId={isSource ? null : targetNameMatchedNodeId}
+                        playback={playback}
+                        playbackInterval={playbackInterval}
+                        onFrameChange={(frame) => {
+                            const setter = isSource ? setSourcePlayback : setTargetPlayback
+                            updateRetargetPlayback(setter, (state) => ({ ...state, frame }))
+                        }}
                         onSelectNode={isSource ? handleSelectSourceNode : handleSelectTargetNode}
+                    />
+                </div>
+                <div style={{ height: 38, borderTop: '1px solid #333', display: 'flex', alignItems: 'center', gap: 8, padding: '0 10px', background: '#202020' }}>
+                    <RetargetPlaybackBar
+                        actionId={isSource ? 'retarget.playPauseSource' : 'retarget.playPauseTarget'}
+                        state={playback}
+                        sequenceOptions={playbackOptions}
+                        interval={playbackInterval}
+                        disabled={isSource ? !source : !targetModelData}
+                        onSequenceChange={(sequenceIndex) => handlePlaybackSequenceChange(panel, sequenceIndex)}
+                        onFrameChange={(frame) => handlePlaybackFrameChange(panel, frame)}
+                        onTogglePlay={() => handleTogglePlayback(panel)}
                     />
                 </div>
             </section>
@@ -299,18 +413,6 @@ export const RetargetModeLayout: React.FC<RetargetModeLayoutProps> = ({
     return (
         <div style={{ width: '100%', height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', background: '#181818', color: '#eee', overflow: 'hidden' }}>
             <div style={{ height: 38, borderBottom: '1px solid #333', display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px', background: '#242424' }}>
-                <div style={toolbarGroupStyle}>
-                    <Tooltip title="开启后，先点 A 区节点，再点 B 区节点，复制动态关键帧和质心点数据。">
-                        <Button
-                            size="small"
-                            type={copyEnabled ? 'primary' : 'default'}
-                            icon={<CopyOutlined />}
-                            onClick={() => setCopyEnabled(!copyEnabled)}
-                            aria-label="复制节点数据"
-                        />
-                    </Tooltip>
-                </div>
-                <span style={toolbarDividerStyle} />
                 <div style={toolbarGroupStyle}>
                     <Radio.Group
                         size="small"
@@ -323,28 +425,33 @@ export const RetargetModeLayout: React.FC<RetargetModeLayoutProps> = ({
                             { label: '手动', value: 'manual' },
                         ]}
                     />
+                    <span style={modeActionDividerStyle} />
                     <Tooltip title={sequenceReplaceMode === 'manual' ? '只替换动作序列范围，不修改动画轨道。' : '按同名骨骼/节点匹配并同步动画轨道。'}>
-                        <Button
+                        <ShortcutBindableButton
+                            shortcutActionId="retarget.replaceSequences"
                             className="retarget-sequence-replace-button"
                             size="small"
-                            icon={<SwapOutlined />}
                             onClick={handleReplaceSequences}
                             disabled={!source || !targetModelData}
                             loading={replacingSequences}
                             aria-label="替换动作序列"
-                        />
+                        >
+                            全部
+                        </ShortcutBindableButton>
                     </Tooltip>
                     <div style={singleSequenceGroupStyle}>
                         <Tooltip title={sequenceReplaceMode === 'manual' ? '按 A 区选中动作给 B 区新增动作序列，随后手动选择节点复制到新范围。' : '按 A 区选中动作给 B 区新增动作序列，并自动复制同名节点在该动作范围内的关键帧。'}>
-                            <Button
+                            <ShortcutBindableButton
+                                shortcutActionId="retarget.replaceSingleSequence"
                                 className="retarget-sequence-replace-button"
                                 size="small"
-                                icon={<InsertRowRightOutlined />}
                                 onClick={handleReplaceSingleSequence}
                                 disabled={!source || !targetModelData || selectedSourceSequenceIndex === null}
                                 loading={replacingSingleSequence}
                                 aria-label="单动作替换"
-                            />
+                            >
+                                单动作
+                            </ShortcutBindableButton>
                         </Tooltip>
                         <Select
                             size="small"
