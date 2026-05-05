@@ -1001,7 +1001,7 @@ const MainLayout: React.FC = () => {
             paths,
             source: request.source ?? 'external-open',
             addToRecent: request.addToRecent ?? true,
-            acceptPath: (path) => openModelWorkflow.isOpenableModelFile(path),
+            acceptPath: (path) => openModelWorkflow.isOpenableResourceFile(path),
             processedPaths: request.source === 'cli-hot-open' ? processedHotOpenPaths.current : undefined,
             delayMs: request.delayMs ?? 40,
         }, {
@@ -1863,7 +1863,7 @@ const MainLayout: React.FC = () => {
                     const paths = Array.isArray(event.payload?.paths) ? event.payload.paths : []
                     if (!paths || paths.length === 0) return
 
-                    const filePath = paths.find((path) => openModelWorkflow.isOpenableModelFile(path))
+                    const filePath = paths.find((path) => openModelWorkflow.isOpenableResourceFile(path))
                     if (!filePath) {
                         // Forward non-model external drops to feature-specific handlers (e.g. texture drop zones)
                         window.dispatchEvent(new CustomEvent('war3-external-file-drop', {
@@ -1888,7 +1888,7 @@ const MainLayout: React.FC = () => {
                     if (sourceWindowLabel && sourceWindowLabel !== currentWindowLabel) return
 
                     const paths = Array.isArray(event.payload?.paths) ? event.payload.paths : []
-                    const hasOpenableModel = paths.some((path) => openModelWorkflow.isOpenableModelFile(path))
+                    const hasOpenableModel = paths.some((path) => openModelWorkflow.isOpenableResourceFile(path))
                     isExternalModelDragRef.current = hasOpenableModel
                     if (hasOpenableModel) {
                         setIsDragging(true)
@@ -2536,7 +2536,7 @@ const MainLayout: React.FC = () => {
                         fontWeight: 'bold',
                         color: '#fff'
                     }}>
-                        拖放 MDX/MDL/BLP/TGA 文件以打开资源
+                        拖放 MDX/MDL/FBX/BLP/TGA/PNG 文件以打开资源
                     </div>
                 </div>
             )}

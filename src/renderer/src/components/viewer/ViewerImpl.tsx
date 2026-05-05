@@ -10,7 +10,7 @@ import{desktopGateway}from"../../infrastructure/desktop";
 import{windowGateway}from"../../infrastructure/window";
 import{decodeWar3BlpMipToImageData}from"../../infrastructure/texture";
 import ModelWorker from"../../workers/model-worker.worker?worker";
-import TextureAdjustWorker from"../../workers/texture-adjust.worker?worker";import{SimpleOrbitCamera}from"../../utils/SimpleOrbitCamera";import{decodeTextureData,getTextureCandidatePaths,loadAllTextures,normalizePath,prepareModelForTextureLoad}from"./textureLoader";
+import TextureAdjustWorker from"../../workers/texture-adjust.worker?worker";import{SimpleOrbitCamera}from"../../utils/SimpleOrbitCamera";import{decodeTextureData,decodeTextureDataAsync,getTextureCandidatePaths,loadAllTextures,normalizePath,prepareModelForTextureLoad}from"./textureLoader";
 import type{WorkerLike}from"./textureLoader";import{validateAllParticleEmitters}from"./particleValidator";import{describePe2AnimOrScalar,pe2PreviewDebugEnabled}from"../../utils/pe2PreviewDebug";import{checkForStructuralChanges,syncParticleEmitters2InPlace}from"./modelSync";import{getEnvironmentManager}from"./EnvironmentManager";import{debugLog,logModelInfo}from"../../utils/debugLogger";import{hexToRgb}from"./types";import{mat3,mat4,vec3,vec4,quat}from"gl-matrix";import{GridRenderer}from"../GridRenderer";import{DebugRenderer}from"../DebugRenderer";import{GizmoRenderer,GizmoAxis,GIZMO_AXIS_LENGTH}from"../GizmoRenderer";import{AxisIndicator}from"../AxisIndicator";import{DEFAULT_TEXTURE_ADJUSTMENTS,applyTextureAdjustments,isDefaultTextureAdjustments,normalizeTextureAdjustments}from"../../utils/textureAdjustments";
 import{reportModelBoundsFallback,selectTrustedModelBounds}from"./ViewerModelBounds";import{reportViewerRenderError,type ViewerRenderDiagnosticRenderer}from"./ViewerRenderDiagnostics";import{finishFailedModelRenderFrame}from"./ViewerRenderRecovery";
 import type{TextureAdjustments}from"../../utils/textureAdjustments";import{useUIStore}from"../../store/uiStore";import{useSelectionStore}from"../../store/selectionStore";import{useModelStore}from"../../store/modelStore";import{useRendererStore}from"../../store/rendererStore";import{useHistoryStore}from"../../store/historyStore";import{useUvEditorStore}from"../../store/uvEditorStore";import{ModelInfoPanel}from"../info/ModelInfoPanel";import{ViewerToolbar}from"../ViewerToolbar";import { ConfigProvider, theme } from "antd";import{CameraOutlined,CopyOutlined,SyncOutlined,PauseCircleOutlined,PlayCircleOutlined}from"@ant-design/icons";import{commandManager}from"../../utils/CommandManager";import{MoveVerticesCommand,VertexChange}from"../../commands/MoveVerticesCommand";import{MoveNodesCommand,NodeChange}from"../../commands/MoveNodesCommand";import{SetNodeParentCommand}from"../../commands/SetNodeParentCommand";import{VertexEditor}from"../VertexEditor";import{pickClosestGeoset}from"../../utils/rayTriangle";import{SplitVerticesCommand}from"../../commands/SplitVerticesCommand";import{AutoSeparateLayersCommand}from"../../commands/AutoSeparateLayersCommand";import{WeldVerticesCommand}from"../../commands/WeldVerticesCommand";import{DeleteVerticesCommand}from"../../commands/DeleteVerticesCommand";import{DeleteFacesCommand}from"../../commands/DeleteFacesCommand";import{PasteVerticesCommand}from"../../commands/PasteVerticesCommand";import{UpdateSequenceExtentsCommand}from"../../commands/UpdateSequenceExtentsCommand";import{isTextInputActive,normalizeKeyCombo,normalizeKeyComboFromEvent}from"../../shortcuts/utils";import{registerGeometryDeleteKeyListener}from"../../utils/geometryDeleteShortcutBridge";import{WEBGL_CONTEXT_ATTRIBUTES}from"./ViewerRenderConstants";import{createViewerFramePerfAggregate,roundPerfValue}from"./ViewerPerf";
@@ -3502,10 +3502,10 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
         }
       };
 
-      // Texture preview mode (.blp/.tga)
+      // Texture preview mode (.blp/.tga/browser image)
       if (isTexturePreviewPath(path)) {
         const bytes = await readPathBytes(path);
-        const imageData = decodeTextureData(toTightArrayBuffer(bytes), path, { preferBlpBaseMip: true });
+        const imageData = await decodeTextureDataAsync(toTightArrayBuffer(bytes), path, { preferBlpBaseMip: true });
         if (!imageData) {
           throw new Error(`无法解码贴图文件:${path}`);
         }

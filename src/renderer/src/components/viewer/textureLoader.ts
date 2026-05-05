@@ -43,6 +43,7 @@ export interface TextureLoadResult {
 
 export {
     decodeTextureData,
+    decodeTextureDataAsync,
     getTextureCandidatePaths,
     isMPQPath,
     normalizePath,

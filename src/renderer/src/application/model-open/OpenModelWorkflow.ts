@@ -49,11 +49,12 @@ export const DEFAULT_IMPORT_FILE_DIALOG_OPTIONS: OpenFileDialogOptions = {
     multiple: false,
     filters: [{
         name: '魔兽争霸3资源',
-        extensions: ['mdx', 'mdl', 'fbx', 'blp', 'tga'],
+        extensions: ['mdx', 'mdl', 'fbx', 'blp', 'tga', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'],
     }],
 }
 
 const MODEL_FILE_EXTENSIONS = new Set(['mdx', 'mdl', 'fbx'])
+const OPENABLE_RESOURCE_EXTENSIONS = new Set(['mdx', 'mdl', 'fbx', 'blp', 'tga', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'])
 
 const getFileExtension = (path: string): string => {
     const dotIndex = path.lastIndexOf('.')
@@ -70,6 +71,10 @@ export class OpenModelWorkflow {
 
     isOpenableModelFile(path: string): boolean {
         return MODEL_FILE_EXTENSIONS.has(getFileExtension(path))
+    }
+
+    isOpenableResourceFile(path: string): boolean {
+        return OPENABLE_RESOURCE_EXTENSIONS.has(getFileExtension(path))
     }
 
     async openFromDialog(
