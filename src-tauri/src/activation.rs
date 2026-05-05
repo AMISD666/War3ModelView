@@ -45,6 +45,14 @@ fn default_level() -> u8 {
     1 // Default to Basic level for backward compatibility
 }
 
+fn normalize_license_level(level: u8) -> u8 {
+    if level == 0 {
+        BASIC_FEATURE_LEVEL
+    } else {
+        level
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActivationStatus {
     pub is_activated: bool,
@@ -336,14 +344,15 @@ pub fn get_activation_status() -> ActivationStatus {
                     (None, None)
                 };
 
+                let level = normalize_license_level(payload.lvl);
                 return ActivationStatus {
                     is_activated: true,
                     license_type: payload.typ,
                     expiration_date: exp_date,
                     days_remaining: days_rem,
                     error: None,
-                    level: payload.lvl,
-                    level_name: level_to_name(payload.lvl),
+                    level,
+                    level_name: level_to_name(level),
                 };
             }
             Err(e) => {
@@ -458,13 +467,27 @@ pub fn activate_software(license_code: &str) -> Result<ActivationStatus, String>
         (None, None)
     };
 
+    let level = normalize_license_level(payload.lvl);
+
     Ok(ActivationStatus {
         is_activated: true,
         license_type: payload.typ,
         expiration_date: exp_date,
         days_remaining: days_rem,
         error: None,
-        level: payload.lvl,
-        level_name: level_to_name(payload.lvl),
+        level,
+        level_name: level_to_name(level),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn activated_license_level_zero_is_basic() {
+        assert_eq!(normalize_license_level(0), BASIC_FEATURE_LEVEL);
+        assert_eq!(normalize_license_level(1), 1);
+        assert_eq!(normalize_license_level(2), 2);
+    }
 }

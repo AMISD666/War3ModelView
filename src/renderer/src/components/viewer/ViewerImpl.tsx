@@ -10,7 +10,8 @@ import{windowGateway}from"../../infrastructure/window";
 import{decodeWar3BlpMipToImageData}from"../../infrastructure/texture";
 import ModelWorker from"../../workers/model-worker.worker?worker";
 import TextureAdjustWorker from"../../workers/texture-adjust.worker?worker";import{SimpleOrbitCamera}from"../../utils/SimpleOrbitCamera";import{decodeTextureData,getTextureCandidatePaths,loadAllTextures,normalizePath,prepareModelForTextureLoad}from"./textureLoader";
-import type{WorkerLike}from"./textureLoader";import{validateAllParticleEmitters}from"./particleValidator";import{describePe2AnimOrScalar,pe2PreviewDebugEnabled}from"../../utils/pe2PreviewDebug";import{checkForStructuralChanges,syncParticleEmitters2InPlace}from"./modelSync";import{getEnvironmentManager}from"./EnvironmentManager";import{logModelInfo}from"../../utils/debugLogger";import{hexToRgb}from"./types";import{mat3,mat4,vec3,vec4,quat}from"gl-matrix";import{GridRenderer}from"../GridRenderer";import{DebugRenderer}from"../DebugRenderer";import{GizmoRenderer,GizmoAxis,GIZMO_AXIS_LENGTH}from"../GizmoRenderer";import{AxisIndicator}from"../AxisIndicator";import{DEFAULT_TEXTURE_ADJUSTMENTS,applyTextureAdjustments,isDefaultTextureAdjustments,normalizeTextureAdjustments}from"../../utils/textureAdjustments";
+import type{WorkerLike}from"./textureLoader";import{validateAllParticleEmitters}from"./particleValidator";import{describePe2AnimOrScalar,pe2PreviewDebugEnabled}from"../../utils/pe2PreviewDebug";import{checkForStructuralChanges,syncParticleEmitters2InPlace}from"./modelSync";import{getEnvironmentManager}from"./EnvironmentManager";import{debugLog,logModelInfo}from"../../utils/debugLogger";import{hexToRgb}from"./types";import{mat3,mat4,vec3,vec4,quat}from"gl-matrix";import{GridRenderer}from"../GridRenderer";import{DebugRenderer}from"../DebugRenderer";import{GizmoRenderer,GizmoAxis,GIZMO_AXIS_LENGTH}from"../GizmoRenderer";import{AxisIndicator}from"../AxisIndicator";import{DEFAULT_TEXTURE_ADJUSTMENTS,applyTextureAdjustments,isDefaultTextureAdjustments,normalizeTextureAdjustments}from"../../utils/textureAdjustments";
+import{reportModelBoundsFallback,selectTrustedModelBounds}from"./ViewerModelBounds";import{reportViewerRenderError,type ViewerRenderDiagnosticRenderer}from"./ViewerRenderDiagnostics";import{finishFailedModelRenderFrame}from"./ViewerRenderRecovery";
 import type{TextureAdjustments}from"../../utils/textureAdjustments";import{useUIStore}from"../../store/uiStore";import{useSelectionStore}from"../../store/selectionStore";import{useModelStore}from"../../store/modelStore";import{useRendererStore}from"../../store/rendererStore";import{useHistoryStore}from"../../store/historyStore";import{useUvEditorStore}from"../../store/uvEditorStore";import{ModelInfoPanel}from"../info/ModelInfoPanel";import{ViewerToolbar}from"../ViewerToolbar";import { ConfigProvider, theme } from "antd";import{CameraOutlined,CopyOutlined,SyncOutlined,PauseCircleOutlined,PlayCircleOutlined}from"@ant-design/icons";import{commandManager}from"../../utils/CommandManager";import{MoveVerticesCommand,VertexChange}from"../../commands/MoveVerticesCommand";import{MoveNodesCommand,NodeChange}from"../../commands/MoveNodesCommand";import{SetNodeParentCommand}from"../../commands/SetNodeParentCommand";import{VertexEditor}from"../VertexEditor";import{pickClosestGeoset}from"../../utils/rayTriangle";import{SplitVerticesCommand}from"../../commands/SplitVerticesCommand";import{AutoSeparateLayersCommand}from"../../commands/AutoSeparateLayersCommand";import{WeldVerticesCommand}from"../../commands/WeldVerticesCommand";import{DeleteVerticesCommand}from"../../commands/DeleteVerticesCommand";import{DeleteFacesCommand}from"../../commands/DeleteFacesCommand";import{PasteVerticesCommand}from"../../commands/PasteVerticesCommand";import{UpdateSequenceExtentsCommand}from"../../commands/UpdateSequenceExtentsCommand";import{isTextInputActive,normalizeKeyCombo,normalizeKeyComboFromEvent}from"../../shortcuts/utils";import{registerGeometryDeleteKeyListener}from"../../utils/geometryDeleteShortcutBridge";import{WEBGL_CONTEXT_ATTRIBUTES}from"./ViewerRenderConstants";import{createViewerFramePerfAggregate,roundPerfValue}from"./ViewerPerf";
 import type{ViewerFramePerfAggregate,ViewerFramePerfSample}from"./ViewerPerf";import{applyHealthBarOffset,resolveHealthBarState}from"./ViewerHealthBar";import type{HealthBarDragSnapshot,HealthBarState}from"./ViewerHealthBar";import{getLiveTextureSourceKey,getTextureAdjustmentSignature,getTextureDecodeWorkerCount,isTexturePreviewPath,toTextureUpdateUint8Array,toTightArrayBuffer,toUint8Array}from"./ViewerTextureUtils";
 import { isGeosetVisible } from "../../utils/geosetVisibility";import { canDeleteNode } from "../../utils/nodeUtils";import { createNodeScreenLabels, drawNodeNameOverlay, findClosestNodeLabel } from "./nodeNameOverlay";import { useNodeNameOverlayRefs } from "./useNodeNameOverlayRefs";import { filterVisibleRendererNodes } from "../../types/nodeVisibility";
@@ -725,34 +726,6 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
     };
   }, []);
 
-  const readVec3 = (v: any): [number, number, number] | null => {
-    if (!v) return null;
-    const a0 = Number((v as any)[0]);
-    const a1 = Number((v as any)[1]);
-    const a2 = Number((v as any)[2]);
-    if (!Number.isFinite(a0) || !Number.isFinite(a1) || !Number.isFinite(a2)) return null;
-    return [a0, a1, a2];
-  };
-
-  const getModelMinMax = (info: any): { min: [number, number, number]; max: [number, number, number] } | null => {
-    // war3-model historically exposed Info.Extent = { Min, Max }
-    const extentMin = readVec3(info?.Extent?.Min);
-    const extentMax = readVec3(info?.Extent?.Max);
-    if (extentMin && extentMax) return { min: extentMin, max: extentMax };
-
-    // Many paths use Info.MinimumExtent / Info.MaximumExtent
-    const min = readVec3(info?.MinimumExtent);
-    const max = readVec3(info?.MaximumExtent);
-    if (min && max) return { min, max };
-
-    // Fallback: BoundsRadius around origin.
-    const r = Number(info?.BoundsRadius);
-    if (Number.isFinite(r) && r > 0) {
-      return { min: [-r, -r, -r], max: [r, r, r] };
-    }
-    return null;
-  };
-
   useEffect(() => {
     rendererRef.current = renderer;
     useRendererStore.getState().setRenderer(renderer);
@@ -969,11 +942,14 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
 
   const fitToViewImpl = React.useCallback(() => {
     const renderer = rendererRef.current;
-    if (!renderer || !renderer.model || !renderer.model.Info) return;
+    if (!renderer || !renderer.model) return;
 
-    const info = renderer.model.Info as any;
-    const bounds = getModelMinMax(info);
+    const boundsSelection = selectTrustedModelBounds(renderer.model);
+    const bounds = boundsSelection.bounds;
     if (!bounds) return;
+    if (boundsSelection.fallbackReason) {
+      reportModelBoundsFallback(boundsSelection, modelPath, debugLog);
+    }
 
     const min = vec3.fromValues(bounds.min[0], bounds.min[1], bounds.min[2]);
     const max = vec3.fromValues(bounds.max[0], bounds.max[1], bounds.max[2]);
@@ -999,7 +975,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
     targetCamera.current.theta = Math.PI / 4;
     targetCamera.current.phi = Math.PI / 3;
     syncCameraToOrbit();
-  }, []);
+  }, [modelPath]);
 
   const handleFitToView = () => {
     fitToViewImpl();
@@ -1477,7 +1453,9 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
         }
 
         const rawTextureId = typeof layer.TextureID === "number" ? layer.TextureID : Number(layer.TextureID);
-        const safeTextureId = Number.isFinite(rawTextureId) ? Math.min(Math.max(0, Math.floor(rawTextureId)), maxTextureId) : 0;
+        const safeTextureId = Number.isFinite(rawTextureId)
+          ? Math.min(Math.max(-1, Math.floor(rawTextureId)), maxTextureId)
+          : -1;
 
         if (safeTextureId !== layer.TextureID || tVertexAnimChanged) {
           materialChanged = true;
@@ -4043,6 +4021,21 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
         });
       }
 
+      if (
+        Array.isArray(modelData.Textures) &&
+        Array.isArray(renderer.model?.Textures) &&
+        modelData.Textures.length < renderer.model.Textures.length
+      ) {
+        rendererSyncService.syncTextureState({
+          renderer: renderer as any,
+          document: modelData as any,
+          documentRevision: useModelStore.getState().documentRevision,
+          previewRevision: useModelStore.getState().previewRevision,
+          ensureTextureSamplers: (targetRenderer, textures) =>
+            ensureWebGpuTextureSamplers(targetRenderer as any, textures as any[]),
+        });
+      }
+
       // === PARTICLES ===
       // Sync ParticleEmitters2 array - always sync to handle deletions
       // Default to empty array if undefined to properly handle particle node deletion
@@ -4752,6 +4745,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
               ribbonsController.renderGPU = noopRender;
             }
 
+            let mainSceneRenderFailed = false;
             try {
               mdlRenderer.render(mvMatrix, pMatrix, renderOpts);
               if (shouldRenderWireframeOverlay) {
@@ -4768,6 +4762,13 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
                   wireframe: true,
                   enableLighting: false,
                 });
+              }
+            } catch (renderError) {
+              mainSceneRenderFailed = true;
+              const now = performance.now();
+              if (now - lastRenderErrorReportTimeRef.current > 1000) {
+                lastRenderErrorReportTimeRef.current = now;
+                reportViewerRenderError(renderError, { renderer: rendererRef.current as unknown as ViewerRenderDiagnosticRenderer, modelPath, stage: "model-render", consolePrefix: "[Viewer] Model render failed; drawing helper overlays only:", contextPrefix: "[Viewer] Render failure context:", perfName: "viewer_model_render_error", gl, debug: debugLog, markPerf: markStandalonePerf });
               }
             } finally {
               if (particlesController) {
@@ -4789,7 +4790,20 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
             // === Grid Rendering (Moved AFTER model for correct depth/overlay handling) ===
             if (gl && (showGridXY || showGridXZ || showGridYZ)) {
               gridRenderer.current.updateBuffers(gl as WebGLRenderingContext, gridSettings.gridSize || 2048);
-              gridRenderer.current.render(gl as WebGLRenderingContext, baseMvMatrix || mvMatrix, pMatrix, gridSettings, showGridXY, showGridXZ, showGridYZ);
+              const helperGridSettings = mainSceneRenderFailed
+                ? { ...gridSettings, enableDepth: false }
+                : gridSettings;
+              gridRenderer.current.render(gl as WebGLRenderingContext, baseMvMatrix || mvMatrix, pMatrix, helperGridSettings, showGridXY, showGridXZ, showGridYZ);
+            }
+
+            if (mainSceneRenderFailed) {
+              sceneMs = performance.now() - sceneStageStart;
+              overlayStageStart = performance.now();
+              finishFailedModelRenderFrame({ axisIndicator: axisIndicator.current, canvas, cameraMs, clearMs, currentAnimationSubMode, currentMainMode, frameCount, framePerfStart, gl, lastFpsTime, mvMatrix: baseMvMatrix || mvMatrix, overlayStageStart, pMatrix, recordFramePerfSample, sceneMs, setFps, stateMs, time, transformMode: transformMode || "none", updateMs, playing: isPlayingRef.current });
+              if (runState.shouldRun && scheduleNext && globalRenderLoopId === myLoopId) {
+                animationFrameId.current = requestAnimationFrame(render);
+              }
+              return;
             }
 
             // === Attachment Point Rendering (Moved AFTER main scene to handle depth/overlay) ===
@@ -5724,16 +5738,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
           const shouldReport = now - lastRenderErrorReportTimeRef.current > 1000;
           if (shouldReport) {
             lastRenderErrorReportTimeRef.current = now;
-            const rendererModel = (rendererRef.current as any)?.model;
-            const materialCount = Array.isArray(rendererModel?.Materials) ? rendererModel.Materials.length : 0;
-            const textureCount = Array.isArray(rendererModel?.Textures) ? rendererModel.Textures.length : 0;
-            console.error("[Viewer] Render Loop Crash:", e);
-            console.error("[Viewer] Render loop context:", {
-              materialCount,
-              textureCount,
-              currentSequence: (rendererRef.current as any)?.rendererData?.animationInfo?.Name,
-              currentFrame: (rendererRef.current as any)?.rendererData?.frame,
-            });
+            reportViewerRenderError(e, { renderer: rendererRef.current as unknown as ViewerRenderDiagnosticRenderer, modelPath, stage: "render-loop", consolePrefix: "[Viewer] Render Loop Crash:", contextPrefix: "[Viewer] Render loop context:", perfName: "viewer_render_loop_error", gl, debug: debugLog, markPerf: markStandalonePerf });
           }
           // Keep RAF alive after a bad frame so UI controls and camera never hard-freeze.
           // This allows hot-sync fixes (e.g., texture/material patch) to recover next frame.

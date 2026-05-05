@@ -15,10 +15,18 @@ src-tauri/gen/
 target/
 
 # Vendored package build artifacts
-vendor/**/dist/
+vendor/*/
+!vendor/war3-model/
+!vendor/war3-model/**
+vendor/**/node_modules/
+vendor/**/docs/
+vendor/**/.github/
+vendor/**/.husky/
 vendor/**/.turbo/
+vendor/**/dist/*
 !vendor/war3-model/dist/
 !vendor/war3-model/dist/war3-model.d.ts
+!vendor/war3-model/dist/war3-model.browser.d.ts
 
 # TypeScript / tool caches
 *.tsbuildinfo
@@ -34,6 +42,7 @@ pnpm-debug.log*
 typecheck_*.txt
 tsc_errors.log
 update_log.txt
+/error.txt
 
 # Local editor and assistant state
 .vscode/
@@ -51,14 +60,17 @@ activation/
 docs/*
 !docs/
 !docs/DEVELOPMENT_RULES.md
-vendor/
 scripts/*
 !scripts/
 !scripts/check-mdx-strict-export.mjs
 !scripts/check-architecture-guardrails.mjs
 !scripts/check-state-sync-fixtures.mjs
+!scripts/check-war3-model-vendor.mjs
+!scripts/sync-war3-model-vendor.mjs
 activation/
-AGENTS.md
+
+# Local-only AI agent instructions
+/AGENTS.md
 
 # OS noise
 .DS_Store

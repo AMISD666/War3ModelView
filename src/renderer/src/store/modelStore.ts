@@ -7,7 +7,7 @@ import { mat4, vec3, mat3, quat } from 'gl-matrix';
 import { ModelData } from '../types/model';
 import { ModelNode, NodeType } from '../types/node';
 import { Tab, TabSnapshot } from '../types/store';
-import { useRendererStore } from './rendererStore';
+import { useRendererStore } from './rendererStore';import { patchNodesForEmitterVisualData } from './modelNodePatch';
 import {
     processDeathAnimation,
     processRemoveLights,
@@ -24,7 +24,6 @@ import { markStandalonePerf } from '../utils/standalonePerf';
 import { desktopGateway } from '../infrastructure/desktop';
 import { getTextureCandidatePaths, normalizeTexturePath } from '../infrastructure/texture';
 import { buildTargetAssetPath, getDirname, isAbsoluteWindowsPath, normalizeWindowsPath } from '../utils/windowsPath';
-
 const MAX_CACHED_RENDERERS = 5;
 
 const normalizeModelIdentityPath = (path: unknown): string => {
@@ -2565,6 +2564,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             || Object.prototype.hasOwnProperty.call(sanitizedPatch, 'RibbonEmitters');
         const clearedMaterialPreview = !!state.materialManagerPreview && touchesMaterialPreviewDomains;
         return createDocumentMutationPatch(state, updatedModelData, {
+            nodes: (() => { const nextNodes = patchNodesForEmitterVisualData(state.nodes, sanitizedPatch); return nextNodes !== state.nodes ? nextNodes : undefined })(),
             extra: {
                 materialManagerPreview: clearedMaterialPreview ? null : state.materialManagerPreview,
                 previewRevision: clearedMaterialPreview ? state.previewRevision + 1 : state.previewRevision,

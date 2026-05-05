@@ -239,6 +239,12 @@ Worker 规则：
 
 `vendor/` 默认是第三方/移植代码。不要为了业务便利随意深改。
 
+`war3-model` 运行时固定走仓库内 `vendor/war3-model`，该目录必须与相邻正确渲染库
+`../war3-model-4.0.0` 保持同步。粒子渲染已用该 4.0.0 库验证为正确，因此不要把
+`war3-model` 改回 `node_modules` 副本，也不要在业务代码或 Vite 配置中写死外部绝对路径。
+刷新库时运行 `npm run sync:war3-model`，提交或排查前运行
+`npm run check:war3-model-vendor` 确认 vendor 未漂移。
+
 允许修改 vendor 的条件：
 
 - 上游没有可用扩展点。

@@ -2,6 +2,11 @@ import { useModelStore, type MaterialManagerPreview } from '../../store/modelSto
 import { markCommandAccepted, markDocumentRevisionChanged } from '../diagnostics'
 import { previewOverlayService } from '../preview'
 import { commandBus, type CommandBus } from './CommandBus'
+import {
+    findSingleRemovedTextureIndex,
+    remapMaterialsAfterTextureRemoval,
+    remapParticleEmittersAfterTextureRemoval,
+} from '../../utils/materialTextureRelations'
 
 export type TextureMaterialDocumentDomain = 'textures' | 'materials' | 'geosets' | 'preview'
 export type TextureMaterialRendererPlan = 'texturePixels' | 'materialsOnly' | 'geosetBuffers' | 'fullReload'
@@ -100,6 +105,29 @@ export class TextureMaterialCommandHandler {
     }
 
     setTextureCollection(input: SetTextureCollectionInput): TextureMaterialCommandResult {
+        const previousModelData = useModelStore.getState().modelData
+        const removedIndex = findSingleRemovedTextureIndex(previousModelData?.Textures, input.textures)
+        if (previousModelData && removedIndex !== null) {
+            return this.setTextureMaterialCollections({
+                textures: input.textures,
+                materials: remapMaterialsAfterTextureRemoval(
+                    previousModelData.Materials ?? [],
+                    removedIndex,
+                    input.textures.length,
+                ),
+                particleEmitters: remapParticleEmittersAfterTextureRemoval(
+                    previousModelData.ParticleEmitters,
+                    removedIndex,
+                    input.textures.length,
+                ),
+                particleEmitters2: remapParticleEmittersAfterTextureRemoval(
+                    previousModelData.ParticleEmitters2,
+                    removedIndex,
+                    input.textures.length,
+                ),
+            })
+        }
+
         return this.executeCommand('Texture: Set Collection', ['textures'], 'texturePixels', () => {
             useModelStore.getState().setTextures(input.textures)
         })

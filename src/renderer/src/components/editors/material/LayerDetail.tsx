@@ -84,10 +84,13 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
         void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload);
     }
 
-    const textureOptions = (modelData as any)?.Textures?.map((t: any, i: number) => ({
+    const textureOptions = [
+        { value: -1, label: 'None' },
+        ...((modelData as any)?.Textures?.map((t: any, i: number) => ({
         value: i,
         label: `[${i}] ${t.Image ? t.Image.split(/[\\/]/).pop() : '无路径'}`
-    })) || []
+        })) || []),
+    ]
 
     const textureAnimOptions = (modelData as any)?.TextureAnims?.map((_t: any, i: number) => ({
         value: i,
@@ -113,7 +116,7 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
                         <Select
                             size="small"
                             style={{ flex: 1 }}
-                            value={typeof layer.TextureID === 'number' ? layer.TextureID : 0}
+                            value={typeof layer.TextureID === 'number' ? layer.TextureID : -1}
                             onChange={(v) => handleChange('TextureID', v)}
                             options={textureOptions}
                         />

@@ -174,10 +174,10 @@ const MaterialAnimPanel: React.FC = () => {
     }, [materials.length, effectiveModelData, pickedGeosetIndex, selectedIds, selectedMaterialIndex, selectedMaterialIndices.length, setSelectedMaterialIndex, setSelectedMaterialIndices])
 
     const currentTextureId = useMemo(() => {
-        if (!primaryLayer) return 0
+        if (!primaryLayer) return -1
         return typeof primaryLayer.TextureID === 'number'
             ? Math.round(primaryLayer.TextureID)
-            : Math.round(sampleScalarTrack(primaryLayer.TextureID, roundedFrame, 0))
+            : Math.round(sampleScalarTrack(primaryLayer.TextureID, roundedFrame, -1))
     }, [primaryLayer, roundedFrame])
 
     const currentAlpha = useMemo(() => {
@@ -194,10 +194,13 @@ const MaterialAnimPanel: React.FC = () => {
     }, [currentAlpha, isAlphaInputFocused])
 
     const textureOptions = useMemo(() => (
-        textures.map((texture, index) => ({
+        [
+        { label: 'None', value: -1 },
+        ...textures.map((texture, index) => ({
             label: `${index}: ${getTextureName(texture?.Image)}`,
             value: index
-        }))
+        })),
+        ]
     ), [textures])
 
     const commitMaterials = useCallback((historyName: string, updater: (nextMaterials: any[]) => void) => {
@@ -234,7 +237,7 @@ const MaterialAnimPanel: React.FC = () => {
 
     const updateFieldValue = useCallback((field: 'TextureID' | 'Alpha', value: number | null) => {
         const safeValue = field === 'TextureID'
-            ? Math.max(0, Math.round(Number(value ?? 0)))
+            ? Math.max(-1, Math.round(Number(value ?? -1)))
             : Math.max(0, Math.min(1, Number(value ?? 1)))
         applyToSelectedMaterials(`修改材质${field}`, (layer) => ({
             ...layer,
@@ -244,7 +247,7 @@ const MaterialAnimPanel: React.FC = () => {
 
     const commitFieldValue = useCallback((field: 'TextureID' | 'Alpha', value: number | null) => {
         const safeValue = field === 'TextureID'
-            ? Math.max(0, Math.round(Number(value ?? 0)))
+            ? Math.max(-1, Math.round(Number(value ?? -1)))
             : Math.max(0, Math.min(1, Number(value ?? 1)))
         applyToSelectedMaterials(field === 'TextureID' ? '修改材质TextureID' : '修改材质Alpha', (layer) => {
             const previousTrack = layer[field]

@@ -1850,7 +1850,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
                                                 }
                                                 if (isStandalone) {
                                                     emitTextureAction({
-                                                        action: 'SAVE_TEXTURES_WITH_MATERIALS',
+                                                        action: 'SAVE_TEXTURES_WITH_MATERIALS', stalePolicy: 'warn',
                                                         payload: {
                                                             textures: texturesForSave,
                                                             materials: materialsForSave,

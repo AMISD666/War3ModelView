@@ -1463,7 +1463,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     }, [visible, selectedMaterialIndex, selectedLayerIndex, modelData, modelPath, localMaterials])
     const effectiveTextures = localTextures.length > 0 ? localTextures : ((modelData as any)?.Textures || [])
     const textureCount = effectiveTextures.length || 0
-    const textureOptions = Array.from({ length: textureCount }, (_, i) => {
+    const textureOptions = [{ value: '-1', plainLabel: 'None', label: 'None' }, ...Array.from({ length: textureCount }, (_, i) => {
         const path = effectiveTextures?.[i]?.Image || '';
         const filename = path.replace(/\\/g, '/').split('/').pop() || path;
 
@@ -1472,7 +1472,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             plainLabel: filename || `Texture ${i}`,
             label: `${filename || `Texture ${i}`}  (#${i})`
         };
-    })
+    })]
     if (textureOptions.length === 0) {
     }
 
@@ -1705,7 +1705,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                                                         <Select
                                                             size="small"
                                                             style={{ width: '100%', fontSize: '12px' }}
-                                                            value={String(typeof selectedLayer.TextureID === 'number' ? selectedLayer.TextureID : Number(selectedLayer.TextureID || 0))}
+                                                            value={String(typeof selectedLayer.TextureID === 'number' ? selectedLayer.TextureID : Number(selectedLayer.TextureID ?? -1))}
                                                             onChange={(v) => {
                                                                 const nextMaterials = updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TextureID: Number(v) }, true)
                                                                 commitStandaloneTextureDrivenChange(nextMaterials, modelTexturesRef.current)

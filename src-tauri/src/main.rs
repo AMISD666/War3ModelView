@@ -1627,7 +1627,6 @@ fn get_app_storage_root_cmd() -> Result<String, String> {
 
 #[tauri::command]
 fn set_mpq_paths(paths: Vec<String>) -> Result<bool, String> {
-    activation::require_basic_activation("Saving MPQ settings")?;
     app_settings::update_mpq_paths(paths)?;
     Ok(true)
 }

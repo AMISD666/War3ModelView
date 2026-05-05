@@ -134,10 +134,17 @@ export class TextureManagerCommandHandler {
 
         if (action === 'SAVE_TEXTURES_WITH_MATERIALS') {
             const record = asRecord(data)
+            const textures = Array.isArray(record?.textures) ? record.textures : []
+            const currentTextures = useModelStore.getState().modelData?.Textures
+            if (Array.isArray(currentTextures) && textures.length === currentTextures.length - 1) {
+                textureMaterialCommandHandler.setTextureCollection({ textures })
+                return
+            }
+
             const currentGeosets = useModelStore.getState().modelData?.Geosets
             const mergedGeosets = mergeGeosetMetadata(currentGeosets, record?.geosets as unknown[] | undefined)
             textureMaterialCommandHandler.setTextureMaterialCollections({
-                textures: Array.isArray(record?.textures) ? record.textures : [],
+                textures,
                 materials: Array.isArray(record?.materials) ? record.materials : undefined,
                 geosets: mergedGeosets,
                 particleEmitters: Array.isArray(record?.particleEmitters) ? record.particleEmitters : undefined,

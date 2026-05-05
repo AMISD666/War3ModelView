@@ -77,10 +77,6 @@ export function remapTextureRefAfterRemoval(value: any, removedIndex: number, fa
 }
 
 export function remapMaterialsAfterTextureRemoval(materials: any[], removedIndex: number, nextTextureCount: number): any[] {
-    const fallbackIndex = nextTextureCount > 0
-        ? Math.min(removedIndex, nextTextureCount - 1)
-        : 0
-
     return (Array.isArray(materials) ? materials : []).map((material: any) => {
         const nextMaterial = cloneStructured(material)
         if (!Array.isArray(nextMaterial?.Layers)) {
@@ -91,7 +87,7 @@ export function remapMaterialsAfterTextureRemoval(materials: any[], removedIndex
             const nextLayer = cloneStructured(layer)
             for (const key of MATERIAL_TEXTURE_REF_KEYS) {
                 if (nextLayer?.[key] !== undefined) {
-                    nextLayer[key] = remapTextureRefAfterRemoval(nextLayer[key], removedIndex, fallbackIndex)
+                    nextLayer[key] = remapTextureRefAfterRemoval(nextLayer[key], removedIndex, -1)
                 }
             }
             return nextLayer
@@ -107,18 +103,52 @@ export function remapParticleEmittersAfterTextureRemoval(
     nextTextureCount: number,
 ): any[] | undefined {
     if (!Array.isArray(emitters)) return undefined
-    const fallbackIndex = nextTextureCount > 0
-        ? Math.min(removedIndex, nextTextureCount - 1)
-        : -1
 
     return emitters.map((emitter: any) => {
         const nextEmitter = cloneStructured(emitter)
         const key = nextEmitter.TextureID !== undefined ? 'TextureID' : 'TextureId'
         if (nextEmitter[key] !== undefined) {
-            nextEmitter[key] = remapTextureRefAfterRemoval(nextEmitter[key], removedIndex, fallbackIndex)
+            nextEmitter[key] = remapTextureRefAfterRemoval(nextEmitter[key], removedIndex, -1)
         }
         return nextEmitter
     })
+}
+
+export function findSingleRemovedTextureIndex(
+    previousTextures: any[] | undefined | null,
+    nextTextures: any[] | undefined | null,
+): number | null {
+    if (!Array.isArray(previousTextures) || !Array.isArray(nextTextures)) return null
+    if (previousTextures.length !== nextTextures.length + 1) return null
+
+    const signatureOf = (texture: any): string =>
+        buildTextureDefinitionSignature(texture ? [texture] : [])
+
+    let removedIndex: number | null = null
+    let previousIndex = 0
+    let nextIndex = 0
+
+    while (previousIndex < previousTextures.length) {
+        const previousSignature = signatureOf(previousTextures[previousIndex])
+        const nextSignature = nextIndex < nextTextures.length
+            ? signatureOf(nextTextures[nextIndex])
+            : null
+
+        if (previousSignature === nextSignature) {
+            previousIndex++
+            nextIndex++
+            continue
+        }
+
+        if (removedIndex !== null) {
+            return null
+        }
+        removedIndex = previousIndex
+        previousIndex++
+    }
+
+    if (nextIndex !== nextTextures.length) return null
+    return removedIndex
 }
 
 export function remapTVertexAnimIdAfterRemoval(value: unknown, removedIndex: number): number | null | unknown {
