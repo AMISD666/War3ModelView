@@ -16,8 +16,6 @@ target/
 
 # Vendored package build artifacts
 vendor/*/
-!vendor/war3-model/
-!vendor/war3-model/**
 !vendor/ufbx/
 !vendor/ufbx/**
 vendor/**/node_modules/
@@ -26,9 +24,6 @@ vendor/**/.github/
 vendor/**/.husky/
 vendor/**/.turbo/
 vendor/**/dist/*
-!vendor/war3-model/dist/
-!vendor/war3-model/dist/war3-model.d.ts
-!vendor/war3-model/dist/war3-model.browser.d.ts
 
 # TypeScript / tool caches
 *.tsbuildinfo
