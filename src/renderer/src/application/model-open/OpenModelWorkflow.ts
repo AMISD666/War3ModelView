@@ -49,11 +49,11 @@ export const DEFAULT_IMPORT_FILE_DIALOG_OPTIONS: OpenFileDialogOptions = {
     multiple: false,
     filters: [{
         name: '魔兽争霸3资源',
-        extensions: ['mdx', 'mdl', 'blp', 'tga'],
+        extensions: ['mdx', 'mdl', 'fbx', 'blp', 'tga'],
     }],
 }
 
-const MODEL_FILE_EXTENSIONS = new Set(['mdx', 'mdl'])
+const MODEL_FILE_EXTENSIONS = new Set(['mdx', 'mdl', 'fbx'])
 
 const getFileExtension = (path: string): string => {
     const dotIndex = path.lastIndexOf('.')

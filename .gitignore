@@ -18,6 +18,8 @@ target/
 vendor/*/
 !vendor/war3-model/
 !vendor/war3-model/**
+!vendor/ufbx/
+!vendor/ufbx/**
 vendor/**/node_modules/
 vendor/**/docs/
 vendor/**/.github/
@@ -60,11 +62,17 @@ activation/
 docs/*
 !docs/
 !docs/DEVELOPMENT_RULES.md
+!docs/FBX_MDX_MDL_Implementation_Plan.md
+!docs/FBX_to_MDX_MDL_Technical_Details.md
 scripts/*
 !scripts/
 !scripts/check-mdx-strict-export.mjs
 !scripts/check-architecture-guardrails.mjs
 !scripts/check-state-sync-fixtures.mjs
+!scripts/check-fbx-import-fixtures.mjs
+!scripts/check-fbx-export-normalization.mjs
+!scripts/check-sequence-interval-normalization.mjs
+!scripts/check-fbx-animation-effective-interval.mjs
 !scripts/check-war3-model-vendor.mjs
 !scripts/sync-war3-model-vendor.mjs
 activation/
@@ -85,6 +93,10 @@ Desktop.ini
 
 # Local test models and one-off root debug scripts
 testmodel/
+!testmodel/
+testmodel/*
+!testmodel/fbx/
+!testmodel/fbx/**
 public/test_model.*
 /debug_*.js
 /dump_nodes.js

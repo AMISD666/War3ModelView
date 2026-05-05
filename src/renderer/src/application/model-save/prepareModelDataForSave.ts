@@ -16,6 +16,7 @@ import {
 import {
     normalizeGlobalSequences,
     normalizeModelInfo,
+    normalizeModelVersion,
     normalizeSequences,
     normalizeTextures,
 } from './saveDataSections'
@@ -43,6 +44,7 @@ export function prepareModelDataForSave(modelData: any): any {
         data = modelData;
     }
 
+    normalizeModelVersion(data);
     normalizeSequences(data);
     normalizeModelInfo(data);
     normalizeGlobalSequences(data);
@@ -926,9 +928,8 @@ export function prepareModelDataForSave(modelData: any): any {
                     }
                     if (typeof layer.TextureID === 'number') {
                         const texCount = data.Textures?.length || 0;
-                        if (texCount > 0 && (layer.TextureID < 0 || layer.TextureID >= texCount)) {
-                            layer.TextureID = 0;
-                        }
+                        layer.TextureID = Math.max(-1, layer.TextureID);
+                        if (texCount > 0 && layer.TextureID >= texCount) layer.TextureID = 0;
                     }
 
                     // TVertexAnimId - can be null or number, convert undefined to null

@@ -8,7 +8,7 @@ import { loadAllTextures } from '../viewer/textureLoader'
 import { hexToRgb } from '../viewer/types'
 import { SimpleOrbitCamera } from '../../utils/SimpleOrbitCamera'
 import { useRendererStore } from '../../store/rendererStore'
-import { zoomNodeSizeFromWheel } from '../../application/render'
+import { projectModelForRealtimeRenderer, zoomNodeSizeFromWheel } from '../../application/render'
 import type { ModelData } from '../../types/model'
 import type { ModelNode } from '../../types/node'
 import {
@@ -282,7 +282,7 @@ export const RetargetModelViewport3D: React.FC<RetargetModelViewport3DProps> = (
         }
         canvas.addEventListener('wheel', handleWheel, { passive: false })
 
-        const rendererModel = createRetargetRendererModel(modelData)
+        const rendererModel = projectModelForRealtimeRenderer(createRetargetRendererModel(modelData))
         const renderer = createWar3ModelRenderer(rendererModel)
         rendererRef.current = renderer
         renderer.initGL(gl)

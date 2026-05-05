@@ -96,7 +96,7 @@ export const toTightArrayBuffer = (bytes: Uint8Array): ArrayBuffer => {
   return bytes.slice().buffer;
 };
 
-const TEXTURE_PREVIEW_EXTENSIONS = new Set(["blp", "tga"]);
+const TEXTURE_PREVIEW_EXTENSIONS = new Set(["blp", "tga", "png", "jpg", "jpeg", "webp", "gif", "bmp"]);
 
 export const isTexturePreviewPath = (path: string): boolean => {
   const lower = path.toLowerCase();

@@ -14,4 +14,5 @@ export type {
     TextureStateRendererSyncInput,
 } from './RendererSyncTypes'
 export { RendererSyncService, rendererSyncService } from './RendererSyncService'
+export { projectModelForRealtimeRenderer } from './RendererPreviewModelProjection'
 export { zoomNodeSizeFromWheel } from './nodeSizeZoom'

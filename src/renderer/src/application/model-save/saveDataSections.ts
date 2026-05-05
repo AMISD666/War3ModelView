@@ -3,6 +3,16 @@ import {
     toFloat32Array,
 } from './saveDataCoercion'
 
+export function normalizeModelVersion(data: any): void {
+    const rawVersion = typeof data.Version === 'number'
+        ? data.Version
+        : data.Version?.FormatVersion
+    const version = Number(rawVersion)
+    data.Version = Number.isFinite(version) && version >= 800
+        ? Math.floor(version)
+        : 800
+}
+
 export function normalizeSequences(data: any): void {
     if (!data.Sequences || !Array.isArray(data.Sequences)) return
 
@@ -34,25 +44,42 @@ export function normalizeSequences(data: any): void {
 }
 
 export function normalizeModelInfo(data: any): void {
-    if (!data.Info) return
+    if (!data.Info || typeof data.Info !== 'object') {
+        data.Info = {}
+    }
+
+    const legacyModelInfo = data.Model && typeof data.Model === 'object' ? data.Model : {}
+    const modelName = typeof data.Info.Name === 'string'
+        ? data.Info.Name
+        : typeof legacyModelInfo.Name === 'string'
+            ? legacyModelInfo.Name
+            : ''
+    data.Info.Name = modelName
 
     if (data.Info.MinimumExtent && !(data.Info.MinimumExtent instanceof Float32Array)) {
         data.Info.MinimumExtent = toFloat32Array(data.Info.MinimumExtent)
+    } else if (!data.Info.MinimumExtent && legacyModelInfo.MinimumExtent) {
+        data.Info.MinimumExtent = toFloat32Array(legacyModelInfo.MinimumExtent)
     }
     if (data.Info.MaximumExtent && !(data.Info.MaximumExtent instanceof Float32Array)) {
         data.Info.MaximumExtent = toFloat32Array(data.Info.MaximumExtent)
+    } else if (!data.Info.MaximumExtent && legacyModelInfo.MaximumExtent) {
+        data.Info.MaximumExtent = toFloat32Array(legacyModelInfo.MaximumExtent)
     }
     if (!data.Info.MinimumExtent) data.Info.MinimumExtent = new Float32Array(3)
     if (!data.Info.MaximumExtent) data.Info.MaximumExtent = new Float32Array(3)
     if (data.Info.BoundsRadius === undefined || data.Info.BoundsRadius === null) {
-        data.Info.BoundsRadius = 0
+        data.Info.BoundsRadius = legacyModelInfo.BoundsRadius ?? 0
     }
     if (data.Info.BlendTime === undefined || data.Info.BlendTime === null) {
-        data.Info.BlendTime = 0
+        data.Info.BlendTime = legacyModelInfo.BlendTime ?? 0
     }
-    if (!data.Info.Name) {
-        data.Info.Name = ''
-    }
+    data.Info.BoundsRadius = Number.isFinite(Number(data.Info.BoundsRadius))
+        ? Number(data.Info.BoundsRadius)
+        : 0
+    data.Info.BlendTime = Number.isFinite(Number(data.Info.BlendTime))
+        ? Math.max(0, Math.floor(Number(data.Info.BlendTime)))
+        : 0
 }
 
 export function normalizeGlobalSequences(data: any): void {

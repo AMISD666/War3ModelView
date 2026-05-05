@@ -2,7 +2,6 @@
  * War3 Model Geoset Type Definitions
  */
 
-// 顶点
 export interface Vertex {
     index: number;
     position: [number, number, number];
@@ -11,32 +10,27 @@ export interface Vertex {
     vertexGroup?: number;
 }
 
-// 面
 export interface Face {
     index: number;
-    vertices: [number, number, number];  // 顶点索引
+    vertices: [number, number, number];
 }
 
-// 顶点组
-export interface VertexGroup {
-    matrices: number[];  // Matrix 索引列表
-}
+export type MatrixGroup = number[];
 
-// 包围盒
 export interface Extent {
     Min: [number, number, number];
     Max: [number, number, number];
     BoundsRadius: number;
 }
 
-// Geoset
 export interface Geoset {
-    Vertices: number[] | Float32Array;        // Flat array
-    Normals: number[] | Float32Array;         // Flat array
-    TVertices?: number[] | Float32Array;       // Flat array
-    VertexGroup?: number[] | Uint8Array;
+    Vertices: number[] | Float32Array;
+    Normals: number[] | Float32Array;
+    TVertices?: Array<number[] | Float32Array>;
+    VertexGroup?: number[] | Uint8Array | Uint16Array;
     Faces: number[] | Uint16Array | Uint32Array;
-    Groups?: VertexGroup[];
+    Groups?: MatrixGroup[];
+    TotalGroupsCount?: number;
     MinimumExtent: [number, number, number];
     MaximumExtent: [number, number, number];
     BoundsRadius: number;
@@ -44,9 +38,10 @@ export interface Geoset {
     SelectionGroup: number;
     Unselectable?: boolean;
     Anim?: any;
+    Tangents?: number[] | Float32Array;
+    SkinWeights?: number[] | Uint8Array;
 }
 
-// Geoset Animation
 export interface GeosetAnimation {
     GeosetId: number;
     Color?: [number, number, number];

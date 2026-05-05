@@ -20,12 +20,21 @@ export interface MaterialLayer {
     TextureID: number;
     Alpha?: number;
     TextureAnimationId?: number;
+    TVertexAnimId?: number | null;
+    CoordId?: number;
+    Shading?: number;
     Unshaded?: boolean;
     Unfogged?: boolean;
     TwoSided?: boolean;
     SphereEnvMap?: boolean;
     NoDepthTest?: boolean;
     NoDepthSet?: boolean;
+    EmissiveGain?: number;
+    NormalTextureID?: number;
+    ORMTextureID?: number;
+    EmissiveTextureID?: number;
+    TeamColorTextureID?: number;
+    ReflectionsTextureID?: number;
 }
 
 // 材质

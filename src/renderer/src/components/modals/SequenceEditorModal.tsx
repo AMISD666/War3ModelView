@@ -6,6 +6,11 @@ import { DraggableModal } from '../DraggableModal';
 import { PlusOutlined, DeleteOutlined, CloseOutlined } from '@ant-design/icons'
 import { useModelStore } from '../../store/modelStore'
 import { pruneModelKeyframes } from '../../utils/modelUtils'
+import {
+    normalizeSequenceInterval,
+    normalizeSequenceForPlayback,
+    normalizeSequencesForPlayback,
+} from '../../utils/sequenceUtils'
 import { useRpcClient } from '../../hooks/useRpc'
 
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame';
@@ -46,7 +51,7 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
 
     const getNextInterval = (sequences: any[]) => {
         const maxEnd = sequences.reduce((max, seq) => {
-            const end = Array.isArray(seq.Interval) ? seq.Interval[1] : seq.Interval?.[1]
+            const end = normalizeSequenceInterval(seq.Interval)?.[1]
             return Math.max(max, typeof end === 'number' ? end : 0)
         }, 0)
         const start = maxEnd + 1000
@@ -97,7 +102,7 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
             // Standalone mode: only initialize ONCE from RPC when real data arrives
             // Never re-initialize after that - would wipe user's in-progress edits
             if (!initializedRef.current && rpcState.sequences && rpcState.sequences.length > 0) {
-                const cloned = deepCloneSequences(rpcState.sequences)
+                const cloned = normalizeSequencesForPlayback(deepCloneSequences(rpcState.sequences))
                 setLocalSequences(cloned)
                 setSelectedIndex(0)
                 initializedRef.current = true
@@ -110,7 +115,7 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
         } else {
             // Modal mode: sync from store on first open
             if (visible && storeSequences && !initializedRef.current) {
-                setLocalSequences(deepCloneSequences(storeSequences))
+                setLocalSequences(normalizeSequencesForPlayback(deepCloneSequences(storeSequences)))
                 if (currentSequence >= 0 && currentSequence < storeSequences.length) {
                     setSelectedIndex(currentSequence)
                     setTimeout(() => scrollToItem(currentSequence), 0)
@@ -142,7 +147,7 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
                 documentId: rpcState.documentId,
                 baseDocumentRevision: rpcState.documentRevision,
                 stalePolicy: 'reject',
-                sequences: localSequences,
+                sequences: normalizeSequencesForPlayback(localSequences),
                 deletedIntervals,
                 pruneKeyframes
             })
@@ -156,7 +161,7 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
                     pruneModelKeyframes(modelData, start, end);
                 });
             }
-            setStoreSequences(localSequences)
+            setStoreSequences(normalizeSequencesForPlayback(localSequences))
             appMessage.success(deletedIntervals.length > 0 ? '序列及关键帧已保存' : '序列已保存')
             onClose()
         }
@@ -164,7 +169,7 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
 
     const updateLocalSequence = (index: number, updates: any) => {
         const newSequences = [...localSequences]
-        newSequences[index] = { ...newSequences[index], ...updates }
+        newSequences[index] = normalizeSequenceForPlayback({ ...newSequences[index], ...updates })
         setLocalSequences(newSequences)
     }
 
@@ -202,8 +207,10 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
 
     const handleIntervalChange = (index: number, subIndex: number, value: number | null) => {
         const newSequences = [...localSequences]
-        const newInterval = [...newSequences[index].Interval]
-        newInterval[subIndex] = value || 0
+        const currentInterval = newSequences[index].Interval || [0, 0]
+        const newInterval = [...currentInterval]
+        const numericValue = Number(value)
+        newInterval[subIndex] = Number.isFinite(numericValue) ? numericValue : 0
         newSequences[index].Interval = newInterval
         setLocalSequences(newSequences)
     }

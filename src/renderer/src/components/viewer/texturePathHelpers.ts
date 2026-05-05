@@ -69,11 +69,19 @@ export function isMPQPath(path: string): boolean {
     return MPQ_PATH_REGEX.test(path)
 }
 
+function isAbsoluteTexturePath(path: string): boolean {
+    return /^[a-zA-Z]:\\/.test(path) || path.startsWith('\\\\')
+}
+
 /**
  * Generate candidate paths for a texture relative to the model directory
  */
 export function getTextureCandidatePaths(modelPath: string, texturePath: string): string[] {
     const textureRelPath = normalizePath(texturePath)
+    if (isAbsoluteTexturePath(textureRelPath)) {
+        return [textureRelPath]
+    }
+
     const normalizedModelPath = normalizePath(modelPath)
     const lastSlash = normalizedModelPath.lastIndexOf('\\')
     const modelDir = lastSlash >= 0 ? normalizedModelPath.substring(0, lastSlash) : normalizedModelPath

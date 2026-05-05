@@ -23,11 +23,7 @@ import {
     TextureLoadContext,
     isMPQPath,
 } from './texturePathHelpers'
-import {
-    decodePngImageData,
-    decodeTextureData,
-    DecodeTextureOptions,
-} from './textureDecoder'
+import { decodePngImageData, decodeTextureData, decodeTextureDataAsync, DecodeTextureOptions } from './textureDecoder'
 import {
     parseTextureBytesPayload,
     toTightArrayBuffer,
@@ -85,7 +81,7 @@ export async function loadTextureFromFile(filePath: string): Promise<ImageData |
         if (filePath.toLowerCase().endsWith('.png')) {
             return await decodePngImageData(texBuffer)
         }
-        return decodeTextureData(toTightArrayBuffer(texBuffer), filePath)
+        return await decodeTextureDataAsync(toTightArrayBuffer(texBuffer), filePath)
     } catch (e) {
         // File loading failed
     }
@@ -121,7 +117,7 @@ export async function loadTextureForRenderer(
     try {
         const mpqData = await invokeReadMpqFile<Uint8Array>(normalizePath(texturePath), 'textureLoader.loadTextureForRenderer')
         if (mpqData && mpqData.length > 0) {
-            const imageData = decodeTextureData(toTightArrayBuffer(mpqData), texturePath)
+            const imageData = await decodeTextureDataAsync(toTightArrayBuffer(mpqData), texturePath)
             if (imageData && renderer.setTextureImageData) {
                 renderer.setTextureImageData(texturePath, [imageData])
                 return true
@@ -149,7 +145,7 @@ export async function decodeTexture(
         if (texturePath.toLowerCase().endsWith('.png') && modelPath && !modelPath.startsWith('dropped:')) {
             return await decodePngImageData(new Uint8Array(buffer))
         }
-        return decodeTextureData(buffer, texturePath, options)
+        return await decodeTextureDataAsync(buffer, texturePath, options)
     }
 
     if (modelPath && !modelPath.startsWith('dropped:')) {
@@ -347,7 +343,7 @@ export async function loadAllTextures(
             }
         } else {
             for (const [path, bytes] of uncachedEntries) {
-                const imageData = decodeTextureData(toTightArrayBuffer(bytes), path, textureOptionsByPath.get(path))
+                const imageData = await decodeTextureDataAsync(toTightArrayBuffer(bytes), path, textureOptionsByPath.get(path))
                 if (imageData) {
                     decodedTextures.set(path, imageData)
                     decodedCount += 1

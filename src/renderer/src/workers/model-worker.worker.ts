@@ -3,7 +3,7 @@
  * 
  * General purpose worker for heavy model operations:
  * 1. Model Parsing (MDX/MDL)
- * 2. Texture Decoding (BLP/TGA)
+ * 2. Texture Decoding (BLP/TGA/browser image formats)
  */
 
 // @ts-ignore
@@ -116,7 +116,28 @@ async function decodeTextureToBitmap(task: DecodeTextureTaskPayload): Promise<Im
     const { buffer, path, maxDimension, preferBlpBaseMip, adjustments } = task;
     let imageData: ImageData | null = null;
 
-    if (path.toLowerCase().endsWith('.tga')) {
+    const lowerPath = path.toLowerCase();
+    if (/\.(png|jpe?g|webp|gif|bmp)$/.test(lowerPath)) {
+        const mimeType = lowerPath.endsWith('.jpg') || lowerPath.endsWith('.jpeg')
+            ? 'image/jpeg'
+            : lowerPath.endsWith('.webp')
+                ? 'image/webp'
+                : lowerPath.endsWith('.gif')
+                    ? 'image/gif'
+                    : lowerPath.endsWith('.bmp')
+                        ? 'image/bmp'
+                        : 'image/png';
+        const bitmap = await createImageBitmap(new Blob([buffer], { type: mimeType }), { premultiplyAlpha: 'none' });
+        if (adjustments && !isDefaultTextureAdjustments(adjustments)) {
+            const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+            const ctx = canvas.getContext('2d', { alpha: true, willReadFrequently: true });
+            if (!ctx) throw new Error('Failed to create image decode canvas');
+            ctx.drawImage(bitmap, 0, 0);
+            imageData = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+        } else {
+            return bitmap;
+        }
+    } else if (lowerPath.endsWith('.tga')) {
         imageData = decodeTGA(buffer);
     } else {
         const blp = decodeBLP(buffer);
@@ -152,7 +173,11 @@ self.onmessage = async (e) => {
             const { buffer, path } = payload;
             const parseStart = performance.now();
             let model: any;
-            if (path.toLowerCase().endsWith('.mdl')) {
+            const lowerPath = path.toLowerCase();
+            if (lowerPath.endsWith('.fbx')) {
+                throw new Error('FBX native parsing is wired, but FBX to MDX/MDL ModelData conversion is not implemented yet.');
+            }
+            if (lowerPath.endsWith('.mdl')) {
                 const text = new TextDecoder().decode(buffer);
                 model = parseMdlWithNumericRecovery(text, parseMDL);
             } else {

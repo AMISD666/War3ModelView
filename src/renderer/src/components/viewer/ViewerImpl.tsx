@@ -1,8 +1,9 @@
 import { appMessage } from '../../store/messageStore'
 import React,{useEffect,useRef,useState,forwardRef,useImperativeHandle,useMemo,useCallback}from"react";
 import{textureMaterialCommandHandler}from"../../application/commands";
+import{loadModelDataForViewer}from"../../application/model-import";
 import{previewProjectionService}from"../../application/preview";
-import{rendererSyncService,zoomNodeSizeFromWheel}from"../../application/render";
+import{projectModelForRealtimeRenderer,rendererSyncService,zoomNodeSizeFromWheel}from"../../application/render";
 import type{ViewerProps,ViewerRef}from"./ViewerTypes";
 import{createWar3ModelRenderer,type War3ModelRenderer}from"../../infrastructure/render";
 import{desktopGateway}from"../../infrastructure/desktop";
@@ -1517,7 +1518,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
 
   const isResolvableTexturePath = (path: string): boolean => {
     const lower = path.toLowerCase();
-    return lower.endsWith(".blp") || lower.endsWith(".tga");
+    return /\.(blp|tga|png|jpe?g|webp|gif|bmp)$/.test(lower);
   };
 
   useEffect(() => {
@@ -1710,7 +1711,6 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
             Normals: hasGeometryBufferData(geoset.Normals) ? geoset.Normals : cloneGeometryBuffer(fallbackGeoset.Normals),
             TVertices: hasGeometryBufferData(geoset.TVertices) ? geoset.TVertices : cloneGeometryBuffer(fallbackGeoset.TVertices),
             Groups: Array.isArray(geoset.Groups) && geoset.Groups.length > 0 ? geoset.Groups : cloneGeometryBuffer(fallbackGeoset.Groups),
-            SkinWeights: hasGeometryBufferData(geoset.SkinWeights) ? geoset.SkinWeights : cloneGeometryBuffer(fallbackGeoset.SkinWeights),
             Tangents: hasGeometryBufferData(geoset.Tangents) ? geoset.Tangents : cloneGeometryBuffer(fallbackGeoset.Tangents),
             VertexGroup: hasGeometryBufferData(geoset.VertexGroup) ? geoset.VertexGroup : cloneGeometryBuffer(fallbackGeoset.VertexGroup),
             MatrixGroups: hasGeometryBufferData(geoset.MatrixGroups) ? geoset.MatrixGroups : cloneGeometryBuffer(fallbackGeoset.MatrixGroups),
@@ -3598,12 +3598,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
           });
 
         const workerParseStart = performance.now();
-        const parseResult = await parseWithWorker(buffer);
-        markLoadStage("worker_parse_returned", {
-          workerParseMs: typeof parseResult.parseMs === "number" ? roundPerfValue(parseResult.parseMs) : undefined,
-          stageMs: roundPerfValue(performance.now() - workerParseStart),
-        });
-        model = parseResult.model;
+        model = await loadModelDataForViewer(buffer, { path, readTimeMs: workerParseStart, parseWithWorker, markLoadStage, roundPerfValue });
       }
       console.timeEnd("[Viewer] MDX Parse"); // Log to production CMD window
       markLoadStage("parse_complete", {
@@ -3656,7 +3651,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
       const { model: rendererModelWithSequences, usedFallback } = ensureRendererSequences(blendCompatibleModel);
       const { model: rendererModel, defaultNodeId } = ensureRenderNodes(rendererModelWithSequences);
       ensureGeosetGroups(rendererModel, defaultNodeId);
-      const newRenderer = createWar3ModelRenderer(rendererModel);
+      const newRenderer = createWar3ModelRenderer(projectModelForRealtimeRenderer(rendererModel));
       (newRenderer as any).__modelPath = path;
       (newRenderer.model as any).__modelPath = path;
       initializeRendererBackend(canvas, newRenderer);
@@ -3799,7 +3794,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
           : undefined;
       const rendererStart = performance.now();
       const { model: rendererModelWithSequences, usedFallback } = ensureRendererSequences(rendererModelWithNodes);
-      const newRenderer = createWar3ModelRenderer(rendererModelWithSequences);
+      const newRenderer = createWar3ModelRenderer(projectModelForRealtimeRenderer(rendererModelWithSequences));
       initializeRendererBackend(canvas, newRenderer);
       newRenderer.update(0);
       resetCamera();
@@ -3811,13 +3806,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
         }),
         loadTeamColorTextures(newRenderer, teamColor),
       ]); // Keep missing texture warning in sync after a full reload
-      const missingPaths = textureResults
-        .filter((r) => {
-          if (!r.loaded) return true;
-          const ext = r.path.split(".").pop()?.toLowerCase();
-          return ext !== "blp" && ext !== "tga";
-        })
-        .map((r) => r.path);
+      const missingPaths = textureResults.filter((r) => !r.loaded).map((r) => r.path);
       useRendererStore.getState().setMissingTextures(missingPaths); // CRITICAL: Force set the correct animation sequence on the NEW renderer
       // before setting it as state. This ensures animation is restored correctly
       // after a full reload (e.g. after creating a particle).
@@ -3963,7 +3952,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
           rendererGeoset.__sourceTVerticesRef = sourceGeoset.TVertices?.[0];
           rendererGeoset.__sourceGroupsRef = sourceGeoset.Groups;
           rendererGeoset.__sourceVertexGroupRef = sourceGeoset.VertexGroup;
-          rendererGeoset.__sourceSkinWeightsRef = sourceGeoset.SkinWeights;
+          rendererGeoset.__sourceSkinWeightsRef = undefined;
         }
       }
       markStandalonePerf("viewer_modeldata_sync_skipped", {

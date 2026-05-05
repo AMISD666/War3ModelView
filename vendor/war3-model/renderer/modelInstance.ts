@@ -335,12 +335,13 @@ export class ModelInstance {
 
     public setSequence(index: number): void {
         this.rendererData.animation = index;
-        this.rendererData.frame = 0;
 
         if (this.model.Sequences && this.model.Sequences[index]) {
             this.rendererData.animationInfo = this.model.Sequences[index];
+            this.rendererData.frame = this.rendererData.animationInfo.Interval?.[0] ?? 0;
         } else {
             this.rendererData.animationInfo = null as unknown as Sequence;
+            this.rendererData.frame = 0;
         }
     }
 

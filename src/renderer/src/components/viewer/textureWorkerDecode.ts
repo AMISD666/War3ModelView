@@ -1,5 +1,5 @@
 import { TextureAdjustments } from '../../utils/textureAdjustments'
-import { DecodeTextureOptions, decodeTextureData } from './textureDecoder'
+import { DecodeTextureOptions, decodeTextureDataAsync } from './textureDecoder'
 import { toTightArrayBuffer } from './textureBufferUtils'
 
 export type WorkerLike = {
@@ -268,7 +268,7 @@ export async function decodeBatchWithWorkerPool(
     for (const path of failedPaths) {
         const bytes = workerByteMap.get(path) || entries.find(([entryPath]) => entryPath === path)?.[1]
         if (!bytes) continue
-        const imageData = decodeTextureData(toTightArrayBuffer(bytes), path, textureOptionsByPath.get(path))
+        const imageData = await decodeTextureDataAsync(toTightArrayBuffer(bytes), path, textureOptionsByPath.get(path))
         if (imageData) {
             decoded.set(path, imageData)
         }

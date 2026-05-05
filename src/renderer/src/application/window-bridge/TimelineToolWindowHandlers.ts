@@ -4,6 +4,10 @@ import { useGlobalColorAdjustStore } from '../../store/globalColorAdjustStore'
 import { useModelStore } from '../../store/modelStore'
 import { useRendererStore } from '../../store/rendererStore'
 import { pruneModelKeyframes } from '../../utils/modelUtils'
+import {
+    getSequenceStartFrame,
+    normalizeSequencesForPlayback,
+} from '../../utils/sequenceUtils'
 import type { GlobalColorAdjustSettings } from '../../utils/globalColorAdjustCore'
 import { commandBus, type CommandBus } from '../commands'
 import { markCommandReceived, markCommandRejected, markToolCommandStaleRevision } from '../diagnostics'
@@ -147,16 +151,6 @@ const getNextDocumentRevisionPatch = (state: ReturnType<typeof useModelStore.get
 const sanitizeNodesForSnapshot = (nodes: any[]) =>
     nodes.filter((node) => node && (node.type === NodeType.CAMERA || typeof node.ObjectId === 'number'))
 
-const getSequenceStartFrame = (sequence: any): number => {
-    const interval = Array.isArray(sequence?.Interval)
-        ? sequence.Interval
-        : sequence?.Interval
-            ? Array.from(sequence.Interval as ArrayLike<number>)
-            : []
-    const start = Number(interval[0] ?? 0)
-    return Number.isFinite(start) ? start : 0
-}
-
 const buildTabsWithModelSnapshot = (
     state: ReturnType<typeof useModelStore.getState>,
     modelData: ModelData | null,
@@ -292,7 +286,7 @@ const createSequenceModelData = (
         return null
     }
 
-    nextModelData.Sequences = structuredClone(sequences)
+    nextModelData.Sequences = structuredClone(normalizeSequencesForPlayback(sequences))
     if (shouldPrune) {
         deletedIntervals.forEach(([start, end]) => {
             pruneModelKeyframes(nextModelData, start, end)

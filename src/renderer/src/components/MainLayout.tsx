@@ -56,6 +56,7 @@ import {
 import { openRetargetTargetFromDialog, openRetargetTargetPaths } from '../application/retarget'
 import { useAppShellController } from '../application/shell/useAppShellController'
 import { useModelToolsController } from '../application/model-tools/useModelToolsController'
+import { FBX_SOURCE_SAVE_WARNING, isFbxSourcePath } from '../application/model-import'
 import { registerCloseModelTabRequestHandler, requestCloseModelTab } from '../application/model-tabs/closeTabRequest'
 import {
     cameraManagerCommandHandler,
@@ -1981,9 +1982,9 @@ const MainLayout: React.FC = () => {
             return false
         }
         const currentModelState = useModelStore.getState();
-        const currentModelPath = currentModelState.modelPath;
-        const currentModelData = currentModelState.modelData;
+        const { modelPath: currentModelPath, modelData: currentModelData } = currentModelState;
         if (!currentModelPath || !currentModelData) return false
+        if (isFbxSourcePath(currentModelPath)) { showMessage('warning', '保存模型', FBX_SOURCE_SAVE_WARNING); return false }
 
         try {
             isSavingRef.current = true;
@@ -2260,8 +2261,7 @@ const MainLayout: React.FC = () => {
     const getModelBaseName = (): string => {
         if (modelPath) {
             const filename = modelPath.split(/[/]/).pop() || 'model'
-            // Remove extension
-            return filename.replace(/.(mdx|mdl)$/i, '')
+            return filename.replace(/\.[^.]+$/i, '')
         }
         return 'model'
     }

@@ -111,6 +111,60 @@ export async function decodePngImageData(bytes: Uint8Array): Promise<ImageData |
     }
 }
 
+function isBrowserImageTexturePath(path: string): boolean {
+    return /\.(png|jpe?g|webp|gif|bmp)$/i.test(path)
+}
+
+export async function decodeBrowserImageData(bytes: Uint8Array, mimeType = 'image/png'): Promise<ImageData | null> {
+    try {
+        const blobBytes = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+        const blob = new Blob([blobBytes], { type: mimeType })
+        const bitmap = await createImageBitmap(blob, { premultiplyAlpha: 'none' })
+        const canvas =
+            typeof OffscreenCanvas !== 'undefined'
+                ? new OffscreenCanvas(bitmap.width, bitmap.height)
+                : document.createElement('canvas')
+        canvas.width = bitmap.width
+        canvas.height = bitmap.height
+        const ctx = canvas.getContext('2d', { alpha: true, willReadFrequently: true }) as
+            | OffscreenCanvasRenderingContext2D
+            | CanvasRenderingContext2D
+            | null
+        if (!ctx) return null
+        ctx.clearRect(0, 0, bitmap.width, bitmap.height)
+        ctx.drawImage(bitmap, 0, 0)
+        return ctx.getImageData(0, 0, bitmap.width, bitmap.height)
+    } catch {
+        return null
+    }
+}
+
+function browserImageMimeType(path: string): string {
+    const lower = path.toLowerCase()
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg'
+    if (lower.endsWith('.webp')) return 'image/webp'
+    if (lower.endsWith('.gif')) return 'image/gif'
+    if (lower.endsWith('.bmp')) return 'image/bmp'
+    return 'image/png'
+}
+
+export async function decodeTextureDataAsync(
+    buffer: ArrayBuffer,
+    path: string,
+    options?: DecodeTextureOptions
+): Promise<ImageData | null> {
+    if (isBrowserImageTexturePath(path)) {
+        const imageData = await decodeBrowserImageData(new Uint8Array(buffer), browserImageMimeType(path))
+        if (!imageData) return null
+        const resized = downscaleImageDataIfNeeded(imageData, options?.maxDimension)
+        const adjusted = options?.adjustments
+            ? applyTextureAdjustments(resized, normalizeTextureAdjustments(options.adjustments))
+            : resized
+        return forceOpaqueAlphaIfNeeded(adjusted, options?.forceOpaqueAlpha)
+    }
+    return decodeTextureData(buffer, path, options)
+}
+
 interface ImageLumaStats {
     alphaSampleCount: number
     meanLuma: number

@@ -9,6 +9,11 @@ import { ModelNode, NodeType } from '../types/node';
 import { Tab, TabSnapshot } from '../types/store';
 import { useRendererStore } from './rendererStore';import { patchNodesForEmitterVisualData } from './modelNodePatch';
 import {
+    getSequenceStartFrame,
+    normalizeSequenceForPlayback,
+    normalizeSequencesForPlayback,
+} from '../utils/sequenceUtils';
+import {
     processDeathAnimation,
     processRemoveLights,
     pruneModelKeyframes,
@@ -140,14 +145,13 @@ export type NodeEditorPreview = {
 
 const pickDefaultSequenceIndex = (sequences: any[]) => {
     if (!Array.isArray(sequences) || sequences.length === 0) return -1;
-    const standRegex = /stand/i;
-    const standIndex = sequences.findIndex((seq) => {
+    const preferredRegex = /stand|idle|walk|move/i;
+    const preferredIndex = sequences.findIndex((seq) => {
         const name = (seq?.Name ?? seq?.name ?? '').toString();
-        return standRegex.test(name);
+        return preferredRegex.test(name);
     });
-    return standIndex >= 0 ? standIndex : 0;
+    return preferredIndex >= 0 ? preferredIndex : 0;
 };
-
 
 // DELETED legacy recalculateModelNormals and associated local functions.
 // These are now unified in src/utils/geometryUtils.ts
@@ -1516,7 +1520,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
 
         const resolvedModelPath = path || (data as any)?.path || (data as any)?.__modelPath || null;
         const nextCurrentSequence = hasSequences ? defaultSequenceIndex : -1;
-        const nextCurrentFrame = 0;
+        const nextCurrentFrame = hasSequences ? getSequenceStartFrame(sequences[defaultSequenceIndex]) : 0;
         const nextHiddenGeosetIds = allGeosetIds;
         let deferredTabSnapshot: DeferredTabSnapshotUpdate | null = null;
 
@@ -1799,7 +1803,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
             }
 
             const newSequences = [...state.modelData.Sequences];
-            newSequences[index] = { ...newSequences[index], ...updates };
+            newSequences[index] = normalizeSequenceForPlayback({ ...newSequences[index], ...updates });
 
             // Also update the sequences array in store root if it exists distinct from modelData
             // (In this store structure, 'sequences' seems to be a derived reference or copy? 
@@ -2442,17 +2446,18 @@ export const useModelStore = create<ModelState>((set, get) => ({
     // Animation Actions Implementation
     // Animation Actions Implementation
     setSequences: (sequences) => {
+        const normalizedSequences = normalizeSequencesForPlayback(sequences);
         set((state) => {
-            const updatedModelData = state.modelData ? { ...state.modelData, Sequences: sequences } : state.modelData;
+            const updatedModelData = state.modelData ? { ...state.modelData, Sequences: normalizedSequences } : state.modelData;
             return createDocumentMutationPatch(
                 state,
                 updatedModelData,
-                { nodes: sanitizeNodesArray(state.nodes), rendererReload: true, sequences }
+                { nodes: sanitizeNodesArray(state.nodes), rendererReload: true, sequences: normalizedSequences }
             );
         });
         const renderer = useRendererStore.getState().renderer;
         if (renderer?.model) {
-            renderer.model.Sequences = sequences;
+            renderer.model.Sequences = normalizedSequences;
             const currentSequence = get().currentSequence;
             if (currentSequence >= 0 && typeof (renderer as any).setSequence === 'function') {
                 (renderer as any).setSequence(currentSequence);

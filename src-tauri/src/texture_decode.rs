@@ -295,6 +295,10 @@ pub fn normalize_path(path: &str) -> String {
 
 pub fn get_texture_candidate_paths(model_path: &str, texture_path: &str) -> Vec<String> {
     let texture_rel = normalize_path(texture_path);
+    if is_absolute_path(&texture_rel) {
+        return vec![texture_rel];
+    }
+
     let normalized_model_path = normalize_path(model_path);
     let model_dir = match normalized_model_path.rfind('\\') {
         Some(idx) => &normalized_model_path[..idx],
@@ -338,4 +342,10 @@ pub fn get_texture_candidate_paths(model_path: &str, texture_path: &str) -> Vec<
     }
 
     candidates
+}
+
+fn is_absolute_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    (bytes.len() >= 3 && bytes[1] == b':' && bytes[2] == b'\\' && bytes[0].is_ascii_alphabetic())
+        || path.starts_with("\\\\")
 }

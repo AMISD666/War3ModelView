@@ -25,6 +25,7 @@ export interface BaseNode {
     ObjectId: number;
     Parent?: number;  // 父节点的 ObjectId
     PivotPoint?: [number, number, number];
+    Flags?: number;
 
     // 标志位
     DontInherit?: {
@@ -48,8 +49,8 @@ export interface BaseNode {
 // Bone 节点
 export interface BoneNode extends BaseNode {
     type: NodeType.BONE;
-    GeosetId?: number;
-    GeosetAnimId?: number;
+    GeosetId?: number | null;
+    GeosetAnimId?: number | null;
 }
 
 // Helper 节点

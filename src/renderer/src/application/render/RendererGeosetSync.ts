@@ -125,12 +125,9 @@ export const syncGeosetBuffers = (
                 changed = true
             }
 
-            if (geoset?.SkinWeights && rendererGeosetMeta.__sourceSkinWeightsRef !== geoset.SkinWeights) {
-                rendererGeoset.SkinWeights = geoset.SkinWeights instanceof Uint8Array
-                    ? geoset.SkinWeights
-                    : new Uint8Array(Array.from(geoset.SkinWeights as ArrayLike<number>, (value) => Number(value) || 0))
-                rendererGeosetMeta.__sourceSkinWeightsRef = geoset.SkinWeights
-                geosetSkinningChanged = true
+            if (rendererGeoset.SkinWeights !== undefined) {
+                delete rendererGeoset.SkinWeights
+                rendererGeosetMeta.__sourceSkinWeightsRef = undefined
                 changed = true
             }
 

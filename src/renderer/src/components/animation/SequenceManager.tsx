@@ -7,6 +7,7 @@ import { DraggableModal } from '../DraggableModal'
 import { useSelectionStore } from '../../store/selectionStore'
 import { useModelStore } from '../../store/modelStore'
 import { useHistoryStore } from '../../store/historyStore'
+import { normalizeSequenceForPlayback, normalizeSequenceInterval } from '../../utils/sequenceUtils'
 
 const SequenceManager: React.FC = () => {
     const sequences = useModelStore((state) => state.sequences)
@@ -54,7 +55,7 @@ const SequenceManager: React.FC = () => {
 
     const getNextInterval = () => {
         const maxEnd = (sequences || []).reduce((max, seq: any) => {
-            const end = Array.isArray(seq.Interval) ? seq.Interval[1] : seq.Interval?.[1]
+            const end = normalizeSequenceInterval(seq.Interval)?.[1]
             return Math.max(max, typeof end === 'number' ? end : 0)
         }, 0)
         const start = maxEnd + 1000
@@ -115,14 +116,14 @@ const SequenceManager: React.FC = () => {
 
     const handleModalOk = () => {
         form.validateFields().then((values) => {
-            const nextSequence = {
+            const nextSequence = normalizeSequenceForPlayback({
                 Name: values.Name,
-                Interval: [typeof values.Start === 'number' ? values.Start : 0, typeof values.End === 'number' ? values.End : 0],
+                Interval: [values.Start, values.End],
                 Rarity: values.Rarity || 0,
                 MoveSpeed: values.MoveSpeed || 0,
                 NonLooping: values.NonLooping ? 1 : 0,
                 BoundsRadius: 60
-            }
+            })
 
             const oldSequences = [...(sequences || [])]
             const newSequences = [...(sequences || [])]
