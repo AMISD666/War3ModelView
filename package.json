@@ -16,6 +16,7 @@
     "check:state-sync-fixtures": "node scripts/check-state-sync-fixtures.mjs",
     "check:sequence-intervals": "node scripts/check-sequence-interval-normalization.mjs",
     "check:fbx-skin-weights": "node scripts/check-fbx-classic-skin-weight-mapping.mjs",
+    "check:fbx-axis-bridge": "node scripts/check-fbx-axis-bridge-animation.mjs",
     "check:openable-resources": "node scripts/check-openable-resource-extensions.mjs",
     "sync:war3-model": "node scripts/sync-war3-model-vendor.mjs",
     "dev:vite": "vite",

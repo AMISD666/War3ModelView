@@ -109,13 +109,25 @@ const tuple3 = (value: [number, number, number] | undefined): [number, number, n
     Number.isFinite(value?.[2]) ? Number(value?.[2]) : 0,
 ]
 
+const isMeaningfulHelperOffset = (value: [number, number, number] | undefined): boolean =>
+    Math.abs(value?.[0] ?? 0) > 1e-5
+    || Math.abs(value?.[1] ?? 0) > 1e-5
+    || Math.abs(value?.[2] ?? 0) > 1e-5
+
 const uniqueNodeName = (name: string, objectId: number): string => {
     const trimmed = name.trim()
     return trimmed.length > 0 ? trimmed : `FBX_Node_${objectId}`
 }
 
-const shouldImportHelperNode = (node: FbxNodeDto): boolean =>
-    !node.isBone && node.parentTypedId !== undefined
+const shouldImportHelperNode = (node: FbxNodeDto, meshNodeIds: Set<number>): boolean =>
+    !node.isBone
+    && node.parentTypedId !== undefined
+    && (
+        meshNodeIds.has(node.typedId)
+        || isMeaningfulHelperOffset(node.restTranslation)
+        || isMeaningfulHelperOffset(node.worldTranslation)
+        || isMeaningfulHelperOffset(node.localTranslation)
+    )
 
 const findMappedParentId = (
     node: FbxNodeDto,
@@ -137,12 +149,16 @@ const buildImportedNodeMapping = (scene: FbxStaticSceneResult): ImportedNodeMapp
     const fbxNodes = scene.nodes ?? []
     const nodesByTypedId = new Map(fbxNodes.map((node) => [node.typedId, node]))
     const boneNodeIds = new Set<number>()
+    const meshNodeIds = new Set<number>()
     for (const bone of scene.bones ?? []) {
         if (bone.nodeTypedId !== undefined) {
             boneNodeIds.add(bone.nodeTypedId)
         }
     }
     for (const mesh of scene.meshes ?? []) {
+        if (mesh.nodeTypedId !== undefined) {
+            meshNodeIds.add(mesh.nodeTypedId)
+        }
         const stride = Math.max(0, Math.floor(mesh.skinWeightStride || 0))
         if (stride <= 0) {
             continue
@@ -160,7 +176,7 @@ const buildImportedNodeMapping = (scene: FbxStaticSceneResult): ImportedNodeMapp
     }
 
     const boneSources = fbxNodes.filter((node) => node.isBone || boneNodeIds.has(node.typedId))
-    const helperSources = fbxNodes.filter((node) => !boneNodeIds.has(node.typedId) && shouldImportHelperNode(node))
+    const helperSources = fbxNodes.filter((node) => !boneNodeIds.has(node.typedId) && shouldImportHelperNode(node, meshNodeIds))
     const objectIdByTypedId = new Map<number, number>()
     let nextObjectId = 0
     for (const node of [...boneSources, ...helperSources]) {

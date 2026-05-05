@@ -18,6 +18,8 @@ export type War3NodeTracks = { translation: War3Track | null; rotation: War3Trac
 type ImportedNodeAnimationMapping = { nodes: ModelNode[]; objectIdByTypedId: Map<number, number> }
 type LocalTransform = { translation: vec3; rotation: quat; scaling: vec3 }
 
+const TRANSFORM_EPSILON = 1e-5
+
 const toFiniteNumber = (value: number | undefined, fallback: number): number =>
     Number.isFinite(value) ? Number(value) : fallback
 
@@ -139,6 +141,17 @@ const buildRestLocals = (nodes: FbxNodeDto[]): Map<number, LocalTransform> => {
     return result
 }
 
+const isStaticBakedNode = (node: FbxBakedNodeDto | undefined): boolean =>
+    !!node && node.constantTranslation && node.constantRotation && node.constantScale
+
+const isRestIdentityBridge = (rest: LocalTransform | undefined): boolean =>
+    !!rest
+    && vec3.squaredLength(rest.translation) <= TRANSFORM_EPSILON * TRANSFORM_EPSILON
+    && Math.abs(Math.abs(quat.dot(rest.rotation, quat.create())) - 1) <= TRANSFORM_EPSILON
+    && Math.abs(rest.scaling[0] - 1) <= TRANSFORM_EPSILON
+    && Math.abs(rest.scaling[1] - 1) <= TRANSFORM_EPSILON
+    && Math.abs(rest.scaling[2] - 1) <= TRANSFORM_EPSILON
+
 const localMatrix = (transform: LocalTransform): mat4 => {
     const result = mat4.create()
     mat4.fromRotationTranslationScale(result, transform.rotation, transform.translation, transform.scaling)
@@ -227,11 +240,14 @@ export const buildWar3DeltaTracksForStack = (
         const node = fbxNodeByTypedId.get(typedId)
         const rest = restLocals.get(typedId)
         const baked = bakedByTypedId.get(typedId)
-        const transform: LocalTransform = {
-            translation: evaluateVec3(baked?.translationKeys, timeSeconds, rest?.translation ?? vec3.create()),
-            rotation: evaluateQuat(baked?.rotationKeys, timeSeconds, rest?.rotation ?? quat.create()),
-            scaling: evaluateVec3(baked?.scaleKeys, timeSeconds, rest?.scaling ?? vec3.fromValues(1, 1, 1)),
-        }
+        const useRestLocal = !nodeMapping.objectIdByTypedId.has(typedId) && !node?.isBone && isStaticBakedNode(baked) && isRestIdentityBridge(rest)
+        const transform: LocalTransform = useRestLocal && rest
+            ? rest
+            : {
+                translation: evaluateVec3(baked?.translationKeys, timeSeconds, rest?.translation ?? vec3.create()),
+                rotation: evaluateQuat(baked?.rotationKeys, timeSeconds, rest?.rotation ?? quat.create()),
+                scaling: evaluateVec3(baked?.scaleKeys, timeSeconds, rest?.scaling ?? vec3.fromValues(1, 1, 1)),
+            }
         const local = localMatrix(transform)
         const world = mat4.create()
         if (node?.parentTypedId !== undefined) {
