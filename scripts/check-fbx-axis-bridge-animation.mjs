@@ -29,6 +29,7 @@ const quatNegX90 = [-Math.SQRT1_2, 0, 0, Math.SQRT1_2]
 const identityQuat = [0, 0, 0, 1]
 const identityMatrix = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
 const x90Matrix = [1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1]
+const translatedBindMatrix = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 10, 0, 0, 1]
 
 const makeNode = (typedId, parentTypedId, isBone, localRotation, restWorldMatrix) => ({
     typedId,
@@ -113,4 +114,36 @@ if (identityDot < 0.9999) {
     fail(`Expected unmapped static FBX axis bridge to be ignored for bone delta, got rotation [${rotation.join(', ')}]`)
 }
 
-console.log('OK FBX static axis bridge rotation is not imported as a War3 bone delta.')
+const currentPoseTracksByTypedId = buildWar3DeltaTracksForStack(
+    [
+        makeNode(1, undefined, false, identityQuat, identityMatrix),
+        makeNode(2, 1, true, identityQuat, translatedBindMatrix),
+    ],
+    {
+        name: 'idle',
+        timeBegin: 0,
+        timeEnd: 2,
+        playbackDuration: 2,
+        bakedNodes: [{
+            nodeTypedId: 2,
+            constantTranslation: true,
+            constantRotation: true,
+            constantScale: true,
+            translationKeys: [{ timeSeconds: 0, value: [0, 0, 0], flags: 0 }],
+            rotationKeys: [{ timeSeconds: 0, value: identityQuat, flags: 0 }],
+            scaleKeys: [{ timeSeconds: 0, value: [1, 1, 1], flags: 0 }],
+        }],
+    },
+    0,
+    {
+        nodes: [{ ObjectId: 0, Name: 'current_pose_bone', Parent: -1, PivotPoint: [0, 0, 0] }],
+        objectIdByTypedId: new Map([[2, 0]]),
+    },
+)
+const translation = Array.from(currentPoseTracksByTypedId.get(2)?.translation?.Keys?.[0]?.Vector ?? [])
+const translationLength = Math.hypot(...translation)
+if (translationLength > 0.0001) {
+    fail(`Expected FBX animation base to use current pose, not bind pose matrix, got translation [${translation.join(', ')}]`)
+}
+
+console.log('OK FBX static axis bridge and bind-pose offsets do not leak into War3 bone deltas.')

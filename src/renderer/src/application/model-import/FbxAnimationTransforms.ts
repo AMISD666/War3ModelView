@@ -158,16 +158,6 @@ const localMatrix = (transform: LocalTransform): mat4 => {
     return result
 }
 
-const readMat4 = (value: number[] | undefined): mat4 | null => {
-    if (!value || value.length < 16) return null
-    const matrix = mat4.create()
-    for (let index = 0; index < 16; index += 1) {
-        const component = value[index]
-        matrix[index] = Number.isFinite(component) ? Number(component) : matrix[index]
-    }
-    return matrix
-}
-
 const buildRestWorldMatrices = (nodes: FbxNodeDto[], restLocals: Map<number, LocalTransform>): Map<number, mat4> => {
     const nodeByTypedId = new Map(nodes.map((node) => [node.typedId, node]))
     const cache = new Map<number, mat4>()
@@ -187,12 +177,6 @@ const buildRestWorldMatrices = (nodes: FbxNodeDto[], restLocals: Map<number, Loc
         return world
     }
     for (const node of nodes) compute(node.typedId)
-    for (const node of nodes) {
-        const bindMatrix = readMat4(node.restWorldMatrix)
-        if (bindMatrix) {
-            cache.set(node.typedId, bindMatrix)
-        }
-    }
     return cache
 }
 

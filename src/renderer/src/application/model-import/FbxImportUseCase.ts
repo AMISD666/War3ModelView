@@ -191,7 +191,7 @@ const buildImportedNodeMapping = (scene: FbxStaticSceneResult): ImportedNodeMapp
             Name: uniqueNodeName(node.name, objectId),
             ObjectId: objectId,
             Parent: findMappedParentId(node, nodesByTypedId, objectIdByTypedId),
-            PivotPoint: tuple3(node.restTranslation ?? node.worldTranslation),
+            PivotPoint: tuple3(node.worldTranslation ?? node.restTranslation),
             Flags: 0,
             GeosetId: null,
             GeosetAnimId: null,
@@ -204,7 +204,7 @@ const buildImportedNodeMapping = (scene: FbxStaticSceneResult): ImportedNodeMapp
             Name: uniqueNodeName(node.name, objectId),
             ObjectId: objectId,
             Parent: findMappedParentId(node, nodesByTypedId, objectIdByTypedId),
-            PivotPoint: tuple3(node.restTranslation ?? node.worldTranslation),
+            PivotPoint: tuple3(node.worldTranslation ?? node.restTranslation),
             Flags: 0,
         } as ModelNode
     })
