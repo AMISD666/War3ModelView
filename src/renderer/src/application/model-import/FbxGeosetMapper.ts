@@ -12,6 +12,59 @@ const warning = (category: FbxImportDiagnostic['category'], message: string): Fb
     message,
 })
 
+export type FbxClassicInfluence = {
+    objectId: number
+    weight: number
+}
+
+const MAX_CLASSIC_MATRIX_INFLUENCES = 4
+const CLASSIC_WEIGHT_ERROR_EPSILON = 1e-9
+
+export const chooseClassicInfluencesForFbxWeights = (
+    influences: FbxClassicInfluence[],
+): FbxClassicInfluence[] => {
+    const mergedByObjectId = new Map<number, number>()
+    for (const influence of influences) {
+        if (!Number.isFinite(influence.objectId) || !Number.isFinite(influence.weight) || influence.weight <= 0) {
+            continue
+        }
+        mergedByObjectId.set(influence.objectId, (mergedByObjectId.get(influence.objectId) ?? 0) + influence.weight)
+    }
+
+    const sorted = Array.from(mergedByObjectId, ([objectId, weight]) => ({ objectId, weight }))
+        .sort((a, b) => b.weight - a.weight || a.objectId - b.objectId)
+    if (sorted.length <= 1) {
+        return sorted
+    }
+
+    const total = sorted.reduce((sum, item) => sum + item.weight, 0)
+    if (total <= 0) {
+        return []
+    }
+
+    const normalized = sorted.map((item) => ({
+        objectId: item.objectId,
+        weight: item.weight / total,
+    }))
+
+    let bestCount = 1
+    let bestError = Number.POSITIVE_INFINITY
+    for (let count = 1; count <= Math.min(MAX_CLASSIC_MATRIX_INFLUENCES, normalized.length); count += 1) {
+        const equalWeight = 1 / count
+        const error = normalized.reduce((sum, item, index) => {
+            const representedWeight = index < count ? equalWeight : 0
+            const delta = item.weight - representedWeight
+            return sum + delta * delta
+        }, 0)
+        if (error + CLASSIC_WEIGHT_ERROR_EPSILON < bestError) {
+            bestCount = count
+            bestError = error
+        }
+    }
+
+    return normalized.slice(0, bestCount)
+}
+
 const findMeshObjectId = (mesh: FbxStaticMeshDto, nodeMapping: ImportedNodeMappingForGeosets): number => {
     if (mesh.nodeTypedId !== undefined) {
         const mapped = nodeMapping.objectIdByTypedId.get(mesh.nodeTypedId)
@@ -44,35 +97,9 @@ const buildSkinnedGroups = (
     let missingBoneRefs = 0
     let fallbackVertices = 0
 
-    const chooseClassicInfluences = (influences: Array<{ objectId: number; weight: number }>): Array<{ objectId: number; weight: number }> => {
-        if (influences.length <= 1) return influences
-        const sorted = [...influences].sort((a, b) => b.weight - a.weight || a.objectId - b.objectId)
-        const total = sorted.reduce((sum, item) => sum + item.weight, 0)
-        const dominant = total > 0 ? sorted[0].weight / total : 1
-        if (dominant >= 0.68) return [sorted[0]]
-
-        let best = [sorted[0]]
-        let bestError = Number.POSITIVE_INFINITY
-        for (let count = 2; count <= Math.min(4, sorted.length); count += 1) {
-            const candidate = sorted.slice(0, count)
-            const candidateTotal = candidate.reduce((sum, item) => sum + item.weight, 0)
-            if (candidateTotal <= 0) continue
-            const equalWeight = 1 / count
-            const error = candidate.reduce((sum, item) => {
-                const normalized = item.weight / candidateTotal
-                return sum + Math.abs(normalized - equalWeight)
-            }, 0)
-            if (error < bestError) {
-                best = candidate
-                bestError = error
-            }
-        }
-        return best
-    }
-
     for (let vertexIndex = 0; vertexIndex < vertexCount; vertexIndex += 1) {
         const count = Math.min(4, Math.max(0, Math.floor(mesh.skinWeightCounts[vertexIndex] ?? 0)))
-        const influences: Array<{ objectId: number; weight: number }> = []
+        const influences: FbxClassicInfluence[] = []
         for (let weightIndex = 0; weightIndex < count; weightIndex += 1) {
             const sourceIndex = vertexIndex * stride + weightIndex
             const boneTypedId = mesh.skinBoneNodeTypedIds[sourceIndex]
@@ -88,7 +115,7 @@ const buildSkinnedGroups = (
         }
 
         const resolved = influences.length > 0
-            ? chooseClassicInfluences(influences)
+            ? chooseClassicInfluencesForFbxWeights(influences)
             : [{ objectId: fallbackObjectId, weight: 1 }]
         if (influences.length === 0) {
             fallbackVertices += 1

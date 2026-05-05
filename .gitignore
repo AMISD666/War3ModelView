@@ -68,6 +68,7 @@ scripts/*
 !scripts/check-fbx-export-normalization.mjs
 !scripts/check-sequence-interval-normalization.mjs
 !scripts/check-fbx-animation-effective-interval.mjs
+!scripts/check-fbx-classic-skin-weight-mapping.mjs
 !scripts/check-war3-model-vendor.mjs
 !scripts/sync-war3-model-vendor.mjs
 activation/
