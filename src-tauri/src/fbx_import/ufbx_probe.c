@@ -689,7 +689,10 @@ static bool war3_fill_static_mesh_part(const ufbx_node *node, uint32_t material_
         return false;
     }
 
-    const ufbx_matrix *position_matrix = &node->geometry_to_world;
+    const bool use_skinned_vertices = skin && mesh->skinned_position.exists;
+    const ufbx_matrix *position_matrix = (!use_skinned_vertices || mesh->skinned_is_local)
+        ? &node->geometry_to_world
+        : NULL;
     ufbx_matrix normal_matrix = position_matrix ? ufbx_matrix_for_normals(position_matrix) : ufbx_identity_matrix;
     size_t write_vertex = 0;
     for (size_t face_index = 0; face_index < mesh->faces.count; face_index++) {
@@ -706,9 +709,15 @@ static bool war3_fill_static_mesh_part(const ufbx_node *node, uint32_t material_
             }
 
             uint32_t mesh_index = tri_indices[index_offset];
-            ufbx_vec3 position = ufbx_get_vertex_vec3(&mesh->vertex_position, mesh_index);
-            ufbx_vec3 normal = mesh->vertex_normal.exists
-                ? ufbx_get_vertex_vec3(&mesh->vertex_normal, mesh_index)
+            const ufbx_vertex_vec3 *position_source = use_skinned_vertices
+                ? &mesh->skinned_position
+                : &mesh->vertex_position;
+            const ufbx_vertex_vec3 *normal_source = use_skinned_vertices && mesh->skinned_normal.exists
+                ? &mesh->skinned_normal
+                : &mesh->vertex_normal;
+            ufbx_vec3 position = ufbx_get_vertex_vec3(position_source, mesh_index);
+            ufbx_vec3 normal = normal_source->exists
+                ? ufbx_get_vertex_vec3(normal_source, mesh_index)
                 : (ufbx_vec3){{0.0, 0.0, 1.0}};
             if (position_matrix) {
                 position = ufbx_transform_position(position_matrix, position);
