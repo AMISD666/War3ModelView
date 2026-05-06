@@ -55,24 +55,10 @@ update_log.txt
 .github/hooks/
 activation/
 docs/*
-!docs/
-!docs/DEVELOPMENT_RULES.md
-!docs/FBX_MDX_MDL_Implementation_Plan.md
-!docs/FBX_to_MDX_MDL_Technical_Details.md
 scripts/*
 !scripts/
-!scripts/check-mdx-strict-export.mjs
-!scripts/check-architecture-guardrails.mjs
-!scripts/check-state-sync-fixtures.mjs
-!scripts/check-fbx-import-fixtures.mjs
-!scripts/check-fbx-export-normalization.mjs
-!scripts/check-sequence-interval-normalization.mjs
-!scripts/check-fbx-animation-effective-interval.mjs
-!scripts/check-fbx-classic-skin-weight-mapping.mjs
-!scripts/check-fbx-axis-bridge-animation.mjs
-!scripts/check-openable-resource-extensions.mjs
-!scripts/check-war3-model-vendor.mjs
 !scripts/sync-war3-model-vendor.mjs
+local-test-scripts/
 activation/
 
 # Local-only AI agent instructions
