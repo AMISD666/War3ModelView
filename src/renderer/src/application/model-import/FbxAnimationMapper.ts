@@ -8,6 +8,7 @@ import {
     buildWar3DeltaTracksForStack,
     type War3Track,
 } from './FbxAnimationTransforms'
+import { collectMappedStackKeyTimes } from './FbxAnimationSampling'
 
 type ImportedNodeAnimationMapping = {
     nodes: ModelNode[]
@@ -15,29 +16,21 @@ type ImportedNodeAnimationMapping = {
 }
 
 type NodeTrackProperty = 'Translation' | 'Rotation' | 'Scaling'
+type War3NodeTrackSet = {
+    translation: War3Track | null
+    rotation: War3Track | null
+    scaling: War3Track | null
+}
 
 const toFiniteNumber = (value: number | undefined, fallback: number): number =>
     Number.isFinite(value) ? Number(value) : fallback
 
+const TRACK_VALUE_EPSILON = 1e-4
+const TRAILING_HOLD_FRAME_ALLOWANCE_MS = 50
+
 const makeSequenceName = (stack: FbxAnimationStackDto, index: number): string => {
     const name = stack.name.trim()
     return name.length > 0 ? name : `FBX_Anim_${index + 1}`
-}
-
-const collectMappedStackKeyTimes = (
-    stack: FbxAnimationStackDto,
-    nodeMapping: ImportedNodeAnimationMapping,
-): number[] => {
-    const times: number[] = []
-    for (const baked of stack.bakedNodes ?? []) {
-        if (!nodeMapping.objectIdByTypedId.has(baked.nodeTypedId)) {
-            continue
-        }
-        for (const key of baked.translationKeys ?? []) times.push(key.timeSeconds)
-        for (const key of baked.rotationKeys ?? []) times.push(key.timeSeconds)
-        for (const key of baked.scaleKeys ?? []) times.push(key.timeSeconds)
-    }
-    return times.filter(Number.isFinite)
 }
 
 const getEffectiveStackDurationMs = (
@@ -73,6 +66,88 @@ const mergeTrackKeys = (existing: War3Track | undefined, next: War3Track): War3T
     }
 }
 
+const vectorsDiffer = (left: Float32Array, right: Float32Array): boolean => {
+    const length = Math.max(left.length, right.length)
+    for (let index = 0; index < length; index += 1) {
+        if (Math.abs((left[index] ?? 0) - (right[index] ?? 0)) > TRACK_VALUE_EPSILON) {
+            return true
+        }
+    }
+    return false
+}
+
+const lastMotionFrameInTrack = (track: War3Track | null, sequenceStartFrame: number): number | null => {
+    const keys = (track?.Keys ?? [])
+        .filter((key) => key.Frame >= sequenceStartFrame && Number.isFinite(key.Frame))
+        .sort((a, b) => a.Frame - b.Frame)
+    if (keys.length < 2) {
+        return null
+    }
+
+    let lastMotionIndex: number | null = null
+    let previous = keys[0]
+    for (let index = 1; index < keys.length; index += 1) {
+        const current = keys[index]
+        if (vectorsDiffer(previous.Vector, current.Vector)) {
+            lastMotionIndex = index
+        }
+        previous = current
+    }
+    if (lastMotionIndex === null) {
+        return null
+    }
+
+    const motionFrame = keys[lastMotionIndex].Frame
+    const holdFrame = keys[lastMotionIndex + 1]?.Frame
+    return holdFrame !== undefined && holdFrame - motionFrame <= TRAILING_HOLD_FRAME_ALLOWANCE_MS
+        ? holdFrame
+        : motionFrame
+}
+
+const getEffectiveTrackEndFrame = (
+    tracksByTypedId: Map<number, War3NodeTrackSet>,
+    sequenceStartFrame: number,
+    fallbackEndFrame: number,
+): number => {
+    let lastMotionFrame: number | null = null
+    for (const tracks of tracksByTypedId.values()) {
+        for (const track of [tracks.translation, tracks.rotation, tracks.scaling]) {
+            const trackMotionFrame = lastMotionFrameInTrack(track, sequenceStartFrame)
+            if (trackMotionFrame !== null) {
+                lastMotionFrame = Math.max(lastMotionFrame ?? trackMotionFrame, trackMotionFrame)
+            }
+        }
+    }
+    return lastMotionFrame === null
+        ? fallbackEndFrame
+        : Math.max(sequenceStartFrame + 1, Math.min(fallbackEndFrame, lastMotionFrame))
+}
+
+const trimTrackToEndFrame = (track: War3Track | null, endFrame: number): War3Track | null => {
+    if (!track) {
+        return null
+    }
+    return {
+        ...track,
+        Keys: track.Keys.filter((key) => key.Frame <= endFrame),
+    }
+}
+
+const trimTracksToEndFrame = (
+    tracksByTypedId: Map<number, War3NodeTrackSet>,
+    endFrame: number,
+): Map<number, War3NodeTrackSet> => {
+    const trimmed = new Map<number, War3NodeTrackSet>()
+    for (const [typedId, tracks] of tracksByTypedId) {
+        trimmed.set(typedId, {
+            translation: trimTrackToEndFrame(tracks.translation, endFrame),
+            rotation: trimTrackToEndFrame(tracks.rotation, endFrame),
+            scaling: trimTrackToEndFrame(tracks.scaling, endFrame),
+        })
+    }
+    return trimmed
+}
+
 const appendNodeTrack = (node: ModelNode, property: NodeTrackProperty, track: War3Track | null): number => {
     if (!track) {
         return 0
@@ -101,21 +176,27 @@ export const applyFbxAnimationTracks = (
         const durationMs = getEffectiveStackDurationMs(stack, nodeMapping)
         const sequenceStartFrame = nextSequenceStart
         const sequenceEndFrame = sequenceStartFrame + durationMs
-        sequences.push({
-            Name: makeSequenceName(stack, stackIndex),
-            Interval: [sequenceStartFrame, sequenceEndFrame],
-            MinimumExtent: modelData.Model.MinimumExtent,
-            MaximumExtent: modelData.Model.MaximumExtent,
-            BoundsRadius: modelData.Model.BoundsRadius,
-        })
-
         const tracksByTypedId = buildWar3DeltaTracksForStack(
             scene.nodes ?? [],
             stack,
             sequenceStartFrame,
             nodeMapping,
         )
-        for (const [typedId, tracks] of tracksByTypedId) {
+        const effectiveSequenceEndFrame = getEffectiveTrackEndFrame(
+            tracksByTypedId,
+            sequenceStartFrame,
+            sequenceEndFrame,
+        )
+        sequences.push({
+            Name: makeSequenceName(stack, stackIndex),
+            Interval: [sequenceStartFrame, effectiveSequenceEndFrame],
+            MinimumExtent: modelData.Model.MinimumExtent,
+            MaximumExtent: modelData.Model.MaximumExtent,
+            BoundsRadius: modelData.Model.BoundsRadius,
+        })
+
+        const trimmedTracksByTypedId = trimTracksToEndFrame(tracksByTypedId, effectiveSequenceEndFrame)
+        for (const [typedId, tracks] of trimmedTracksByTypedId) {
             const objectId = nodeMapping.objectIdByTypedId.get(typedId)
             if (objectId === undefined) {
                 continue

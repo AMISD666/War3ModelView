@@ -158,6 +158,12 @@ fn fbx_animation_fixture_bake_smoke() {
     )
     .expect("animated FBX static import should succeed");
 
+    if let Ok(json_out) = std::env::var("FBX_ANIM_FIXTURE_JSON_OUT") {
+        let json = serde_json::to_string(&result).expect("FBX animation DTO should serialize");
+        std::fs::write(&json_out, json).expect("should write FBX animation DTO JSON dump");
+        eprintln!("FBX animation DTO JSON dump: {json_out}");
+    }
+
     assert!(result.probe.ok);
     assert!(
         result.probe.animation_stack_count >= 1,

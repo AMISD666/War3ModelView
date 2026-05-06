@@ -7,6 +7,7 @@ import type {
     FbxNodeDto,
 } from '../../types/fbxImport'
 import type { ModelNode } from '../../types/node'
+import { collectMappedStackKeyTimes } from './FbxAnimationSampling'
 
 export type War3Track = {
     LineType: number
@@ -121,14 +122,6 @@ const evaluateQuat = (
     return result
 }
 
-const sortedUniqueTimes = (node: FbxBakedNodeDto): number[] => {
-    const times = new Set<number>()
-    for (const key of node.translationKeys ?? []) times.add(toFiniteNumber(key.timeSeconds, 0))
-    for (const key of node.rotationKeys ?? []) times.add(toFiniteNumber(key.timeSeconds, 0))
-    for (const key of node.scaleKeys ?? []) times.add(toFiniteNumber(key.timeSeconds, 0))
-    return [...times].filter(Number.isFinite).sort((a, b) => a - b)
-}
-
 const buildRestLocals = (nodes: FbxNodeDto[]): Map<number, LocalTransform> => {
     const result = new Map<number, LocalTransform>()
     for (const node of nodes) {
@@ -217,6 +210,7 @@ export const buildWar3DeltaTracksForStack = (
     const bakedByTypedId = new Map((stack.bakedNodes ?? []).map((node) => [node.nodeTypedId, node]))
     const typedIdByObjectId = new Map([...nodeMapping.objectIdByTypedId].map(([typedId, objectId]) => [objectId, typedId]))
     const importedNodeByTypedId = new Map(nodeMapping.nodes.map((node) => [node.ObjectId, node]))
+    const stackSampleTimes = collectMappedStackKeyTimes(stack, nodeMapping)
 
     const animatedWorldAt = (typedId: number, timeSeconds: number, cache: Map<number, mat4>): mat4 => {
         const cached = cache.get(typedId)
@@ -250,13 +244,12 @@ export const buildWar3DeltaTracksForStack = (
         const importedNode = importedNodeByTypedId.get(objectId)
         if (!importedNode) continue
 
-        const times = sortedUniqueTimes(baked)
         const translationKeys: Array<{ frame: number; vector: Float32Array }> = []
         const rotationKeys: Array<{ frame: number; vector: Float32Array }> = []
         const scalingKeys: Array<{ frame: number; vector: Float32Array }> = []
         let previousRotation: quat | null = null
 
-        for (const timeSeconds of times) {
+        for (const timeSeconds of stackSampleTimes) {
             const frame = sequenceStartFrame + Math.max(0, Math.round(timeSeconds * 1000))
             const cache = new Map<number, mat4>()
             const animatedWorld = animatedWorldAt(baked.nodeTypedId, timeSeconds, cache)

@@ -10,15 +10,18 @@ const fail = (message) => {
     throw new Error(message)
 }
 
-const transpile = async (relativePath) => {
+const transpile = async (relativePath, replacements = []) => {
     const sourcePath = path.join(repoRoot, relativePath)
     const source = await import('node:fs/promises').then(({ readFile }) => readFile(sourcePath, 'utf8'))
-    const output = ts.transpileModule(source, {
+    let output = ts.transpileModule(source, {
         compilerOptions: {
             module: ts.ModuleKind.ES2022,
             target: ts.ScriptTarget.ES2022,
         },
     }).outputText
+    for (const [from, to] of replacements) {
+        output = output.replace(from, to)
+    }
     const outputPath = path.join(tempDir, path.basename(relativePath).replace(/\.ts$/, '.mjs'))
     await writeFile(outputPath, output)
     return outputPath
@@ -47,7 +50,11 @@ const makeNode = (typedId, parentTypedId, isBone, localRotation, restWorldMatrix
 await rm(tempDir, { recursive: true, force: true })
 await mkdir(tempDir, { recursive: true })
 
-const transformsPath = await transpile('src/renderer/src/application/model-import/FbxAnimationTransforms.ts')
+await transpile('src/renderer/src/application/model-import/FbxAnimationSampling.ts')
+const transformsPath = await transpile(
+    'src/renderer/src/application/model-import/FbxAnimationTransforms.ts',
+    [[/from '\.\/FbxAnimationSampling'/g, "from './FbxAnimationSampling.mjs'"]],
+)
 const { buildWar3DeltaTracksForStack } = await import(pathToFileURL(transformsPath))
 
 const importedBone = {
