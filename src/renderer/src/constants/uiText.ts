@@ -319,6 +319,8 @@ export const uiText = {
         activationPlaceholder: '请输入激活码',
         activating: '验证中...',
         activate: '激活',
+        copyMachineId: '复制本机机器码',
+        copyingMachineId: '复制中...',
         confirm: '确定',
     },
     errorBoundary: {

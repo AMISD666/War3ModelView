@@ -75,7 +75,7 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({
                 action: 'SAVE',
                 documentId: rpcState.documentId,
                 baseDocumentRevision: rpcState.documentRevision,
-                stalePolicy: 'reject',
+                stalePolicy: 'warn',
                 globalSequences: normalizedSeqs,
             })
         } else {

@@ -1922,6 +1922,7 @@ fn main() {
             emit_to_webview_json_payload,
             // Activation Commands
             activation_commands::get_machine_id,
+            activation_commands::copy_machine_id_to_clipboard,
             activation_commands::get_activation_status,
             activation_commands::get_qq_activation_policy,
             activation_commands::clear_qq_activation_policy_cache,

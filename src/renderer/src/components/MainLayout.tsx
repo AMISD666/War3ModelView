@@ -206,9 +206,11 @@ const MainLayout: React.FC = () => {
         setActivationCode,
         activationLoading,
         activationError,
+        machineIdCopyLoading,
         checkUpdate,
         showChangelog,
         activate,
+        copyMachineId,
     } = useAppShellController()
     const {
         recalculateNormals,
@@ -2616,10 +2618,12 @@ const MainLayout: React.FC = () => {
                 activationStatus={activationStatus}
                 activationCode={activationCode}
                 activationLoading={activationLoading}
+                machineIdCopyLoading={machineIdCopyLoading}
                 activationError={activationError}
                 onClose={() => setShowAbout(false)}
                 onActivationCodeChange={setActivationCode}
                 onActivate={activate}
+                onCopyMachineId={copyMachineId}
             />
 
 

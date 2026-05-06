@@ -41,7 +41,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
         cameras: [],
         globalSequences: [],
     });
-    const emitCameraAction = (action: string, payload?: unknown, stalePolicy: 'warn' | 'reject' = 'reject') => {
+    const emitCameraAction = (action: string, payload?: unknown, stalePolicy: 'warn' | 'reject' = 'warn') => {
         emitCommand('EXECUTE_CAMERA_ACTION', {
             action,
             payload,

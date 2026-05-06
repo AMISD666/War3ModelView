@@ -31,7 +31,7 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
 
     // RPC Sync for standalone mode
     const { state: rpcState, emitCommand } = useRpcClient<any>('geosetEditor', { geosets: [], materialsCount: 0, selectedIndex: -1, pickedGeosetIndex: null });
-    const emitGeosetAction = (action: string, payload: unknown, stalePolicy: 'warn' | 'reject' = 'reject') => {
+    const emitGeosetAction = (action: string, payload: unknown, stalePolicy: 'warn' | 'reject' = 'warn') => {
         emitCommand('EXECUTE_GEOSET_ACTION', {
             action,
             payload,

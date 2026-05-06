@@ -22,6 +22,7 @@ const LAST_CHECK_TIME_KEY: &str = "LastCheckTime";
 const QQ_VERIFICATION_TIME_KEY: &str = "QQVerif";
 const QQ_REVERIFY_SECONDS: i64 = 180 * 24 * 60 * 60;
 pub const BASIC_FEATURE_LEVEL: u8 = 1;
+pub const PRO_FEATURE_LEVEL: u8 = 2;
 pub const QQ_TARGET_GROUP_ID: &str = "168886891";
 
 // Ed25519 Public Key (Base64 encoded)
@@ -443,6 +444,10 @@ pub fn require_basic_activation(feature_name: &str) -> Result<ActivationStatus, 
     require_license_level(BASIC_FEATURE_LEVEL, feature_name)
 }
 
+pub fn require_pro_activation(feature_name: &str) -> Result<ActivationStatus, String> {
+    require_license_level(PRO_FEATURE_LEVEL, feature_name)
+}
+
 pub fn activate_software(license_code: &str) -> Result<ActivationStatus, String> {
     // Verify the license first
     let payload = verify_license(license_code)?;
@@ -489,5 +494,10 @@ mod tests {
         assert_eq!(normalize_license_level(0), BASIC_FEATURE_LEVEL);
         assert_eq!(normalize_license_level(1), 1);
         assert_eq!(normalize_license_level(2), 2);
+    }
+
+    #[test]
+    fn pro_feature_level_is_advanced_license_level() {
+        assert_eq!(PRO_FEATURE_LEVEL, 2);
     }
 }

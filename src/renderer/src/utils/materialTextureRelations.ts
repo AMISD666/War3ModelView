@@ -7,6 +7,30 @@ export const MATERIAL_TEXTURE_REF_KEYS = [
     'ReflectionsTextureID',
 ] as const
 
+type TextureRefValue = number | null | {
+    Keys?: Array<{
+        Vector?: ArrayLike<number> | number[]
+        [key: string]: unknown
+    }>
+    [key: string]: unknown
+}
+
+type TextureRefRecord = {
+    TextureID?: TextureRefValue
+    TextureId?: TextureRefValue
+}
+
+type MaterialLayerTextureRefs = Partial<Record<(typeof MATERIAL_TEXTURE_REF_KEYS)[number], TextureRefValue>>
+
+type MaterialWithTextureLayers = {
+    Layers?: object[]
+}
+
+const normalizeTextureIndexForTextureCount = (value: unknown, textureCount: number): number => {
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) return -1
+    return value < textureCount ? value : -1
+}
+
 export function cloneStructured<T>(value: T): T {
     try {
         return structuredClone(value)
@@ -109,6 +133,77 @@ export function remapParticleEmittersAfterTextureRemoval(
         const key = nextEmitter.TextureID !== undefined ? 'TextureID' : 'TextureId'
         if (nextEmitter[key] !== undefined) {
             nextEmitter[key] = remapTextureRefAfterRemoval(nextEmitter[key], removedIndex, -1)
+        }
+        return nextEmitter
+    })
+}
+
+export function normalizeTextureRefForTextureCount(value: TextureRefValue | undefined, textureCount: number): TextureRefValue | undefined {
+    if (value === undefined || value === null) return value
+
+    if (typeof value === 'number') {
+        return normalizeTextureIndexForTextureCount(value, textureCount)
+    }
+
+    if (typeof value === 'object' && Array.isArray(value.Keys)) {
+        const clonedValue = cloneStructured(value)
+        const clonedKeys = Array.isArray(clonedValue.Keys) ? clonedValue.Keys : []
+        clonedValue.Keys = clonedKeys.map((key) => {
+            const vector = key?.Vector
+            if (!vector || vector[0] === undefined) {
+                return key
+            }
+            const nextKey = cloneStructured(key)
+            const nextVectorSource = nextKey.Vector ?? vector
+            const nextVector = ArrayBuffer.isView(nextVectorSource)
+                ? Array.from(nextVectorSource as ArrayLike<number>)
+                : Array.isArray(nextVectorSource)
+                    ? [...nextVectorSource]
+                    : [nextVectorSource[0]]
+            nextVector[0] = normalizeTextureIndexForTextureCount(nextVector[0], textureCount)
+            nextKey.Vector = nextVector
+            return nextKey
+        })
+        return clonedValue
+    }
+
+    return value
+}
+
+export function normalizeMaterialsForTextureCount<T extends MaterialWithTextureLayers>(materials: T[] | undefined | null, textureCount: number): T[] | undefined {
+    if (!Array.isArray(materials)) return undefined
+
+    return materials.map((material) => {
+        const nextMaterial = cloneStructured(material)
+        if (!Array.isArray(nextMaterial?.Layers)) {
+            return nextMaterial
+        }
+
+        nextMaterial.Layers = nextMaterial.Layers.map((layer) => {
+            const nextLayer = cloneStructured(layer) as MaterialLayerTextureRefs
+            for (const key of MATERIAL_TEXTURE_REF_KEYS) {
+                if (nextLayer?.[key] !== undefined) {
+                    nextLayer[key] = normalizeTextureRefForTextureCount(nextLayer[key], textureCount)
+                }
+            }
+            return nextLayer
+        })
+
+        return nextMaterial
+    })
+}
+
+export function normalizeParticleEmittersForTextureCount(
+    emitters: object[] | undefined | null,
+    textureCount: number,
+): object[] | undefined {
+    if (!Array.isArray(emitters)) return undefined
+
+    return emitters.map((emitter) => {
+        const nextEmitter = cloneStructured(emitter) as typeof emitter & TextureRefRecord
+        const key: keyof TextureRefRecord = nextEmitter.TextureID !== undefined ? 'TextureID' : 'TextureId'
+        if (nextEmitter[key] !== undefined) {
+            nextEmitter[key] = normalizeTextureRefForTextureCount(nextEmitter[key], textureCount)
         }
         return nextEmitter
     })

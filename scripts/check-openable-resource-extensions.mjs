@@ -37,8 +37,18 @@ const workflowPath = await transpile('src/renderer/src/application/model-open/Op
     [/import[^;]+modelStore[^;]+;\n?/g, ''],
     [/import[^;]+selectionStore[^;]+;\n?/g, ''],
     [/import[^;]+types\/model[^;]+;\n?/g, ''],
+    [/import[^;]+model-import\/fbxSourcePath[^;]+;\n?/g, ''],
+    [/import[^;]+featureGate[^;]+;\n?/g, ''],
     [/export const openModelWorkflow = new OpenModelWorkflow\([^)]*\)\s*;?/g, ''],
 ])
+let workflowSource = await import('node:fs/promises').then(({ readFile }) => readFile(workflowPath, 'utf8'))
+workflowSource = [
+    "const isFbxSourcePath = (path) => typeof path === 'string' && path.toLowerCase().endsWith('.fbx');",
+    "const FBX_PRO_FEATURE_NAME = 'FBX 模型加载和转换';",
+    'const requireProFeature = async () => true;',
+    workflowSource,
+].join('\n')
+await writeFile(workflowPath, workflowSource)
 const { OpenModelWorkflow, DEFAULT_IMPORT_FILE_DIALOG_OPTIONS } = await import(pathToFileURL(workflowPath))
 
 const workflow = new OpenModelWorkflow({}, {})

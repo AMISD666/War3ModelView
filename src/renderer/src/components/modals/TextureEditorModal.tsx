@@ -359,10 +359,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
         if (!isStandalone) {
             return
         }
-        emitTextureAction({
-            action: 'SAVE_TEXTURES',
-            payload: serializeTexturesForSave(textures, adjustmentsMap)
-        })
+        emitTextureAction({ action: 'SAVE_TEXTURES', payload: serializeTexturesForSave(textures, adjustmentsMap), stalePolicy: 'warn' })
     }
 
     const buildTextureDeletionResult = (
@@ -386,7 +383,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
         setLocalTextures(nextTextures)
         const texturesForSave = serializeTexturesForSave(nextTextures, adjustmentsMap)
         if (isStandalone) {
-            emitTextureAction({ action: 'SAVE_TEXTURES', payload: texturesForSave })
+            emitTextureAction({ action: 'SAVE_TEXTURES', payload: texturesForSave, stalePolicy: 'warn' })
         } else if (isDetachedWindow) {
             void Promise.resolve(onApply?.(texturesForSave)).catch((error) => {
                 console.error('[TextureEditor] Failed to apply detached textures:', error)
@@ -1045,7 +1042,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
             pendingTextureSaveTimeoutRef.current = null
             const texturesForSave = buildTexturesForSave()
             if (isStandalone) {
-                emitTextureAction({ action: 'SAVE_TEXTURES', payload: texturesForSave })
+                emitTextureAction({ action: 'SAVE_TEXTURES', payload: texturesForSave, stalePolicy: 'warn' })
             } else if (isDetachedWindow) {
                 void Promise.resolve(onApply?.(texturesForSave)).catch((error) => {
                     console.error('[TextureEditor] Failed to auto-apply detached textures:', error)
@@ -1086,7 +1083,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
         const texturesForSave = buildTexturesForSave()
 
         if (isStandalone) {
-            emitTextureAction({ action: 'SAVE_TEXTURES', payload: texturesForSave })
+            emitTextureAction({ action: 'SAVE_TEXTURES', payload: texturesForSave, stalePolicy: 'warn' })
         } else if (isDetachedWindow) {
             void Promise.resolve(onApply?.(texturesForSave)).catch((error) => {
                 console.error('[TextureEditor] Failed to apply detached textures:', error)
@@ -1583,7 +1580,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
         })
 
         if (isStandalone) {
-            emitTextureAction({ action: 'SAVE_TEXTURES', payload: texturesForSave })
+            emitTextureAction({ action: 'SAVE_TEXTURES', payload: texturesForSave, stalePolicy: 'warn' })
         } else if (isDetachedWindow) {
             void Promise.resolve(onApply?.(texturesForSave)).catch((error) => {
                 console.error('[TextureEditor] Failed to apply dropped detached texture:', error)

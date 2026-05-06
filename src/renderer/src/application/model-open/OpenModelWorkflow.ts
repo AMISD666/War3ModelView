@@ -7,6 +7,8 @@ import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
 import type { ModelData } from '../../types/model'
 import type { AppMode } from '../../store/selectionStore'
+import { FBX_PRO_FEATURE_NAME, isFbxSourcePath } from '../model-import/fbxSourcePath'
+import { requireProFeature } from '../../utils/featureGate'
 
 export type OpenModelSource =
     | 'dialog'
@@ -87,7 +89,7 @@ export class OpenModelWorkflow {
         }
 
         void this.window.focusCurrentWindow().catch(() => {})
-        this.openPath({
+        await this.openPath({
             path: selected,
             source: 'dialog',
             addToRecent: true,
@@ -95,8 +97,11 @@ export class OpenModelWorkflow {
         return selected
     }
 
-    openPath(input: OpenModelPathInput, context: OpenModelPathContext): boolean {
+    async openPath(input: OpenModelPathInput, context: OpenModelPathContext): Promise<boolean> {
         if (!input.path) {
+            return false
+        }
+        if (isFbxSourcePath(input.path) && !(await requireProFeature(FBX_PRO_FEATURE_NAME))) {
             return false
         }
         if (input.acceptPath && !input.acceptPath(input.path)) {
@@ -122,7 +127,7 @@ export class OpenModelWorkflow {
 
         for (let index = 0; index < uniquePaths.length; index += 1) {
             const path = uniquePaths[index]
-            const opened = this.openPath({
+            const opened = await this.openPath({
                 ...input,
                 path,
             }, context)

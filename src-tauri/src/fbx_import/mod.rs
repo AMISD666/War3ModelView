@@ -7,6 +7,7 @@ mod tests;
 
 pub use types::*;
 
+use crate::activation;
 use convert::{
     animation_stack_from_native, bone_from_native, material_from_native, native_error_message,
     native_f32_vec, native_optional_index, native_string, native_u32_vec, native_u8_vec,
@@ -23,6 +24,14 @@ use std::slice;
 
 #[tauri::command]
 pub fn probe_fbx_native_import(
+    path: String,
+    options: Option<FbxProbeOptions>,
+) -> Result<FbxProbeResult, String> {
+    activation::require_pro_activation("FBX model loading and conversion")?;
+    probe_fbx_native_import_unchecked(path, options)
+}
+
+fn probe_fbx_native_import_unchecked(
     path: String,
     options: Option<FbxProbeOptions>,
 ) -> Result<FbxProbeResult, String> {
@@ -50,6 +59,14 @@ pub fn probe_fbx_native_import(
 
 #[tauri::command]
 pub fn import_fbx_static_scene(
+    path: String,
+    options: Option<FbxProbeOptions>,
+) -> Result<FbxStaticSceneResult, String> {
+    activation::require_pro_activation("FBX model loading and conversion")?;
+    import_fbx_static_scene_unchecked(path, options)
+}
+
+fn import_fbx_static_scene_unchecked(
     path: String,
     options: Option<FbxProbeOptions>,
 ) -> Result<FbxStaticSceneResult, String> {

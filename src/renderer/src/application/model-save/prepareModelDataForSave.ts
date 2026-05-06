@@ -916,12 +916,12 @@ export function prepareModelDataForSave(modelData: any): any {
                     applyShadingFlag(layer.NoDepthSet, 128);
                     layer.Shading = shading;
 
-                    // TextureID - can be number or AnimVector, default to 0
+                    // TextureID - can be number or AnimVector, default to None
                     if (layer.TextureID === undefined || layer.TextureID === null) {
-                        layer.TextureID = 0;
+                        layer.TextureID = -1;
                     } else if (typeof layer.TextureID === 'string') {
                         const parsedTextureId = Number(layer.TextureID);
-                        layer.TextureID = Number.isFinite(parsedTextureId) ? Math.floor(parsedTextureId) : 0;
+                        layer.TextureID = Number.isFinite(parsedTextureId) ? Math.floor(parsedTextureId) : -1;
                     } else if (typeof layer.TextureID === 'object') {
                         // Fix AnimVector Key Vectors to be Int32Array
                         layer.TextureID = normalizeTextureIdAnimVector(layer.TextureID, data.Textures?.length || 0, globalSeqCount) ?? layer.TextureID;
@@ -929,7 +929,7 @@ export function prepareModelDataForSave(modelData: any): any {
                     if (typeof layer.TextureID === 'number') {
                         const texCount = data.Textures?.length || 0;
                         layer.TextureID = Math.max(-1, layer.TextureID);
-                        if (texCount > 0 && layer.TextureID >= texCount) layer.TextureID = 0;
+                        if (texCount <= 0 || layer.TextureID >= texCount) layer.TextureID = -1;
                     }
 
                     // TVertexAnimId - can be null or number, convert undefined to null
@@ -1002,8 +1002,8 @@ export function prepareModelDataForSave(modelData: any): any {
                         }
                         if (typeof layer[key] === 'number') {
                             const texCount = data.Textures?.length || 0;
-                            if (texCount > 0 && (layer[key] < 0 || layer[key] >= texCount)) {
-                                layer[key] = 0;
+                            if (texCount <= 0 || layer[key] < 0 || layer[key] >= texCount) {
+                                layer[key] = -1;
                             }
                         }
                     });

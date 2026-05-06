@@ -12,7 +12,7 @@ fn fbx_static_fixture_import_smoke() {
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(1024 * 1024);
 
-    let result = import_fbx_static_scene(
+    let result = import_fbx_static_scene_unchecked(
         path,
         Some(FbxProbeOptions {
             max_file_size_bytes: Some(max_file_size_bytes),
@@ -68,7 +68,7 @@ fn fbx_skin_fixture_node_bone_smoke() {
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(16 * 1024 * 1024);
-        let result = import_fbx_static_scene(
+        let result = import_fbx_static_scene_unchecked(
             path,
             Some(FbxProbeOptions {
                 max_file_size_bytes: Some(max_file_size_bytes),
@@ -150,7 +150,7 @@ fn fbx_animation_fixture_bake_smoke() {
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(16 * 1024 * 1024);
 
-    let result = import_fbx_static_scene(
+    let result = import_fbx_static_scene_unchecked(
         path,
         Some(FbxProbeOptions {
             max_file_size_bytes: Some(max_file_size_bytes),

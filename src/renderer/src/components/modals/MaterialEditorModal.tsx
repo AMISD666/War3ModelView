@@ -517,7 +517,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                     lastMaterialsSignatureRef.current = materialsSignature
                     lastRpcMaterialsRef.current = rpcSnapshotRevision
                     if (texturesChanged) {
-                        setLocalTextures(JSON.parse(JSON.stringify(currentTextures)))
+                        const clonedTextures = JSON.parse(JSON.stringify(currentTextures)); modelTexturesRef.current = clonedTextures; localTexturesRef.current = clonedTextures; setLocalTextures(clonedTextures)
                     }
                 } else {                lastMaterialsSignatureRef.current = materialsSignature
                 lastStandaloneModelPathRef.current = pathStr

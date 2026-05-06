@@ -59,7 +59,7 @@ export const GlobalSequenceSelect: React.FC<GlobalSequenceSelectProps> = ({
                 action: 'SAVE',
                 documentId: rpcState.documentId,
                 baseDocumentRevision: rpcState.documentRevision,
-                stalePolicy: 'reject',
+                stalePolicy: 'warn',
                 globalSequences: newSeqs,
             });
         } else {

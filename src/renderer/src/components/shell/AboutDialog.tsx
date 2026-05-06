@@ -7,10 +7,12 @@ interface AboutDialogProps {
     activationStatus: ActivationStatus | null
     activationCode: string
     activationLoading: boolean
+    machineIdCopyLoading: boolean
     activationError: string | null
     onClose(): void
     onActivationCodeChange(value: string): void
     onActivate(): void
+    onCopyMachineId(): void
 }
 
 export const AboutDialog: React.FC<AboutDialogProps> = ({
@@ -18,10 +20,12 @@ export const AboutDialog: React.FC<AboutDialogProps> = ({
     activationStatus,
     activationCode,
     activationLoading,
+    machineIdCopyLoading,
     activationError,
     onClose,
     onActivationCodeChange,
     onActivate,
+    onCopyMachineId,
 }) => {
     if (!open) {
         return null
@@ -103,6 +107,23 @@ export const AboutDialog: React.FC<AboutDialogProps> = ({
                     ) : (
                         <div style={{ color: '#888' }}>{uiText.about.loading}</div>
                     )}
+                    <button
+                        onClick={onCopyMachineId}
+                        disabled={machineIdCopyLoading}
+                        style={{
+                            marginTop: '12px',
+                            width: '100%',
+                            padding: '7px 12px',
+                            backgroundColor: machineIdCopyLoading ? '#555' : '#1f6feb',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: machineIdCopyLoading ? 'not-allowed' : 'pointer',
+                            fontSize: '13px',
+                        }}
+                    >
+                        {machineIdCopyLoading ? uiText.about.copyingMachineId : uiText.about.copyMachineId}
+                    </button>
                 </div>
 
                 <div style={{

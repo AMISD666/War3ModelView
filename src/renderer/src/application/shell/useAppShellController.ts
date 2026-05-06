@@ -32,6 +32,7 @@ export const useAppShellController = () => {
     const [activationCode, setActivationCode] = useState('')
     const [activationLoading, setActivationLoading] = useState(false)
     const [activationError, setActivationError] = useState<string | null>(null)
+    const [machineIdCopyLoading, setMachineIdCopyLoading] = useState(false)
 
     useEffect(() => {
         localStorage.setItem(DEBUG_CONSOLE_STORAGE_KEY, JSON.stringify(showDebugConsole))
@@ -60,6 +61,25 @@ export const useAppShellController = () => {
         void fetchActivationStatus()
         setActivationError(null)
     }, [fetchActivationStatus, showAbout])
+
+    const copyMachineId = useCallback(async () => {
+        setMachineIdCopyLoading(true)
+        setActivationError(null)
+
+        try {
+            await desktopGateway.invoke<string>('copy_machine_id_to_clipboard')
+            showMessage('success', '已复制本机机器码', '可直接发送用于验证激活码')
+        } catch (error: unknown) {
+            const message = typeof error === 'string'
+                ? error
+                : error instanceof Error
+                    ? error.message
+                    : '复制本机机器码失败'
+            setActivationError(message)
+        } finally {
+            setMachineIdCopyLoading(false)
+        }
+    }, [])
 
     const checkUpdate = useCallback(async () => {
         localStorage.setItem(AUTO_UPDATE_CHECK_DATE_KEY, getTodayKey())
@@ -136,8 +156,10 @@ export const useAppShellController = () => {
         setActivationCode,
         activationLoading,
         activationError,
+        machineIdCopyLoading,
         checkUpdate,
         showChangelog,
         activate,
+        copyMachineId,
     }
 }

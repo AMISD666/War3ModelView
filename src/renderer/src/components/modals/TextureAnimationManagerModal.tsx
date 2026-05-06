@@ -82,7 +82,7 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
                 payload,
                 documentId: rpcState.documentId,
                 baseDocumentRevision: rpcState.documentRevision,
-                stalePolicy: 'reject',
+                stalePolicy: 'warn',
             });
         } else {
             const oldAnims = structuredClone(modelData?.TextureAnims || []);

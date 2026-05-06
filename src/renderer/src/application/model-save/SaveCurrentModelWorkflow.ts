@@ -9,6 +9,8 @@ import { saveModelUseCase } from './SaveModelUseCase'
 import type { EncodeAdjustedTexturesOptions, TextureAssetOperationResult, TextureSaveAssetService } from './TextureSaveAssetService'
 import { textureSaveAssetService } from './TextureSaveAssetService'
 import { clearTextureBatchCache } from '../cache'
+import { FBX_PRO_FEATURE_NAME, isFbxSourcePath } from '../model-import/fbxSourcePath'
+import { requireProFeature } from '../../utils/featureGate'
 
 export type SaveValidationContext = 'save' | 'saveAs' | 'export' | 'convert'
 
@@ -60,6 +62,10 @@ export class SaveCurrentModelWorkflow {
     ) { }
 
     async savePreparedModel(input: SavePreparedModelInput): Promise<SavePreparedModelResult | null> {
+        if (isFbxSourcePath(input.sourceModelPath) && !(await requireProFeature(FBX_PRO_FEATURE_NAME))) {
+            return null
+        }
+
         await input.onProgress?.({ progress: 8, detail: '正在整理模型数据...' })
         const preparation = this.saveModel.prepareModelForSave({
             modelData: input.modelData,

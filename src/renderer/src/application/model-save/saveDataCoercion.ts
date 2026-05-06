@@ -274,10 +274,10 @@ export function ensureAnimVector(
 
 function clampTextureTrackValue(value: unknown, textureCount: number): number {
     const parsed = Number(value)
-    if (!Number.isFinite(parsed)) return 0
-    if (textureCount <= 0) return 0
+    if (!Number.isFinite(parsed)) return -1
+    if (textureCount <= 0) return -1
     const normalized = Math.floor(parsed)
-    if (normalized < 0 || normalized >= textureCount) return 0
+    if (normalized < 0 || normalized >= textureCount) return -1
     return normalized
 }
 

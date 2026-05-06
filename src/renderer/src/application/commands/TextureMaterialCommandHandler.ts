@@ -4,6 +4,8 @@ import { previewOverlayService } from '../preview'
 import { commandBus, type CommandBus } from './CommandBus'
 import {
     findSingleRemovedTextureIndex,
+    normalizeMaterialsForTextureCount,
+    normalizeParticleEmittersForTextureCount,
     remapMaterialsAfterTextureRemoval,
     remapParticleEmittersAfterTextureRemoval,
 } from '../../utils/materialTextureRelations'
@@ -125,6 +127,15 @@ export class TextureMaterialCommandHandler {
                     removedIndex,
                     input.textures.length,
                 ),
+            })
+        }
+
+        if (previousModelData) {
+            return this.setTextureMaterialCollections({
+                textures: input.textures,
+                materials: normalizeMaterialsForTextureCount(previousModelData.Materials, input.textures.length),
+                particleEmitters: normalizeParticleEmittersForTextureCount(previousModelData.ParticleEmitters, input.textures.length),
+                particleEmitters2: normalizeParticleEmittersForTextureCount(previousModelData.ParticleEmitters2, input.textures.length),
             })
         }
 

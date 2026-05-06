@@ -150,7 +150,7 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
         geosetAnims: [],
         globalSequences: [],
     })
-    const emitVisibilityAction = (action: string, payload: unknown, stalePolicy: 'warn' | 'reject' = 'reject') => {
+    const emitVisibilityAction = (action: string, payload: unknown, stalePolicy: 'warn' | 'reject' = 'warn') => {
         emitCommand('EXECUTE_VISIBILITY_ACTION', {
             action,
             payload,

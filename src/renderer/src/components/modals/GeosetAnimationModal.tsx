@@ -28,7 +28,7 @@ interface GeosetAnimationModalProps {
 const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, onClose, isStandalone }) => {
     const { modelData } = useModelStore()
     const { state: rpcState, emitCommand } = useRpcClient<any>('geosetAnimManager', { geosets: [], geosetAnims: [], globalSequences: [], pickedGeosetIndex: null })
-    const emitGeosetAnimAction = (action: string, payload: unknown, stalePolicy: 'warn' | 'reject' = 'reject') => {
+    const emitGeosetAnimAction = (action: string, payload: unknown, stalePolicy: 'warn' | 'reject' = 'warn') => {
         emitCommand('EXECUTE_ANIM_ACTION', {
             action,
             payload,

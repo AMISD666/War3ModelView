@@ -1,9 +1,21 @@
 use crate::{activation, remote_activation_policy};
+use clipboard_win::{formats::Unicode, Clipboard, Setter};
 use tauri::Manager;
 
 #[tauri::command]
 pub fn get_machine_id() -> Result<String, String> {
     activation::get_machine_id()
+}
+
+#[tauri::command]
+pub fn copy_machine_id_to_clipboard() -> Result<String, String> {
+    let machine_id = activation::get_machine_id()?;
+    let _clipboard =
+        Clipboard::new_attempts(10).map_err(|e| format!("无法打开剪贴板: {}", e))?;
+    Unicode
+        .write_clipboard(&machine_id)
+        .map_err(|e| format!("复制本机机器码失败: {}", e))?;
+    Ok(machine_id)
 }
 
 #[tauri::command]
