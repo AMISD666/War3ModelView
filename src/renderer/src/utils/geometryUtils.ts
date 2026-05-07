@@ -5,6 +5,29 @@
 
 import { vec3 } from 'gl-matrix'
 
+const getVertexCount = (vertices: unknown): number => {
+    if (!vertices || typeof (vertices as { length?: unknown }).length !== 'number') return 0
+    if (Array.isArray(vertices) && Array.isArray(vertices[0])) return vertices.length
+    return Math.floor(Number((vertices as { length: number }).length) / 3)
+}
+
+const readVertex = (vertices: unknown, index: number): [number, number, number] | null => {
+    if (Array.isArray(vertices) && Array.isArray(vertices[index])) {
+        const source = vertices[index] as ArrayLike<unknown>
+        const x = Number(source[0])
+        const y = Number(source[1])
+        const z = Number(source[2])
+        return Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z) ? [x, y, z] : null
+    }
+
+    const source = vertices as ArrayLike<unknown>
+    const base = index * 3
+    const x = Number(source?.[base])
+    const y = Number(source?.[base + 1])
+    const z = Number(source?.[base + 2])
+    return Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z) ? [x, y, z] : null
+}
+
 /**
  * Calculate smooth vertex normals for a geoset.
  * This averages face normals for vertices that share the same position.
@@ -194,15 +217,15 @@ export function calculateGeosetExtent(geoset: any): void {
     }
 
     const vertices = geoset.Vertices;
-    const vertexCount = vertices.length / 3;
+    const vertexCount = getVertexCount(vertices);
 
     let minX = Infinity, minY = Infinity, minZ = Infinity;
     let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
 
     for (let i = 0; i < vertexCount; i++) {
-        const x = vertices[i * 3];
-        const y = vertices[i * 3 + 1];
-        const z = vertices[i * 3 + 2];
+        const vertex = readVertex(vertices, i);
+        if (!vertex) continue;
+        const [x, y, z] = vertex;
 
         if (x < minX) minX = x;
         if (y < minY) minY = y;
@@ -210,6 +233,13 @@ export function calculateGeosetExtent(geoset: any): void {
         if (x > maxX) maxX = x;
         if (y > maxY) maxY = y;
         if (z > maxZ) maxZ = z;
+    }
+
+    if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(minZ)) {
+        geoset.MinimumExtent = undefined;
+        geoset.MaximumExtent = undefined;
+        geoset.BoundsRadius = 0;
+        return;
     }
 
     // Update extent

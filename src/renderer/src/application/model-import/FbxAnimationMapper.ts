@@ -9,6 +9,10 @@ import {
     type War3Track,
 } from './FbxAnimationTransforms'
 import { collectMappedStackKeyTimes } from './FbxAnimationSampling'
+import {
+    applyWar3SequenceMetadata,
+    makeWar3SequenceNameFromFbxStack,
+} from './FbxSequenceNames'
 
 type ImportedNodeAnimationMapping = {
     nodes: ModelNode[]
@@ -27,11 +31,6 @@ const toFiniteNumber = (value: number | undefined, fallback: number): number =>
 
 const TRACK_VALUE_EPSILON = 1e-4
 const TRAILING_HOLD_FRAME_ALLOWANCE_MS = 50
-
-const makeSequenceName = (stack: FbxAnimationStackDto, index: number): string => {
-    const name = stack.name.trim()
-    return name.length > 0 ? name : `FBX_Anim_${index + 1}`
-}
 
 const getEffectiveStackDurationMs = (
     stack: FbxAnimationStackDto,
@@ -161,15 +160,24 @@ export const applyFbxAnimationTracks = (
     scene: FbxStaticSceneResult,
     modelData: ModelData,
     nodeMapping: ImportedNodeAnimationMapping,
+    options: {
+        startFrame?: number
+        intervalFrame?: number
+        append?: boolean
+    } = {},
 ): number => {
     const animationStacks = scene.animationStacks ?? []
     if (animationStacks.length === 0) {
         return 0
     }
 
-    let nextSequenceStart = 0
+    let nextSequenceStart = toFiniteNumber(options.startFrame, 0)
+    const fixedStartInterval = options.intervalFrame === undefined
+        ? null
+        : Math.max(0, Math.round(toFiniteNumber(options.intervalFrame, 0)))
     let mappedTrackCount = 0
-    const sequences: Sequence[] = []
+    const sequences: Sequence[] = options.append ? [...(modelData.Sequences ?? [])] : []
+    const rawStackNames = animationStacks.map((stack) => stack.name)
 
     for (let stackIndex = 0; stackIndex < animationStacks.length; stackIndex += 1) {
         const stack = animationStacks[stackIndex]
@@ -187,13 +195,13 @@ export const applyFbxAnimationTracks = (
             sequenceStartFrame,
             sequenceEndFrame,
         )
-        sequences.push({
-            Name: makeSequenceName(stack, stackIndex),
+        sequences.push(applyWar3SequenceMetadata({
+            Name: makeWar3SequenceNameFromFbxStack(stack.name, stackIndex, rawStackNames),
             Interval: [sequenceStartFrame, effectiveSequenceEndFrame],
             MinimumExtent: modelData.Model.MinimumExtent,
             MaximumExtent: modelData.Model.MaximumExtent,
             BoundsRadius: modelData.Model.BoundsRadius,
-        })
+        }))
 
         const trimmedTracksByTypedId = trimTracksToEndFrame(tracksByTypedId, effectiveSequenceEndFrame)
         for (const [typedId, tracks] of trimmedTracksByTypedId) {
@@ -210,7 +218,9 @@ export const applyFbxAnimationTracks = (
             mappedTrackCount += appendNodeTrack(node, 'Scaling', tracks.scaling)
         }
 
-        nextSequenceStart = sequenceEndFrame + 100
+        nextSequenceStart = fixedStartInterval === null
+            ? sequenceEndFrame + 100
+            : sequenceStartFrame + fixedStartInterval
     }
 
     modelData.Sequences = sequences

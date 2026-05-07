@@ -13,6 +13,7 @@ import { initDebugLogging } from './utils/debugLog'
 
 const ModelOptimizeModal = React.lazy(() => import('./components/modals/ModelOptimizeModal'))
 const ModelMergeModal = React.lazy(() => import('./components/modals/ModelMergeModal'))
+const FbxBatchMergeModal = React.lazy(() => import('./components/modals/FbxBatchMergeModal'))
 const GlobalColorAdjustModal = React.lazy(() => import('./components/modals/GlobalColorAdjustModal'))
 const CameraManagerModal = React.lazy(() => import('./components/modals/CameraManagerModal'))
 const GeosetEditorModal = React.lazy(() => import('./components/modals/GeosetEditorModal'))
@@ -92,6 +93,10 @@ if (targetWindow === 'modelOptimize') {
 } else if (targetWindow === 'modelMerge') {
     RootComponent = renderWithinSuspense(
         <ModelMergeModal visible={true} onClose={() => windowGateway.hideCurrentWindow()} isStandalone={true} />
+    )
+} else if (targetWindow === 'fbxBatchMerge') {
+    RootComponent = renderWithinSuspense(
+        <FbxBatchMergeModal visible={true} onClose={() => windowGateway.hideCurrentWindow()} isStandalone={true} />
     )
 } else if (targetWindow === 'globalColorAdjust') {
     RootComponent = renderWithinSuspense(

@@ -1,5 +1,8 @@
 import type { FbxImportDiagnostic, FbxStaticMeshDto } from '../../types/fbxImport'
 import type { Geoset } from '../../types/geoset'
+import { MAX_CLASSIC_MATRIX_GROUPS } from './FbxGeosetConstants'
+import { splitGeosetByClassicMatrixGroupLimit } from './FbxGeosetSplitter'
+import { compactImportedFbxGeosetVertices } from './FbxGeosetVertexCompactor'
 
 export type ImportedNodeMappingForGeosets = {
     defaultObjectId: number
@@ -137,34 +140,31 @@ const buildSkinnedGroups = (
     if (fallbackVertices > 0) {
         diagnostics.push(warning('skeleton', `FBX mesh "${mesh.name}" has ${fallbackVertices} vertices without usable skin weights; they were bound to the mesh fallback node.`))
     }
-    if (groups.length > 255) {
-        diagnostics.push(warning('war3-limit', `FBX mesh "${mesh.name}" produced ${groups.length} matrix groups; classic GNDX serialization stores group indices as bytes, so save/reopen needs manual validation.`))
+    if (groups.length > MAX_CLASSIC_MATRIX_GROUPS) {
+        diagnostics.push(warning('war3-limit', `FBX mesh "${mesh.name}" produced ${groups.length} matrix groups; it will be split during import to stay within classic MDX limits.`))
     }
 
-    const vertexGroup = groups.length > 255
+    const vertexGroup = groups.length >= MAX_CLASSIC_MATRIX_GROUPS
         ? new Uint16Array(vertexGroupValues)
         : new Uint8Array(vertexGroupValues)
     return { vertexGroup, groups }
 }
 
-export const mapFbxMeshToGeoset = (
+const buildImportedGeoset = (
     mesh: FbxStaticMeshDto,
     materialId: number,
-    nodeMapping: ImportedNodeMappingForGeosets,
-    diagnostics: FbxImportDiagnostic[],
+    vertexGroup: Uint8Array | Uint16Array,
+    groups: number[][],
 ): Geoset => {
     const vertexCount = Math.floor(mesh.vertices.length / 3)
-    const fallbackObjectId = findMeshObjectId(mesh, nodeMapping)
-    const skin = buildSkinnedGroups(mesh, vertexCount, fallbackObjectId, nodeMapping, diagnostics)
-    const totalGroupsCount = skin.groups.reduce((sum, group) => sum + group.length, 0)
-
+    const totalGroupsCount = groups.reduce((sum, group) => sum + group.length, 0)
     return {
         Vertices: new Float32Array(mesh.vertices),
         Normals: new Float32Array(mesh.normals.length === vertexCount * 3 ? mesh.normals : new Array(vertexCount * 3).fill(0)),
         TVertices: [new Float32Array(mesh.uvs.length === vertexCount * 2 ? mesh.uvs : new Array(vertexCount * 2).fill(0))],
         Faces: vertexCount > 65535 ? new Uint32Array(mesh.indices) : new Uint16Array(mesh.indices),
-        VertexGroup: skin.vertexGroup,
-        Groups: skin.groups,
+        VertexGroup: vertexGroup,
+        Groups: groups,
         TotalGroupsCount: totalGroupsCount,
         MinimumExtent: mesh.minimumExtent,
         MaximumExtent: mesh.maximumExtent,
@@ -173,4 +173,25 @@ export const mapFbxMeshToGeoset = (
         SelectionGroup: 0,
         Unselectable: false,
     }
+}
+
+export const mapFbxMeshToGeosets = (
+    mesh: FbxStaticMeshDto,
+    materialId: number,
+    nodeMapping: ImportedNodeMappingForGeosets,
+    diagnostics: FbxImportDiagnostic[],
+): Geoset[] => {
+    const vertexCount = Math.floor(mesh.vertices.length / 3)
+    const fallbackObjectId = findMeshObjectId(mesh, nodeMapping)
+    const skin = buildSkinnedGroups(mesh, vertexCount, fallbackObjectId, nodeMapping, diagnostics)
+    const geoset = buildImportedGeoset(mesh, materialId, skin.vertexGroup, skin.groups)
+    const compacted = compactImportedFbxGeosetVertices(geoset)
+    if (compacted.verticesAfter < compacted.verticesBefore) {
+        diagnostics.push(warning('geometry', `FBX mesh "${mesh.name}" shared equivalent triangle-corner vertices during import (${compacted.verticesBefore} -> ${compacted.verticesAfter}).`))
+    }
+    const splitGeosets = splitGeosetByClassicMatrixGroupLimit(compacted.geoset)
+    if (splitGeosets.length > 1) {
+        diagnostics.push(warning('war3-limit', `FBX mesh "${mesh.name}" was split into ${splitGeosets.length} geosets to preserve classic MDX skinning on save/reopen.`))
+    }
+    return splitGeosets
 }

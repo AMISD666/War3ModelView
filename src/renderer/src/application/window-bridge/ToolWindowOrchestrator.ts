@@ -28,6 +28,7 @@ export type EditorToggleId =
     | 'globalColorAdjust'
     | 'modelOptimize'
     | 'modelMerge'
+    | 'fbxBatchMerge'
     | 'dissolveEffect'
     | string
 
@@ -57,6 +58,7 @@ const WINDOW_TOGGLE_CONFIG: Record<string, { windowId: ToolWindowId; title: stri
     globalColorAdjust: { windowId: 'globalColorAdjust', title: '全局颜色调整' },
     modelOptimize: { windowId: 'modelOptimize', title: '模型优化' },
     modelMerge: { windowId: 'modelMerge', title: '模型合并' },
+    fbxBatchMerge: { windowId: 'fbxBatchMerge', title: '多 FBX 文件合并' },
     dissolveEffect: { windowId: 'dissolveEffect', title: '消散动画工具' },
 }
 

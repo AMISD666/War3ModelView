@@ -72,6 +72,21 @@ function fixLikelyQuaternionWCorruption(nums: number[]): number[] {
     return nums
 }
 
+function numericKeyedObjectToNumbers(v: object): number[] {
+    const keys = Object.keys(v)
+        .map((n) => parseInt(n, 10))
+        .filter((n) => !Number.isNaN(n))
+        .sort((a, b) => a - b)
+    if (keys.length === 0) return []
+    return keys.map((i) => Number((v as Record<number | string, unknown>)[i]))
+}
+
+function isByteObjectPayload(nums: number[]): boolean {
+    return nums.length > 0
+        && nums.length % 4 === 0
+        && nums.every((value) => Number.isInteger(value) && value >= 0 && value <= 255)
+}
+
 /**
  * 将关键帧向量转为普通 number[]（供 JSON / IPC / 编辑器使用）。
  * @param opts.isInt 整型轨道（TextureID 等）时，Uint8Array 按 int32 解释；否则按 float32。
@@ -91,12 +106,14 @@ export function vectorToPlainArray(v: unknown, opts?: VectorPlainOptions): numbe
         // 其他 TypedArray（如 Uint16）：保持按元素枚举；若遇 MsgPack 异常再单独处理
         out = Array.from(v as unknown as ArrayLike<number>)
     } else if (typeof v === 'object') {
-        const keys = Object.keys(v as object)
-            .map((n) => parseInt(n, 10))
-            .filter((n) => !Number.isNaN(n))
-            .sort((a, b) => a - b)
-        if (keys.length === 0) return []
-        out = keys.map((i) => Number((v as Record<number | string, unknown>)[i]))
+        const nums = numericKeyedObjectToNumbers(v)
+        if (nums.length === 0) return []
+        if (isByteObjectPayload(nums)) {
+            const bytes = new Uint8Array(nums)
+            out = opts?.isInt ? uint8ToInt32Numbers(bytes) : uint8ToFloat32Numbers(bytes)
+        } else {
+            out = nums
+        }
     } else {
         return []
     }

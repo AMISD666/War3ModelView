@@ -5,6 +5,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chrono::Utc;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::process::Command;
 use uuid::Uuid;
 use winreg::enums::*;
@@ -444,8 +445,109 @@ pub fn require_basic_activation(feature_name: &str) -> Result<ActivationStatus, 
     require_license_level(BASIC_FEATURE_LEVEL, feature_name)
 }
 
-pub fn require_pro_activation(feature_name: &str) -> Result<ActivationStatus, String> {
-    require_license_level(PRO_FEATURE_LEVEL, feature_name)
+const FBX_CAPABILITY_FEATURE: &str = "fbx_import_convert";
+const FBX_CAPABILITY_CONTEXT: &[u8] = b"War3ModelView FBX capability v1";
+
+#[derive(Debug, Clone)]
+pub struct FbxCapability {
+    level: u8,
+    license_type: String,
+    machine_id: String,
+    proof: [u8; 32],
+}
+
+impl FbxCapability {
+    fn from_verified_license(license_code: &str, payload: LicensePayload) -> Result<Self, String> {
+        let level = normalize_license_level(payload.lvl);
+        if level < PRO_FEATURE_LEVEL {
+            return Err(format!("license is not advanced. Current level: {}", level));
+        }
+
+        Ok(Self {
+            level,
+            license_type: payload.typ.clone(),
+            machine_id: payload.mid.clone(),
+            proof: derive_fbx_capability_proof(license_code, &payload, level),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn level(&self) -> u8 {
+        self.level
+    }
+
+    #[cfg(test)]
+    pub(crate) fn license_type(&self) -> &str {
+        &self.license_type
+    }
+
+    #[cfg(test)]
+    pub(crate) fn machine_id(&self) -> &str {
+        &self.machine_id
+    }
+
+    #[cfg(test)]
+    pub(crate) fn proof(&self) -> &[u8; 32] {
+        &self.proof
+    }
+
+    pub fn assert_valid_for_operation(&self, operation: &str) -> Result<(), String> {
+        if self.level < PRO_FEATURE_LEVEL || self.proof.iter().all(|byte| *byte == 0) {
+            return Err(format!(
+                "Missing FBX capability for {operation}. License type: {}, machine: {}",
+                self.license_type, self.machine_id
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_only() -> Self {
+        Self {
+            level: PRO_FEATURE_LEVEL,
+            license_type: "TEST".to_string(),
+            machine_id: "TEST-MACHINE".to_string(),
+            proof: [1; 32],
+        }
+    }
+}
+
+pub fn require_fbx_capability() -> Result<FbxCapability, String> {
+    if check_time_rollback() {
+        return Err("FBX model loading and conversion requires a valid advanced activation code. Reason: system time rollback detected".to_string());
+    }
+
+    let license_code = load_license().ok_or_else(|| {
+        "FBX model loading and conversion requires a valid advanced activation code. Reason: no activation code is saved".to_string()
+    })?;
+    let payload = verify_license(&license_code).map_err(|error| {
+        format!(
+            "FBX model loading and conversion requires a valid advanced activation code. Reason: {}",
+            error
+        )
+    })?;
+
+    FbxCapability::from_verified_license(&license_code, payload).map_err(|error| {
+        format!(
+            "FBX model loading and conversion requires a valid advanced activation code. Reason: {}",
+            error
+        )
+    })
+}
+
+fn derive_fbx_capability_proof(
+    license_code: &str,
+    payload: &LicensePayload,
+    normalized_level: u8,
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(FBX_CAPABILITY_CONTEXT);
+    hasher.update(FBX_CAPABILITY_FEATURE.as_bytes());
+    hasher.update(license_code.as_bytes());
+    hasher.update(payload.mid.as_bytes());
+    hasher.update(payload.typ.as_bytes());
+    hasher.update([normalized_level]);
+    hasher.finalize().into()
 }
 
 pub fn activate_software(license_code: &str) -> Result<ActivationStatus, String> {
@@ -499,5 +601,41 @@ mod tests {
     #[test]
     fn pro_feature_level_is_advanced_license_level() {
         assert_eq!(PRO_FEATURE_LEVEL, 2);
+    }
+
+    #[test]
+    fn fbx_capability_accepts_advanced_offline_license_payload() {
+        let payload = LicensePayload {
+            mid: "TEST-MACHINE".to_string(),
+            typ: "PERM".to_string(),
+            exp: 0,
+            ver: 1,
+            iss: "War3ModelEditor".to_string(),
+            lvl: PRO_FEATURE_LEVEL,
+        };
+        let capability = FbxCapability::from_verified_license("signed-test-license", payload)
+            .expect("advanced offline license should grant FBX capability");
+
+        assert_eq!(capability.level(), PRO_FEATURE_LEVEL);
+        assert_eq!(capability.license_type(), "PERM");
+        assert_eq!(capability.machine_id(), "TEST-MACHINE");
+        assert!(capability.proof().iter().any(|byte| *byte != 0));
+    }
+
+    #[test]
+    fn fbx_capability_rejects_basic_or_qq_license_payload() {
+        let payload = LicensePayload {
+            mid: "TEST-MACHINE".to_string(),
+            typ: "QQ".to_string(),
+            exp: 0,
+            ver: 1,
+            iss: "War3ModelEditor".to_string(),
+            lvl: BASIC_FEATURE_LEVEL,
+        };
+        let error = FbxCapability::from_verified_license("signed-test-license", payload)
+            .expect_err("Basic/QQ activation must not grant FBX capability");
+
+        assert!(error.contains("license is not advanced"));
+        assert!(error.contains("Current level: 1"));
     }
 }

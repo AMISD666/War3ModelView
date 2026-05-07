@@ -25,6 +25,7 @@ import {
 } from '../../utils/materialTextureRelations'
 import { getMaterialTrackEditorTitle, getMaterialTrackFieldName } from '../../utils/materialAnimShared'
 import { useMaterialEditorStandaloneEvents } from './material-editor/useMaterialEditorStandaloneEvents'
+import { useMaterialEditorMainWindowFileDrop } from './material-editor/useMaterialEditorMainWindowFileDrop'
 import { desktopGateway } from '../../infrastructure/desktop'
 
 const { Text } = Typography
@@ -815,6 +816,28 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         isCommittingRef.current = false
     }
 
+    const commitStandaloneTextureImport = (nextMaterials: any[], nextTextures?: any[] | null) => {
+        if (!isStandalone) return
+
+        const materialsForSave = denormalizeMaterialsForSave(nextMaterials)
+        const texturesForSave = JSON.parse(JSON.stringify(nextTextures ?? modelTexturesRef.current ?? []))
+
+        originalMaterialsRef.current = JSON.parse(JSON.stringify(materialsForSave))
+        originalTexturesRef.current = JSON.parse(JSON.stringify(texturesForSave))
+        didRealtimePreviewRef.current = false
+        didRealtimeTexturePreviewRef.current = false
+        isCommittingRef.current = true
+
+        emitMaterialAction({
+            action: 'COMMIT_MATERIALS',
+            payload: {
+                materials: materialsForSave,
+                textures: texturesForSave,
+            },
+            stalePolicy: 'warn',
+        })
+    }
+
     const stageImportedTextures = (nextTextures: any[]) => {
         modelTexturesRef.current = nextTextures
         localTexturesRef.current = nextTextures
@@ -840,8 +863,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         didRealtimePreviewRef.current = true
 
         if (isStandalone) {
-            syncStandaloneMaterials(nextMaterials, hasTexturePatch ? nextTextures ?? undefined : undefined)
-            commitStandaloneTextureDrivenChange(nextMaterials, hasTexturePatch ? nextTextures ?? undefined : null)
+            commitStandaloneTextureImport(nextMaterials, hasTexturePatch ? nextTextures ?? undefined : undefined)
         } else {
             applyVisualPatch({
                 Textures: hasTexturePatch ? nextTextures ?? undefined : undefined,
@@ -1441,26 +1463,18 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         handleExternalTexturePaths,
     })
 
-    useEffect(() => {
-        if (!visible) return
-        const onExternalFileDrop = async (evt: Event) => {
-            const activeMaterialIndex = selectedMaterialIndexRef.current
-        const activeLayerIndex = selectedLayerIndexRef.current
-        if (activeMaterialIndex < 0 || activeLayerIndex < 0) return
-            const customEvent = evt as CustomEvent<{ paths?: string[]; position?: { x: number; y: number } | null }>
-            const paths = Array.isArray(customEvent.detail?.paths) ? customEvent.detail.paths : []
-            if (paths.length === 0) return
-            const supportedPaths = paths.filter(isSupportedTextureFile)
-            if (supportedPaths.length === 0) return
-            const position = customEvent.detail?.position
-            if (position && ![detailsDropSurfaceRef.current, layerTextureDropSurfaceRef.current, textureDropZoneRef.current].some((element) => isPointInsideElement(position.x, position.y, element))) {
-                return
-            }
-            await handleExternalTexturePaths(supportedPaths)
-        }
-        window.addEventListener('war3-external-file-drop', onExternalFileDrop as EventListener)
-        return () => window.removeEventListener('war3-external-file-drop', onExternalFileDrop as EventListener)
-    }, [visible, selectedMaterialIndex, selectedLayerIndex, modelData, modelPath, localMaterials])
+    useMaterialEditorMainWindowFileDrop({
+        visible,
+        selectedMaterialIndexRef,
+        selectedLayerIndexRef,
+        isSupportedTextureFile,
+        detailsDropSurfaceRef,
+        layerTextureDropSurfaceRef,
+        textureDropZoneRef,
+        isPointInsideElement,
+        handleExternalTexturePaths,
+    })
+
     const effectiveTextures = localTextures.length > 0 ? localTextures : ((modelData as any)?.Textures || [])
     const textureCount = effectiveTextures.length || 0
     const textureOptions = [{ value: '-1', plainLabel: 'None', label: 'None' }, ...Array.from({ length: textureCount }, (_, i) => {

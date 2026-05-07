@@ -35,6 +35,7 @@ const AnimationPanel: React.FC<AnimationPanelProps> = ({
     // State for inline editing name
     const [editingIndex, setEditingIndex] = useState<number | null>(null)
     const [editingName, setEditingName] = useState('')
+    const originalEditingNameRef = useRef<{ index: number, name: string } | null>(null)
     const inputRef = useRef<any>(null)
 
     // State for inline editing duration (seconds)
@@ -80,12 +81,42 @@ const AnimationPanel: React.FC<AnimationPanelProps> = ({
     const handleDoubleClick = (index: number, e: React.MouseEvent) => {
         e.stopPropagation()
         const anim = sequences[index]
+        originalEditingNameRef.current = { index, name: anim.Name || '' }
         setEditingIndex(index)
         setEditingName(anim.Name || `动画 ${index}`)
     }
 
     const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        setEditingName(e.target.value)
+        const nextName = e.target.value
+        setEditingName(nextName)
+        if (editingIndex === null) return
+        const trimmedName = nextName.trim()
+        if (!trimmedName) return
+        applySequenceNameToDocument(editingIndex, trimmedName)
+    }
+
+    const applySequenceNameToDocument = (index: number, name: string) => {
+        const currentSequences = useModelStore.getState().sequences || []
+        const newSequences = currentSequences.map((seq, idx) =>
+            idx === index ? { ...seq, Name: name } : seq
+        )
+        setSequences(newSequences)
+    }
+
+    const finishNameEdit = () => {
+        setEditingIndex(null)
+        setEditingName('')
+        originalEditingNameRef.current = null
+    }
+
+    const cancelNameEdit = () => {
+        if (editingIndex !== null) {
+            const original = originalEditingNameRef.current
+            if (original?.index === editingIndex) {
+                applySequenceNameToDocument(editingIndex, original.name)
+            }
+        }
+        finishNameEdit()
     }
 
     const handleNameConfirm = () => {
@@ -94,24 +125,25 @@ const AnimationPanel: React.FC<AnimationPanelProps> = ({
         const trimmedName = editingName.trim()
         if (!trimmedName) {
             appMessage.warning('动画名称不能为空')
-            setEditingIndex(null)
+            cancelNameEdit()
             return
         }
 
-        const oldSequences = [...sequences]
-        const newSequences = sequences.map((seq, idx) =>
-            idx === editingIndex ? { ...seq, Name: trimmedName } : seq
-        )
+        const original = originalEditingNameRef.current
+        const originalName = original?.index === editingIndex ? original.name : sequences[editingIndex]?.Name
 
         // History
-        push({
-            name: `Rename Sequence to "${trimmedName}"`,
-            undo: () => setSequences(oldSequences),
-            redo: () => setSequences(newSequences)
-        })
+        if (originalName !== trimmedName) {
+            const index = editingIndex
+            push({
+                name: `Rename Sequence to "${trimmedName}"`,
+                undo: () => applySequenceNameToDocument(index, originalName),
+                redo: () => applySequenceNameToDocument(index, trimmedName)
+            })
+        }
 
-        setSequences(newSequences)
-        setEditingIndex(null)
+        applySequenceNameToDocument(editingIndex, trimmedName)
+        finishNameEdit()
         appMessage.success('名称已修改')
     }
 
@@ -159,7 +191,7 @@ const AnimationPanel: React.FC<AnimationPanelProps> = ({
         if (e.key === 'Enter') {
             handleNameConfirm()
         } else if (e.key === 'Escape') {
-            setEditingIndex(null)
+            cancelNameEdit()
         }
     }
 

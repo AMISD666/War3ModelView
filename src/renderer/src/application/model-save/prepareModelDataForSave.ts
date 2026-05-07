@@ -20,6 +20,7 @@ import {
     normalizeSequences,
     normalizeTextures,
 } from './saveDataSections'
+import { normalizeMaterialForSave } from './normalizeMaterialLayersForSave'
 
 /**
  * Normalize model data before saving to ensure typed arrays are correct.
@@ -835,182 +836,13 @@ export function prepareModelDataForSave(modelData: any): any {
     // Fix Materials - ensure all layer properties are valid for MDX generator
     if (data.Materials && Array.isArray(data.Materials)) {
         // console.log(`[MainLayout] prepareModelDataForSave: Processing ${data.Materials.length} materials`);
-        data.Materials.forEach((material: any, matIndex: number) => {
-            // Ensure material properties
-            if (material.PriorityPlane === undefined) material.PriorityPlane = 0;
-            if (material.RenderMode === undefined) material.RenderMode = 0;
-
-            // Rebuild RenderMode from boolean flags when provided
-            const renderMask = 1 | 16 | 32;
-            const baseRenderMode = typeof material.RenderMode === 'number' ? material.RenderMode : 0;
-            let renderMode = baseRenderMode & ~renderMask;
-            const applyRenderFlag = (value: any, bit: number) => {
-                if (value === true) {
-                    renderMode |= bit;
-                } else if (value === false) {
-                    // Explicitly cleared
-                } else if (baseRenderMode & bit) {
-                    renderMode |= bit;
-                }
-            };
-            applyRenderFlag(material.ConstantColor, 1);
-            const sortPrims = material.SortPrimsFarZ ?? material.SortPrimitivesFarZ;
-            applyRenderFlag(sortPrims, 16);
-            applyRenderFlag(material.FullResolution, 32);
-            material.RenderMode = renderMode;
-
-            if (material.Layers && Array.isArray(material.Layers)) {
-                material.Layers.forEach((layer: any, layerIndex: number) => {
-                    // FilterMode - required, default to 0 (None)
-                    let filterModeValue: any = layer.FilterMode;
-                    if (filterModeValue === undefined && layer.filterMode !== undefined) {
-                        filterModeValue = layer.filterMode;
-                    }
-                    if (filterModeValue && typeof filterModeValue === 'object' && 'value' in filterModeValue) {
-                        filterModeValue = (filterModeValue as any).value;
-                    }
-                    if (filterModeValue === undefined || filterModeValue === null) {
-                        filterModeValue = 0;
-                    }
-                    if (typeof filterModeValue === 'string') {
-                        const normalized = filterModeValue.replace(/\\s+/g, '').toLowerCase();
-                        const map: Record<string, number> = {
-                            none: 0,
-                            transparent: 1,
-                            blend: 2,
-                            additive: 3,
-                            addalpha: 4,
-                            modulate: 5,
-                            modulate2x: 6
-                        };
-                        if (/^\d+$/.test(normalized)) {
-                            filterModeValue = Number.parseInt(normalized, 10);
-                        } else {
-                            filterModeValue = map[normalized] ?? 0;
-                        }
-                    }
-                    if (typeof filterModeValue !== 'number' || !Number.isFinite(filterModeValue)) {
-                        filterModeValue = 0;
-                    }
-                    layer.FilterMode = Math.max(0, Math.min(6, Math.floor(filterModeValue)));
-
-                    // Shading - required, default to 0
-                    const shadingMask = 1 | 2 | 16 | 32 | 64 | 128;
-                    const baseShading = typeof layer.Shading === 'number' ? layer.Shading : 0;
-                    let shading = baseShading & ~shadingMask;
-                    const applyShadingFlag = (value: any, bit: number) => {
-                        if (value === true) {
-                            shading |= bit;
-                        } else if (value === false) {
-                            // Explicitly cleared
-                        } else if (baseShading & bit) {
-                            shading |= bit;
-                        }
-                    };
-                    applyShadingFlag(layer.Unshaded, 1);
-                    const sphereEnv = layer.SphereEnvMap ?? layer.SphereEnvironmentMap;
-                    applyShadingFlag(sphereEnv, 2);
-                    applyShadingFlag(layer.TwoSided, 16);
-                    applyShadingFlag(layer.Unfogged, 32);
-                    applyShadingFlag(layer.NoDepthTest, 64);
-                    applyShadingFlag(layer.NoDepthSet, 128);
-                    layer.Shading = shading;
-
-                    // TextureID - can be number or AnimVector, default to None
-                    if (layer.TextureID === undefined || layer.TextureID === null) {
-                        layer.TextureID = -1;
-                    } else if (typeof layer.TextureID === 'string') {
-                        const parsedTextureId = Number(layer.TextureID);
-                        layer.TextureID = Number.isFinite(parsedTextureId) ? Math.floor(parsedTextureId) : -1;
-                    } else if (typeof layer.TextureID === 'object') {
-                        // Fix AnimVector Key Vectors to be Int32Array
-                        layer.TextureID = normalizeTextureIdAnimVector(layer.TextureID, data.Textures?.length || 0, globalSeqCount) ?? layer.TextureID;
-                    }
-                    if (typeof layer.TextureID === 'number') {
-                        const texCount = data.Textures?.length || 0;
-                        layer.TextureID = Math.max(-1, layer.TextureID);
-                        if (texCount <= 0 || layer.TextureID >= texCount) layer.TextureID = -1;
-                    }
-
-                    // TVertexAnimId - can be null or number, convert undefined to null
-                    if (layer.TVertexAnimId === undefined && layer.TextureAnimationId !== undefined) {
-                        layer.TVertexAnimId = layer.TextureAnimationId;
-                    }
-                    if (layer.TVertexAnimId === undefined) {
-                        layer.TVertexAnimId = null;
-                    }
-                    if (typeof layer.TVertexAnimId === 'number') {
-                        const tvAnimCount = data.TextureAnims?.length || 0;
-                        if (layer.TVertexAnimId < 0 || (tvAnimCount > 0 && layer.TVertexAnimId >= tvAnimCount)) {
-                            layer.TVertexAnimId = null;
-                        }
-                    }
-
-                    // CoordId - required, default to 0
-                    if (layer.CoordId === undefined || layer.CoordId === null) {
-                        layer.CoordId = 0;
-                    }
-
-                    // Alpha - required, default to 1
-                    if (layer.Alpha === undefined || layer.Alpha === null) {
-                        layer.Alpha = 1;
-                    } else if (typeof layer.Alpha === 'object') {
-                        // Fix AnimVector Key Vectors to be Float32Array
-                        layer.Alpha = ensureAnimVector(layer.Alpha, 1, false, undefined, globalSeqCount) ?? layer.Alpha;
-                    } else if (typeof layer.Alpha === 'number') {
-                        if (layer.Alpha < 0) layer.Alpha = 0;
-                        if (layer.Alpha > 1) layer.Alpha = 1;
-                    }
-
-                    // Optional HD/extended layer properties
-                    if (layer.EmissiveGain !== undefined && layer.EmissiveGain !== null) {
-                        if (typeof layer.EmissiveGain === 'object') {
-                            layer.EmissiveGain = ensureAnimVector(layer.EmissiveGain, 1, false, undefined, globalSeqCount) ?? layer.EmissiveGain;
-                        }
-                    }
-                    if (layer.FresnelColor !== undefined && layer.FresnelColor !== null) {
-                        if (layer.FresnelColor instanceof Float32Array) {
-                            // ok
-                        } else if (layer.FresnelColor && typeof layer.FresnelColor === 'object' && Array.isArray(layer.FresnelColor.Keys)) {
-                            layer.FresnelColor = fixAnimVector(layer.FresnelColor, 3, false, [1, 1, 1], globalSeqCount);
-                        } else {
-                            layer.FresnelColor = toFloat32Array(layer.FresnelColor, 3);
-                        }
-                    }
-                    if (layer.FresnelOpacity !== undefined && layer.FresnelOpacity !== null) {
-                        if (typeof layer.FresnelOpacity === 'object') {
-                            layer.FresnelOpacity = ensureAnimVector(layer.FresnelOpacity, 1, false, undefined, globalSeqCount) ?? layer.FresnelOpacity;
-                        }
-                    }
-                    if (layer.FresnelTeamColor !== undefined && layer.FresnelTeamColor !== null) {
-                        if (typeof layer.FresnelTeamColor === 'object') {
-                            layer.FresnelTeamColor = ensureAnimVector(layer.FresnelTeamColor, 1, false, undefined, globalSeqCount) ?? layer.FresnelTeamColor;
-                        }
-                    }
-
-                    const extraTextureIds = [
-                        'NormalTextureID',
-                        'ORMTextureID',
-                        'EmissiveTextureID',
-                        'TeamColorTextureID',
-                        'ReflectionsTextureID'
-                    ];
-                    extraTextureIds.forEach((key) => {
-                        if (layer[key] === undefined || layer[key] === null) return;
-                        if (typeof layer[key] === 'object') {
-                            layer[key] = normalizeTextureIdAnimVector(layer[key], data.Textures?.length || 0, globalSeqCount) ?? layer[key];
-                        }
-                        if (typeof layer[key] === 'number') {
-                            const texCount = data.Textures?.length || 0;
-                            if (texCount <= 0 || layer[key] < 0 || layer[key] >= texCount) {
-                                layer[key] = -1;
-                            }
-                        }
-                    });
-
-                    // console.log(`[MainLayout] Material[${matIndex}].Layer[${layerIndex}]: FilterMode=${layer.FilterMode}, Shading=${layer.Shading}, TextureID=${typeof layer.TextureID === 'number' ? layer.TextureID : 'AnimVector'}, TVertexAnimId=${layer.TVertexAnimId}, CoordId=${layer.CoordId}, Alpha=${typeof layer.Alpha === 'number' ? layer.Alpha : 'AnimVector'}`);
-                });
-            }
+        data.Materials.forEach((material: any) => {
+            normalizeMaterialForSave(
+                material,
+                data.Textures?.length || 0,
+                data.TextureAnims?.length || 0,
+                globalSeqCount,
+            );
         });
     }
 

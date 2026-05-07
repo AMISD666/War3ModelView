@@ -53,10 +53,17 @@ import {
     openModelWorkflow,
     type ModelOpenFilesRequest,
 } from '../application/model-open'
+import {
+    dispatchExternalFileDrop,
+    EXTERNAL_FILE_DROP_CLAIM_EVENT,
+    externalFileDropClaimRegistry,
+    type ExternalFileDropClaimDetail,
+} from '../application/file-drop'
 import { openRetargetTargetFromDialog, openRetargetTargetPaths } from '../application/retarget'
 import { useAppShellController } from '../application/shell/useAppShellController'
 import { useModelToolsController } from '../application/model-tools/useModelToolsController'
-import { FBX_SOURCE_SAVE_WARNING, isFbxSourcePath } from '../application/model-import'
+import { FBX_SOURCE_SAVE_WARNING, fbxBatchMergeUseCase, isFbxSourcePath } from '../application/model-import'
+import { FBX_PRO_FEATURE_NAME } from '../application/model-import/fbxSourcePath'
 import { registerCloseModelTabRequestHandler, requestCloseModelTab } from '../application/model-tabs/closeTabRequest'
 import {
     cameraManagerCommandHandler,
@@ -92,6 +99,8 @@ import { hasActiveGlobalColorAdjustSettings } from '../utils/globalColorAdjustCo
 import { commitSavedModelToStore } from '../services/commitSavedModelService'
 import { cloneStructured } from '../utils/materialTextureRelations'
 import { getBasename, getDirname, joinPath, normalizeWindowsPath } from '../utils/windowsPath'
+import { requireProFeature } from '../utils/featureGate'
+import { getGeosetVertexCount } from '../commands/AutoSeparateLayersSplitter'
 import { AboutDialog } from './shell/AboutDialog'
 
 const toArrayBuffer = (value: ArrayBuffer | Uint8Array): ArrayBuffer => {
@@ -123,6 +132,13 @@ type RevisionedMainToolCommand = {
     documentId?: string | null
     baseDocumentRevision?: number
     stalePolicy?: 'warn' | 'reject'
+}
+
+type FbxBatchMergeCommandPayload = {
+    requestId?: unknown
+    paths?: unknown
+    startFrame?: unknown
+    intervalFrame?: unknown
 }
 
 const checkMainToolCommandRevision = (
@@ -186,6 +202,13 @@ const checkMainToolCommandRevision = (
     }
 
     return true
+}
+
+const buildFbxBatchMergeTabPath = (paths: string[]): string => {
+    const firstPath = paths[0] ?? 'fbx_merged.fbx'
+    const dir = getDirname(firstPath)
+    const sourceName = getBasename(firstPath).replace(/\.fbx$/i, '').trim() || 'fbx_merged'
+    return joinPath(dir, `${sourceName}_fbx_merged_${Date.now()}.mdl`)
 }
 
 const MainLayout: React.FC = () => {
@@ -773,6 +796,59 @@ const MainLayout: React.FC = () => {
 
     useRpcServer('modelMerge', getModelMergeState, handleModelMergeCommand);
 
+    // ---- FBX Batch Merge RPC Server ----
+    const getFbxBatchMergeState = useCallback(() => {
+        const store = useModelStore.getState()
+        return {
+            documentId: store.documentId,
+            documentRevision: store.documentRevision,
+            modelPath: store.modelPath || '',
+        }
+    }, [])
+
+    const handleFbxBatchMergeCommand = useCallback(async (command: string, payload: unknown) => {
+        if (command !== 'EXECUTE_FBX_BATCH_MERGE') return
+
+        const data = (payload ?? {}) as FbxBatchMergeCommandPayload
+        const requestId = typeof data.requestId === 'string' ? data.requestId : undefined
+        const paths = Array.isArray(data.paths) ? data.paths.filter((path: unknown): path is string => typeof path === 'string') : []
+        try {
+            const result = await fbxBatchMergeUseCase.mergeFromPaths({
+                paths,
+                startFrame: Number(data.startFrame ?? 333),
+                intervalFrame: Number(data.intervalFrame ?? 2000),
+            })
+            const mergedPath = buildFbxBatchMergeTabPath(paths)
+            const mergedName = getBasename(mergedPath).replace(/\.mdl$/i, '')
+            result.modelData.Model.Name = mergedName
+            const store = useModelStore.getState()
+            store.addTab(mergedPath)
+            store.setModelData(result.modelData, mergedPath, {
+                skipAutoRecalculate: true,
+            })
+            store.markTabDirty()
+            const message = `合并完成：${result.sourceCount} 个 FBX，${result.sequenceCount} 个动作序列`
+            showMessage('success', '多 FBX 文件合并', message)
+            await windowGateway.emit('fbxBatchMerge-result', {
+                requestId,
+                ok: true,
+                sourceCount: result.sourceCount,
+                sequenceCount: result.sequenceCount,
+                message,
+            }).catch(() => { })
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            showMessage('error', '多 FBX 文件合并失败', message)
+            await windowGateway.emit('fbxBatchMerge-result', {
+                requestId,
+                ok: false,
+                message,
+            }).catch(() => { })
+        }
+    }, [])
+
+    useRpcServer('fbxBatchMerge', getFbxBatchMergeState, handleFbxBatchMergeCommand);
+
     // ---- Dissolve Effect RPC Server ----
     const getDissolveEffectState = useCallback(() => {
         const store = useModelStore.getState();
@@ -782,7 +858,7 @@ const MainLayout: React.FC = () => {
             return geosets.map((g: any) => ({
                 MaterialID: g.MaterialID,
                 SelectionGroup: g.SelectionGroup,
-                vertexCount: g.Vertices ? Math.floor(g.Vertices.length / 3) : 0
+                vertexCount: getGeosetVertexCount(g)
             }));
         };
         const stripSequences = (seqs?: any[]) => {
@@ -808,28 +884,60 @@ const MainLayout: React.FC = () => {
     const handleDissolveCommand = useCallback((command: string, payload: any) => {
         if (command === 'EXECUTE_DISSOLVE') {
             if (!checkMainToolCommandRevision('DissolveEffectCommandHandler', command, payload)) {
+                void windowGateway.emit('dissolveEffect-result', {
+                    requestId: payload?.requestId,
+                    ok: false,
+                    message: '工具窗口数据已过期，请重新打开或等待同步后再执行。',
+                }).catch(() => { })
                 return
             }
             (async () => {
                 const store = useModelStore.getState();
-                if (!store.modelData || !store.modelPath) return;
+                if (!store.modelData || !store.modelPath) {
+                    await windowGateway.emit('dissolveEffect-result', {
+                        requestId: payload?.requestId,
+                        ok: false,
+                        message: '没有加载模型数据',
+                    }).catch(() => { })
+                    return;
+                }
                 try {
                     const { executeDissolveEffect, refreshDissolveTexturesInRenderer } = await import('../utils/dissolveEffect');
                     const result = await executeDissolveEffect(store.modelData, store.modelPath, payload);
                     textureMaterialCommandHandler.setTextureMaterialCollections({ materials: result.materials, textures: result.textures });
                     await refreshDissolveTexturesInRenderer(useRendererStore.getState().renderer, store.modelPath, result);
+                    await windowGateway.emit('dissolveEffect-result', {
+                        requestId: payload?.requestId,
+                        ok: true,
+                        textureModifiedCount: result.textureModifiedCount,
+                        materialModifiedCount: result.materialModifiedCount,
+                        message: `消散动画制作完成：已修改 ${result.textureModifiedCount} 个贴图，更新 ${result.materialModifiedCount} 个材质`,
+                    }).catch(() => { })
+                    await windowManager.emitToolWindowSync('dissolveEffect', getDissolveEffectState()).catch(() => { })
                 } catch (e: any) {
                     console.error('[Dissolve] Failed:', e);
+                    await windowGateway.emit('dissolveEffect-result', {
+                        requestId: payload?.requestId,
+                        ok: false,
+                        message: e?.message || '执行消散效果失败',
+                    }).catch(() => { })
+                    await windowManager.emitToolWindowSync('dissolveEffect', getDissolveEffectState()).catch(() => { })
                 }
             })();
         }
-    }, []);
+    }, [getDissolveEffectState]);
 
     const { broadcastSync: broadcastDissolveEffect } = useRpcServer('dissolveEffect', getDissolveEffectState, handleDissolveCommand);
 
     useEffect(() => {
         const unsubscribe = useModelStore.subscribe((state, prevState) => {
-            if (state.modelData?.Geosets !== prevState.modelData?.Geosets || state.sequences !== prevState.sequences) {
+            if (
+                state.documentRevision !== prevState.documentRevision
+                || state.assetRevision !== prevState.assetRevision
+                || state.previewRevision !== prevState.previewRevision
+                || state.modelData?.Geosets !== prevState.modelData?.Geosets
+                || state.sequences !== prevState.sequences
+            ) {
                 void windowManager.isToolWindowVisible('dissolveEffect').then((visible) => {
                     if (!visible) return
                     broadcastDissolveEffect(getDissolveEffectState());
@@ -1348,7 +1456,7 @@ const MainLayout: React.FC = () => {
             index,
             MaterialID: g.MaterialID,
             SelectionGroup: g.SelectionGroup,
-            vertexCount: g.Vertices ? g.Vertices.length / 3 : 0,
+            vertexCount: getGeosetVertexCount(g),
             faceCount: g.Faces ? g.Faces.length / 3 : 0
         }));
 
@@ -1400,7 +1508,7 @@ const MainLayout: React.FC = () => {
         const geosets = (_modelData?.Geosets || []).map((g: any, index: number) => ({
             index,
             MaterialID: g.MaterialID,
-            vertexCount: g.Vertices ? g.Vertices.length / 3 : 0,
+            vertexCount: getGeosetVertexCount(g),
 
             faceCount: g.Faces ? g.Faces.length / 3 : 0
         }));
@@ -1852,8 +1960,15 @@ const MainLayout: React.FC = () => {
         let unlistenDrop: (() => void) | undefined
         let unlistenEnter: (() => void) | undefined
         let unlistenLeave: (() => void) | undefined
+        let unlistenClaim: (() => void) | undefined
         const setupDragDropListeners = async () => {
             try {
+                unlistenClaim = await windowGateway.listen(EXTERNAL_FILE_DROP_CLAIM_EVENT, (event) => {
+                    const payload = (event as { payload?: ExternalFileDropClaimDetail }).payload
+                    if (!payload) return
+                    externalFileDropClaimRegistry.apply(payload)
+                })
+
                 // Listen for file drop
                 unlistenDrop = await desktopGateway.listen<{ paths?: string[]; position?: { x: number; y: number } }>('tauri://drag-drop', async (event) => {
                     setIsDragging(false)
@@ -1864,18 +1979,18 @@ const MainLayout: React.FC = () => {
 
                     const paths = Array.isArray(event.payload?.paths) ? event.payload.paths : []
                     if (!paths || paths.length === 0) return
-
-                    const filePath = paths.find((path) => openModelWorkflow.isOpenableResourceFile(path))
-                    if (!filePath) {
-                        // Forward non-model external drops to feature-specific handlers (e.g. texture drop zones)
-                        window.dispatchEvent(new CustomEvent('war3-external-file-drop', {
-                            detail: {
-                                paths,
-                                position: event.payload?.position ?? null
-                            }
-                        }))
+                    if (paths.some((path) => externalFileDropClaimRegistry.isClaimed(path, currentWindowLabel))) {
                         return
                     }
+
+                    const featureDropHandled = dispatchExternalFileDrop({
+                        paths,
+                        position: event.payload?.position ?? null,
+                    })
+                    if (featureDropHandled) return
+
+                    const filePath = paths.find((path) => openModelWorkflow.isOpenableResourceFile(path))
+                    if (!filePath) return
                     void openModelPaths({
                         paths: [filePath],
                         source: 'drag-drop',
@@ -1916,6 +2031,7 @@ const MainLayout: React.FC = () => {
             unlistenDrop?.()
             unlistenEnter?.()
             unlistenLeave?.()
+            unlistenClaim?.()
         }
     }, [openModelAsTab])
 
@@ -2500,6 +2616,13 @@ const MainLayout: React.FC = () => {
         toggleNodeManager,
     ])
 
+    const handleOpenFbxBatchMerge = useCallback(async () => {
+        if (!(await requireProFeature(FBX_PRO_FEATURE_NAME))) {
+            return
+        }
+        handleToggleEditor('fbxBatchMerge')
+    }, [handleToggleEditor])
+
     return (
         <div
             style={{
@@ -2611,6 +2734,7 @@ const MainLayout: React.FC = () => {
                 onAddDeathAnimation={addDeathAnimation}
                 onRemoveLights={removeLights}
                 onCopyModel={handleCopyModel}
+                onOpenFbxBatchMerge={handleOpenFbxBatchMerge}
             />
 
             <AboutDialog

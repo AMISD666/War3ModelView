@@ -145,12 +145,42 @@ export type NodeEditorPreview = {
 
 const pickDefaultSequenceIndex = (sequences: any[]) => {
     if (!Array.isArray(sequences) || sequences.length === 0) return -1;
-    const preferredRegex = /stand|idle|walk|move/i;
-    const preferredIndex = sequences.findIndex((seq) => {
-        const name = (seq?.Name ?? seq?.name ?? '').toString();
-        return preferredRegex.test(name);
+
+    const readSequenceName = (seq: any) => (seq?.Name ?? seq?.name ?? '').toString();
+    const readSequenceDuration = (seq: any) => {
+        const interval = Array.isArray(seq?.Interval)
+            ? seq.Interval
+            : ArrayBuffer.isView(seq?.Interval)
+                ? Array.from(seq.Interval as ArrayLike<number>)
+                : [];
+        const start = Number(interval[0] ?? 0);
+        const end = Number(interval[1] ?? start);
+        return Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, end - start) : 0;
+    };
+
+    const preferredRegex = /stand|idle|walk|move|rest/i;
+    const avoidedRegex = /death|dead|decay|dissipate/i;
+
+    const preferredIndex = sequences.findIndex((seq) => preferredRegex.test(readSequenceName(seq)));
+    if (preferredIndex >= 0) {
+        return preferredIndex;
+    }
+
+    let bestIndex = -1;
+    let bestDuration = -1;
+    sequences.forEach((seq, index) => {
+        const name = readSequenceName(seq);
+        if (avoidedRegex.test(name)) {
+            return;
+        }
+        const duration = readSequenceDuration(seq);
+        if (duration > bestDuration) {
+            bestDuration = duration;
+            bestIndex = index;
+        }
     });
-    return preferredIndex >= 0 ? preferredIndex : 0;
+
+    return bestIndex >= 0 ? bestIndex : 0;
 };
 
 // DELETED legacy recalculateModelNormals and associated local functions.

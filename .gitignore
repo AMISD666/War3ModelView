@@ -58,6 +58,8 @@ docs/*
 scripts/*
 !scripts/
 !scripts/sync-war3-model-vendor.mjs
+!scripts/check-material-layer-save-normalization.mjs
+!scripts/check-material-alpha-keyframes.mjs
 local-test-scripts/
 activation/
 

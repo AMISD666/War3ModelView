@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useWindowEvent } from '../../../hooks/useWindowEvent'
 import { windowGateway } from '../../../infrastructure/window'
+import { EXTERNAL_FILE_DROP_CLAIM_EVENT, type ExternalFileDropClaimDetail } from '../../../application/file-drop'
 
 type DropPosition = { x: number; y: number } | null | undefined
 
@@ -52,11 +53,20 @@ export function useMaterialEditorStandaloneEvents({
     handleExternalTexturePaths,
 }: UseMaterialEditorStandaloneEventsArgs): void {
     const standaloneEnabled = Boolean(isStandalone && visible)
+    const currentWindowLabel = windowGateway.getCurrentWindowLabel()
 
     const isCurrentWindowEvent = (event: { windowLabel?: string }): boolean => {
         const sourceWindowLabel = event.windowLabel
-        const currentWindowLabel = windowGateway.getCurrentWindowLabel()
         return !sourceWindowLabel || sourceWindowLabel === currentWindowLabel
+    }
+
+    const emitClaim = (kind: ExternalFileDropClaimDetail['kind'], paths: string[]): void => {
+        if (paths.length === 0) return
+        void windowGateway.emit<ExternalFileDropClaimDetail>(EXTERNAL_FILE_DROP_CLAIM_EVENT, {
+            kind,
+            paths,
+            sourceWindowLabel: currentWindowLabel,
+        })
     }
 
     const isHitTarget = (position?: DropPosition): boolean => {
@@ -87,10 +97,15 @@ export function useMaterialEditorStandaloneEvents({
         const supportedPaths = (scopedEvent.payload?.paths || []).filter(isSupportedTextureFile)
         if (supportedPaths.length === 0) return
         if (!isHitTarget(scopedEvent.payload?.position)) return
+        emitClaim('claim', supportedPaths)
         setIsTextureDropActive(true)
     }, standaloneEnabled)
 
-    useWindowEvent('tauri://drag-leave', () => {
+    useWindowEvent<TextureDropPayload>('tauri://drag-leave', (event) => {
+        const scopedEvent = event as WindowScopedEvent<TextureDropPayload>
+        if (!isCurrentWindowEvent(scopedEvent)) return
+        const supportedPaths = (scopedEvent.payload?.paths || []).filter(isSupportedTextureFile)
+        emitClaim('release', supportedPaths)
         setIsTextureDropActive(false)
     }, standaloneEnabled)
 
@@ -101,6 +116,7 @@ export function useMaterialEditorStandaloneEvents({
         const supportedPaths = (scopedEvent.payload?.paths || []).filter(isSupportedTextureFile)
         if (supportedPaths.length === 0) return
         if (!isHitTarget(scopedEvent.payload?.position)) return
+        emitClaim('consume', supportedPaths)
 
         void handleExternalTexturePaths(supportedPaths).finally(() => {
             setIsTextureDropActive(false)

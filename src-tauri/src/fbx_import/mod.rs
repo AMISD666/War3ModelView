@@ -8,6 +8,7 @@ mod tests;
 pub use types::*;
 
 use crate::activation;
+use crate::activation::FbxCapability;
 use convert::{
     animation_stack_from_native, bone_from_native, material_from_native, native_error_message,
     native_f32_vec, native_optional_index, native_string, native_u32_vec, native_u8_vec,
@@ -27,7 +28,16 @@ pub fn probe_fbx_native_import(
     path: String,
     options: Option<FbxProbeOptions>,
 ) -> Result<FbxProbeResult, String> {
-    activation::require_pro_activation("FBX model loading and conversion")?;
+    let capability = activation::require_fbx_capability()?;
+    probe_fbx_native_import_with_capability(path, options, &capability)
+}
+
+fn probe_fbx_native_import_with_capability(
+    path: String,
+    options: Option<FbxProbeOptions>,
+    capability: &FbxCapability,
+) -> Result<FbxProbeResult, String> {
+    capability.assert_valid_for_operation("FBX probe")?;
     probe_fbx_native_import_unchecked(path, options)
 }
 
@@ -62,7 +72,16 @@ pub fn import_fbx_static_scene(
     path: String,
     options: Option<FbxProbeOptions>,
 ) -> Result<FbxStaticSceneResult, String> {
-    activation::require_pro_activation("FBX model loading and conversion")?;
+    let capability = activation::require_fbx_capability()?;
+    import_fbx_static_scene_with_capability(path, options, &capability)
+}
+
+fn import_fbx_static_scene_with_capability(
+    path: String,
+    options: Option<FbxProbeOptions>,
+    capability: &FbxCapability,
+) -> Result<FbxStaticSceneResult, String> {
+    capability.assert_valid_for_operation("FBX static scene import")?;
     import_fbx_static_scene_unchecked(path, options)
 }
 

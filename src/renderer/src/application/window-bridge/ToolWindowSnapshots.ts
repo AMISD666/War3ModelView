@@ -1,4 +1,5 @@
 import type { PreviewProjectionMode } from '../preview'
+import { getGeosetVertexCount } from '../../commands/AutoSeparateLayersSplitter'
 
 export type ToolWindowGeosetSummary = {
     index: number
@@ -113,7 +114,7 @@ export const stripGeosetDataForToolWindow = (geosets: any[] | undefined | null):
         index,
         MaterialID: geoset?.MaterialID,
         SelectionGroup: geoset?.SelectionGroup,
-        vertexCount: geoset?.Vertices ? geoset.Vertices.length / 3 : 0,
+        vertexCount: getGeosetVertexCount(geoset),
         faceCount: geoset?.Faces ? geoset.Faces.length / 3 : 0,
     }))
 }

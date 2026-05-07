@@ -1,6 +1,21 @@
 use super::*;
 
 #[test]
+fn fbx_import_helpers_accept_explicit_capability_without_machine_activation() {
+    let capability = activation::FbxCapability::test_only();
+
+    let probe_error =
+        probe_fbx_native_import_with_capability("not-fbx.txt".to_string(), None, &capability)
+            .expect_err("capability-authenticated probe should still validate FBX file type");
+    assert!(probe_error.contains("Only .fbx files"));
+
+    let import_error =
+        import_fbx_static_scene_with_capability("not-fbx.txt".to_string(), None, &capability)
+            .expect_err("capability-authenticated import should still validate FBX file type");
+    assert!(import_error.contains("Only .fbx files"));
+}
+
+#[test]
 fn fbx_static_fixture_import_smoke() {
     let Ok(path) = std::env::var("FBX_STATIC_FIXTURE") else {
         eprintln!("FBX static import smoke skipped: set FBX_STATIC_FIXTURE to a small .fbx file.");
@@ -58,22 +73,22 @@ fn fbx_static_fixture_import_smoke() {
 #[test]
 fn fbx_skin_fixture_node_bone_smoke() {
     let Ok(path) = std::env::var("FBX_SKIN_FIXTURE") else {
-            eprintln!(
-                "FBX skin node/bone smoke skipped: set FBX_SKIN_FIXTURE to a small skinned .fbx file."
-            );
-            return;
-        };
+        eprintln!(
+            "FBX skin node/bone smoke skipped: set FBX_SKIN_FIXTURE to a small skinned .fbx file."
+        );
+        return;
+    };
 
-        let max_file_size_bytes = std::env::var("FBX_SKIN_FIXTURE_MAX_BYTES")
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(16 * 1024 * 1024);
-        let result = import_fbx_static_scene_unchecked(
-            path,
-            Some(FbxProbeOptions {
-                max_file_size_bytes: Some(max_file_size_bytes),
-            }),
-        )
+    let max_file_size_bytes = std::env::var("FBX_SKIN_FIXTURE_MAX_BYTES")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(16 * 1024 * 1024);
+    let result = import_fbx_static_scene_unchecked(
+        path,
+        Some(FbxProbeOptions {
+            max_file_size_bytes: Some(max_file_size_bytes),
+        }),
+    )
     .expect("skinned FBX static import should succeed");
 
     assert!(result.probe.ok);
@@ -86,55 +101,58 @@ fn fbx_skin_fixture_node_bone_smoke() {
         "static import should include FBX node DTOs"
     );
     assert!(
-        result.nodes.iter().all(|node| node.rest_world_matrix[15] == 1.0
-            && node.rest_world_matrix.iter().all(|value| value.is_finite())),
+        result
+            .nodes
+            .iter()
+            .all(|node| node.rest_world_matrix[15] == 1.0
+                && node.rest_world_matrix.iter().all(|value| value.is_finite())),
         "each imported FBX node should include a finite 4x4 rest/bind world matrix"
     );
     assert!(
         !result.bones.is_empty(),
         "static import should include FBX bone DTOs"
     );
-        let resolved_bone_count = result
-            .bones
-            .iter()
-            .filter(|bone| {
-                bone.node_typed_id.is_some()
-                    && result
-                        .nodes
-                        .iter()
-                        .any(|node| Some(node.typed_id) == bone.node_typed_id)
-            })
-            .count();
-        assert!(
-            resolved_bone_count > 0,
-            "at least one imported FBX bone should resolve to a node DTO"
-        );
-        assert!(
-            result.meshes.iter().any(|mesh| mesh.skin_weight_stride > 0
-                && mesh.skin_weight_counts.iter().any(|count| *count > 0)),
-            "skinned fixture should include per-vertex FBX source weight DTOs"
-        );
-        assert!(
-            result.meshes.iter().all(|mesh| {
-                if mesh.skin_weight_stride == 0 {
-                    return true;
-                }
-                let stride = mesh.skin_weight_stride as usize;
-                mesh.skin_weight_counts
+    let resolved_bone_count = result
+        .bones
+        .iter()
+        .filter(|bone| {
+            bone.node_typed_id.is_some()
+                && result
+                    .nodes
                     .iter()
-                    .enumerate()
-                    .all(|(vertex_index, count)| {
-                        let count = usize::from(*count).min(stride);
-                        (0..count).all(|weight_index| {
-                            let source_index = vertex_index * stride + weight_index;
-                            let typed_id = mesh.skin_bone_node_typed_ids[source_index];
-                            result.nodes.iter().any(|node| node.typed_id == typed_id)
-                        })
+                    .any(|node| Some(node.typed_id) == bone.node_typed_id)
+        })
+        .count();
+    assert!(
+        resolved_bone_count > 0,
+        "at least one imported FBX bone should resolve to a node DTO"
+    );
+    assert!(
+        result.meshes.iter().any(|mesh| mesh.skin_weight_stride > 0
+            && mesh.skin_weight_counts.iter().any(|count| *count > 0)),
+        "skinned fixture should include per-vertex FBX source weight DTOs"
+    );
+    assert!(
+        result.meshes.iter().all(|mesh| {
+            if mesh.skin_weight_stride == 0 {
+                return true;
+            }
+            let stride = mesh.skin_weight_stride as usize;
+            mesh.skin_weight_counts
+                .iter()
+                .enumerate()
+                .all(|(vertex_index, count)| {
+                    let count = usize::from(*count).min(stride);
+                    (0..count).all(|weight_index| {
+                        let source_index = vertex_index * stride + weight_index;
+                        let typed_id = mesh.skin_bone_node_typed_ids[source_index];
+                        result.nodes.iter().any(|node| node.typed_id == typed_id)
                     })
-            }),
-            "each FBX source weight bone node reference should resolve to a node DTO"
-        );
-    }
+                })
+        }),
+        "each FBX source weight bone node reference should resolve to a node DTO"
+    );
+}
 
 #[test]
 fn fbx_animation_fixture_bake_smoke() {
@@ -182,9 +200,7 @@ fn fbx_animation_fixture_bake_smoke() {
         .animation_stacks
         .iter()
         .flat_map(|stack| stack.baked_nodes.iter())
-        .map(|node| {
-            node.translation_keys.len() + node.rotation_keys.len() + node.scale_keys.len()
-        })
+        .map(|node| node.translation_keys.len() + node.rotation_keys.len() + node.scale_keys.len())
         .sum();
     let mapped_baked_node_count: usize = result
         .animation_stacks

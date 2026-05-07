@@ -5,6 +5,7 @@
 import React, { useMemo } from 'react';
 import { useModelStore } from '../../store/modelStore';
 import { NodeType } from '../../types/node';
+import { getGeosetVertexCount } from '../../commands/AutoSeparateLayersSplitter';
 
 const rowStyle: React.CSSProperties = {
     display: 'flex',
@@ -37,7 +38,7 @@ export const ModelInfoPanel: React.FC = () => {
         let totalVertices = 0;
         let totalFaces = 0;
         geosets.forEach(geoset => {
-            totalVertices += geoset.Vertices?.length || 0;
+            totalVertices += getGeosetVertexCount(geoset as unknown as Record<string, unknown>);
             totalFaces += (geoset.Faces?.length || 0) / 3;
         });
 

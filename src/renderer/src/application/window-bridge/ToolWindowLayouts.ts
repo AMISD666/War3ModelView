@@ -12,6 +12,7 @@ export type ToolWindowId =
     | 'geosetAnimManager'
     | 'modelOptimize'
     | 'modelMerge'
+    | 'fbxBatchMerge'
     | 'globalColorAdjust'
     | 'dissolveEffect'
 
@@ -36,6 +37,7 @@ export const TOOL_WINDOW_SIZES: Record<ToolWindowId, WindowSize> = {
     geosetAnimManager: { width: 800, height: 560 },
     modelOptimize: { width: 320, height: 520 },
     modelMerge: { width: 560, height: 500 },
+    fbxBatchMerge: { width: 420, height: 420 },
     globalColorAdjust: { width: 550, height: 480 },
     dissolveEffect: { width: 600, height: 620 },
 }

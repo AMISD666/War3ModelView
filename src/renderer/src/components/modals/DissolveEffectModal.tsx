@@ -5,6 +5,7 @@ import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame';
 import { useModelStore } from '../../store/modelStore';
 import { useRendererStore } from '../../store/rendererStore';
 import { useRpcClient } from '../../hooks/useRpc';
+import { useWindowEvent } from '../../hooks/useWindowEvent';
 import { textureMaterialCommandHandler } from '../../application/commands';
 import { desktopGateway } from '../../infrastructure/desktop';
 
@@ -207,6 +208,8 @@ interface DissolveGeosetOption {
     materialId: number;
 }
 
+type DissolveExecutionResultEvent = { requestId?: string; ok: boolean; message?: string; textureModifiedCount?: number; materialModifiedCount?: number }
+
 const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onClose, isStandalone = false }) => {
     const storeNodes = useModelStore(state => state.nodes);
     const storeSequences = useModelStore(state => state.sequences);
@@ -228,6 +231,8 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
     const [manualStart, setManualStart] = useState<number>(0);
     const [manualEnd, setManualEnd] = useState<number>(1000);
     const [saveMode, setSaveMode] = useState<'overwrite' | 'saveAs'>('saveAs');
+    const [isExecuting, setIsExecuting] = useState(false);
+    const pendingRequestIdRef = useRef<string | null>(null);
 
     // Derived min/max
     const currentMin = timeMode === 'sequence' ? (sequences[selectedSequenceIndex]?.Interval[0] || 0) : manualStart;
@@ -288,7 +293,27 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
         }
     };
 
+    useWindowEvent<DissolveExecutionResultEvent>('dissolveEffect-result', (event) => {
+        const result = event.payload;
+        if (result.requestId && result.requestId !== pendingRequestIdRef.current) return;
+
+        pendingRequestIdRef.current = null;
+        setIsExecuting(false);
+        appMessage.destroy('dissolve-effect');
+
+        if (!result.ok) {
+            appMessage.error(result.message || '执行消散效果失败');
+            return;
+        }
+
+        appMessage.success(
+            result.message ||
+            `消散动画制作完成：已修改 ${result.textureModifiedCount ?? 0} 个贴图，更新 ${result.materialModifiedCount ?? 0} 个材质`
+        );
+    }, isStandalone);
+
     const handleExecute = async () => {
+        if (isExecuting) return;
         if (selectedGeosets.length === 0) { appMessage.warning('请至少选择一个多边形组'); return; }
         if (!texturePath) { appMessage.warning('请选择消散贴图'); return; }
         if (points.length === 0) { appMessage.warning('请在时间轴上设置至少一个关键帧点'); return; }
@@ -316,13 +341,17 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
         };
 
         if (isStandalone) {
+            const requestId = Math.random().toString(36).substring(2, 11);
+            pendingRequestIdRef.current = requestId;
+            setIsExecuting(true);
             emitCommand('EXECUTE_DISSOLVE', {
                 ...dissolveParams,
+                requestId,
                 documentId: rpcState.documentId,
                 baseDocumentRevision: rpcState.documentRevision,
-                stalePolicy: 'reject',
+                stalePolicy: 'warn',
             });
-            appMessage.info('正在执行消散效果...');
+            appMessage.loading({ content: '正在执行消散效果...', key: 'dissolve-effect', duration: 0 });
             return;
         }
 
@@ -330,6 +359,7 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
         if (!store.modelData || !store.modelPath) { appMessage.error('没有加载模型数据'); return; }
 
         try {
+            setIsExecuting(true);
             const { executeDissolveEffect, refreshDissolveTexturesInRenderer } = await import('../../utils/dissolveEffect');
             const result = await executeDissolveEffect(store.modelData, store.modelPath, dissolveParams);
             textureMaterialCommandHandler.setTextureMaterialCollections({ materials: result.materials, textures: result.textures });
@@ -340,6 +370,8 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
             });
         } catch (err: any) {
             appMessage.error(err?.message || '执行消散效果失败');
+        } finally {
+            setIsExecuting(false);
         }
     };
 
@@ -497,8 +529,8 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
 
             <div style={{ flex: 1 }} />
 
-            <Button type="primary" block size="large" onClick={handleExecute} style={{ backgroundColor: '#1890ff', fontWeight: 'bold' }}>
-                开始执行
+            <Button type="primary" block size="large" onClick={handleExecute} loading={isExecuting} disabled={isExecuting} style={{ backgroundColor: '#1890ff', fontWeight: 'bold' }}>
+                {isExecuting ? '执行中...' : '开始执行'}
             </Button>
 
             <style dangerouslySetInnerHTML={{

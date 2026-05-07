@@ -12,6 +12,7 @@ import GlobalSequenceModal from '../modals/GlobalSequenceModal'
 import GeosetVisibilityToolModal from '../modals/GeosetVisibilityToolModal'
 import ModelOptimizeModal from '../modals/ModelOptimizeModal'
 import ModelMergeModal from '../modals/ModelMergeModal'
+import FbxBatchMergeModal from '../modals/FbxBatchMergeModal'
 import GlobalColorAdjustModal from '../modals/GlobalColorAdjustModal'
 import DissolveEffectModal from '../modals/DissolveEffectModal'
 import KeyframeEditor from '../editors/KeyframeEditor'
@@ -30,6 +31,7 @@ export const isStandaloneToolWindowLabel = (windowLabel: string | null | undefin
         || windowLabel === 'geosetVisibilityTool'
         || windowLabel === 'modelOptimize'
         || windowLabel === 'modelMerge'
+        || windowLabel === 'fbxBatchMerge'
         || windowLabel === 'globalColorAdjust'
         || windowLabel === 'dissolveEffect'
         || windowLabel === 'nodeEditor'
@@ -91,6 +93,10 @@ const StandaloneToolWindowRouter: React.FC<StandaloneToolWindowRouterProps> = ({
 
     if (windowLabel === 'modelMerge') {
         return <ModelMergeModal visible={true} onClose={handleHide} isStandalone={true} />
+    }
+
+    if (windowLabel === 'fbxBatchMerge') {
+        return <FbxBatchMergeModal visible={true} onClose={handleHide} isStandalone={true} />
     }
 
     if (windowLabel === 'globalColorAdjust') {

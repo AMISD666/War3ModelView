@@ -10,8 +10,7 @@ pub fn get_machine_id() -> Result<String, String> {
 #[tauri::command]
 pub fn copy_machine_id_to_clipboard() -> Result<String, String> {
     let machine_id = activation::get_machine_id()?;
-    let _clipboard =
-        Clipboard::new_attempts(10).map_err(|e| format!("无法打开剪贴板: {}", e))?;
+    let _clipboard = Clipboard::new_attempts(10).map_err(|e| format!("无法打开剪贴板: {}", e))?;
     Unicode
         .write_clipboard(&machine_id)
         .map_err(|e| format!("复制本机机器码失败: {}", e))?;

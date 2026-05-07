@@ -1,0 +1,1 @@
+export const MAX_CLASSIC_MATRIX_GROUPS = 256

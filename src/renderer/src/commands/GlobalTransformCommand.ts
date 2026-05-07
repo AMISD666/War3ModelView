@@ -5,6 +5,7 @@ import { Command } from '../utils/CommandManager'
 import { modelDocumentCommandHandler } from '../application/commands'
 import { pivotVec3ToTuple } from '../utils/modelUtils'
 import { calculateModelExtent } from '../utils/geometryUtils'
+import { scaleRawNodeTranslationTracksForBakedScale } from './GlobalTransformNodeTracks'
 
 type TransformOps = {
     translation: [number, number, number]
@@ -569,6 +570,7 @@ function bakeScaleOnlyIntoModelDataPreservingNodes(
         }
     }
 
+    scaleRawNodeTranslationTracksForBakedScale(modelData, scale)
     scaleRawNodeParametersForBakedScale(modelData, ctx.radiusScale)
     calculateModelExtent(modelData)
 }

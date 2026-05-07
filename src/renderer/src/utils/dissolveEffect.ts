@@ -54,6 +54,58 @@ function addPathSuffix(path: string, suffix: string): string {
     return path.substring(0, lastDot) + suffix + path.substring(lastDot);
 }
 
+function toScalarKeyValue(value: unknown, fallback: number): number {
+    if (Array.isArray(value)) {
+        const first = Number(value[0] ?? fallback);
+        return Number.isFinite(first) ? first : fallback;
+    }
+    if (ArrayBuffer.isView(value)) {
+        const view = Array.from(value as unknown as Iterable<number>);
+        const first = Number(view[0] ?? fallback);
+        return Number.isFinite(first) ? first : fallback;
+    }
+    const direct = Number(value ?? fallback);
+    return Number.isFinite(direct) ? direct : fallback;
+}
+
+function normalizeScalarKeys(keys: any[], fallback: number): Array<{ Frame: number; Vector: [number] }> {
+    if (!Array.isArray(keys)) return [];
+    return keys
+        .map((key) => {
+            const frame = typeof key?.Frame === 'number' ? key.Frame : Number(key?.Time ?? 0);
+            return {
+                Frame: Number.isFinite(frame) ? Math.round(frame) : 0,
+                Vector: [toScalarKeyValue(key?.Vector, fallback)] as [number],
+            };
+        })
+        .sort((a, b) => a.Frame - b.Frame);
+}
+
+function upsertScalarKey(
+    keys: Array<{ Frame: number; Vector: [number] }>,
+    frame: number,
+    value: number,
+): Array<{ Frame: number; Vector: [number] }> {
+    const normalizedFrame = Math.round(frame);
+    const next = [...keys];
+    const index = next.findIndex((key) => key.Frame === normalizedFrame);
+    const key = {
+        Frame: normalizedFrame,
+        Vector: [value] as [number],
+    };
+    if (index >= 0) {
+        next[index] = key;
+    } else {
+        next.push(key);
+        next.sort((a, b) => a.Frame - b.Frame);
+    }
+    return next;
+}
+
+function ensureDefaultVisibleKey(keys: Array<{ Frame: number; Vector: [number] }>): Array<{ Frame: number; Vector: [number] }> {
+    return upsertScalarKey(keys, 0, 1);
+}
+
 export async function executeDissolveEffect(
     modelData: any,
     modelPath: string,
@@ -155,7 +207,7 @@ export async function executeDissolveEffect(
         const mat = materials[matIdx];
         if (!mat?.Layers) return;
         mat.Layers.forEach((layer: any) => {
-            let existingKeys: any[] = [];
+            let existingKeys: Array<{ Frame: number; Vector: [number] }> = [];
             let lineType = 1;
             let globalSeqId = null;
             let baseAlpha = 1;
@@ -163,67 +215,44 @@ export async function executeDissolveEffect(
             if (typeof layer.Alpha === 'number') {
                 baseAlpha = layer.Alpha;
             } else if (layer.Alpha && typeof layer.Alpha === 'object' && Array.isArray(layer.Alpha.Keys)) {
-                existingKeys = layer.Alpha.Keys;
+                existingKeys = normalizeScalarKeys(layer.Alpha.Keys, 1);
                 lineType = layer.Alpha.LineType !== undefined ? layer.Alpha.LineType : 1;
                 globalSeqId = layer.Alpha.GlobalSeqId !== undefined ? layer.Alpha.GlobalSeqId : null;
+                if (existingKeys.length > 0) {
+                    baseAlpha = existingKeys[0].Vector[0];
+                }
             }
 
-            // Simple sample function to isolate keyframes
-            const sampleAlpha = (frame: number) => {
-                if (existingKeys.length === 0) return baseAlpha;
-                let val = existingKeys[0].Vector[0];
-                for (const k of existingKeys) {
-                    if (k.Frame <= frame) val = k.Vector[0];
-                    else break;
-                }
-                return val;
-            };
-
-            // Build sequence-specific keys from explicit dissolve timeline points.
-            const layerStartVal = sampleAlpha(params.seqStart);
             const explicitPoints = (params.dissolvePoints || [])
                 .filter(point => Number.isFinite(point.frame) && Number.isFinite(point.value))
                 .sort((a, b) => a.frame - b.frame);
-            const pointAtOrBeforeSeqEnd = [...explicitPoints].reverse().find(point => point.frame <= params.seqEnd);
-            const frameSet = new Map<number, number>();
-            frameSet.set(params.seqStart, explicitPoints.find(point => point.frame === params.seqStart)?.value ?? layerStartVal);
-            explicitPoints.forEach(point => {
-                if (point.frame >= params.seqStart && point.frame <= params.seqEnd) {
-                    frameSet.set(point.frame, point.value);
-                }
+            const dissolveStart = Math.round(params.dissolveStartFrame);
+            const dissolveEnd = Math.round(params.dissolveEndFrame);
+            const removeStart = Math.min(dissolveStart, dissolveEnd);
+            const removeEnd = Math.max(dissolveStart, dissolveEnd);
+
+            // Only replace the dissolve segment itself, leaving the rest of the track intact.
+            const preservedKeys = existingKeys.filter((key) => key.Frame < removeStart || key.Frame > removeEnd);
+            let mergedKeys: Array<{ Frame: number; Vector: [number] } | { Frame: number; Vector: Float32Array }> = preservedKeys;
+
+            explicitPoints.forEach((point) => {
+                mergedKeys = upsertScalarKey(
+                    mergedKeys as Array<{ Frame: number; Vector: [number] }>,
+                    point.frame,
+                    point.value,
+                );
             });
-            frameSet.set(
-                params.seqEnd,
-                explicitPoints.find(point => point.frame === params.seqEnd)?.value ??
-                pointAtOrBeforeSeqEnd?.value ??
-                layerStartVal
-            );
 
-            // Left and Right Boundary isolation to prevent bleeding into other sequences
-            const leftBoundary = Math.max(0, params.seqStart - 1);
-            const rightBoundary = params.seqEnd + 1;
-            
-            // Keep keyframes completely OUTSIDE the interval
-            const preservedKeys = existingKeys.filter(k => k.Frame < params.seqStart || k.Frame > params.seqEnd);
-
-            if (!preservedKeys.some(k => k.Frame === leftBoundary) && params.seqStart > 0) {
-                frameSet.set(leftBoundary, sampleAlpha(leftBoundary));
-            }
-            if (!preservedKeys.some(k => k.Frame === rightBoundary)) {
-                frameSet.set(rightBoundary, sampleAlpha(rightBoundary));
-            }
-
-            const newKeys = Array.from(frameSet.entries()).map(([f, v]) => ({ Frame: f, Vector: [v] }));
-
-            // Merge and sort
-            const mergedKeys = [...preservedKeys, ...newKeys]
-                .map(k => ({ Frame: k.Frame, Vector: new Float32Array([...k.Vector]) }))
+            const normalizedMergedKeys = ensureDefaultVisibleKey(
+                mergedKeys as Array<{ Frame: number; Vector: [number] }>,
+            )
+                .map((key) => ({ Frame: key.Frame, Vector: new Float32Array(key.Vector) }))
                 .sort((a, b) => a.Frame - b.Frame);
 
             layer.Alpha = {
                 LineType: lineType,
                 GlobalSeqId: globalSeqId,
-                Keys: mergedKeys,
+                Keys: normalizedMergedKeys,
             };
 
             if ((typeof layer.FilterMode === 'number' ? layer.FilterMode : 0) === 0) layer.FilterMode = 1;
