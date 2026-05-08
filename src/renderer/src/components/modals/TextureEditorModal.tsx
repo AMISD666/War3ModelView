@@ -34,9 +34,21 @@ import type {
     TextureManagerSnapshot,
 } from '../../application/window-bridge'
 import {
+    createAddTexturesCommandPayload,
+    createDeleteTextureCommandPayload,
+    createPatchTextureCommandPayload,
+    createReloadRendererCommandPayload,
+    createSaveTexturesCommandPayload,
+    createSetTextureSaveModeCommandPayload,
+    createSetTextureSaveSuffixCommandPayload,
+    withTextureManagerRevision,
+    type TextureManagerCommandPayload,
+    type TextureSaveMode,
+} from '../../application/window-bridge/TextureManagerCommandPayload'
+import { getTextureIdForMaterial } from '../../application/window-bridge/TextureManagerSnapshotPayload'
+import { textureManagerTextureSummariesToTextures } from '../../application/window-bridge/TextureManagerSnapshotPayload'
+import {
     buildTextureDefinitionSignature,
-    remapMaterialsAfterTextureRemoval,
-    remapParticleEmittersAfterTextureRemoval
 } from '../../utils/materialTextureRelations'
 import { invokeReadMpqFile } from '../../utils/mpqPerf'
 
@@ -105,22 +117,20 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
         snapshotProjection: 'document',
         windowId: 'textureManager',
         payload: {
+            textureSummaries: [],
             textures: [],
+            materialSummaries: [],
             materials: [],
             geosets: [],
-            particleEmitters: [],
-            particleEmitters2: [],
-            globalSequences: [],
             modelPath: undefined,
         },
         snapshotVersion: 0,
         snapshot: {
+            textureSummaries: [],
             textures: [],
+            materialSummaries: [],
             materials: [],
             geosets: [],
-            particleEmitters: [],
-            particleEmitters2: [],
-            globalSequences: [],
             modelPath: undefined,
         },
         pickedGeosetIndex: null,
@@ -145,13 +155,11 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
         }
     )
 
-    const emitTextureAction = React.useCallback((message: { action: string; payload?: unknown; stalePolicy?: 'warn' | 'reject' }) => {
-        emitCommand('EXECUTE_TEXTURE_ACTION', {
-            ...message,
+    const emitTextureAction = React.useCallback((message: TextureManagerCommandPayload) => {
+        emitCommand('EXECUTE_TEXTURE_ACTION', withTextureManagerRevision({
             documentId: rpcState.documentId,
-            baseDocumentRevision: rpcState.documentRevision,
-            stalePolicy: message.stalePolicy ?? 'reject',
-        })
+            documentRevision: rpcState.documentRevision,
+        }, message))
     }, [emitCommand, rpcState.documentId, rpcState.documentRevision])
 
     const rpcSnapshot = rpcState.payload ?? rpcState.snapshot
@@ -164,32 +172,26 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
     const getActiveData = () => {
         if (isStandalone) {
             return {
-                Textures: rpcSnapshot.textures,
-                Materials: rpcSnapshot.materials,
+                Textures: textureManagerTextureSummariesToTextures(rpcSnapshot.textureSummaries, rpcSnapshot.textures),
+                MaterialSummaries: rpcSnapshot.materialSummaries ?? [],
+                Materials: [],
                 Geosets: rpcSnapshot.geosets,
-                ParticleEmitters: rpcSnapshot.particleEmitters,
-                ParticleEmitters2: rpcSnapshot.particleEmitters2,
-                GlobalSequences: rpcSnapshot.globalSequences,
                 pickedGeosetIndex: rpcState.pickedGeosetIndex
             }
         } else if (isDetachedWindow) {
             return {
                 Textures: initialTextures || [],
+                MaterialSummaries: [],
                 Materials: [],
                 Geosets: [],
-                ParticleEmitters: [],
-                ParticleEmitters2: [],
-                GlobalSequences: [],
                 pickedGeosetIndex: null
             }
         } else {
             return {
                 Textures: localStore.modelData?.Textures || [],
+                MaterialSummaries: [],
                 Materials: localStore.modelData?.Materials || [],
                 Geosets: localStore.modelData?.Geosets || [],
-                ParticleEmitters: localStore.modelData?.ParticleEmitters || [],
-                ParticleEmitters2: localStore.modelData?.ParticleEmitters2 || [],
-                GlobalSequences: localStore.modelData?.GlobalSequences || [],
                 pickedGeosetIndex: useSelectionStore.getState().pickedGeosetIndex
             }
         }
@@ -207,14 +209,14 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
     const handleTextureSaveModeChange = (mode: 'overwrite' | 'save_as') => {
         setTextureSaveMode(mode)
         if (isStandalone) {
-            emitTextureAction({ action: 'SET_TEXTURE_SAVE_MODE', payload: { mode }, stalePolicy: 'warn' })
+            emitTextureAction(createSetTextureSaveModeCommandPayload(mode as TextureSaveMode, 'warn'))
         }
     }
 
     const handleTextureSaveSuffixChange = (suffix: string) => {
         setTextureSaveSuffix(suffix)
         if (isStandalone) {
-            emitTextureAction({ action: 'SET_TEXTURE_SAVE_SUFFIX', payload: { suffix }, stalePolicy: 'warn' })
+            emitTextureAction(createSetTextureSaveSuffixCommandPayload(suffix, 'warn'))
         }
     }
 
@@ -359,21 +361,32 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
         if (!isStandalone) {
             return
         }
-        emitTextureAction({ action: 'SAVE_TEXTURES', payload: serializeTexturesForSave(textures, adjustmentsMap), stalePolicy: 'warn' })
+        emitTextureAction(createSaveTexturesCommandPayload(serializeTexturesForSave(textures, adjustmentsMap), 'warn'))
     }
 
-    const buildTextureDeletionResult = (
-        removedIndex: number,
-        nextLocalTextures: LocalTexture[]
-    ): { texturesForSave: any[]; materialsForSave: any[]; particleEmitters?: any[]; particleEmitters2?: any[] } => {
-        const texturesForSave = serializeTexturesForSave(nextLocalTextures)
-        const activeData = getActiveData()
-        const currentMaterials = Array.isArray(activeData.Materials) ? activeData.Materials : []
-        const materialsForSave = remapMaterialsAfterTextureRemoval(currentMaterials, removedIndex, nextLocalTextures.length)
-        const particleEmitters = remapParticleEmittersAfterTextureRemoval(activeData.ParticleEmitters, removedIndex, nextLocalTextures.length)
-        const particleEmitters2 = remapParticleEmittersAfterTextureRemoval(activeData.ParticleEmitters2, removedIndex, nextLocalTextures.length)
+    const patchStandaloneTexture = (
+        index: number,
+        updates: Record<string, unknown>,
+    ) => {
+        if (!isStandalone) {
+            return
+        }
+        emitTextureAction(createPatchTextureCommandPayload(index, updates, 'warn'))
+    }
 
-        return { texturesForSave, materialsForSave, particleEmitters, particleEmitters2 }
+    const deleteStandaloneTexture = (index: number) => {
+        if (!isStandalone) {
+            return
+        }
+        emitTextureAction(createDeleteTextureCommandPayload(index, 'warn'))
+    }
+
+    const addStandaloneTextures = (textures: LocalTexture[]) => {
+        if (!isStandalone) {
+            return
+        }
+        const texturesForSave = serializeTexturesForSave(textures)
+        emitTextureAction(createAddTexturesCommandPayload(texturesForSave, 'warn'))
     }
 
     const commitTextureCollection = (
@@ -383,7 +396,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
         setLocalTextures(nextTextures)
         const texturesForSave = serializeTexturesForSave(nextTextures, adjustmentsMap)
         if (isStandalone) {
-            emitTextureAction({ action: 'SAVE_TEXTURES', payload: texturesForSave, stalePolicy: 'warn' })
+            emitTextureAction(createSaveTexturesCommandPayload(texturesForSave, 'warn'))
         } else if (isDetachedWindow) {
             void Promise.resolve(onApply?.(texturesForSave)).catch((error) => {
                 console.error('[TextureEditor] Failed to apply detached textures:', error)
@@ -505,12 +518,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
 
         const rawMaterialId = data.Geosets[pickedGeosetIndex].MaterialID
         const materialId = typeof rawMaterialId === 'number' ? rawMaterialId : Number(rawMaterialId)
-        if (!Number.isInteger(materialId) || materialId < 0 || !data.Materials || !data.Materials[materialId]) return -1
-
-        const material = data.Materials[materialId]
-        if (!material?.Layers || material.Layers.length === 0) return -1
-
-        const textureId = material.Layers[0].TextureID
+        const textureId = getTextureIdForMaterial(materialId, data.MaterialSummaries, data.Materials)
         if (typeof textureId !== 'number' || textureId < 0 || textureId >= data.Textures.length) return -1
 
         return textureId
@@ -686,16 +694,8 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
 
             const rawMaterialId = data.Geosets[pickedGeosetIndex].MaterialID
             const materialId = typeof rawMaterialId === 'number' ? rawMaterialId : Number(rawMaterialId)
-            if (!Number.isInteger(materialId) || materialId < 0 || !data.Materials || !data.Materials[materialId]) {
-                return
-            }
+            const textureId = getTextureIdForMaterial(materialId, data.MaterialSummaries, data.Materials)
 
-            const material = data.Materials[materialId]
-            if (!material.Layers || material.Layers.length === 0) {
-                return
-            }
-
-            const textureId = material.Layers[0].TextureID
             if (typeof textureId !== 'number' || textureId < 0 || textureId >= localTextures.length) {
                 return
             }
@@ -1042,7 +1042,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
             pendingTextureSaveTimeoutRef.current = null
             const texturesForSave = buildTexturesForSave()
             if (isStandalone) {
-                emitTextureAction({ action: 'SAVE_TEXTURES', payload: texturesForSave, stalePolicy: 'warn' })
+                emitTextureAction(createSaveTexturesCommandPayload(texturesForSave, 'warn'))
             } else if (isDetachedWindow) {
                 void Promise.resolve(onApply?.(texturesForSave)).catch((error) => {
                     console.error('[TextureEditor] Failed to auto-apply detached textures:', error)
@@ -1070,7 +1070,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
     const handleCancel = () => {
         if (hasLiveTextureOverrideRef.current) {
             if (isStandalone) {
-                emitTextureAction({ action: 'RELOAD_RENDERER' })
+                emitTextureAction(createReloadRendererCommandPayload())
             } else {
                 localStore.triggerRendererReload()
             }
@@ -1083,7 +1083,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
         const texturesForSave = buildTexturesForSave()
 
         if (isStandalone) {
-            emitTextureAction({ action: 'SAVE_TEXTURES', payload: texturesForSave, stalePolicy: 'warn' })
+            emitTextureAction(createSaveTexturesCommandPayload(texturesForSave, 'warn'))
         } else if (isDetachedWindow) {
             void Promise.resolve(onApply?.(texturesForSave)).catch((error) => {
                 console.error('[TextureEditor] Failed to apply detached textures:', error)
@@ -1388,7 +1388,11 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
             setPreviewSource(null)
         }
 
-        syncStandaloneTextures(newTextures)
+        if (isStandalone) {
+            patchStandaloneTexture(index, updates)
+        } else {
+            syncStandaloneTextures(newTextures)
+        }
     }
 
     const handleFlagChange = (flag: number, checked: boolean) => {
@@ -1542,8 +1546,6 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
         if (!imported) return
 
         const currentLocalTextures = localTexturesRef.current
-        const currentAdjustmentsByTextureId = adjustmentsByTextureIdRef.current
-
         const nextLocalTextures = currentLocalTextures.map((texture, index) => index === currentSelectedIndex
             ? { ...texture, Image: imported.relativePath, ReplaceableId: 0 }
             : texture)
@@ -1559,33 +1561,15 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
         latestAdjustedPreviewKeyRef.current = null
         selectedPreviewCacheKeyRef.current = null
 
-        const texturesForSave = nextLocalTextures.map((texture) => {
-            const { __editorId, ...rest } = texture
-            const raw = adjustmentsByTextureIdRef.current[__editorId]
-            if (raw) {
-                const normalized = normalizeTextureAdjustments(raw)
-                if (!isDefaultTextureAdjustments(normalized)) {
-                    return {
-                        ...rest,
-                        [TEXTURE_ADJUSTMENTS_KEY]: normalized
-                    }
-                }
-            }
-            if (Object.prototype.hasOwnProperty.call(rest, TEXTURE_ADJUSTMENTS_KEY)) {
-                const cleaned = { ...rest }
-                delete cleaned[TEXTURE_ADJUSTMENTS_KEY]
-                return cleaned
-            }
-            return rest
-        })
-
         if (isStandalone) {
-            emitTextureAction({ action: 'SAVE_TEXTURES', payload: texturesForSave, stalePolicy: 'warn' })
+            patchStandaloneTexture(currentSelectedIndex, { Image: imported.relativePath, ReplaceableId: 0 })
         } else if (isDetachedWindow) {
+            const texturesForSave = serializeTexturesForSave(nextLocalTextures)
             void Promise.resolve(onApply?.(texturesForSave)).catch((error) => {
                 console.error('[TextureEditor] Failed to apply dropped detached texture:', error)
             })
         } else {
+            const texturesForSave = serializeTexturesForSave(nextLocalTextures)
             textureMaterialCommandHandler.setTextureCollection({ textures: texturesForSave })
         }
 
@@ -1633,7 +1617,12 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
         }
 
         const updatedTextures = [...currentLocalTextures, ...newTextures]
-        commitTextureCollection(updatedTextures)
+        setLocalTextures(updatedTextures)
+        if (isStandalone) {
+            addStandaloneTextures(newTextures)
+        } else {
+            commitTextureCollection(updatedTextures)
+        }
         const nextSelectedIndex = updatedTextures.length - 1
         setSelectedIndex(nextSelectedIndex)
         setTimeout(() => scrollToItem(nextSelectedIndex), 0)
@@ -1790,7 +1779,12 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
                                             onClick: () => {
                                                 const newTexture = ensureLocalTexture({ Image: 'Textures\\white.blp', ReplaceableId: 0, Flags: 0 })
                                                 const updatedTextures = [...localTexturesRef.current, newTexture]
-                                                commitTextureCollection(updatedTextures)
+                                                setLocalTextures(updatedTextures)
+                                                if (isStandalone) {
+                                                    addStandaloneTextures([newTexture])
+                                                } else {
+                                                    commitTextureCollection(updatedTextures)
+                                                }
                                                 const nextSelectedIndex = updatedTextures.length - 1
                                                 setSelectedIndex(nextSelectedIndex)
                                                 setTimeout(() => scrollToItem(nextSelectedIndex), 0)
@@ -1836,7 +1830,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
                                                 e.stopPropagation()
                                                 const removedId = localTextures[index]?.__editorId
                                                 const newTextures = localTextures.filter((_, i) => i !== index)
-                                                const { texturesForSave, materialsForSave, particleEmitters, particleEmitters2 } = buildTextureDeletionResult(index, newTextures)
+                                                const texturesForSave = serializeTexturesForSave(newTextures)
                                                 setLocalTextures(newTextures)
                                                 if (removedId) {
                                                     setAdjustmentsByTextureId((prev) => {
@@ -1846,25 +1840,14 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
                                                     })
                                                 }
                                                 if (isStandalone) {
-                                                    emitTextureAction({
-                                                        action: 'SAVE_TEXTURES_WITH_MATERIALS', stalePolicy: 'warn',
-                                                        payload: {
-                                                            textures: texturesForSave,
-                                                            materials: materialsForSave,
-                                                            particleEmitters,
-                                                            particleEmitters2
-                                                        }
-                                                    })
+                                                    deleteStandaloneTexture(index)
                                                 } else if (isDetachedWindow) {
                                                     void Promise.resolve(onApply?.(texturesForSave)).catch((error) => {
                                                         console.error('[TextureEditor] Failed to apply detached texture deletion:', error)
                                                     })
                                                 } else {
-                                                    textureMaterialCommandHandler.setTextureMaterialCollections({
+                                                    textureMaterialCommandHandler.setTextureCollection({
                                                         textures: texturesForSave,
-                                                        materials: materialsForSave,
-                                                        particleEmitters,
-                                                        particleEmitters2
                                                     })
                                                 }
                                                 if (selectedIndex === index) setSelectedIndex(-1)

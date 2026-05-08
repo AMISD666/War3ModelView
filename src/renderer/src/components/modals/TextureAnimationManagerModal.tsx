@@ -12,6 +12,10 @@ import { useWindowEvent } from '../../hooks/useWindowEvent';
 import { windowGateway } from '../../infrastructure/window';
 import { modelDocumentCommandHandler } from '../../application/commands';
 import { remapMaterialsAfterTextureAnimRemoval } from '../../utils/materialTextureRelations';
+import {
+    createTextureAnimationCommandPayload,
+    type TextureAnimationAction,
+} from '../../application/window-bridge/TextureAnimationCommandPayload';
 
 interface TextureAnimationManagerModalProps {
     visible: boolean;
@@ -74,16 +78,19 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
         }
     }, [visible, sourceAnims]);
 
-    const saveToBackend = (action: string, payload: any, newAnims: any[]) => {
+    const saveToBackend = (action: TextureAnimationAction, payload: any, newAnims: any[]) => {
         setLocalAnims(newAnims);
         if (isStandalone) {
-            rpcClient.emitCommand('EXECUTE_TEXTURE_ANIM_ACTION', {
-                action,
-                payload,
-                documentId: rpcState.documentId,
-                baseDocumentRevision: rpcState.documentRevision,
-                stalePolicy: 'warn',
-            });
+            rpcClient.emitCommand(
+                'EXECUTE_TEXTURE_ANIM_ACTION',
+                createTextureAnimationCommandPayload({
+                    action,
+                    documentId: rpcState.documentId,
+                    documentRevision: rpcState.documentRevision,
+                    textureAnims: newAnims,
+                    deleteIndex: typeof payload?.deleteIndex === 'number' ? payload.deleteIndex : undefined,
+                }),
+            );
         } else {
             const oldAnims = structuredClone(modelData?.TextureAnims || []);
             const commandName = action === 'ADD'

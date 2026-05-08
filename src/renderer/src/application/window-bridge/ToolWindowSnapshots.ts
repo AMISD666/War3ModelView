@@ -1,5 +1,21 @@
 import type { PreviewProjectionMode } from '../preview'
 import { getGeosetVertexCount } from '../../commands/AutoSeparateLayersSplitter'
+import {
+    createMaterialManagerMaterialSummaries,
+    createMaterialManagerSequenceSummaries,
+    createMaterialManagerTextureAnimSummaries,
+    createMaterialManagerTextureSummaries,
+    type MaterialManagerMaterialSummary,
+    type MaterialManagerSequenceSummary,
+    type MaterialManagerTextureAnimSummary,
+    type MaterialManagerTextureSummary,
+} from './MaterialManagerSnapshotPayload'
+import {
+    createTextureManagerMaterialSummaries,
+    createTextureManagerTextureSummaries,
+    type TextureManagerMaterialSummary,
+    type TextureManagerTextureSummary,
+} from './TextureManagerSnapshotPayload'
 
 export type ToolWindowGeosetSummary = {
     index: number
@@ -10,12 +26,13 @@ export type ToolWindowGeosetSummary = {
 }
 
 export type TextureManagerSnapshot = {
+    textureSummaries: TextureManagerTextureSummary[]
+    /** @deprecated Standalone texture manager should use textureSummaries and selected-detail commands. */
     textures: any[]
+    materialSummaries: TextureManagerMaterialSummary[]
+    /** @deprecated Standalone texture manager should use materialSummaries. */
     materials: any[]
     geosets: ToolWindowGeosetSummary[]
-    particleEmitters: any[]
-    particleEmitters2: any[]
-    globalSequences: number[]
     modelPath: string | null | undefined
 }
 
@@ -45,12 +62,19 @@ export type TextureManagerPatch = {
 }
 
 export type MaterialManagerSnapshot = {
+    materialSummaries: MaterialManagerMaterialSummary[]
+    /** @deprecated Standalone material manager still needs full selected/editing data until detail queries land. */
     materials: any[]
+    textureSummaries: MaterialManagerTextureSummary[]
+    /** @deprecated Standalone material manager should use textureSummaries for list/select UI. */
     textures: any[]
     geosets: ToolWindowGeosetSummary[]
-    ribbonEmitters: any[]
     globalSequences: number[]
+    sequenceSummaries: MaterialManagerSequenceSummary[]
+    textureAnimSummaries: MaterialManagerTextureAnimSummary[]
+    /** @deprecated Standalone material manager should use sequenceSummaries. */
     sequences: any[]
+    /** @deprecated Standalone material manager should use textureAnimSummaries unless editing TextureAnims directly. */
     textureAnims: any[]
     modelPath: string | null | undefined
 }
@@ -86,21 +110,23 @@ type SnapshotCache<TSnapshot> = {
 }
 
 const EMPTY_TEXTURE_SNAPSHOT: TextureManagerSnapshot = {
+    textureSummaries: [],
     textures: [],
+    materialSummaries: [],
     materials: [],
     geosets: [],
-    particleEmitters: [],
-    particleEmitters2: [],
-    globalSequences: [],
     modelPath: undefined,
 }
 
 const EMPTY_MATERIAL_SNAPSHOT: MaterialManagerSnapshot = {
+    materialSummaries: [],
     materials: [],
+    textureSummaries: [],
     textures: [],
     geosets: [],
-    ribbonEmitters: [],
     globalSequences: [],
+    sequenceSummaries: [],
+    textureAnimSummaries: [],
     sequences: [],
     textureAnims: [],
     modelPath: undefined,
@@ -185,9 +211,6 @@ export class ToolWindowSnapshotCache {
             textures: modelData?.Textures ?? null,
             materials: modelData?.Materials ?? null,
             geosets: modelData?.Geosets ?? null,
-            particleEmitters: modelData?.ParticleEmitters ?? null,
-            particleEmitters2: modelData?.ParticleEmitters2 ?? null,
-            globalSequences: modelData?.GlobalSequences ?? null,
             modelPath: input.modelPath,
             snapshotProjection: input.snapshotProjection,
         }
@@ -196,22 +219,19 @@ export class ToolWindowSnapshotCache {
             this.textureCache.snapshotVersion += 1
             this.textureCache.sourceRefs = nextSourceRefs
             this.textureCache.snapshot = {
-                textures: modelData?.Textures ?? [],
-                materials: modelData?.Materials ?? [],
+                textureSummaries: createTextureManagerTextureSummaries(modelData?.Textures),
+                textures: [],
+                materialSummaries: createTextureManagerMaterialSummaries(modelData?.Materials),
+                materials: [],
                 geosets: stripGeosetDataForToolWindow(modelData?.Geosets),
-                particleEmitters: modelData?.ParticleEmitters ?? [],
-                particleEmitters2: modelData?.ParticleEmitters2 ?? [],
-                globalSequences: toGlobalSequenceDurations(modelData?.GlobalSequences),
                 modelPath: input.modelPath,
             }
             input.markPerf?.('texture_snapshot_cached', {
                 snapshotVersion: this.textureCache.snapshotVersion,
                 snapshotProjection: input.snapshotProjection,
-                textureCount: this.textureCache.snapshot.textures.length,
+                textureCount: this.textureCache.snapshot.textureSummaries.length,
                 materialCount: this.textureCache.snapshot.materials.length,
                 geosetCount: this.textureCache.snapshot.geosets.length,
-                particleEmitterCount: this.textureCache.snapshot.particleEmitters.length,
-                particleEmitter2Count: this.textureCache.snapshot.particleEmitters2.length,
             })
         }
 
@@ -248,7 +268,6 @@ export class ToolWindowSnapshotCache {
             materials: modelData?.Materials ?? null,
             textures: modelData?.Textures ?? null,
             geosets: modelData?.Geosets ?? null,
-            ribbonEmitters: modelData?.RibbonEmitters ?? null,
             globalSequences: modelData?.GlobalSequences ?? null,
             sequences: modelData?.Sequences || null,
             textureAnims: modelData?.TextureAnims || null,
@@ -260,22 +279,28 @@ export class ToolWindowSnapshotCache {
             this.materialCache.snapshotVersion += 1
             this.materialCache.sourceRefs = nextSourceRefs
             this.materialCache.snapshot = {
+                materialSummaries: createMaterialManagerMaterialSummaries(modelData?.Materials),
                 materials: modelData?.Materials ?? [],
+                textureSummaries: createMaterialManagerTextureSummaries(modelData?.Textures),
                 textures: modelData?.Textures ?? [],
                 geosets: stripGeosetDataForToolWindow(modelData?.Geosets),
-                ribbonEmitters: modelData?.RibbonEmitters ?? [],
                 globalSequences: toGlobalSequenceDurations(modelData?.GlobalSequences),
-                sequences: modelData?.Sequences || [],
-                textureAnims: modelData?.TextureAnims || [],
+                sequenceSummaries: createMaterialManagerSequenceSummaries(modelData?.Sequences),
+                textureAnimSummaries: createMaterialManagerTextureAnimSummaries(modelData?.TextureAnims),
+                sequences: [],
+                textureAnims: [],
                 modelPath: input.modelPath,
             }
             input.markPerf?.('material_snapshot_cached', {
                 snapshotVersion: this.materialCache.snapshotVersion,
                 snapshotProjection: input.snapshotProjection,
                 materialCount: this.materialCache.snapshot.materials.length,
+                materialSummaryCount: this.materialCache.snapshot.materialSummaries.length,
                 textureCount: this.materialCache.snapshot.textures.length,
+                textureSummaryCount: this.materialCache.snapshot.textureSummaries.length,
+                sequenceSummaryCount: this.materialCache.snapshot.sequenceSummaries.length,
+                textureAnimSummaryCount: this.materialCache.snapshot.textureAnimSummaries.length,
                 geosetCount: this.materialCache.snapshot.geosets.length,
-                ribbonEmitterCount: this.materialCache.snapshot.ribbonEmitters.length,
             })
         }
 

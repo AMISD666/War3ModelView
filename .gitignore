@@ -55,11 +55,13 @@ update_log.txt
 .github/hooks/
 activation/
 docs/*
+!docs/Standalone_Tool_Window_Light_Client_Plan.md
 scripts/*
 !scripts/
 !scripts/sync-war3-model-vendor.mjs
 !scripts/check-material-layer-save-normalization.mjs
 !scripts/check-material-alpha-keyframes.mjs
+!scripts/check-standalone-light-client.mjs
 local-test-scripts/
 activation/
 

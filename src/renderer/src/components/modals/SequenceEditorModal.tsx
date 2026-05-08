@@ -12,6 +12,7 @@ import {
     normalizeSequencesForPlayback,
 } from '../../utils/sequenceUtils'
 import { useRpcClient } from '../../hooks/useRpc'
+import { createApplySequenceChangesPayload } from '../../application/window-bridge/SequenceCommandPayload'
 
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame';
 const { Text } = Typography
@@ -143,14 +144,13 @@ const SequenceEditorModal: React.FC<SequenceEditorModalProps> = ({ visible, onCl
 
     const handleOk = () => {
         if (isStandalone) {
-            emitCommand('APPLY_SEQUENCE_CHANGES', {
+            emitCommand('APPLY_SEQUENCE_CHANGES', createApplySequenceChangesPayload({
                 documentId: rpcState.documentId,
-                baseDocumentRevision: rpcState.documentRevision,
-                stalePolicy: 'reject',
-                sequences: normalizeSequencesForPlayback(localSequences),
+                documentRevision: rpcState.documentRevision,
+                sequences: localSequences,
                 deletedIntervals,
                 pruneKeyframes
-            })
+            }))
             setDeletedIntervals([])
             appMessage.success('序列已保存')
             onClose()

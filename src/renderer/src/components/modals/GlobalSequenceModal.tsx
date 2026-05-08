@@ -5,6 +5,10 @@ import { useModelStore } from '../../store/modelStore'
 import { useRpcClient } from '../../hooks/useRpc'
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
 import { windowGateway } from '../../infrastructure/window'
+import {
+    createGlobalSequenceSavePayload,
+    normalizeGlobalSequenceDurations,
+} from '../../application/window-bridge/GlobalSequenceCommandPayload'
 
 interface GlobalSequenceModalProps {
     visible: boolean
@@ -56,12 +60,8 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({
         setLocalSeqs([...globalSequences])
     }, [globalSequences])
 
-    const normalizeSequences = (seqs: number[]): number[] => (
-        seqs.map((duration) => Math.max(0, Math.floor(Number(duration) || 0)))
-    )
-
     const saveChanges = (newSeqs: number[]) => {
-        const normalizedSeqs = normalizeSequences(newSeqs)
+        const normalizedSeqs = normalizeGlobalSequenceDurations(newSeqs)
         const sig = JSON.stringify(normalizedSeqs)
         if (sig === lastCommittedSeqSigRef.current) {
             setLocalSeqs(normalizedSeqs)
@@ -71,13 +71,14 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({
         lastCommittedSeqSigRef.current = sig
         setLocalSeqs(normalizedSeqs)
         if (isStandalone) {
-            emitCommand('EXECUTE_GLOBAL_SEQ_ACTION', {
-                action: 'SAVE',
-                documentId: rpcState.documentId,
-                baseDocumentRevision: rpcState.documentRevision,
-                stalePolicy: 'warn',
-                globalSequences: normalizedSeqs,
-            })
+            emitCommand(
+                'EXECUTE_GLOBAL_SEQ_ACTION',
+                createGlobalSequenceSavePayload({
+                    documentId: rpcState.documentId,
+                    documentRevision: rpcState.documentRevision,
+                    durations: normalizedSeqs,
+                }),
+            )
         } else {
             // Targeted patch — avoids full model reload and preserving animation state
             updateGlobalSequences(normalizedSeqs)

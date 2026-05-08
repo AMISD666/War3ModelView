@@ -23,6 +23,18 @@ import {
     remapGeosetsAfterMaterialRemoval,
     remapRibbonEmittersAfterMaterialRemoval,
 } from '../../utils/materialTextureRelations'
+import {
+    createMaterialManagerCommandPayload,
+    type MaterialManagerActionMessage,
+} from '../../application/window-bridge/MaterialManagerCommandPayload'
+import {
+    getMaterialManagerMaterialListItems,
+    getMaterialManagerSelectedMaterialDetail,
+    getMaterialManagerTextureOptions,
+    getMaterialManagerTextureAnimOptionIndexes,
+    materialManagerSequenceSummariesToKeyframeSequences,
+    materialManagerTextureAnimSummariesToPlaceholders,
+} from '../../application/window-bridge/MaterialManagerSnapshotPayload'
 import { getMaterialTrackEditorTitle, getMaterialTrackFieldName } from '../../utils/materialAnimShared'
 import { useMaterialEditorStandaloneEvents } from './material-editor/useMaterialEditorStandaloneEvents'
 import { useMaterialEditorMainWindowFileDrop } from './material-editor/useMaterialEditorMainWindowFileDrop'
@@ -164,10 +176,13 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         windowId: 'materialManager',
         payload: {
             materials: [],
+            materialSummaries: [],
+            textureSummaries: [],
             textures: [],
             geosets: [],
-            ribbonEmitters: [],
             globalSequences: [],
+            sequenceSummaries: [],
+            textureAnimSummaries: [],
             sequences: [],
             textureAnims: [],
             modelPath: '',
@@ -175,10 +190,13 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         snapshotVersion: 0,
         snapshot: {
             materials: [],
+            materialSummaries: [],
+            textureSummaries: [],
             textures: [],
             geosets: [],
-            ribbonEmitters: [],
             globalSequences: [],
+            sequenceSummaries: [],
+            textureAnimSummaries: [],
             sequences: [],
             textureAnims: [],
             modelPath: '',
@@ -218,13 +236,15 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     /** 独立窗：已从 RPC 快照加载本地材质列表前，禁止向主进程发 SAVE_MATERIALS，否则空数组会写入预览层并遮挡权威模型 */
     const isInitialized = React.useRef(false)
 
-    const emitMaterialAction = React.useCallback((message: { action: string; payload?: unknown; stalePolicy?: 'warn' | 'reject' }) => {
-        emitCommand('EXECUTE_MATERIAL_ACTION', {
-            ...message,
-            documentId: rpcState.documentId,
-            baseDocumentRevision: rpcState.documentRevision,
-            stalePolicy: message.stalePolicy ?? (message.action === 'SAVE_MATERIALS' || message.action === 'COMMIT_MATERIALS' ? 'warn' : 'reject'),
-        })
+    const emitMaterialAction = React.useCallback((message: MaterialManagerActionMessage) => {
+        emitCommand(
+            'EXECUTE_MATERIAL_ACTION',
+            createMaterialManagerCommandPayload({
+                ...message,
+                documentId: rpcState.documentId,
+                documentRevision: rpcState.documentRevision,
+            }),
+        )
     }, [emitCommand, rpcState.documentId, rpcState.documentRevision])
 
     const rpcSnapshot = rpcState.payload ?? rpcState.snapshot
@@ -240,18 +260,20 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             Materials: rpcSnapshot.materials,
             Textures: rpcSnapshot.textures,
             Geosets: rpcSnapshot.geosets,
-            RibbonEmitters: rpcSnapshot.ribbonEmitters,
             GlobalSequences: rpcSnapshot.globalSequences,
-            Sequences: rpcSnapshot.sequences,
-            TextureAnims: rpcSnapshot.textureAnims,
+            Sequences: materialManagerSequenceSummariesToKeyframeSequences(rpcSnapshot.sequenceSummaries, rpcSnapshot.sequences),
+            TextureAnims: materialManagerTextureAnimSummariesToPlaceholders(rpcSnapshot.textureAnimSummaries, rpcSnapshot.textureAnims),
         }),
         [
             rpcSnapshotRevision,
             rpcSnapshot.materials,
+            rpcSnapshot.materialSummaries,
+            rpcSnapshot.textureSummaries,
             rpcSnapshot.textures,
             rpcSnapshot.geosets,
-            rpcSnapshot.ribbonEmitters,
             rpcSnapshot.globalSequences,
+            rpcSnapshot.sequenceSummaries,
+            rpcSnapshot.textureAnimSummaries,
             rpcSnapshot.sequences,
             rpcSnapshot.textureAnims,
         ]
@@ -404,7 +426,13 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     const selectedMaterialIndexRef = React.useRef(-1)
     const selectedLayerIndexRef = React.useRef(-1)
 
-    const syncStandaloneMaterials = React.useCallback((nextMaterialsUi: any[], nextTextures?: any[], nextGeosets?: any[], nextRibbonEmitters?: any[]) => {
+    const syncStandaloneMaterials = React.useCallback((
+        nextMaterialsUi: any[],
+        nextTextures?: any[],
+        nextGeosets?: any[],
+        nextRibbonEmitters?: any[],
+        materialDelete?: { deletedIndex: number; nextMaterialCount: number },
+    ) => {
         if (!isStandalone) return
         if (!isInitialized.current) return
         const materialsForSave = denormalizeMaterialsForSave(cloneDeep(nextMaterialsUi))
@@ -415,7 +443,111 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                 textures: cloneDeep(nextTextures ?? modelTexturesRef.current),
                 geosets: nextGeosets ? cloneDeep(nextGeosets) : undefined,
                 ribbonEmitters: nextRibbonEmitters ? cloneDeep(nextRibbonEmitters) : undefined,
+                materialDelete,
             }
+        })
+    }, [emitMaterialAction, isStandalone])
+
+    const previewStandaloneMaterialPatch = React.useCallback((
+        materialIndex: number,
+        materialsForSave: any[],
+    ) => {
+        if (!isStandalone || !isInitialized.current) return
+        const material = materialsForSave?.[materialIndex]
+        if (!material || typeof material !== 'object' || Array.isArray(material)) return
+        emitMaterialAction({
+            action: 'PATCH_SELECTED_MATERIAL_PREVIEW',
+            payload: {
+                materialIndex,
+                updates: material,
+            },
+        })
+    }, [emitMaterialAction, isStandalone])
+
+    const previewStandaloneLayerPatch = React.useCallback((
+        materialIndex: number,
+        layerIndex: number,
+        materialsForSave: any[],
+    ) => {
+        if (!isStandalone || !isInitialized.current) return
+        const layer = materialsForSave?.[materialIndex]?.Layers?.[layerIndex]
+        if (!layer || typeof layer !== 'object' || Array.isArray(layer)) return
+        emitMaterialAction({
+            action: 'PATCH_SELECTED_LAYER_PREVIEW',
+            payload: {
+                materialIndex,
+                layerIndex,
+                updates: layer,
+            },
+        })
+    }, [emitMaterialAction, isStandalone])
+
+    const previewStandaloneAddLayer = React.useCallback((
+        materialIndex: number,
+        materialsForSave: any[],
+    ) => {
+        if (!isStandalone || !isInitialized.current) return
+        const layers = materialsForSave?.[materialIndex]?.Layers
+        const layer = Array.isArray(layers) ? layers[layers.length - 1] : null
+        if (!layer || typeof layer !== 'object' || Array.isArray(layer)) return
+        emitMaterialAction({
+            action: 'ADD_LAYER_PREVIEW',
+            payload: {
+                materialIndex,
+                layer,
+            },
+        })
+    }, [emitMaterialAction, isStandalone])
+
+    const previewStandaloneDeleteLayer = React.useCallback((
+        materialIndex: number,
+        layerIndex: number,
+    ) => {
+        if (!isStandalone || !isInitialized.current) return
+        emitMaterialAction({
+            action: 'DELETE_LAYER_PREVIEW',
+            payload: {
+                materialIndex,
+                layerIndex,
+            },
+        })
+    }, [emitMaterialAction, isStandalone])
+
+    const previewStandaloneMoveLayer = React.useCallback((
+        materialIndex: number,
+        fromIndex: number,
+        toIndex: number,
+    ) => {
+        if (!isStandalone || !isInitialized.current) return
+        emitMaterialAction({
+            action: 'MOVE_LAYER_PREVIEW',
+            payload: {
+                materialIndex,
+                fromIndex,
+                toIndex,
+            },
+        })
+    }, [emitMaterialAction, isStandalone])
+
+    const previewStandaloneAddMaterial = React.useCallback((
+        materialsForSave: any[],
+    ) => {
+        if (!isStandalone || !isInitialized.current) return
+        const material = materialsForSave?.[materialsForSave.length - 1]
+        if (!material || typeof material !== 'object' || Array.isArray(material)) return
+        emitMaterialAction({
+            action: 'ADD_MATERIAL_PREVIEW',
+            payload: { material },
+        })
+    }, [emitMaterialAction, isStandalone])
+
+    const previewStandaloneDeleteMaterial = React.useCallback((
+        materialIndex: number,
+    ) => {
+        if (!isStandalone || !isInitialized.current) return
+        emitMaterialAction({
+            action: 'DELETE_MATERIAL_PREVIEW',
+            payload: { materialIndex },
         })
     }, [emitMaterialAction, isStandalone])
 
@@ -676,7 +808,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                 emitMaterialAction({
                     action: 'COMMIT_MATERIALS',
                     payload: { materials: snapshot.materialsForSave, textures: snapshot.texturesForSave },
-                    stalePolicy: 'warn',
+                    stalePolicy: 'reject',
                 })
             }
             if (showSuccessMessage) {
@@ -707,10 +839,10 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         isCommittingRef.current = true
         if (isStandalone) {
             emitMaterialAction({
-                action: 'COMMIT_MATERIALS',
-                payload: { materials: snapshot.materialsForSave, textures: snapshot.texturesForSave },
-                stalePolicy: 'warn',
-            })
+                    action: 'COMMIT_MATERIALS',
+                    payload: { materials: snapshot.materialsForSave, textures: snapshot.texturesForSave },
+                    stalePolicy: 'reject',
+                })
         } else {
             applyVisualPatch({ Textures: snapshot.texturesForSave, Materials: snapshot.materialsForSave })
         }
@@ -752,13 +884,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             const materialsForSave = denormalizeMaterialsForSave(newMaterials)
             if (isStandalone) {
                 if (isInitialized.current) {
-                    emitMaterialAction({
-                        action: 'SAVE_MATERIALS',
-                        payload: {
-                            materials: materialsForSave,
-                            textures: modelTexturesRef.current
-                        }
-                    })
+                    previewStandaloneMaterialPatch(index, materialsForSave)
                 }
             } else {
                 applyMaterialCollection(materialsForSave)
@@ -787,13 +913,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             const materialsForSave = denormalizeMaterialsForSave(newMaterials)
             if (isStandalone) {
                 if (isInitialized.current) {
-                    emitMaterialAction({
-                        action: 'SAVE_MATERIALS',
-                        payload: {
-                            materials: materialsForSave,
-                            textures: modelTexturesRef.current
-                        }
-                    })
+                    previewStandaloneLayerPatch(matIndex, layerIndex, materialsForSave)
                 }
             } else {
                 applyMaterialCollection(materialsForSave)
@@ -834,7 +954,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                 materials: materialsForSave,
                 textures: texturesForSave,
             },
-            stalePolicy: 'warn',
+            stalePolicy: 'reject',
         })
     }
 
@@ -890,7 +1010,8 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             return previous
         })
         if (isStandalone) {
-            syncStandaloneMaterials(newMaterials)
+            didRealtimePreviewRef.current = true
+            previewStandaloneMoveLayer(selectedMaterialIndex, fromIndex, toIndex)
         } else {
             didRealtimePreviewRef.current = true
             applyMaterialCollection(denormalizeMaterialsForSave(newMaterials))
@@ -979,7 +1100,8 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         const newMaterial = { __editorMaterialId: createEditorId('mat'), PriorityPlane: 0, RenderMode: 0, Layers: [defaultLayer] }
         const nextMaterials = applyMaterialsChange((previous) => [...previous, newMaterial])
         if (isStandalone) {
-            syncStandaloneMaterials(nextMaterials)
+            didRealtimePreviewRef.current = true
+            previewStandaloneAddMaterial(denormalizeMaterialsForSave(nextMaterials))
         } else {
             didRealtimePreviewRef.current = true
             applyMaterialCollection(denormalizeMaterialsForSave(nextMaterials))
@@ -1001,12 +1123,15 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 
         const nextMaterialCount = denormalizeMaterialsForSave(newMaterials).length
         const updatedGeosets = remapGeosetsAfterMaterialRemoval(modelData?.Geosets, index, nextMaterialCount)
-        const updatedRibbonEmitters = remapRibbonEmittersAfterMaterialRemoval(modelData?.RibbonEmitters, index, nextMaterialCount)
+        const updatedRibbonEmitters = isStandalone
+            ? undefined
+            : remapRibbonEmittersAfterMaterialRemoval(directModelData?.RibbonEmitters, index, nextMaterialCount)
         if (updatedGeosets || updatedRibbonEmitters) {
             // Sync BOTH materials and geosets to the store together to prevent mismatch
             // This ensures the renderer sees consistent data
             if (isStandalone) {
-                syncStandaloneMaterials(newMaterials, modelTexturesRef.current, updatedGeosets, updatedRibbonEmitters)
+                didRealtimePreviewRef.current = true
+                previewStandaloneDeleteMaterial(index)
             } else {
                 didRealtimePreviewRef.current = true
                 applyVisualPatch({
@@ -1016,7 +1141,8 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                 });
             }
         } else if (isStandalone) {
-            syncStandaloneMaterials(newMaterials)
+            didRealtimePreviewRef.current = true
+            previewStandaloneDeleteMaterial(index)
         } else {
             didRealtimePreviewRef.current = true
             applyMaterialCollection(denormalizeMaterialsForSave(newMaterials))
@@ -1055,7 +1181,8 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             return previous
         })
         if (isStandalone) {
-            syncStandaloneMaterials(newMaterials)
+            didRealtimePreviewRef.current = true
+            previewStandaloneAddLayer(selectedMaterialIndex, denormalizeMaterialsForSave(newMaterials))
         } else {
             didRealtimePreviewRef.current = true
             applyMaterialCollection(denormalizeMaterialsForSave(newMaterials))
@@ -1077,7 +1204,8 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             return previous
         })
         if (isStandalone) {
-            syncStandaloneMaterials(newMaterials)
+            didRealtimePreviewRef.current = true
+            previewStandaloneDeleteLayer(selectedMaterialIndex, index)
         } else {
             didRealtimePreviewRef.current = true
             applyMaterialCollection(denormalizeMaterialsForSave(newMaterials))
@@ -1119,7 +1247,9 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             globalSequences: (modelData?.GlobalSequences || [])
                 .map((g: any) => (typeof g === 'number' ? g : g?.Duration))
                 .filter((v: any) => typeof v === 'number'),
-            sequences: modelData?.Sequences || []
+            sequences: isStandalone
+                ? materialManagerSequenceSummariesToKeyframeSequences(rpcSnapshot.sequenceSummaries, rpcSnapshot.sequences)
+                : (modelData?.Sequences || [])
         };
 
         const windowId = windowManager.getKeyframeWindowId(payload.fieldName);
@@ -1161,6 +1291,12 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     }
 
     const selectedMaterial = selectedMaterialIndex >= 0 ? localMaterials[selectedMaterialIndex] : null
+    const selectedMaterialDetail = getMaterialManagerSelectedMaterialDetail(
+        isStandalone ? rpcSnapshot.materialSummaries : undefined,
+        localMaterials,
+        selectedMaterialIndex,
+    )
+    const selectedLayerDetails = selectedMaterialDetail?.layers ?? []
     const selectedLayer = selectedMaterial && selectedLayerIndex >= 0 && selectedMaterial.Layers ? selectedMaterial.Layers[selectedLayerIndex] : null
 
     const SUPPORTED_TEXTURE_EXTENSIONS = new Set(['.blp', '.tga'])
@@ -1476,17 +1612,16 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
     })
 
     const effectiveTextures = localTextures.length > 0 ? localTextures : ((modelData as any)?.Textures || [])
-    const textureCount = effectiveTextures.length || 0
-    const textureOptions = [{ value: '-1', plainLabel: 'None', label: 'None' }, ...Array.from({ length: textureCount }, (_, i) => {
-        const path = effectiveTextures?.[i]?.Image || '';
-        const filename = path.replace(/\\/g, '/').split('/').pop() || path;
-
-        return {
-            value: String(i),
-            plainLabel: filename || `Texture ${i}`,
-            label: `${filename || `Texture ${i}`}  (#${i})`
-        };
-    })]
+    const textureAnimOptionIndexes = isStandalone
+        ? getMaterialManagerTextureAnimOptionIndexes(rpcSnapshot.textureAnimSummaries, rpcSnapshot.textureAnims)
+        : (((modelData as any)?.TextureAnims || []).map((_: any, i: number) => i))
+    const textureOptions = [
+        { value: '-1', plainLabel: 'None', label: 'None' },
+        ...getMaterialManagerTextureOptions(isStandalone ? rpcSnapshot.textureSummaries : undefined, effectiveTextures),
+    ]
+    const materialListItems = isStandalone
+        ? getMaterialManagerMaterialListItems(rpcSnapshot.materialSummaries, localMaterials)
+        : getMaterialManagerMaterialListItems(undefined, localMaterials)
     if (textureOptions.length === 0) {
     }
 
@@ -1515,7 +1650,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 
         const draggedIndex = getDraggedTextureIndex(e.dataTransfer)
         if (draggedIndex !== null) {
-            if (draggedIndex >= textureCount) {
+            if (draggedIndex >= effectiveTextures.length) {
                 appMessage.warning(`拖放的贴图索引 ${draggedIndex} 超出范围`)
                 return
             }
@@ -1554,36 +1689,37 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                     </div>
                     <div ref={materialListRef} style={{ overflowY: 'auto', flex: 1 }}>
                         <List
-                            dataSource={localMaterials}
-                            rowKey={(item: any, index?: number) => item?.__editorMaterialId || `material-${index ?? 0}`}
-                            renderItem={(_item: any, index: number) => (
+                            dataSource={materialListItems}
+                            rowKey={(item: any, index?: number) => `material-${item?.index ?? index ?? 0}`}
+                            renderItem={(item: any, index: number) => (
                                 <List.Item
-                                    data-material-index={index}
+                                    data-material-index={item.index}
                                     onClick={() => {
-                                        setSelectedMaterialIndex(index)
-                                        const mats = localMaterials[index]
+                                        const materialIndex = item.index
+                                        setSelectedMaterialIndex(materialIndex)
+                                        const mats = localMaterials[materialIndex]
                                         if (mats && mats.Layers && mats.Layers.length > 0) {
                                             setSelectedLayerIndex(0) // Auto select first layer
-                                            syncMaterialSelection(index, 0)
+                                            syncMaterialSelection(materialIndex, 0)
                                         } else {
                                             setSelectedLayerIndex(-1)
-                                            syncMaterialSelection(index, null)
+                                            syncMaterialSelection(materialIndex, null)
                                         }
                                     }}
                                     style={{
                                         cursor: 'pointer',
                                         padding: '4px 8px',
-                                        backgroundColor: selectedMaterialIndex === index ? '#5a9cff' : 'transparent',
-                                        color: selectedMaterialIndex === index ? '#fff' : '#b0b0b0',
+                                        backgroundColor: selectedMaterialIndex === item.index ? '#5a9cff' : 'transparent',
+                                        color: selectedMaterialIndex === item.index ? '#fff' : '#b0b0b0',
                                         borderBottom: '1px solid #3a3a3a',
                                         fontSize: '12px'
                                     }}
                                     className="hover:bg-[#454545]"
                                 >
                                     <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                                        <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Material {index}</span>
-                                        {selectedMaterialIndex === index && (
-                                            <DeleteOutlined onClick={(e) => { e.stopPropagation(); handleDeleteMaterial(index) }} style={{ color: '#fff' }} />
+                                        <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Material {item.index}</span>
+                                        {selectedMaterialIndex === item.index && (
+                                            <DeleteOutlined onClick={(e) => { e.stopPropagation(); handleDeleteMaterial(item.index) }} style={{ color: '#fff' }} />
                                         )}
                                     </div>
                                 </List.Item>
@@ -1606,35 +1742,35 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                         />
                     </div>
                     <div ref={layerListRef} style={{ overflowY: 'auto', flex: 1 }}>
-                        {selectedMaterial ? (
+                        {selectedMaterialDetail ? (
                             <List
-                                dataSource={selectedMaterial.Layers || []}
-                                rowKey={(item: any, index?: number) => item?.__editorLayerId || `layer-${index ?? 0}`}
-                                renderItem={(_item: any, index: number) => (
+                                dataSource={selectedLayerDetails}
+                                rowKey={(item: any, index?: number) => item?.index ?? index ?? 0}
+                                renderItem={(item: any, index: number) => (
                                     <List.Item
                                         onClick={() => {
-                                            setSelectedLayerIndex(index)
-                                            syncMaterialSelection(selectedMaterialIndex, index)
+                                            setSelectedLayerIndex(item.index)
+                                            syncMaterialSelection(selectedMaterialIndex, item.index)
                                         }}
-                                        data-layer-index={index}
-                                        onMouseDown={(e) => handleLayerMouseDown(e, index)}
+                                        data-layer-index={item.index}
+                                        onMouseDown={(e) => handleLayerMouseDown(e, item.index)}
                                         style={{
                                             padding: '4px 8px',
-                                            backgroundColor: selectedLayerIndex === index ? '#5a9cff' : 'transparent',
-                                            color: selectedLayerIndex === index ? '#fff' : '#b0b0b0',
+                                            backgroundColor: selectedLayerIndex === item.index ? '#5a9cff' : 'transparent',
+                                            color: selectedLayerIndex === item.index ? '#fff' : '#b0b0b0',
                                             borderBottom: '1px solid #3a3a3a',
-                                            opacity: dragLayerIndex === index ? 0.6 : 1,
-                                            outline: dragOverLayerIndex === index && dragLayerIndex !== null && dragLayerIndex !== index ? '1px dashed #5a9cff' : 'none',
-                                            cursor: dragLayerIndex === index ? 'grabbing' : 'grab',
+                                            opacity: dragLayerIndex === item.index ? 0.6 : 1,
+                                            outline: dragOverLayerIndex === item.index && dragLayerIndex !== null && dragLayerIndex !== item.index ? '1px dashed #5a9cff' : 'none',
+                                            cursor: dragLayerIndex === item.index ? 'grabbing' : 'grab',
                                             userSelect: 'none',
                                             fontSize: '12px'
                                         }}
                                         className="hover:bg-[#454545]"
                                     >
                                         <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Layer {index}</span>
-                                            {selectedLayerIndex === index && (
-                                                <DeleteOutlined onClick={(e) => { e.stopPropagation(); handleDeleteLayer(index) }} style={{ color: '#fff' }} />
+                                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.label}</span>
+                                            {selectedLayerIndex === item.index && (
+                                                <DeleteOutlined onClick={(e) => { e.stopPropagation(); handleDeleteLayer(item.index) }} style={{ color: '#fff' }} />
                                             )}
                                         </div>
                                     </List.Item>
@@ -1776,9 +1912,9 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                                                     onChange={(v) => updateLocalLayer(selectedMaterialIndex, selectedLayerIndex, { TVertexAnimId: v === -1 ? null : v }, true)}
                                                     options={[
                                                         { value: -1, label: 'None' },
-                                                        ...((modelData as any)?.TextureAnims?.map((_: any, i: number) => ({
-                                                            value: i,
-                                                            label: `Anim ${i}`
+                                                        ...(textureAnimOptionIndexes.map((index: number) => ({
+                                                            value: index,
+                                                            label: `Anim ${index}`
                                                         })) || [])
                                                     ]}
                                                     popupClassName="dark-theme-select-dropdown"

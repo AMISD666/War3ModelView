@@ -1,6 +1,7 @@
 import type { FbxImportGateway } from '../../infrastructure/fbx'
 import { fbxImportGateway } from '../../infrastructure/fbx'
 import type { FbxImportDiagnostic, FbxImportSettings } from '../../types/fbxImport'
+import type { FbxStaticSceneResult } from '../../types/fbxImport'
 import type { ModelData, Sequence } from '../../types/model'
 import type { ModelNode } from '../../types/node'
 import { getBasename } from '../../utils/windowsPath'
@@ -45,6 +46,67 @@ const normalizePathList = (paths: string[]): string[] => {
 const collectNodeNames = (nodes: ModelNode[] | undefined): Set<string> =>
     new Set((nodes ?? []).map((node) => node.Name).filter((name): name is string => !!name))
 
+const buildNodePathByObjectId = (nodes: ModelNode[] | undefined): Map<number, string> => {
+    const nodeByObjectId = new Map((nodes ?? []).map((node) => [node.ObjectId, node]))
+    const cache = new Map<number, string>()
+    const visit = (objectId: number): string => {
+        const cached = cache.get(objectId)
+        if (cached !== undefined) {
+            return cached
+        }
+
+        const node = nodeByObjectId.get(objectId)
+        if (!node) {
+            return ''
+        }
+
+        const name = node.Name.trim()
+        const parentPath = typeof node.Parent === 'number' && node.Parent >= 0
+            ? visit(node.Parent)
+            : ''
+        const path = parentPath ? `${parentPath}/${name}` : name
+        cache.set(objectId, path)
+        return path
+    }
+
+    for (const node of nodes ?? []) {
+        visit(node.ObjectId)
+    }
+    return cache
+}
+
+const buildTypedIdByObjectId = (mapping: ImportedNodeMapping): Map<number, number> =>
+    new Map([...mapping.objectIdByTypedId].map(([typedId, objectId]) => [objectId, typedId]))
+
+const buildTypedIdsByNodePath = (mapping: ImportedNodeMapping): Map<string, number[]> => {
+    const typedIdByObjectId = buildTypedIdByObjectId(mapping)
+    const pathByObjectId = buildNodePathByObjectId(mapping.nodes)
+    const result = new Map<string, number[]>()
+    for (const node of mapping.nodes) {
+        const typedId = typedIdByObjectId.get(node.ObjectId)
+        const path = pathByObjectId.get(node.ObjectId)?.trim()
+        if (typedId === undefined || !path) {
+            continue
+        }
+        result.set(path, [...(result.get(path) ?? []), typedId])
+    }
+    return result
+}
+
+const buildTypedIdsByNodeName = (mapping: ImportedNodeMapping): Map<string, number[]> => {
+    const typedIdByObjectId = buildTypedIdByObjectId(mapping)
+    const result = new Map<string, number[]>()
+    for (const node of mapping.nodes) {
+        const typedId = typedIdByObjectId.get(node.ObjectId)
+        const name = node.Name.trim()
+        if (typedId === undefined || !name) {
+            continue
+        }
+        result.set(name, [...(result.get(name) ?? []), typedId])
+    }
+    return result
+}
+
 const assertCompatibleSkeleton = (base: ModelData, next: ModelData, nextPath: string): void => {
     const baseNames = collectNodeNames(base.Nodes)
     const missing = (next.Nodes ?? [])
@@ -75,32 +137,24 @@ const prefixSequenceName = (sequence: Sequence, path: string): Sequence => {
 }
 
 const buildSceneAnimationMappingForBase = (
+    baseScene: FbxStaticSceneResult,
     baseMapping: ImportedNodeMapping,
     nextMapping: ImportedNodeMapping,
     path: string,
 ): ImportedNodeMapping => {
-    const typedIdByObjectId = new Map(
-        [...nextMapping.objectIdByTypedId].map(([typedId, objectId]) => [objectId, typedId]),
-    )
-    const typedIdsByName = new Map<string, number[]>()
-    for (const node of nextMapping.nodes) {
-        const typedId = typedIdByObjectId.get(node.ObjectId)
-        if (typedId === undefined) {
-            continue
-        }
-        const name = node.Name.trim()
-        if (name) {
-            typedIdsByName.set(name, [...(typedIdsByName.get(name) ?? []), typedId])
-        }
-    }
+    const basePathByObjectId = buildNodePathByObjectId(baseMapping.nodes)
+    const typedIdsByPath = buildTypedIdsByNodePath(nextMapping)
+    const typedIdsByName = buildTypedIdsByNodeName(nextMapping)
 
     const objectIdByTypedId = new Map<number, number>()
     const missing: string[] = []
     for (const baseNode of baseMapping.nodes) {
-        const typedIds = typedIdsByName.get(baseNode.Name.trim())
-        const typedId = typedIds?.shift()
+        const nodePath = basePathByObjectId.get(baseNode.ObjectId)?.trim() ?? ''
+        const pathTypedIds = nodePath ? typedIdsByPath.get(nodePath) : undefined
+        const nameTypedIds = typedIdsByName.get(baseNode.Name.trim())
+        const typedId = pathTypedIds?.shift() ?? nameTypedIds?.shift()
         if (typedId === undefined) {
-            missing.push(baseNode.Name)
+            missing.push(nodePath || baseNode.Name)
             continue
         }
         objectIdByTypedId.set(typedId, baseNode.ObjectId)
@@ -110,8 +164,15 @@ const buildSceneAnimationMappingForBase = (
     }
 
     return {
-        ...baseMapping,
+        ...nextMapping,
+        nodes: baseMapping.nodes,
+        bones: baseMapping.bones,
+        helpers: baseMapping.helpers,
+        pivotPoints: baseMapping.pivotPoints,
+        defaultObjectId: baseMapping.defaultObjectId,
         objectIdByTypedId,
+        targetRestNodes: baseScene.nodes,
+        targetObjectIdByTypedId: baseMapping.objectIdByTypedId,
     }
 }
 
@@ -120,6 +181,19 @@ const prefixNewSequences = (modelData: ModelData, firstNewIndex: number, path: s
     for (let index = firstNewIndex; index < sequences.length; index += 1) {
         sequences[index] = prefixSequenceName(sequences[index], path)
     }
+}
+
+const getNextSequenceStartAfterAppend = (
+    modelData: ModelData,
+    firstNewIndex: number,
+    fallbackStart: number,
+): number => {
+    const newSequences = (modelData.Sequences ?? []).slice(firstNewIndex)
+    const latestEnd = newSequences.reduce((maxEnd, sequence) => {
+        const endFrame = Number(sequence.Interval?.[1])
+        return Number.isFinite(endFrame) ? Math.max(maxEnd, endFrame) : maxEnd
+    }, -Infinity)
+    return Number.isFinite(latestEnd) ? latestEnd + 100 : fallbackStart
 }
 
 export class FbxBatchMergeUseCase {
@@ -136,6 +210,7 @@ export class FbxBatchMergeUseCase {
         const diagnostics: FbxImportDiagnostic[] = []
         let baseModel: ModelData | null = null
         let baseMapping: ImportedNodeMapping | null = null
+        let baseScene: FbxStaticSceneResult | null = null
         let totalMappedKeys = 0
         let nextSequenceStart = startFrame
 
@@ -148,6 +223,7 @@ export class FbxBatchMergeUseCase {
             if (!baseModel) {
                 baseModel = modelData
                 baseMapping = nodeMapping
+                baseScene = scene
                 const firstSequenceIndex = baseModel.Sequences?.length ?? 0
                 totalMappedKeys += applyFbxAnimationTracks(scene, baseModel, baseMapping, {
                     startFrame: nextSequenceStart,
@@ -155,21 +231,21 @@ export class FbxBatchMergeUseCase {
                     append: true,
                 })
                 prefixNewSequences(baseModel, firstSequenceIndex, path)
-                nextSequenceStart += Math.max(0, (baseModel.Sequences?.length ?? 0) - firstSequenceIndex) * intervalFrame
+                nextSequenceStart = getNextSequenceStartAfterAppend(baseModel, firstSequenceIndex, nextSequenceStart + intervalFrame)
             } else {
-                if (!baseMapping) {
+                if (!baseMapping || !baseScene) {
                     throw new Error('FBX 合并没有可用的基准骨骼')
                 }
                 assertCompatibleSkeleton(baseModel, modelData, path)
                 const firstSequenceIndex = baseModel.Sequences?.length ?? 0
-                const sceneMapping = buildSceneAnimationMappingForBase(baseMapping, nodeMapping, path)
+                const sceneMapping = buildSceneAnimationMappingForBase(baseScene, baseMapping, nodeMapping, path)
                 totalMappedKeys += applyFbxAnimationTracks(scene, baseModel, sceneMapping, {
                     startFrame: nextSequenceStart,
                     intervalFrame,
                     append: true,
                 })
                 prefixNewSequences(baseModel, firstSequenceIndex, path)
-                nextSequenceStart += Math.max(0, (baseModel.Sequences?.length ?? 0) - firstSequenceIndex) * intervalFrame
+                nextSequenceStart = getNextSequenceStartAfterAppend(baseModel, firstSequenceIndex, nextSequenceStart + intervalFrame)
             }
         }
 

@@ -7,8 +7,15 @@ import {
     NODE_EDITOR_COMMANDS,
     type NodeEditorKind,
     type NodeEditorCommandSender,
+    type NodeEditorMaterialSummary,
+    type NodeEditorNodeSummary,
+    type NodeEditorPivotPoint,
     type NodeEditorRpcState,
+    type NodeEditorSequenceSummary,
+    type NodeEditorTextureDetail,
+    type NodeEditorTextureSummary,
 } from '../../types/nodeEditorRpc'
+import { createRevisionedNodeEditorCommandPayload } from '../../application/commands/NodeEditorCommandPayload'
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
 import ParticleEmitterDialog from '../node/ParticleEmitterDialog'
 import ParticleEmitter2Dialog from '../node/ParticleEmitter2Dialog'
@@ -54,6 +61,8 @@ const initialRpcState: NodeEditorRpcState = {
     renameInitialName: '',
     allNodes: [],
     pivotPoints: [],
+    selectedPivotPoint: null,
+    selectedParticleEmitter2Texture: null,
 }
 
 /**
@@ -64,27 +73,35 @@ const NodeEditorStandalone: React.FC = () => {
     const { state, emitCommand } = useRpcClient<NodeEditorRpcState>('nodeEditor', initialRpcState)
     const snapshotRevision = state.snapshotRevision || state.snapshotVersion
     const emitRevisionedCommand: NodeEditorCommandSender = (command, payload) => {
-        emitCommand(command, {
-            ...payload,
+        emitCommand(command, createRevisionedNodeEditorCommandPayload(command, payload, {
             documentId: state.documentId,
-            baseDocumentRevision: state.documentRevision,
-            stalePolicy:
-                command === NODE_EDITOR_COMMANDS.previewNodeUpdate ||
-                command === NODE_EDITOR_COMMANDS.clearNodePreview ||
-                command === NODE_EDITOR_COMMANDS.applyNodeUpdate
-                    ? 'warn'
-                    : 'reject',
-        })
+            documentRevision: state.documentRevision,
+        }))
     }
     const sessionKeyRef = useRef('')
     const [frozenNode, setFrozenNode] = useState<any>(null)
     const [frozenSessionKey, setFrozenSessionKey] = useState('')
     const [closedSessionKey, setClosedSessionKey] = useState('')
     const [editorSessionRev, setEditorSessionRev] = useState(0)
+    const textureDetailRefreshTimersRef = useRef<number[]>([])
+    const stateRef = useRef<NodeEditorRpcState>(initialRpcState)
     const activeSessionKey =
         state.kind && state.objectId >= 0
             ? `${state.kind}:${state.objectId}:${state.sessionNonce}`
             : ''
+    const hydrateSelectedPivotPoint = (node: any, pivotPoint?: NodeEditorPivotPoint | null) => {
+        if (!node || !pivotPoint) {
+            return node
+        }
+        return {
+            ...node,
+            PivotPoint: pivotPoint,
+        }
+    }
+
+    useEffect(() => {
+        stateRef.current = state
+    }, [state])
 
     useEffect(() => {
         const key = activeSessionKey
@@ -103,13 +120,13 @@ const NodeEditorStandalone: React.FC = () => {
         if (frozenNode !== null && frozenSessionKey === activeSessionKey) return
         if (state.node && state.objectId >= 0 && state.kind) {
             try {
-                setFrozenNode(structuredClone(state.node))
+                setFrozenNode(hydrateSelectedPivotPoint(structuredClone(state.node), state.selectedPivotPoint))
             } catch {
-                setFrozenNode(JSON.parse(JSON.stringify(state.node)))
+                setFrozenNode(hydrateSelectedPivotPoint(JSON.parse(JSON.stringify(state.node)), state.selectedPivotPoint))
             }
             setFrozenSessionKey(activeSessionKey)
         }
-    }, [activeSessionKey, closedSessionKey, state.node, state.objectId, state.kind, frozenNode, frozenSessionKey])
+    }, [activeSessionKey, closedSessionKey, state.node, state.selectedPivotPoint, state.objectId, state.kind, frozenNode, frozenSessionKey])
 
     const handleClose = async () => {
         setClosedSessionKey(activeSessionKey)
@@ -124,21 +141,128 @@ const NodeEditorStandalone: React.FC = () => {
         }
     }
 
+    const requestNodeEditorSnapshot = () => {
+        windowGateway.emit('rpc-req-nodeEditor').catch(() => {})
+    }
+
+    const requestSelectedTextureDetailRefresh = (textureId: number) => {
+        if (!Number.isInteger(textureId) || textureId < -1) {
+            return
+        }
+        textureDetailRefreshTimersRef.current.forEach((timerId) => window.clearTimeout(timerId))
+        textureDetailRefreshTimersRef.current = [
+            window.setTimeout(requestNodeEditorSnapshot, 40),
+            window.setTimeout(requestNodeEditorSnapshot, 220),
+        ]
+    }
+
+    const resolveSelectedTextureDetail = async (textureId: number): Promise<NodeEditorTextureDetail | null> => {
+        if (!Number.isInteger(textureId) || textureId < 0) {
+            return null
+        }
+        const currentTexture = stateRef.current.selectedParticleEmitter2Texture
+        if (currentTexture?.index === textureId) {
+            return currentTexture
+        }
+        requestSelectedTextureDetailRefresh(textureId)
+        return new Promise((resolve) => {
+            const startedAt = Date.now()
+            let pollTimerId = 0
+            const timeoutMs = 320
+            const finish = (texture: NodeEditorTextureDetail | null) => {
+                if (pollTimerId) {
+                    window.clearTimeout(pollTimerId)
+                }
+                resolve(texture)
+            }
+            const poll = () => {
+                const texture = stateRef.current.selectedParticleEmitter2Texture
+                if (texture?.index === textureId) {
+                    finish(texture)
+                    return
+                }
+                if (Date.now() - startedAt >= timeoutMs) {
+                    finish(null)
+                    return
+                }
+                pollTimerId = window.setTimeout(poll, 24)
+            }
+            pollTimerId = window.setTimeout(poll, 24)
+        })
+    }
+
+    useEffect(() => {
+        return () => {
+            textureDetailRefreshTimersRef.current.forEach((timerId) => window.clearTimeout(timerId))
+            textureDetailRefreshTimersRef.current = []
+        }
+    }, [])
+
+    const normalizedAllNodes = useMemo(() => {
+        const summaries = state.nodeSummaries ?? state.resources?.nodes ?? []
+        const summaryNodes = summaries.map((node: NodeEditorNodeSummary) => ({
+            ObjectId: node.objectId,
+            Name: node.name,
+            Parent: node.parent,
+        }))
+        return summaryNodes.length > 0 ? summaryNodes : state.allNodes
+    }, [state.allNodes, state.nodeSummaries, state.resources?.nodes])
+
+    const normalizedTextures = useMemo(() => {
+        if (Array.isArray(state.textures) && state.textures.length > 0) {
+            return state.textures
+        }
+        const summaries = state.textureSummaries ?? state.resources?.textures ?? []
+        return summaries.map((texture: NodeEditorTextureSummary) => ({
+            Image: texture.image ?? '',
+            Path: texture.image ?? '',
+            ReplaceableId: texture.replaceableId ?? 0,
+        }))
+    }, [state.textures, state.textureSummaries, state.resources?.textures])
+
+    const normalizedMaterials = useMemo(() => {
+        if (Array.isArray(state.materials) && state.materials.length > 0) {
+            return state.materials
+        }
+        const summaries = state.materialSummaries ?? state.resources?.materials ?? []
+        return summaries.map((material: NodeEditorMaterialSummary) => ({
+            PriorityPlane: material.priorityPlane ?? 0,
+            Layers: Array.from({ length: Math.max(0, material.layerCount ?? 0) }, () => ({})),
+        }))
+    }, [state.materials, state.materialSummaries, state.resources?.materials])
+
+    const normalizedSequences = useMemo(() => {
+        const summaries = state.sequenceSummaries ?? state.resources?.sequences ?? []
+        const summarySequences = summaries.map((sequence: NodeEditorSequenceSummary) => ({
+            Name: sequence.name,
+            Interval: sequence.interval ?? [0, 0],
+        }))
+        return summarySequences.length > 0 ? summarySequences : state.sequences
+    }, [state.sequenceSummaries, state.resources?.sequences, state.sequences])
+
+    const normalizedGlobalSequences = useMemo(
+        () => state.globalSequenceDurations ?? state.resources?.globalSequenceDurations ?? state.globalSequences ?? [],
+        [state.globalSequenceDurations, state.resources?.globalSequenceDurations, state.globalSequences]
+    )
+
     const standaloneModelData = useMemo(
         () => ({
-            Textures: state.textures,
-            Materials: state.materials,
-            GlobalSequences: state.globalSequences,
-            Sequences: state.sequences,
-            PivotPoints: state.pivotPoints ?? [],
+            Textures: normalizedTextures,
+            textureSummaries: state.textureSummaries ?? state.resources?.textures ?? [],
+            Materials: normalizedMaterials,
+            GlobalSequences: normalizedGlobalSequences,
+            Sequences: normalizedSequences,
+            selectedParticleEmitter2Texture: state.selectedParticleEmitter2Texture ?? null,
         }),
         [
             snapshotRevision,
-            state.textures,
-            state.materials,
-            state.globalSequences,
-            state.sequences,
-            state.pivotPoints,
+            normalizedTextures,
+            state.textureSummaries,
+            state.resources?.textures,
+            normalizedMaterials,
+            normalizedGlobalSequences,
+            normalizedSequences,
+            state.selectedParticleEmitter2Texture,
         ]
     )
 
@@ -155,11 +279,8 @@ const NodeEditorStandalone: React.FC = () => {
     useEffect(() => {
         if (!activeSessionKey || isFrozenNodeReady) return
 
-        const requestSnapshot = () => {
-            windowGateway.emit('rpc-req-nodeEditor').catch(() => {})
-        }
-        const firstTimer = window.setTimeout(requestSnapshot, 160)
-        const secondTimer = window.setTimeout(requestSnapshot, 650)
+        const firstTimer = window.setTimeout(requestNodeEditorSnapshot, 160)
+        const secondTimer = window.setTimeout(requestNodeEditorSnapshot, 650)
 
         return () => {
             window.clearTimeout(firstTimer)
@@ -223,6 +344,8 @@ const NodeEditorStandalone: React.FC = () => {
                             standaloneEmit={emitRevisionedCommand}
                             standaloneModelData={standaloneModelData}
                             standaloneModelPath={state.modelPath}
+                            onStandaloneTextureDetailRefreshRequest={requestSelectedTextureDetailRefresh}
+                            resolveStandaloneTextureDetail={resolveSelectedTextureDetail}
                         />
                     )}
                     {state.kind === 'collisionShape' && (
@@ -282,7 +405,7 @@ const NodeEditorStandalone: React.FC = () => {
                             standaloneNode={frozenNode}
                             standaloneEmit={emitRevisionedCommand}
                             standaloneModelData={standaloneModelData}
-                            standaloneAllNodes={state.allNodes}
+                            standaloneAllNodes={normalizedAllNodes}
                         />
                     )}
                     {state.kind === 'rename' && (

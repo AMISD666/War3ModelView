@@ -11,6 +11,7 @@ import { useWindowEvent } from '../../hooks/useWindowEvent'
 import { vectorToPlainArray } from '../../utils/animVectorIpc'
 import { coercePivotFloat3 } from '../../utils/pivotUtils'
 import { modelDocumentCommandHandler } from '../../application/commands'
+import type { GeosetVisibilityActionPayload } from '../../application/window-bridge/ToolWindowCommandHandlers'
 
 const { Text } = Typography
 
@@ -150,13 +151,11 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
         geosetAnims: [],
         globalSequences: [],
     })
-    const emitVisibilityAction = (action: string, payload: unknown, stalePolicy: 'warn' | 'reject' = 'warn') => {
+    const emitVisibilityAction = (actionPayload: Omit<GeosetVisibilityActionPayload, 'documentId' | 'baseDocumentRevision'>) => {
         emitCommand('EXECUTE_VISIBILITY_ACTION', {
-            action,
-            payload,
+            ...actionPayload,
             documentId: rpcState.documentId,
             baseDocumentRevision: rpcState.documentRevision,
-            stalePolicy,
         })
     }
 
@@ -174,7 +173,7 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
 
     const setSequence = (seqId: number | null) => {
         if (isStandalone) {
-            emitVisibilityAction('SET_SEQUENCE', seqId, 'warn')
+            emitVisibilityAction({ action: 'SET_SEQUENCE', payload: { sequenceIndex: seqId }, stalePolicy: 'warn' })
         } else {
             directSetSequence(seqId ?? -1)
         }
@@ -182,7 +181,7 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
 
     const setFrame = (frame: number) => {
         if (isStandalone) {
-            emitVisibilityAction('SET_FRAME', frame, 'warn')
+            emitVisibilityAction({ action: 'SET_FRAME', payload: { frame }, stalePolicy: 'warn' })
         } else {
             directSetFrame(frame)
         }
@@ -273,7 +272,7 @@ const GeosetVisibilityToolModal: React.FC<GeosetVisibilityToolModalProps> = ({ v
         const appliedAnims = deepClone(nextAnims)
         setLocalAnims(appliedAnims)
         if (isStandalone) {
-            emitVisibilityAction('SAVE_ANIMS', appliedAnims)
+            emitVisibilityAction({ action: 'SAVE_ANIMS', payload: { geosetAnims: appliedAnims }, stalePolicy: 'reject' })
             return
         }
         modelDocumentCommandHandler.replaceGeosetAnimationList({

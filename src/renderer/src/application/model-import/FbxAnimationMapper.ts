@@ -31,6 +31,7 @@ const toFiniteNumber = (value: number | undefined, fallback: number): number =>
 
 const TRACK_VALUE_EPSILON = 1e-4
 const TRAILING_HOLD_FRAME_ALLOWANCE_MS = 50
+const SEQUENCE_GAP_MS = 100
 
 const getEffectiveStackDurationMs = (
     stack: FbxAnimationStackDto,
@@ -219,8 +220,8 @@ export const applyFbxAnimationTracks = (
         }
 
         nextSequenceStart = fixedStartInterval === null
-            ? sequenceEndFrame + 100
-            : sequenceStartFrame + fixedStartInterval
+            ? sequenceEndFrame + SEQUENCE_GAP_MS
+            : Math.max(sequenceStartFrame + fixedStartInterval, effectiveSequenceEndFrame + SEQUENCE_GAP_MS)
     }
 
     modelData.Sequences = sequences

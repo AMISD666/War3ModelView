@@ -11,6 +11,9 @@ type ImportedNodeAnimationMapping = {
 
 type TimedKey = FbxBakedVec3KeyDto | FbxBakedQuatKeyDto
 
+const toFiniteNumber = (value: number | undefined, fallback: number): number =>
+    Number.isFinite(value) ? Number(value) : fallback
+
 const addFiniteKeyTimes = (times: Set<number>, keys: TimedKey[] | undefined): void => {
     for (const key of keys ?? []) {
         if (Number.isFinite(key.timeSeconds)) {
@@ -30,11 +33,18 @@ export const collectMappedStackKeyTimes = (
     nodeMapping: ImportedNodeAnimationMapping,
 ): number[] => {
     const times = new Set<number>()
+    const hasMappedNode = (stack.bakedNodes ?? []).some((baked) =>
+        nodeMapping.objectIdByTypedId.has(baked.nodeTypedId))
+    if (!hasMappedNode && nodeMapping.objectIdByTypedId.size > 0) {
+        return []
+    }
     for (const baked of stack.bakedNodes ?? []) {
-        if (!nodeMapping.objectIdByTypedId.has(baked.nodeTypedId)) {
-            continue
-        }
         addNodeKeyTimes(times, baked)
+    }
+    const playbackDuration = toFiniteNumber(stack.playbackDuration, stack.timeEnd - stack.timeBegin)
+    if (playbackDuration > 0) {
+        times.add(0)
+        times.add(playbackDuration)
     }
     return [...times].sort((a, b) => a - b)
 }

@@ -45,7 +45,18 @@ import { markStandalonePerf } from '../utils/standalonePerf'
 import { parseModelBuffer, mergeGeosets, mergeAnimations } from '../utils/modelMerge'
 import { desktopGateway } from '../infrastructure/desktop'
 import { windowGateway } from '../infrastructure/window'
-import { mergeLiveRendererGeometryForSave, saveCurrentModelWorkflow, type TextureAssetOperationResult, type SaveValidationContext, type SaveWorkflowProgress } from '../application/model-save'
+import {
+    createEmptyNodeEditorRpcState,
+    createNodeEditorRpcState,
+} from '../application/window-bridge/NodeEditorSnapshotPayload'
+import {
+    mergeLiveRendererGeometryForSave,
+    saveCurrentModelWorkflow,
+    saveModelUseCase,
+    type TextureAssetOperationResult,
+    type SaveValidationContext,
+    type SaveWorkflowProgress,
+} from '../application/model-save'
 import {
     DEFAULT_IMPORT_FILE_DIALOG_OPTIONS,
     MODEL_OPEN_FILES_REQUEST_EVENT,
@@ -90,7 +101,9 @@ import {
     type MaterialManagerRpcState,
     type TextureManagerPatch,
     type TextureManagerRpcState,
+    normalizeDissolveEffectLightPayload,
 } from '../application/window-bridge'
+import { parseModelOptimizeCommandPayload } from '../application/window-bridge/ModelOptimizeCommandPayload'
 import { uiText } from '../constants/uiText'
 import { useGlobalColorAdjustStore } from '../store/globalColorAdjustStore'
 import { useSaveOperationStore } from '../store/saveOperationStore'
@@ -481,27 +494,15 @@ const MainLayout: React.FC = () => {
         const cache = nodeEditorSnapshotCacheRef.current
         const live = useModelStore.getState()
         if (!session) {
-            return {
+            return createEmptyNodeEditorRpcState({
                 documentId: live.documentId,
                 documentRevision: live.documentRevision,
                 assetRevision: live.assetRevision,
                 previewRevision: live.previewRevision,
-                snapshotRevision: 0,
-                windowId: 'nodeEditor',
-                snapshotVersion: 0,
-                sessionNonce: 0,
-                kind: '',
-                objectId: -1,
-                node: null,
-                textures: [],
-                materials: [],
-                globalSequences: [],
-                sequences: [],
-                modelPath: '',
-                renameInitialName: '',
-                allNodes: [],
-                pivotPoints: [],
-            }
+                modelPath: live.modelPath,
+                modelData: live.modelData,
+                nodes: live.nodes,
+            })
         }
         const node = live.getNodeById(session.objectId)
         let nodeJson = ''
@@ -525,31 +526,19 @@ const MainLayout: React.FC = () => {
                 cloned = toRpcSafeNodeSnapshot(node)
             }
         }
-        return {
+        return createNodeEditorRpcState({
+            session,
+            snapshotRevision: cache.snapshotVersion,
+            node: cloned,
+            modelData: md,
+            nodes: live.nodes,
+            nodeEditorPreview: live.nodeEditorPreview,
+            modelPath: live.modelPath,
             documentId: live.documentId,
             documentRevision: live.documentRevision,
             assetRevision: live.assetRevision,
             previewRevision: live.previewRevision,
-            snapshotRevision: cache.snapshotVersion,
-            windowId: 'nodeEditor',
-            snapshotVersion: cache.snapshotVersion,
-            sessionNonce: session.sessionNonce,
-            kind: session.kind,
-            objectId: session.objectId,
-            node: cloned,
-            textures: md?.Textures ?? [],
-            materials: md?.Materials ?? [],
-            globalSequences: md?.GlobalSequences ?? [],
-            sequences: md?.Sequences ?? [],
-            modelPath: live.modelPath ?? '',
-            renameInitialName: node?.Name ?? '',
-            allNodes: (live.nodes ?? []).map((item: any) => ({
-                ObjectId: item?.ObjectId,
-                Name: item?.Name,
-                Parent: item?.Parent,
-            })),
-            pivotPoints: md?.PivotPoints ?? [],
-        }
+        })
     }, [])
 
 
@@ -610,8 +599,28 @@ const MainLayout: React.FC = () => {
         };
     }, [modelData, modelOptimizeRunning, modelOptimizeLastResult]);
 
-    const handleModelOptimizeCommand = useCallback((command: string, payload: any) => {
-        if (!checkMainToolCommandRevision('ModelOptimizeCommandHandler', command, payload)) {
+    const handleModelOptimizeCommand = useCallback((command: string, payload: unknown) => {
+        const parsedPayload = parseModelOptimizeCommandPayload(command, payload)
+        if (!parsedPayload.ok) {
+            markCommandRejected({
+                source: 'ModelOptimizeCommandHandler',
+                commandName: command,
+                action: '',
+                commandDocumentId: '',
+                activeDocumentId: useModelStore.getState().documentId ?? '',
+                baseDocumentRevision: '',
+                activeDocumentRevision: useModelStore.getState().documentRevision,
+                reason: 'invalid_payload',
+            })
+            console.warn('[ModelOptimizeCommandHandler] Rejected invalid payload', {
+                command,
+                reason: parsedPayload.reason,
+            })
+            return
+        }
+
+        const optimizePayload = parsedPayload.payload
+        if (!checkMainToolCommandRevision('ModelOptimizeCommandHandler', command, optimizePayload)) {
             return
         }
 
@@ -635,13 +644,9 @@ const MainLayout: React.FC = () => {
                 const workingCopy = structuredClone(currentModel);
                 const startedAt = performance.now();
 
-                if (command === 'EXECUTE_POLYGON_OPT') {
+                if (optimizePayload.kind === 'polygon') {
                     const { optimizeModelPolygons } = await import('../utils/modelOptimization')
-                    const result = await optimizeModelPolygons(workingCopy, {
-                        removeRedundantVertices: payload?.removeRedundantVertices !== false,
-                        decimateModel: payload?.decimateModel !== false,
-                        decimateRatio: Number(payload?.decimateRatio ?? 75)
-                    });
+                    const result = await optimizeModelPolygons(workingCopy, optimizePayload.options);
 
                     if (!result.changed) {
                         setModelOptimizeLastResult('多边形优化完成');
@@ -664,12 +669,9 @@ const MainLayout: React.FC = () => {
                     return;
                 }
 
-                if (command === 'EXECUTE_KEYFRAME_OPT') {
+                if (optimizePayload.kind === 'keyframe') {
                     const { optimizeModelKeyframes } = await import('../utils/modelOptimization')
-                    const result = await optimizeModelKeyframes(workingCopy, {
-                        removeRedundantFrames: payload?.removeRedundantFrames !== false,
-                        optimizeKeyframes: payload?.optimizeKeyframes !== false
-                    });
+                    const result = await optimizeModelKeyframes(workingCopy, optimizePayload.options);
 
                     if (!result.changed) {
                         setModelOptimizeLastResult('关键帧优化完成：没有可安全优化的数据。');
@@ -821,14 +823,23 @@ const MainLayout: React.FC = () => {
             const mergedPath = buildFbxBatchMergeTabPath(paths)
             const mergedName = getBasename(mergedPath).replace(/\.mdl$/i, '')
             result.modelData.Model.Name = mergedName
-            const store = useModelStore.getState()
-            store.addTab(mergedPath)
-            store.setModelData(result.modelData, mergedPath, {
-                skipAutoRecalculate: true,
+
+            const { preparedData, validationErrors } = saveModelUseCase.prepareModelForSave({
+                modelData: result.modelData,
             })
-            store.markTabDirty()
-            const message = `合并完成：${result.sourceCount} 个 FBX，${result.sequenceCount} 个动作序列`
-            showMessage('success', '多 FBX 文件合并', message)
+            await saveModelUseCase.writePreparedModelFile({
+                preparedData,
+                targetPath: mergedPath,
+                format: 'mdl',
+            })
+
+            useModelStore.getState().addTab(mergedPath)
+
+            const validationSuffix = validationErrors.length > 0
+                ? `\uFF0C\u4FDD\u5B58\u65F6\u5DF2\u81EA\u52A8\u5904\u7406 ${validationErrors.length} \u4E2A\u6821\u9A8C\u9879`
+                : ''
+            const message = `\u5408\u5E76\u5B8C\u6210\uFF1A${result.sourceCount} \u4E2A FBX\uFF0C${result.sequenceCount} \u4E2A\u52A8\u4F5C\u5E8F\u5217${validationSuffix}`
+            showMessage('success', '\u591A FBX \u6587\u4EF6\u5408\u5E76', message)
             await windowGateway.emit('fbxBatchMerge-result', {
                 requestId,
                 ok: true,
@@ -838,7 +849,7 @@ const MainLayout: React.FC = () => {
             }).catch(() => { })
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error)
-            showMessage('error', '多 FBX 文件合并失败', message)
+            showMessage('error', '\u591A FBX \u6587\u4EF6\u5408\u5E76\u5931\u8D25', message)
             await windowGateway.emit('fbxBatchMerge-result', {
                 requestId,
                 ok: false,
@@ -903,7 +914,8 @@ const MainLayout: React.FC = () => {
                 }
                 try {
                     const { executeDissolveEffect, refreshDissolveTexturesInRenderer } = await import('../utils/dissolveEffect');
-                    const result = await executeDissolveEffect(store.modelData, store.modelPath, payload);
+                    const dissolveParams = normalizeDissolveEffectLightPayload(payload);
+                    const result = await executeDissolveEffect(store.modelData, store.modelPath, dissolveParams);
                     textureMaterialCommandHandler.setTextureMaterialCollections({ materials: result.materials, textures: result.textures });
                     await refreshDissolveTexturesInRenderer(useRendererStore.getState().renderer, store.modelPath, result);
                     await windowGateway.emit('dissolveEffect-result', {

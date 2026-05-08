@@ -21,6 +21,7 @@ import { DeferredCommitContext } from './particle-emitter2/DeferredInputNumber';
 import { BoxedNumericField, FlagsPanel, LifecycleSection, OtherParamsSection, OverallAdjustments, RenderingSection, SegmentBox } from './particle-emitter2/ParticleEmitter2DialogSections';
 import { clamp, fromAntdColor, getFiniteNumber, getStaticValue, hsvToRgb, isAnimVector, parseInterval, rgbToHsv, toAntdColor } from './particle-emitter2/helpers';
 import type { ParticleEmitter2DialogProps, SegmentColorTuple } from './particle-emitter2/types';
+import { createParticleEmitter2TextureOptions, isParticleEmitter2TextureIdAvailable } from './particle-emitter2/textureOptions';
 
 const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
     visible,
@@ -31,11 +32,19 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
     standaloneEmit,
     standaloneModelData,
     standaloneModelPath,
+    onStandaloneTextureDetailRefreshRequest,
+    resolveStandaloneTextureDetail,
 }) => {
     const [form] = Form.useForm();
     const { getNodeById, modelData: storeModelData, modelPath: storeModelPath } = useModelStore();
     const modelData = isStandalone ? standaloneModelData : storeModelData;
     const modelPath = isStandalone ? (standaloneModelPath ?? '') : storeModelPath;
+    const selectedParticleEmitter2Texture = isStandalone
+        ? standaloneModelData?.selectedParticleEmitter2Texture ?? null
+        : null;
+    const textureSummaries = isStandalone
+        ? standaloneModelData?.textureSummaries ?? []
+        : [];
     const [isTextureDropActive, setIsTextureDropActive] = useState(false);
     const [overallHueShift, setOverallHueShift] = useState(0);
     const [overallAlphaScale, setOverallAlphaScale] = useState(1);
@@ -302,9 +311,12 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
     const applyRealtimeTexture = (textureId: number) => {
         const sourceNode = getCurrentSourceNode();
         if (nodeId === null || !sourceNode) return;
-        const textureCount = modelData?.Textures?.length || 0;
-        if (textureId >= textureCount && textureId !== -1) return;
         const safeTextureId = Number.isInteger(textureId) ? textureId : -1;
+        if (!isParticleEmitter2TextureIdAvailable(safeTextureId, {
+            textureSummaries,
+            selectedTexture: selectedParticleEmitter2Texture,
+            legacyTextures: isStandalone ? null : modelData?.Textures,
+        })) return;
         const previewNode: ParticleEmitter2Node = {
             ...sourceNode,
             TextureID: safeTextureId,
@@ -312,6 +324,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
         form.setFieldValue('TextureID', safeTextureId);
         if (isStandalone) {
             applyCommittedNode(previewNode);
+            onStandaloneTextureDetailRefreshRequest?.(safeTextureId);
             return;
         }
         didRealtimePreviewRef.current = true;
@@ -574,6 +587,23 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
         setPresetModalOpen(true);
     };
 
+    const resolvePresetTexture = async (textureId: number) => {
+        if (!Number.isInteger(textureId) || textureId < 0) {
+            return null;
+        }
+        if (selectedParticleEmitter2Texture?.index === textureId) {
+            return selectedParticleEmitter2Texture;
+        }
+        if (isStandalone) {
+            onStandaloneTextureDetailRefreshRequest?.(textureId);
+            const refreshedTexture = await resolveStandaloneTextureDetail?.(textureId);
+            if (refreshedTexture?.index === textureId) {
+                return refreshedTexture;
+            }
+        }
+        return isStandalone ? null : modelData?.Textures?.[textureId] ?? null;
+    };
+
     const handleSavePreset = async () => {
         try {
             const values = await form.validateFields();
@@ -581,7 +611,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
             if (!updatedNode) return;
 
             const textureId = Number(updatedNode.TextureID);
-            const texture = textureId >= 0 ? (modelData?.Textures?.[textureId] ?? null) : null;
+            const texture = await resolvePresetTexture(textureId);
 
             setIsSavingPreset(true);
             await saveParticleEmitter2Preset({
@@ -833,11 +863,11 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
     );
 
     // Texture Options
-    const textureOptions = (modelData?.Textures || []).map((tex: any, index: number) => ({
-        label: `[${index}] ${tex.Image}`,
-        value: index
-    }));
-    textureOptions.unshift({ label: '(None)', value: -1 });
+    const textureOptions = createParticleEmitter2TextureOptions({
+        textureSummaries,
+        selectedTexture: selectedParticleEmitter2Texture,
+        legacyTextures: isStandalone ? null : modelData?.Textures,
+    });
 
     const pe2FormEl = (
         <DeferredCommitContext.Provider value={commitDeferredPreviewChanges}>

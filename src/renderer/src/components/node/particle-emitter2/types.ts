@@ -1,5 +1,6 @@
 import type { ParticleEmitter2Node } from '../../../types/node';
 import type { NodeEditorCommandSender } from '../../../types/nodeEditorRpc';
+import type { NodeEditorTextureDetail, NodeEditorTextureSummary } from '../../../types/nodeEditorRpc';
 
 export type SegmentColorTuple = [[number, number, number], [number, number, number], [number, number, number]];
 
@@ -11,6 +12,14 @@ export interface ParticleEmitter2DialogProps {
     isStandalone?: boolean;
     standaloneNode?: ParticleEmitter2Node | null;
     standaloneEmit?: NodeEditorCommandSender;
-    standaloneModelData?: { Textures?: any[]; GlobalSequences?: any[]; Sequences?: any[] } | null;
+    standaloneModelData?: {
+        Textures?: any[];
+        textureSummaries?: NodeEditorTextureSummary[];
+        GlobalSequences?: any[];
+        Sequences?: any[];
+        selectedParticleEmitter2Texture?: NodeEditorTextureDetail | null;
+    } | null;
     standaloneModelPath?: string;
+    onStandaloneTextureDetailRefreshRequest?: (textureId: number) => void;
+    resolveStandaloneTextureDetail?: (textureId: number) => Promise<NodeEditorTextureDetail | null>;
 }

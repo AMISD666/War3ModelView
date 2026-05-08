@@ -9,8 +9,19 @@ import {
     normalizeSequencesForPlayback,
 } from '../../utils/sequenceUtils'
 import type { GlobalColorAdjustSettings } from '../../utils/globalColorAdjustCore'
+import type {
+    ResetGlobalColorAdjustSettingsCommandPayload,
+    SetGlobalColorAdjustSettingsCommandPayload,
+    SetGlobalColorTextureSaveModeCommandPayload,
+    SetGlobalColorTextureSaveSuffixCommandPayload,
+} from './GlobalColorAdjustCommandPayload'
 import { commandBus, type CommandBus } from '../commands'
 import { markCommandReceived, markCommandRejected, markToolCommandStaleRevision } from '../diagnostics'
+import {
+    normalizeGlobalSequenceDurations,
+    parseGlobalSequenceSavePayload,
+} from './GlobalSequenceCommandPayload'
+import { parseApplySequenceChangesPayload } from './SequenceCommandPayload'
 
 export interface SequenceManagerRpcState {
     documentId: string | null
@@ -198,15 +209,6 @@ const syncRendererSequences = (sequences: any[], currentSequence: number): void 
     }
 }
 
-const normalizeGlobalSequenceDurations = (globalSequences: any[] | undefined | null): number[] => (
-    Array.isArray(globalSequences)
-        ? globalSequences.map((sequence: any) => {
-            const duration = typeof sequence === 'number' ? sequence : sequence?.Duration
-            return Math.max(0, Math.floor(Number(duration) || 0))
-        })
-        : []
-)
-
 const syncRendererGlobalSequences = (globalSequences: any[] | undefined | null): void => {
     const renderer = useRendererStore.getState().renderer
     if (renderer?.model) {
@@ -338,10 +340,20 @@ export class SequenceManagerCommandHandler {
         }
 
         if (command === 'APPLY_SEQUENCE_CHANGES') {
-            const nextSequences = Array.isArray((payload as any)?.sequences) ? (payload as any).sequences : []
-            const deletedIntervals = Array.isArray((payload as any)?.deletedIntervals) ? (payload as any).deletedIntervals : []
-            const shouldPrune = (payload as any)?.pruneKeyframes !== false
-            const after = createSequenceModelData(before, nextSequences, deletedIntervals, shouldPrune)
+            const sequencePayload = parseApplySequenceChangesPayload(payload)
+            if (!sequencePayload.ok) {
+                console.warn('[SequenceManagerCommandHandler] Rejected invalid payload', {
+                    reason: sequencePayload.reason,
+                })
+                return
+            }
+
+            const after = createSequenceModelData(
+                before,
+                sequencePayload.payload.sequences,
+                sequencePayload.payload.deletedIntervals,
+                sequencePayload.payload.pruneKeyframes,
+            )
             if (!after) return
             this.execute('Apply Sequence Changes', before, after)
         }
@@ -367,17 +379,23 @@ export class GlobalSequenceManagerCommandHandler {
     constructor(private readonly bus: CommandBus = commandBus) { }
 
     handle(command: string, payload: unknown): void {
+        const savePayload = parseGlobalSequenceSavePayload(payload)
         if (!checkTimelineCommandRevision('GlobalSequenceManagerCommandHandler', command, payload)) {
             return
         }
 
-        if (command !== 'EXECUTE_GLOBAL_SEQ_ACTION' || (payload as any)?.action !== 'SAVE') {
+        if (command !== 'EXECUTE_GLOBAL_SEQ_ACTION' || !savePayload.ok) {
+            if (!savePayload.ok && command === 'EXECUTE_GLOBAL_SEQ_ACTION') {
+                console.warn('[GlobalSequenceManagerCommandHandler] Rejected invalid payload', {
+                    reason: savePayload.reason,
+                })
+            }
             return
         }
 
         const state = useModelStore.getState()
         const before = cloneModelData(state.modelData)
-        const after = createGlobalSequenceModelData(before, Array.isArray((payload as any)?.globalSequences) ? (payload as any).globalSequences : [])
+        const after = createGlobalSequenceModelData(before, savePayload.payload.durations)
         if (!before || !after) {
             return
         }
@@ -399,24 +417,30 @@ export class GlobalSequenceManagerCommandHandler {
 
 export class GlobalColorAdjustCommandHandler {
     handle(command: string, payload: unknown): void {
+        if (!checkTimelineCommandRevision('GlobalColorAdjustCommandHandler', command, payload)) {
+            return
+        }
+
         if (command === 'SET_GLOBAL_COLOR_ADJUST_SETTINGS') {
-            useGlobalColorAdjustStore.getState().replaceSettings(payload as Partial<GlobalColorAdjustSettings>)
+            const data = payload as SetGlobalColorAdjustSettingsCommandPayload | undefined
+            useGlobalColorAdjustStore.getState().replaceSettings(data?.settings ?? {})
             return
         }
 
         if (command === 'RESET_GLOBAL_COLOR_ADJUST_SETTINGS') {
+            payload as ResetGlobalColorAdjustSettingsCommandPayload | undefined
             useGlobalColorAdjustStore.getState().resetSettings()
             return
         }
 
         if (command === 'SET_GLOBAL_COLOR_TEXTURE_SAVE_MODE') {
-            const mode = (payload as { mode?: unknown } | null)?.mode
+            const mode = (payload as SetGlobalColorTextureSaveModeCommandPayload | undefined)?.mode
             useRendererStore.getState().setTextureSaveMode(mode === 'save_as' ? 'save_as' : 'overwrite')
             return
         }
 
         if (command === 'SET_GLOBAL_COLOR_TEXTURE_SAVE_SUFFIX') {
-            const suffix = (payload as { suffix?: unknown } | null)?.suffix
+            const suffix = (payload as SetGlobalColorTextureSaveSuffixCommandPayload | undefined)?.suffix
             useRendererStore.getState().setTextureSaveSuffix(typeof suffix === 'string' ? suffix : '')
         }
     }

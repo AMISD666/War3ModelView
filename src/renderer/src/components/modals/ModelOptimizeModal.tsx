@@ -3,6 +3,7 @@ import { Modal, Checkbox, Slider, InputNumber, Button, Row, Col, Typography, Div
 import Draggable, { DraggableData, DraggableEvent } from 'react-draggable';
 import { useRpcClient } from '../../hooks/useRpc';
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame';
+import { createModelOptimizeCommandPayload } from '../../application/window-bridge/ModelOptimizeCommandPayload';
 
 const { Text, Title } = Typography;
 
@@ -40,17 +41,6 @@ const ModelOptimizeModal: React.FC<ModelOptimizeModalProps> = ({ visible, onClos
         'modelOptimize',
         { documentId: null, documentRevision: 0, originalFaces: 0, isOptimizing: false, lastResult: '' }
     );
-    const withRevision = <T extends Record<string, unknown>>(payload: T): T & {
-        documentId: string | null
-        baseDocumentRevision: number
-        stalePolicy: 'reject'
-    } => ({
-        ...payload,
-        documentId: rpcState.documentId,
-        baseDocumentRevision: rpcState.documentRevision,
-        stalePolicy: 'reject',
-    })
-
     // Draggable state (only relevant if not standalone window since desktop window has its own OS drag)
     const [disabled, setDisabled] = useState(false);
     const [bounds, setBounds] = useState({ left: 0, top: 0, bottom: 0, right: 0 });
@@ -99,17 +89,34 @@ const ModelOptimizeModal: React.FC<ModelOptimizeModalProps> = ({ visible, onClos
 
     const handleExecutePolygonOpt = () => {
         if (isStandalone && rpcState.isOptimizing) return;
-        const payload = { removeRedundantVertices, decimateModel, decimateRatio };
         if (isStandalone) {
-            emitCommand('EXECUTE_POLYGON_OPT', withRevision(payload));
+            emitCommand('EXECUTE_POLYGON_OPT', createModelOptimizeCommandPayload({
+                documentId: rpcState.documentId,
+                documentRevision: rpcState.documentRevision,
+                stalePolicy: 'reject',
+                kind: 'polygon',
+                options: {
+                    removeRedundantVertices,
+                    decimateModel,
+                    decimateRatio,
+                },
+            }));
         } else {        }
     };
 
     const handleExecuteKeyframeOpt = () => {
         if (isStandalone && rpcState.isOptimizing) return;
-        const payload = { removeRedundantFrames, optimizeKeyframes };
         if (isStandalone) {
-            emitCommand('EXECUTE_KEYFRAME_OPT', withRevision(payload));
+            emitCommand('EXECUTE_KEYFRAME_OPT', createModelOptimizeCommandPayload({
+                documentId: rpcState.documentId,
+                documentRevision: rpcState.documentRevision,
+                stalePolicy: 'reject',
+                kind: 'keyframe',
+                options: {
+                    removeRedundantFrames,
+                    optimizeKeyframes,
+                },
+            }));
         } else {        }
     };
 

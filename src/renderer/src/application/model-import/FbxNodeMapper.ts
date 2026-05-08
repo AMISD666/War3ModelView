@@ -9,6 +9,8 @@ export type ImportedNodeMapping = {
     pivotPoints: [number, number, number][]
     defaultObjectId: number
     objectIdByTypedId: Map<number, number>
+    targetRestNodes?: FbxNodeDto[]
+    targetObjectIdByTypedId?: Map<number, number>
 }
 
 const tuple3 = (value: [number, number, number] | undefined): [number, number, number] => [

@@ -20,6 +20,7 @@
     "check:transparent-alpha-test": "node scripts/check-transparent-alpha-test.mjs",
     "check:animation-sequence-rename": "node scripts/check-animation-panel-sequence-rename.mjs",
     "check:auto-separate-layers": "node scripts/check-auto-separate-layers.mjs",
+    "check:standalone-light-client": "node scripts/check-standalone-light-client.mjs",
     "dev:vite": "vite",
     "dev": "npm run dev:vite",
     "tauri": "tauri",

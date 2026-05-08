@@ -17,6 +17,10 @@ export type War3Track = {
 }
 export type War3NodeTracks = { translation: War3Track | null; rotation: War3Track | null; scaling: War3Track | null }
 type ImportedNodeAnimationMapping = { nodes: ModelNode[]; objectIdByTypedId: Map<number, number> }
+type ImportedNodeRestMapping = ImportedNodeAnimationMapping & {
+    targetRestNodes?: FbxNodeDto[]
+    targetObjectIdByTypedId?: Map<number, number>
+}
 type LocalTransform = { translation: vec3; rotation: quat; scaling: vec3 }
 
 const TRANSFORM_EPSILON = 1e-5
@@ -195,12 +199,23 @@ export const buildWar3DeltaTracksForStack = (
     sceneNodes: FbxNodeDto[],
     stack: FbxAnimationStackDto,
     sequenceStartFrame: number,
-    nodeMapping: ImportedNodeAnimationMapping,
+    nodeMapping: ImportedNodeRestMapping,
 ): Map<number, War3NodeTracks> => {
     const restLocals = buildRestLocals(sceneNodes)
     const restWorld = buildRestWorldMatrices(sceneNodes, restLocals)
+    const targetRestNodes = nodeMapping.targetRestNodes ?? sceneNodes
+    const targetRestLocals = buildRestLocals(targetRestNodes)
+    const targetRestWorld = buildRestWorldMatrices(targetRestNodes, targetRestLocals)
+    const targetTypedIdByObjectId = nodeMapping.targetObjectIdByTypedId
+        ? new Map([...nodeMapping.targetObjectIdByTypedId].map(([typedId, objectId]) => [objectId, typedId]))
+        : new Map([...nodeMapping.objectIdByTypedId].map(([typedId, objectId]) => [objectId, typedId]))
     const restWorldInverse = new Map<number, mat4>()
-    for (const [typedId, matrix] of restWorld) {
+    for (const [typedId, objectId] of nodeMapping.objectIdByTypedId) {
+        const targetTypedId = targetTypedIdByObjectId.get(objectId) ?? typedId
+        const matrix = targetRestWorld.get(targetTypedId) ?? restWorld.get(typedId)
+        if (!matrix) {
+            continue
+        }
         const inverse = mat4.create()
         mat4.invert(inverse, matrix)
         restWorldInverse.set(typedId, inverse)
@@ -237,9 +252,12 @@ export const buildWar3DeltaTracksForStack = (
         return world
     }
 
+    const mappedTypedIds = [...nodeMapping.objectIdByTypedId.keys()]
+        .filter((typedId) => fbxNodeByTypedId.has(typedId))
+
     const result = new Map<number, War3NodeTracks>()
-    for (const baked of stack.bakedNodes ?? []) {
-        const objectId = nodeMapping.objectIdByTypedId.get(baked.nodeTypedId)
+    for (const typedId of mappedTypedIds) {
+        const objectId = nodeMapping.objectIdByTypedId.get(typedId)
         if (objectId === undefined) continue
         const importedNode = importedNodeByTypedId.get(objectId)
         if (!importedNode) continue
@@ -252,18 +270,31 @@ export const buildWar3DeltaTracksForStack = (
         for (const timeSeconds of stackSampleTimes) {
             const frame = sequenceStartFrame + Math.max(0, Math.round(timeSeconds * 1000))
             const cache = new Map<number, mat4>()
-            const animatedWorld = animatedWorldAt(baked.nodeTypedId, timeSeconds, cache)
+            const animatedWorld = animatedWorldAt(typedId, timeSeconds, cache)
             const skinWorld = mat4.create()
-            mat4.multiply(skinWorld, animatedWorld, restWorldInverse.get(baked.nodeTypedId) ?? mat4.create())
+            mat4.multiply(skinWorld, animatedWorld, restWorldInverse.get(typedId) ?? mat4.create())
 
             let localDelta = skinWorld
-            const parentTypedId = typeof importedNode.Parent === 'number' && importedNode.Parent >= 0
-                ? typedIdByObjectId.get(importedNode.Parent)
+            const parentObjectId = typeof importedNode.Parent === 'number' && importedNode.Parent >= 0
+                ? importedNode.Parent
+                : undefined
+            const parentTypedId = parentObjectId !== undefined
+                ? typedIdByObjectId.get(parentObjectId)
                 : undefined
             if (parentTypedId !== undefined) {
+                const targetParentTypedId = parentObjectId !== undefined
+                    ? targetTypedIdByObjectId.get(parentObjectId) ?? parentTypedId
+                    : parentTypedId
                 const parentAnimatedWorld = animatedWorldAt(parentTypedId, timeSeconds, cache)
                 const parentSkinWorld = mat4.create()
-                mat4.multiply(parentSkinWorld, parentAnimatedWorld, restWorldInverse.get(parentTypedId) ?? mat4.create())
+                const parentRestInverse = restWorldInverse.get(parentTypedId)
+                    ?? (() => {
+                        const inverse = mat4.create()
+                        const matrix = targetRestWorld.get(targetParentTypedId) ?? restWorld.get(parentTypedId)
+                        if (matrix) mat4.invert(inverse, matrix)
+                        return inverse
+                    })()
+                mat4.multiply(parentSkinWorld, parentAnimatedWorld, parentRestInverse)
                 const inverseParentSkinWorld = mat4.create()
                 mat4.invert(inverseParentSkinWorld, parentSkinWorld)
                 localDelta = mat4.create()
@@ -282,7 +313,7 @@ export const buildWar3DeltaTracksForStack = (
             scalingKeys.push({ frame, vector: new Float32Array(decomposed.scaling) })
         }
 
-        result.set(baked.nodeTypedId, {
+        result.set(typedId, {
             translation: makeTrack(translationKeys),
             rotation: makeTrack(rotationKeys),
             scaling: makeTrack(scalingKeys),

@@ -11,6 +11,51 @@ export type NodeEditorKind =
     | 'genericNode'
     | 'rename'
 
+export interface NodeEditorTextureSummary {
+    index: number
+    image?: string
+    replaceableId?: number
+}
+
+export interface NodeEditorTextureDetail {
+    index: number
+    Image: string
+    Path?: string
+    ReplaceableId?: number
+    WrapWidth?: boolean
+    WrapHeight?: boolean
+    Flags?: number
+}
+
+export interface NodeEditorMaterialSummary {
+    index: number
+    layerCount: number
+    priorityPlane?: number
+}
+
+export interface NodeEditorSequenceSummary {
+    index: number
+    name: string
+    interval: [number, number] | null
+}
+
+export interface NodeEditorNodeSummary {
+    objectId: number
+    name?: string
+    parent?: number
+    type?: number
+}
+
+export type NodeEditorPivotPoint = [number, number, number]
+
+export interface NodeEditorResourceSummary {
+    textures: NodeEditorTextureSummary[]
+    materials: NodeEditorMaterialSummary[]
+    sequences: NodeEditorSequenceSummary[]
+    globalSequenceDurations: number[]
+    nodes: NodeEditorNodeSummary[]
+}
+
 /** 主窗口广播给独立节点编辑器的快照。 */
 export interface NodeEditorRpcState {
     documentId: string | null
@@ -34,8 +79,20 @@ export interface NodeEditorRpcState {
     modelPath: string
     renameInitialName: string
     allNodes: any[]
-    /** 对应 modelData.PivotPoints，避免独立窗口从节点副本上读取到损坏的 PIVT 数据。 */
+    /** @deprecated Standalone node editor should use selectedPivotPoint instead of the full PIVT table. */
     pivotPoints: any[]
+    /** 当前编辑节点的权威 PIVT 明细，避免广播整张 PivotPoints 表。 */
+    selectedPivotPoint: NodeEditorPivotPoint | null
+    /** Selected PE2 texture detail for preset export without reading the full Textures snapshot. */
+    selectedParticleEmitter2Texture?: NodeEditorTextureDetail | null
+    /** Lightweight resource summaries for future light-client rendering. Full legacy fields remain available above. */
+    resources?: NodeEditorResourceSummary
+    textureSummaries?: NodeEditorTextureSummary[]
+    materialSummaries?: NodeEditorMaterialSummary[]
+    sequenceSummaries?: NodeEditorSequenceSummary[]
+    globalSequenceDurations?: number[]
+    nodeSummaries?: NodeEditorNodeSummary[]
+    resourceRevision?: number
 }
 
 /** APPLY_NODE_UPDATE 可选历史记录，行为与主窗口 HistoryStore 一致。 */

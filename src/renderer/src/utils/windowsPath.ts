@@ -39,3 +39,16 @@ export const buildTargetAssetPath = (targetModelDir: string, relativePath: strin
     const sanitizedRelative = normalizeWindowsPath(relativePath).replace(/^[\\/]+/, '')
     return `${sanitizedDir}\\${sanitizedRelative}`
 }
+
+export const GENERATED_MODEL_PATH_PREFIX = 'generated:'
+
+export const toGeneratedModelPath = (diskPath: string): string =>
+    `${GENERATED_MODEL_PATH_PREFIX}${normalizeWindowsPath(diskPath)}`
+
+export const isGeneratedModelPath = (path: string | null | undefined): boolean =>
+    typeof path === 'string' && path.startsWith(GENERATED_MODEL_PATH_PREFIX)
+
+export const getGeneratedModelDiskPath = (path: string | null | undefined): string | null =>
+    typeof path === 'string' && isGeneratedModelPath(path)
+        ? normalizeWindowsPath(path.slice(GENERATED_MODEL_PATH_PREFIX.length))
+        : null

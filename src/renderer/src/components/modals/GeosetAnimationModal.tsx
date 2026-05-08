@@ -15,6 +15,7 @@ import { coercePivotFloat3 } from '../../utils/pivotUtils'
 import { vectorToPlainArray } from '../../utils/animVectorIpc'
 import { toFloat32Array } from '../../utils/modelUtils'
 import { modelDocumentCommandHandler } from '../../application/commands'
+import { createUpdateGeosetAnimsPayload } from '../../application/window-bridge/GeosetAnimationCommandPayload'
 
 const { Text } = Typography
 const { Option } = Select
@@ -28,14 +29,12 @@ interface GeosetAnimationModalProps {
 const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, onClose, isStandalone }) => {
     const { modelData } = useModelStore()
     const { state: rpcState, emitCommand } = useRpcClient<any>('geosetAnimManager', { geosets: [], geosetAnims: [], globalSequences: [], pickedGeosetIndex: null })
-    const emitGeosetAnimAction = (action: string, payload: unknown, stalePolicy: 'warn' | 'reject' = 'warn') => {
-        emitCommand('EXECUTE_ANIM_ACTION', {
-            action,
-            payload,
+    const emitGeosetAnimUpdate = (geosetAnims: unknown[]) => {
+        emitCommand('EXECUTE_ANIM_ACTION', createUpdateGeosetAnimsPayload({
             documentId: rpcState.documentId,
-            baseDocumentRevision: rpcState.documentRevision,
-            stalePolicy,
-        })
+            documentRevision: rpcState.documentRevision,
+            geosetAnims,
+        }))
     }
 
     const [localAnims, setLocalAnims] = useState<any[]>([])
@@ -171,7 +170,7 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
 
     const saveToBackend = (anims: any[]) => {
         if (isStandalone) {
-            emitGeosetAnimAction('UPDATE_GEOSET_ANIMS', anims);
+            emitGeosetAnimUpdate(anims);
         } else {
             modelDocumentCommandHandler.replaceGeosetAnimationList({
                 name: 'Update Geoset Animation',

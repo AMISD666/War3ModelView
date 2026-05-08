@@ -11,6 +11,7 @@ import type { ModelNode } from '../../types/node'
 import { markCommandReceived, markCommandRejected, markToolCommandStaleRevision } from '../diagnostics'
 import { previewOverlayService } from '../preview'
 import { commandBus, type CommandBus } from './CommandBus'
+import { parseRevisionedNodeEditorCommandPayload } from './NodeEditorCommandPayload'
 
 const checkNodeCommandRevision = (
     command: string,
@@ -92,23 +93,64 @@ export class NodeEditorCommandHandler {
         }
 
         if (command === NODE_EDITOR_COMMANDS.previewNodeUpdate) {
-            this.previewNodeUpdate(payload)
+            const normalizedPayload = parseRevisionedNodeEditorCommandPayload(command, payload)
+            if (!normalizedPayload.ok) {
+                this.rejectInvalidPayload(command, payload as RevisionedNodeEditorCommandMetadata | undefined, normalizedPayload.reason)
+                return
+            }
+            this.previewNodeUpdate(normalizedPayload.payload)
             return
         }
 
         if (command === NODE_EDITOR_COMMANDS.clearNodePreview) {
-            this.clearNodePreview(payload)
+            const normalizedPayload = parseRevisionedNodeEditorCommandPayload(command, payload)
+            if (!normalizedPayload.ok) {
+                this.rejectInvalidPayload(command, payload as RevisionedNodeEditorCommandMetadata | undefined, normalizedPayload.reason)
+                return
+            }
+            this.clearNodePreview(normalizedPayload.payload)
             return
         }
 
         if (command === NODE_EDITOR_COMMANDS.applyNodeUpdate) {
-            this.applyNodeUpdate(payload)
+            const normalizedPayload = parseRevisionedNodeEditorCommandPayload(command, payload)
+            if (!normalizedPayload.ok) {
+                this.rejectInvalidPayload(command, payload as RevisionedNodeEditorCommandMetadata | undefined, normalizedPayload.reason)
+                return
+            }
+            this.applyNodeUpdate(normalizedPayload.payload)
             return
         }
 
         if (command === NODE_EDITOR_COMMANDS.renameNode) {
-            this.renameNode(payload)
+            const normalizedPayload = parseRevisionedNodeEditorCommandPayload(command, payload)
+            if (!normalizedPayload.ok) {
+                this.rejectInvalidPayload(command, payload as RevisionedNodeEditorCommandMetadata | undefined, normalizedPayload.reason)
+                return
+            }
+            this.renameNode(normalizedPayload.payload)
         }
+    }
+
+    private rejectInvalidPayload(
+        command: string,
+        payload: RevisionedNodeEditorCommandMetadata | undefined,
+        reason: string,
+    ): void {
+        const state = useModelStore.getState()
+        markCommandRejected({
+            source: 'NodeEditorCommandHandler',
+            commandName: command,
+            commandDocumentId: payload?.documentId ?? '',
+            activeDocumentId: state.documentId ?? '',
+            baseDocumentRevision: payload?.baseDocumentRevision ?? '',
+            activeDocumentRevision: state.documentRevision,
+            reason: 'invalid_payload',
+        })
+        console.warn('[NodeEditorCommandHandler] Rejected invalid payload', {
+            command,
+            reason,
+        })
     }
 
     previewNodeUpdate<TNode extends ModelNode>(payload: NodeEditorNodePayload<TNode> | unknown): void {

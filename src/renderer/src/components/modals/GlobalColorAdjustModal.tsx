@@ -6,6 +6,13 @@ import { useRendererStore } from '../../store/rendererStore'
 import { useRpcClient } from '../../hooks/useRpc'
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
 import { GlobalColorTextureSaveModeControls, type GlobalColorTextureSaveMode } from './GlobalColorTextureSaveModeControls'
+import type {
+    GlobalColorAdjustCommandRevision,
+    ResetGlobalColorAdjustSettingsCommandPayload,
+    SetGlobalColorAdjustSettingsCommandPayload,
+    SetGlobalColorTextureSaveModeCommandPayload,
+    SetGlobalColorTextureSaveSuffixCommandPayload,
+} from '../../application/window-bridge/GlobalColorAdjustCommandPayload'
 import {
     DEFAULT_GLOBAL_COLOR_ADJUST_SETTINGS,
     DEFAULT_GLOBAL_COLOR_ADJUST_TARGETS,
@@ -21,10 +28,27 @@ interface GlobalColorAdjustModalProps {
 }
 
 interface GlobalColorAdjustRpcState {
+    documentId?: string | null
+    documentRevision?: number
     settings: GlobalColorAdjustSettings
-    textureSaveMode?: GlobalColorTextureSaveMode
-    textureSaveSuffix?: string
+    textureSaveMode: GlobalColorTextureSaveMode
+    textureSaveSuffix: string
 }
+
+type GlobalColorAdjustCommandPayload =
+    | SetGlobalColorAdjustSettingsCommandPayload
+    | SetGlobalColorTextureSaveModeCommandPayload
+    | SetGlobalColorTextureSaveSuffixCommandPayload
+    | ResetGlobalColorAdjustSettingsCommandPayload
+
+const createStandaloneCommandRevision = (
+    rpcState: Pick<GlobalColorAdjustRpcState, 'documentId' | 'documentRevision'>,
+    stalePolicy: GlobalColorAdjustCommandRevision['stalePolicy'] = 'warn'
+): GlobalColorAdjustCommandRevision => ({
+    documentId: rpcState.documentId ?? null,
+    baseDocumentRevision: rpcState.documentRevision ?? 0,
+    stalePolicy,
+})
 
 const TARGET_ITEMS: Array<{ key: GlobalColorAdjustTarget; label: string }> = [
     { key: 'materialLayers', label: '材质层' },
@@ -114,16 +138,18 @@ export const GlobalColorAdjustModal: React.FC<GlobalColorAdjustModalProps> = ({
     const setStoreTextureSaveSuffix = useRendererStore((state) => state.setTextureSaveSuffix)
     const { state: rpcState, emitCommand } = useRpcClient<GlobalColorAdjustRpcState>(
         'globalColorAdjust',
-        { settings: DEFAULT_GLOBAL_COLOR_ADJUST_SETTINGS, textureSaveMode: 'overwrite', textureSaveSuffix: '_1' }
+        {
+            documentId: null,
+            documentRevision: 0,
+            settings: DEFAULT_GLOBAL_COLOR_ADJUST_SETTINGS,
+            textureSaveMode: 'overwrite',
+            textureSaveSuffix: '_1',
+        }
     )
 
     const appliedSettings = isStandalone ? rpcState.settings : storeSettings
-    const appliedTextureSaveMode = isStandalone
-        ? rpcState.textureSaveMode ?? storeTextureSaveMode
-        : storeTextureSaveMode
-    const appliedTextureSaveSuffix = isStandalone
-        ? rpcState.textureSaveSuffix ?? storeTextureSaveSuffix
-        : storeTextureSaveSuffix
+    const appliedTextureSaveMode = isStandalone ? rpcState.textureSaveMode : storeTextureSaveMode
+    const appliedTextureSaveSuffix = isStandalone ? rpcState.textureSaveSuffix : storeTextureSaveSuffix
 
     const [draftSettings, setDraftSettings] = useState<GlobalColorAdjustSettings>(appliedSettings)
     const [draftTextureSaveMode, setDraftTextureSaveMode] = useState<GlobalColorTextureSaveMode>(appliedTextureSaveMode)
@@ -137,11 +163,18 @@ export const GlobalColorAdjustModal: React.FC<GlobalColorAdjustModalProps> = ({
         }
     }, [appliedSettings, appliedTextureSaveMode, appliedTextureSaveSuffix, visible])
 
+    const emitStandaloneCommand = (command: string, payload: GlobalColorAdjustCommandPayload) => {
+        emitCommand(command, payload)
+    }
+
     const commitSettings = (nextSettings: GlobalColorAdjustSettings) => {
         const normalized = normalizeGlobalColorAdjustSettings(nextSettings)
         setDraftSettings(normalized)
         if (isStandalone) {
-            emitCommand('SET_GLOBAL_COLOR_ADJUST_SETTINGS', normalized)
+            emitStandaloneCommand('SET_GLOBAL_COLOR_ADJUST_SETTINGS', {
+                ...createStandaloneCommandRevision(rpcState),
+                settings: normalized,
+            })
             return
         }
         replaceStoreSettings(normalized)
@@ -149,18 +182,26 @@ export const GlobalColorAdjustModal: React.FC<GlobalColorAdjustModalProps> = ({
 
     const commitTextureSaveMode = (mode: GlobalColorTextureSaveMode) => {
         setDraftTextureSaveMode(mode)
-        setStoreTextureSaveMode(mode)
         if (isStandalone) {
-            emitCommand('SET_GLOBAL_COLOR_TEXTURE_SAVE_MODE', { mode })
+            emitStandaloneCommand('SET_GLOBAL_COLOR_TEXTURE_SAVE_MODE', {
+                ...createStandaloneCommandRevision(rpcState),
+                mode,
+            })
+            return
         }
+        setStoreTextureSaveMode(mode)
     }
 
     const commitTextureSaveSuffix = (suffix: string) => {
         setDraftTextureSaveSuffix(suffix)
-        setStoreTextureSaveSuffix(suffix)
         if (isStandalone) {
-            emitCommand('SET_GLOBAL_COLOR_TEXTURE_SAVE_SUFFIX', { suffix })
+            emitStandaloneCommand('SET_GLOBAL_COLOR_TEXTURE_SAVE_SUFFIX', {
+                ...createStandaloneCommandRevision(rpcState),
+                suffix,
+            })
+            return
         }
+        setStoreTextureSaveSuffix(suffix)
     }
 
     const updateDraftValue = (key: 'hue' | 'brightness' | 'saturation' | 'opacity', value: number) => {
@@ -351,7 +392,9 @@ export const GlobalColorAdjustModal: React.FC<GlobalColorAdjustModalProps> = ({
                 <Button size="small" type="text" icon={<ReloadOutlined />} onClick={() => {
                     setDraftSettings(DEFAULT_GLOBAL_COLOR_ADJUST_SETTINGS)
                     if (isStandalone) {
-                        emitCommand('RESET_GLOBAL_COLOR_ADJUST_SETTINGS')
+                        emitStandaloneCommand('RESET_GLOBAL_COLOR_ADJUST_SETTINGS', {
+                            ...createStandaloneCommandRevision(rpcState),
+                        })
                         return
                     }
                     resetStoreSettings()

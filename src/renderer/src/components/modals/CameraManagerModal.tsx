@@ -10,6 +10,7 @@ import { windowManager } from '../../utils/WindowManager';
 import { useRpcClient } from '../../hooks/useRpc';
 import { useWindowEvent } from '../../hooks/useWindowEvent';
 import { modelDocumentCommandHandler, type CameraDocumentEntry } from '../../application/commands';
+import type { CameraManagerActionPayload } from '../../application/window-bridge/CameraManagerCommandHandler';
 
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame';
 interface CameraManagerModalProps {
@@ -41,14 +42,13 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
         cameras: [],
         globalSequences: [],
     });
-    const emitCameraAction = (action: string, payload?: unknown, stalePolicy: 'warn' | 'reject' = 'warn') => {
-        emitCommand('EXECUTE_CAMERA_ACTION', {
-            action,
-            payload,
+    const emitCameraAction = (command: Omit<CameraManagerActionPayload, 'documentId' | 'baseDocumentRevision'>) => {
+        const actionPayload: CameraManagerActionPayload = {
+            ...command,
             documentId: rpcState.documentId,
             baseDocumentRevision: rpcState.documentRevision,
-            stalePolicy,
-        })
+        } as CameraManagerActionPayload
+        emitCommand('EXECUTE_CAMERA_ACTION', actionPayload)
     }
 
     // Filter cameras from nodes (or rpcState)
@@ -107,7 +107,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
         };
 
         if (isStandalone) {
-            emitCameraAction('ADD', newCamera);
+            emitCameraAction({ action: 'ADD', payload: { camera: newCamera as CameraDocumentEntry } });
             return;
         }
 
@@ -119,9 +119,8 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
 
     const handleDelete = (index: number) => {
         if (index >= 0 && index < cameras.length) {
-            const node = cameras[index];
             if (isStandalone) {
-                emitCameraAction('DELETE', { cameraIndex: index, objectId: node.ObjectId });
+                emitCameraAction({ action: 'DELETE', payload: { cameraIndex: index } });
                 if (selectedIndex >= index) setSelectedIndex(Math.max(-1, selectedIndex - 1));
                 return;
             }
@@ -137,9 +136,8 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
     const updateCamera = (index: number, updates: Partial<CameraNode>) => {
         const camera = cameras[index];
         if (camera) {
-            const objectId = camera.ObjectId;
             if (isStandalone) {
-                emitCameraAction('UPDATE', { cameraIndex: index, objectId, data: updates });
+                emitCameraAction({ action: 'UPDATE', payload: { cameraIndex: index, updates: updates as Partial<CameraDocumentEntry> } });
                 return;
             }
 
@@ -346,7 +344,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
                     size="small"
                     icon={<CameraOutlined />}
                     onClick={() => {
-                        if (isStandalone) emitCameraAction('ADD_FROM_VIEW');
+                        if (isStandalone) emitCameraAction({ action: 'ADD_FROM_VIEW' });
                         else if (onAddFromView) onAddFromView();
                     }}
                     style={{ color: '#1677ff' }}
@@ -360,7 +358,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
                     disabled={selectedIndex < 0}
                     onClick={() => {
                         if (selectedIndex >= 0) {
-                            if (isStandalone) emitCameraAction('VIEW_CAMERA', { cameraIndex: selectedIndex, objectId: cameras[selectedIndex].ObjectId }, 'warn');
+                            if (isStandalone) emitCameraAction({ action: 'VIEW_CAMERA', payload: { cameraIndex: selectedIndex }, stalePolicy: 'warn' });
                             else if (onViewCamera) onViewCamera(cameras[selectedIndex]);
                         }
                     }}

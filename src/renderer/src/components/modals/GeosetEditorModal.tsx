@@ -10,6 +10,7 @@ import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
 import { useRpcClient } from '../../hooks/useRpc'
 import { modelDocumentCommandHandler } from '../../application/commands'
 import { windowGateway } from '../../infrastructure/window'
+import { createSaveAllGeosetsCommandPayload } from '../../application/window-bridge/GeosetEditorCommandPayload'
 
 const { Text } = Typography
 
@@ -31,21 +32,22 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
 
     // RPC Sync for standalone mode
     const { state: rpcState, emitCommand } = useRpcClient<any>('geosetEditor', { geosets: [], materialsCount: 0, selectedIndex: -1, pickedGeosetIndex: null });
-    const emitGeosetAction = (action: string, payload: unknown, stalePolicy: 'warn' | 'reject' = 'warn') => {
-        emitCommand('EXECUTE_GEOSET_ACTION', {
-            action,
-            payload,
-            documentId: rpcState.documentId,
-            baseDocumentRevision: rpcState.documentRevision,
-            stalePolicy,
-        })
+    const emitSaveAllGeosets = (geosets: any[]) => {
+        emitCommand(
+            'EXECUTE_GEOSET_ACTION',
+            createSaveAllGeosetsCommandPayload({
+                documentId: rpcState.documentId,
+                documentRevision: rpcState.documentRevision,
+                geosets,
+            }),
+        )
     }
 
     const sourceGeosets = isStandalone ? rpcState.geosets : modelData?.Geosets || [];
 
     const saveGeosets = (geosets: any[], name = 'Update Geosets') => {
         if (isStandalone) {
-            emitGeosetAction('SAVE_ALL', geosets)
+            emitSaveAllGeosets(geosets)
             return
         }
         modelDocumentCommandHandler.replaceGeosetList({
@@ -134,7 +136,7 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
 
     const handleOk = () => {
         if (isStandalone) {
-            emitGeosetAction('SAVE_ALL', localGeosets);
+            emitSaveAllGeosets(localGeosets);
             appMessage.success('多边形设置已保存')
             setHasChanges(false)
             void windowGateway.hideCurrentWindow()
@@ -162,7 +164,7 @@ const GeosetEditorModal: React.FC<GeosetEditorModalProps> = ({ visible, onClose,
 
         // Save immediately
         if (isStandalone) {
-            emitGeosetAction('SAVE_ALL', newGeosets);
+            emitSaveAllGeosets(newGeosets);
         } else {
             saveGeosets(newGeosets, 'Update Geoset')
         }

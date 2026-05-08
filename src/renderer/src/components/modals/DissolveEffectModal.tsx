@@ -7,6 +7,7 @@ import { useRendererStore } from '../../store/rendererStore';
 import { useRpcClient } from '../../hooks/useRpc';
 import { useWindowEvent } from '../../hooks/useWindowEvent';
 import { textureMaterialCommandHandler } from '../../application/commands';
+import { normalizeDissolveEffectLightPayload } from '../../application/window-bridge/DissolveEffectCommandPayload';
 import { desktopGateway } from '../../infrastructure/desktop';
 
 const { Text, Title } = Typography;
@@ -325,18 +326,10 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
             appMessage.warning('请确保时间轴上同时存在开始和结束关键帧'); return;
         }
 
-        const dissolveParams = {
+        const dissolveCommandPayload = {
             selectedGeosets,
             dissolveTexturePath: texturePath,
-            dissolveStartFrame: startPoints[0].frame,
-            dissolveEndFrame: endPoints[endPoints.length - 1].frame,
-            dissolvePoints: sortedPoints.map(point => ({
-                frame: point.frame,
-                value: DISSOLVE_POINT_META[point.type].value,
-                type: point.type,
-            })),
-            seqStart: currentMin,
-            seqEnd: currentMax,
+            dissolvePoints: sortedPoints.map(point => ({ frame: point.frame, type: point.type })),
             saveMode,
         };
 
@@ -345,7 +338,7 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
             pendingRequestIdRef.current = requestId;
             setIsExecuting(true);
             emitCommand('EXECUTE_DISSOLVE', {
-                ...dissolveParams,
+                ...dissolveCommandPayload,
                 requestId,
                 documentId: rpcState.documentId,
                 baseDocumentRevision: rpcState.documentRevision,
@@ -361,6 +354,7 @@ const DissolveEffectModal: React.FC<DissolveEffectModalProps> = ({ visible, onCl
         try {
             setIsExecuting(true);
             const { executeDissolveEffect, refreshDissolveTexturesInRenderer } = await import('../../utils/dissolveEffect');
+            const dissolveParams = normalizeDissolveEffectLightPayload(dissolveCommandPayload);
             const result = await executeDissolveEffect(store.modelData, store.modelPath, dissolveParams);
             textureMaterialCommandHandler.setTextureMaterialCollections({ materials: result.materials, textures: result.textures });
             await refreshDissolveTexturesInRenderer(useRendererStore.getState().renderer, store.modelPath, result);
