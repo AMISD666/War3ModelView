@@ -2,6 +2,8 @@
   fitToView: () => void;
   getCamera: () => { distance: number; theta: number; phi: number; target: [number, number, number] };
   setCamera: (params: { distance: number; theta: number; phi: number; target: [number, number, number] }) => void;
+  confirmGlobalTransform: () => void;
+  cancelGlobalTransform: () => void;
 }
 
 export interface ViewerProps {

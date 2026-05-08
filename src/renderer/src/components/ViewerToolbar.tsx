@@ -24,7 +24,9 @@ import {
     AimOutlined, // Pivot
     FullscreenOutlined, // Fit to View
     SwapOutlined,
-    VerticalAlignMiddleOutlined
+    VerticalAlignMiddleOutlined,
+    CheckOutlined,
+    CloseOutlined
 } from '@ant-design/icons';
 
 import { SelectionId, useSelectionStore } from '../store/selectionStore';
@@ -47,6 +49,8 @@ interface ViewerToolbarProps {
     onAutoSeparateLayers?: () => void
     onWeldVertices?: () => void
     onFitToView?: () => void
+    onConfirmGlobalTransform?: () => void
+    onCancelGlobalTransform?: () => void
 }
 
 export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
@@ -54,7 +58,9 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
     onSplitVertices,
     onAutoSeparateLayers,
     onWeldVertices,
-    onFitToView
+    onFitToView,
+    onConfirmGlobalTransform,
+    onCancelGlobalTransform
 }) => {
     const mainMode = useSelectionStore(state => state.mainMode);
     const geometrySubMode = useSelectionStore(state => state.geometrySubMode);
@@ -444,8 +450,17 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
     }
 
     const toggleGlobalTransformMode = () => {
-        useSelectionStore.getState().setGlobalTransformPivot('modelCenter')
-        setIsGlobalTransformMode(!useSelectionStore.getState().isGlobalTransformMode)
+        if (useSelectionStore.getState().isGlobalTransformMode) return
+        useSelectionStore.getState().setGlobalTransformPivot('origin')
+        setIsGlobalTransformMode(true)
+    }
+
+    const confirmGlobalTransform = () => {
+        onConfirmGlobalTransform?.()
+    }
+
+    const cancelGlobalTransform = () => {
+        onCancelGlobalTransform?.()
     }
 
     // Check if selected vertices are all from the same geoset (required for weld)
@@ -519,7 +534,11 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                 state.setSnapRotateEnabled(!state.snapRotateEnabled)
                 return true
             }, { isActive: isNonUvMode }),
-            registerShortcutHandler('view.globalTransformToggle', () => { toggleGlobalTransformMode(); return true }, { isActive: isViewMode }),
+            registerShortcutHandler('view.globalTransformToggle', () => {
+                if (useSelectionStore.getState().isGlobalTransformMode) return false
+                toggleGlobalTransformMode()
+                return true
+            }, { isActive: isViewMode }),
             registerShortcutHandler('view.mirrorHorizontal', () => { handleMirrorModel('y'); return true }, { isActive: isViewMode }),
             registerShortcutHandler('view.mirrorVertical', () => { handleMirrorModel('z'); return true }, { isActive: isViewMode }),
         ]
@@ -839,31 +858,37 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
                     <Space>
                         <Tooltip title="全局变换模式 (可以直接修改模型默认位置大小和旋转)">
                             <ShortcutBindableButton
-                                shortcutActionId="view.globalTransformToggle"
+                                shortcutActionId={isGlobalTransformMode ? "view.globalTransformConfirm" : "view.globalTransformToggle"}
                                 type={isGlobalTransformMode ? 'primary' : 'default'}
-                                icon={<GlobalOutlined />}
+                                icon={isGlobalTransformMode ? <CheckOutlined /> : <GlobalOutlined />}
                                 onClick={() => {
-                                    toggleGlobalTransformMode()
+                                    if (isGlobalTransformMode) confirmGlobalTransform()
+                                    else toggleGlobalTransformMode()
                                 }}
                                 style={isGlobalTransformMode ? { backgroundColor: '#52c41a', borderColor: '#52c41a' } : undefined}
                             >
-                                全局变换
+                                {isGlobalTransformMode ? "确定" : "全局变换"}
                             </ShortcutBindableButton>
                         </Tooltip>
-                        <Tooltip title="左右镜像">
+                        <Tooltip title={isGlobalTransformMode ? "取消全局变换预览" : "左右镜像"}>
                             <ShortcutBindableButton
-                                shortcutActionId="view.mirrorHorizontal"
-                                icon={<SwapOutlined />}
-                                onClick={() => handleMirrorModel('y')}
+                                shortcutActionId={isGlobalTransformMode ? "view.globalTransformCancel" : "view.mirrorHorizontal"}
+                                icon={isGlobalTransformMode ? <CloseOutlined /> : <SwapOutlined />}
+                                onClick={() => {
+                                    if (isGlobalTransformMode) cancelGlobalTransform()
+                                    else handleMirrorModel('y')
+                                }}
                             />
                         </Tooltip>
-                        <Tooltip title="垂直镜像">
-                            <ShortcutBindableButton
-                                shortcutActionId="view.mirrorVertical"
-                                icon={<VerticalAlignMiddleOutlined style={{ transform: 'rotate(90deg)' }} />}
-                                onClick={() => handleMirrorModel('z')}
-                            />
-                        </Tooltip>
+                        {!isGlobalTransformMode && (
+                            <Tooltip title="垂直镜像">
+                                <ShortcutBindableButton
+                                    shortcutActionId="view.mirrorVertical"
+                                    icon={<VerticalAlignMiddleOutlined style={{ transform: 'rotate(90deg)' }} />}
+                                    onClick={() => handleMirrorModel('z')}
+                                />
+                            </Tooltip>
+                        )}
                     </Space>
                     <div style={dividerStyle} />
                 </>

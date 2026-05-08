@@ -1,5 +1,4 @@
 import React from 'react';
-import { Tooltip } from 'antd';
 import { EyeInvisibleOutlined, EyeOutlined } from '@ant-design/icons';
 import type { TreeNode } from '../../../types/node';
 import {
@@ -24,6 +23,8 @@ interface NodeTreeTitleProps {
     setDragPosition: (position: { x: number; y: number }) => void;
     onMoveNodes: (nodeId: number, targetId: number) => void;
     toggleNodeVisibility: (nodeId: number) => void;
+    showOnlyNode: (nodeId: number) => void;
+    invertNodeVisibility: () => void;
     focusTreeSurface: () => void;
 }
 
@@ -43,6 +44,8 @@ export const NodeTreeTitle: React.FC<NodeTreeTitleProps> = ({
     setDragPosition,
     onMoveNodes,
     toggleNodeVisibility,
+    showOnlyNode,
+    invertNodeVisibility,
     focusTreeSurface
 }) => {
     const nodeId = nodeData.data?.ObjectId ?? parseInt(nodeData.key);
@@ -127,26 +130,30 @@ export const NodeTreeTitle: React.FC<NodeTreeTitleProps> = ({
             {isVirtualRoot ? (
                 <span className="node-manager-visibility-cell" aria-hidden="true" />
             ) : (
-                <Tooltip title={isNodeVisible ? '闅愯棌鑺傜偣' : '鏄剧ず鑺傜偣'} mouseEnterDelay={0.3}>
-                    <button
-                        type="button"
-                        className={`node-manager-visibility-button${isNodeVisible ? '' : ' is-hidden'}`}
-                        aria-label={isNodeVisible ? '闅愯棌鑺傜偣' : '鏄剧ず鑺傜偣'}
-                        aria-pressed={!isNodeVisible}
-                        onMouseDown={(event) => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                        }}
-                        onClick={(event) => {
-                            event.preventDefault();
-                            event.stopPropagation();
+                <button
+                    type="button"
+                    className={`node-manager-visibility-button${isNodeVisible ? '' : ' is-hidden'}`}
+                    aria-label="toggle node visibility"
+                    aria-pressed={!isNodeVisible}
+                    onMouseDown={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                    }}
+                    onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        if (event.altKey) {
+                            invertNodeVisibility();
+                        } else if (event.ctrlKey) {
+                            showOnlyNode(nodeId);
+                        } else {
                             toggleNodeVisibility(nodeId);
-                            focusTreeSurface();
-                        }}
-                    >
-                        {isNodeVisible ? <EyeOutlined /> : <EyeInvisibleOutlined />}
-                    </button>
-                </Tooltip>
+                        }
+                        focusTreeSurface();
+                    }}
+                >
+                    {isNodeVisible ? <EyeOutlined /> : <EyeInvisibleOutlined />}
+                </button>
             )}
             <span style={nodeTitleTextStyle(isVirtualRoot, isNodeVisible)}>
                 {nodeData.title}

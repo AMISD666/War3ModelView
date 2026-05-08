@@ -1,6 +1,7 @@
 import type { TextureAdjustments } from "../../utils/textureAdjustments";
 import { TEXTURE_ADJUSTMENTS_KEY, normalizeTextureAdjustments } from "../../utils/textureAdjustments";
-import { normalizePath } from "./textureLoader";
+import { normalizePath, REPLACEABLE_TEXTURES } from "./textureLoader";
+import type { TextureLoadResult } from "./textureLoader";
 
 export type LiveTextureAdjustPayload = {
   modelPath: string;
@@ -21,6 +22,57 @@ export type TextureReloadSchedulerState = {
   running: boolean;
   queued: TextureReloadRequest | null;
   version: number;
+};
+
+const addReferencedTexturePath = (paths: Set<string>, path: unknown): void => {
+  if (typeof path !== "string") return;
+  const normalized = normalizePath(path);
+  if (normalized) paths.add(normalized);
+};
+
+export const collectReferencedTexturePaths = (model: any): Set<string> => {
+  const paths = new Set<string>();
+  if (Array.isArray(model?.Textures)) {
+    model.Textures.forEach((texture: any) => addReferencedTexturePath(paths, texture?.Image));
+  }
+  if (Array.isArray(model?.ParticleEmitters)) {
+    model.ParticleEmitters.forEach((emitter: any) => addReferencedTexturePath(paths, emitter?.FileName));
+  }
+  if (Array.isArray(model?.ParticleEmitters2)) {
+    model.ParticleEmitters2.forEach((emitter: any) => {
+      if (emitter?.ReplaceableId > 0 && (emitter.TextureID === -1 || emitter.TextureID === undefined)) {
+        const replaceablePath = REPLACEABLE_TEXTURES[emitter.ReplaceableId];
+        if (replaceablePath !== undefined) {
+          addReferencedTexturePath(paths, `ReplaceableTextures\\${replaceablePath}.blp`);
+        }
+      }
+    });
+  }
+  return paths;
+};
+
+export const updateMissingTexturePathsAfterLoad = (
+  currentMissing: string[],
+  referencedPaths: Set<string>,
+  results: TextureLoadResult[],
+): string[] => {
+  const next = new Set<string>();
+  for (const path of currentMissing) {
+    const normalized = normalizePath(path);
+    if (normalized && referencedPaths.has(normalized)) {
+      next.add(normalized);
+    }
+  }
+  for (const result of results) {
+    const normalized = normalizePath(result.path);
+    if (!normalized || !referencedPaths.has(normalized)) continue;
+    if (result.loaded) {
+      next.delete(normalized);
+    } else {
+      next.add(normalized);
+    }
+  }
+  return Array.from(next);
 };
 
 export const toTextureUpdateUint8Array = (payload: any): Uint8ClampedArray | null => {

@@ -6201,6 +6201,7 @@ dependencies = [
  "once_cell",
  "rand 0.8.5",
  "rayon",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

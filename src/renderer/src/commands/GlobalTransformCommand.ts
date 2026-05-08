@@ -2,7 +2,7 @@ import { mat3, mat4, quat, vec3 } from 'gl-matrix'
 import { useModelStore, extractNodesFromModel } from '../store/modelStore'
 import { ModelNode } from '../types/node'
 import { Command } from '../utils/CommandManager'
-import { modelDocumentCommandHandler } from '../application/commands'
+import { validateDocumentReferencesAfterCommand } from '../application/commands/CommandIntegrityGuard'
 import { pivotVec3ToTuple } from '../utils/modelUtils'
 import { calculateModelExtent } from '../utils/geometryUtils'
 import { scaleRawNodeTranslationTracksForBakedScale } from './GlobalTransformNodeTracks'
@@ -721,28 +721,23 @@ export class GlobalTransformCommand implements Command {
     }
 
     execute() {
-        this.apply(this.after)
+        this.apply(this.after, 'execute')
     }
 
     undo() {
-        this.apply(this.before)
+        this.apply(this.before, 'undo')
     }
 
-    private apply(snapshot: Snapshot | null) {
+    private apply(snapshot: Snapshot | null, phase: 'execute' | 'undo') {
         if (!snapshot) return
 
-        modelDocumentCommandHandler.replaceDocumentSnapshot({
-            name: this.name,
-            before: null,
-            after: {
-                modelData: cloneDeep(snapshot.modelData),
-                nodes: cloneDeep(snapshot.nodes),
-                globalTransformTracker: {
-                    rotation: [...snapshot.trackerRotation] as [number, number, number]
-                },
+        useModelStore.getState().replaceDocumentSnapshot(snapshot.modelData, {
+            nodes: snapshot.nodes,
+            globalTransformTracker: {
+                rotation: [...snapshot.trackerRotation] as [number, number, number]
             },
-            options: { recordHistory: false },
-            applyOptions: { rendererReload: true },
+            rendererReload: true,
         })
+        validateDocumentReferencesAfterCommand(this.name, phase)
     }
 }

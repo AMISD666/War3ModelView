@@ -31,6 +31,9 @@
         "targets": [
             "nsis"
         ],
+        "resources": {
+            "../docs/action_name_mapping.txt": "action_name_mapping.txt"
+        },
         "windows": {
             "webviewInstallMode": {
                 "type": "downloadBootstrapper",

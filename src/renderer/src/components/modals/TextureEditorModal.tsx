@@ -1,5 +1,5 @@
 import { appMessage } from '../../store/messageStore'
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { List, Button, Input, Checkbox, Card, Typography, Dropdown, Slider } from 'antd'
 import { SmartInputNumber as InputNumber } from '../common/SmartInputNumber'
 import type { MenuProps } from 'antd'
@@ -253,6 +253,11 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
     const localTexturesRef = useRef<LocalTexture[]>([])
     const adjustmentsByTextureIdRef = useRef<Record<string, TextureAdjustments>>({})
     const pendingTextureSaveTimeoutRef = useRef<number | null>(null)
+    const pendingPathCommitRef = useRef<{
+        index: number
+        path: string
+        editorId: string
+    } | null>(null)
     /** 路径框正在编辑时，禁止用父级/RPC 状态覆盖输入，避免失焦与截断输入 */
     const pathInputEditingRef = useRef(false)
     const pathInputSelectedIndexRef = useRef(-1)
@@ -294,9 +299,15 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
         : DEFAULT_TEXTURE_ADJUSTMENTS
     const isPathInputPreviewOverrideActive =
         !!selectedTexture &&
-        pathInputEditingRef.current &&
         pathInputSelectedIndexRef.current === selectedIndex &&
-        pathInputValue !== (selectedTexture.Image ?? '')
+        pathInputValue !== (selectedTexture.Image ?? '') &&
+        (
+            pathInputEditingRef.current ||
+            (
+                pendingPathCommitRef.current?.index === selectedIndex &&
+                pendingPathCommitRef.current?.path === pathInputValue
+            )
+        )
     const previewTexture: LocalTexture | null = selectedTexture && isPathInputPreviewOverrideActive
         ? {
             ...selectedTexture,
@@ -324,6 +335,12 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
 
         if (selectedIndex < 0) {
             setPathInputValue('')
+            return
+        }
+        if (
+            pendingPathCommitRef.current?.index === selectedIndex &&
+            pendingPathCommitRef.current.path !== (selectedTexture?.Image ?? '')
+        ) {
             return
         }
         setPathInputValue(selectedTexture?.Image ?? '')
@@ -408,8 +425,14 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
 
     const commitPathInput = () => {
         if (selectedIndex < 0) return
-        const newPath = pathInputValue
+        const newPath = pathInputValue.trim()
         if (newPath === (localTextures[selectedIndex]?.Image ?? '')) return
+        pendingPathCommitRef.current = {
+            index: selectedIndex,
+            path: newPath,
+            editorId: localTextures[selectedIndex]?.__editorId ?? '',
+        }
+        setPathInputValue(newPath)
         updateLocalTexture(selectedIndex, newPath.trim()
             ? { Image: newPath, ReplaceableId: 0 }
             : { Image: newPath })
@@ -646,11 +669,24 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
             const nextPreviewCacheKey = getPreviewCacheKey(
                 nextSelectedIndex >= 0 ? withReplaceables[nextSelectedIndex] : null
             )
+            const pendingPathCommit = pendingPathCommitRef.current
+            const pendingCommitted =
+                !!pendingPathCommit &&
+                pendingPathCommit.index >= 0 &&
+                pendingPathCommit.index < withReplaceables.length &&
+                withReplaceables[pendingPathCommit.index]?.Image === pendingPathCommit.path
+            const keepPendingPreview =
+                !!pendingPathCommit &&
+                nextSelectedIndex === pendingPathCommit.index &&
+                pathInputValue === pendingPathCommit.path
 
             setLocalTextures(withReplaceables)
             setAdjustmentsByTextureId(nextAdjustments)
-            if (previousPreviewCacheKey !== nextPreviewCacheKey) {
+            if (!keepPendingPreview && previousPreviewCacheKey !== nextPreviewCacheKey) {
                 setBasePreviewImageData(null)
+            }
+            if (pendingCommitted) {
+                pendingPathCommitRef.current = null
             }
             hasLiveTextureOverrideRef.current = false
             setSelectedIndex(nextSelectedIndex)
@@ -811,7 +847,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
         left.saturation === right.saturation &&
         left.opacity === right.opacity
 
-    const drawPreviewImageData = (imageData: ImageData | null) => {
+    const drawPreviewImageData = useCallback((imageData: ImageData | null) => {
         const canvas = previewCanvasRef.current
         if (!canvas || !imageData) {
             return
@@ -826,7 +862,15 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
         }
 
         ctx.putImageData(imageData, 0, 0)
-    }
+    }, [])
+
+    const setPreviewCanvasElement = useCallback((canvas: HTMLCanvasElement | null) => {
+        previewCanvasRef.current = canvas
+        if (!canvas) {
+            return
+        }
+        drawPreviewImageData(latestAdjustedPreviewImageDataRef.current ?? latestBasePreviewImageDataRef.current)
+    }, [drawPreviewImageData])
 
     const fulfillPendingRendererSync = () => {
         const pending = pendingRendererSyncRef.current
@@ -1376,16 +1420,26 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
                 Object.prototype.hasOwnProperty.call(updates, 'ReplaceableId'))
 
         if (shouldInvalidatePreview) {
+            const nextImage = typeof newTextures[index]?.Image === 'string' ? newTextures[index].Image : ''
+            const nextPreviewCacheKey = getPreviewCacheKey(newTextures[index])
+            const preserveCurrentPreview =
+                pendingPathCommitRef.current?.index === index &&
+                pendingPathCommitRef.current?.path === nextImage &&
+                selectedPreviewCacheKeyRef.current === nextPreviewCacheKey &&
+                (!!latestBasePreviewImageDataRef.current || !!previewUrl)
+
             previewCacheRef.current.clear()
-            selectedPreviewCacheKeyRef.current = null
-            previewAdjustSourceKeyRef.current = null
-            latestAdjustedPreviewImageDataRef.current = null
-            latestAdjustedPreviewKeyRef.current = null
+            if (!preserveCurrentPreview) {
+                selectedPreviewCacheKeyRef.current = null
+                previewAdjustSourceKeyRef.current = null
+                latestAdjustedPreviewImageDataRef.current = null
+                latestAdjustedPreviewKeyRef.current = null
+                setBasePreviewImageData(null)
+                setPreviewUrl(null)
+                setPreviewError(null)
+                setPreviewSource(null)
+            }
             pendingRendererSyncRef.current = null
-            setBasePreviewImageData(null)
-            setPreviewUrl(null)
-            setPreviewError(null)
-            setPreviewSource(null)
         }
 
         if (isStandalone) {
@@ -2025,7 +2079,7 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
                                                 </div>
                                             ) : basePreviewImageData ? (
                                                 <>
-                                                    <canvas ref={previewCanvasRef} style={{ maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto' }} />
+                                                    <canvas ref={setPreviewCanvasElement} style={{ maxWidth: '100%', maxHeight: '100%', width: 'auto', height: 'auto' }} />
                                                     {previewSource && (
                                                         <div style={{
                                                             position: 'absolute',

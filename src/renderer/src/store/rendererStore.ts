@@ -8,6 +8,7 @@ type AnimationSubMode = 'binding' | 'keyframe'
 type NodeRenderMode = 'hidden' | 'solid' | 'wireframe'
 export type NodeNameDisplayMode = 'hidden' | 'all' | 'selected'
 export type RenderMode = 'textured' | 'wireframe' | 'texturedWireframe'
+export type ParticleQualityMode = 'full' | 'game'
 
 export const getNextRenderMode = (mode: RenderMode): RenderMode => {
     if (mode === 'textured') return 'wireframe'
@@ -91,6 +92,8 @@ interface RendererStore {
     setShowAttachments: (show: boolean) => void
     showParticles: boolean
     setShowParticles: (show: boolean) => void
+    particleQualityMode: ParticleQualityMode
+    setParticleQualityMode: (mode: ParticleQualityMode) => void
     showRibbons: boolean
     setShowRibbons: (show: boolean) => void
     hiddenNodeIds: number[]
@@ -168,7 +171,10 @@ export const useRendererStore = create<RendererStore>()(
     persist(
         (set) => ({
             renderer: null,
-            setRenderer: (renderer) => set({ renderer }),
+            setRenderer: (renderer) => set((state) => {
+                renderer?.setParticleQualityMode?.(state.particleQualityMode)
+                return { renderer }
+            }),
 
             // Grid Settings
             gridSettings: {
@@ -246,6 +252,11 @@ export const useRendererStore = create<RendererStore>()(
             setShowAttachments: (show) => set({ showAttachments: show }),
             showParticles: true,
             setShowParticles: (show) => set({ showParticles: show }),
+            particleQualityMode: 'full',
+            setParticleQualityMode: (mode) => set((state) => {
+                state.renderer?.setParticleQualityMode?.(mode)
+                return { particleQualityMode: mode }
+            }),
             showRibbons: true,
             setShowRibbons: (show) => set({ showRibbons: show }),
             hiddenNodeIds: [],
@@ -375,6 +386,7 @@ export const useRendererStore = create<RendererStore>()(
                 showLights: state.showLights,
                 showAttachments: state.showAttachments,
                 showParticles: state.showParticles,
+                particleQualityMode: state.particleQualityMode,
                 showRibbons: state.showRibbons,
                 showHealthBar: state.showHealthBar,
                 enableLighting: state.enableLighting,

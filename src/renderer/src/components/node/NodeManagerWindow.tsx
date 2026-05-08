@@ -204,6 +204,20 @@ export const NodeManagerWindow: React.FC = () => {
         });
     }, []);
 
+    const showOnlyNode = useCallback((nodeId: number) => {
+        if (!Number.isInteger(nodeId) || nodeId < 0) return;
+        setHiddenNodeIds(nodeManagerNodes
+            .map((node) => node.ObjectId)
+            .filter((id) => id !== nodeId));
+    }, [nodeManagerNodes, setHiddenNodeIds]);
+
+    const invertNodeVisibility = useCallback(() => {
+        const hiddenSet = new Set(hiddenNodeIds);
+        setHiddenNodeIds(nodeManagerNodes
+            .map((node) => node.ObjectId)
+            .filter((id) => !hiddenSet.has(id)));
+    }, [hiddenNodeIds, nodeManagerNodes, setHiddenNodeIds]);
+
     const handleSelect: TreeProps['onSelect'] = (_selectedKeys, info) => {
         // 树内点击：禁止自动滚动列表（视口选中节点时由 Viewer 单独打开滚动）
         markNodeManagerListScrollFromTree();
@@ -977,6 +991,8 @@ export const NodeManagerWindow: React.FC = () => {
                                 setDragPosition={setDragPosition}
                                 onMoveNodes={handleMoveNodes}
                                 toggleNodeVisibility={toggleNodeVisibility}
+                                showOnlyNode={showOnlyNode}
+                                invertNodeVisibility={invertNodeVisibility}
                                 focusTreeSurface={focusTreeSurface}
                             />
                         )}

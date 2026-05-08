@@ -62,8 +62,19 @@ scripts/*
 !scripts/check-material-layer-save-normalization.mjs
 !scripts/check-material-alpha-keyframes.mjs
 !scripts/check-standalone-light-client.mjs
+!scripts/check-pe2-frameflags-zero.mjs
+!scripts/check-pe2-render-layer-order.mjs
+!scripts/check-particle-quality-toggle.mjs
 local-test-scripts/
 activation/
+
+# Runtime vendored renderer patches that are part of this app's behavior
+!vendor/war3-model/
+!vendor/war3-model/renderer/
+!vendor/war3-model/renderer/particles.ts
+!vendor/war3-model/renderer/modelRenderer.ts
+!vendor/war3-model/renderer/War3BlendState.ts
+!vendor/war3-model/renderer/MaterialDrawPlanner.ts
 
 # Local-only AI agent instructions
 /AGENTS.md

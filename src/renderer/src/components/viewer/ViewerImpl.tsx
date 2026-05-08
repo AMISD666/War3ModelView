@@ -1,4 +1,8 @@
 import { appMessage } from '../../store/messageStore'
+type ParticleQualityRenderer = War3ModelRenderer & { setParticleQualityMode?: (mode: "full" | "game") => void };
+const applyParticleQualityMode = (renderer: War3ModelRenderer | null | undefined, mode: "full" | "game") => {
+  (renderer as ParticleQualityRenderer | undefined)?.setParticleQualityMode?.(mode);
+};
 import React,{useEffect,useRef,useState,forwardRef,useImperativeHandle,useMemo,useCallback}from"react";
 import{textureMaterialCommandHandler}from"../../application/commands";
 import{loadModelDataForViewer}from"../../application/model-import";
@@ -14,7 +18,7 @@ import TextureAdjustWorker from"../../workers/texture-adjust.worker?worker";impo
 import type{WorkerLike}from"./textureLoader";import{validateAllParticleEmitters}from"./particleValidator";import{describePe2AnimOrScalar,pe2PreviewDebugEnabled}from"../../utils/pe2PreviewDebug";import{checkForStructuralChanges,syncParticleEmitters2InPlace}from"./modelSync";import{getEnvironmentManager}from"./EnvironmentManager";import{debugLog,logModelInfo}from"../../utils/debugLogger";import{hexToRgb}from"./types";import{mat3,mat4,vec3,vec4,quat}from"gl-matrix";import{GridRenderer}from"../GridRenderer";import{DebugRenderer}from"../DebugRenderer";import{GizmoRenderer,GizmoAxis,GIZMO_AXIS_LENGTH}from"../GizmoRenderer";import{AxisIndicator}from"../AxisIndicator";import{DEFAULT_TEXTURE_ADJUSTMENTS,applyTextureAdjustments,isDefaultTextureAdjustments,normalizeTextureAdjustments}from"../../utils/textureAdjustments";
 import{reportModelBoundsFallback,selectTrustedModelBounds}from"./ViewerModelBounds";import{reportViewerRenderError,type ViewerRenderDiagnosticRenderer}from"./ViewerRenderDiagnostics";import{finishFailedModelRenderFrame}from"./ViewerRenderRecovery";
 import type{TextureAdjustments}from"../../utils/textureAdjustments";import{useUIStore}from"../../store/uiStore";import{useSelectionStore}from"../../store/selectionStore";import{useModelStore}from"../../store/modelStore";import{useRendererStore}from"../../store/rendererStore";import{useHistoryStore}from"../../store/historyStore";import{useUvEditorStore}from"../../store/uvEditorStore";import{ModelInfoPanel}from"../info/ModelInfoPanel";import{ViewerToolbar}from"../ViewerToolbar";import { ConfigProvider, theme } from "antd";import{CameraOutlined,CopyOutlined,SyncOutlined,PauseCircleOutlined,PlayCircleOutlined}from"@ant-design/icons";import{commandManager}from"../../utils/CommandManager";import{MoveVerticesCommand,VertexChange}from"../../commands/MoveVerticesCommand";import{MoveNodesCommand,NodeChange}from"../../commands/MoveNodesCommand";import{SetNodeParentCommand}from"../../commands/SetNodeParentCommand";import{VertexEditor}from"../VertexEditor";import{pickClosestGeoset}from"../../utils/rayTriangle";import{SplitVerticesCommand}from"../../commands/SplitVerticesCommand";import{AutoSeparateLayersCommand}from"../../commands/AutoSeparateLayersCommand";import{WeldVerticesCommand}from"../../commands/WeldVerticesCommand";import{DeleteVerticesCommand}from"../../commands/DeleteVerticesCommand";import{DeleteFacesCommand}from"../../commands/DeleteFacesCommand";import{PasteVerticesCommand}from"../../commands/PasteVerticesCommand";import{UpdateSequenceExtentsCommand}from"../../commands/UpdateSequenceExtentsCommand";import{isTextInputActive,normalizeKeyCombo,normalizeKeyComboFromEvent}from"../../shortcuts/utils";import{registerGeometryDeleteKeyListener}from"../../utils/geometryDeleteShortcutBridge";import{WEBGL_CONTEXT_ATTRIBUTES}from"./ViewerRenderConstants";import{createViewerFramePerfAggregate,roundPerfValue}from"./ViewerPerf";
-import type{ViewerFramePerfAggregate,ViewerFramePerfSample}from"./ViewerPerf";import{applyHealthBarOffset,resolveHealthBarState}from"./ViewerHealthBar";import type{HealthBarDragSnapshot,HealthBarState}from"./ViewerHealthBar";import{getLiveTextureSourceKey,getTextureAdjustmentSignature,getTextureDecodeWorkerCount,isTexturePreviewPath,toTextureUpdateUint8Array,toTightArrayBuffer,toUint8Array}from"./ViewerTextureUtils";
+import type{ViewerFramePerfAggregate,ViewerFramePerfSample}from"./ViewerPerf";import{applyHealthBarOffset,resolveHealthBarState}from"./ViewerHealthBar";import type{HealthBarDragSnapshot,HealthBarState}from"./ViewerHealthBar";import{getLiveTextureSourceKey,getTextureAdjustmentSignature,getTextureDecodeWorkerCount,isTexturePreviewPath,toTextureUpdateUint8Array,toTightArrayBuffer,toUint8Array}from"./ViewerTextureUtils";import{collectReferencedTexturePaths,updateMissingTexturePathsAfterLoad}from"./ViewerTextureUtils";
 import { isGeosetVisible } from "../../utils/geosetVisibility";import { canDeleteNode } from "../../utils/nodeUtils";import { createNodeScreenLabels, drawNodeNameOverlay, findClosestNodeLabel } from "./nodeNameOverlay";import { useNodeNameOverlayRefs } from "./useNodeNameOverlayRefs";import { filterVisibleRendererNodes } from "../../types/nodeVisibility";
 import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadSchedulerState}from"./ViewerTextureUtils";import{GlobalTransformCommand}from"../../commands/GlobalTransformCommand";import{copyVertices,copyFaces,VertexCopyBuffer}from"../../utils/vertexOperations";import{UpdateKeyframeCommand,KeyframeChange}from"../../commands/UpdateKeyframeCommand";import{MissingTextureWarning}from"../MissingTextureWarning";import{GeosetSeparateDialog}from"../modals/GeosetSeparateDialog";import{LayerConfig,layerConfigToMaterialLayer}from"../modals/MaterialLayerOptions";import{NodeType}from"../../types/node";import{openNodeEditor}from"../../utils/nodeEditorOpen";import{nodeTypeToEditorKind}from"../../types/nodeEditorRpc";import{getEffectiveBindings,registerShortcutHandler}from"../../shortcuts/manager";import{markStandalonePerf}from"../../utils/standalonePerf";import{invokeReadMpqFile}from"../../utils/mpqPerf";import{markNodeManagerListScrollFromTree,markNodeManagerListScrollFromViewer}from"../../utils/nodeManagerListScrollBridge";import{collectSelectedGeosetIndices}from"../editors/uvSelectionSync";import{createSelectionRect,pointInRect,segmentIntersectsRect,triangleIntersectsRect}from"../editors/uvSelectionUtils";let globalRenderLoopId=0;const Viewer=forwardRef((props:ViewerProps,ref:React.Ref<ViewerRef>)=>{const{modelPath,animationIndex,teamColor,showGrid,showNodes,showSkeleton,showCollisionShapes,showCameras,showLights,showAttachments,showWireframe,showWireframeOverlay=false,isPlaying,onTogglePlay,onToggleLooping,onToggleWireframe,onModelLoaded,onModelFirstFrameReady,onModelLoadError,backgroundColor,showFPS,playbackSpeed,viewPreset,modelData,onSetViewPreset,onAddCameraFromView}=props;const[parseWorker]=useState(()=>new ModelWorker());const[textureWorkers]=useState<WorkerLike[]>(()=>{const count=getTextureDecodeWorkerCount();return Array.from({length:count},()=>new ModelWorker()as unknown as WorkerLike);});const[loading,setLoading]=useState(false);const[loadingStatus,setLoadingStatus]=useState("");const canvasRef=useRef<HTMLCanvasElement>(null);const[renderer,setRenderer]=useState<War3ModelRenderer|null>(null);const[fps,setFps]=useState<number>(0);const gridRenderer=useRef(new GridRenderer());const debugRenderer=useRef(new DebugRenderer());const gizmoRenderer=useRef(new GizmoRenderer());const axisIndicator=useRef(new AxisIndicator());const rendererRef=useRef<War3ModelRenderer|null>(null);const cameraRef=useRef<SimpleOrbitCamera|null>(null);const appMainMode=useSelectionStore((state)=>state.mainMode);const animationSubMode=useSelectionStore((state)=>state.animationSubMode);const rendererReloadTrigger=useModelStore((state)=>state.rendererReloadTrigger);const cachedRenderer=useModelStore((state)=>state.cachedRenderer);const mpqLoaded=useRendererStore((state)=>state.mpqLoaded);const nodeRenderMode=useRendererStore((state)=>state.nodeRenderMode);const showHealthBar=useRendererStore((state)=>state.showHealthBar);const missingTextures=useRendererStore((state)=>state.missingTextures);const glRef=useRef<WebGL2RenderingContext|WebGLRenderingContext|null>(null);const needsRendererUpdateRef=useRef(false);const bindingParticlePoseSignatureRef=useRef("");const textureReloadSchedulerRef=useRef<TextureReloadSchedulerState>({timer:null,running:false,queued:null,version:0,});const animationFrameId=useRef<number|null>(null);const shouldRunRenderLoop=useRef<boolean>(true);const lastRenderErrorReportTimeRef=useRef<number>(0);const framePerfRef=useRef<ViewerFramePerfAggregate>(createViewerFramePerfAggregate());const lastFpsTime=useRef<number>(performance.now());const lastFrameTime=useRef<number>(performance.now());const frameCount=useRef<number>(0);const renderRef=useRef<((time:number,scheduleNext?:boolean)=>void)|null>(null);const pMatrixRef=useRef(mat4.create());const mvMatrixRef=useRef(mat4.create());const cameraPosRef=useRef(vec3.create());const cameraUpRef=useRef(vec3.fromValues(0,0,1));const cameraQuatRef=useRef(quat.create());const showModelInfo=useUIStore((state)=>state.showModelInfo);const isLooping=useModelStore((state)=>state.isLooping);const setLooping=useModelStore((state)=>state.setLooping);const[texturePreview,setTexturePreview]=useState<{url:string;width:number;height:number;path:string;}|null>(null);const backgroundTextureResolveRunningRef=useRef(false);const attemptedMissingTexturePathsRef=useRef<Set<string>>(new Set());const flushFramePerfSummary=useCallback((reason:string,force=false)=>{const bucket=framePerfRef.current;if(bucket.samples===0)return;if(!force&&bucket.samples<90)return;markStandalonePerf("viewer_frame_profile",{reason,samples:bucket.samples,avgTotalMs:roundPerfValue(bucket.totalMs/bucket.samples),maxTotalMs:roundPerfValue(bucket.maxTotalMs),slowFrameCount:bucket.slowFrameCount,avgClearMs:roundPerfValue(bucket.clearMs/bucket.samples),avgCameraMs:roundPerfValue(bucket.cameraMs/bucket.samples),avgStateMs:roundPerfValue(bucket.stateMs/bucket.samples),avgUpdateMs:roundPerfValue(bucket.updateMs/bucket.samples),avgSceneMs:roundPerfValue(bucket.sceneMs/bucket.samples),avgOverlayMs:roundPerfValue(bucket.overlayMs/bucket.samples),isPlaying:isPlayingRef.current,modelPath:modelPath||"",});framePerfRef.current=createViewerFramePerfAggregate();},[modelPath],);const recordFramePerfSample=useCallback((sample:ViewerFramePerfSample,detail?:Record<string,unknown>)=>{const bucket=framePerfRef.current;bucket.samples+=1;bucket.totalMs+=sample.totalMs;bucket.maxTotalMs=Math.max(bucket.maxTotalMs,sample.totalMs);bucket.clearMs+=sample.clearMs;bucket.cameraMs+=sample.cameraMs;bucket.stateMs+=sample.stateMs;bucket.updateMs+=sample.updateMs;bucket.sceneMs+=sample.sceneMs;bucket.overlayMs+=sample.overlayMs;if(sample.totalMs>=16.7){bucket.slowFrameCount+=1;};const now=performance.now();if(sample.totalMs>=33&&now-bucket.lastSlowEmitMs>=1000){bucket.lastSlowEmitMs=now;markStandalonePerf("viewer_slow_frame",{totalMs:roundPerfValue(sample.totalMs),clearMs:roundPerfValue(sample.clearMs),cameraMs:roundPerfValue(sample.cameraMs),stateMs:roundPerfValue(sample.stateMs),updateMs:roundPerfValue(sample.updateMs),sceneMs:roundPerfValue(sample.sceneMs),overlayMs:roundPerfValue(sample.overlayMs),...detail,});};if(bucket.samples>=90){flushFramePerfSummary("periodic");}},[flushFramePerfSummary],);useEffect(()=>{return()=>{parseWorker.terminate();textureWorkers.forEach((worker)=>worker.terminate?.());};},[parseWorker,textureWorkers]);const reportModelLoadError=(error:unknown,path:string|null)=>{if(onModelLoadError){onModelLoadError(error,path);return;}const message=error instanceof Error?error.message:String(error);appMessage.error({content:`模型加载失败：${message}`,duration:6000});};const formatCameraValue=(value:number):string=>{if(!Number.isFinite(value))return"0";const formatted=value.toFixed(2);return formatted.replace(/.?0+$/,"");};const getCameraVector=(prop:any,directProp?:any):number[]=>{const isArrayLike=(v:any)=>Array.isArray(v)||v instanceof Float32Array||ArrayBuffer.isView(v);const toArray=(v:any)=>(v instanceof Float32Array?Array.from(v):v);if(directProp&&isArrayLike(directProp))return toArray(directProp);if(isArrayLike(prop))return toArray(prop);if(prop&&prop.Keys&&prop.Keys.length>0){const v=prop.Keys[0].Vector;return v?toArray(v):[0,0,0];};return[0,0,0];};const getAvailableCameras=():any[]=>{const{modelData,nodes}=useModelStore.getState();const modelCameras=Array.isArray((modelData as any)?.Cameras)?(modelData as any).Cameras.filter((cam:any)=>cam):[];if(modelCameras.length>0)return modelCameras;return Array.isArray(nodes)?nodes.filter((n:any)=>n&&n.type==="Camera"):[];};const getSelectedCamera=(cameraIndex=selectedCameraIndex):any|null=>{const cameraList=getAvailableCameras();if(cameraIndex<0||cameraIndex>=cameraList.length)return null;return cameraList[cameraIndex]??null;};const clearActiveModelCameraView=()=>{inCameraView.current=false;setActiveModelCameraView(null);};const roundVertexCoord=(value:number):number=>Math.round(value*10000)/10000;const getVertexPositionKey=(vertices:ArrayLike<number>,vertexIndex:number):string=>{const base=vertexIndex*3;return`${roundVertexCoord(Number(vertices[base]??0))},${roundVertexCoord(Number(vertices[base+1]??0))},${roundVertexCoord(Number(vertices[base+2]??0))}`;
   };const { overlayRef: nodeNameOverlayRef, labelsRef: nodeNameLabelsRef, hoveredIdRef: hoveredNodeNameIdRef } = useNodeNameOverlayRefs();const modeDisplayName = useSelectionStore((state) => {
@@ -387,6 +391,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
   const showAttachmentsRef = useRef(showAttachments);
   const showParticlesRef = useRef(useRendererStore.getState().showParticles ?? true);
   const showRibbonsRef = useRef(useRendererStore.getState().showRibbons ?? true);
+  const particleQualityModeRef = useRef(useRendererStore.getState().particleQualityMode ?? "full");
   const showHealthBarRef = useRef(showHealthBar);
   const showWireframeRef = useRef(showWireframe);
   const showWireframeOverlayRef = useRef(showWireframeOverlay);
@@ -492,7 +497,9 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
       vertexSettingsRef.current = state.vertexSettings;
       showParticlesRef.current = state.showParticles ?? true;
       showRibbonsRef.current = state.showRibbons ?? true;
+      particleQualityModeRef.current = state.particleQualityMode ?? "full";
       showHealthBarRef.current = state.showHealthBar ?? false;
+      applyParticleQualityMode(rendererRef.current, particleQualityModeRef.current);
     });
     return () => unsub();
   }, []);
@@ -1108,6 +1115,8 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
           cameraRef.current.update();
         }
       },
+      confirmGlobalTransform: confirmGlobalTransformPreview,
+      cancelGlobalTransform: cancelGlobalTransformPreview,
     }),
     [fitToViewImpl],
   );
@@ -1135,6 +1144,25 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
 
       // Fallback for render-mode toggle when the global shortcut layer misses.
       const combo = normalizeKeyComboFromEvent(ev);
+      const previewHistoryCombo = combo ? normalizeKeyCombo(combo).toUpperCase() : null;
+      if (useSelectionStore.getState().isGlobalTransformMode && previewHistoryCombo) {
+        if (previewHistoryCombo === "CTRL+Z" || previewHistoryCombo === "META+Z") {
+          undoGlobalTransformPreview();
+          ev.preventDefault();
+          ev.stopPropagation();
+          return;
+        } else if (
+          previewHistoryCombo === "CTRL+Y" ||
+          previewHistoryCombo === "META+Y" ||
+          previewHistoryCombo === "CTRL+SHIFT+Z" ||
+          previewHistoryCombo === "META+SHIFT+Z"
+        ) {
+          redoGlobalTransformPreview();
+          ev.preventDefault();
+          ev.stopPropagation();
+          return;
+        }
+      }
       const wireframeBindings = getEffectiveBindings("view.toggleWireframe").map(normalizeKeyCombo);
       if (combo && wireframeBindings.includes(normalizeKeyCombo(combo))) {
         onToggleWireframe();
@@ -1190,9 +1218,27 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
     };
     window.addEventListener("keydown", onKeyDown, true);
     window.addEventListener("keyup", onKeyUp);
+    const unregisterPreviewUndo = registerShortcutHandler(
+      "edit.undo",
+      () => {
+        undoGlobalTransformPreview();
+        return true;
+      },
+      { isActive: () => useSelectionStore.getState().isGlobalTransformMode, priority: 1000 },
+    );
+    const unregisterPreviewRedo = registerShortcutHandler(
+      "edit.redo",
+      () => {
+        redoGlobalTransformPreview();
+        return true;
+      },
+      { isActive: () => useSelectionStore.getState().isGlobalTransformMode, priority: 1000 },
+    );
     return () => {
       window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("keyup", onKeyUp);
+      unregisterPreviewUndo();
+      unregisterPreviewRedo();
     };
   }, [applyViewPreset, onToggleWireframe, toggleProjectionMode]);
 
@@ -1225,6 +1271,27 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
     rotation: [0, 0, 0] as [number, number, number],
     scale: [1, 1, 1] as [number, number, number],
   });
+  const globalTransformPreviewUndoRef = useRef<Array<{
+    translation: [number, number, number];
+    rotation: [number, number, number];
+    scale: [number, number, number];
+  }>>([]);
+  const globalTransformPreviewRedoRef = useRef<Array<{
+    translation: [number, number, number];
+    rotation: [number, number, number];
+    scale: [number, number, number];
+  }>>([]);
+  const globalTransformDragStartPreviewRef = useRef<{
+    translation: [number, number, number];
+    rotation: [number, number, number];
+    scale: [number, number, number];
+  } | null>(null);
+  const globalTransformCenterCacheRef = useRef<{
+    documentRevision: number;
+    rendererReloadTrigger: number;
+    renderer: War3ModelRenderer | null;
+    center: [number, number, number];
+  } | null>(null);
   const gizmoHudRef = useRef({
     translation: [0, 0, 0] as [number, number, number],
     rotation: [0, 0, 0] as [number, number, number], // degrees
@@ -1899,8 +1966,18 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
             targetPaths: Array.from(new Set(texturesToLoad.map((texture: any) => texture.Image).filter(Boolean))),
             workerDecodeMinTextures: 1,
             workerDecodeMinBytes: 1,
-          }).then(() => {
+          }).then((results) => {
             if (rendererRef.current === currentRenderer && currentRenderer.modelInstance?.syncMaterials) {
+              const referencedPaths = collectReferencedTexturePaths(currentRenderer.model);
+              const nextMissing = updateMissingTexturePathsAfterLoad(
+                useRendererStore.getState().missingTextures,
+                referencedPaths,
+                results,
+              );
+              useRendererStore.getState().setMissingTextures(nextMissing);
+              results.forEach((result) => {
+                if (result.loaded) attemptedMissingTexturePathsRef.current.delete(result.path);
+              });
               currentRenderer.modelInstance.syncMaterials();
               needsRendererUpdateRef.current = true;
             }
@@ -2099,6 +2176,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
       if (cameraRef.current) cameraRef.current.enabled = false;
       gizmoState.current.isDragging = true;
       gizmoState.current.isShiftDuplicate = e.shiftKey; // Track if this is a shift-duplicate operation
+      globalTransformDragStartPreviewRef.current = isGlobalTransformMode ? cloneGlobalPreviewTransform() : null;
       const gizmoInfo = computeCurrentGizmoCenter();
       gizmoState.current.dragCenter = gizmoInfo.count > 0 ? vec3.clone(gizmoInfo.center) : null;
       snapDragRef.current.translationDelta = [0, 0, 0];
@@ -3856,6 +3934,16 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
       })
         .then((results) => {
           if (!shouldUseResult()) return;
+          const referencedPaths = collectReferencedTexturePaths(request.renderer.model);
+          const nextMissing = updateMissingTexturePathsAfterLoad(
+            useRendererStore.getState().missingTextures,
+            referencedPaths,
+            results,
+          );
+          useRendererStore.getState().setMissingTextures(nextMissing);
+          results.forEach((result) => {
+            if (result.loaded) attemptedMissingTexturePathsRef.current.delete(result.path);
+          });
           const failed = results.filter((result) => !result.loaded);
           if (failed.length > 0) {
             failed.forEach((result) => {
@@ -4302,7 +4390,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
           const { geometrySubMode, transformMode, selectedVertexIds, selectedFaceIds, animationSubMode: currentAnimationSubMode, mainMode: currentMainMode, isGlobalTransformMode } = useSelectionStore.getState();
           const previewTransform = previewTransformRef.current;
           const baseMvMatrix = isGlobalTransformMode ? mat4.clone(mvMatrix) : null;
-          const globalPivot = getModelCenter();
+          const globalPivot = getGlobalTransformPivot();
           const isResetPoseMode = animationIndex === -1;
           const isBindPoseMode = isResetPoseMode || currentMainMode === "geometry" || (currentMainMode === "animation" && currentAnimationSubMode === "binding");
           const resetPoseGlobalSequences = mdlRenderer.model?.GlobalSequences as ArrayLike<number> | undefined;
@@ -4325,6 +4413,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
           if (typeof mdlRenderer.setCamera === "function") {
             mdlRenderer.setCamera(cameraPos, cameraQuat);
           }
+          applyParticleQualityMode(mdlRenderer, particleQualityModeRef.current);
 
           if (isPlayingRef.current && shouldAdvanceGlobalSequencesInResetPose && mdlRenderer.rendererData) {
             const advanceDelta = delta * playbackSpeedRef.current;
@@ -4579,6 +4668,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
 
           if (mdlRenderer.rendererData) {
             mdlRenderer.setCamera(cameraPos, cameraQuat);
+            applyParticleQualityMode(mdlRenderer, particleQualityModeRef.current);
 
             if (isBindPoseMode) {
               if (mdlRenderer.rendererData.nodes) {
@@ -5686,7 +5776,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
               const gizmoOrientation = useRendererStore.getState().gizmoOrientation;
               const gizmoBasis = getGizmoBasis(gizmoOrientation);
 
-              gizmoRenderer.current.render(gl as WebGLRenderingContext, mvMatrix, pMatrix, center, transformMode as any, gizmoState.current.activeAxis, gizmoScale, gizmoBasis);
+              gizmoRenderer.current.render(gl as WebGLRenderingContext, baseMvMatrix || mvMatrix, pMatrix, center, transformMode as any, gizmoState.current.activeAxis, gizmoScale, gizmoBasis);
             }
           }
 
@@ -5824,6 +5914,16 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
 
   const getModelCenter = (): [number, number, number] => {
     const modelState = useModelStore.getState();
+    const cachedCenter = globalTransformCenterCacheRef.current;
+    if (
+      cachedCenter &&
+      cachedCenter.documentRevision === modelState.documentRevision &&
+      cachedCenter.rendererReloadTrigger === modelState.rendererReloadTrigger &&
+      cachedCenter.renderer === rendererRef.current
+    ) {
+      return [...cachedCenter.center] as [number, number, number];
+    }
+
     const modelData = modelState.modelData as any;
     const centerFromBounds = (
       minX: number,
@@ -5958,9 +6058,19 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
       return [transformed[0], transformed[1], transformed[2]];
     };
 
+    const rememberCenter = (center: [number, number, number]): [number, number, number] => {
+      globalTransformCenterCacheRef.current = {
+        documentRevision: modelState.documentRevision,
+        rendererReloadTrigger: modelState.rendererReloadTrigger,
+        renderer: rendererRef.current,
+        center: [...center] as [number, number, number],
+      };
+      return [...center] as [number, number, number];
+    };
+
     const geometryCenter = getGeosetBoundsCenter(rendererRef.current?.model?.Geosets)
       ?? getGeosetBoundsCenter(modelData?.Geosets);
-    if (geometryCenter) return applyCommittedGlobalTransform(geometryCenter);
+    if (geometryCenter) return rememberCenter(applyCommittedGlobalTransform(geometryCenter));
 
     const min = modelData?.Info?.MinimumExtent;
     const max = modelData?.Info?.MaximumExtent;
@@ -5971,7 +6081,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
     const maxY = Number(max?.[1]);
     const maxZ = Number(max?.[2]);
     if (Number.isFinite(minX) && Number.isFinite(minY) && Number.isFinite(minZ) && Number.isFinite(maxX) && Number.isFinite(maxY) && Number.isFinite(maxZ)) {
-      return applyCommittedGlobalTransform(centerFromBounds(minX, minY, minZ, maxX, maxY, maxZ));
+      return rememberCenter(applyCommittedGlobalTransform(centerFromBounds(minX, minY, minZ, maxX, maxY, maxZ)));
     }
 
     const renderer = rendererRef.current;
@@ -6016,7 +6126,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
       }
 
       if (count > 0) {
-        return centerFromBounds(nodeMinX, nodeMinY, nodeMinZ, nodeMaxX, nodeMaxY, nodeMaxZ);
+        return rememberCenter(centerFromBounds(nodeMinX, nodeMinY, nodeMinZ, nodeMaxX, nodeMaxY, nodeMaxZ));
       }
     }
 
@@ -6046,12 +6156,129 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
       }
 
       if (count > 0) {
-        return centerFromBounds(pivotMinX, pivotMinY, pivotMinZ, pivotMaxX, pivotMaxY, pivotMaxZ);
+        return rememberCenter(centerFromBounds(pivotMinX, pivotMinY, pivotMinZ, pivotMaxX, pivotMaxY, pivotMaxZ));
       }
     }
 
-    return [0, 0, 0];
+    return rememberCenter([0, 0, 0]);
   };
+
+  const getGlobalTransformPivot = (): [number, number, number] => {
+    return useSelectionStore.getState().globalTransformPivot === "origin"
+      ? [0, 0, 0]
+      : getModelCenter();
+  };
+
+  function cloneGlobalPreviewTransform() {
+    const source = previewTransformRef.current;
+    return {
+      translation: [...source.translation] as [number, number, number],
+      rotation: [...source.rotation] as [number, number, number],
+      scale: [...source.scale] as [number, number, number],
+    };
+  }
+
+  function globalPreviewTransformsEqual(
+    a: { translation: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number] },
+    b: { translation: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number] },
+  ): boolean {
+    const epsilon = 1e-6;
+    return (
+      a.translation.every((value, index) => Math.abs(value - b.translation[index]) <= epsilon) &&
+      a.rotation.every((value, index) => Math.abs(value - b.rotation[index]) <= epsilon) &&
+      a.scale.every((value, index) => Math.abs(value - b.scale[index]) <= epsilon)
+    );
+  }
+
+  function applyGlobalPreviewTransformSnapshot(snapshot: {
+    translation: [number, number, number];
+    rotation: [number, number, number];
+    scale: [number, number, number];
+  }) {
+    previewTransformRef.current = {
+      translation: [...snapshot.translation] as [number, number, number],
+      rotation: [...snapshot.rotation] as [number, number, number],
+      scale: [...snapshot.scale] as [number, number, number],
+    };
+    needsRendererUpdateRef.current = true;
+  }
+
+  function clearGlobalPreviewHistory() {
+    globalTransformPreviewUndoRef.current = [];
+    globalTransformPreviewRedoRef.current = [];
+    globalTransformDragStartPreviewRef.current = null;
+  }
+
+  function pushGlobalPreviewUndoStep(before: {
+    translation: [number, number, number];
+    rotation: [number, number, number];
+    scale: [number, number, number];
+  }) {
+    const after = cloneGlobalPreviewTransform();
+    if (globalPreviewTransformsEqual(before, after)) return;
+    globalTransformPreviewUndoRef.current.push(before);
+    if (globalTransformPreviewUndoRef.current.length > 100) {
+      globalTransformPreviewUndoRef.current.shift();
+    }
+    globalTransformPreviewRedoRef.current = [];
+  }
+
+  function undoGlobalTransformPreview(): boolean {
+    const previous = globalTransformPreviewUndoRef.current.pop();
+    if (!previous) return false;
+    globalTransformPreviewRedoRef.current.push(cloneGlobalPreviewTransform());
+    applyGlobalPreviewTransformSnapshot(previous);
+    return true;
+  }
+
+  function redoGlobalTransformPreview(): boolean {
+    const next = globalTransformPreviewRedoRef.current.pop();
+    if (!next) return false;
+    globalTransformPreviewUndoRef.current.push(cloneGlobalPreviewTransform());
+    applyGlobalPreviewTransformSnapshot(next);
+    return true;
+  }
+
+  function resetGlobalTransformPreview() {
+    previewTransformRef.current = {
+      translation: [0, 0, 0],
+      rotation: [0, 0, 0],
+      scale: [1, 1, 1],
+    };
+    useModelStore.getState().resetPreviewTransform();
+    needsRendererUpdateRef.current = true;
+    clearGlobalPreviewHistory();
+  }
+
+  function getPendingGlobalTransform() {
+    const previewTransform = previewTransformRef.current;
+    const commitTransform = {
+      translation: [...previewTransform.translation] as [number, number, number],
+      rotation: [...previewTransform.rotation] as [number, number, number],
+      scale: [...previewTransform.scale] as [number, number, number],
+    };
+    const hasTransform =
+      commitTransform.translation.some((v) => v !== 0) ||
+      commitTransform.rotation.some((v) => v !== 0) ||
+      commitTransform.scale.some((v) => v !== 1);
+    return hasTransform ? commitTransform : null;
+  }
+
+  function confirmGlobalTransformPreview() {
+    const commitTransform = getPendingGlobalTransform();
+    if (commitTransform) {
+      const pivot = getGlobalTransformPivot();
+      const cmd = new GlobalTransformCommand(commitTransform, rendererRef.current, pivot);
+      cmd.execute();
+    }
+    resetGlobalTransformPreview();
+    useSelectionStore.getState().setIsGlobalTransformMode(false);
+  }
+
+  function cancelGlobalTransformPreview() {
+    resetGlobalTransformPreview();
+    useSelectionStore.getState().setIsGlobalTransformMode(false);
+  }
 
   const toNumberArray = (v: any, fallback: number[]): number[] => {
     if (!v) return [...fallback];
@@ -6147,7 +6374,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
     }
 
     if (isGlobalTransformMode) {
-      const pivot = getModelCenter();
+      const pivot = getGlobalTransformPivot();
       center[0] = pivot[0];
       center[1] = pivot[1];
       center[2] = pivot[2];
@@ -6559,6 +6786,9 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
 
         if (transformMode === "translate") {
           buildMoveVec(axis);
+          if (axis === "x") {
+            vec3.scale(vecs.moveVec, vecs.moveVec, -1);
+          }
 
           applyTranslateSnap(vecs.moveVec);
           applyHudTranslate(vecs.moveVec);
@@ -7482,28 +7712,12 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
         const { mainMode, animationSubMode, isGlobalTransformMode } = useSelectionStore.getState();
 
         if (isGlobalTransformMode) {
-          const previewTransform = previewTransformRef.current;
-          const commitTransform = {
-            translation: [...previewTransform.translation] as [number, number, number],
-            rotation: [...previewTransform.rotation] as [number, number, number],
-            scale: [...previewTransform.scale] as [number, number, number],
-          };
-          const hasTransform = commitTransform.translation.some((v) => v !== 0) || commitTransform.rotation.some((v) => v !== 0) || commitTransform.scale.some((v) => v !== 1);
-
-          // CRITICAL: Execute command FIRST to bake transform into model data,
-          // then reset preview. Otherwise model visually jumps back before bake completes.
-          if (hasTransform) {
-            const pivot = getModelCenter();
-            const cmd = new GlobalTransformCommand(commitTransform, rendererRef.current, pivot);
-            commandManager.execute(cmd);
+          const dragStartPreview = globalTransformDragStartPreviewRef.current;
+          if (dragStartPreview) {
+            pushGlobalPreviewUndoStep(dragStartPreview);
+            globalTransformDragStartPreviewRef.current = null;
           }
-
-          // Reset local preview transform reference
-          previewTransformRef.current = {
-            translation: [0, 0, 0],
-            rotation: [0, 0, 0],
-            scale: [1, 1, 1],
-          };
+          needsRendererUpdateRef.current = true;
         }
         snapDragRef.current.translationDelta = [0, 0, 0];
         snapDragRef.current.translationApplied = [0, 0, 0];
@@ -8822,6 +9036,8 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
           onAutoSeparateLayers={handleAutoSeparateLayers}
           onWeldVertices={handleWeldVertices}
           onFitToView={handleFitToView}
+          onConfirmGlobalTransform={confirmGlobalTransformPreview}
+          onCancelGlobalTransform={cancelGlobalTransformPreview}
         />
       )}
 
