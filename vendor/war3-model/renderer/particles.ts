@@ -23,7 +23,8 @@ const tailViewDir = vec3.create();
 const tailWorldPos = vec3.create();
 const tailFallbackAxis = vec3.create();
 const emitterRotationMat3 = mat3.create();
-const rotatedBaseVec = vec3.create();
+const particleFacing2D = vec3.create();
+const xyQuadLocalOffset = vec3.create();
 
 export type ParticleQualityMode = 'full' | 'game';
 
@@ -51,6 +52,22 @@ function getParticleEmitter2PhaseTime(props: ParticleEmitter2): number {
 
 function getParticleQualityEmissionScale(mode: ParticleQualityMode): number {
     return mode === 'game' ? GAME_PARTICLE_EMISSION_SCALE : 1;
+}
+
+function isValidAttribLocation(location: number | null): location is number {
+    return typeof location === 'number' && location >= 0;
+}
+
+function setXYQuadAxesFromVelocity(velocity: vec3, outRight: vec3, outUp: vec3): boolean {
+    vec3.set(particleFacing2D, velocity[0], velocity[1], 0);
+    if (vec3.squaredLength(particleFacing2D) <= 0.000001) {
+        return false;
+    }
+
+    vec3.normalize(outUp, particleFacing2D);
+    vec3.scale(outUp, outUp, -1);
+    vec3.set(outRight, -outUp[1], outUp[0], 0);
+    return true;
 }
 
 export interface ParticleEmitter2RenderItem {
@@ -101,6 +118,8 @@ interface Particle {
     pos: vec3;
     // xyz
     speed: vec3;
+    quadRight: vec3;
+    quadUp: vec3;
     angle: number;
     gravity: number;
     lifeSpan: number;
@@ -766,6 +785,7 @@ export class ParticlesController {
 
     private resizeEmitterBuffers(emitter: ParticleEmitterWrapper, size: number): void {
         if (size <= emitter.capacity) {
+            this.ensureEmitterRenderBuffers(emitter);
             return;
         }
 
@@ -814,64 +834,131 @@ export class ParticlesController {
 
         emitter.capacity = size;
 
-        if (!emitter.indexBuffer) {
-            if (this.gl) {
-                if (emitter.type & ParticleEmitter2FramesFlags.Tail) {
-                    emitter.tailVertexBuffer = this.gl.createBuffer();
-                    emitter.tailTexCoordBuffer = this.gl.createBuffer();
-                }
-                if (emitter.type & ParticleEmitter2FramesFlags.Head) {
-                    emitter.headVertexBuffer = this.gl.createBuffer();
-                    emitter.headTexCoordBuffer = this.gl.createBuffer();
-                }
+        this.ensureEmitterRenderBuffers(emitter);
+    }
+
+    private ensureEmitterRenderBuffers(emitter: ParticleEmitterWrapper): void {
+        if (this.gl) {
+            if ((emitter.type & ParticleEmitter2FramesFlags.Tail) && (!emitter.tailVertexBuffer || !emitter.tailTexCoordBuffer)) {
+                emitter.tailVertexBuffer = this.gl.createBuffer();
+                emitter.tailTexCoordBuffer = this.gl.createBuffer();
+            }
+            if ((emitter.type & ParticleEmitter2FramesFlags.Head) && (!emitter.headVertexBuffer || !emitter.headTexCoordBuffer)) {
+                emitter.headVertexBuffer = this.gl.createBuffer();
+                emitter.headTexCoordBuffer = this.gl.createBuffer();
+            }
+            if (!emitter.colorBuffer) {
                 emitter.colorBuffer = this.gl.createBuffer();
+            }
+            if (!emitter.indexBuffer) {
                 emitter.indexBuffer = this.gl.createBuffer();
-            } else if (this.device) {
-                if (emitter.type & ParticleEmitter2FramesFlags.Tail) {
-                    emitter.tailVertexGPUBuffer?.destroy();
-                    emitter.tailVertexGPUBuffer = this.device.createBuffer({
-                        label: `particles tail vertex buffer ${emitter.index}`,
-                        size: tailVertices.byteLength,
-                        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
-                    });
-                    emitter.tailTexCoordGPUBuffer?.destroy();
-                    emitter.tailTexCoordGPUBuffer = this.device.createBuffer({
-                        label: `particles tail texCoords buffer ${emitter.index}`,
-                        size: tailTexCoords.byteLength,
-                        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
-                    });
-                }
-                if (emitter.type & ParticleEmitter2FramesFlags.Head) {
-                    emitter.headVertexGPUBuffer?.destroy();
-                    emitter.headVertexGPUBuffer = this.device.createBuffer({
-                        label: `particles head vertex buffer ${emitter.index}`,
-                        size: headVertices.byteLength,
-                        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
-                    });
-                    this.device.queue.writeBuffer(emitter.headVertexGPUBuffer, 0, headVertices as any);
-                    emitter.headTexCoordGPUBuffer?.destroy();
-                    emitter.headTexCoordGPUBuffer = this.device.createBuffer({
-                        label: `particles head texCoords buffer ${emitter.index}`,
-                        size: headTexCoords.byteLength,
-                        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
-                    });
-                    this.device.queue.writeBuffer(emitter.headTexCoordGPUBuffer, 0, headTexCoords as any);
-                }
-                emitter.colorGPUBuffer?.destroy();
-                emitter.colorGPUBuffer = this.device.createBuffer({
-                    label: `particles color buffer ${emitter.index}`,
-                    size: colors.byteLength,
+            }
+        } else if (this.device) {
+            if ((emitter.type & ParticleEmitter2FramesFlags.Tail) && emitter.tailVertices && emitter.tailTexCoords &&
+                (!emitter.tailVertexGPUBuffer || !emitter.tailTexCoordGPUBuffer)) {
+                emitter.tailVertexGPUBuffer?.destroy();
+                emitter.tailVertexGPUBuffer = this.device.createBuffer({
+                    label: `particles tail vertex buffer ${emitter.index}`,
+                    size: emitter.tailVertices.byteLength,
                     usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
                 });
-                this.device.queue.writeBuffer(emitter.colorGPUBuffer, 0, colors as any);
-                emitter.indexGPUBuffer?.destroy();
+                emitter.tailTexCoordGPUBuffer?.destroy();
+                emitter.tailTexCoordGPUBuffer = this.device.createBuffer({
+                    label: `particles tail texCoords buffer ${emitter.index}`,
+                    size: emitter.tailTexCoords.byteLength,
+                    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+                });
+            }
+            if ((emitter.type & ParticleEmitter2FramesFlags.Head) && emitter.headVertices && emitter.headTexCoords &&
+                (!emitter.headVertexGPUBuffer || !emitter.headTexCoordGPUBuffer)) {
+                emitter.headVertexGPUBuffer?.destroy();
+                emitter.headVertexGPUBuffer = this.device.createBuffer({
+                    label: `particles head vertex buffer ${emitter.index}`,
+                    size: emitter.headVertices.byteLength,
+                    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+                });
+                this.device.queue.writeBuffer(emitter.headVertexGPUBuffer, 0, emitter.headVertices as any);
+                emitter.headTexCoordGPUBuffer?.destroy();
+                emitter.headTexCoordGPUBuffer = this.device.createBuffer({
+                    label: `particles head texCoords buffer ${emitter.index}`,
+                    size: emitter.headTexCoords.byteLength,
+                    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+                });
+                this.device.queue.writeBuffer(emitter.headTexCoordGPUBuffer, 0, emitter.headTexCoords as any);
+            }
+            if (!emitter.colorGPUBuffer && emitter.colors) {
+                emitter.colorGPUBuffer = this.device.createBuffer({
+                    label: `particles color buffer ${emitter.index}`,
+                    size: emitter.colors.byteLength,
+                    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+                });
+                this.device.queue.writeBuffer(emitter.colorGPUBuffer, 0, emitter.colors as any);
+            }
+            if (!emitter.indexGPUBuffer && emitter.indices) {
                 emitter.indexGPUBuffer = this.device.createBuffer({
                     label: `particles index buffer ${emitter.index}`,
-                    size: indices.byteLength,
+                    size: emitter.indices.byteLength,
                     usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST
                 });
-                this.device.queue.writeBuffer(emitter.indexGPUBuffer, 0, indices as any);
+                this.device.queue.writeBuffer(emitter.indexGPUBuffer, 0, emitter.indices as any);
             }
+        }
+    }
+
+    private hasEmitterGLRenderBuffers(emitter: ParticleEmitterWrapper): boolean {
+        const hasTailBuffers = !(emitter.type & ParticleEmitter2FramesFlags.Tail) ||
+            (!!emitter.tailVertices && !!emitter.tailTexCoords && !!emitter.tailVertexBuffer && !!emitter.tailTexCoordBuffer);
+        const hasHeadBuffers = !(emitter.type & ParticleEmitter2FramesFlags.Head) ||
+            (!!emitter.headVertices && !!emitter.headTexCoords && !!emitter.headVertexBuffer && !!emitter.headTexCoordBuffer);
+
+        return hasTailBuffers && hasHeadBuffers && !!emitter.colors && !!emitter.indices && !!emitter.colorBuffer && !!emitter.indexBuffer;
+    }
+
+    private hasEmitterGPURenderBuffers(emitter: ParticleEmitterWrapper): boolean {
+        const hasTailBuffers = !(emitter.type & ParticleEmitter2FramesFlags.Tail) ||
+            (!!emitter.tailVertices && !!emitter.tailTexCoords && !!emitter.tailVertexGPUBuffer && !!emitter.tailTexCoordGPUBuffer);
+        const hasHeadBuffers = !(emitter.type & ParticleEmitter2FramesFlags.Head) ||
+            (!!emitter.headVertices && !!emitter.headTexCoords && !!emitter.headVertexGPUBuffer && !!emitter.headTexCoordGPUBuffer);
+
+        return hasTailBuffers && hasHeadBuffers && !!emitter.colors && !!emitter.indices && !!emitter.colorGPUBuffer && !!emitter.indexGPUBuffer;
+    }
+
+    private disableAllVertexAttribArrays(): void {
+        const maxAttribs = this.gl.getParameter(this.gl.MAX_VERTEX_ATTRIBS) as number;
+        for (let i = 0; i < maxAttribs; ++i) {
+            this.gl.disableVertexAttribArray(i);
+        }
+    }
+
+    private enableParticleVertexAttribArrays(): boolean {
+        const position = this.shaderProgramLocations.vertexPositionAttribute;
+        const texCoord = this.shaderProgramLocations.textureCoordAttribute;
+        const color = this.shaderProgramLocations.colorAttribute;
+
+        if (!isValidAttribLocation(position) || !isValidAttribLocation(texCoord) || !isValidAttribLocation(color)) {
+            return false;
+        }
+
+        this.disableAllVertexAttribArrays();
+        this.gl.enableVertexAttribArray(position);
+        this.gl.enableVertexAttribArray(texCoord);
+        this.gl.enableVertexAttribArray(color);
+        return true;
+    }
+
+    private disableParticleVertexAttribArrays(): void {
+        const position = this.shaderProgramLocations.vertexPositionAttribute;
+        const texCoord = this.shaderProgramLocations.textureCoordAttribute;
+        const color = this.shaderProgramLocations.colorAttribute;
+
+        if (isValidAttribLocation(position)) {
+            this.gl.disableVertexAttribArray(position);
+        }
+        if (isValidAttribLocation(texCoord)) {
+            this.gl.disableVertexAttribArray(texCoord);
+        }
+        if (isValidAttribLocation(color)) {
+            this.gl.disableVertexAttribArray(color);
         }
     }
 
@@ -890,21 +977,23 @@ export class ParticlesController {
         this.gl.uniformMatrix4fv(this.shaderProgramLocations.pMatrixUniform, false, pMatrix);
         this.gl.uniformMatrix4fv(this.shaderProgramLocations.mvMatrixUniform, false, mvMatrix);
 
-        this.gl.enableVertexAttribArray(this.shaderProgramLocations.vertexPositionAttribute);
-        this.gl.enableVertexAttribArray(this.shaderProgramLocations.textureCoordAttribute);
-        this.gl.enableVertexAttribArray(this.shaderProgramLocations.colorAttribute);
+        if (!this.enableParticleVertexAttribArrays()) {
+            return;
+        }
 
         for (const emitter of this.emitters) {
             if (!emitter.particles.length) {
+                continue;
+            }
+            this.ensureEmitterRenderBuffers(emitter);
+            if (!this.hasEmitterGLRenderBuffers(emitter)) {
                 continue;
             }
 
             this.renderEmitter(emitter);
         }
 
-        this.gl.disableVertexAttribArray(this.shaderProgramLocations.vertexPositionAttribute);
-        this.gl.disableVertexAttribArray(this.shaderProgramLocations.textureCoordAttribute);
-        this.gl.disableVertexAttribArray(this.shaderProgramLocations.colorAttribute);
+        this.disableParticleVertexAttribArrays();
     }
 
     public getRenderItems(cameraPos: vec3 | null): ParticleEmitter2RenderItem[] {
@@ -953,17 +1042,19 @@ export class ParticlesController {
         if (!emitter || !emitter.particles.length) {
             return;
         }
+        this.ensureEmitterRenderBuffers(emitter);
+        if (!this.hasEmitterGLRenderBuffers(emitter)) {
+            return;
+        }
 
         this.gl.useProgram(this.shaderProgram);
         this.gl.uniformMatrix4fv(this.shaderProgramLocations.pMatrixUniform, false, pMatrix);
         this.gl.uniformMatrix4fv(this.shaderProgramLocations.mvMatrixUniform, false, mvMatrix);
-        this.gl.enableVertexAttribArray(this.shaderProgramLocations.vertexPositionAttribute);
-        this.gl.enableVertexAttribArray(this.shaderProgramLocations.textureCoordAttribute);
-        this.gl.enableVertexAttribArray(this.shaderProgramLocations.colorAttribute);
+        if (!this.enableParticleVertexAttribArrays()) {
+            return;
+        }
         this.renderEmitter(emitter);
-        this.gl.disableVertexAttribArray(this.shaderProgramLocations.vertexPositionAttribute);
-        this.gl.disableVertexAttribArray(this.shaderProgramLocations.textureCoordAttribute);
-        this.gl.disableVertexAttribArray(this.shaderProgramLocations.colorAttribute);
+        this.disableParticleVertexAttribArrays();
     }
 
     private renderEmitter(emitter: ParticleEmitterWrapper): void {
@@ -1012,6 +1103,10 @@ export class ParticlesController {
 
         for (const emitter of this.emitters) {
             if (!emitter.particles.length) {
+                continue;
+            }
+            this.ensureEmitterRenderBuffers(emitter);
+            if (!this.hasEmitterGPURenderBuffers(emitter)) {
                 continue;
             }
 
@@ -1165,6 +1260,8 @@ export class ParticlesController {
                 pos: vec3.create(),
                 angle: 0,
                 speed: vec3.create(),
+                quadRight: vec3.create(),
+                quadUp: vec3.create(),
                 gravity: null,
                 lifeSpan: null
             };
@@ -1225,6 +1322,12 @@ export class ParticlesController {
             vec3.add(velocityEnd, localPos, localSpeed);
             vec3.transformMat4(velocityEnd, velocityEnd, emitterMatrix);
             vec3.subtract(particle.speed, velocityEnd, particle.pos);
+        }
+
+        vec3.set(particle.quadRight, 1, 0, 0);
+        vec3.set(particle.quadUp, 0, 1, 0);
+        if (!isModelSpace && hasParticleFlag(emitter.props, ParticleEmitter2Flags.XYQuad)) {
+            setXYQuadAxesFromVelocity(particle.speed, particle.quadRight, particle.quadUp);
         }
 
         particle.gravity = this.interp.animVectorVal(emitter.props.Gravity, 0);
@@ -1291,30 +1394,25 @@ export class ParticlesController {
                 emitter.headVertices[index * 12 + i * 3 + 2] = this.particleBaseVectors[i][2] * scale;
 
                 if (hasParticleFlag(emitter.props, ParticleEmitter2Flags.XYQuad)) {
-                    const x = emitter.headVertices[index * 12 + i * 3];
-                    const y = emitter.headVertices[index * 12 + i * 3 + 1];
-                    const z = emitter.headVertices[index * 12 + i * 3 + 2];
-                    const cosA = Math.cos(particle.angle);
-                    const sinA = Math.sin(particle.angle);
-                    const rx = x * cosA - y * sinA;
-                    const ry = x * sinA + y * cosA;
+                    const x = this.particleBaseVectors[i][0] * scale;
+                    const y = this.particleBaseVectors[i][1] * scale;
+                    const isModelSpace = hasParticleFlag(emitter.props, ParticleEmitter2Flags.ModelSpace);
 
-                    const emitterMatrix = this.rendererData.nodes[emitter.props.ObjectId].matrix;
-                    mat3.fromMat4(emitterRotationMat3, emitterMatrix);
-                    vec3.set(rotatedBaseVec, rx, ry, z);
-                    vec3.transformMat3(rotatedBaseVec, rotatedBaseVec, emitterRotationMat3);
-
-                    const targetLen = Math.sqrt(rx * rx + ry * ry + z * z) || 1;
-                    const len = Math.sqrt(
-                        rotatedBaseVec[0] * rotatedBaseVec[0] +
-                        rotatedBaseVec[1] * rotatedBaseVec[1] +
-                        rotatedBaseVec[2] * rotatedBaseVec[2]
-                    ) || 1;
-                    const scaleFix = targetLen / len;
-
-                    emitter.headVertices[index * 12 + i * 3] = rotatedBaseVec[0] * scaleFix;
-                    emitter.headVertices[index * 12 + i * 3 + 1] = rotatedBaseVec[1] * scaleFix;
-                    emitter.headVertices[index * 12 + i * 3 + 2] = rotatedBaseVec[2] * scaleFix;
+                    if (isModelSpace) {
+                        const emitterMatrix = this.rendererData.nodes[emitter.props.ObjectId]?.matrix;
+                        vec3.set(xyQuadLocalOffset, x, y, 0);
+                        if (emitterMatrix) {
+                            mat3.fromMat4(emitterRotationMat3, emitterMatrix);
+                            vec3.transformMat3(xyQuadLocalOffset, xyQuadLocalOffset, emitterRotationMat3);
+                        }
+                        emitter.headVertices[index * 12 + i * 3] = xyQuadLocalOffset[0];
+                        emitter.headVertices[index * 12 + i * 3 + 1] = xyQuadLocalOffset[1];
+                        emitter.headVertices[index * 12 + i * 3 + 2] = xyQuadLocalOffset[2];
+                    } else {
+                        emitter.headVertices[index * 12 + i * 3] = particle.quadRight[0] * x + particle.quadUp[0] * y;
+                        emitter.headVertices[index * 12 + i * 3 + 1] = particle.quadRight[1] * x + particle.quadUp[1] * y;
+                        emitter.headVertices[index * 12 + i * 3 + 2] = 0;
+                    }
                 }
             }
         }
@@ -1589,7 +1687,9 @@ export class ParticlesController {
     private setGeneralBuffers(emitter: ParticleEmitterWrapper): void {
         this.gl.bindBuffer(this.gl.ARRAY_BUFFER, emitter.colorBuffer);
         this.gl.bufferData(this.gl.ARRAY_BUFFER, emitter.colors, this.gl.DYNAMIC_DRAW);
-        this.gl.vertexAttribPointer(this.shaderProgramLocations.colorAttribute, 4, this.gl.FLOAT, false, 0, 0);
+        if (isValidAttribLocation(this.shaderProgramLocations.colorAttribute)) {
+            this.gl.vertexAttribPointer(this.shaderProgramLocations.colorAttribute, 4, this.gl.FLOAT, false, 0, 0);
+        }
 
         this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, emitter.indexBuffer);
         this.gl.bufferData(this.gl.ELEMENT_ARRAY_BUFFER, emitter.indices, this.gl.DYNAMIC_DRAW);
@@ -1603,7 +1703,9 @@ export class ParticlesController {
             this.gl.bindBuffer(this.gl.ARRAY_BUFFER, emitter.headTexCoordBuffer);
             this.gl.bufferData(this.gl.ARRAY_BUFFER, emitter.headTexCoords, this.gl.DYNAMIC_DRAW);
         }
-        this.gl.vertexAttribPointer(this.shaderProgramLocations.textureCoordAttribute, 2, this.gl.FLOAT, false, 0, 0);
+        if (isValidAttribLocation(this.shaderProgramLocations.textureCoordAttribute)) {
+            this.gl.vertexAttribPointer(this.shaderProgramLocations.textureCoordAttribute, 2, this.gl.FLOAT, false, 0, 0);
+        }
 
         if (type === ParticleEmitter2FramesFlags.Tail) {
             this.gl.bindBuffer(this.gl.ARRAY_BUFFER, emitter.tailVertexBuffer);
@@ -1612,7 +1714,9 @@ export class ParticlesController {
             this.gl.bindBuffer(this.gl.ARRAY_BUFFER, emitter.headVertexBuffer);
             this.gl.bufferData(this.gl.ARRAY_BUFFER, emitter.headVertices, this.gl.DYNAMIC_DRAW);
         }
-        this.gl.vertexAttribPointer(this.shaderProgramLocations.vertexPositionAttribute, 3, this.gl.FLOAT, false, 0, 0);
+        if (isValidAttribLocation(this.shaderProgramLocations.vertexPositionAttribute)) {
+            this.gl.vertexAttribPointer(this.shaderProgramLocations.vertexPositionAttribute, 3, this.gl.FLOAT, false, 0, 0);
+        }
 
         this.gl.drawElements(this.gl.TRIANGLES, emitter.particles.length * 6, this.gl.UNSIGNED_SHORT, 0);
     }

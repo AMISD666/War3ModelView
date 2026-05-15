@@ -1,7 +1,7 @@
 import { appMessage } from '../store/messageStore'
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Checkbox } from 'antd'
-import { EyeOutlined, EyeInvisibleOutlined, CloseOutlined, MinusOutlined, DeleteOutlined, MergeCellsOutlined } from '@ant-design/icons';
+import { EyeOutlined, EyeInvisibleOutlined, CloseOutlined, MinusOutlined, DeleteOutlined, MergeCellsOutlined, CopyOutlined, SnippetsOutlined } from '@ant-design/icons';
 import { useModelStore } from '../store/modelStore';
 import { useSelectionStore } from '../store/selectionStore';
 import { modelDocumentCommandHandler, textureMaterialCommandHandler } from '../application/commands';
@@ -16,6 +16,7 @@ import {
     getHiddenIdsForGeosetToggle,
     isGeosetVisible as resolveGeosetVisible
 } from '../utils/geosetVisibility';
+import { buildGeosetClipboardPayload, pasteGeosetClipboardPayload } from '../application/model-clipboard/geosetClipboard';
 
 interface GeosetVisibilityPanelProps {
     visible: boolean;
@@ -26,7 +27,7 @@ interface GeosetVisibilityPanelProps {
 const DEFAULT_PANEL_SIZE = { width: 220, height: 300 };
 const MINIMIZED_PANEL_SIZE = { width: 160, height: 34 };
 const FALLBACK_DEFAULT_POSITION = { x: 980, y: 96 };
-const CONTEXT_MENU_SIZE = { width: 176, height: 94 };
+const CONTEXT_MENU_SIZE = { width: 196, height: 164 };
 
 const clampPanelPosition = (x: number, y: number, width: number, height: number) => {
     if (typeof window === 'undefined') {
@@ -75,6 +76,7 @@ const clampContextMenuPosition = (x: number, y: number) => {
 export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ visible, onClose, docked }) => {
     const pickedGeosetIndex = useSelectionStore((state) => state.pickedGeosetIndex);
     const modelData = useModelStore(state => state.modelData);
+    const modelPath = useModelStore(state => state.modelPath);
     const hiddenGeosetIds = useModelStore(state => state.hiddenGeosetIds);
     const forceShowAllGeosets = useModelStore(state => state.forceShowAllGeosets);
     const hoveredGeosetId = useModelStore(state => state.hoveredGeosetId);
@@ -114,6 +116,7 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
     // Selection state
     const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
     const [lastClickedIndex, setLastClickedIndex] = useState<number | null>(null);
+    const geosetClipboardRef = useRef<ReturnType<typeof buildGeosetClipboardPayload> | null>(null);
 
     const areSameIndices = (a: number[], b: number[]) => {
         if (a.length !== b.length) return false;
@@ -215,6 +218,73 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
         } finally {
             useSelectionStore.getState().setPickedGeosetIndex(null);
             setContextMenuVisible(false);
+        }
+    };
+
+    const handleCopyGeosets = () => {
+        if (!modelData || selectedIndices.length === 0) {
+            appMessage.warning('请选择至少一个多边形');
+            return;
+        }
+
+        const payload = buildGeosetClipboardPayload(modelData, modelPath ?? null, selectedIndices);
+        geosetClipboardRef.current = payload;
+        setContextMenuVisible(false);
+
+        if (!payload) {
+            appMessage.warning('没有可复制的多边形数据');
+            return;
+        }
+
+        appMessage.success(`已复制 ${payload.geosets.length} 个多边形，可切换到其他模型标签页粘贴`);
+    };
+
+    const handlePasteGeosets = async () => {
+        if (!modelData) {
+            appMessage.warning('当前模型不可用');
+            return;
+        }
+
+        if (!geosetClipboardRef.current) {
+            appMessage.warning('当前没有可粘贴的多边形剪贴板');
+            return;
+        }
+
+        try {
+            const { modelData: nextModelData, result } = await pasteGeosetClipboardPayload({
+                payload: geosetClipboardRef.current,
+                targetModelData: modelData,
+                targetModelPath: modelPath ?? null,
+            });
+
+            if (!result.pasted) {
+                appMessage.warning('没有可粘贴的多边形');
+                return;
+            }
+
+            modelDocumentCommandHandler.replaceDocumentSnapshot({
+                name: 'Paste Geosets',
+                before: null,
+                after: {
+                    modelData: nextModelData,
+                    hiddenGeosetIds: hiddenGeosetIds.filter((id) => id >= 0 && id < nextModelData.Geosets.length),
+                    selectedGeosetIndices: result.appendedGeosetIndices,
+                    selectedGeosetIndex: result.appendedGeosetIndices[0] ?? null,
+                },
+                options: { recordHistory: false },
+                applyOptions: { rendererReload: true },
+            });
+
+            applySelection(result.appendedGeosetIndices);
+            useSelectionStore.getState().setPickedGeosetIndex(result.appendedGeosetIndices[0] ?? null);
+            setContextMenuVisible(false);
+
+            const copiedAssetSuffix = result.copiedCount > 0 ? `，并复制 ${result.copiedCount} 个资源文件` : '';
+            const failedAssetSuffix = result.failed.length > 0 ? `；未复制资源：${result.failed.join(', ')}` : '';
+            appMessage.success(`已粘贴 ${result.appendedGeosetIndices.length} 个多边形${copiedAssetSuffix}${failedAssetSuffix}`);
+        } catch (error) {
+            console.error('[GeosetVisibilityPanel] Paste geosets failed:', error);
+            appMessage.error('多边形粘贴失败');
         }
     };
 
@@ -840,6 +910,46 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
                         width: CONTEXT_MENU_SIZE.width
                     }}
                 >
+                    <div
+                        onClick={handleCopyGeosets}
+                        style={{
+                            padding: '6px 12px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 8,
+                            cursor: selectedIndices.length > 0 ? 'pointer' : 'not-allowed',
+                            color: selectedIndices.length > 0 ? '#8fd19e' : '#555',
+                            fontSize: 12
+                        }}
+                        onMouseEnter={(e) => {
+                            if (selectedIndices.length > 0) {
+                                e.currentTarget.style.backgroundColor = 'rgba(120,200,140,0.18)';
+                            }
+                        }}
+                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                    >
+                        <CopyOutlined /> 多边形复制
+                    </div>
+                    <div
+                        onClick={() => { void handlePasteGeosets(); }}
+                        style={{
+                            padding: '6px 12px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 8,
+                            cursor: geosetClipboardRef.current ? 'pointer' : 'not-allowed',
+                            color: geosetClipboardRef.current ? '#ffd666' : '#555',
+                            fontSize: 12
+                        }}
+                        onMouseEnter={(e) => {
+                            if (geosetClipboardRef.current) {
+                                e.currentTarget.style.backgroundColor = 'rgba(255,214,102,0.18)';
+                            }
+                        }}
+                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                    >
+                        <SnippetsOutlined /> 多边形粘贴
+                    </div>
                     {/* Merge - First */}
                     <div
                         onClick={() => {

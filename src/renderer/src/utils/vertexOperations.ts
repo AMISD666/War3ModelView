@@ -98,6 +98,11 @@ const createVertexGroupArray = (source: ArrayLike<number> | undefined | null, va
     return new Uint8Array(values)
 }
 
+const cloneGroups = (groups: unknown): number[][] =>
+    Array.isArray(groups)
+        ? groups.map((group) => (Array.isArray(group) ? group.map((value) => Number(value) || 0) : []))
+        : [[0]]
+
 const copyStridedValues = (
     source: ArrayLike<number> | undefined | null,
     sortedVertexIndices: number[],
@@ -162,6 +167,18 @@ const compactGeosetByRemainingFaces = (
             VertexGroup: createVertexGroupArray(geoset.VertexGroup, newVertexGroups),
             Faces: new Uint16Array(newFaces),
             TVertices: newTVertices,
+            Groups: cloneGroups(geoset.Groups),
+            TotalGroupsCount: typeof geoset.TotalGroupsCount === 'number'
+                ? geoset.TotalGroupsCount
+                : cloneGroups(geoset.Groups).reduce((sum, group) => sum + group.length, 0),
+            MaterialID: typeof geoset.MaterialID === 'number' ? geoset.MaterialID : 0,
+            SelectionGroup: typeof geoset.SelectionGroup === 'number' ? geoset.SelectionGroup : 0,
+            Unselectable: Boolean(geoset.Unselectable),
+            ...(geoset.MinimumExtent ? { MinimumExtent: Array.from(geoset.MinimumExtent as ArrayLike<number>) } : {}),
+            ...(geoset.MaximumExtent ? { MaximumExtent: Array.from(geoset.MaximumExtent as ArrayLike<number>) } : {}),
+            ...(typeof geoset.BoundsRadius === 'number' ? { BoundsRadius: geoset.BoundsRadius } : {}),
+            ...(typeof geoset.LevelOfDetail === 'number' ? { LevelOfDetail: geoset.LevelOfDetail } : {}),
+            ...(typeof geoset.Name === 'string' ? { Name: geoset.Name } : {}),
             ...(geoset.Tangents ? { Tangents: new Float32Array(copyStridedValues(geoset.Tangents, sortedUsed, 4)) } : {}),
             ...(geoset.SkinWeights ? { SkinWeights: new Uint8Array(copyStridedValues(geoset.SkinWeights, sortedUsed, 4)) } : {})
         },
@@ -216,8 +233,16 @@ export function splitVertices(geoset: GeosetData, vertexIndices: number[], mater
     const newVertices: number[] = []
     const newNormals: number[] = []
     const newVertexGroups: number[] = []
-    const newTVertices: number[][] = (geoset.TVertices as Float32Array[]).map(() => [])
+    const newTVertices: number[][] = Array.isArray(geoset.TVertices) ? geoset.TVertices.map(() => []) : []
     const newFaces: number[] = []
+    const newTangents: number[] = []
+    const newSkinWeights: number[] = []
+    const sourceTangents = geoset.Tangents as ArrayLike<number> | undefined
+    const sourceSkinWeights = geoset.SkinWeights as ArrayLike<number> | undefined
+    const groups = cloneGroups(geoset.Groups)
+    const totalGroupsCount = typeof geoset.TotalGroupsCount === 'number'
+        ? geoset.TotalGroupsCount
+        : groups.reduce((sum, group) => sum + group.length, 0)
 
     // Copy vertex data to new geoset
     for (const oldIdx of sortedVerticesToExtract) {
@@ -233,9 +258,24 @@ export function splitVertices(geoset: GeosetData, vertexIndices: number[], mater
         )
         newVertexGroups.push(geoset.VertexGroup[oldIdx])
 
-        for (let layer = 0; layer < (geoset.TVertices as Float32Array[]).length; layer++) {
+        for (let layer = 0; layer < newTVertices.length; layer++) {
             const tv = geoset.TVertices[layer] as Float32Array
             newTVertices[layer].push(tv[oldIdx * 2], tv[oldIdx * 2 + 1])
+        }
+
+        if (sourceTangents) {
+            newTangents.push(
+                sourceTangents[oldIdx * 4] ?? 0,
+                sourceTangents[oldIdx * 4 + 1] ?? 0,
+                sourceTangents[oldIdx * 4 + 2] ?? 0,
+                sourceTangents[oldIdx * 4 + 3] ?? 1,
+            )
+        }
+
+        if (sourceSkinWeights) {
+            for (let offset = 0; offset < 8; offset++) {
+                newSkinWeights.push(sourceSkinWeights[oldIdx * 8 + offset] ?? 0)
+            }
         }
     }
 
@@ -281,8 +321,10 @@ export function splitVertices(geoset: GeosetData, vertexIndices: number[], mater
     const updatedVertices: number[] = []
     const updatedNormals: number[] = []
     const updatedVertexGroups: number[] = []
-    const updatedTVertices: number[][] = (geoset.TVertices as Float32Array[]).map(() => [])
+    const updatedTVertices: number[][] = Array.isArray(geoset.TVertices) ? geoset.TVertices.map(() => []) : []
     const updatedFaces: number[] = []
+    const updatedTangents: number[] = []
+    const updatedSkinWeights: number[] = []
 
     // Copy remaining vertex data
     for (const oldIdx of sortedRemainingVertices) {
@@ -298,9 +340,24 @@ export function splitVertices(geoset: GeosetData, vertexIndices: number[], mater
         )
         updatedVertexGroups.push(geoset.VertexGroup[oldIdx])
 
-        for (let layer = 0; layer < (geoset.TVertices as Float32Array[]).length; layer++) {
+        for (let layer = 0; layer < updatedTVertices.length; layer++) {
             const tv = geoset.TVertices[layer] as Float32Array
             updatedTVertices[layer].push(tv[oldIdx * 2], tv[oldIdx * 2 + 1])
+        }
+
+        if (sourceTangents) {
+            updatedTangents.push(
+                sourceTangents[oldIdx * 4] ?? 0,
+                sourceTangents[oldIdx * 4 + 1] ?? 0,
+                sourceTangents[oldIdx * 4 + 2] ?? 0,
+                sourceTangents[oldIdx * 4 + 3] ?? 1,
+            )
+        }
+
+        if (sourceSkinWeights) {
+            for (let offset = 0; offset < 8; offset++) {
+                updatedSkinWeights.push(sourceSkinWeights[oldIdx * 8 + offset] ?? 0)
+            }
         }
     }
 
@@ -312,22 +369,46 @@ export function splitVertices(geoset: GeosetData, vertexIndices: number[], mater
             oldToRemainingIndex.get(geoset.Faces[faceStart + 1])!,
             oldToRemainingIndex.get(geoset.Faces[faceStart + 2])!
         )
-    }   return {
+    }
+
+    return {
         updatedOriginalGeoset: {
             Vertices: new Float32Array(updatedVertices),
             Normals: new Float32Array(updatedNormals),
-            VertexGroup: new Uint8Array(updatedVertexGroups),
+            VertexGroup: createVertexGroupArray(geoset.VertexGroup, updatedVertexGroups),
             Faces: new Uint16Array(updatedFaces),
             TVertices: updatedTVertices.map(tv => new Float32Array(tv)),
-            MaterialID: geoset.MaterialID
+            MaterialID: geoset.MaterialID,
+            Groups: groups,
+            TotalGroupsCount: totalGroupsCount,
+            SelectionGroup: typeof geoset.SelectionGroup === 'number' ? geoset.SelectionGroup : 0,
+            Unselectable: Boolean(geoset.Unselectable),
+            ...(geoset.MinimumExtent ? { MinimumExtent: Array.from(geoset.MinimumExtent as ArrayLike<number>) } : {}),
+            ...(geoset.MaximumExtent ? { MaximumExtent: Array.from(geoset.MaximumExtent as ArrayLike<number>) } : {}),
+            ...(typeof geoset.BoundsRadius === 'number' ? { BoundsRadius: geoset.BoundsRadius } : {}),
+            ...(typeof geoset.LevelOfDetail === 'number' ? { LevelOfDetail: geoset.LevelOfDetail } : {}),
+            ...(typeof geoset.Name === 'string' ? { Name: geoset.Name } : {}),
+            ...(sourceTangents ? { Tangents: new Float32Array(updatedTangents) } : {}),
+            ...(sourceSkinWeights ? { SkinWeights: new Uint8Array(updatedSkinWeights) } : {}),
         },
         newGeoset: {
             Vertices: new Float32Array(newVertices),
             Normals: new Float32Array(newNormals),
-            VertexGroup: new Uint8Array(newVertexGroups),
+            VertexGroup: createVertexGroupArray(geoset.VertexGroup, newVertexGroups),
             Faces: new Uint16Array(newFaces),
             TVertices: newTVertices.map(tv => new Float32Array(tv)),
-            MaterialID: materialId
+            MaterialID: materialId,
+            Groups: groups,
+            TotalGroupsCount: totalGroupsCount,
+            SelectionGroup: typeof geoset.SelectionGroup === 'number' ? geoset.SelectionGroup : 0,
+            Unselectable: Boolean(geoset.Unselectable),
+            ...(geoset.MinimumExtent ? { MinimumExtent: Array.from(geoset.MinimumExtent as ArrayLike<number>) } : {}),
+            ...(geoset.MaximumExtent ? { MaximumExtent: Array.from(geoset.MaximumExtent as ArrayLike<number>) } : {}),
+            ...(typeof geoset.BoundsRadius === 'number' ? { BoundsRadius: geoset.BoundsRadius } : {}),
+            ...(typeof geoset.LevelOfDetail === 'number' ? { LevelOfDetail: geoset.LevelOfDetail } : {}),
+            ...(typeof geoset.Name === 'string' ? { Name: geoset.Name } : {}),
+            ...(sourceTangents ? { Tangents: new Float32Array(newTangents) } : {}),
+            ...(sourceSkinWeights ? { SkinWeights: new Uint8Array(newSkinWeights) } : {}),
         },
         extractedFaceIndices: Array.from(facesToExtract)
     }

@@ -29,6 +29,11 @@ import { markStandalonePerf } from '../utils/standalonePerf';
 import { desktopGateway } from '../infrastructure/desktop';
 import { getTextureCandidatePaths, normalizeTexturePath } from '../infrastructure/texture';
 import { buildTargetAssetPath, getDirname, isAbsoluteWindowsPath, normalizeWindowsPath } from '../utils/windowsPath';
+import {
+    appendClipboardGlobalSequences,
+    buildClipboardGlobalSequencePayload,
+    remapGlobalSequenceReferencesInPlace,
+} from '../application/model-clipboard/globalSequenceClipboard';
 const MAX_CACHED_RENDERERS = 5;
 
 const normalizeModelIdentityPath = (path: unknown): string => {
@@ -68,6 +73,7 @@ type ClipboardPayload = {
     textures?: Record<number, any>;
     materials?: Record<number, any>;
     textureAnims?: Record<number, any>;
+    globalSequences?: Record<number, number>;
     resourcePaths?: string[];
 };
 
@@ -2107,6 +2113,13 @@ export const useModelStore = create<ModelState>((set, get) => ({
             if (Object.keys(textures).length > 0) payload.textures = textures;
             if (Object.keys(materials).length > 0) payload.materials = materials;
             if (Object.keys(textureAnims).length > 0) payload.textureAnims = textureAnims;
+            const globalSequences = buildClipboardGlobalSequencePayload({
+                node,
+                modelData: md,
+                materials,
+                textureAnims,
+            });
+            if (globalSequences) payload.globalSequences = globalSequences;
             if (resourcePaths.length > 0) payload.resourcePaths = resourcePaths;
 
             return { clipboardNode: node, clipboardPayload: payload };
@@ -2143,6 +2156,10 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 const targetTextures: any[] = Array.isArray(md.Textures) ? [...md.Textures] : [];
                 const targetMaterials: any[] = Array.isArray(md.Materials) ? [...md.Materials] : [];
                 const targetTextureAnims: any[] = Array.isArray(md.TextureAnims) ? [...md.TextureAnims] : [];
+                const { globalSequences: targetGlobalSequences, oldToNew: globalSeqOldToNew } = appendClipboardGlobalSequences(
+                    md.GlobalSequences,
+                    payload.globalSequences,
+                );
 
                 const texOldToNew = new Map<number, number>();
                 const tvOldToNew = new Map<number, number>();
@@ -2155,7 +2172,9 @@ export const useModelStore = create<ModelState>((set, get) => ({
                         if (tvOldToNew.has(oldId)) continue;
                         const anim = payload.textureAnims[oldId];
                         const newId = targetTextureAnims.length;
-                        targetTextureAnims.push(deepClone(anim));
+                        const clonedAnim = deepClone(anim);
+                        remapGlobalSequenceReferencesInPlace(clonedAnim, globalSeqOldToNew);
+                        targetTextureAnims.push(clonedAnim);
                         tvOldToNew.set(oldId, newId);
                     }
                 }
@@ -2183,6 +2202,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                     for (const oldId of ids) {
                         if (matOldToNew.has(oldId)) continue;
                         const mat = deepClone(payload.materials[oldId]);
+                        remapGlobalSequenceReferencesInPlace(mat, globalSeqOldToNew);
                         const layers = mat?.Layers ?? mat?.layers;
                         if (Array.isArray(layers)) {
                             for (const layer of layers) {
@@ -2216,7 +2236,8 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 }
 
                 // 4) Remap node references
-                const remappedNode: any = { ...clipboardNodeForPaste };
+                const remappedNode: any = deepClone(clipboardNodeForPaste);
+                remapGlobalSequenceReferencesInPlace(remappedNode, globalSeqOldToNew);
                 if (remappedNode.type === NodeType.PARTICLE_EMITTER_2) {
                     const oldTex = remappedNode.TextureID;
                     if (typeof oldTex === 'number' && texOldToNew.has(oldTex)) {
@@ -2234,6 +2255,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                     Textures: targetTextures,
                     Materials: targetMaterials,
                     TextureAnims: targetTextureAnims,
+                    GlobalSequences: targetGlobalSequences,
                 } as any;
                 clipboardNodeForPaste = remappedNode as ModelNode;
             }

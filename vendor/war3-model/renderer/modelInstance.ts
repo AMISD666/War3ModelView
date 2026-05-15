@@ -103,6 +103,7 @@ export class ModelInstance {
         this.ribbonsController = new RibbonsController(this.interp, this.rendererData);
 
         this.initNodes();
+        this.ribbonsController.setNodeMatrixRefresh(() => this.refreshNodeMatrices());
         this.initGlobalSequences();
         this.initMaterialLayers();
     }
@@ -274,7 +275,7 @@ export class ModelInstance {
         }
         this.updateGlobalSequences(delta);
 
-        this.updateNode(this.rendererData.rootNode);
+        this.refreshNodeMatrices();
 
         for (let i = 0; i < this.model.Geosets.length; ++i) {
             this.rendererData.geosetAlpha[i] = this.findAlpha(i);
@@ -324,6 +325,14 @@ export class ModelInstance {
     public setScale(scale: vec3): void {
         vec3.copy(this.scale, scale);
         this.dirty = true;
+    }
+
+    public refreshNodeMatrices(): void {
+        if (!this.rendererData.rootNode) {
+            return;
+        }
+
+        this.updateNode(this.rendererData.rootNode);
     }
 
     public updateWorldMatrix(): void {

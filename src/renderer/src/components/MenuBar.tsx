@@ -14,7 +14,7 @@ import {
     MinusOutlined,
     ToolOutlined
 } from '@ant-design/icons'
-import { getNextRenderMode, useRendererStore, type ParticleQualityMode, type RenderMode } from '../store/rendererStore'
+import { getNextRenderMode, useRendererStore, type RenderMode } from '../store/rendererStore'
 import { useSelectionStore, type AppMode } from '../store/selectionStore'
 import { useUIStore } from '../store/uiStore'
 import { uiText } from '../constants/uiText'
@@ -171,8 +171,6 @@ const MenuBar: React.FC<MenuBarProps> = ({
         setShowLights: setQuickShowLights,
         showParticles: quickShowParticles,
         setShowParticles: setQuickShowParticles,
-        particleQualityMode,
-        setParticleQualityMode,
         showRibbons: quickShowRibbons,
         setShowRibbons: setQuickShowRibbons,
         showHealthBar: quickShowHealthBar,
@@ -208,8 +206,6 @@ const MenuBar: React.FC<MenuBarProps> = ({
         setShowLights: state.setShowLights,
         showParticles: state.showParticles,
         setShowParticles: state.setShowParticles,
-        particleQualityMode: state.particleQualityMode,
-        setParticleQualityMode: state.setParticleQualityMode,
         showRibbons: state.showRibbons,
         setShowRibbons: state.setShowRibbons,
         showHealthBar: state.showHealthBar,
@@ -391,16 +387,6 @@ const MenuBar: React.FC<MenuBarProps> = ({
                         ? '显示全部'
                         : '选中/悬停',
             tone: nodeNameDisplayMode === 'selected' ? 'warning' : 'default'
-        },
-        {
-            key: 'particle-quality',
-            label: '粒子质量',
-            checked: particleQualityMode === 'full',
-            onToggle: () => setParticleQualityMode((particleQualityMode === 'full' ? 'game' : 'full') as ParticleQualityMode),
-            icon: <FireOutlined />,
-            badge: particleQualityMode === 'full' ? '满' : '游',
-            statusLabel: particleQualityMode === 'full' ? '完整画质' : '游戏画质',
-            tone: particleQualityMode === 'game' ? 'warning' : 'default'
         }
     ]
 

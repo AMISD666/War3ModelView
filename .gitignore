@@ -65,6 +65,10 @@ scripts/*
 !scripts/check-pe2-frameflags-zero.mjs
 !scripts/check-pe2-render-layer-order.mjs
 !scripts/check-particle-quality-toggle.mjs
+!scripts/check-pe2-render-buffer-init.mjs
+!scripts/check-pe2-xyquad-plane.mjs
+!scripts/check-ribbon-render-queue.mjs
+!scripts/check-mirror-save-geometry-integrity.mjs
 local-test-scripts/
 activation/
 

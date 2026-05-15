@@ -38,10 +38,10 @@ const cloneRendererGeosetForSave = (rendererGeoset: any, documentGeoset: any): a
         Unselectable: rendererGeoset.Unselectable ?? documentGeoset?.Unselectable ?? false,
         Vertices: cloneArrayLike(rendererGeoset.Vertices ?? documentGeoset?.Vertices ?? []),
         Normals: cloneArrayLike(rendererGeoset.Normals ?? documentGeoset?.Normals ?? []),
-        VertexGroup: cloneArrayLike(rendererGeoset.VertexGroup ?? documentGeoset?.VertexGroup ?? []),
+        VertexGroup: cloneArrayLike(documentGeoset?.VertexGroup ?? rendererGeoset.VertexGroup ?? []),
         Faces: cloneArrayLike(rendererGeoset.Faces ?? documentGeoset?.Faces ?? []),
         TVertices: cloneArrayLike(rendererGeoset.TVertices ?? documentGeoset?.TVertices ?? []),
-        Groups: cloneArrayLike(rendererGeoset.Groups ?? documentGeoset?.Groups ?? [[0]]),
+        Groups: cloneArrayLike(documentGeoset?.Groups ?? rendererGeoset.Groups ?? [[0]]),
         TotalGroupsCount: rendererGeoset.TotalGroupsCount ?? documentGeoset?.TotalGroupsCount,
         MinimumExtent: cloneArrayLike(rendererGeoset.MinimumExtent ?? documentGeoset?.MinimumExtent),
         MaximumExtent: cloneArrayLike(rendererGeoset.MaximumExtent ?? documentGeoset?.MaximumExtent),
@@ -53,7 +53,7 @@ const cloneRendererGeosetForSave = (rendererGeoset: any, documentGeoset: any): a
         next.Tangents = cloneArrayLike(rendererGeoset.Tangents ?? documentGeoset.Tangents)
     }
     if (rendererGeoset.SkinWeights || documentGeoset?.SkinWeights) {
-        next.SkinWeights = cloneArrayLike(rendererGeoset.SkinWeights ?? documentGeoset.SkinWeights)
+        next.SkinWeights = cloneArrayLike(documentGeoset?.SkinWeights ?? rendererGeoset.SkinWeights)
     }
 
     return next

@@ -66,13 +66,25 @@ export class SplitVerticesCommand implements Command {
         this.originalGeosetSnapshot = {
             Vertices: new Float32Array(geoset.Vertices),
             Normals: new Float32Array(geoset.Normals),
-            VertexGroup: new Uint8Array(geoset.VertexGroup),
+            VertexGroup: geoset.VertexGroup instanceof Uint16Array
+                ? new Uint16Array(geoset.VertexGroup)
+                : new Uint8Array(geoset.VertexGroup),
             Faces: new Uint16Array(geoset.Faces),
             TVertices: geoset.TVertices.map((tv: Float32Array) => new Float32Array(tv)),
             MaterialID: geoset.MaterialID,
             Groups: geoset.Groups ? JSON.parse(JSON.stringify(geoset.Groups)) : [[0]],
+            TotalGroupsCount: typeof geoset.TotalGroupsCount === 'number'
+                ? geoset.TotalGroupsCount
+                : (geoset.Groups ? geoset.Groups.reduce((sum: number, group: number[]) => sum + group.length, 0) : 1),
             SelectionGroup: geoset.SelectionGroup,
-            Unselectable: geoset.Unselectable
+            Unselectable: geoset.Unselectable,
+            ...(geoset.MinimumExtent ? { MinimumExtent: Array.from(geoset.MinimumExtent as ArrayLike<number>) } : {}),
+            ...(geoset.MaximumExtent ? { MaximumExtent: Array.from(geoset.MaximumExtent as ArrayLike<number>) } : {}),
+            ...(typeof geoset.BoundsRadius === 'number' ? { BoundsRadius: geoset.BoundsRadius } : {}),
+            ...(typeof geoset.LevelOfDetail === 'number' ? { LevelOfDetail: geoset.LevelOfDetail } : {}),
+            ...(typeof geoset.Name === 'string' ? { Name: geoset.Name } : {}),
+            ...(geoset.Tangents ? { Tangents: new Float32Array(geoset.Tangents) } : {}),
+            ...(geoset.SkinWeights ? { SkinWeights: new Uint8Array(geoset.SkinWeights) } : {}),
         }
 
         // Get vertex indices
@@ -143,7 +155,15 @@ export class SplitVerticesCommand implements Command {
             VertexGroup: Array.from(g.VertexGroup),
             Faces: Array.from(g.Faces),
             TVertices: g.TVertices.map((tv: Float32Array) => Array.from(tv)),
-            Groups: g.Groups ? JSON.parse(JSON.stringify(g.Groups)) : [[0]]
+            Groups: g.Groups ? JSON.parse(JSON.stringify(g.Groups)) : [[0]],
+            ...(typeof g.TotalGroupsCount === 'number' ? { TotalGroupsCount: g.TotalGroupsCount } : {}),
+            ...(g.MinimumExtent ? { MinimumExtent: Array.from(g.MinimumExtent as ArrayLike<number>) } : {}),
+            ...(g.MaximumExtent ? { MaximumExtent: Array.from(g.MaximumExtent as ArrayLike<number>) } : {}),
+            ...(typeof g.BoundsRadius === 'number' ? { BoundsRadius: g.BoundsRadius } : {}),
+            ...(typeof g.LevelOfDetail === 'number' ? { LevelOfDetail: g.LevelOfDetail } : {}),
+            ...(typeof g.Name === 'string' ? { Name: g.Name } : {}),
+            ...(g.Tangents ? { Tangents: Array.from(g.Tangents as ArrayLike<number>) } : {}),
+            ...(g.SkinWeights ? { SkinWeights: Array.from(g.SkinWeights as ArrayLike<number>) } : {}),
         }))
 
         nextGeosets.forEach((geoset: any) => calculateGeosetExtent(geoset))
@@ -162,13 +182,7 @@ export class SplitVerticesCommand implements Command {
             }
         }
 
-        const nextHiddenIds = hasNewGeoset
-            ? Array.from(new Set(
-                previousHiddenIds
-                    .filter((id) => id >= 0 && id < nextGeosets.length)
-                    .concat(this.newGeosetIndex)
-            )).sort((a, b) => a - b)
-            : previousHiddenIds.filter((id) => id >= 0 && id < nextGeosets.length)
+        const nextHiddenIds = previousHiddenIds.filter((id) => id >= 0 && id < nextGeosets.length)
 
         if (!modelStore.modelData) return
 

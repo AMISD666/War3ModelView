@@ -12,7 +12,15 @@ import ribbonShader from './shaders/webgpu/ribbons.wgsl?raw';
 
 // Reusable temporary variables for ribbon calculations to reduce GC
 const tempPivotFirst = vec3.create();
-const tempPivotSecond = vec3.create();
+const tempRibbonOrigin = vec3.create();
+const tempRibbonAxis = vec3.create();
+const tempRibbonAbove = vec3.create();
+const tempRibbonBelow = vec3.create();
+const tempRibbonFallbackReference = vec3.create();
+const tempRibbonFallbackTangent = vec3.create();
+
+const MIN_RIBBON_LIFESPAN = 0.02;
+const RIBBON_EMISSION_QUALITY_SCALE = 2;
 
 
 interface RibbonEmitterWrapper {
@@ -34,6 +42,14 @@ interface RibbonEmitterWrapper {
     texCoordGPUBuffer: GPUBuffer;
 
     fsUnifrmsPerLayer: GPUBuffer[];
+}
+
+export interface RibbonRenderItem {
+    emitterIndex: number;
+    layerIndex: number;
+    filterMode: number;
+    priorityPlane: number;
+    dist2: number;
 }
 
 export class RibbonsController {
@@ -66,6 +82,8 @@ export class RibbonsController {
     private interp: ModelInterp;
     private rendererData: RendererData;
     private emitters: RibbonEmitterWrapper[];
+    private forcePreviewVisibility = false;
+    private nodeMatrixRefresh: (() => void) | null = null;
 
     constructor(interp: ModelInterp, rendererData: RendererData) {
         this.shaderProgramLocations = {
@@ -105,9 +123,11 @@ export class RibbonsController {
                     fsUnifrmsPerLayer: []
                 };
 
-                emitter.baseCapacity = Math.ceil(
-                    ModelInterp.maxAnimVectorVal(emitter.props.EmissionRate) * emitter.props.LifeSpan
-                ) + 1; // extra points
+                emitter.baseCapacity = Math.max(2, Math.ceil(
+                    ModelInterp.maxAnimVectorVal(emitter.props.EmissionRate) *
+                    RIBBON_EMISSION_QUALITY_SCALE *
+                    emitter.props.LifeSpan
+                ) + 1); // extra points
 
                 this.emitters.push(emitter);
             }
@@ -399,9 +419,11 @@ export class RibbonsController {
                 emission: 0,
                 props: ribbonEmitter,
                 capacity: 0,
-                baseCapacity: Math.ceil(
-                    ModelInterp.maxAnimVectorVal(ribbonEmitter.EmissionRate) * ribbonEmitter.LifeSpan
-                ) + 1,
+                baseCapacity: Math.max(2, Math.ceil(
+                    ModelInterp.maxAnimVectorVal(ribbonEmitter.EmissionRate) *
+                    RIBBON_EMISSION_QUALITY_SCALE *
+                    ribbonEmitter.LifeSpan
+                ) + 1),
                 creationTimes: [],
                 vertices: null,
                 vertexBuffer: null,
@@ -422,6 +444,35 @@ export class RibbonsController {
         }
     }
 
+    public setPreviewVisibility(forceVisible: boolean): void {
+        this.forcePreviewVisibility = forceVisible;
+    }
+
+    public setNodeMatrixRefresh(refresh: () => void): void {
+        this.nodeMatrixRefresh = refresh;
+    }
+
+    public resetEmitters(): void {
+        for (const emitter of this.emitters) {
+            this.clearEmitter(emitter);
+        }
+    }
+
+    public buildHistoryAt(frame: number): void {
+        this.syncEmitters();
+        const now = Date.now();
+        const originalFrame = this.rendererData.frame;
+        for (const emitter of this.emitters) {
+            if (!this.rebuildEmitterHistoryAt(emitter, frame, now)) {
+                this.rendererData.frame = frame;
+                this.nodeMatrixRefresh?.();
+                this.ensurePreviewRibbon(emitter, now);
+            }
+        }
+        this.rendererData.frame = originalFrame;
+        this.nodeMatrixRefresh?.();
+    }
+
     public render(mvMatrix: mat4, pMatrix: mat4): void {
         this.gl.useProgram(this.shaderProgram);
 
@@ -437,7 +488,7 @@ export class RibbonsController {
             }
 
             // Check visibility before rendering
-            const visibility = this.interp.animVectorVal(emitter.props.Visibility, 1);
+            const visibility = this.getEmitterVisibility(emitter);
             if (visibility <= 0) {
                 continue;
             }
@@ -515,7 +566,7 @@ export class RibbonsController {
                     emitter.props.Color[0],
                     emitter.props.Color[1],
                     emitter.props.Color[2],
-                    this.interp.animVectorVal(emitter.props.Alpha, 1)
+                    this.interp.animVectorVal(emitter.props.Alpha, 1) * this.getEmitterVisibility(emitter)
                 ]);
 
                 if (!emitter.fsUnifrmsPerLayer[j]) {
@@ -553,6 +604,88 @@ export class RibbonsController {
                 pass.draw(emitter.creationTimes.length * 2);
             }
         }
+    }
+
+    public getRenderItems(cameraPos: vec3 | null): RibbonRenderItem[] {
+        const items: RibbonRenderItem[] = [];
+
+        for (const emitter of this.emitters) {
+            if (emitter.creationTimes.length < 2 || this.getEmitterVisibility(emitter) <= 0) {
+                continue;
+            }
+
+            const materialID = emitter.props.MaterialID;
+            const material: Material | undefined = this.rendererData.model.Materials[materialID];
+            if (!material?.Layers?.length) {
+                continue;
+            }
+
+            let dist2 = 0;
+            if (cameraPos) {
+                let count = 0;
+                const center = vec3.create();
+                for (let i = 0; i < emitter.creationTimes.length; ++i) {
+                    const base = i * 6;
+                    center[0] += (emitter.vertices[base] + emitter.vertices[base + 3]) * 0.5;
+                    center[1] += (emitter.vertices[base + 1] + emitter.vertices[base + 4]) * 0.5;
+                    center[2] += (emitter.vertices[base + 2] + emitter.vertices[base + 5]) * 0.5;
+                    count++;
+                }
+                if (count > 0) {
+                    vec3.scale(center, center, 1 / count);
+                    const dx = center[0] - cameraPos[0];
+                    const dy = center[1] - cameraPos[1];
+                    const dz = center[2] - cameraPos[2];
+                    dist2 = dx * dx + dy * dy + dz * dz;
+                }
+            }
+
+            for (let layerIndex = 0; layerIndex < material.Layers.length; ++layerIndex) {
+                const layer = material.Layers[layerIndex];
+                items.push({
+                    emitterIndex: emitter.index,
+                    layerIndex,
+                    filterMode: layer.FilterMode || FilterMode.None,
+                    priorityPlane: material.PriorityPlane || 0,
+                    dist2
+                });
+            }
+        }
+
+        return items;
+    }
+
+    public renderEmitterLayerByIndex(
+        emitterIndex: number,
+        layerIndex: number,
+        mvMatrix: mat4,
+        pMatrix: mat4
+    ): void {
+        const emitter = this.emitters.find((item) => item.index === emitterIndex);
+        if (!emitter || emitter.creationTimes.length < 2 || this.getEmitterVisibility(emitter) <= 0) {
+            return;
+        }
+
+        const materialID = emitter.props.MaterialID;
+        const material: Material | undefined = this.rendererData.model.Materials[materialID];
+        const layer = material?.Layers?.[layerIndex];
+        if (!material || !layer) {
+            return;
+        }
+
+        this.gl.useProgram(this.shaderProgram);
+        this.gl.uniformMatrix4fv(this.shaderProgramLocations.pMatrixUniform, false, pMatrix);
+        this.gl.uniformMatrix4fv(this.shaderProgramLocations.mvMatrixUniform, false, mvMatrix);
+        this.gl.enableVertexAttribArray(this.shaderProgramLocations.vertexPositionAttribute);
+        this.gl.enableVertexAttribArray(this.shaderProgramLocations.textureCoordAttribute);
+
+        this.setEmitterColorUniform(emitter);
+        this.setGeneralBuffers(emitter);
+        this.setLayerProps(layer, this.rendererData.materialLayerTextureID[materialID][layerIndex]);
+        this.renderEmitter(emitter);
+
+        this.gl.disableVertexAttribArray(this.shaderProgramLocations.vertexPositionAttribute);
+        this.gl.disableVertexAttribArray(this.shaderProgramLocations.textureCoordAttribute);
     }
 
     private initShaders(): void {
@@ -629,22 +762,253 @@ export class RibbonsController {
         }
     }
 
+    private clearEmitter(emitter: RibbonEmitterWrapper): void {
+        emitter.emission = 0;
+        emitter.creationTimes = [];
+
+        if (emitter.vertices) {
+            emitter.vertices.fill(0);
+        }
+        if (emitter.texCoords) {
+            emitter.texCoords.fill(0);
+        }
+    }
+
+    private dropOldestPoint(emitter: RibbonEmitterWrapper): void {
+        emitter.creationTimes.shift();
+        if (emitter.vertices && emitter.vertices.length > 6) {
+            emitter.vertices.set(emitter.vertices.subarray(6), 0);
+        }
+    }
+
+    private getEmitterVisibility(emitter: RibbonEmitterWrapper): number {
+        if (this.forcePreviewVisibility) {
+            return 1;
+        }
+        return this.interp.animVectorVal(emitter.props.Visibility, 1);
+    }
+
+    private getEmitterLifeSpan(emitter: RibbonEmitterWrapper): number {
+        const lifeSpan = Number(emitter.props.LifeSpan);
+        return Number.isFinite(lifeSpan) && lifeSpan > 0 ? lifeSpan : MIN_RIBBON_LIFESPAN;
+    }
+
+    private getEmitterHistoryPointCount(emitter: RibbonEmitterWrapper): number {
+        const lifeSpan = this.getEmitterLifeSpan(emitter);
+        const emissionRate = Math.max(1, this.interp.animVectorVal(emitter.props.EmissionRate, 0) * RIBBON_EMISSION_QUALITY_SCALE);
+        return Math.max(2, Math.min(emitter.baseCapacity, Math.ceil(emissionRate * lifeSpan) + 1));
+    }
+
+    private normalizeHistoryFrame(frame: number): number {
+        const info = this.rendererData.animationInfo;
+        const interval = info?.Interval;
+        if (!interval || interval.length < 2) {
+            return frame;
+        }
+
+        const start = Number(interval[0]);
+        const end = Number(interval[1]);
+        const duration = end - start;
+        if (!Number.isFinite(start) || !Number.isFinite(end) || duration <= 0) {
+            return frame;
+        }
+
+        if (info.NonLooping) {
+            return Math.max(start, Math.min(end, frame));
+        }
+
+        let wrapped = (frame - start) % duration;
+        if (wrapped < 0) {
+            wrapped += duration;
+        }
+        return start + wrapped;
+    }
+
+    private getRibbonOrigin(emitter: RibbonEmitterWrapper, out: vec3): vec3 | null {
+        const nodeWrapper = this.rendererData.nodes[emitter.props.ObjectId];
+        if (!nodeWrapper?.matrix) {
+            return null;
+        }
+
+        const pivot = (emitter.props.PivotPoint && (emitter.props.PivotPoint as any).length >= 3)
+            ? emitter.props.PivotPoint as vec3
+            : null;
+        vec3.set(out, pivot?.[0] ?? 0, pivot?.[1] ?? 0, pivot?.[2] ?? 0);
+        vec3.transformMat4(out, out, nodeWrapper.matrix);
+        return out;
+    }
+
+    private getRibbonAxis(emitter: RibbonEmitterWrapper, out: vec3): vec3 {
+        const nodeWrapper = this.rendererData.nodes[emitter.props.ObjectId];
+        const matrix = nodeWrapper?.matrix;
+        if (matrix) {
+            vec3.set(out, matrix[4], matrix[5], matrix[6]);
+            if (vec3.squaredLength(out) > 0.000001) {
+                return vec3.normalize(out, out);
+            }
+        }
+
+        vec3.set(out, 0, 1, 0);
+        return out;
+    }
+
+    private getRibbonFallbackTangent(axis: vec3, out: vec3): vec3 {
+        if (Math.abs(axis[2]) < 0.9) {
+            vec3.set(tempRibbonFallbackReference, 0, 0, 1);
+        } else {
+            vec3.set(tempRibbonFallbackReference, 0, 1, 0);
+        }
+
+        vec3.cross(out, axis, tempRibbonFallbackReference);
+        if (vec3.squaredLength(out) <= 0.000001) {
+            vec3.set(out, 1, 0, 0);
+            return out;
+        }
+
+        return vec3.normalize(out, out);
+    }
+
+    private setEmitterColorUniform(emitter: RibbonEmitterWrapper): void {
+        const rawColor = emitter.props.Color;
+        const color = (rawColor && rawColor.length >= 3) ? rawColor : [1, 1, 1];
+        const alpha = this.interp.animVectorVal(emitter.props.Alpha, 1);
+        const visibility = this.getEmitterVisibility(emitter);
+
+        this.gl.uniform4f(
+            this.shaderProgramLocations.colorUniform,
+            color[0],
+            color[1],
+            color[2],
+            alpha * visibility
+        );
+    }
+
+    private rebuildEmitterHistoryAt(emitter: RibbonEmitterWrapper, frame: number, now: number): boolean {
+        const originalFrame = this.rendererData.frame;
+        this.clearEmitter(emitter);
+
+        this.rendererData.frame = frame;
+        this.nodeMatrixRefresh?.();
+
+        const visibility = this.getEmitterVisibility(emitter);
+        const alpha = this.interp.animVectorVal(emitter.props.Alpha, 1);
+        const heightBelow = this.interp.animVectorVal(emitter.props.HeightBelow, 0);
+        const heightAbove = this.interp.animVectorVal(emitter.props.HeightAbove, 0);
+        if (visibility <= 0 || alpha <= 0 || Math.abs(heightBelow) + Math.abs(heightAbove) <= 0.0001) {
+            this.rendererData.frame = originalFrame;
+            this.nodeMatrixRefresh?.();
+            return false;
+        }
+
+        const count = this.getEmitterHistoryPointCount(emitter);
+        const lifeSpanMs = this.getEmitterLifeSpan(emitter) * 1000;
+        this.resizeEmitterBuffers(emitter, count);
+
+        for (let i = 0; i < count; ++i) {
+            const ageRatio = count === 1 ? 0 : (count - 1 - i) / (count - 1);
+            const ageMs = ageRatio * lifeSpanMs;
+            this.rendererData.frame = this.normalizeHistoryFrame(frame - ageMs);
+            this.nodeMatrixRefresh?.();
+
+            const origin = this.getRibbonOrigin(emitter, tempRibbonOrigin);
+            if (!origin) {
+                continue;
+            }
+
+            const pointIndex = emitter.creationTimes.length;
+            this.writeRibbonPoint(emitter, pointIndex, origin);
+            emitter.creationTimes.push(now - ageMs);
+        }
+
+        this.rendererData.frame = originalFrame;
+        this.nodeMatrixRefresh?.();
+
+        if (emitter.creationTimes.length < 2) {
+            this.clearEmitter(emitter);
+            return false;
+        }
+
+        this.updateEmitterTexCoords(emitter, now);
+        return true;
+    }
+
+    private writeRibbonPoint(emitter: RibbonEmitterWrapper, pointIndex: number, origin: vec3): void {
+        const heightBelow = this.interp.animVectorVal(emitter.props.HeightBelow, 0);
+        const heightAbove = this.interp.animVectorVal(emitter.props.HeightAbove, 0);
+        const nodeWrapper = this.rendererData.nodes[emitter.props.ObjectId];
+        const matrix = nodeWrapper?.matrix;
+        const base = pointIndex * 6;
+
+        if (matrix) {
+            const pivot = (emitter.props.PivotPoint && (emitter.props.PivotPoint as any).length >= 3)
+                ? emitter.props.PivotPoint as vec3
+                : null;
+            vec3.set(tempRibbonAbove, pivot?.[0] ?? 0, (pivot?.[1] ?? 0) + heightAbove, pivot?.[2] ?? 0);
+            vec3.set(tempRibbonBelow, pivot?.[0] ?? 0, (pivot?.[1] ?? 0) - heightBelow, pivot?.[2] ?? 0);
+            vec3.transformMat4(tempRibbonAbove, tempRibbonAbove, matrix);
+            vec3.transformMat4(tempRibbonBelow, tempRibbonBelow, matrix);
+        } else {
+            const axis = this.getRibbonAxis(emitter, tempRibbonAxis);
+            vec3.scaleAndAdd(tempRibbonAbove, origin, axis, heightAbove);
+            vec3.scaleAndAdd(tempRibbonBelow, origin, axis, -heightBelow);
+        }
+
+        emitter.vertices[base] = tempRibbonAbove[0];
+        emitter.vertices[base + 1] = tempRibbonAbove[1];
+        emitter.vertices[base + 2] = tempRibbonAbove[2];
+        emitter.vertices[base + 3] = tempRibbonBelow[0];
+        emitter.vertices[base + 4] = tempRibbonBelow[1];
+        emitter.vertices[base + 5] = tempRibbonBelow[2];
+    }
+
+    private ensurePreviewRibbon(emitter: RibbonEmitterWrapper, now: number): void {
+        const visibility = this.getEmitterVisibility(emitter);
+        const alpha = this.interp.animVectorVal(emitter.props.Alpha, 1);
+        const heightBelow = this.interp.animVectorVal(emitter.props.HeightBelow, 0);
+        const heightAbove = this.interp.animVectorVal(emitter.props.HeightAbove, 0);
+        if (visibility <= 0 || alpha <= 0 || Math.abs(heightBelow) + Math.abs(heightAbove) <= 0.0001) {
+            return;
+        }
+
+        const origin = this.getRibbonOrigin(emitter, tempRibbonOrigin);
+        if (!origin) {
+            return;
+        }
+
+        const axis = this.getRibbonAxis(emitter, tempRibbonAxis);
+        const tangent = this.getRibbonFallbackTangent(axis, tempRibbonFallbackTangent);
+        const reach = Math.max(1, Math.abs(heightAbove) + Math.abs(heightBelow));
+        const lifeSpan = this.getEmitterLifeSpan(emitter);
+
+        this.resizeEmitterBuffers(emitter, 2);
+        const firstOrigin = tempPivotFirst;
+        vec3.scaleAndAdd(firstOrigin, origin, tangent, -reach);
+        this.writeRibbonPoint(emitter, 0, firstOrigin);
+        this.writeRibbonPoint(emitter, 1, origin);
+        emitter.creationTimes = [now - lifeSpan * 500, now];
+        this.updateEmitterTexCoords(emitter, now);
+    }
+
     private updateEmitter(emitter: RibbonEmitterWrapper, delta: number): void {
         const now = Date.now();
         // Visibility default should be 1 (visible), not 0
-        const visibility = this.interp.animVectorVal(emitter.props.Visibility, 1);
+        const visibility = this.getEmitterVisibility(emitter);
 
 
 
         if (visibility > 0) {
             // EmissionRate can be animated, use animVectorVal
-            const emissionRate = this.interp.animVectorVal(emitter.props.EmissionRate, 0);
+            const emissionRate = Math.max(0, this.interp.animVectorVal(emitter.props.EmissionRate, 0) * RIBBON_EMISSION_QUALITY_SCALE);
 
             emitter.emission += emissionRate * delta;
 
             if (emitter.emission >= 1000) {
                 // only once per tick
                 emitter.emission = emitter.emission % 1000;
+
+                if (emitter.creationTimes.length >= emitter.baseCapacity) {
+                    this.dropOldestPoint(emitter);
+                }
 
                 if (emitter.creationTimes.length + 1 > emitter.capacity) {
                     this.resizeEmitterBuffers(emitter, emitter.creationTimes.length + 1);
@@ -657,13 +1021,9 @@ export class RibbonsController {
         }
 
         if (emitter.creationTimes.length) {
-            while (emitter.creationTimes[0] + emitter.props.LifeSpan * 1000 < now) {
-                emitter.creationTimes.shift();
-                // Performance fix: Use typed array set to shift vertices instead of manual loop
-                // Each point has 6 floats (3 for first, 3 for second)
-                if (emitter.vertices.length > 6) {
-                    emitter.vertices.set(emitter.vertices.subarray(6), 0);
-                }
+            const lifeSpan = this.getEmitterLifeSpan(emitter);
+            while (emitter.creationTimes[0] + lifeSpan * 1000 < now) {
+                this.dropOldestPoint(emitter);
             }
         }
 
@@ -671,33 +1031,21 @@ export class RibbonsController {
         // still exists
         if (emitter.creationTimes.length) {
             this.updateEmitterTexCoords(emitter, now);
+        } else if (visibility > 0) {
+            if (!this.rebuildEmitterHistoryAt(emitter, this.rendererData.frame, now)) {
+                this.ensurePreviewRibbon(emitter, now);
+            }
         }
     }
 
     private appendVertices(emitter: RibbonEmitterWrapper): void {
-        const first = tempPivotFirst;
-        const second = tempPivotSecond;
-        vec3.copy(first, emitter.props.PivotPoint as vec3);
-        vec3.copy(second, emitter.props.PivotPoint as vec3);
-
-        const heightBelow = this.interp.animVectorVal(emitter.props.HeightBelow, 0);
-        const heightAbove = this.interp.animVectorVal(emitter.props.HeightAbove, 0);
-
-        first[1] -= heightBelow;
-        second[1] += heightAbove;
-
+        const origin = tempPivotFirst;
         const emitterMatrix: mat4 = this.rendererData.nodes[emitter.props.ObjectId].matrix;
-        vec3.transformMat4(first, first, emitterMatrix);
-        vec3.transformMat4(second, second, emitterMatrix);
-
+        vec3.copy(origin, emitter.props.PivotPoint as vec3);
+        vec3.transformMat4(origin, origin, emitterMatrix);
 
         const currentSize = emitter.creationTimes.length;
-        emitter.vertices[currentSize * 6] = first[0];
-        emitter.vertices[currentSize * 6 + 1] = first[1];
-        emitter.vertices[currentSize * 6 + 2] = first[2];
-        emitter.vertices[currentSize * 6 + 3] = second[0];
-        emitter.vertices[currentSize * 6 + 4] = second[1];
-        emitter.vertices[currentSize * 6 + 5] = second[2];
+        this.writeRibbonPoint(emitter, currentSize, origin);
     }
 
     private updateEmitterTexCoords(emitter: RibbonEmitterWrapper, now: number): void {

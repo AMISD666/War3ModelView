@@ -19,7 +19,7 @@ import {
     getWar3FilterDrawRank,
     mapParticleEmitter2FilterMode
 } from './War3BlendState';
-import { type TransparentRenderEntry } from './MaterialDrawPlanner';
+import { compareTransparentRenderEntries, type TransparentRenderEntry } from './MaterialDrawPlanner';
 import vertexShaderHardwareSkinningSource from './shaders/webgl/sdHardwareSkinning.vs.glsl?raw';
 import vertexShaderSoftwareSkinning from './shaders/webgl/sdSoftwareSkinning.vs.glsl?raw';
 import fragmentShader from './shaders/webgl/sd.fs.glsl?raw';
@@ -1694,25 +1694,21 @@ export class ModelRenderer {
                         dist2: item.dist2
                     });
                 }
+
+                for (const item of instance.ribbonsController.getRenderItems(camPos)) {
+                    transparentEntries.push({
+                        kind: 'ribbon',
+                        instanceIndex,
+                        emitterIndex: item.emitterIndex,
+                        layerIndex: item.layerIndex,
+                        filterMode: item.filterMode,
+                        priorityPlane: item.priorityPlane,
+                        dist2: item.dist2
+                    });
+                }
             }
 
-            transparentEntries.sort((a, b) => {
-                if (a.priorityPlane !== b.priorityPlane) return a.priorityPlane - b.priorityPlane;
-                const rankA = getWar3FilterDrawRank(a.filterMode);
-                const rankB = getWar3FilterDrawRank(b.filterMode);
-                if (rankA !== rankB) return rankA - rankB;
-                if (a.dist2 !== b.dist2) return b.dist2 - a.dist2;
-                if (a.kind !== b.kind) return a.kind === 'layer' ? -1 : 1;
-                if (a.kind === 'layer' && b.kind === 'layer') {
-                    if (a.geosetIndex !== b.geosetIndex) return a.geosetIndex - b.geosetIndex;
-                    return a.layerIndex - b.layerIndex;
-                }
-                if (a.kind === 'particle2' && b.kind === 'particle2') {
-                    if (a.instanceIndex !== b.instanceIndex) return a.instanceIndex - b.instanceIndex;
-                    return a.emitterIndex - b.emitterIndex;
-                }
-                return 0;
-            });
+            transparentEntries.sort(compareTransparentRenderEntries);
 
             for (const entry of transparentEntries) {
                 if (entry.kind === 'particle2') {
@@ -1720,6 +1716,21 @@ export class ModelRenderer {
                     const instanceMV = particleMvMatrices[entry.instanceIndex];
                     if (instance && instanceMV) {
                         instance.particlesController.renderEmitterByIndex(entry.emitterIndex, instanceMV, pMatrix);
+                        bindModelShaderAttributes();
+                    }
+                    continue;
+                }
+
+                if (entry.kind === 'ribbon') {
+                    const instance = instances[entry.instanceIndex];
+                    const instanceMV = particleMvMatrices[entry.instanceIndex];
+                    if (instance && instanceMV) {
+                        instance.ribbonsController.renderEmitterLayerByIndex(
+                            entry.emitterIndex,
+                            entry.layerIndex,
+                            instanceMV,
+                            pMatrix
+                        );
                         bindModelShaderAttributes();
                     }
                     continue;
@@ -1833,8 +1844,8 @@ export class ModelRenderer {
 
             if (this.isHD) {
                 instance.particlesController.render(instanceMV, pMatrix);
+                instance.ribbonsController.render(instanceMV, pMatrix);
             }
-            instance.ribbonsController.render(instanceMV, pMatrix);
         }
     }
 
